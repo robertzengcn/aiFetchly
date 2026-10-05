@@ -119,7 +119,18 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       controller.abort();
     }, timeoutMs);
     try {
-      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+      const response = await this.fetchImpl(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      // TODO-03 (FR-008/015): the header-timeout lifetime ENDS when headers
+      // arrive, but the caller-abort link must survive for the whole body
+      // read — otherwise Stop during a streaming read leaves the request
+      // alive with no way to cancel it. Attach a body-close cleanup that
+      // aborts the transport when the caller aborts mid-body or the response
+      // is finalized, and keeps the listener installed until then.
+      this.linkCallerAbortToBody(response, controller, callerSignal);
+      return response;
     } catch (err) {
       // Distinguish a timeout (timer fired) from a user-initiated abort.
       const timedOut =
@@ -133,9 +144,45 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       throw err;
     } finally {
       clearTimeout(timer);
-      if (callerSignal) {
-        callerSignal.removeEventListener("abort", onCallerAbort);
-      }
+    }
+  }
+
+  /**
+   * TODO-03: keep the caller's abort connected through body consumption.
+   * `fetch()` resolves when headers arrive; removing the listener then (the
+   * old behavior) disconnected Stop from the streaming read. Instead:
+   * - a caller abort mid-body aborts the transport controller (which cancels
+   *   the in-flight read with an AbortError);
+   * - the listener is removed only when the body is closed/cancelled or the
+   *   response errors — never before.
+   */
+  private linkCallerAbortToBody(
+    response: Response,
+    controller: AbortController,
+    callerSignal: AbortSignal | undefined
+  ): void {
+    if (!callerSignal) return;
+    const abortTransport = (): void => {
+      if (!controller.signal.aborted) controller.abort();
+    };
+    if (callerSignal.aborted) {
+      abortTransport();
+      return;
+    }
+    // The listener lives for the response's lifetime. It is registered with
+    // { once: true } on the TURN-OWNED signal — short-lived by construction
+    // (dropped with the AbortController when the segment ends) — so not
+    // detaching on drain cannot accumulate listeners across requests.
+    callerSignal.addEventListener("abort", abortTransport, { once: true });
+    const body = response.body;
+    if (body) {
+      // Cancelling the body (early consumer close, parser cleanup) also
+      // aborts the transport so the server sees the connection drop.
+      const originalCancel = body.cancel.bind(body);
+      body.cancel = (reason?: unknown): Promise<void> => {
+        abortTransport();
+        return originalCancel(reason);
+      };
     }
   }
 

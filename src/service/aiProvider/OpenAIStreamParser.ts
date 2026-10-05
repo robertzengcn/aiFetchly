@@ -61,6 +61,8 @@ export class OpenAIStreamParser {
     let buffer = "";
     let readBytes = 0;
     let completedNaturally = false;
+    /** TODO-04: the SSE protocol said [DONE] — stop parsing ANY later bytes. */
+    let sawDoneMarker = false;
 
     try {
       let streamActive = true;
@@ -115,6 +117,7 @@ export class OpenAIStreamParser {
           }
           const payload = trimmed.slice(5).trim();
           if (payload === "[DONE]") {
+            sawDoneMarker = true;
             streamActive = false;
             break;
           }
@@ -134,11 +137,14 @@ export class OpenAIStreamParser {
           }
         }
       }
+      // Physical EOF reached (done === true): nothing more can arrive.
       completedNaturally = true;
 
-      // Flush any trailing data line left in the buffer.
+      // Flush any trailing data line left in the buffer — but NEVER after
+      // the protocol terminated with [DONE]: late buffered payload is not
+      // output (TODO-04).
       const trailing = buffer.trim();
-      if (trailing.startsWith("data:")) {
+      if (!sawDoneMarker && trailing.startsWith("data:")) {
         const payload = trailing.slice(5).trim();
         if (payload && payload !== "[DONE]") {
           try {

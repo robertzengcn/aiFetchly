@@ -158,3 +158,50 @@ describe("OpenAICompatibleProviderClient.streamEvents (FR-001)", () => {
     expect(chunks).toEqual(["hi"]);
   });
 });
+
+describe("TODO-03: caller abort stays connected through body reads", () => {
+  it("aborting mid-read aborts the fetch transport signal (pending read cancelled by fetch)", async () => {
+    const encoder = new TextEncoder();
+    const callerController = new AbortController();
+    let transportSignal: AbortSignal | undefined;
+    let streamCancelReason: unknown = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"choices":[{"index":0,"delta":{"content":"a"}}]}\n\n'
+          )
+        );
+      },
+      cancel(reason) {
+        streamCancelReason = reason;
+      },
+    });
+    const fetchImpl = ((): typeof fetch =>
+      ((_url: string | URL | Request, init?: RequestInit) => {
+        transportSignal = init?.signal as AbortSignal;
+        return Promise.resolve(new Response(stream, { status: 200 }));
+      }) as unknown as typeof fetch)();
+    const client = new OpenAICompatibleProviderClient(CONFIG, "", fetchImpl);
+
+    const iterator = client
+      .streamEvents(
+        { messages: [{ role: "user", content: "hello" }] },
+        { signal: callerController.signal }
+      )
+      [Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect(first.done).toBe(false);
+
+    // OLD BEHAVIOR: the listener was removed when headers arrived, so this
+    // abort never reached the transport. TODO-03: it must.
+    callerController.abort();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(transportSignal?.aborted).toBe(true);
+
+    // NOTE: .return() while suspended mid-read cannot run the parser's
+    // finally until the read settles (design §6: abort FIRST, then close) —
+    // the transport abort above is the client's cancellation surface here.
+    void streamCancelReason;
+  });
+});

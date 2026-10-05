@@ -3296,6 +3296,8 @@ export class AiChatApi {
     let currentEventType: string | undefined;
     let loggedPayloadCount = 0;
     let emittedPayloadCount = 0;
+    /** TODO-04: the protocol said [DONE] — stop parsing ANY later bytes. */
+    let sawDoneMarker = false;
 
     /** Validate + normalize one payload; throws for error payloads. */
     const processPayload = (
@@ -3387,6 +3389,7 @@ export class AiChatApi {
           if (trimmedLine.startsWith("data:")) {
             const jsonStr = trimmedLine.substring(5).trim();
             if (jsonStr === "[DONE]") {
+              sawDoneMarker = true;
               streamActive = false;
               break;
             }
@@ -3409,8 +3412,9 @@ export class AiChatApi {
         }
       }
 
-      // Process any remaining data in buffer
-      const trimmedBuffer = buffer.trim();
+      // Process any remaining data in buffer — but NEVER after the protocol
+      // terminated with [DONE]: late buffered payload is not output (TODO-04).
+      const trimmedBuffer = sawDoneMarker ? "" : buffer.trim();
       if (
         trimmedBuffer &&
         trimmedBuffer !== "data: [DONE]" &&
@@ -3444,7 +3448,7 @@ export class AiChatApi {
       // emitted and the body is non-empty, try to parse the entire body as
       // a single JSON payload and feed it through the normal normalization
       // path (which already handles the non-streaming "message" shape).
-      if (emittedPayloadCount === 0) {
+      if (emittedPayloadCount === 0 && !sawDoneMarker) {
         const trimmedBody = rawBody.trim();
         if (
           trimmedBody &&
