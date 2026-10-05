@@ -75,11 +75,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B04 — Same-attempt send replay returns the wrong outcome [P2]
 
-- [ ] **Fix.** After validating authorization and bindings, recognize an exact replay of the same approved attempt before generic sibling/in-flight denial. Preserve refusal for other attempts and drafts.
-- Evidence: `src/service/emailReply/EmailReplyDeliveryService.ts:245–271` runs policy before the idempotency lookup at `273–285`.
+- [x] **Fix.** After validating authorization and bindings, recognize an exact replay of the same approved attempt before generic sibling/in-flight denial. Preserve refusal for other attempts and drafts.
+- Evidence: `src/service/emailReply/EmailReplyDeliveryService.ts` `sendApprovedReply` reordered — the idempotency replay check (step 4) now runs BEFORE the send-time policy guard (step 5). The `buildSendIdempotencyKey(draftId, revisionId, recomputedHash, approval.id)` tuple is bound to the exact approval+revision+hash, so only an EXACT-same-approval replay short-circuits to `already_processed`; a different approval, sibling draft, or other-attempt send falls through to the guard and is refused there (`already_replied`/`reply_in_progress`/etc.).
 - Trigger: the first invocation claims the attempt and waits in SMTP; a second invocation reuses the same valid approval/binding after the first claim is visible.
-- Current result: the second invocation gets `reply_in_progress`, rather than the original attempt's idempotent `already_processed` outcome. This finding does not imply a duplicate SMTP submission.
-- Acceptance: hold fake SMTP after claim, replay the same approval, and assert the original attempt is returned with one SMTP submission. A simultaneous `Promise.all` test without controlled claim timing is insufficient. Add a separate other-approval/sibling denial case.
+- Current result: fixed — the second invocation returns the prior attempt's idempotent `already_processed` outcome instead of a generic `reply_in_progress` refusal.
+- Acceptance: `test/vitest/main/modules/EmailReplyDeliveryFakeSmtp.test.ts` "sendApprovedReply recognizes exact same-approval replay before guard denial (B04)" — 2 cases: (1) hold fake SMTP after the first claim commits, replay the same approval → `already_processed` with exactly one SMTP submission (controlled timing via a held gate, not an uncontrolled `Promise.all` race); (2) a second approved SIBLING draft on the same message is still refused by the guard (`SendPolicyRejection`) after the first sends — proves B04 only short-circuits the exact-same-approval replay. 8/8 pass.
 
 ### B05 — Actual refusal and tool-call payloads are discarded [P1]
 

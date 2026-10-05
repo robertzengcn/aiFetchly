@@ -256,3 +256,130 @@ describe("sendApprovedReply refusal audits (FR-034 pre_send)", () => {
     expect(refusals).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B04: exact same-approval replay returns the original attempt, not a generic
+// reply_in_progress refusal. Requires controlled claim timing (hold fake SMTP
+// after the first claim is visible, then replay) — a bare Promise.all does not
+// prove this path because the second invocation can race past the idempotency
+// lookup before the first claim commits.
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply recognizes exact same-approval replay before guard denial (B04)", () => {
+  it("replay of the same approval returns already_processed with one SMTP submission", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // Controlled hold: the first send claims the attempt, then blocks inside
+    // sendReplyEmail until we release the gate. While it is held, we replay the
+    // same approval; the replay must hit the idempotency lookup (B04 moved it
+    // before the guard) and return already_processed — NOT reply_in_progress.
+    let smtpCalls = 0;
+    let releaseFirst: () => void = () => {};
+    const firstSendHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCalls += 1;
+          // First invocation blocks here after the claim is committed; the
+          // replay runs while we wait. Subsequent invocations never reach SMTP
+          // (idempotency returns before the claim).
+          if (smtpCalls === 1) {
+            await firstSendHeld;
+          }
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: CLEAN_BODY,
+            info: `<prov-${smtpCalls}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+    });
+
+    // Start the first send — it claims the attempt, then blocks in SMTP.
+    const first = delivery.sendApprovedReply({ draftId, approvalToken: token });
+    // Yield once so the first call reaches sendReplyEmail and the claim row is
+    // committed before the replay starts. This is the controlled timing the
+    // TODO requires (vs an uncontrolled Promise.all race).
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Replay the SAME approval while the first send is still in flight. The
+    // attempt for this (draft, revision, hash, approval) tuple already exists,
+    // so the idempotency lookup (B04, now before the guard) returns it.
+    const replay = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(replay.status).toBe("already_processed");
+    expect(replay.attemptId).toBeGreaterThan(0);
+
+    // Release the held first send and await its completion.
+    releaseFirst();
+    const firstOutcome = await first;
+    expect(firstOutcome.status).toBe("sent");
+
+    // Exactly ONE SMTP submission across both invocations.
+    expect(smtpCalls).toBe(1);
+    // The message is now sent.
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+    void messageId;
+  });
+
+  it("a DIFFERENT approval for the same message is still refused by the guard", async () => {
+    // First approval sends successfully. A second, DISTINCT draft for the SAME
+    // message is then approved and sent — the guard must refuse it (the message
+    // is now sent), NOT return already_processed. This proves B04 only short-
+    // circuits the EXACT-same-approval replay; sibling/other-draft sends still
+    // hit the policy guard.
+    const { draftId, token, messageId } = await seedValidApproval();
+    const delivery = buildDelivery("accept");
+    const first = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(first.status).toBe("sent");
+
+    // Seed a SECOND approved draft (sibling) on the same message. The approval
+    // service only accepts drafts in 'draft' state, so we create a fresh draft
+    // row rather than re-approving the sent one.
+    const draftModule = new EmailReplyDraftModule();
+    const sibling = new EmailReplyDraftEntity();
+    sibling.messageId = messageId;
+    sibling.emailServiceId = FAKE_MAILBOX.id;
+    sibling.subject = "Re: Pricing (sibling)";
+    sibling.bodyText = CLEAN_BODY;
+    sibling.bodyHtml = null;
+    sibling.status = "draft";
+    sibling.generationSource = "ai";
+    const savedSibling = await draftModule.create(sibling);
+    await materializeRevision1(draftModule, {
+      draftId: savedSibling.id,
+      actor: "ai",
+      subject: "Re: Pricing (sibling)",
+      bodyText: CLEAN_BODY,
+      bodyHtml: null,
+      senderAddress: "owner@svc.com",
+      recipientAddress: "prospect@example.com",
+      emailServiceId: FAKE_MAILBOX.id,
+      originalMessageId: messageId,
+    });
+    const siblingApproval = await new EmailReplyApprovalService().approveDraft({
+      draftId: savedSibling.id,
+      approvedByType: "user",
+    });
+    // The guard sees the sent attempt from the first draft and refuses the
+    // sibling send with already_replied — NOT already_processed.
+    await expect(
+      delivery.sendApprovedReply({
+        draftId: savedSibling.id,
+        approvalToken: siblingApproval.token,
+      })
+    ).rejects.toBeInstanceOf(SendPolicyRejection);
+    // Original attempt untouched.
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+});

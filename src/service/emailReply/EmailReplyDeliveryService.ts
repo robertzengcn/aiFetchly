@@ -241,7 +241,32 @@ export class EmailReplyDeliveryService {
       recomputedHash,
     });
 
-    // 4. Send-time policy (reloaded, never cached). FR-006.
+    // 4. Idempotency replay check (B04): recognize an exact replay of THIS
+    //    approved attempt BEFORE the send-time policy guard. Once the first
+    //    invocation has claimed an attempt for this (draft, revision, hash,
+    //    approval) tuple, a second invocation with the same approval must
+    //    return the prior attempt's idempotent `already_processed` outcome —
+    //    NOT a generic `reply_in_progress` refusal from the guard (which sees
+    //    the in-flight attempt and refuses). This is safe because the
+    //    idempotency key is bound to the exact approval+revision+hash; a
+    //    DIFFERENT attempt or sibling draft still falls through to the guard
+    //    and is refused there.
+    const idempotencyKey = buildSendIdempotencyKey(
+      draft.id,
+      revision.id,
+      recomputedHash,
+      approval.id
+    );
+    const existing = await this.attemptModule.findByIdempotencyKey(
+      idempotencyKey
+    );
+    if (existing) {
+      return { status: "already_processed", attemptId: existing.id };
+    }
+
+    // 5. Send-time policy (reloaded, never cached). FR-006. Runs only when this
+    //    exact approval has not already been claimed — so a genuine sibling or
+    //    other-attempt send is still refused here before SMTP.
     const decision = await this.policy.evaluate({
       stage: "pre_send",
       messageId: message.id,
@@ -268,21 +293,6 @@ export class EmailReplyDeliveryService {
         `Send rejected by policy: ${decision.reason}`,
         decision.code
       );
-    }
-
-    // 5. Idempotency: if this exact approval already claimed, return the prior
-    //    attempt without contacting SMTP.
-    const idempotencyKey = buildSendIdempotencyKey(
-      draft.id,
-      revision.id,
-      recomputedHash,
-      approval.id
-    );
-    const existing = await this.attemptModule.findByIdempotencyKey(
-      idempotencyKey
-    );
-    if (existing) {
-      return { status: "already_processed", attemptId: existing.id };
     }
 
     // 6. Atomic claim: draft approved -> sending, insert attempt, write pre-submit
