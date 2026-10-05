@@ -1,0 +1,330 @@
+# Task Completion Policy — PRD Coverage TODO
+
+Source PRDs (both `Proposed`, implementation has now **started in Slice 1 only**):
+
+- `docs/prd/scheduled-loop-premature-stop-recovery-advice.md` (v3.0) — FR-01…FR-24, NFR-01…NFR-12, AC-01…AC-32
+- `docs/prd/scheduled-loop-premature-stop-recovery-technical-design.md` (v2.0) — §§1…18, delivery slices §16
+
+Branch: `worktree-task-completion-policy-v1-slice1` (16 commits on top of `7ce133b2`,
+`+6293/−2`, confined to `src/{entity,entityTypes,model,modules,service/aiTaskExecution,config}` + tests).
+
+**Headline verdict**
+
+- Slice 1 foundation is landed as library code and its 42 service tests pass
+  (`yarn vitest run --config vitest.service.config.mjs test/vitest/main/service/Task*.test.ts` → 5 files, 42 passed).
+- **Nothing is wired into the live loop**: the gate `isAiTaskCompletionPolicyV1Enabled()`
+  (`src/config/featureFlags.ts:213`) has zero production call sites; `AIChatQueryLoop`,
+  `AIChatQueryEngine`, `ScheduledLoopEventSink`, `ScheduledAiMessageRunner` are untouched
+  (old `goalTextStop` / `shouldAutoContinueGoal` / `complete→completed` still live).
+  That is *correct* for Slice 1 (shadow-only by design), but it means **every AC that
+  requires live recovery still fails**, and the shadow evaluation itself is never invoked.
+- 10 bugs found in landed code (B1–B10 below, all verified against source; R1 probe
+  executed live: `save 100 qualifying contacts` without template → `response_only`).
+  Fix B1, B2, B4, B7, B8, R1 before building Slice 2 on these paths.
+
+How to use this file: `[BUG]` = fix in landed code. `[GAP-Sn]` = unimplemented work
+belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
+
+---
+
+## A. Bugs in landed Slice 1 code (fix before Slice 2)
+
+- [ ] **[BUG] B1 — NaN poisons `TaskRunBudget` accounting.** `src/service/aiTaskExecution/TaskRunBudget.ts:191-210`
+      (`reconcileTokens`, `addActiveRuntime`, `addWaitMs`).
+      `Math.max(0, Math.floor(NaN))` is `NaN` (any NaN operand wins), so one missing/invalid
+      provider `usage` value — explicitly anticipated by §9 ("conservative estimates if usage
+      is missing") — permanently sets `consumed.*` to `NaN` and corrupts every later
+      `getConsumed`/`getRemaining` computation. `Infinity` likewise unhandled. No test covers
+      NaN input.
+      Fix: `Number.isFinite` guard on every numeric input (fail-closed to 0 / estimated), plus tests.
+      PRD: FR-08, §9.
+
+- [x] **[BUG] B2 — "CAS" finalization is check-then-act, not atomic.** ✅ Done (commit 1653ba90):
+      `finalizeExecution` is a single `UPDATE … WHERE execution_state_version = :v AND finalized = 0`
+      with an affected-rows check (via `useStructuredResult=true` on the driver QueryRunner); true
+      concurrent `Promise.all` race test resolves to exactly one winner. `src/model/AiTaskExecution.model.ts:148-184`.
+      `finalizeExecution` does read (`getById`) → version check → `save()` as separate steps, so two
+      concurrent finalizers can both read version 0, both pass, and the second overwrites the first —
+      violating §6.3 step 1 ("Claim an unfinalized execution using expected state version **in a
+      transaction**") and the file's own docstring. The test named "concurrent CAS finalization"
+      awaits finalizer 1 fully before starting finalizer 2, so it cannot detect this race.
+      Fix (Slice 2 at latest): single `UPDATE … WHERE execution_state_version = :v AND finalized = false`
+      with affected-rows check, in one transaction including the ledger-owner release; add a true
+      concurrency test.
+      PRD: §6.2, §6.3, AC-32.
+
+- [x] **[BUG] B3 — Non-atomic creation leaves orphan ledgers.** ✅ Done (commit 1653ba90):
+      `createExecution` wraps ledger + execution saves in a single TypeORM transaction.
+      `src/model/AiTaskExecution.model.ts:96,130`.
+      `ledgerRepo.save()` then `executionRepo.save()` with no transaction; a crash/failure between them
+      leaves a `ledger-*` row whose `active_execution_id` points at a nonexistent execution.
+      Fix: wrap both saves in a TypeORM transaction (combine with AC-26 submission-dedup lookup work).
+      PRD: §6.2.
+
+- [ ] **[BUG] B4 — Operation create: race + silent intent collision.** `src/model/AiTaskOperation.model.ts:62-87`.
+      (a) Two concurrent creates with the same key both read `null`, both insert → raw unique-constraint
+      exception instead of `{ alreadyExists: true }`; must catch the constraint violation.
+      (b) Same key + *different* `intentHash`/`executionId`/`toolIdentity` returns `alreadyExists: true`
+      with no comparison — a changed target reusing an operation key is silently accepted, violating the
+      entity's own contract ("the canonical intent_hash **prevents a changed target from reusing an
+      operation**", `src/entity/AiTaskOperation.entity.ts:10-12`).
+      Fix: catch constraint violation; compare intent fields and return an `INTENT_CONFLICT`-style result.
+      PRD: §10.1 (Slice 3 load-bearing).
+
+- [ ] **[BUG] B5 — `claimed_at` is never written.** `src/model/AiTaskOperation.model.ts:109-122` stamps
+      `dispatched_at`/`settled_at` but has no `claimed` branch, and no other writer exists — the
+      `claimed_at` column (`src/entity/AiTaskOperation.entity.ts:57-58`) is permanently null, breaking
+      §10 claim-ordering evidence.
+      Fix: stamp `claimed_at` on the `claimed` transition.
+      PRD: §10.2.
+
+- [x] **[BUG] B6 — `finalizeExecution` silently drops evidence linkage.** ✅ Done (commit 1653ba90):
+      `evidenceIds`/`remainingWork`/`assistantResultMessageId` now persist into `execution_state_json`
+      as a finalization checkpoint; `assistant_result_message_id` column also written via
+      `COALESCE` in the CAS UPDATE. `src/model/AiTaskExecution.model.ts:146-187`
+      vs `FinalizeInput:23-31`. Callers pass `evidenceIds`/`remainingWork` but neither is persisted (no
+      evidence store in Slice 1) and `assistant_result_message_id` has no input field at all — yet the call
+      returns `ok: true`, despite §6.3 step 2 requiring "outcome, reason, **linked assistant result,
+      evidence/counter summary**".
+      Fix: persist to `execution_state_json` now, or remove the fields until the Slice 2 checkpoint format
+      lands; silent drop is the worst option.
+      PRD: §6.3, FR-12.
+
+- [ ] **[BUG] B7 — `freeze` output not schema-validated; hash order-sensitive.**
+      `src/service/aiTaskExecution/TaskCompletionContractService.ts:53-137`.
+      `freeze` does ad-hoc checks but never runs `taskCompletionContractSchema.parse`, so it accepts
+      contracts its own schema rejects: empty `objective` (`""` passes, schema requires `min(1)`), negative
+      offsets (only `end < start` checked, schema requires `min(0)`), overlong strings, duplicate criterion
+      `id`s (§8.2 checker contract requires "no duplicates", nothing enforces it). Separately, `computeHash`
+      maps `input.criteria` in caller order without normalizing (contrast `approvedSourceMessageIds`, which
+      *is* sorted at `:128`): semantically identical freezes with criteria in different order hash
+      differently, breaking §5.1 ("an unchanged Continue contract remains comparable") and causing false
+      scope-change detection. Same for `sourceRefs` order and duplicate approved IDs (`["m","m"]` vs `["m"]`).
+      Fix: `schema.parse` the frozen output; sort criteria by `id` (dedupe/validate) and normalize
+      `sourceRefs`/approved IDs before hashing; add tests.
+      PRD: FR-19, §5.1, §8.2.
+
+- [x] **[BUG] B8 — `recordShadowDecision` clobbers checkpoint, can mutate terminal rows.** ✅ Done
+      (commit 1653ba90): merges the decision under a stable `shadowDecision` key instead of overwriting
+      (§6.1), guards on `finalized` (terminal rows immutable), bumps `execution_state_version` (CAS
+      preserved), and no-ops on a missing execution. `src/modules/AiTaskExecutionModule.ts:57-66`.
+      PRD: §6.1, §6.2.
+
+- [x] **[BUG] B9 — Controller stuffs criterion IDs into `evidenceIds`.** ✅ Done (commit 97250c43):
+      shadow mode now emits `evidenceIds: []` (no evidence collected until `TaskEvidenceService` exists
+      in Slice 2), so downstream consumers validating reference membership/scope (§8.2) won't
+      misattribute criterion IDs as evidence identities. `src/service/aiTaskExecution/TaskCompletionController.ts:110,125`.
+      PRD: §5.2, §8.2.
+
+- [ ] **[BUG] R1 — Resolver misses the PRD's own headline scenarios without a template.**
+      `src/service/aiTaskExecution/TaskRequestResolver.ts:103-149`. Verified live (probe test, 2026-10-05):
+      `classify({ userMessage: "save 100 qualifying contacts", hasApprovedTaskTemplate: false })` →
+      **`response_only`**; `"Find 20 leads, save them, and draft an email"` → `response_only`;
+      `"Please check the deployment status now"` → `response_only` (leading "please" defeats `startsWith`).
+      Only template-backed tasks, `check/monitor/verify`-leading, `write/draft`-leading, and short
+      `send/post` messages route to task routes. But FR-17 demands automatic enrollment of "action requests,
+      information-gathering tasks, and requested text/artifact deliverables" with **no extra task-mode
+      switch**, and FR-18 requires "structured request analysis where templates do not cover the request".
+      AC-01/AC-17's `save 100 contacts` and §5.13/AC-20's multi-part `find+save+draft` are therefore
+      unprotected unless an approved template happens to exist — the existing test only covers the
+      with-template case (`TaskRequestResolver.test.ts:6-13`).
+      Fix: add deterministic matchers for `save/collect/find/search/gather/add/import` task verbs (and
+      conjunctions), tolerate leading politeness/scoping prefixes, keep definition-question and
+      ambiguity guards; add no-template tests for AC-01/AC-17/AC-19/AC-20. Do NOT fix by keyword-matching
+      alone per FR-18 (structural verb+target analysis, template path unchanged).
+      PRD: FR-17, FR-18, AC-01, AC-17, AC-19, AC-20.
+
+---
+
+## B. Incomplete work, by delivery slice (§16)
+
+### Slice 1 remainder (gate: FR-05/06/16–20/24; AC-12/14/19/21/26/31)
+
+- [x] **[GAP-S1] B10 — Shadow evaluation is never invoked in production.** `decide()` and
+      `recordShadowDecision()` have zero production callers; the gate has zero call sites. Slice 1
+      currently records no shadow decisions at all — "read-only shadow evaluation … on both origins"
+      exists as tested library code only. **Decision (2026-10-05): explicitly defer call-site wiring
+      to Slice 2. Slice 1 is recorded as library-only.** Rationale:
+      1. §17 mandates "Shadow mode uses local read-only evidence and explicitly budgeted checker
+         work; it cannot alter counters or trigger maker continuations. **Measure checker cost before
+         enrollment.**" The bounded read-only evidence adapters and checker dispatch
+         (`TaskEvidenceService`, `[GAP-S2]`) do not exist yet — there is no evidence source to drive
+         a shadow `decide()` call against. Wiring a call site now would invoke `decide()` against an
+         empty evidence set on every enrolled run, producing shadow decisions with nothing to
+         evaluate — a cost-measurement signal with no payload, the opposite of what §17 asks for.
+      2. The engine acceptance path (`[GAP-S2]`: conversation lease, DB/user scope, durable
+         `submissionId`, execution record before resolver/maker dispatch, trusted binding on every
+         resume path) is the *prerequisite* for any shadow call site — `recordShadowDecision` needs
+         a created execution to record against, and the loop-consult path needs the controller wired.
+         That wiring is itself Slice 2.
+      3. Shadow evaluation that cannot alter counters or trigger maker continuations (§17) is, by
+         construction, a no-op without the Slice 2 enforcement gate (`decide()` returns a decision
+         that the loop would consult; the loop does not consult it today). Wiring the call site
+         ahead of the consult path would record decisions the loop ignores — dead traffic.
+      Slice 2 must: (a) add the `TaskEvidenceService` so shadow `decide()` has evidence to
+      evaluate, (b) wire a gate-checked, read-only shadow `decide()` + `recordShadowDecision()`
+      call site on both manual (`AIChatQueryEngine`/`AIChatQueryLoop`) and scheduled
+      (`ScheduledAiMessageRunner`/`ScheduledLoopEventSink`) origins, and (c) measure checker cost
+      per §17 before any enrollment. Until then the gate stays OFF in production (zero call sites is
+      correct for a shadow-only library slice).
+- [x] **[GAP-S1] Worker-guard tests.** ✅ Done (commit 399d8f8c): tests in
+      `test/modules/AiTaskExecutionModule.test.ts` assert `createExecution`/`finalizeExecution`/
+      `getExecution`/`getUnfinalizedExecutions` throw under `process.env.WORKER_TYPE` (NFR-03).
+- [ ] **[GAP-S1] Missing unit tests for landed fixes:** `structuredClone` deep-copy fix in
+      `TaskCompletionContractService.freeze`, `verifyHash` round-trip, NaN/Infinity budget inputs (see B1),
+      true-concurrent CAS (see B2).
+- [x] **[GAP-S1] `HARD_CAPS` declared but unenforced.** ✅ Done (commit ab9caf7c): `clampToHardCaps`
+      in `budgetDefaults.ts` clamps `maxContinuations`/`maxActiveRuntimeMs` at the ledger freeze
+      boundary; `AiTaskExecutionModel.createExecution` serializes
+      `clampToHardCaps(input.budgetLimits)` into `policy_limits_json` instead of `"{}"`. Coordinator
+      wires `budgetLimits` through `CreateExecutionInput` → module → model.
+      PRD: FR-08 ("Only trusted validated configuration changes the defaults"), §6.1.
+- [x] **[GAP-S1] Ledger `policy_limits_json` never populated** (`AiTaskExecution.model.ts` wrote `"{}"`).
+      ✅ Done (commit ab9caf7c): frozen clamped budget limits now persist at `createExecution` time.
+      PRD: §6.1.
+- [x] **[GAP-S1] Scoped submission uniqueness unenforced.** ✅ Done (commit b872f221): partial
+      unique index on `(conversation_id, submission_id) WHERE submission_id IS NOT NULL`;
+      `createExecution` looks up by `(conversation, submission)` and returns `reused` (same
+      request_hash, AC-26 transport-retry) or `conflict` (`SUBMISSION_CONFLICT`, different
+      request_hash); scheduled-origin `null` submission_id is exempt (lineage key is
+      occurrence_key). Process-wide `AsyncMutex` serializes the dedup-lookup + insert so
+      concurrent callers don't collide on the shared better-sqlite3 connection. PRD: §4A.1, §6.1,
+      AC-26.
+
+### Slice 2 — Manual + scheduled recovery (gate: FR-01–10/12–15/17–24; AC-01–08/11/15–27/29–32)
+
+Contracts, evidence & verification:
+
+- [ ] **[GAP-S2] `TaskEvidenceService`** (adapters, deterministic checks, checker dispatch, §8.1/§8.2):
+      record/file/operation/observation/text evidence with source revision + baseline handling; qualitative
+      checker with schema validation, reference-membership checks, retry budget (1 retry/candidate, 6/run).
+      PRD: FR-03, FR-04, AC-03, AC-11, AC-20.
+- [ ] **[GAP-S2] `TaskProgressTracker`** (evidence fingerprints, stall detection §7.2 step 9, no-progress
+      streak bound 3, discovery-traffic exclusion). PRD: FR-09, AC-05.
+- [ ] **[GAP-S2] Contract freezing per run** (template compiler + main-process validation, §4A.2/§5.1;
+      criterion offset-vs-message-body validation; baseline capture before change-evidence actions).
+      PRD: FR-01, FR-02, FR-19.
+- [ ] **[GAP-S2] Live `TaskRunBudget` enforcement**: ledger-backed reservations, dispatch gate on every
+      resolver/maker/checker/compaction/fallback/HTTP-retry path, token-estimate reservation + actual
+      reconciliation with dedup by request ID, active-time/1-hour-wait accounting, `HARD_CAPS` clamping.
+      PRD: FR-08, AC-08, AC-29.
+
+Engine / loop / scheduler wiring (all behind `aiTaskCompletionPolicyV1`, frozen policy at acceptance):
+
+- [ ] **[GAP-S2] Engine acceptance path** (§4A.1): conversation lease, DB/user scope, durable user message by
+      stable `submissionId`, execution record + ledger before resolver/maker dispatch, trusted binding on
+      every resume path (permission, plan-question, plan-approval). Renderer generates/retains
+      `submissionId`. PRD: FR-17, FR-20, AC-26.
+- [ ] **[GAP-S2] Loop consults controller before terminal event** (FR-05): every enrolled no-call ending and
+      round/budget cap reaches `decide()`; suppress legacy `goalTextStop`/empty-stop/cap nudges for enrolled
+      runs only (`AIChatQueryLoop.ts:2224-2268`, `:2164-2182` stay for non-enrolled). Valid parsed calls still
+      execute even with `stop`. PRD: FR-05, FR-06, AC-02, AC-12, AC-18.
+- [ ] **[GAP-S2] Single-owner enforcement**: standalone vs goal owner per execution; unrelated active goals
+      cannot take over manual requests (§4A.3); goal-maker iterations yield internally. PRD: FR-20, AC-14, AC-31.
+- [ ] **[GAP-S2] `ScheduledLoopEventSink` rejects missing/malformed task result as `MISSING_TASK_OUTCOME`**
+      (never falls back to success); manual path likewise. Consult must happen upstream of
+      `ScheduledLoopEventSink.ts:68` first-wins guard. PRD: FR-05, FR-12.
+- [ ] **[GAP-S2] Atomic finalization with schedule accounting** (`AiTaskExecutionModule.finalizeExecution`
+      + scheduled adapter in one transaction: outcome/reason/evidence/counters + occurrence status/counters/
+      next-run exactly once; manual path touches no schedule tables; `verified_complete→completed` mapping
+      preserves semantic outcome; unknown-action-outcome pauses schedule immediately). PRD: FR-12, §6.3, AC-32.
+- [ ] **[GAP-S2] Pause/resume/cancel/Continue/Retry semantics** (§4A.4, §12): same-execution grant/deny and
+      question/approval resume with remaining ledger; Stop/Replace fencing (`TASK_REPLACED`, late-callback
+      fencing); linked Continue successor (immutable ancestor, shared lineage ledger, one active successor);
+      explicit Retry as disclosed new ledger; transport retry idempotency. PRD: FR-10, FR-21, FR-22, AC-06,
+      AC-07, AC-22–27.
+- [ ] **[GAP-S2] Stop during checking/recovery** aborts owner + checker/transport waits, no further dispatch,
+      no late success (AC-24); replacement message fences old execution (AC-25).
+
+Renderer / i18n / tests:
+
+- [ ] **[GAP-S2] Renderer + history surfaces**: `ChatV2StreamChunk` / event→IPC / store / `AiChatV2.vue` /
+      scheduled history: Working / Checking / Continuing / waiting / Verified-Incomplete-NeedsInput-Blocked-
+      Cancelled-TimedOut states; `response_ended` never shows a task-success badge; no per-attempt duplicate
+      toasts; stale/duplicate event filtering by execution ID/generation/event ID. PRD: FR-13, FR-14, AC-16, AC-32.
+- [ ] **[GAP-S2] Six-language translations** (`en zh es fr de ja` + English fallbacks) for every new
+      state/message/action. PRD: FR-15.
+- [ ] **[GAP-S2] Component tests** (`test/vitest/main/components/`) for new status/progress/history/grant-deny/
+      run-stop-vs-schedule-stop UI; **E2E** (`test/e2e/specs/`) for plain-message manual + scheduled
+      fake-stream tool-stop-recovery, ordinary-answer no-loop, text deliverable, pause-resume-stop, reload
+      honesty, Stop-during-recovery, stale-event-after-replacement, effect-simulator-dispatched-once.
+      PRD: FR-15, §15 (test table), AC-01–08/11/15–27/29–32.
+
+Acceptance mapping (all currently failing live; Slice 2 gate requires all green):
+AC-01 (54/100 continue), AC-02 (first-response no-tool recovery), AC-03 (genuine completion, no extra maker
+call), AC-04 (observation occurrence), AC-05 (no-progress incomplete), AC-06 (permission resume counters),
+AC-07 (denial honored), AC-08 (budget exhaustion), AC-11 (checker-invented evidence rejected), AC-15
+(persistence failure → no success), AC-16 (history reload all languages), AC-17–27, AC-29 (monotonic counters
+through compaction/fallback), AC-30 (recoverable pre-decision error stays non-terminal), AC-32 (idempotent
+terminal identity, no schedule accounting for manual).
+
+### Slice 3 — Guarded effects (gate: FR-11, NFR-05/07; AC-09/10/13/28)
+
+- [ ] **[GAP-S3] `TaskOperationGuard`** (§10): stable operation keys (execution/lineage + domain + target +
+      intent hash + contract-permitted ordinal only), native receipt preference, claim→dispatch→confirm/unknown
+      state machine with transition validation, pending/unknown query, no-effect-evidence-gated retry only.
+- [ ] **[GAP-S3] Cross-execution same-intent lookup**: new execution/conversation must not bypass an
+      unresolved earlier send/job (domain/target/intent/state index or native job lookup); `UNKNOWN_ACTION_OUTCOME`
+      blocks replay, requires reconciliation, pauses schedule (FR-12).
+- [ ] **[GAP-S3] Startup recovery**: mark unfinished executions/occurrences interrupted, preserve
+      checkpoints/receipts, invalidate callbacks/handles, reconcile uncertain operations — no automatic action
+      replay. (NFR-05; `getUnfinalizedExecutions` exists, no consumer.)
+- [ ] **[GAP-S3] Crash/finalization fault-injection tests** (reservation↔dispatch crash, dispatch↔receipt crash,
+      restart-before-notification dedup, zero duplicate effects, single schedule-count increment).
+- [ ] **[GAP-S3] Background-job semantics**: start-receipt vs completion distinction, bounded read-only polling
+      (backoff, ≥1s interval), no unbounded internal polling. (§10.3)
+- [ ] **[GAP-S3] Terminology reconciliation**: entity/types use `pending…accepted/completed`, design §10.2
+      diagram uses `prepared…confirmed` — pick one before receipt reconciliation lands.
+
+### Slice 4 — External adapters (gate: FR-04, AC-14)
+
+- [ ] **[GAP-S4] Legacy schedule-page and non-Chat-V2 AI features**: separate enrollment adapters + compatibility
+      tests; never silently infer new targets. (Only `AiMessageTask` policy columns exist as schema prep.)
+
+### Server diagnostics (FR-16; owner: AI server engineering; repo `/Users/cengjianze/project/aifetchserver`)
+
+Desktop completion control must work without server metadata; all fields optional/capability-negotiated.
+
+- [ ] **[GAP-SRV] Preserve provider finish reasons**; record `terminal_origin`
+      (`provider|adapter_normalized|synthetic_missing_terminal|transport_error|unknown`) in
+      `aifetchserver/api/openai_compatible.py` stream builder + adapters; no image-whitelist leakage to
+      unrelated passthrough streams; no silent error→stop translation.
+- [ ] **[GAP-SRV] Optional `aifetch_stream_diagnostics` extension** (schema v1: request/server-query IDs,
+      provider label, selected/resolved model incl. failover record, upstream response/finish reason,
+      forwarded reason, terminal origin + `upstream_terminal_seen`, output budget, usage source); optional
+      correlation header; safe logs only (no prompts/args/recipients/reasoning/keys).
+- [ ] **[GAP-SRV] Desktop correlation plumbing**: opaque request/execution (+ optional scheduled-run) IDs via
+      optional metadata/headers; `OpenAIStreamAccumulator` + API stream types record provenance;
+      missing-diagnostics → `unknown` tolerated.
+- [ ] **[GAP-SRV] Server unit/integration tests** per §15 row (raw stop passthrough, absent-terminal origin,
+      normalization, midstream error, post-terminal usage, fallback-model record, metadata optionality,
+      sensitive-log exclusion).
+
+---
+
+## C. Regression & rollout gates (PRD §12, design §17/§18)
+
+- [ ] All AC-01–32 pass assigned test layers, incl. manually typed tasks with no `/goal`, schedule, or toggle.
+- [ ] Zero enrolled non-verified runs recorded successful; zero duplicate effects in fault-injection tests.
+- [ ] `yarn testmain`, relevant `yarn test` module cases, `yarn typecheck`, `yarn test:components`,
+      `yarn vue-typecheck`, `yarn test:e2e` green for changed flows; server `uv run pytest` + `ruff` + `mypy`.
+- [ ] Metrics instrumented (evidence-backed completion, recovery success, incomplete reasons, extra
+      resolver/maker/checker calls, actual/estimated usage labels, latency, waits, finalization conflicts,
+      reconciliation) segmented by manual/scheduled origin, route, action risk; shadow baseline comparison.
+- [ ] Rollback verified: flag OFF stops enrollment/continuations; enrolled runs finish frozen-policy or
+      incomplete/cancelled — never fallback success; additive schema retained; quiesce before downgrade.
+- [ ] Historical `completed` rows untouched (no retroactive `verified` relabel).
+
+---
+
+## D. Audit trail
+
+- Audited 2026-10-05 on branch `worktree-task-completion-policy-v1-slice1`.
+- Method: full read of both PRDs; full read of all 6 `src/service/aiTaskExecution/*` files, all 3 entities,
+  both models, both modules, `entityTypes`, feature gate; grep-confirmed zero live call sites in
+  `AIChatQueryLoop`/`AIChatQueryEngine`/`ScheduledLoopEventSink`/`ScheduledAiMessageRunner`; ran 5 Slice 1
+  service suites (42/42 pass with `vitest.service.config.mjs` — note: bare `yarn vitest run` without the
+  config fails `@/` alias resolution, a harness-invocation detail, not a repo bug); executed a throwaway
+  resolver probe (deleted afterward) proving R1.
+- Prior audit claims incorporated: B1–B8 (parallel audit agents, each verified by quoted source); B9/R1/B10
+  added by lead audit. Slice 2/3/4 absence cross-checked against `git log 7ce133b2..HEAD` file list.
