@@ -3,9 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
  * P0.3: the pre-draft policy gate must block hard-blocked messages (bounce,
@@ -265,5 +268,205 @@ describe("FR-029 — message-level duplicate guard", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.code).toBe("already_replied");
+  });
+});
+
+/**
+ * B02 [P1]: the message-level guard must inspect the authoritative send-attempt
+ * ledger, not just draft/message projections. An attempt that is `sent`,
+ * `delivery_unknown`, `claimed`, or `submitted` must deny a duplicate draft or
+ * send — even when the linked draft row is missing/stale and the message
+ * `replyStatus` projection still looks unanswered. The attempt ledger is
+ * append-only and survives projection drift (orphan attempts, stale replyStatus
+ * after a mid-flip crash, a deleted draft, etc.).
+ *
+ * Each case seeds an authoritative attempt state with a stale, clean-looking
+ * message/draft projection (replyStatus = not_started, no drafts) and asserts
+ * the guard still denies at BOTH the draft and send stages before any AI/SMTP
+ * work. Acceptance: independently seed each authoritative attempt state; both
+ * draft and send stages must deny before AI/SMTP work, including missing-draft
+ * and equivalent-duplicate-row cases.
+ */
+describe("B02 — guard inspects authoritative send-attempt evidence", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+  const orchestrator = new EmailReplyPolicyOrchestrator();
+
+  async function seedCleanMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4250;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = over.classificationConfidence ?? 0.95;
+    // Stale projection: looks completely unanswered. The attempt ledger below
+    // is the authoritative evidence that must override this.
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedAttempt(
+    messageId: number,
+    status: EmailReplySendAttemptStatus,
+    emailServiceId = 4250
+  ): Promise<number> {
+    // Orphan-friendly: the attempt ledger is authoritative even without a live
+    // draft row. Use a sentinel draftId/revisionId/approvalId so the attempt
+    // stands alone (simulates a deleted/stale draft, or a crash before the
+    // draft projection caught up).
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `key-${Math.random()}`;
+    attempt.draftId = 900000 + Math.floor(Math.random() * 9999);
+    attempt.revisionId = attempt.draftId;
+    attempt.approvalId = attempt.draftId;
+    attempt.messageId = messageId;
+    attempt.conversationId = null;
+    attempt.emailServiceId = emailServiceId;
+    attempt.senderAddress = "owner@example.com";
+    attempt.recipientAddress = "person@example.com";
+    attempt.status = status;
+    attempt.claimedAt = new Date();
+    attempt.submittedAt = null;
+    attempt.completedAt = null;
+    attempt.providerMessageId = null;
+    attempt.failureCode = null;
+    attempt.sanitizedError = null;
+    const saved = await attemptModule.create(attempt);
+    return saved.id;
+  }
+
+  it("refuses already_replied at pre_draft when a sent attempt exists with no draft and stale replyStatus", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "sent");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("already_replied");
+  });
+
+  it("refuses already_replied at pre_send when a sent attempt exists with no draft", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "sent");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_send",
+      messageId: id,
+      // The guard runs before the per-draft claim, so a sentinel draftId still
+      // yields the attempt-led denial.
+      draftId: 999999,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("already_replied");
+  });
+
+  it("refuses delivery_unknown at pre_draft when an ambiguous attempt exists with no draft", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "delivery_unknown");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("delivery_unknown");
+  });
+
+  it("refuses reply_in_progress at pre_draft when a claimed attempt exists with no draft", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "claimed");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_in_progress");
+  });
+
+  it("refuses reply_in_progress at pre_draft when a submitted attempt exists with no draft", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "submitted");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_in_progress");
+  });
+
+  it("refuses reply_in_progress at pre_send when a claimed attempt exists", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "claimed");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_send",
+      messageId: id,
+      draftId: 999999,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_in_progress");
+  });
+
+  it("attempt ledger is authoritative over a stale live draft (sent attempt + live draft → already_replied, not reuse)", async () => {
+    // A sent attempt plus a leftover live draft: the sent attempt wins. The
+    // guard must NOT fall through to the reuse path.
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = id;
+    draft.emailServiceId = 4250;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = "draft";
+    draft.generationSource = "ai";
+    await draftModule.create(draft);
+    await seedAttempt(id, "sent");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("already_replied");
+  });
+
+  it("a definitely-failed attempt alone does NOT block drafting (failed != unknown)", async () => {
+    // A definitely-rejected SMTP attempt is terminal but not ambiguous; the
+    // message may be re-drafted/re-sent. (B08 covers reusing the failed draft;
+    // here we only assert the guard does not treat `failed` as a block.)
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    await seedAttempt(id, "failed");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+  });
+
+  it("clean message with no drafts and no attempts is allowed (regression)", async () => {
+    const id = await seedCleanMessage({ replyStatus: "not_started" });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
   });
 });

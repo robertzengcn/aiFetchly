@@ -46,6 +46,23 @@ export class EmailReplySendAttemptModel extends BaseDb {
   }
 
   /**
+   * All send attempts for an inbound message id (FR-029/B02). The message-level
+   * guard inspects this to find authoritative delivery evidence — sent,
+   * unresolved (`delivery_unknown`), or in-flight (`claimed`/`submitted`) —
+   * even when the linked draft row is missing/stale and the message
+   * `replyStatus` projection still looks unanswered. Ordered newest-first so
+   * the guard's precedence scan sees the most recent attempt first.
+   */
+  async listByMessage(
+    messageId: number
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    return await this.repository.find({
+      where: { messageId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /**
    * In-flight attempts older than the threshold — candidates for recovery
    * (§15.6, §16). Returns `claimed`/`submitted` rows that may represent an
    * ambiguous delivery after a crash or post-SMTP write failure.

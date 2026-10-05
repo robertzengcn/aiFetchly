@@ -59,6 +59,28 @@ export class EmailReplySendAttemptModule extends BaseModule {
     }
   }
 
+  /**
+   * All send attempts for an inbound message id (FR-029/B02). The message-level
+   * guard reads this for authoritative delivery evidence — sent, unresolved
+   * (`delivery_unknown`), or in-flight (`claimed`/`submitted`) — even when the
+   * linked draft row is missing/stale and the message `replyStatus` projection
+   * still looks unanswered.
+   */
+  async listByMessage(
+    messageId: number
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.attemptModel.listByMessage(messageId);
+    } catch (error) {
+      console.error(
+        "Error listing reply send attempts for message:",
+        error
+      );
+      throw error;
+    }
+  }
+
   /** Stale in-flight attempts older than {@link threshold} (recovery input). */
   async listStaleInFlight(
     threshold: Date

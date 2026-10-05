@@ -11,6 +11,7 @@ import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModu
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
  * Single authoritative policy gate for the reply pipeline (technical design
@@ -32,11 +33,36 @@ import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
  * Phase-1 limitation closed by Phase-2 atomic reservation (FR-035).
  */
 export class EmailReplyPolicyOrchestrator {
-  private readonly draftModule = new EmailReplyDraftModule();
-  private readonly approvalModule = new EmailReplyApprovalModule();
-  private readonly attemptModule = new EmailReplySendAttemptModule();
-  private readonly messageModule = new EmailReceivedMessageModule();
-  private readonly ruleModule = new EmailAutoReplyRuleModule();
+  private readonly draftModule: EmailReplyDraftModule;
+  private readonly approvalModule: EmailReplyApprovalModule;
+  private readonly attemptModule: EmailReplySendAttemptModule;
+  private readonly messageModule: EmailReceivedMessageModule;
+  private readonly ruleModule: EmailAutoReplyRuleModule;
+
+  /**
+   * Production callers omit the options; tests inject stub modules so the
+   * guard's precedence logic can be exercised against seeded state without the
+   * full DB stack. Mirrors the `senderFactory`/`serviceLoader` seam pattern in
+   * {@link EmailReplyDeliveryService}.
+   */
+  constructor(options?: {
+    readonly draftModule?: EmailReplyDraftModule;
+    readonly approvalModule?: EmailReplyApprovalModule;
+    readonly attemptModule?: EmailReplySendAttemptModule;
+    readonly messageModule?: EmailReceivedMessageModule;
+    readonly ruleModule?: EmailAutoReplyRuleModule;
+  }) {
+    this.draftModule =
+      options?.draftModule ?? new EmailReplyDraftModule();
+    this.approvalModule =
+      options?.approvalModule ?? new EmailReplyApprovalModule();
+    this.attemptModule =
+      options?.attemptModule ?? new EmailReplySendAttemptModule();
+    this.messageModule =
+      options?.messageModule ?? new EmailReceivedMessageModule();
+    this.ruleModule =
+      options?.ruleModule ?? new EmailAutoReplyRuleModule();
+  }
 
   async evaluate(input: {
     stage: EmailReplyPolicyStage;
@@ -81,8 +107,16 @@ export class EmailReplyPolicyOrchestrator {
    * (FR-029, Phase-1 local-only slice). Returns `null` when the message is
    * clean (proceed to the legacy checks); otherwise returns a refusal decision.
    *
+   * B02: the send-attempt ledger is the authoritative delivery evidence. A
+   * `sent`/`delivery_unknown`/`claimed`/`submitted` attempt counts even when
+   * the linked draft row is missing/stale and the message `replyStatus`
+   * projection still looks unanswered — the attempt row is append-only and
+   * survives draft/message projection drift (orphan attempts, stale replyStatus
+   * after a mid-flip crash, etc.).
+   *
    * Precedence (PRD §5):
-   *  1. `replyStatus === "sent"` or any draft `sent` → `already_replied`.
+   *  1. `replyStatus === "sent"` or any draft `sent` OR any `sent` attempt →
+   *     `already_replied`.
    *  2. Any draft/attempt `delivery_unknown` → `delivery_unknown` (ambiguous
    *     outcome on a prior attempt; never auto-retry).
    *  3. Any draft `sending` or attempt `claimed`/`submitted` →
@@ -112,22 +146,36 @@ export class EmailReplyPolicyOrchestrator {
       (d) => d.status === "delivery_unknown"
     );
 
-    // 1. Already replied: explicit message state OR a sent draft.
-    if (replyStatus === "sent" || sentDrafts.length > 0) {
+    // B02: authoritative delivery ledger. Read every attempt for this message
+    // (including orphan rows whose linked draft was deleted, and stale rows
+    // left behind by a mid-flip crash). The attempt status is append-only and
+    // overrides stale draft/message projections.
+    const attempts = await this.attemptModule.listByMessage(messageId);
+    const sentAttempts = attempts.filter((a) => a.status === "sent");
+    const unknownAttempts = attempts.filter(
+      (a) => a.status === "delivery_unknown"
+    );
+    const inFlightAttempts = attempts.filter((a) =>
+      isAttemptInFlight(a.status)
+    );
+
+    // 1. Already replied: explicit message state OR a sent draft OR a sent
+    //    attempt (the ledger is authoritative even if the draft row is gone).
+    if (replyStatus === "sent" || sentDrafts.length > 0 || sentAttempts.length > 0) {
       return deny(
         "already_replied",
         "Message already has a sent reply; refusing duplicate"
       );
     }
-    // 2. Ambiguous delivery on a prior attempt.
-    if (unknownDrafts.length > 0) {
+    // 2. Ambiguous delivery on a prior attempt (draft OR attempt ledger).
+    if (unknownDrafts.length > 0 || unknownAttempts.length > 0) {
       return deny(
         "delivery_unknown",
         "A prior send attempt for this message has an ambiguous delivery outcome; requires human triage"
       );
     }
-    // 3. In-flight send.
-    if (sendingDrafts.length > 0) {
+    // 3. In-flight send (draft sending OR attempt claimed/submitted).
+    if (sendingDrafts.length > 0 || inFlightAttempts.length > 0) {
       return deny(
         "reply_in_progress",
         "A send for this message is already in flight"
@@ -428,6 +476,20 @@ export function isValidReplyAddress(address: string): boolean {
  */
 function isLiveDraftStatus(status: string): boolean {
   return status === "draft" || status === "approved" || status === "sending";
+}
+
+/**
+ * Attempt statuses that represent an in-flight SMTP submission (B02). `claimed`
+ * is the atomic pre-SMTP hold; `submitted` is the post-handoff hold. Both mean
+ * a send is actively in progress for this message — the guard must refuse a
+ * duplicate send (or a duplicate draft) before AI/SMTP work. `sent`,
+ * `failed`, and `delivery_unknown` are terminal and handled by their own
+ * precedence branches above.
+ */
+function isAttemptInFlight(
+  status: EmailReplySendAttemptStatus
+): boolean {
+  return status === "claimed" || status === "submitted";
 }
 
 /**
