@@ -420,59 +420,49 @@ export class EmailReplyDraftGenerationService {
     //    NOT counted as a validation strike — the regeneration budget corrects
     //    malformed model output, not provider outages. Transport errors surface
     //    as a provider error with no draft persisted and no strike consumed.
-    let generated: GeneratedEmailReply;
-    try {
-      const firstRaw = await this.callLlmRawWithHintFallback(systemMsg, userMsg);
-      const first = this.validateLlmResult(firstRaw);
-      if (first.ok) {
-        generated = first.value;
-      } else {
-        const secondRaw = await this.callLlmRawWithHintFallback(systemMsg, {
-          role: "user",
-          content: buildCorrectionPrompt({
-            originalUserContent: openAIContentToString(userMsg.content),
-            codes: first.codes,
-          }),
-        });
-        const second = this.validateLlmResult(secondRaw);
-        if (!second.ok) {
-          const allCodes = [...first.codes, ...second.codes];
-          await this.recordFailure(
-            message.emailServiceId,
-            message.id,
-            `[needs_human_review] generation failed validation twice: ${allCodes.join(
-              ","
-            )}`,
-            { stage: "generation", code: "needs_human_review" }
-          );
-          return {
-            success: false,
-            error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
-          };
-        }
-        generated = second.value;
-      }
-    } catch (error) {
-      // Transport failure: not a validation strike. Persist a provider-error
-      // audit row (semantically reply_skipped, NOT send_failed — no send was
-      // attempted) and surface the provider error to the caller.
-      if (error instanceof LlmTransportError) {
+    //
+    //    B10: the LLM attempt is separated from the failure-audit write. The
+    //    attempt returns a discriminated outcome (ok / validation_failed /
+    //    transport_error) and writes NO audit itself. The caller writes exactly
+    //    ONE reply_skipped audit per failure outcome, OUTSIDE the attempt's
+    //    catch. A persistence failure in recordFailure propagates directly — it
+    //    is no longer re-caught by a transport-error handler and reinterpreted
+    //    as a generic provider failure (which previously caused a second audit
+    //    attempt and lost the intended stage/code).
+    const attempt = await this.attemptLlmGeneration(systemMsg, userMsg);
+    if (attempt.kind !== "ok") {
+      if (attempt.kind === "validation_failed") {
+        const allCodes = attempt.codes;
+        // recordFailure is NOT inside a transport catch — a persistence error
+        // here propagates to the caller as a failed outcome (B10).
         await this.recordFailure(
           message.emailServiceId,
           message.id,
-          `[provider_error] ${error.message}`,
-          { stage: "generation", code: "provider_error" }
+          `[needs_human_review] generation failed validation twice: ${allCodes.join(
+            ","
+          )}`,
+          { stage: "generation", code: "needs_human_review" }
         );
-        return { success: false, error: `[provider_error] ${error.message}` };
+        return {
+          success: false,
+          error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
+        };
       }
-      const errMsg = error instanceof Error ? error.message : String(error);
+      // transport_error: not a validation strike. Persist a provider-error
+      // audit row (semantically reply_skipped, NOT send_failed — no send was
+      // attempted) and surface the provider error to the caller.
       await this.recordFailure(
         message.emailServiceId,
         message.id,
-        `LLM call failed: ${errMsg}`
+        `[provider_error] ${attempt.error.message}`,
+        { stage: "generation", code: "provider_error" }
       );
-      return { success: false, error: errMsg };
+      return {
+        success: false,
+        error: `[provider_error] ${attempt.error.message}`,
+      };
     }
+    const generated = attempt.value;
 
     // 6b. Validate output.
     const warnings: string[] = [];
@@ -806,6 +796,62 @@ export class EmailReplyDraftGenerationService {
    */
   private validateLlmResult(raw: LlmRawResult): StrictParseResult {
     return validateLlmRawResult(raw);
+  }
+
+  /**
+   * Run the two-strike LLM generation + validation loop and return a
+   * discriminated outcome (B10). This method performs the model work ONLY;
+   * it writes NO audit and throws only on truly unexpected (non-transport)
+   * errors. The caller owns writing exactly ONE failure audit based on the
+   * outcome kind, so a persistence failure in {@link recordFailure} propagates
+   * directly instead of being re-caught here and reinterpreted as a transport
+   * error.
+   *
+   * Outcomes:
+   *  - `ok`: validation passed on the first or second attempt.
+   *  - `validation_failed`: both attempts failed validation; the caller
+   *    writes the `needs_human_review` audit (codes = first ∪ second).
+   *  - `transport_error`: a provider/transport failure (`LlmTransportError`);
+   *    the caller writes the `provider_error` audit. NOT a validation strike.
+   */
+  private async attemptLlmGeneration(
+    systemMsg: OpenAIChatMessage,
+    userMsg: OpenAIChatMessage
+  ): Promise<
+    | { readonly kind: "ok"; readonly value: GeneratedEmailReply }
+    | { readonly kind: "validation_failed"; readonly codes: readonly string[] }
+    | { readonly kind: "transport_error"; readonly error: LlmTransportError }
+  > {
+    try {
+      const firstRaw = await this.callLlmRawWithHintFallback(systemMsg, userMsg);
+      const first = this.validateLlmResult(firstRaw);
+      if (first.ok) {
+        return { kind: "ok", value: first.value };
+      }
+      const secondRaw = await this.callLlmRawWithHintFallback(systemMsg, {
+        role: "user",
+        content: buildCorrectionPrompt({
+          originalUserContent: openAIContentToString(userMsg.content),
+          codes: first.codes,
+        }),
+      });
+      const second = this.validateLlmResult(secondRaw);
+      if (second.ok) {
+        return { kind: "ok", value: second.value };
+      }
+      return {
+        kind: "validation_failed",
+        codes: [...first.codes, ...second.codes],
+      };
+    } catch (error) {
+      if (error instanceof LlmTransportError) {
+        return { kind: "transport_error", error };
+      }
+      // Unexpected non-transport error — propagate so the caller sees a real
+      // failure rather than a fabricated classification. This is NOT the
+      // validation/transport path; it's a bug or invariant violation.
+      throw error;
+    }
   }
 
   private async writeReplyAudit(

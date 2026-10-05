@@ -1322,6 +1322,206 @@ describe("decodeStoredWarnings (B09)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B10: provider/validation exception handling is separated from persistence
+// failures. The failure audit is attempted exactly once; a persistence error
+// in recordFailure propagates (not re-caught as a transport error and not
+// re-classified as a generic provider failure).
+// ---------------------------------------------------------------------------
+describe("createDraft failure-audit separation (B10)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4248;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  /** Count how many times recordFailure attempted to write an audit row. */
+  async function auditWriteCount(messageId: number): Promise<number> {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 100,
+    });
+    return records.filter((r) => r.action === "reply_skipped").length;
+  }
+
+  it("writes exactly ONE needs_human_review audit on two-strike validation failure (no fabricated provider error)", async () => {
+    // Both LLM calls return malformed JSON -> validation_failed outcome.
+    // recordFailure is called exactly once with code=needs_human_review.
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse("{not json", "stop"),
+      completionResponse("{also not json", "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[needs_human_review]");
+    // Exactly TWO LLM calls (first + one correction), then stop.
+    expect(requests).toHaveLength(2);
+    // Exactly ONE audit row, classified needs_human_review (NOT provider_error).
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const skips = records.filter((r) => r.action === "reply_skipped");
+    expect(skips).toHaveLength(1);
+    const meta = JSON.parse(skips[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.stage).toBe("generation");
+    expect(meta.code).toBe("needs_human_review");
+  });
+
+  it("propagates a persistent recordFailure error (not swallowed, not re-classified as provider_error)", async () => {
+    // B10 acceptance: a persistence failure in the failure-audit write must
+    // propagate. Stub replyAuditModule.create to throw persistently; the
+    // two-strike validation-failure path must surface the persistence error
+    // and NOT attempt a second audit write (which previously happened because
+    // the thrown audit error was re-caught as a transport error).
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse("{not json", "stop"),
+      completionResponse("{also not json", "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const createCalls: EmailReplyAuditLogEntity[] = [];
+    const originalCreate = svc["replyAuditModule"].create.bind(
+      svc["replyAuditModule"]
+    );
+    svc["replyAuditModule"].create = async (entity: EmailReplyAuditLogEntity) => {
+      createCalls.push(entity);
+      throw new Error("audit DB write failed (simulated permanent)");
+    };
+    try {
+      // The persistence error now PROPAGATES (rejects) instead of being
+      // swallowed and re-classified as a provider_error. This is the B10
+      // contract: "persistence failure propagated."
+      await expect(
+        svc.createDraft({ messageId, useKnowledgeLibrary: false })
+      ).rejects.toThrow("audit DB write failed (simulated permanent)");
+      // The recordFailure path was attempted exactly ONCE — no second attempt
+      // from a re-caught transport-error handler (the pre-B10 bug).
+      expect(createCalls).toHaveLength(1);
+      // The intended classification was needs_human_review, NOT a fabricated
+      // provider_error (the pre-B10 bug reclassified on the second catch).
+      expect(createCalls[0].reason).toContain("[needs_human_review]");
+      // And NO audit row actually landed (the write threw).
+      expect(await auditWriteCount(messageId)).toBe(0);
+    } finally {
+      svc["replyAuditModule"].create = originalCreate;
+    }
+  });
+
+  it("a reject-once audit stub still surfaces the persistence error and writes no second audit", async () => {
+    // B10 "reject-once stub" acceptance: the audit write rejects once; the
+    // service does not retry the audit and does not reclassify. This mirrors
+    // the permanent-failure case but asserts the reject-once contract
+    // explicitly: one create() call, no retry, the intended stage/code was
+    // needs_human_review (not fabricated into provider_error).
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse("{not json", "stop"),
+      completionResponse("{also not json", "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const createCalls: EmailReplyAuditLogEntity[] = [];
+    const originalCreate = svc["replyAuditModule"].create.bind(
+      svc["replyAuditModule"]
+    );
+    svc["replyAuditModule"].create = async (entity: EmailReplyAuditLogEntity) => {
+      createCalls.push(entity);
+      throw new Error("audit write rejected once (simulated)");
+    };
+    try {
+      await expect(
+        svc.createDraft({ messageId, useKnowledgeLibrary: false })
+      ).rejects.toThrow("audit write rejected once (simulated)");
+      // Exactly ONE create() call — no retry, no second attempt from a
+      // re-caught transport-error handler.
+      expect(createCalls).toHaveLength(1);
+      // The intended stage/code was needs_human_review (the persistence error
+      // surfaced BEFORE the audit row could land, so the reason on the
+      // attempted entity is the validation-failure classification, not a
+      // fabricated provider_error).
+      expect(createCalls[0].reason).toContain("[needs_human_review]");
+      expect(await auditWriteCount(messageId)).toBe(0);
+    } finally {
+      svc["replyAuditModule"].create = originalCreate;
+    }
+  });
+
+  it("transport_error writes exactly ONE provider_error audit and does not count a validation strike", async () => {
+    // B10 companion: the transport-error outcome is also audited exactly once.
+    // A provider throw surfaces as LlmTransportError; recordFailure writes one
+    // provider_error row; no validation strike (no second LLM call).
+    const messageId = await seedMessage();
+    const requests: OpenAIChatCompletionRequest[] = [];
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        requests.push(req);
+        throw new Error("network timeout");
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    // Exactly ONE provider call (no correction attempt — transport errors are
+    // not validation strikes).
+    expect(requests).toHaveLength(1);
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const skips = records.filter((r) => r.action === "reply_skipped");
+    expect(skips).toHaveLength(1);
+    const meta = JSON.parse(skips[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.stage).toBe("generation");
+    expect(meta.code).toBe("provider_error");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B03: post-generation recheck runs the FULL guard, not a live-draft filter
 // ---------------------------------------------------------------------------
 describe("createDraft post-generation recheck runs the full guard (B03)", () => {

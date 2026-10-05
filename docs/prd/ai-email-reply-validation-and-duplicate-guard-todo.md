@@ -125,11 +125,13 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B10 — Audit failures are misreported as model failures [P2]
 
-- [ ] **Fix.** Keep provider/validation exception handling separate from persistence failures. Attempt the required failure audit once and propagate its failure clearly.
+- [x] **Fix.** Keep provider/validation exception handling separate from persistence failures. Attempt the required failure audit once and propagate its failure clearly.
 - Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:340–389`; validation failure auditing at `356–363` runs inside a catch scope that interprets the thrown audit error as an LLM failure and invokes failure auditing again.
 - Trigger: invalid generated output followed by an audit write that rejects once.
 - Current result: a second audit may be attempted and the returned reason becomes a generic provider failure, hiding the actual persistence error and losing the intended stage/code.
 - Acceptance: reject the audit write and assert one attempted failure-event write, no fabricated model-error classification, and persistence failure propagated. Test permanent failure and a reject-once stub.
+- Fix detail: extracted `attemptLlmGeneration(systemMsg, userMsg)` returning a discriminated outcome (`ok` / `validation_failed` / `transport_error`). It performs the model work and writes NO audit; non-transport unexpected errors propagate. `createDraft` now writes exactly ONE `recordFailure` per failure outcome OUTSIDE the attempt's catch, so a persistence failure in `recordFailure` propagates directly instead of being re-caught by a transport-error handler and reinterpreted as a generic `provider_error` (which previously caused a second audit attempt and lost the intended `needs_human_review` stage/code). Removed the broad `try/catch` that conflated validation, transport, and persistence errors.
+- Acceptance verification: `test/vitest/main/EmailReplyDraftGeneration.test.ts` — "createDraft failure-audit separation (B10)" (4 cases: two-strike validation failure writes exactly ONE `needs_human_review` audit with the correct stage/code and 2 LLM calls; permanent `recordFailure` throw propagates as a rejection with exactly ONE create() attempt and zero landed rows; reject-once audit stub propagates with exactly ONE attempt whose reason is `[needs_human_review]` (not fabricated into `provider_error`); transport_error writes exactly ONE `provider_error` audit with 1 LLM call and no validation strike). 64/64 pass in the file; 38/38 in `EmailReplyPreDraftPolicy.test.ts`; tsc clean.
 
 ### B11 — Correlation identifies the message, not the request [P2]
 
