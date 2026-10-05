@@ -190,7 +190,7 @@ export class TaskRunBudget {
     this.tokenReconciledIds.add(requestId);
     this.consumed = {
       ...this.consumed,
-      tokens: this.consumed.tokens + Math.max(0, Math.floor(actualTokens)),
+      tokens: this.consumed.tokens + this.asFiniteNonNegative(actualTokens),
     };
   }
 
@@ -198,15 +198,28 @@ export class TaskRunBudget {
   addActiveRuntime(ms: number): void {
     this.consumed = {
       ...this.consumed,
-      activeRuntimeMs: this.consumed.activeRuntimeMs + Math.max(0, Math.floor(ms)),
+      activeRuntimeMs: this.consumed.activeRuntimeMs + this.asFiniteNonNegative(ms),
     };
   }
 
   addWaitMs(ms: number): void {
     this.consumed = {
       ...this.consumed,
-      waitMs: this.consumed.waitMs + Math.max(0, Math.floor(ms)),
+      waitMs: this.consumed.waitMs + this.asFiniteNonNegative(ms),
     };
+  }
+
+  /**
+   * Clamp a provider/runtime numeric input to a non-negative finite integer,
+   * failing closed to 0 on NaN/Infinity/negative (FR-08, §9). Without this
+   * guard `Math.max(0, Math.floor(NaN))` is NaN, which permanently corrupts
+   * `consumed.*` and defeats every downstream exhaustion gate.
+   */
+  private asFiniteNonNegative(value: number): number {
+    if (!Number.isFinite(value) || value <= 0) {
+      return 0;
+    }
+    return Math.floor(value);
   }
 
   recordNoProgress(): void {

@@ -92,6 +92,20 @@ describe("TaskRunBudget reconcileTokens (§9)", () => {
     expect(budget.getConsumed().tokens).toBe(0);
   });
 
+  it("fail-closes NaN/Infinity token inputs to 0 (FR-08, §9)", () => {
+    // Without a Number.isFinite guard, Math.max(0, Math.floor(NaN)) is NaN,
+    // permanently corrupting consumed.tokens and defeating every downstream
+    // exhaustion gate. Infinity clamps to 0 here too (the budget tracks
+    // finite provider usage, not unbounded allocations).
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    budget.reconcileTokens("req-nan", Number.NaN);
+    budget.reconcileTokens("req-inf", Number.POSITIVE_INFINITY);
+    budget.reconcileTokens("req-neg-inf", Number.NEGATIVE_INFINITY);
+    expect(budget.getConsumed().tokens).toBe(0);
+    expect(Number.isFinite(budget.getConsumed().tokens)).toBe(true);
+    expect(Number.isFinite(budget.getRemaining().tokens)).toBe(true);
+  });
+
   it("does not drop tokens when a tokens:-prefixed ID was reserved (Issue 1 case a)", () => {
     // Old code: reserveProviderAttempt("tokens:foo") added "tokens:foo" to
     // the shared set; reconcileTokens("foo") computed key "tokens:foo" and
@@ -139,6 +153,18 @@ describe("TaskRunBudget accumulators (§9)", () => {
     budget.addWaitMs(-500);
     expect(budget.getConsumed().activeRuntimeMs).toBe(0);
     expect(budget.getConsumed().waitMs).toBe(0);
+  });
+
+  it("accumulators fail-closed NaN/Infinity inputs to 0 (FR-08, §9)", () => {
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    budget.addActiveRuntime(Number.NaN);
+    budget.addActiveRuntime(Number.POSITIVE_INFINITY);
+    budget.addWaitMs(Number.NaN);
+    budget.addWaitMs(Number.POSITIVE_INFINITY);
+    expect(budget.getConsumed().activeRuntimeMs).toBe(0);
+    expect(budget.getConsumed().waitMs).toBe(0);
+    expect(Number.isFinite(budget.getRemaining().activeRuntimeMs)).toBe(true);
+    expect(Number.isFinite(budget.getRemaining().waitMs)).toBe(true);
   });
 });
 
