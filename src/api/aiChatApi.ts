@@ -489,6 +489,13 @@ export interface OpenAIChatMessage {
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
   images?: OpenAIChatImage[];
+  /**
+   * Provider refusal text (OpenAI-compatible `message.refusal`). When non-empty
+   * the model declined to answer; the content must NOT be accepted as a draft
+   * regardless of `finish_reason` (FR-027/B05). Some providers return a refusal
+   * with `finish_reason: "stop"` or no finish reason at all.
+   */
+  refusal?: string | null;
 }
 
 /** Safely convert OpenAIMessageContent to a display string. */

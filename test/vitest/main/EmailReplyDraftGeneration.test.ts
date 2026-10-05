@@ -10,6 +10,7 @@ import {
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
+  OpenAIToolCall,
 } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -86,6 +87,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "stop",
       returnedModel: "test-model",
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -102,6 +105,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "length",
       returnedModel: "test-model",
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.codes).toContain("truncated_output");
@@ -113,6 +118,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "content_filter",
       returnedModel: "test-model",
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.codes).toContain("content_filtered");
@@ -124,6 +131,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "tool_calls",
       returnedModel: "test-model",
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.codes).toContain("unexpected_tool_call");
@@ -137,6 +146,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: null,
       returnedModel: null,
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(r.ok).toBe(true);
   });
@@ -148,6 +159,8 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "stop",
       returnedModel: null,
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(first.ok).toBe(false);
     const second = validateLlmRawResult({
@@ -155,8 +168,175 @@ describe("validateLlmRawResult (FR-027)", () => {
       finishReason: "stop",
       returnedModel: null,
       usage: null,
+      refusal: null,
+      toolCalls: null,
     });
     expect(second.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05: refusal / actual tool-call payloads rejected before content parse
+// ---------------------------------------------------------------------------
+describe("validateLlmRawResult rejects refusal/tool-call payloads (B05)", () => {
+  const sampleToolCalls: OpenAIToolCall[] = [
+    {
+      id: "call_1",
+      type: "function",
+      function: { name: "send_email", arguments: '{"to":"x"}' },
+    },
+  ];
+
+  it("fails valid JSON plus a nonempty refusal with finish_reason stop", () => {
+    // A provider can return refusal text alongside parsable JSON with
+    // finish_reason "stop". The refusal must win — content is never accepted.
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: "stop",
+      returnedModel: "test-model",
+      usage: null,
+      refusal: "I can't help with that.",
+      toolCalls: null,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.codes).toContain("provider_refusal");
+  });
+
+  it("fails valid JSON plus actual tool_calls with finish_reason stop", () => {
+    // finish_reason "stop" but the message carries real tool-call payloads —
+    // the model emitted a tool invocation instead of a JSON reply.
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: "stop",
+      returnedModel: "test-model",
+      usage: null,
+      refusal: null,
+      toolCalls: sampleToolCalls,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.codes).toContain("unexpected_tool_call");
+  });
+
+  it("fails missing finish_reason plus a refusal payload", () => {
+    // Some providers omit finish_reason entirely; the refusal payload alone
+    // must still fail before the content is parsed.
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: null,
+      returnedModel: null,
+      usage: null,
+      refusal: "Refusing per policy.",
+      toolCalls: null,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.codes).toContain("provider_refusal");
+  });
+
+  it("fails missing finish_reason plus actual tool_calls", () => {
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: null,
+      returnedModel: null,
+      usage: null,
+      refusal: null,
+      toolCalls: sampleToolCalls,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.codes).toContain("unexpected_tool_call");
+  });
+
+  it("ignores a whitespace-only refusal and falls through to parse", () => {
+    // A whitespace-only refusal field is treated as absent; ordinary valid
+    // content remains accepted (regression for the B05 capture).
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: "stop",
+      returnedModel: "test-model",
+      usage: null,
+      refusal: "   ",
+      toolCalls: null,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("ignores an empty tool_calls array and falls through to parse", () => {
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: "stop",
+      returnedModel: "test-model",
+      usage: null,
+      refusal: null,
+      toolCalls: [],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("refusal takes precedence over a length finish_reason", () => {
+    // The refusal check runs first; even if the model also hit the token cap,
+    // the refusal is the actionable reason.
+    const r = validateLlmRawResult({
+      content: validReplyJson,
+      finishReason: "length",
+      returnedModel: "test-model",
+      usage: null,
+      refusal: "Refused.",
+      toolCalls: null,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.codes).toContain("provider_refusal");
+      expect(r.codes).not.toContain("truncated_output");
+    }
+  });
+});
+
+describe("callLlmRaw captures refusal and tool_calls fields (B05)", () => {
+  it("carries message.refusal and message.tool_calls through to LlmRawResult", async () => {
+    const refusalResponse: OpenAIChatCompletionResponse = {
+      id: "r1",
+      object: "chat.completion",
+      created: 1,
+      model: "test-model",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: validReplyJson,
+            refusal: "I won't draft that.",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "noop", arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 20,
+        total_tokens: 30,
+      },
+    };
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async () => refusalResponse,
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const callLlmRaw = (svc as unknown as {
+      callLlmRaw: (a: unknown, b: unknown) => Promise<LlmRawResult>;
+    }).callLlmRaw.bind(svc);
+    const result = await callLlmRaw(
+      { role: "system", content: "sys" },
+      { role: "user", content: "u" }
+    );
+    expect(result.refusal).toBe("I won't draft that.");
+    expect(result.toolCalls).toHaveLength(1);
+    // The validator rejects this combination (covered by the B05 cases above).
+    const v = validateLlmRawResult(result);
+    expect(v.ok).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AiChatApi } from "@/api/aiChatApi";
-import type { OpenAIChatMessage, OpenAIUsage } from "@/api/aiChatApi";
+import type { OpenAIChatMessage, OpenAIToolCall, OpenAIUsage } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -75,6 +75,20 @@ export interface LlmRawResult {
   readonly finishReason: string | null;
   readonly returnedModel: string | null;
   readonly usage: OpenAIUsage | null;
+  /**
+   * Provider refusal text (`message.refusal`), carried through from the raw
+   * completion so the validator can reject it BEFORE parsing content,
+   * independently of `finish_reason` (FR-027/B05). Empty/null when the model
+   * did not refuse.
+   */
+  readonly refusal: string | null;
+  /**
+   * Actual tool-call payloads (`message.tool_calls`) returned on the choice,
+   * independent of `finish_reason` (FR-027/B05). Some providers return tool
+   * calls with `finish_reason: "stop"` or no finish reason. When non-empty the
+   * content must NOT be accepted as a draft.
+   */
+  readonly toolCalls: readonly OpenAIToolCall[] | null;
 }
 
 /**
@@ -621,11 +635,25 @@ export class EmailReplyDraftGenerationService {
       throw new LlmTransportError(errMsg);
     }
     const choice = resp.choices?.[0];
+    const refusalText = choice?.message?.refusal;
+    const messageToolCalls = choice?.message?.tool_calls;
     return {
       content: openAIContentToString(choice?.message?.content),
       finishReason: choice?.finish_reason ?? null,
       returnedModel: resp.model ?? null,
       usage: resp.usage ?? null,
+      // B05: carry the actual refusal/tool-call payloads through to the
+      // validator. The validator rejects these BEFORE parsing content,
+      // independently of finish_reason — a provider can return a refusal or
+      // tool calls with finish_reason "stop" or no finish reason at all.
+      refusal:
+        typeof refusalText === "string" && refusalText.trim().length > 0
+          ? refusalText
+          : null,
+      toolCalls:
+        Array.isArray(messageToolCalls) && messageToolCalls.length > 0
+          ? messageToolCalls
+          : null,
     };
   }
 
@@ -795,6 +823,18 @@ export class EmailReplyDraftGenerationService {
  *     authoritative either way.
  */
 export function validateLlmRawResult(raw: LlmRawResult): StrictParseResult {
+  // B05: inspect the actual refusal/tool-call payloads BEFORE finish_reason
+  // and before parsing content. A provider can return a refusal or tool calls
+  // with finish_reason "stop" or no finish reason at all, so the finish-reason
+  // checks alone are insufficient. These checks are independent of and prior
+  // to the finish-reason branches below. A whitespace-only refusal is treated
+  // as absent (matches the capture trim in callLlmRaw).
+  if (raw.refusal && raw.refusal.trim().length > 0) {
+    return { ok: false, codes: ["provider_refusal"] };
+  }
+  if (raw.toolCalls && raw.toolCalls.length > 0) {
+    return { ok: false, codes: ["unexpected_tool_call"] };
+  }
   const finish = raw.finishReason;
   if (finish === "length") {
     return { ok: false, codes: ["truncated_output"] };

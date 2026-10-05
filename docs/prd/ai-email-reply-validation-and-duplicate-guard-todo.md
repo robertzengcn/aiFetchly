@@ -83,11 +83,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B05 — Actual refusal and tool-call payloads are discarded [P1]
 
-- [ ] **Fix.** Carry provider refusal/tool-call fields into the raw completion contract and reject them before parsing content, independently of `finish_reason`.
-- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:627–633` retains content, reason, model, and usage but drops message refusal/tool calls; checks at `801–812` inspect selected finish-reason strings only.
+- [x] **Fix.** Carry provider refusal/tool-call fields into the raw completion contract and reject them before parsing content, independently of `finish_reason`.
+- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts` `LlmRawResult` now carries `refusal` and `toolCalls`; `callLlmRaw` captures `choice.message.refusal` (trimmed, non-empty) and `choice.message.tool_calls` (non-empty array); `validateLlmRawResult` checks these BEFORE the finish-reason branches and before `parseStrictGeneratedReply`. `OpenAIChatMessage.refusal` added to `src/api/aiChatApi.ts`.
 - Trigger: a response contains valid reply JSON together with a refusal or actual tool calls, but reports `stop` or no finish reason.
-- Current result: the content can be accepted as a draft. Checking a `tool_calls` finish reason alone does not inspect the actual payload required by FR-027.
-- Acceptance: valid JSON plus nonempty refusal; valid JSON plus actual tool calls with `stop`; and missing finish reason plus prohibited payload must all fail without a draft. Verify ordinary content-only replies remain accepted.
+- Current result: fixed — refusal returns `provider_refusal`, tool calls return `unexpected_tool_call`, both before content parse; whitespace-only refusal and empty tool_calls fall through to the ordinary parse.
+- Acceptance: `test/vitest/main/EmailReplyDraftGeneration.test.ts` "validateLlmRawResult rejects refusal/tool-call payloads (B05)" — 7 cases (valid JSON + refusal with stop; valid JSON + tool_calls with stop; missing finish_reason + refusal; missing finish_reason + tool_calls; whitespace-only refusal ignored; empty tool_calls ignored; refusal precedence over length). Plus "callLlmRaw captures refusal and tool_calls fields (B05)" — verifies `LlmRawResult.refusal`/`toolCalls` carry through from the raw response. All pass; ordinary content-only replies remain accepted.
 
 ### B06 — JSON hint incompatibility becomes an unconditional failure [P2]
 
