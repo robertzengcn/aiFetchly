@@ -65,3 +65,43 @@ All event types flow through `AIChatQueryEventSink` → `createPersistingEventSi
 ## 6. Stage A traceability
 
 Filled at the Stage A gate (`docs/prd/generator-streaming-operations.md`).
+
+## 7. Requirement conflict decisions (TODO-15, recorded 2026-10-07)
+
+### FR-026 / AC-19 — same-conversation supersede vs busy-queue policy
+
+**Decision: the busy-queue policy wins; AC-19's re-send-supersedes is NOT implemented as specified.**
+Evidence: `AIChatQueryEngine.runPersistedTurn()` rejects a busy conversation with
+`conversation_busy` (never replaces), and the coordinator routes busy sends into the durable
+queue (message-queue PRD §9.2). The loop's `isActiveTurn()` filter suppresses stale chunks from
+an aborted turn but does not itself abort a provider request on ownership loss — the request
+owner (Stop / scheduler) drives aborts today. Implementing literal supersession would replace
+the queue's FIFO/steering contract. **Affected IDs: FR-026, AC-19.** If product later wants
+supersession, it must be a product decision revising the queue contract, and losing ownership
+must abort the provider request and close the iterator — not merely suppress token callbacks.
+
+### FR-014 / AC-12 — "AI disabled" wording vs local-provider eligibility
+
+**Decision: keep provider-aware gating; do NOT add a literal universal `USER_AI_ENABLED` gate.**
+Evidence: `canUseChat()` (`ai-chat-v2-ipc.ts`) delegates to `AIProviderResolver`, which
+intentionally allows a configured local provider when hosted AI is disabled — a supported
+product capability (offline/local AI). All modified AI IPC handlers (START_RUN, resume,
+answer-question, pending handlers via `registerChatValidatedHandler`) gate before parsing or
+provider work. **Affected IDs: FR-014, AC-12.** Tests cover hosted-disabled separately from
+local-enabled; adding the literal Token gate would break supported local AI.
+
+## 8. Workspace V2 import inventory (TODO-15)
+
+Shared V2 code the workspace depends on (verified by import scan; deletion of any of these
+breaks the supported UI — preservation tests cover the transcribed components):
+
+| Category | Imports | Used by (workspace) |
+| --- | --- | --- |
+| Components | `AiChatV2Composer.vue`, `AiChatV2ModeSelector.vue`, `AiChatV2ModelSelector.vue`, `AiChatV2ToolApprovalModeSelector.vue`, `AiChatV2ContextBadge.vue`, `AiChatVoiceOutputToggle.vue`, `AiChatVoiceRuntimeInstallDialog.vue`, `WorkspaceBadge.vue`, `WorkspaceRequiredCard.vue`, `WorkspaceTrustCard.vue`, `WorkspaceMemoryPanel.vue`, `AiChatV2Message.vue`, `AiChatV2PendingMessage.vue` | `AiChatCenterSurface.vue`, `AiChatWorkspaceTranscript.vue` |
+| Utilities | `contextUsageUtil` | `AiChatContextPanel.vue` |
+| Types | `ChatV2MessageView` + `aiChatV2Types` (many) | `AiChatOutboundBatchReviewCard.vue`, `AiChatInspector.vue`, `AiChatActivityPanel.vue`, `toolExecutionProjection.ts`, `planPresentationProjection.ts`, and others |
+| IPC handlers | `ai-chat-v2-ipc.ts` (`getQueryEngine`, `getQueueService`, `canUseChat`, history helpers) | `ai-chat-workspace-ipc.ts` |
+| APIs | V2 stream/pending/resume channels (the workspace's resume/answer route through the V2 handler by design §14) | workspace center surface |
+
+No V2-named file may be deleted or moved without updating these imports and running
+`yarn test:components` + the transcript component tests.
