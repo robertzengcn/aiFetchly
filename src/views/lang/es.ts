@@ -3208,6 +3208,7 @@ export default {
         "Comandos de instalación aprobados: ejecútalos tú mismo cuando sea necesario. El asistente no puede ejecutarlos ni modificarlos.",
       run: "Ejecutar",
       envVars: "Inyecta (desde el almacenamiento seguro): {names}",
+      inDirectory: "se ejecuta en {dir}",
       injected: "Inyectado: {names}",
       resultOk: "Código de salida {code}.",
       resultFailed: "Error: {message}",

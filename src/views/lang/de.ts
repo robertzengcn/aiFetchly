@@ -3206,6 +3206,7 @@ export default {
         "Genehmigte Setup-Befehle — führen Sie sie bei Bedarf selbst aus. Der Assistent kann sie weder ausführen noch ändern.",
       run: "Ausführen",
       envVars: "Injiziert (aus dem sicheren Speicher): {names}",
+      inDirectory: "wird in {dir} ausgeführt",
       injected: "Injiziert: {names}",
       resultOk: "Exit-Code {code}.",
       resultFailed: "Fehlgeschlagen: {message}",

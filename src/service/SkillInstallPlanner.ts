@@ -13,6 +13,7 @@
  */
 
 import * as crypto from "crypto";
+import * as path from "path";
 import type {
   ApprovedCommandTemplate,
   SkillActivationMode,
@@ -56,6 +57,10 @@ const CREDENTIAL_ENV_RE =
   /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*(?:_API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD))\s*[=:]/g;
 
 export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
+  const instructionInputs = input.instructionFiles.map((f) => ({
+    content: f.content,
+    relativePath: f.relativePath,
+  }));
   const dependencies = detectDependencyProposals(
     input.instructionFiles.map((f) => f.content),
     input.stagedFiles
@@ -67,9 +72,7 @@ export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
     input.instructionFiles.map((f) => f.content),
     input.discovered
   );
-  const commands = collectCommandTemplates(
-    input.instructionFiles.map((f) => f.content)
-  );
+  const commands = collectCommandTemplates(instructionInputs);
 
   const warnings: InstallWarning[] = [];
   if (input.source.acquisitionMethod === "local-copy") {
@@ -254,16 +257,45 @@ function collectRequestedPermissions(
  * Opaque strings, encoded commands, substitution, and privilege escalation
  * surface as high-risk items — visible to the user, never silently trusted
  * (PRD §18.4).
+ *
+ * Ticket D4b: inputs are PER-FILE ({ content, relativePath }) so each
+ * command records the directory its instruction file lives in — commands
+ * from a nested candidate's install.md run from THAT directory (the
+ * runner composes plan.source.acquiredRoot + workingDirectory), instead
+ * of every command running from the inspection root. A bare string input
+ * (legacy/tests) keeps the source-root directory.
  */
 export function collectCommandTemplates(
-  instructionTexts: readonly string[]
+  instructionInputs: readonly (
+    | string
+    | { content: string; relativePath: string }
+  )[]
 ): ApprovedCommandTemplate[] {
   return collectCommandTemplatesWithEnv(
-    instructionTexts,
-    detectCredentialRequirements(instructionTexts).map(
-      (c) => c.environmentVariable
-    )
+    instructionInputs,
+    detectCredentialRequirements(
+      instructionInputs.map((input) =>
+        typeof input === "string" ? input : input.content
+      )
+    ).map((c) => c.environmentVariable)
   );
+}
+
+/**
+ * Ticket D4b: derive a command's working directory from its instruction
+ * file's location — the dirname of the (candidate-qualified) relative
+ * path, posix-normalized, "" for files at the inspection root. Escapes
+ * (absolute paths, "..") can only come from our own reader, but are
+ * refused defensively and fall back to the source root.
+ */
+export function instructionFileWorkingDirectory(
+  relativePath: string | undefined
+): string {
+  if (!relativePath) return "";
+  const posix = relativePath.split(path.sep).join("/");
+  if (posix.startsWith("/") || posix.split("/").includes("..")) return "";
+  const dir = posix.includes("/") ? posix.slice(0, posix.lastIndexOf("/")) : "";
+  return dir;
 }
 
 /**
@@ -273,15 +305,23 @@ export function collectCommandTemplates(
  * referencing those variables medium-risk so the review card shows them.
  */
 export function collectCommandTemplatesWithEnv(
-  instructionTexts: readonly string[],
+  instructionInputs: readonly (
+    | string
+    | { content: string; relativePath: string }
+  )[],
   credentialEnvNames: readonly string[]
 ): ApprovedCommandTemplate[] {
   const templates: ApprovedCommandTemplate[] = [];
   const seen = new Set<string>();
-  const text = instructionTexts.join("\n");
 
-  for (const line of text.split("\n")) {
-    const command = line.trim();
+  for (const input of instructionInputs) {
+    const text = typeof input === "string" ? input : input.content;
+    const workingDirectory = instructionFileWorkingDirectory(
+      typeof input === "string" ? undefined : input.relativePath
+    );
+
+    for (const line of text.split("\n")) {
+      const command = line.trim();
     if (command === "" || !isShellish(command)) continue;
     if (seen.has(command)) continue;
     seen.add(command);
@@ -313,12 +353,15 @@ export function collectCommandTemplatesWithEnv(
     templates.push({
       id: `cmd:${crypto
         .createHash("sha1")
-        .update(command)
+        .update(`${workingDirectory} ${command}`)
         .digest("hex")
         .slice(0, 8)}`,
       executable: privileged ? parts[1] ?? command : parts[0] ?? command,
       args: plainArgs,
-      workingDirectory: "<skill source root>",
+      // Ticket D4b: the instruction file's directory (relative to the
+      // staged source root; "" = the root itself) — the runner composes
+      // the absolute cwd and the card shows where each command runs.
+      workingDirectory,
       environmentNames: envNames,
       riskLevel: highRisk
         ? "high"
@@ -331,6 +374,7 @@ export function collectCommandTemplatesWithEnv(
           ? "Proposed by repository instructions; injects credentials from the secure store"
           : "Proposed by repository instructions",
     });
+    }
   }
   return templates.slice(0, 50);
 }

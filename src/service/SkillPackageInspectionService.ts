@@ -96,12 +96,19 @@ export class SkillPackageInspectionService {
       diagnostics,
       referencedHelpers
     );
-    // Audit R5: installation instructions inside a DISCOVERED candidate
-    // root (nested/install.md, skills/<name>/install.md) were invisible
-    // when the inspection root had none — a plan built from
-    // nested/SKILL.md must also see nested/install.md. Read each
-    // candidate's root (deduped; the inspection root is already read).
+    // Audit R5 + review tickets (nested instruction qualification): read
+    // each DISCOVERED candidate's root for instructions the inspection
+    // root lacks. The merged files carry paths QUALIFIED with the
+    // candidate's root (nested/install.md) — readInstructionFiles returns
+    // paths relative to ITS root argument, so a bare "install.md" from
+    // skills/a and skills/b previously collided in the dedup and the
+    // second candidate's dependencies/commands silently vanished; the
+    // qualified path also tells the planner which directory those
+    // commands run from (D4b per-candidate cwd).
     const seen = new Set<string>(["."]);
+    const seenQualified = new Set<string>(
+      instructionFiles.map((f) => f.relativePath)
+    );
     for (const candidate of discovered) {
       const rel = candidate.rootRelativePath;
       if (!rel || rel === "." || seen.has(rel)) continue;
@@ -114,13 +121,15 @@ export class SkillPackageInspectionService {
         diagnostics,
         referencedHelpers
       ).forEach((f) => {
-        if (
-          !instructionFiles.some(
-            (existing) => existing.relativePath === f.relativePath
-          )
-        ) {
-          instructionFiles.push(f);
-        }
+        const qualified =
+          rel === "." ? f.relativePath : `${rel}/${f.relativePath}`;
+        if (seenQualified.has(qualified)) return;
+        seenQualified.add(qualified);
+        instructionFiles.push(
+          qualified === f.relativePath
+            ? f
+            : { ...f, relativePath: qualified }
+        );
       });
     }
 

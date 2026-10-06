@@ -3193,6 +3193,7 @@ export default {
         "Commandes d'installation approuvées : exécutez-les vous-même si nécessaire. L'assistant ne peut ni les exécuter ni les modifier.",
       run: "Exécuter",
       envVars: "Injecte (depuis le stockage sécurisé) : {names}",
+      inDirectory: "s'exécute dans {dir}",
       injected: "Injecté : {names}",
       resultOk: "Code de sortie {code}.",
       resultFailed: "Échec : {message}",

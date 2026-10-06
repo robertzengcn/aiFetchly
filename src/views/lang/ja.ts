@@ -3144,6 +3144,7 @@ export default {
         "承認済みのセットアップコマンドです。必要なときにご自身で実行してください。アシスタントは実行も変更もできません。",
       run: "実行",
       envVars: "注入（セキュアストレージから）：{names}",
+      inDirectory: "{dir} で実行",
       injected: "注入済み：{names}",
       resultOk: "終了コード {code}。",
       resultFailed: "失敗：{message}",

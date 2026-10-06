@@ -274,6 +274,8 @@ export interface SafePlanView {
     readonly args: readonly string[];
     readonly riskLevel: string;
     readonly rationale: string;
+    /** Ticket D4b: directory relative to the source root ("" = root). */
+    readonly workingDirectory?: string;
     readonly environmentNames: readonly string[];
   }[];
   readonly warnings: readonly string[];

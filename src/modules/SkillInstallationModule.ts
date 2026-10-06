@@ -1257,7 +1257,24 @@ export class SkillInstallationModule extends BaseModule {
     const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
     // Commands run in the session's staged content root — the package the
     // plan was built from (review fix: previously the parent source/ dir).
-    const cwd = plan.source.acquiredRoot;
+    // Ticket D4b: a command from a NESTED instruction file runs from that
+    // file's directory (the plan's relative workingDirectory), composed
+    // under the staged root with a containment guard — never absolute,
+    // never escaping.
+    const template = plan.commands.find((c) => c.id === commandId);
+    const workingDirectory = template?.workingDirectory ?? "";
+    if (
+      workingDirectory.startsWith("/") ||
+      workingDirectory.split(/[\\/]/).includes("..")
+    ) {
+      return {
+        ok: false,
+        message: "The command's working directory is not inside the source.",
+      };
+    }
+    const cwd = workingDirectory
+      ? path.join(plan.source.acquiredRoot, workingDirectory)
+      : plan.source.acquiredRoot;
     const { SkillApprovedCommandRunner } = await import(
       "@/service/SkillApprovedCommandRunner"
     );
@@ -3462,6 +3479,9 @@ export class SkillInstallationModule extends BaseModule {
         args: c.args,
         riskLevel: c.riskLevel,
         rationale: c.rationale,
+        // Ticket D4b: the command's directory relative to the source root
+        // ("" = the root) — informed consent for WHERE it runs.
+        workingDirectory: c.workingDirectory,
         // Declared env-var NAMES only — values live in the secure store and
         // are injected directly into the child process by the runner.
         environmentNames: c.environmentNames,

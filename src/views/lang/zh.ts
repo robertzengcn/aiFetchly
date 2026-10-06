@@ -3049,6 +3049,7 @@ export default {
         "已批准的安装命令——需要时由你自行运行。助手无法运行或修改它们。",
       run: "运行",
       envVars: "注入（来自安全存储）：{names}",
+      inDirectory: "在 {dir} 中运行",
       injected: "已注入：{names}",
       resultOk: "退出码 {code}。",
       resultFailed: "失败：{message}",

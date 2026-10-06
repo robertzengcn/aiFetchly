@@ -3178,6 +3178,7 @@ export default {
         "Approved setup commands — run them yourself when needed. The assistant cannot run or alter them.",
       run: "Run",
       envVars: "Injects (from secure storage): {names}",
+      inDirectory: "runs in {dir}",
       injected: "Injected: {names}",
       resultOk: "Exit {code}.",
       resultFailed: "Failed: {message}",

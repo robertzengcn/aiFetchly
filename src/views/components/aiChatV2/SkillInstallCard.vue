@@ -186,6 +186,13 @@
           >
             {{ t(`skillInstall.risk.${cmd.riskLevel}`) || cmd.riskLevel }}
           </v-chip>
+          <!-- Ticket D4b: where the command runs, when not the source root. -->
+          <span
+            v-if="cmd.workingDirectory"
+            class="text-caption text-medium-emphasis ml-1"
+          >
+            {{ t("skillInstall.command.inDirectory", { dir: cmd.workingDirectory }) }}
+          </span>
         </div>
         <div class="text-caption text-warning mb-1">
           {{ t("skillInstall.highRiskHint") }}
@@ -321,6 +328,13 @@
             >
               {{ t("skillInstall.command.run") }}
             </v-btn>
+          </div>
+          <div
+            v-if="cmd.workingDirectory"
+            class="text-caption text-medium-emphasis"
+            data-testid="skill-install-run-cwd"
+          >
+            {{ t("skillInstall.command.inDirectory", { dir: cmd.workingDirectory }) }}
           </div>
           <div
             v-if="cmd.environmentNames.length > 0"

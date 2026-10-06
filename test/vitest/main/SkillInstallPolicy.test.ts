@@ -825,3 +825,34 @@ describe("shell policy long-form flags + newline-exact operation match (RV5/RV6)
     expect(newlineVariant.allowed).toBe(false);
   });
 });
+
+describe("per-candidate command working directories (ticket D4b)", () => {
+  it("commands carry their instruction file's directory; root files carry \"\"", async () => {
+    const { collectCommandTemplates, instructionFileWorkingDirectory } =
+      await import("@/service/SkillInstallPlanner");
+    expect(instructionFileWorkingDirectory(undefined)).toBe("");
+    expect(instructionFileWorkingDirectory("install.md")).toBe("");
+    expect(instructionFileWorkingDirectory("nested/install.md")).toBe("nested");
+    expect(instructionFileWorkingDirectory("skills/two/install.md")).toBe(
+      "skills/two"
+    );
+    // Escapes fall back to the source root.
+    expect(instructionFileWorkingDirectory("../evil/install.md")).toBe("");
+    expect(instructionFileWorkingDirectory("/abs/install.md")).toBe("");
+
+    const templates = collectCommandTemplates([
+      {
+        content: "pip install -r requirements.txt",
+        relativePath: "install.md",
+      },
+      {
+        content: "node setup.js",
+        relativePath: "nested/install.md",
+      },
+    ]);
+    const root = templates.find((t) => t.executable === "pip");
+    expect(root?.workingDirectory).toBe("");
+    const nested = templates.find((t) => t.executable === "node");
+    expect(nested?.workingDirectory).toBe("nested");
+  });
+});
