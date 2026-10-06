@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, IsNull, EntityManager, In } from "typeorm";
+import { Repository, IsNull, In } from "typeorm";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
@@ -16,27 +16,13 @@ import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
-import { AsyncMutex } from "@/utils/asyncMutex";
+import { runReplyTxn } from "@/model/replyTxn";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 
-/**
- * Process-wide serializer for reply-reliability write transactions. See
- * {@link AsyncMutex} for why overlapping TypeORM/better-sqlite3 transactions
- * must not run concurrently on the shared connection.
- */
-const replyWriteMutex = new AsyncMutex();
-
-/** Run a transaction body under the shared reliability write mutex. */
-function runReplyTxn<T>(
-  sqliteDb: {
-    connection: {
-      transaction: <R>(fn: (m: EntityManager) => Promise<R>) => Promise<R>;
-    };
-  },
-  fn: (manager: EntityManager) => Promise<T>
-): Promise<T> {
-  return replyWriteMutex.run(() => sqliteDb.connection.transaction(fn));
-}
+// The shared `replyWriteMutex` lives in `src/model/replyTxn.ts` so that
+// `EmailReplyDraftModel` and `EmailReplyGuardModel` (T07) serialize their
+// transactions on the same in-process mutex — see replyTxn.ts for the
+// rationale and the cross-process/cross-crash fencing disclaimer.
 
 export interface ReplyDraftListInput {
   emailServiceId?: number;
