@@ -2947,13 +2947,21 @@ export class AIChatQueryLoop {
                 this.executePreparedToolWithTimeout(input, preparedCall, emit),
               input.abortController.signal
             );
-            for (;;) {
-              const step = await progressStream.next();
-              if (step.done === true) {
-                toolResult = step.value;
-                break;
+            try {
+              for (;;) {
+                const step = await progressStream.next();
+                if (step.done === true) {
+                  toolResult = step.value;
+                  break;
+                }
+                yield step.value.event;
               }
-              yield step.value.event;
+            } finally {
+              // TODO-07 (FR-015): abandoning this generator at a progress
+              // yield must still close the inner multiplexer (slot cleanup).
+              await progressStream.return(undefined as never).catch(
+                () => undefined
+              );
             }
           }
 

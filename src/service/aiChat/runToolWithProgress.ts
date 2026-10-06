@@ -10,6 +10,20 @@ import { LatestValueSlot } from "./LatestValueSlot";
 /** Proposed cap for a single serialized progress payload (design §12). */
 export const TOOL_PROGRESS_MAX_SERIALIZED_BYTES = 64 * 1024;
 
+/**
+ * TODO-14 (design §12/§18): privacy-safe progress diagnostics — count-only
+ * counters, no content. Read by tests to assert baseline restoration.
+ */
+export const toolProgressDiagnostics = {
+  oversizedReplaced: 0,
+  coalescedDropped: 0,
+  emitted: 0,
+} as {
+  oversizedReplaced: number;
+  coalescedDropped: number;
+  emitted: number;
+};
+
 interface MinimalProgressShape {
   readonly phase?: unknown;
   readonly progress?: unknown;
@@ -80,31 +94,38 @@ export function runToolWithProgress<ToolResult, Progress extends MinimalProgress
 }
 
 /**
- * Replace an oversized serialized progress payload with a minimal
- * phase/counts-only event (count-only diagnostic; the message body is
- * dropped). Never throws — progress must not fail a segment.
+ * Replace an oversized serialized progress payload with a WHITELISTED
+ * minimal event — only the bounded identity/phase/counts fields survive;
+ * every other property (message bodies, tool payloads, anything unbounded)
+ * is dropped. Byte size is measured as UTF-8, not JS string length.
+ * Unserializable payloads (circular refs) take the same minimal path rather
+ * than passing an unbounded object through. Never throws — progress must
+ * not fail a segment.
  */
 function applyProgressBudget<Progress extends MinimalProgressShape>(
   event: Progress
 ): ToolProgressEnvelope<Progress> {
+  let serializedLength = 0;
   try {
-    const serialized = JSON.stringify(event);
-    if (
-      serialized !== undefined &&
-      serialized.length > TOOL_PROGRESS_MAX_SERIALIZED_BYTES
-    ) {
-      return {
-        event: {
-          ...event,
-          // Drop the message body (and any other unbounded fields the spread
-          // carried in) — keep only bounded phase/counts fields.
-          ...({ message: undefined } as unknown as Partial<Progress>),
-        } as Progress,
-        oversizedReplaced: true,
-      };
-    }
+    serializedLength = Buffer.byteLength(JSON.stringify(event), "utf8");
   } catch {
-    // Unserializable progress: pass through untouched rather than failing.
+    serializedLength = Number.POSITIVE_INFINITY; // unserializable → minimal
+  }
+  if (serializedLength > TOOL_PROGRESS_MAX_SERIALIZED_BYTES) {
+    const minimal: Record<string, unknown> = {
+      type: "tool_progress",
+    };
+    for (const key of ["conversationId", "messageId", "toolCallId", "toolName", "phase", "progress", "partialCount", "expectedCount", "timestamp"]) {
+      const value = (event as unknown as Record<string, unknown>)[key];
+      if (value !== undefined) {
+        minimal[key] = value;
+      }
+    }
+    toolProgressDiagnostics.oversizedReplaced += 1;
+    return {
+      event: minimal as unknown as Progress,
+      oversizedReplaced: true,
+    };
   }
   return { event, oversizedReplaced: false };
 }

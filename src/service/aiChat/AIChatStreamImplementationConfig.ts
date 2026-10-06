@@ -32,8 +32,10 @@ export class EnvAIChatStreamImplementationConfig
       this.mode = raw;
     } else {
       if (raw !== undefined) {
+        // TODO-14: log the CHOSEN mode only — never echo the arbitrary value
+        // (could contain anything a user put in the environment).
         console.warn(
-          `[ai-chat-stream] invalid ${AI_CHAT_STREAM_IMPLEMENTATION_ENV}=${raw}; falling back to callback`
+          `[ai-chat-stream] invalid ${AI_CHAT_STREAM_IMPLEMENTATION_ENV} value ignored; using mode=callback`
         );
       }
       this.mode = "callback";

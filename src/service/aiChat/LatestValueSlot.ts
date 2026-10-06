@@ -24,6 +24,10 @@ export class LatestValueSlot<T> {
 
   set(value: T): void {
     if (this.closed) return;
+    if (this.latest !== null) {
+      // TODO-14: a coalesced (overwritten) progress update.
+      latestValueSlotDiagnostics.coalescedDropped += 1;
+    }
     this.latest = { value };
     const waiters = this.waiters;
     this.waiters = [];
@@ -47,6 +51,7 @@ export class LatestValueSlot<T> {
 
   close(): void {
     this.closed = true;
+    this.latest = null; // TODO-07: release the retained reference.
     const waiters = this.waiters;
     this.waiters = [];
     for (const wake of waiters) wake();
@@ -56,3 +61,11 @@ export class LatestValueSlot<T> {
     return this.closed;
   }
 }
+
+/**
+ * TODO-14: count-only slot diagnostics (no content). Tests assert these
+ * return to baseline after terminal/pause/abort paths.
+ */
+export const latestValueSlotDiagnostics = {
+  coalescedDropped: 0,
+} as { coalescedDropped: number };

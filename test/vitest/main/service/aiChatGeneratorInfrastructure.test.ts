@@ -280,3 +280,90 @@ describe("runToolWithProgress (FR-016, AC-09)", () => {
     expect(final.value).toBe("done");
   });
 });
+
+describe("TODO-07/14: progress bounds + cleanup diagnostics", () => {
+  it("an oversized payload with unbounded EXTRA fields is whitelisted down to bounded fields only", async () => {
+    const { runToolWithProgress, toolProgressDiagnostics } = await import(
+      "@/service/aiChat/runToolWithProgress"
+    );
+    let releaseTool!: () => void;
+    const toolPromise = new Promise<string>((resolve) => {
+      releaseTool = () => resolve("ok");
+    });
+    const bigPayload = "x".repeat(100_000);
+    const wrapper = runToolWithProgress<string, TestProgress>(
+      (emit) => {
+        emit({
+          phase: "running",
+          message: bigPayload,
+          progress: 0.5,
+          partialCount: 1,
+          expectedCount: 100,
+        } as TestProgress & { payload?: string });
+        return toolPromise;
+      },
+      new AbortController().signal
+    );
+    const first = await wrapper.next();
+    expect(first.done).toBe(false);
+    if (!first.done) {
+      expect(first.value.oversizedReplaced).toBe(true);
+      const ev = first.value.event as unknown as Record<string, unknown>;
+      expect(ev.message).toBeUndefined();
+      expect(ev.phase).toBe("running");
+      expect(ev.partialCount).toBe(1);
+    }
+    releaseTool();
+    const done = await wrapper.next();
+    expect(done.done).toBe(true);
+    expect(toolProgressDiagnostics.oversizedReplaced).toBeGreaterThanOrEqual(1);
+  });
+
+  it("a circular progress payload takes the minimal path instead of passing through", async () => {
+    const { runToolWithProgress } = await import(
+      "@/service/aiChat/runToolWithProgress"
+    );
+    const circular: Record<string, unknown> = {
+      phase: "running",
+      message: "m",
+      progress: null,
+      partialCount: null,
+      expectedCount: null,
+    };
+    circular.self = circular;
+    let releaseTool!: () => void;
+    const toolPromise = new Promise<string>((resolve) => {
+      releaseTool = () => resolve("ok");
+    });
+    const wrapper = runToolWithProgress<string, TestProgress>(
+      (emit) => {
+        emit(circular as unknown as TestProgress);
+        return toolPromise;
+      },
+      new AbortController().signal
+    );
+    const first = await wrapper.next();
+    expect(first.done).toBe(false);
+    if (!first.done) {
+      const ev = first.value.event as unknown as Record<string, unknown>;
+      expect(ev.self).toBeUndefined(); // unbounded field dropped
+      expect(ev.phase).toBe("running");
+    }
+    releaseTool();
+    await wrapper.next();
+  });
+
+  it("LatestValueSlot.clear drops retained references and counts coalescing", async () => {
+    const { LatestValueSlot, latestValueSlotDiagnostics } = await import(
+      "@/service/aiChat/LatestValueSlot"
+    );
+    const before = latestValueSlotDiagnostics.coalescedDropped;
+    const slot = new LatestValueSlot<number>();
+    slot.set(1);
+    slot.set(2); // coalesced
+    expect(latestValueSlotDiagnostics.coalescedDropped).toBe(before + 1);
+    slot.close();
+    slot.set(9);
+    expect(slot.take()).toBeUndefined(); // closed: nothing retained
+  });
+});
