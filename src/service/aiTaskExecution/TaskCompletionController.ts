@@ -31,6 +31,8 @@ import type {
   EvidenceChecker,
   EvidenceContext,
 } from "@/service/aiTaskExecution/TaskEvidenceService";
+import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
+import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
@@ -49,6 +51,16 @@ export interface DecideContext {
   readonly evidenceService?: EvidenceChecker;
   readonly contract?: TaskCompletionContract;
   readonly evidenceContext?: EvidenceContext;
+  /**
+   * Slice 2 live budget (D4/FR-08/09). When supplied, the controller
+   * consults the accessors before deciding: continuation allowance
+   * exhausted → finish(incomplete, CONTINUATION_LIMIT); provider attempts
+   * exhausted → finish(incomplete, MODEL_ATTEMPT_LIMIT); checker allowance
+   * exhausted → qualitative evidence is skipped downstream (the evidence
+   * service receives a budget-gated reserve function). Undefined in Slice 1
+   * shadow mode — no budget consult, byte-identical behavior.
+   */
+  readonly budget?: TaskRunBudget;
 }
 
 export class TaskCompletionController {
@@ -88,6 +100,36 @@ export class TaskCompletionController {
     // §7.2 step 5: response-only candidates finish response-ended.
     if (context.route === "response_only") {
       return { type: "finish_response", result: "response_ended" };
+    }
+
+    // D4 (FR-08/09): live budget consult precedes criteria evaluation. A
+    // spent allowance means no further dispatch is possible, so the honest
+    // outcome is incomplete with the matching reason code — never a
+    // continue the budget cannot fund, and never a verified_complete the
+    // evidence check could not fund either (checker budget exhaustion skips
+    // qualitative evidence downstream via the gated reserve function).
+    const budget = context.budget;
+    if (budget) {
+      if (budget.isContinuationBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "CONTINUATION_LIMIT",
+          evidenceIds: [],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...(context.unmetCriterionIds ?? [])],
+        };
+      }
+      if (budget.isProviderBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "MODEL_ATTEMPT_LIMIT",
+          evidenceIds: [],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...(context.unmetCriterionIds ?? [])],
+        };
+      }
     }
 
     // Preparation route cannot finish executable work (FR-21).
@@ -178,7 +220,33 @@ export class TaskCompletionController {
     const contract = context.contract;
     const evidenceContext = context.evidenceContext;
     if (!service || !contract || !evidenceContext) return undefined;
-    const result = await service.checkCandidate(candidate, contract, evidenceContext);
+
+    // Per-check sequence — each reserve call mints a unique request ID so
+    // the dedup set never collapses two distinct qualitative checks.
+    let checkerSeq = 0;
+
+    // D4 (FR-09): start this candidate's checker window and gate the
+    // checker dispatch through the budget's per-run + per-candidate
+    // reservation. Each call to the returned reserve function is ONE
+    // checker dispatch, so it mints a unique request ID (dedup must not
+    // collapse two distinct qualitative checks into one budget unit). When
+    // the budget is exhausted, the qualitative evaluator receives Exhausted
+    // and records "unknown" (fail-closed) instead of dispatching.
+    const budget = context.budget;
+    const gatedContext = budget
+      ? {
+          ...evidenceContext,
+          budgetReserveChecker: (): BudgetReservationResult => {
+            budget.beginCheckerCandidate(candidate.candidateId);
+            checkerSeq += 1;
+            return budget.reserveCheckerAttempt(
+              `chk:${candidate.candidateId}:${checkerSeq}`
+            );
+          },
+        }
+      : evidenceContext;
+
+    const result = await service.checkCandidate(candidate, contract, gatedContext);
     const requiredCriterionIds = contract.criteria
       .filter((criterion) => criterion.required)
       .map((criterion) => criterion.id);

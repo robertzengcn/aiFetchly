@@ -4,7 +4,10 @@ import {
   MANUAL_BUDGET_DEFAULTS,
   HARD_CAPS,
   BudgetReservationResult,
+  decodeLedgerPolicyLimits,
+  ledgerPolicyLimitsSchema,
 } from "@/service/aiTaskExecution/TaskRunBudget";
+import type { BudgetLimits } from "@/service/aiTaskExecution/TaskRunBudget";
 import {
   buildScheduledBudgetLimits,
   SCHEDULED_LOOP_RUN_TIMEOUT_MS,
@@ -229,5 +232,261 @@ describe("buildScheduledBudgetLimits (FR-08, §9)", () => {
     expect(limits.maxContinuations).toBe(0);
     expect(limits.maxToolExecutions).toBe(0);
     expect(limits.maxActiveRuntimeMs).toBe(0);
+  });
+});
+
+// ----- Slice 2 (Unit 2): live budget enforcement (D4, FR-08/09, AC-09/10) -----
+
+function unit2Limits(overrides: Partial<BudgetLimits> = {}): BudgetLimits {
+  return { ...MANUAL_BUDGET_DEFAULTS, ...overrides };
+}
+
+function unit2LedgerRow(overrides: Partial<{
+  policy_limits_json: string;
+  consumed_continuations: number;
+  consumed_provider_attempts: number;
+  consumed_checker_attempts: number;
+  consumed_tool_executions: number;
+  consumed_tokens: number;
+  consumed_active_ms: number;
+  consumed_wait_ms: number;
+  no_progress_streak: number;
+}> = {}): {
+  policy_limits_json: string;
+  consumed_continuations: number;
+  consumed_provider_attempts: number;
+  consumed_checker_attempts: number;
+  consumed_tool_executions: number;
+  consumed_tokens: number;
+  consumed_active_ms: number;
+  consumed_wait_ms: number;
+  no_progress_streak: number;
+} {
+  return {
+    policy_limits_json: JSON.stringify(MANUAL_BUDGET_DEFAULTS),
+    consumed_continuations: 0,
+    consumed_provider_attempts: 0,
+    consumed_checker_attempts: 0,
+    consumed_tool_executions: 0,
+    consumed_tokens: 0,
+    consumed_active_ms: 0,
+    consumed_wait_ms: 0,
+    no_progress_streak: 0,
+    ...overrides,
+  };
+}
+
+describe("TaskRunBudget.reserveCheckerAttempt (Slice 2, FR-09, AC-09/10)", () => {
+  it("reserves within the per-run limit and increments consumed_checker_attempts", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 3 }));
+    expect(budget.reserveCheckerAttempt("chk-1")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reserveCheckerAttempt("chk-2")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.getConsumed().checkerAttempts).toBe(2);
+  });
+
+  it("dedups by request ID — re-reserving the same check does not double-count", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 3 }));
+    expect(budget.reserveCheckerAttempt("chk-1")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reserveCheckerAttempt("chk-1")).toBe(BudgetReservationResult.AlreadyReserved);
+    expect(budget.getConsumed().checkerAttempts).toBe(1);
+  });
+
+  it("returns Exhausted when the per-run checker limit is spent (gate: qualitative skipped)", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 2 }));
+    budget.reserveCheckerAttempt("chk-1");
+    budget.reserveCheckerAttempt("chk-2");
+    expect(budget.reserveCheckerAttempt("chk-3")).toBe(BudgetReservationResult.Exhausted);
+    expect(budget.isCheckerBudgetExhausted()).toBe(true);
+    expect(budget.getConsumed().checkerAttempts).toBe(2);
+  });
+
+  it("enforces the per-candidate cap (HARD_CAPS.maxCheckerAttemptsPerCandidate = 2) — 1 retry", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 100 }));
+    budget.beginCheckerCandidate("cand-1");
+    expect(budget.reserveCheckerAttempt("chk-1")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reserveCheckerAttempt("chk-2")).toBe(BudgetReservationResult.Reserved);
+    // Third attempt for the same candidate — per-candidate cap spent even
+    // though the per-run counter has room.
+    expect(budget.reserveCheckerAttempt("chk-3")).toBe(BudgetReservationResult.Exhausted);
+    expect(budget.getConsumed().checkerAttempts).toBe(2);
+  });
+
+  it("beginCheckerCandidate resets the per-candidate window for a NEW candidate only (idempotent)", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 100 }));
+    budget.beginCheckerCandidate("cand-1");
+    budget.reserveCheckerAttempt("chk-1");
+    budget.reserveCheckerAttempt("chk-2");
+    expect(budget.reserveCheckerAttempt("chk-3")).toBe(BudgetReservationResult.Exhausted);
+    // Same-candidate re-begin does NOT reset.
+    budget.beginCheckerCandidate("cand-1");
+    expect(budget.reserveCheckerAttempt("chk-4")).toBe(BudgetReservationResult.Exhausted);
+    // New candidate gets a fresh 2-attempt window.
+    budget.beginCheckerCandidate("cand-2");
+    expect(budget.reserveCheckerAttempt("chk-5")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reserveCheckerAttempt("chk-6")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reserveCheckerAttempt("chk-7")).toBe(BudgetReservationResult.Exhausted);
+  });
+
+  it("checker reservations share the reservedRequestIds dedup set with other reserve types", () => {
+    // The four reserve* methods share one dedup keyspace — a caller-supplied
+    // ID must be unique across types (documented invariant).
+    const budget = new TaskRunBudget(unit2Limits());
+    budget.reserveProviderAttempt("shared-id");
+    expect(budget.reserveCheckerAttempt("shared-id")).toBe(BudgetReservationResult.AlreadyReserved);
+    expect(budget.getConsumed().checkerAttempts).toBe(0);
+  });
+});
+
+describe("TaskRunBudget live-gating accessors (Slice 2, D4, FR-08)", () => {
+  it("isContinuationBudgetExhausted flips at the limit", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxContinuations: 2 }));
+    expect(budget.isContinuationBudgetExhausted()).toBe(false);
+    budget.reserveContinuation("cont-1");
+    expect(budget.isContinuationBudgetExhausted()).toBe(false);
+    budget.reserveContinuation("cont-2");
+    expect(budget.isContinuationBudgetExhausted()).toBe(true);
+  });
+
+  it("isProviderBudgetExhausted flips at the limit", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxProviderAttempts: 1 }));
+    expect(budget.isProviderBudgetExhausted()).toBe(false);
+    budget.reserveProviderAttempt("prov-1");
+    expect(budget.isProviderBudgetExhausted()).toBe(true);
+  });
+
+  it("isCheckerBudgetExhausted reflects the per-run counter without a candidate window", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxCheckerAttempts: 1 }));
+    expect(budget.isCheckerBudgetExhausted()).toBe(false);
+    budget.reserveCheckerAttempt("chk-1");
+    expect(budget.isCheckerBudgetExhausted()).toBe(true);
+  });
+
+  it("isNoProgressStreakExhausted flips at the streak limit", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxNoProgressStreak: 2 }));
+    expect(budget.isNoProgressStreakExhausted()).toBe(false);
+    budget.recordNoProgress();
+    budget.recordNoProgress();
+    expect(budget.isNoProgressStreakExhausted()).toBe(true);
+  });
+
+  it("tool reservations stay record-but-no-gate — no accessor gates them (D4)", () => {
+    const budget = new TaskRunBudget(unit2Limits({ maxToolExecutions: 1 }));
+    budget.reserveToolExecution("tool-1");
+    expect(budget.getConsumed().toolExecutions).toBe(1);
+    // No isToolBudgetExhausted accessor exists — reserveToolExecution is
+    // record-only in Slice 2 (gating mid-operation leaves tool state limbo;
+    // tool volume is bounded via continuation/round caps).
+    const maybeAccessor = (budget as unknown as Record<string, unknown>)["isToolBudgetExhausted"];
+    expect(maybeAccessor).toBeUndefined();
+  });
+});
+
+describe("TaskRunBudget.resurrectFromLedger (Slice 2, D4/D6)", () => {
+  it("round-trips consumed counters and limits from a ledger row", () => {
+    const row = unit2LedgerRow({
+      consumed_continuations: 2,
+      consumed_provider_attempts: 10,
+      consumed_checker_attempts: 4,
+      consumed_tool_executions: 7,
+      consumed_tokens: 5000,
+      consumed_active_ms: 60_000,
+      consumed_wait_ms: 120_000,
+      no_progress_streak: 1,
+    });
+    const budget = TaskRunBudget.resurrectFromLedger(row);
+    expect(budget.getConsumed()).toEqual({
+      continuations: 2,
+      providerAttempts: 10,
+      checkerAttempts: 4,
+      toolExecutions: 7,
+      tokens: 5000,
+      activeRuntimeMs: 60_000,
+      waitMs: 120_000,
+      noProgressStreak: 1,
+    });
+  });
+
+  it("a resurrected budget enforces restored limits — continuation exhausted when the ledger says spent", () => {
+    const row = unit2LedgerRow({
+      policy_limits_json: JSON.stringify({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 2 }),
+      consumed_continuations: 2,
+    });
+    const budget = TaskRunBudget.resurrectFromLedger(row);
+    expect(budget.isContinuationBudgetExhausted()).toBe(true);
+    expect(budget.reserveContinuation("cont-new")).toBe(BudgetReservationResult.Exhausted);
+  });
+
+  it("a resurrected budget can still reserve within remaining allowance", () => {
+    const row = unit2LedgerRow({
+      policy_limits_json: JSON.stringify({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 3 }),
+      consumed_continuations: 1,
+    });
+    const budget = TaskRunBudget.resurrectFromLedger(row);
+    expect(budget.reserveContinuation("cont-new")).toBe(BudgetReservationResult.Reserved);
+    expect(budget.getConsumed().continuations).toBe(2);
+  });
+
+  it("clamps a tampered ledger row whose limits exceed HARD_CAPS", () => {
+    const row = unit2LedgerRow({
+      policy_limits_json: JSON.stringify({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 1000 }),
+    });
+    const budget = TaskRunBudget.resurrectFromLedger(row);
+    // Hard cap 10: exactly 10 reservations succeed, the 11th is refused.
+    for (let i = 1; i <= 10; i += 1) {
+      expect(budget.reserveContinuation(`c-${i}`)).toBe(BudgetReservationResult.Reserved);
+    }
+    expect(budget.reserveContinuation("c-11")).toBe(BudgetReservationResult.Exhausted);
+  });
+
+  it("guards NaN/Infinity/negative consumed counters from a corrupt ledger row (fail-closed to 0)", () => {
+    const row = unit2LedgerRow({
+      consumed_tokens: Number.NaN,
+      consumed_active_ms: Number.POSITIVE_INFINITY,
+      consumed_continuations: -5,
+    });
+    const budget = TaskRunBudget.resurrectFromLedger(row);
+    expect(budget.getConsumed().tokens).toBe(0);
+    expect(budget.getConsumed().activeRuntimeMs).toBe(0);
+    expect(budget.getConsumed().continuations).toBe(0);
+  });
+
+  it("throws on malformed policy_limits_json (fail-closed: no budget, no dispatch)", () => {
+    const row = unit2LedgerRow({ policy_limits_json: "not-json{{{" });
+    expect(() => TaskRunBudget.resurrectFromLedger(row)).toThrow(/Malformed/);
+  });
+
+  it("throws on schema-mismatched policy_limits_json (wrong types / missing fields)", () => {
+    const row = unit2LedgerRow({
+      policy_limits_json: JSON.stringify({ maxContinuations: "three" }),
+    });
+    expect(() => TaskRunBudget.resurrectFromLedger(row)).toThrow(/schema validation/);
+  });
+});
+
+describe("decodeLedgerPolicyLimits (Slice 2 persistence boundary)", () => {
+  it("decodes a valid limits JSON clamped to hard caps", () => {
+    const decoded = decodeLedgerPolicyLimits(
+      JSON.stringify({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 25, maxActiveRuntimeMs: 999_999_999 })
+    );
+    expect(decoded.maxContinuations).toBe(HARD_CAPS.maxContinuations);
+    expect(decoded.maxActiveRuntimeMs).toBe(HARD_CAPS.maxActiveRuntimeMs);
+    // Non-capped fields pass through unchanged.
+    expect(decoded.maxProviderAttempts).toBe(MANUAL_BUDGET_DEFAULTS.maxProviderAttempts);
+    expect(decoded.maxCheckerAttempts).toBe(MANUAL_BUDGET_DEFAULTS.maxCheckerAttempts);
+  });
+
+  it("preserves zero as a legitimate no-allowance configuration", () => {
+    const zeroed = ledgerPolicyLimitsSchema.parse({
+      maxContinuations: 0,
+      maxProviderAttempts: 0,
+      maxCheckerAttempts: 0,
+      maxToolExecutions: 0,
+      maxTokens: 0,
+      maxActiveRuntimeMs: 0,
+      maxWaitMs: 0,
+      maxNoProgressStreak: 0,
+    });
+    expect(zeroed.maxContinuations).toBe(0);
+    expect(zeroed.maxTokens).toBe(0);
   });
 });

@@ -10,6 +10,7 @@
  * here so the scheduled loop and the budget policy cannot drift apart.
  */
 import { SCHEDULED_LOOP_RUN_TIMEOUT_MS } from "@/config/aiChatScheduledLoopConfig";
+import { z } from "zod/v4";
 
 export { SCHEDULED_LOOP_RUN_TIMEOUT_MS };
 
@@ -38,6 +39,10 @@ export const MANUAL_BUDGET_DEFAULTS: BudgetLimitsInput = {
 export const HARD_CAPS = {
   maxContinuations: 10,
   maxActiveRuntimeMs: 30 * 60 * 1000,
+  // FR-08/§9: checker attempts are capped per run (6) and per candidate (2,
+  // 1 retry). Unit 2 adds the per-candidate gate to the budget reservation.
+  maxCheckerAttemptsPerRun: 6,
+  maxCheckerAttemptsPerCandidate: 2,
 } as const;
 
 /**
@@ -103,4 +108,51 @@ export function buildScheduledBudgetLimits(input: {
     maxWaitMs: 60 * 60 * 1000,
     maxNoProgressStreak: 3,
   };
+}
+
+// ----- Ledger policy_limits_json decode boundary -----
+
+/**
+ * Zod schema for the frozen `policy_limits_json` stored on a ledger row.
+ * Persisted JSON is untrusted at read: `resurrectFromLedger` decodes through
+ * this schema before trusting the values. Each field must be a non-negative
+ * safe integer; `resurrectFromLedger` clamps the two hard-capped fields
+ * (continuations, active runtime) down to HARD_CAPS so a tampered ledger
+ * row can never produce an unbounded budget.
+ */
+export const ledgerPolicyLimitsSchema = z.object({
+  maxContinuations: z.number().int().min(0),
+  maxProviderAttempts: z.number().int().min(0),
+  maxCheckerAttempts: z.number().int().min(0),
+  maxToolExecutions: z.number().int().min(0),
+  maxTokens: z.number().int().min(0),
+  maxActiveRuntimeMs: z.number().int().min(0),
+  maxWaitMs: z.number().int().min(0),
+  maxNoProgressStreak: z.number().int().min(0),
+});
+
+/**
+ * Decode + validate a ledger row's `policy_limits_json`. Returns the limits
+ * clamped to HARD_CAPS (continuations, active runtime) so a persisted
+ * budget can never exceed the caps even if the row was written by an older
+ * version or tampered with. Throws on malformed JSON or a schema mismatch —
+ * callers treat resurrection failure as fatal for the resume (fail-closed:
+ * no budget, no dispatch) rather than silently granting an unbounded one.
+ */
+export function decodeLedgerPolicyLimits(policyLimitsJson: string): BudgetLimitsInput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(policyLimitsJson);
+  } catch {
+    throw new Error(
+      `Malformed ledger policy_limits_json (not JSON): ${policyLimitsJson.slice(0, 100)}`
+    );
+  }
+  const result = ledgerPolicyLimitsSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `Ledger policy_limits_json failed schema validation: ${result.error.message}`
+    );
+  }
+  return clampToHardCaps(result.data);
 }

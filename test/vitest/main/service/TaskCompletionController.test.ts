@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
-import type { TaskEndCandidate } from "@/entityTypes/aiTaskExecutionTypes";
+import { TaskRunBudget, BudgetReservationResult, MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/TaskRunBudget";
+import type { TaskEndCandidate, TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
 
 function baseCandidate(overrides: Partial<TaskEndCandidate>): TaskEndCandidate {
   return {
@@ -460,6 +461,154 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       expect(decision.outcome).toBe("verified_complete");
       // Slice 1 fallback: no evidence rows collected.
       expect(decision.evidenceIds).toEqual([]);
+    }
+  });
+
+  // ----- Slice 2 (Unit 2): live budget consult (D4, FR-08/09, AC-09/10) -----
+
+  it("Slice 2 budget: continuation exhausted → finish(incomplete, CONTINUATION_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 1 });
+    budget.reserveContinuation("cont-1");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 50/100.", finishReason: "length", boundary: "round_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("Slice 2 budget: provider attempts exhausted → finish(incomplete, MODEL_ATTEMPT_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxProviderAttempts: 2 });
+    budget.reserveProviderAttempt("prov-1");
+    budget.reserveProviderAttempt("prov-2");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", finishReason: "length", boundary: "budget_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("MODEL_ATTEMPT_LIMIT");
+    }
+  });
+
+  it("Slice 2 budget: continuation consult wins over provider consult (both exhausted → CONTINUATION_LIMIT)", async () => {
+    // Precedence: continuation-limit is checked before provider-limit so the
+    // reason code is deterministic when both allowances are spent.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 0, maxProviderAttempts: 0 });
+    const decision = await ctrl.decide(baseCandidate({}), { route: "task_verified", budget });
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("Slice 2 budget: with allowance remaining, decision falls through to criteria evaluation", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    budget.reserveContinuation("cont-1");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+    }
+  });
+
+  it("Slice 2 budget: undefined budget → no consult (Slice 1 behavior preserved)", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 50/100.", finishReason: "length", boundary: "round_cap" }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    // Without a budget, the boundary-derived reason code (not a budget
+    // accessor) drives the reason.
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("Slice 2 budget: safety restriction still wins over budget exhaustion", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 0 });
+    const decision = await ctrl.decide(
+      baseCandidate({ safetyRestriction: true, content: "I can't help." }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("blocked_by_policy");
+    }
+  });
+
+  it("Slice 2 budget: budget-gated checker reserve reaches the evidence service (per-candidate window)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxCheckerAttempts: 1 });
+    const reserveCalls: BudgetReservationResult[] = [];
+    const fakeService = {
+      checkCandidate: async (
+        _candidate: TaskEndCandidate,
+        _contract: TaskCompletionContract,
+        context: { budgetReserveChecker?: () => BudgetReservationResult }
+      ) => {
+        // Simulate the qualitative evaluator consuming the reserve function.
+        const reserve = context.budgetReserveChecker;
+        if (reserve) {
+          reserveCalls.push(reserve());
+          reserveCalls.push(reserve());
+        }
+        return { passedCriterionIds: ["rec-1"], unmetCriterionIds: [], evidenceIds: ["evidence-1"] };
+      },
+    };
+    const contract = {
+      schemaVersion: 1 as const,
+      contractId: "contract-1",
+      contractHash: "hash-abc",
+      objective: "Save contacts",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "verified" as const,
+      criteria: [
+        {
+          id: "rec-1",
+          required: true,
+          kind: "observation" as const,
+          description: "observes 100 contacts",
+          adapterKey: "observation",
+          targetId: "100 contacts",
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ],
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        evidenceService: fakeService,
+        contract,
+        evidenceContext: { content: "Saved 100 contacts.", source: "provider", sourceRevision: "rev-1" },
+        budget,
+      }
+    );
+    // First reserve succeeds (1 of 1 per-run), second is exhausted.
+    expect(reserveCalls).toEqual([BudgetReservationResult.Reserved, BudgetReservationResult.Exhausted]);
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
     }
   });
 });
