@@ -1,79 +1,66 @@
 # Review tickets: natural-language skill installation (2026-10-05)
 
 From the pre-landing `/review` pass (Codex gpt-6-astra full-branch scan +
-parent review). The 10 remediation-range defects were fixed in commit
-`72edf8df` (RV1–RV10). The items below are either OLDER branch findings
-(predating the R1–R10 remediation, in already-audited commits) or approved
-deferrals — each needs its own individually tested fix, not a drive-by.
+parent review). STATUS UPDATE 2026-10-06: **everything below is fixed**
+except item 11 (deferred test debt). Fix commits, newest last:
 
-## P1 — pre-existing (full-branch scan)
+- `72edf8df` — remediation-range RV1–RV10 (command-hash baseline,
+  shellSplit, migration 0004, policy long-forms/newline, rollback stop,
+  incompatible hold, neutral probe cwd, AI gate)
+- `2805a2af` — tickets 1–5 (identity-bound uninstall incl. the
+  ownership-file/carried-identity repair, held-update cancel/decline,
+  restart identity+enabled reconcile, backups outside the discovery
+  root, supersede unregistration + verified registration)
+- `b4eeda08` — tickets 6–9 (conversation-scoped install boundary,
+  narrowing applied after catalog filtering, handoffs after the tool
+  batch, plugin/executable lifecycle dispatch)
+- `00a4ad17` — ticket 10 / D4b + the two nested-instruction P2s
+  (candidate-qualified instruction paths survive dedup; per-candidate
+  command working directories with a containment guard)
 
-1. **Uninstall ownership check** — `SkillInstallationModule.ts:2467`:
-   after a same-name replacement, the superseded row keeps the same
-   `activationPath`; uninstalling the SUPERSEDED row deletes the
-   replacement's files. `SkillActivationService.uninstall` verifies
-   generic ownership metadata, not the installation identity. Fix: verify
-   the activation's ownership file still names the requested
-   installationId before deleting.
-2. **Cancel of a held update rolls back the WORKING installation** —
-   `SkillInstallationModule.ts:1478`: an update that pauses at
-   installing_dependencies has already adopted the existing
-   installationId; cancelling (or declining a dependency) runs the
-   rollback path against files this session never wrote. Fix: track
-   whether the session actually activated files before rolling back.
-3. **Restart discovery loses installer identities** —
-   `AIFetchlyRuntimeRegistrySync.ts:289`: scanning installer-managed
-   directories assigns fresh name-derived installationIds and enables
-   everything, so disabled skills resurrect and disable/enable target
-   nonexistent runtime ids. Fix: reconcile scanned directories with the
-   persisted installation rows (identity + enabled state).
-4. **Rollback backups live inside the discovery root** —
-   `SkillActivationService.ts:104`: replacement backups sit beside the
-   active skill and carry a valid SKILL.md; the config loader scans both
-   and a backup can replace the active definition on restart. Fix: store
-   backups outside the skills root (or exclude from scanning).
-5. **Superseded catalog entry blocks the replacement** —
-   `SkillInstallationModule.ts:2774`: same-name replacement disables the
-   old row but leaves its catalog entry at the same path;
-   `PromptSkillCatalog.replaceSource` then rejects the new entry and the
-   session still reports ready. Fix: remove the superseded runtime entry
-   and verify registration succeeded before reporting ready.
+## Fixed — former P1s (pre-existing, full-branch scan)
 
-## P2 — pre-existing (full-branch scan)
+1. **Uninstall ownership check** — uninstall is now identity-bound
+   (ownership file records the INSTALLATION id — it previously recorded
+   the session id — and the D2 prior-row adoption rewrites it); linked
+   rows bind to the recorded link target.
+2. **Cancel/decline of a held update** — rollback runs only when THIS
+   session's own event history shows it reached activation.
+3. **Restart discovery identities** — the loader reconciles scanned
+   installer directories with persisted rows (identity + enabled);
+   pre-fix backup directories beside a skill are skipped.
+4. **Rollback backups** — stored under `~/.aifetchly/skill-backups`,
+   outside the discovery root.
+5. **Superseded catalog entry** — the supersede loop unregisters the old
+   runtime entry + deactivates its invocations; registerPromptSkill
+   verifies actual registration before ready.
 
-6. **Conversation boundary cache bleed** — `AIChatQueryLoop.ts:1970`:
-   `installBoundaryDirty` / `activeInstallSession` /
-   `manualActionApprovedCache` are instance-wide without a
-   conversation-reset; one loop instance serves multiple conversations.
-7. **Skill tool-narrowing undone by deferred-catalog filtering** —
-   `AIChatQueryLoop.ts:1038`: `filterForRound` receives the original
-   tool list and replaces the narrowed set.
-8. **Skill handoff message ordering** — `AIChatQueryLoop.ts:2164`: a
-   `use_skill` + other-tool round inserts a user-role handoff between
-   tool responses; strict providers reject the next request.
-9. **Plugin/executable lifecycle dispatch** —
-   `SkillInstallationModule.ts:2383`: disable/uninstall only handle the
-   prompt-skill paths; plugin/executable rows report success while their
-   registered tools stay live.
+## Fixed — former P2s
 
-## Approved deferrals (this review)
+6. **Conversation boundary cache bleed** — the install boundary (session
+   + manual-action approval) is conversation-scoped and invalidated on
+   switch.
+7. **Narrowing order** — allowed-tools narrowing applies to the final
+   catalog-filtered set.
+8. **Handoff ordering** — prompt-skill/image handoffs append after the
+   whole tool batch (contiguous tool responses).
+9. **Plugin/executable lifecycle** — disable/enable route to the
+   InstalledSkill registry; uninstall routes to Plugin/SkillManagement
+   with typed failures.
 
-10. **Per-candidate command cwd** (D4b): setup commands found in a nested
-    candidate's install.md execute from the plan root, not the
-    candidate's folder. Needs a plan-contract change: carry a validated
-    candidate-relative working directory through planning, approval
-    binding, and the runner. Until then, nested instruction commands with
-    relative paths can fail or touch the wrong files.
-11. **RV7/RV8 module-level regression tests**: the rollback_required
-    loop-stop and the incompatible-dependency hold are enforced and
-    type-checked but lack dedicated end-to-end tests (driving them needs
-    environment-dependent fixtures — e.g. a locally-present-but-old
-    binary). Add deterministic fixtures when the test harness grows a
-    probe-injection seam.
+## Fixed — former deferral
 
-Coverage notes from the same review: specialist subagents (testing,
-maintainability, security, performance, data-migration, api-contract,
-design, simplification) all died to the provider 5-hour usage limit
-(429) — their lenses were run inline by the parent instead; the Codex
+10. **Per-candidate command cwd (D4b)** — see `00a4ad17` above.
+
+## Still deferred
+
+11. **RV7/RV8 dedicated e2e tests**: the rollback_required loop-stop and
+    the incompatible-dependency hold are enforced and covered by
+    unit-level guards, but lack deterministic end-to-end tests — driving
+    them needs a probe-injection seam (a locally-present-but-old binary
+    fixture). Add when the test harness grows that seam.
+
+Coverage notes from the review: specialist subagents all died to the
+provider 5-hour usage limit (429) — lenses run inline instead; Codex
 adversarial + structured passes completed. E2E/Playwright and
 live-platform runs were not rerun (rebuild `yarn build:e2e` first).
