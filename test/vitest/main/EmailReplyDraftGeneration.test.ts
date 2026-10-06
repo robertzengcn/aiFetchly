@@ -2477,3 +2477,203 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     expect(meta.correctionAttempted).toBe(false);
   });
 });
+
+describe("FR-039 generation/validation counters", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  /** Seed one clean message on a distinct emailServiceId (isolated DB rows). */
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4251;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4251;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  beforeEach(() => {
+    drainCountersForTest();
+  });
+
+  it("valid generation emits generation_outcome{ok} only (no validation/correction counters)", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const counters = drainCountersForTest();
+    expect(counters.get("generation_outcome{outcome=ok}")).toBe(1);
+    expect(counters.get("correction_attempt{stage=generation}")).toBeUndefined();
+    expect(counters.get("hint_fallback{stage=generation}")).toBeUndefined();
+    // policy_decision (pre-draft guard) still fires; not a generation counter.
+    expect(
+      counters.get(
+        "policy_decision{allowed=true,code=allowed,stage=pre_draft}"
+      )
+    ).toBe(1);
+  });
+
+  it("malformed-then-valid emits correction_attempt + validation_code + generation_outcome{ok}", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse("{not valid json}"),
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const counters = drainCountersForTest();
+    expect(counters.get("correction_attempt{stage=generation}")).toBe(1);
+    expect(counters.get("generation_outcome{outcome=ok}")).toBe(1);
+    // The first attempt's failure codes are recorded per code.
+    expect(counters.get("validation_code{code=malformed_json}")).toBe(1);
+  });
+
+  it("double validation failure emits validation_code per code + generation_outcome{validation_failed}", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse("{not valid json}"),
+      completionResponse("{also not valid}"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    const counters = drainCountersForTest();
+    expect(counters.get("generation_outcome{outcome=validation_failed}")).toBe(1);
+    expect(counters.get("validation_code{code=malformed_json}")).toBe(2);
+    expect(counters.get("correction_attempt{stage=generation}")).toBe(1);
+  });
+
+  it("finish_reason length emits truncation_detected{finish_reason_length} + validation_code{truncated_output}", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      // The JSON parses, but the provider hit the token cap mid-output.
+      completionResponse(validReplyJson, "length"),
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("truncation_detected{source=finish_reason_length}")
+    ).toBe(1);
+    expect(counters.get("validation_code{code=truncated_output}")).toBe(1);
+  });
+
+  it("unsupported response_format then no-hint success emits hint_fallback", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    let call = 0;
+    const stagedFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async () => {
+        call += 1;
+        if (call === 1) {
+          const err = new Error(
+            "Bad request: response_format is not supported by this model"
+          );
+          (err as unknown as { status: number }).status = 400;
+          throw err;
+        }
+        return completionResponse(validReplyJson, "stop");
+      },
+    });
+    void factory;
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: stagedFactory,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const counters = drainCountersForTest();
+    expect(counters.get("hint_fallback{stage=generation}")).toBe(1);
+    expect(counters.get("generation_outcome{outcome=ok}")).toBe(1);
+  });
+
+  it("reuse path emits generation_outcome{reused} with zero model calls", async () => {
+    const messageId = await seedMessage();
+    await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(requests).toHaveLength(0);
+    const counters = drainCountersForTest();
+    expect(counters.get("generation_outcome{outcome=reused}")).toBe(1);
+    expect(counters.get("generation_outcome{outcome=ok}")).toBeUndefined();
+  });
+
+  it("post-generation race recheck refusal emits guard_conflict{post_generation,code}", async () => {
+    const messageId = await seedMessage();
+    // The model responds during the call; a sibling draft flips the message
+    // to sent before the recheck runs. Force the conflict by flipping
+    // replyStatus inside the model callback (the awaited LLM call window).
+    let flipped = false;
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async () => {
+        if (!flipped) {
+          flipped = true;
+          // Simulate a sibling reply being sent DURING generation.
+          await messageModule.updateReplyStatus(messageId, "sent");
+        }
+        return completionResponse(validReplyJson, "stop");
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("guard_conflict{code=already_replied,stage=post_generation}")
+    ).toBe(1);
+    // The winning generation DID validate — but its output was dropped at
+    // the recheck, so generation_outcome{ok} fired inside the attempt while
+    // the invocation overall failed.
+    expect(counters.get("generation_outcome{outcome=ok}")).toBe(1);
+  });
+});

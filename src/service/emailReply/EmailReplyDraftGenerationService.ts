@@ -409,6 +409,7 @@ export class EmailReplyDraftGenerationService {
           existing_draft_id: reusable.id,
         };
       }
+      incrementReplyMetric("generation_outcome", { outcome: "reused" });
       return {
         success: true,
         draftId: reusable.id,
@@ -687,6 +688,13 @@ export class EmailReplyDraftGenerationService {
       messageId: message.id,
     });
     if (!recheckDecision.allowed) {
+      // FR-039: the post-generation recheck REFUSED after the pre-draft guard
+      // allowed — the guard conflict counter (distinct from policy_decision,
+      // which the pre-draft stage already emits).
+      incrementReplyMetric("guard_conflict", {
+        stage: "post_generation",
+        code: recheckDecision.code,
+      });
       await this.recordFailure(
         message.emailServiceId,
         message.id,
@@ -744,6 +752,7 @@ export class EmailReplyDraftGenerationService {
           existing_draft_id: reusableNow.id,
         };
       }
+      incrementReplyMetric("generation_outcome", { outcome: "reused" });
       return {
         success: true,
         draftId: reusableNow.id,
@@ -1108,8 +1117,22 @@ export class EmailReplyDraftGenerationService {
         systemMsg,
         userMsg
       );
+      // B06 fallback provenance counter (FR-039): the one-shot no-hint
+      // retry was taken for the FIRST submission.
+      if (firstSubmission.usedHintFallback) {
+        incrementReplyMetric("hint_fallback", { stage: "generation" });
+      }
       const first = this.validateLlmResult(firstSubmission.raw);
+      // FR-039: a `length` finish is the provider-side truncation signal,
+      // distinct from a truncation-coded validation failure. Emitted at the
+      // consumption site so validateLlmRawResult stays pure.
+      if (firstSubmission.raw.finishReason === "length") {
+        incrementReplyMetric("truncation_detected", {
+          source: "finish_reason_length",
+        });
+      }
       if (first.ok) {
+        incrementReplyMetric("generation_outcome", { outcome: "ok" });
         return {
           kind: "ok",
           value: first.value,
@@ -1118,6 +1141,17 @@ export class EmailReplyDraftGenerationService {
           hintFallbackUsed: firstSubmission.usedHintFallback,
         };
       }
+      // FR-039: record each validation failure with its bounded code set
+      // (low-cardinality validator codes only — never content).
+      for (const code of first.codes) {
+        incrementReplyMetric("validation_code", { code });
+        if (code === "truncated_output") {
+          incrementReplyMetric("truncation_detected", {
+            source: "validation_code",
+          });
+        }
+      }
+      incrementReplyMetric("correction_attempt", { stage: "generation" });
       const secondSubmission = await this.callLlmRawWithHintFallback(
         systemMsg,
         {
@@ -1129,8 +1163,18 @@ export class EmailReplyDraftGenerationService {
         },
         { stage: "correction" }
       );
+      // B06 fallback provenance counter for the CORRECTION submission.
+      if (secondSubmission.usedHintFallback) {
+        incrementReplyMetric("hint_fallback", { stage: "correction" });
+      }
       const second = this.validateLlmResult(secondSubmission.raw);
+      if (secondSubmission.raw.finishReason === "length") {
+        incrementReplyMetric("truncation_detected", {
+          source: "finish_reason_length",
+        });
+      }
       if (second.ok) {
+        incrementReplyMetric("generation_outcome", { outcome: "ok" });
         return {
           kind: "ok",
           value: second.value,
@@ -1139,12 +1183,28 @@ export class EmailReplyDraftGenerationService {
           hintFallbackUsed: secondSubmission.usedHintFallback,
         };
       }
+      for (const code of second.codes) {
+        incrementReplyMetric("validation_code", { code });
+        if (code === "truncated_output") {
+          incrementReplyMetric("truncation_detected", {
+            source: "validation_code",
+          });
+        }
+      }
+      incrementReplyMetric("generation_outcome", {
+        outcome: "validation_failed",
+      });
       return {
         kind: "validation_failed",
         codes: [...first.codes, ...second.codes],
       };
     } catch (error) {
       if (error instanceof LlmTransportError) {
+        incrementReplyMetric("generation_outcome", {
+          outcome: error.deadlineExceeded
+            ? "deadline_exceeded"
+            : "transport_error",
+        });
         return { kind: "transport_error", error };
       }
       // Unexpected non-transport error — propagate so the caller sees a real
