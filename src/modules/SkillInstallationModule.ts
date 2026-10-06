@@ -560,14 +560,20 @@ export class SkillInstallationModule extends BaseModule {
     // was requested). plan.source.contentHash covers the WHOLE acquired
     // repository, so comparing it against the sub-root's tree hash made a
     // subdirectory install's first approved command always fail.
-    let commandBaselineHash: string | undefined;
-    try {
-      const { hashTree } = await import(
-        "@/childprocess/skill-installation/stagePackage"
-      );
-      commandBaselineHash = hashTree(inspectionRoot);
-    } catch {
-      /* hashing unavailable — the runner hard-refuses instead */
+    // Review R2 (perf): the no-subdirectory case IS the acquired tree —
+    // reuse the already-computed contentHash instead of re-walking and
+    // re-hashing the whole repository synchronously on the main loop.
+    let commandBaselineHash: string | undefined =
+      descriptor.subdirectory ? undefined : acquired.source.contentHash;
+    if (commandBaselineHash === undefined) {
+      try {
+        const { hashTree } = await import(
+          "@/childprocess/skill-installation/stagePackage"
+        );
+        commandBaselineHash = hashTree(inspectionRoot);
+      } catch {
+        /* hashing unavailable — the runner hard-refuses instead */
+      }
     }
     const plan: SkillInstallPlan = {
       ...prePlan,
@@ -1022,7 +1028,13 @@ export class SkillInstallationModule extends BaseModule {
       JSON.stringify(updatedPlan)
     );
 
-    if (rechecked.every((d) => d.currentStatus === "satisfied")) {
+    // Review R2-P1: readiness gates on BLOCKING statuses only (missing |
+      // incompatible) — classification items stay 'unknown' forever and a
+      // every-satisfied check deadlocked them at installing_dependencies.
+      if (rechecked.every((d) => ![
+        "missing",
+        "incompatible",
+      ].includes(d.currentStatus as string))) {
       await this.appendEvent(
         events,
         input.sessionId,
@@ -1262,7 +1274,12 @@ export class SkillInstallationModule extends BaseModule {
     // under the staged root with a containment guard — never absolute,
     // never escaping.
     const template = plan.commands.find((c) => c.id === commandId);
-    const workingDirectory = template?.workingDirectory ?? "";
+    // Review R2: plans persisted by the pre-D4b planner carry the display
+    // placeholder "<skill source root>" — normalize it to the source root
+    // instead of composing a nonexistent directory (spawn ENOENT).
+    const rawWorkingDirectory = template?.workingDirectory ?? "";
+    const workingDirectory =
+      rawWorkingDirectory === "<skill source root>" ? "" : rawWorkingDirectory;
     if (
       workingDirectory.startsWith("/") ||
       workingDirectory.split(/[\\/]/).includes("..")
@@ -2590,14 +2607,18 @@ export class SkillInstallationModule extends BaseModule {
       const deactivatedInvocations = await this.deactivateInvocations(
         input.installationId
       );
-      await this.cleanupInstallationRecords(input.installationId, entity, {
-        deleteSecrets: input.deleteSecrets !== false,
-      });
+      // Review R2: the REAL credential count — the routed branch used to
+      // discard the helper's return and report a hardcoded 0.
+      const secretsDeleted = await this.cleanupInstallationRecords(
+        input.installationId,
+        entity,
+        { deleteSecrets: input.deleteSecrets !== false }
+      );
       return {
         ok: true,
         removed: "directory",
         targetPreserved: null,
-        secretsDeleted: owningRemoval.secretsDeleted,
+        secretsDeleted,
         deactivatedInvocations,
       };
     }
@@ -2619,8 +2640,19 @@ export class SkillInstallationModule extends BaseModule {
             linkedTargetPath?: string;
           }
         ).linkedTargetPath;
+        // Review R2: a link row with NO recorded target fails CLOSED —
+        // links carry no ownership file, so an unbound unlink could remove
+        // a replacement installation's link.
+        if (!recorded) {
+          return {
+            ok: false,
+            message:
+              "This linked installation has no recorded source target; " +
+              "uninstall it via the current installation of this skill.",
+          };
+        }
         const current = fs.realpathSync(entity.activationPath);
-        if (recorded && fs.realpathSync(recorded) !== current) {
+        if (fs.realpathSync(recorded) !== current) {
           return {
             ok: false,
             message:
@@ -2671,8 +2703,7 @@ export class SkillInstallationModule extends BaseModule {
    */
   private async uninstallRoutedPackage(
     entity: SkillInstallationEntity
-  ): Promise<{ ok: true; secretsDeleted: number } | { ok: false; message: string }> {
-    const secretsDeleted = 0;
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
     if (entity.kind === "plugin") {
       try {
         const { PluginManagementModule } = await import(
@@ -2689,6 +2720,26 @@ export class SkillInstallationModule extends BaseModule {
               `The plugin manager could not remove '${entity.name}'.`,
           };
         }
+        // Review R2: uninstallPlugin only clears DB records — mirror the
+        // PLUGIN_UNINSTALL IPC handler's full teardown (package files +
+        // runtime capability unregistration) before reporting success.
+        const { getPluginInstallRoot } = await import(
+          "@/service/pluginPaths"
+        );
+        try {
+          fs.rmSync(getPluginInstallRoot(entity.name), {
+            recursive: true,
+            force: true,
+          });
+        } catch {
+          /* best-effort file removal */
+        }
+        const { PluginComponentRegistryService } = await import(
+          "@/service/PluginComponentRegistryService"
+        );
+        await PluginComponentRegistryService.unregisterPluginCapabilities(
+          entity.name
+        );
       } catch (err) {
         return {
           ok: false,
@@ -2711,6 +2762,14 @@ export class SkillInstallationModule extends BaseModule {
             message: `The skill manager could not remove '${entity.name}'.`,
           };
         }
+        // Review R2: mirror the SKILL_UNINSTALL IPC handler — the runtime
+        // registry entry outlives the DB row otherwise.
+        try {
+          const { SkillRegistry } = await import("@/config/skillsRegistry");
+          SkillRegistry.unregisterSkill(entity.name);
+        } catch {
+          /* registry unavailable — the DB removal above governs */
+        }
       } catch (err) {
         return {
           ok: false,
@@ -2720,7 +2779,7 @@ export class SkillInstallationModule extends BaseModule {
         };
       }
     }
-    return { ok: true, secretsDeleted };
+    return { ok: true };
   }
 
   /**
@@ -3031,6 +3090,17 @@ export class SkillInstallationModule extends BaseModule {
               JSON.stringify(ownership, null, 2),
               "utf-8"
             );
+            // Review R2: hashTree includes the ownership file — recompute
+            // the baseline so repair does not flag this sanctioned write
+            // (the metadataJson assignment below runs AFTER this block).
+            try {
+              const { hashTree } = await import(
+                "@/childprocess/skill-installation/stagePackage"
+              );
+              activationContentHash = hashTree(result.activationPath);
+            } catch {
+              /* baseline recomputation is best-effort */
+            }
           } catch {
             /* unreadable/unwritable ownership — uninstall's guards govern */
           }
@@ -3095,8 +3165,12 @@ export class SkillInstallationModule extends BaseModule {
     // Verification levels (design §18): activation structure + dependency
     // probes + registry discovery.
     const structureOk = activation.verifyActivation(result.activationPath);
+    // Review R2-P1: readiness gates on BLOCKING statuses only (missing |
+    // incompatible); 'unknown' classification items never satisfy and used
+    // to deadlock the session at installing_dependencies.
     const depsOk = plan.dependencies.every(
-      (d) => d.currentStatus === "satisfied"
+      (d) =>
+        d.currentStatus !== "missing" && d.currentStatus !== "incompatible"
     );
     const registered = this.registerPromptSkill(
       result.activationPath,

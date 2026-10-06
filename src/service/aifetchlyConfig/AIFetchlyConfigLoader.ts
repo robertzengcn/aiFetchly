@@ -1045,6 +1045,7 @@ export class AIFetchlyConfigLoader {
       activationPath: string;
       enabled: boolean;
       kind: string;
+      status: string;
     }[] = [];
     try {
       const { Token } = await import("@/modules/token");
@@ -1063,6 +1064,7 @@ export class AIFetchlyConfigLoader {
             activationPath: row.activationPath as string,
             enabled: row.enabled,
             kind: row.kind,
+            status: row.status,
           }));
       }
     } catch {
@@ -1150,10 +1152,24 @@ export class AIFetchlyConfigLoader {
 
       // Ticket P1-3: reconcile with the persisted installer row (matched
       // on the row's recorded activation path, realpath'd the same way).
-      const persistedRow = persistedRows.find(
-        (row) =>
-          row.activationPath === candidateDir || row.activationPath === canonicalRoot
+      // Review R2: a same-name replacement leaves BOTH rows with the same
+      // activation path — prefer the live row (superseded/revoked last) so
+      // restart registers the replacement's files under the CURRENT
+      // identity and enabled state.
+      const liveRows = persistedRows.filter(
+        (r) => r.status !== "superseded" && r.status !== "revoked"
       );
+      const persistedRow =
+        liveRows.find(
+          (row) =>
+            row.activationPath === candidateDir ||
+            row.activationPath === canonicalRoot
+        ) ??
+        persistedRows.find(
+          (row) =>
+            row.activationPath === candidateDir ||
+            row.activationPath === canonicalRoot
+        );
       promptSkills.push({
         id: `${sourceId}:prompt-skill:${loaded.file.manifest.name}`,
         name: loaded.file.manifest.name,

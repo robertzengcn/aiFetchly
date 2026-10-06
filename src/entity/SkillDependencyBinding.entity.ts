@@ -17,7 +17,6 @@ import { Order } from "./order.decorator";
   ["installationId", "dependencyName"],
   { unique: true }
 )
-@Index("idx_skill_dep_binding_installation", ["installationId"])
 export class SkillDependencyBindingEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id!: number;

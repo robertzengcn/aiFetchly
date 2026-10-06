@@ -236,7 +236,7 @@
            catalog-validated system installer; decline rolls the activation
            back and cancels. Token binding is identical to plan approval. -->
       <div
-        v-if="snapshot?.state === 'installing_dependencies' && missingDependencies.length > 0"
+        v-if="snapshot?.state === 'installing_dependencies' && unsatisfiedDependencies.length > 0"
         data-testid="skill-install-deps"
         class="mt-2"
       >
@@ -404,7 +404,11 @@
       <!-- Recoverable failure (failed) or post-activation rollback
            (rollback_required) — both offer recovery guidance. -->
       <div
-        v-if="['failed', 'rollback_required'].includes(snapshot?.state ?? '')"
+        v-if="
+          ['failed', 'rollback_required', 'installing_dependencies'].includes(
+            snapshot?.state ?? ''
+          )
+        "
         class="mt-2 d-flex ga-2"
         data-testid="skill-install-failed"
       >
@@ -561,6 +565,13 @@ const safePlan = computed(() => snapshotView.value?.safePlan ?? null);
 const missingDependencies = computed(
   () =>
     safePlan.value?.dependencies.filter((d) => d.status === "missing") ?? []
+);
+/** Review R2: the hold UI renders for EVERY unsatisfied dependency —
+ *  incompatible/unknown-only holds previously showed a bare progress bar
+ *  with no controls and no escape (a dead end). */
+const unsatisfiedDependencies = computed(
+  () =>
+    safePlan.value?.dependencies.filter((d) => d.status !== "satisfied") ?? []
 );
 
 /**

@@ -16,6 +16,8 @@
  * user-approved repository command.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import * as os from "os";
 import type {
   DependencyPlanItem,
@@ -408,7 +410,10 @@ export interface ProbeOutcome {
  * execution-lookup hazard on Windows (a repository-supplied `where.exe`
  * could shadow the resolution). A neutral system directory is used.
  */
-const PROBE_CWD = os.tmpdir();
+// Review R2: a per-process, unpredictable subdirectory of tmpdir — the
+// shared tmpdir let any same-user process pre-plant shadowing binaries
+// (where.exe/python3.exe) at the predictable probe cwd on Windows.
+const PROBE_CWD = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-probe-"));
 
 /**
  * Run a dependency's probes through the platform provider. A dependency is

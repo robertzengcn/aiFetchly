@@ -77,7 +77,7 @@ export type ToolPolicyVerdict =
  * `tar --extract` are all acquisition-shaped.
  */
 const SHELL_INSTALL_RE =
-  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\s-[xf]|\btar\b[^\n|;&]*\s--(?:extract|get)\b|\bcp\b[^\n|;&]*\s-(?:r|R|a|A)\b|\bcp\b[^\n|;&]*\s--recursive\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
+  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\s-?\w*[xf]\w*|\btar\b[^\n|;&]*\s--(?:extract|get)\b|\bcp\b[^\n|;&]*\s-\w*[rRaA]\b|\bcp\b[^\n|;&]*\s--(?:recursive|archive)\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
 
 /** File writes that mutate the install destination. */
 const INSTALL_DEST_RE =

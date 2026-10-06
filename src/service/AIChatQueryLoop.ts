@@ -760,6 +760,12 @@ export class AIChatQueryLoop {
         "[install-boundary] session lookup failed:",
         boundaryError
       );
+      // Review R2-P1: a THROWN refresh must fail closed too — the caches
+      // still held the PREVIOUS conversation's session and manual-action
+      // approval, and tagging the new conversation without clearing them
+      // leaked that authorization across conversations.
+      this.activeInstallSession = null;
+      this.manualActionApprovedCache = { approved: false };
       this.installBoundaryConversation = conversationId;
     }
   }
@@ -2158,7 +2164,10 @@ export class AIChatQueryLoop {
               pending: {
                 conversationId: input.conversationId,
                 assistantMessageId: input.assistantMessageId,
-                conversationMessages: messages,
+                // Review R2: carry any handoffs queued by EARLIER tools
+                // in this batch through the pause — they were dropped
+                // when the permission return bypassed the batch append.
+                conversationMessages: [...messages, ...postToolHandoffs],
                 abortController: input.abortController,
                 request: input.request,
                 openAITools: currentTools,

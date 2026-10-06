@@ -323,8 +323,11 @@ export function collectCommandTemplatesWithEnv(
     for (const line of text.split("\n")) {
       const command = line.trim();
     if (command === "" || !isShellish(command)) continue;
-    if (seen.has(command)) continue;
-    seen.add(command);
+    // Review R2: identity is (directory, command) — a bare command key
+    // collapsed identical lines from different instruction directories.
+    const dedupeKey = JSON.stringify([workingDirectory, command]);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
 
     const highRisk =
       /\bsudo\b|\bsu\b|&&|\|\||`|\$\(|\bchmod\b|\bchown\b|\brm\s+-rf?\b/i.test(
@@ -353,7 +356,7 @@ export function collectCommandTemplatesWithEnv(
     templates.push({
       id: `cmd:${crypto
         .createHash("sha1")
-        .update(`${workingDirectory} ${command}`)
+        .update(JSON.stringify([workingDirectory, command]))
         .digest("hex")
         .slice(0, 8)}`,
       executable: privileged ? parts[1] ?? command : parts[0] ?? command,

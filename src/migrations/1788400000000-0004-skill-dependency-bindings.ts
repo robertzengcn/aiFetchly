@@ -48,14 +48,13 @@ export class SkillDependencyBindings00041788400000000
     await queryRunner.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS "uq_skill_dep_binding" ON "${table}" ("installationId", "dependencyName")`
     );
-    await queryRunner.query(
-      `CREATE INDEX IF NOT EXISTS "idx_skill_dep_binding_installation" ON "${table}" ("installationId")`
-    );
+
   }
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "idx_skill_dep_binding_installation"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "uq_skill_dep_binding"`);
-    await queryRunner.query(`DROP TABLE IF EXISTS "skill_dependency_bindings"`);
+  public async down(): Promise<void> {
+    // Review R2: additive-only no-op (the 0002/0003 convention) — an
+    // unconditional DROP destroyed rows on synchronize-created dev DBs the
+    // migration never created, and the entity stays registered so packaged
+    // builds would never recreate the table.
   }
 }
