@@ -414,3 +414,50 @@ describe("required-write barriers on real loop boundaries (TODO-01/02)", () => {
     expect(SkillExecutor.execute).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TODO-09: partial history preserved on required-persistence failure", () => {
+  it("streams text, the tool-call save rejects, and the partial assistant row is written", async () => {
+    mockSaveToolCallMessage.mockRejectedValue(new Error("disk full"));
+    const collected: AIChatQueryEvent[] = [];
+    const sink = { emit: (e: AIChatQueryEvent) => { collected.push(e); }, flush: vi.fn().mockRejectedValue(
+      Object.assign(new Error("Required persistence failed"), { name: "AIChatRequiredPersistenceError" })
+    ) };
+    const { AIChatQueryLoop } = await import("@/service/AIChatQueryLoop");
+    const tokenChunk = (text: string) => ({
+      id: "t9", object: "chat.completion.chunk", created: 1, model: "m",
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+    });
+    const toolChunk = {
+      id: "t9b", object: "chat.completion.chunk", created: 1, model: "m",
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c9", type: "function", function: { name: "send_email", arguments: "{}" } }] }, finish_reason: null }],
+    };
+    let rounds = 0;
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: async (_req: unknown, onChunk: (c: unknown) => void): Promise<void> => {
+        rounds += 1;
+        onChunk(tokenChunk("Visible answer "));
+        if (rounds === 1) onChunk(toolChunk);
+      },
+      executeTool: async (): Promise<never> => { throw new Error("must not run"); },
+      getSkillDefinition: () => undefined,
+    } as never);
+    const engine = new AIChatQueryEngine(loop as never);
+    const outcome = await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-T09" },
+      eventSink: sink as never,
+    } as never);
+    expect(outcome.type).toBe("failed");
+    // The partial assistant row was attempted with the streamed text.
+    await vi.waitFor(() =>
+      expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: "v2-T09",
+          content: "Visible answer ",
+        })
+      )
+    );
+    // No next round started after the required-save failure.
+    expect(rounds).toBe(1);
+    void collected;
+  });
+});

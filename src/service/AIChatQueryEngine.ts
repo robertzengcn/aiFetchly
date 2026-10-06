@@ -484,6 +484,12 @@ interface ActiveTurnState {
   assistantMessageId: string;
   eventSink: AIChatQueryEventSink;
   turnId?: string;
+  /**
+   * TODO-09 (FR-015/017): safe partial output snapshot — the streamed text
+   * observed so far. A consumer/persistence failure writes this through the
+   * normal module path so history reload shows what the user already saw.
+   */
+  partialContent: string;
   /** Steering mailbox for this turn; absent when steering is unavailable. */
   control?: AIChatTurnControl;
   /** Stage A §3.2 (FR-021): owner listener notified when the turn parks. */
@@ -1807,6 +1813,7 @@ export class AIChatQueryEngine {
       assistantMessageId,
       turnId,
       eventSink,
+      partialContent: "",
       ...(control ? { control } : {}),
     });
 
@@ -2244,6 +2251,7 @@ export class AIChatQueryEngine {
       assistantMessageId: matchedByToolId.assistantMessageId,
       turnId: matchedByToolId.turnId,
       eventSink: denySink,
+      partialContent: "",
     });
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(module, denySink);
@@ -2598,6 +2606,7 @@ export class AIChatQueryEngine {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
       eventSink: baseSink,
+      partialContent: "",
       ...(lifecycle ? { lifecycle } : {}),
     });
     // Stage A §3.2 (FR-021): the claimed resume starts executing now.
@@ -2823,6 +2832,7 @@ export class AIChatQueryEngine {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
       eventSink: baseSink,
+      partialContent: "",
       ...(lifecycle ? { lifecycle } : {}),
     });
     this.notifyResumed(lifecycle, {
@@ -3487,6 +3497,13 @@ export class AIChatQueryEngine {
     const wrapped: AIChatQueryEventSink = {
       emit: (event) => {
         eventSink.emit(event);
+        if (event.type === "token") {
+          // TODO-09: track the visible partial for failure-path history.
+          const entry = this.activeTurns.get(event.conversationId);
+          if (entry && entry.assistantMessageId === event.messageId) {
+            entry.partialContent += event.contentDelta;
+          }
+        }
         if (event.type === "usage_update") {
           latestUsage = {
             totalTokens: event.totalTokens,
@@ -3695,6 +3712,30 @@ export class AIChatQueryEngine {
     this.dispatchStop(conversationId, "error");
     log.error("[ai-chat-v2] engine failure:", err);
     void redirectToLoginOnAuthExpired(err);
+    // TODO-09 (FR-015/017): preserve the safe partial history the user
+    // already saw. Attempt the write through the normal module path; a
+    // further storage failure is logged but never replaces the primary
+    // error (the error event below still fires first-hand).
+    const partial = this.activeTurns.get(conversationId)?.partialContent;
+    if (partial && partial.length > 0) {
+      void new AIChatV2Module()
+        .saveAssistantMessage({
+          conversationId,
+          content: partial,
+          messageId: assistantMessageId,
+          metadata: {
+            source: "chat-v2",
+            finishReason: "error",
+            error: userSafeError(err),
+          },
+        })
+        .catch((persistErr: unknown) => {
+          log.error(
+            "[ai-chat-v2] partial-history write after failure also failed:",
+            persistErr
+          );
+        });
+    }
     eventSink.emit({
       type: "error",
       conversationId,
