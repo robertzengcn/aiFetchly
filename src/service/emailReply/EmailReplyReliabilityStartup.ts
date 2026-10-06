@@ -101,18 +101,35 @@ export class EmailReplyReliabilityStartup {
     }
   }
 
-  /** One-shot stale-attempt recovery. Never throws. */
+  /** One-shot stale-attempt + stale-reservation recovery. Never throws. */
   async runRecoverySweep(): Promise<number> {
     try {
-      const result =
-        await new EmailReplySendRecoveryService().recoverStaleAttempts();
+      const recovery = new EmailReplySendRecoveryService();
+      const result = await recovery.recoverStaleAttempts();
       if (result.needsAttention) {
         // High-visibility operational signal (FR-019, §15.5).
         console.warn(
           `[reply-reliability] recovered ${result.recovered} stale in-flight send attempt(s) to delivery_unknown — manual mailbox verification required`
         );
       }
-      return result.recovered;
+      // T07: reclaim expired generation reservations (§8.2) — after the
+      // attempt sweep so a stale in-flight attempt has been finalized first
+      // and the reservation reconcile sees the final state.
+      let reclaimed = 0;
+      try {
+        reclaimed = await recovery.recoverStaleReservations();
+      } catch (error) {
+        console.error(
+          "[reply-reliability] reservation sweep failed:",
+          error
+        );
+      }
+      if (reclaimed > 0) {
+        console.log(
+          `[reply-reliability] reclaimed ${reclaimed} stale generation reservation(s)`
+        );
+      }
+      return result.recovered + reclaimed;
     } catch (error) {
       console.error("[reply-reliability] recovery sweep failed:", error);
       return 0;

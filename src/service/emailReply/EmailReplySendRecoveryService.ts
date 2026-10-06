@@ -1,21 +1,30 @@
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
 import { REPLY_SEND_RECOVERY_THRESHOLD_MS } from "@/service/emailReply/replyReliabilityVersions";
 import { incrementReplyMetric } from "@/service/emailReply/EmailReplyMetrics";
 
 /**
- * Recovers stale in-flight send attempts (technical design §15.6, §16, FR-019).
+ * Recovers stale in-flight send attempts (technical design §15.6, §16, FR-019)
+ * and stale generation reservations (T07/FR-035, §8.2).
  *
  * After possible SMTP acceptance, a process crash or post-SMTP write failure
  * can leave an attempt in `claimed`/`submitted`. This service marks such
  * attempts `delivery_unknown` after a configured timeout. It NEVER marks them
  * failed and NEVER re-submits SMTP (FR-019, NFR-001).
  *
+ * T07: a process crash can also leave a generation-reservation guard row in
+ * `generating`/`draft_ready` with an expired lease. The reservation sweep
+ * reclaims each one AFTER reconciling against actual draft/attempt records
+ * (the model's `reclaimExpiredReservation` never trusts `idle` while a related
+ * sent/unknown/in-flight record exists).
+ *
  * Runs in the main process only — never in a worker with database access.
  */
 export class EmailReplySendRecoveryService {
   private readonly attemptModule = new EmailReplySendAttemptModule();
   private readonly draftModule = new EmailReplyDraftModule();
+  private readonly guardModule = new EmailReplyGuardModule();
 
   /**
    * Sweep stale in-flight attempts older than {@link ageMs} (default
@@ -61,6 +70,51 @@ export class EmailReplySendRecoveryService {
     });
     // Each delivery_unknown is a high-visibility operational event (§15.5).
     return { recovered, needsAttention: recovered > 0 };
+  }
+
+  /**
+   * T07/FR-035: sweep stale generation reservations (§8.2). A crash between
+   * the reservation acquire and the commit (or between the commit and the
+   * guard transition, before the atomic commit transaction) leaves a guard row
+   * in `generating`/`draft_ready` with an expired lease that the in-memory
+   * mutex cannot clean up — it died with the process. For each stale row,
+   * `reclaimExpiredReservation` re-reads the canonical cluster and transitions
+   * to `draft_ready` (committed draft survived) / `sent` / `delivery_unknown`
+   * / `sending` (related evidence exists) / `idle` (clean cluster).
+   *
+   * @returns the number of reservations reclaimed.
+   */
+  async recoverStaleReservations(now: Date = new Date()): Promise<number> {
+    const stale = await this.guardModule.listStaleReservations(now);
+    if (stale.length === 0) {
+      return 0;
+    }
+
+    let reclaimed = 0;
+    for (const reservation of stale) {
+      try {
+        const didReclaim = await this.guardModule.reclaimExpiredReservation({
+          guardId: reservation.id,
+          now,
+        });
+        if (didReclaim) {
+          reclaimed += 1;
+          incrementReplyMetric("reservation_reclaimed", {
+            phase: reservation.phase,
+          });
+        }
+      } catch (error) {
+        console.error(
+          `Failed to reclaim stale generation reservation ${reservation.id}:`,
+          error
+        );
+      }
+    }
+
+    incrementReplyMetric("reservation_recovered", {
+      outcome: reclaimed > 0 ? "reclaimed" : "none_stale",
+    });
+    return reclaimed;
   }
 
   /**
