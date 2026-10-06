@@ -22,16 +22,33 @@
  * terminal candidates can never become verified_complete (AC-12).
  */
 import type {
+  TaskCompletionContract,
   TaskCompletionDecision,
   TaskEndCandidate,
   TaskExecutionRoute,
 } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  EvidenceChecker,
+  EvidenceContext,
+} from "@/service/aiTaskExecution/TaskEvidenceService";
 
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
   readonly passedCriterionIds?: readonly string[];
   readonly requiredCriterionIds?: readonly string[];
   readonly unmetCriterionIds?: readonly string[];
+  /**
+   * Slice 2 evidence injection. When the caller supplies an evidence
+   * service + contract + context, the controller calls `checkCandidate`
+   * itself and populates `evidenceIds` on the decision from real
+   * {@link TaskEvidence} rows. When absent (Slice 1 shadow mode, or flag
+   * off), the controller falls back to caller-supplied
+   * `passedCriterionIds`/`unmetCriterionIds` and emits `evidenceIds: []`
+   * (the Slice 1 placeholder behavior, preserved for shadow-mode tests).
+   */
+  readonly evidenceService?: EvidenceChecker;
+  readonly contract?: TaskCompletionContract;
+  readonly evidenceContext?: EvidenceContext;
 }
 
 export class TaskCompletionController {
@@ -86,10 +103,18 @@ export class TaskCompletionController {
     }
 
     // Task route (task_verified or task_best_effort): evaluate criteria.
-    const required = context.requiredCriterionIds ?? [];
-    const passed = new Set(context.passedCriterionIds ?? []);
+    // Slice 2: when the caller injects the evidence service, consult it here
+    // to obtain real {@link TaskEvidence} rows (criteria evaluated against
+    // assistant content / tool catalog / checker LLM). The result drives the
+    // verified_complete / incomplete outcome + the evidenceIds list. Slice 1
+    // callers (shadow mode, flag off) supply passedCriterionIds directly and
+    // get evidenceIds:[] — the Slice 1 placeholder behavior, preserved.
+    const evidence = await this.maybeEvaluateEvidence(candidate, context);
+
+    const required = evidence?.requiredCriterionIds ?? context.requiredCriterionIds ?? [];
+    const passedSet = new Set(evidence?.passedCriterionIds ?? context.passedCriterionIds ?? []);
     const allRequiredPass =
-      required.length > 0 && required.every((id) => passed.has(id));
+      required.length > 0 && required.every((id) => passedSet.has(id));
 
     // §7.2 step 6: all required criteria pass → verified_complete.
     // AC-12: synthetic/unknown/missing-terminal provenance can never verify.
@@ -104,13 +129,9 @@ export class TaskCompletionController {
         type: "finish",
         outcome: "verified_complete",
         reasonCode: "CRITERIA_SATISFIED",
-        // Shadow mode (Slice 1) collects no real evidence — evidenceIds is
-        // the identity of TaskEvidence rows (§5.2), NOT the IDs of criteria
-        // that passed. Storing criterion IDs here (the previous behavior)
-        // would misattribute them as evidence rows and break §8.2
-        // reference-membership checks downstream. Emit [] until
-        // TaskEvidenceService (Slice 2) records real evidence.
-        evidenceIds: [],
+        // Real evidence row identities from TaskEvidenceService (Slice 2),
+        // or [] when no evidence service was injected (Slice 1 shadow mode).
+        evidenceIds: [...(evidence?.evidenceIds ?? [])],
         summary: this.boundedSummary(candidate.content),
         remainingWork: [],
       };
@@ -118,17 +139,54 @@ export class TaskCompletionController {
 
     // Shadow mode (Slice 1): unfinished/unverifiable task candidates return
     // finish(incomplete). Live continuation dispatch is Slice 2.
-    const unmet = required.filter((id) => !passed.has(id));
+    const unmet = required.filter((id) => !passedSet.has(id));
     const reasonCode = this.incompleteReasonCode(candidate);
     return {
       type: "finish",
       outcome: "incomplete",
       reasonCode,
-      // No evidence collected in shadow mode (see verified_complete branch
-      // above). Criterion pass/fail is reported via remainingWork + reasonCode.
-      evidenceIds: [],
+      // Real evidence row identities from TaskEvidenceService (Slice 2),
+      // or [] when no evidence service was injected (Slice 1 shadow mode).
+      evidenceIds: [...(evidence?.evidenceIds ?? [])],
       summary: this.boundedSummary(candidate.content),
       remainingWork: unmet,
+    };
+  }
+
+  /**
+   * Call the evidence service when the caller injected one + a contract +
+   * context. Returns the pass/unmet/evidence-id triple, plus the
+   * required-criterion list derived from the contract (so the controller
+   * does not need a separate `requiredCriterionIds` from the caller when
+   * the service is wired). Returns undefined when no service is present
+   * (Slice 1 shadow mode / flag off) — the caller-supplied criterion IDs
+   * are used instead.
+   */
+  private async maybeEvaluateEvidence(
+    candidate: TaskEndCandidate,
+    context: DecideContext
+  ): Promise<
+    | {
+        readonly passedCriterionIds: readonly string[];
+        readonly unmetCriterionIds: readonly string[];
+        readonly evidenceIds: readonly string[];
+        readonly requiredCriterionIds: readonly string[];
+      }
+    | undefined
+  > {
+    const service = context.evidenceService;
+    const contract = context.contract;
+    const evidenceContext = context.evidenceContext;
+    if (!service || !contract || !evidenceContext) return undefined;
+    const result = await service.checkCandidate(candidate, contract, evidenceContext);
+    const requiredCriterionIds = contract.criteria
+      .filter((criterion) => criterion.required)
+      .map((criterion) => criterion.id);
+    return {
+      passedCriterionIds: result.passedCriterionIds,
+      unmetCriterionIds: result.unmetCriterionIds,
+      evidenceIds: result.evidenceIds,
+      requiredCriterionIds,
     };
   }
 

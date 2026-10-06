@@ -314,4 +314,152 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       expect(decision.outcome).not.toBe("verified_complete");
     }
   });
+
+  // ----- Slice 2: evidence service injection (FR-05/06/16, AC-12/13) -----
+  // When the caller injects an evidence service + contract + context, the
+  // controller calls checkCandidate itself and populates evidenceIds from
+  // real TaskEvidence rows. Slice 1 callers (no injection) keep getting
+  // evidenceIds:[] — the shadow-mode placeholder, preserved byte-identical.
+
+  it("Slice 2: verified_complete carries real evidenceIds when evidence service is injected", async () => {
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: ["rec-1"],
+        unmetCriterionIds: [],
+        evidenceIds: ["evidence-aaa", "evidence-bbb"],
+      }),
+    };
+    const contract = {
+      schemaVersion: 1 as const,
+      contractId: "contract-1",
+      contractHash: "hash-abc",
+      objective: "Save contacts",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "verified" as const,
+      criteria: [
+        {
+          id: "rec-1",
+          required: true,
+          kind: "observation" as const,
+          description: "observes 100 contacts",
+          adapterKey: "observation",
+          targetId: "100 contacts",
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ],
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        evidenceService: fakeService,
+        contract,
+        evidenceContext: {
+          content: "Saved 100 contacts.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
+      // Real evidence row identities from the service, not [].
+      expect(decision.evidenceIds).toEqual(["evidence-aaa", "evidence-bbb"]);
+    }
+  });
+
+  it("Slice 2: incomplete carries real evidenceIds when evidence service is injected (criteria unmet)", async () => {
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: ["rec-1"],
+        unmetCriterionIds: ["rec-2"],
+        evidenceIds: ["evidence-ccc"],
+      }),
+    };
+    const contract = {
+      schemaVersion: 1 as const,
+      contractId: "contract-1",
+      contractHash: "hash-abc",
+      objective: "Save contacts",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "verified" as const,
+      criteria: [
+        {
+          id: "rec-1",
+          required: true,
+          kind: "observation" as const,
+          description: "observes 100 contacts",
+          adapterKey: "observation",
+          targetId: "100 contacts",
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+        {
+          id: "rec-2",
+          required: true,
+          kind: "observation" as const,
+          description: "observes confirmation email",
+          adapterKey: "observation",
+          targetId: "confirmation email",
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ],
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        evidenceService: fakeService,
+        contract,
+        evidenceContext: {
+          content: "Saved 100 contacts.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      // Real evidence row identity, not [].
+      expect(decision.evidenceIds).toEqual(["evidence-ccc"]);
+      // remainingWork derived from the contract's required criteria minus
+      // the evidence service's passed set.
+      expect(decision.remainingWork).toEqual(["rec-2"]);
+    }
+  });
+
+  it("Slice 2: partial injection (service but no contract) falls back to caller-supplied criterion IDs + evidenceIds:[]", async () => {
+    // If the caller forgets the contract/context, the controller must not
+    // call the service with undefined — it falls back to Slice 1 behavior.
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => {
+        throw new Error("should not be called without a contract + context");
+      },
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        evidenceService: fakeService,
+        // contract + evidenceContext intentionally omitted.
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      // Slice 1 fallback: no evidence rows collected.
+      expect(decision.evidenceIds).toEqual([]);
+    }
+  });
 });
