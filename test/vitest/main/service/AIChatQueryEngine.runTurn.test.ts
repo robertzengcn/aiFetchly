@@ -709,3 +709,105 @@ function makeLifecycleListener(): AIChatTurnLifecycleListener & {
     },
   };
 }
+
+describe("TODO-05: finalization serialization + side effects exactly once", () => {
+  it("Stop hook fires exactly once across stopConversation + cancelled resolution", async () => {
+    const { HookDispatcher } = await import("@/service/hooks/HookDispatcher");
+    const stopCalls: Array<{ conversationId: string | undefined; reason: string }> = [];
+    const origDispatch = HookDispatcher.executeHooks.bind(HookDispatcher);
+    (HookDispatcher as unknown as { executeHooks: typeof HookDispatcher.executeHooks }).executeHooks =
+      (async (input: { eventName: string; input: { conversationId?: string; reason?: string } }) => {
+        if (input.eventName === "Stop") {
+          stopCalls.push({
+            conversationId: input.input.conversationId,
+            reason: input.input.reason ?? "",
+          });
+        }
+        return origDispatch(input as never);
+      }) as typeof HookDispatcher.executeHooks;
+
+    const abortable = (input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> =>
+      new Promise((resolve) => {
+        input.abortController.signal.addEventListener("abort", () =>
+          resolve({
+            type: "cancelled",
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            partialContent: "",
+          })
+        );
+      });
+    const engine = createEngineWithFakeLoop(abortable);
+    const collector = makeEventCollector();
+    const run = engine.runTurn({
+      request: { message: "long", conversationId: "v2-TO5" },
+      eventSink: collector.sink,
+    });
+    await vi.waitFor(() =>
+      expect(engine.getConversationRuntimeStatus("v2-TO5")).toBe("running")
+    );
+    engine.stopActiveTurn("v2-TO5");
+    await run;
+    const stopHooks = stopCalls.filter((c) => c.conversationId === "v2-TO5");
+    expect(stopHooks).toHaveLength(1);
+    expect(stopHooks[0].reason).toBe("user_stopped");
+    (HookDispatcher as unknown as { executeHooks: typeof HookDispatcher.executeHooks }).executeHooks = origDispatch;
+  });
+
+  it("onSegmentDurable fires after the assistant save and before the completion notification", async () => {
+    const order: string[] = [];
+    mockSaveAssistantMessage.mockImplementation(async () => {
+      order.push("assistant-save");
+      return {};
+    });
+    mockNotifyShow.mockImplementation(async () => {
+      order.push("desktop-notify");
+      return false;
+    });
+    const engine = createEngineWithFakeLoop(async (input) => ({
+      type: "completed",
+      conversationId: input.conversationId,
+      assistantMessageId: input.assistantMessageId,
+      fullContent: "done",
+      finishReason: "stop",
+    }));
+    await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-TO5b" },
+      eventSink: makeEventCollector().sink,
+      onSegmentDurable: async () => {
+        order.push("durable-gate");
+      },
+    });
+    expect(order.indexOf("assistant-save")).toBeLessThan(order.indexOf("durable-gate"));
+    expect(order.indexOf("durable-gate")).toBeLessThan(order.indexOf("desktop-notify"));
+  });
+
+  it("compat onTurnTerminal fires after the assistant save (never before)", async () => {
+    const order: string[] = [];
+    mockSaveAssistantMessage.mockImplementation(async () => {
+      order.push("assistant-save");
+      return {};
+    });
+    const engine = new AIChatQueryEngine(
+      {
+        run: async (input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> => ({
+          type: "completed",
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          fullContent: "x",
+          finishReason: "stop",
+        }),
+      } as unknown as AIChatQueryLoop,
+      {
+        onTurnTerminal: () => {
+          order.push("on-turn-terminal");
+        },
+      } as never
+    );
+    await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-TO5c" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(order.indexOf("assistant-save")).toBeLessThan(order.indexOf("on-turn-terminal"));
+  });
+});

@@ -347,6 +347,15 @@ export interface AIChatQuerySubmitInput {
    */
   lifecycle?: AIChatTurnLifecycleListener;
   /**
+   * TODO-05 (FR-023): owner-supplied durable-run gate — awaited after the
+   * terminal case's durable message writes but BEFORE post-terminal side
+   * effects. The owning coordinator persists the run transition here.
+   */
+  onSegmentDurable?: (
+    conversationId: string,
+    outcome: "completed" | "cancelled" | "failed"
+  ) => Promise<void>;
+  /**
    * Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
    * terminal; the engine's own onTurnTerminal callback is skipped so the
    * queue is notified exactly once per run.
@@ -409,6 +418,16 @@ export interface AIChatQueryEngineDeps {
     readonly instruction: AIChatSteeringInstruction;
     readonly boundary: import("@/entityTypes/aiChatV2Types").AIChatSafeBoundary;
   }) => Promise<void>;
+  /**
+   * TODO-05 (FR-023): awaited after the terminal case's durable message
+   * writes but BEFORE post-terminal side effects (notification, dream,
+   * compaction, Stop hook). The owner persists the durable run transition
+   * here, so side effects never start ahead of run finalization.
+   */
+  onSegmentDurable?: (
+    conversationId: string,
+    outcome: "completed" | "cancelled" | "failed"
+  ) => Promise<void>;
   /**
    * Optional. Notified at every turn's true terminal (completed/cancelled/
    * failed), including turns resumed after a permission/plan-question pause —
@@ -517,6 +536,7 @@ export class AIChatQueryEngine {
   /** Persists steering instructions consumed by active turns' mailboxes. */
   private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
   private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
+  private readonly onSegmentDurableCb?: AIChatQueryEngineDeps["onSegmentDurable"];
   private readonly historyRetrievalServiceFactory?: AIChatQueryEngineDeps["historyRetrievalServiceFactory"];
   private readonly compactionCoordinator?: AIChatQueryEngineDeps["compactionCoordinator"];
   private readonly modelCatalogService = new AIChatModelCatalogService();
@@ -531,6 +551,12 @@ export class AIChatQueryEngine {
   >();
   /** Tracks which conversations have already fired SessionStart. */
   private readonly startedConversations = new Set<string>();
+  /**
+   * TODO-05 (FR-023): conversations whose Stop hook already fired from an
+   * explicit stop. The loop's own cancelled resolution must not fire it a
+   * second time — Stop hooks run exactly once per turn.
+   */
+  private readonly stopHooksDispatched = new Set<string>();
 
   constructor(
     private readonly loop: AIChatQueryLoop,
@@ -548,6 +574,7 @@ export class AIChatQueryEngine {
     this.toolFilter = deps?.toolFilter;
     this.steeringPromoter = deps?.steeringPromoter;
     this.onTurnTerminalCb = deps?.onTurnTerminal;
+    this.onSegmentDurableCb = deps?.onSegmentDurable;
     this.streamImplementation =
       deps?.streamImplementation ?? new EnvAIChatStreamImplementationConfig();
     this.historyRetrievalServiceFactory = deps?.historyRetrievalServiceFactory;
@@ -1364,6 +1391,7 @@ export class AIChatQueryEngine {
       ...(input.ownerNotifiesTerminal !== undefined
         ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
         : {}),
+      ...(input.onSegmentDurable ? { onSegmentDurable: input.onSegmentDurable } : {}),
     });
   }
 
@@ -1635,6 +1663,10 @@ export class AIChatQueryEngine {
     readonly outboundSendPreAuthorized?: boolean;
     readonly lifecycle?: AIChatTurnLifecycleListener;
     readonly ownerNotifiesTerminal?: boolean;
+    readonly onSegmentDurable?: (
+      conversationId: string,
+      outcome: "completed" | "cancelled" | "failed"
+    ) => Promise<void>;
   }): Promise<AIChatTurnTerminalEvent> {
     const {
       conversationId,
@@ -1655,6 +1687,7 @@ export class AIChatQueryEngine {
       outboundSendPreAuthorized,
       lifecycle,
       ownerNotifiesTerminal,
+      onSegmentDurable,
     } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
@@ -1882,6 +1915,7 @@ export class AIChatQueryEngine {
       );
       await this.handleLoopResult(result, module, streamEventSink, {
         ownerNotifiesTerminal: ownerNotifiesTerminal === true,
+        ...(onSegmentDurable ? { onSegmentDurable } : {}),
       });
       if (result.type === "paused_for_permission") {
         return {
@@ -2363,7 +2397,10 @@ export class AIChatQueryEngine {
    * turns are aborted and their loop resolves `cancelled`, which emits + persists.
    */
   private stopConversation(conversationId: string): void {
-    this.dispatchStop(conversationId, "user_stopped");
+    if (!this.stopHooksDispatched.has(conversationId)) {
+      this.stopHooksDispatched.add(conversationId);
+      this.dispatchStop(conversationId, "user_stopped");
+    }
     const pendingPermission = this.pendingPermissions.get(conversationId);
     if (pendingPermission) {
       this.pendingPermissions.delete(conversationId);
@@ -2509,6 +2546,10 @@ export class AIChatQueryEngine {
     options?: {
       readonly eventSink?: AIChatQueryEventSink;
       readonly lifecycle?: AIChatTurnLifecycleListener;
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
     }
   ): Promise<AIChatSegmentOutcome> {
     if (claim.kind === "permission") {
@@ -2529,6 +2570,10 @@ export class AIChatQueryEngine {
     options?: {
       readonly eventSink?: AIChatQueryEventSink;
       readonly lifecycle?: AIChatTurnLifecycleListener;
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
     }
   ): Promise<AIChatSegmentOutcome> {
     const conversationId = matchedByToolId.conversationId;
@@ -2740,6 +2785,10 @@ export class AIChatQueryEngine {
     options?: {
       readonly eventSink?: AIChatQueryEventSink;
       readonly lifecycle?: AIChatTurnLifecycleListener;
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
     }
   ): Promise<AIChatSegmentOutcome> {
     const conversationId = pending.conversationId;
@@ -3015,7 +3064,14 @@ export class AIChatQueryEngine {
     result: AIChatQueryLoopResult,
     module: AIChatV2Module,
     eventSink: AIChatQueryEventSink,
-    options?: { readonly ownerNotifiesTerminal?: boolean }
+    options?: {
+      readonly ownerNotifiesTerminal?: boolean;
+      /** TODO-05: per-segment durable-run gate (see AIChatQuerySubmitInput). */
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
+    }
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
     // Persist deferred-catalog discovered state on terminal results so it
@@ -3032,14 +3088,11 @@ export class AIChatQueryEngine {
     // owner learns the conversation freed up. Stage A §3.6 (FR-023): runs
     // dispatched with ownerNotifiesTerminal (the coordinator) skip this —
     // the owner notifies the queue exactly once per run itself.
-    if (
+    const notifyCompatibilityOwner =
       (result.type === "completed" ||
         result.type === "cancelled" ||
         result.type === "failed") &&
-      options?.ownerNotifiesTerminal !== true
-    ) {
-      this.onTurnTerminalCb?.(result.conversationId, result.type);
-    }
+      options?.ownerNotifiesTerminal !== true;
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
@@ -3082,6 +3135,12 @@ export class AIChatQueryEngine {
           completionTokens: result.completionTokens,
           reasoningContent: result.reasoningContent,
         });
+        // TODO-05: durable-run gate — side effects wait for the owner's run
+        // transition (or proceed when no owner provides one).
+        const durableGate = options?.onSegmentDurable ?? this.onSegmentDurableCb;
+        if (durableGate) {
+          await durableGate(conversationId, "completed");
+        }
         const compactAgent = this.compactAgent;
         if (compactAgent) {
           const compactInput = {
@@ -3168,7 +3227,12 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           fullContent: result.partialContent,
         });
-        this.dispatchStop(conversationId, "user_stopped");
+        const durableGate = options?.onSegmentDurable ?? this.onSegmentDurableCb;
+        if (durableGate) {
+          await durableGate(conversationId, "cancelled");
+        }
+        // TODO-05: the explicit stop already fired the hook — exactly once.
+        this.stopHooksDispatched.delete(conversationId);
         this.clearActiveTurnState(conversationId, assistantMessageId);
         this.clearStagedConfirmedBatchRefs(conversationId);
         break;
@@ -3220,6 +3284,10 @@ export class AIChatQueryEngine {
                 errorCode: imageEditErrorCode(result.error) ?? undefined,
               }),
         });
+        const durableGate = options?.onSegmentDurable ?? this.onSegmentDurableCb;
+        if (durableGate) {
+          await durableGate(conversationId, "failed");
+        }
         // Emergency auto-compact: when the turn failed because the context
         // window was exceeded, immediately run a full compact so the next
         // turn has a smaller context. Without this the user is stuck in a
@@ -3304,6 +3372,12 @@ export class AIChatQueryEngine {
         break;
       }
     }
+    // TODO-05 (FR-007/023): the compatibility queue hears completion only
+    // AFTER the terminal case's durable writes (assistant row, terminal
+    // event) completed — never before the save could still fail.
+    if (notifyCompatibilityOwner) {
+      this.onTurnTerminalCb?.(result.conversationId, result.type);
+    }
   }
 
   /**
@@ -3363,6 +3437,7 @@ export class AIChatQueryEngine {
     this.pendingPlanQuestions.delete(conversationId);
     this.pendingSinks.delete(conversationId);
     this.runStreamModes.delete(conversationId);
+    this.stopHooksDispatched.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -3540,6 +3615,7 @@ export class AIChatQueryEngine {
 
   private forgetStreamMode(conversationId: string): void {
     this.runStreamModes.delete(conversationId);
+    this.stopHooksDispatched.delete(conversationId);
   }
 
   private rememberPendingSink(

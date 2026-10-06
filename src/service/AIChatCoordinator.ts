@@ -52,6 +52,11 @@ export interface CoordinatorEngine {
     readonly assistantMessageId?: string;
     readonly lifecycle?: AIChatTurnLifecycleListener;
     readonly ownerNotifiesTerminal?: boolean;
+    /** TODO-05: durable-run gate (see AIChatQuerySubmitInput). */
+    readonly onSegmentDurable?: (
+      conversationId: string,
+      outcome: "completed" | "cancelled" | "failed"
+    ) => Promise<void>;
   }): Promise<AIChatSegmentOutcome>;
   /** Stage A §3.5 (FR-010/024): owner-driven resume seam. */
   claimPendingPermission(
@@ -68,6 +73,11 @@ export interface CoordinatorEngine {
     options?: {
       readonly eventSink?: AIChatQueryEventSink;
       readonly lifecycle?: AIChatTurnLifecycleListener;
+      /** TODO-05: durable-run gate (see AIChatQuerySubmitInput). */
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
     }
   ): Promise<AIChatSegmentOutcome>;
   stopActiveTurn(conversationId?: string): void;
@@ -674,6 +684,28 @@ export class AIChatCoordinator {
       try {
         const lifecycle = this.createLifecycleListener(live);
         const eventSink = this.createRunSink(live, adapter);
+        // TODO-05 (FR-023): the durable-run gate the engine awaits between
+        // its durable message writes and its post-terminal side effects.
+        // Terminal→terminal transitions are no-ops under the model's EXPECTED
+        // guards, so executeDispatch's own final transition stays safe.
+        const onSegmentDurable = (
+          gatedConversationId: string,
+          terminal: "completed" | "cancelled" | "failed"
+        ): Promise<void> =>
+          this.deps.runModule
+            .transition(runId, terminal, this.terminalPatchFor(live))
+            .then(() => undefined)
+            .catch((transitionErr: unknown) => {
+              console.warn(
+                "[ai-chat-workspace] durable-gate transition failed for run",
+                runId,
+                gatedConversationId,
+                transitionErr
+              );
+              // The engine's message writes are the primary durability; a
+              // failed run-row write must not swallow the terminal outcome —
+              // executeDispatch retries the transition and records the error.
+            });
         if (resumeClaim) {
           // Stage A §3.5 (FR-024): the claimed continuation runs inside the
           // dispatch — lease and capacity are already held at this point —
@@ -681,6 +713,7 @@ export class AIChatCoordinator {
           outcome = await this.deps.engine.resumeClaimed(resumeClaim, {
             eventSink,
             lifecycle,
+            onSegmentDurable,
           });
         } else if (live.queueDispatch) {
           outcome = await this.deps.engine.submitPersistedUserMessage({
@@ -694,6 +727,7 @@ export class AIChatCoordinator {
             assistantMessageId: live.queueDispatch.assistantMessageId,
             lifecycle,
             ownerNotifiesTerminal: true,
+            onSegmentDurable,
           });
         } else {
           outcome = await this.deps.engine.runTurn({
@@ -701,6 +735,7 @@ export class AIChatCoordinator {
             eventSink,
             lifecycle,
             ownerNotifiesTerminal: true,
+            onSegmentDurable,
           });
         }
       } catch (err) {
@@ -843,6 +878,17 @@ export class AIChatCoordinator {
    * absence of a terminal event; an unexpected busy outcome (admission race)
    * fails the run honestly rather than reporting success.
    */
+  /** Error summary for the durable terminal write (shared with final branch). */
+  private terminalPatchFor(live: LiveRunState): {
+    errorSummary: string | null;
+  } {
+    const terminal = live.terminalChunk;
+    if (terminal?.eventType === "error" && terminal.errorMessage) {
+      return { errorSummary: terminal.errorMessage.slice(0, 500) };
+    }
+    return { errorSummary: null };
+  }
+
   private statusForOutcome(outcome: AIChatSegmentOutcome): ChatRunStatus {
     switch (outcome.type) {
       case "completed":
