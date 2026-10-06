@@ -2203,19 +2203,59 @@ export class AiChatApi {
     }
     this.copyEnabledReasoningOption(request, data);
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
+    // B13: when the caller supplied a per-call budget, bound both the
+    // response-headers phase AND the response-body phase by passing an
+    // AbortSignal to postJson. postJson spreads options into _fetchJSON →
+    // fetch(baseUrl + endpoint, {...options, headers}); per the fetch spec an
+    // AbortSignal aborts body reads too, and _fetchJSON awaits res.json() —
+    // so a hosted provider that sends headers then stalls mid-body still
+    // aborts within the budget. The timer fires once after callBudgetMs; the
+    // resulting AbortError propagates as a thrown error the generation
+    // service wraps into LlmTransportError (same envelope as the local path).
+    // The small-model 404 retry shares the same signal so the aggregate
+    // budget spans both attempts. Streaming is NOT altered here —
+    // openAIChatCompletionStreamHosted honors the caller signal separately
+    // and must not get a short body timeout.
+    if (request.callBudgetMs !== undefined) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), request.callBudgetMs);
+      try {
+        return await this.postHostedCompletionWithSmallModelRetry(
+          request,
+          data,
+          controller.signal
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return await this.postHostedCompletionWithSmallModelRetry(
+      request,
+      data,
+      undefined
+    );
+  }
+
+  /**
+   * POST the hosted completion, applying the small-model-alias 404 fallback
+   * (retry once with `fallbackModel` or no model). When `signal` is supplied
+   * the SAME signal threads through both the initial attempt and the retry so
+   * a B13 aggregate budget spans both. Any other error — including a 404 for
+   * a literal model id — propagates unchanged.
+   */
+  private async postHostedCompletionWithSmallModelRetry(
+    request: OpenAIChatCompletionRequest,
+    data: OpenAIChatCompletionRequest,
+    signal: AbortSignal | undefined
+  ): Promise<OpenAIChatCompletionResponse> {
+    const options = signal ? { signal } : undefined;
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
-        data
+        data,
+        options
       );
     } catch (err) {
-      // The hosted server resolves the virtual "small" alias only when a
-      // small row is flagged (otherwise HTTP 404 `small_model_unavailable`;
-      // `postJson` surfaces it as `HttpResponseError` with status 404 and no
-      // body). Retry exactly once with the caller-supplied fallback model, or
-      // with no model (server default) when absent, so background
-      // consolidation still runs on backends without a small row. Any other
-      // error — including a 404 for a literal model id — propagates unchanged.
       if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
         throw err;
       }
@@ -2234,7 +2274,8 @@ export class AiChatApi {
       );
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
-        retry
+        retry,
+        options
       );
     }
   }
