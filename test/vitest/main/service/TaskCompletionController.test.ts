@@ -611,4 +611,138 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       expect(decision.outcome).toBe("verified_complete");
     }
   });
+
+  // ----- Slice 2 (Unit 4): LIVE continuation branch (§7.2 step 10, FR-07) -----
+  // Budget presence is the live-mode signal. With a budget injected and
+  // feasible unmet work, decide() returns `continue` with the §7.3 targeted
+  // prompt. Without a budget (shadow mode / flag off), the same candidate
+  // still returns finish(incomplete) — byte-identical to Slice 1.
+
+  it("Slice 2 live: budget + unmet criteria → continue with the §7.3 targeted prompt", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 54/100 contacts.", boundary: "round_cap", finishReason: "length" }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("continue");
+    if (decision.type === "continue") {
+      expect(decision.unmetCriterionIds).toEqual(["rec-1"]);
+      expect(decision.continuationId).toContain("cand-1");
+      expect(decision.prompt).toContain("Continue the same approved task execution");
+      expect(decision.prompt).toContain("Unmet criteria: rec-1");
+      expect(decision.prompt).toContain("Do not claim completion without required evidence");
+      expect(decision.prompt).toContain("Remaining limits:");
+    }
+  });
+
+  it("Slice 2 live: continue carries the contract objective when present", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 54/100." }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        budget,
+        contract: {
+          schemaVersion: 1 as const,
+          contractId: "contract-1",
+          contractHash: "hash-abc",
+          objective: "Save 100 qualifying contacts",
+          sourceUserMessageId: "msg-1",
+          approvedSourceMessageIds: ["msg-1"],
+          mode: "verified" as const,
+          criteria: [
+            {
+              id: "rec-1",
+              required: true,
+              kind: "observation" as const,
+              description: "observes 100 contacts",
+              adapterKey: "observation",
+              targetId: "100 contacts",
+              sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+            },
+          ],
+        },
+      }
+    );
+    expect(decision.type).toBe("continue");
+    if (decision.type === "continue") {
+      expect(decision.prompt).toContain("Objective: Save 100 qualifying contacts");
+    }
+  });
+
+  it("Slice 2 live: all criteria passing on task_best_effort → finish(incomplete), never continue (FR-04 no-loop guard)", async () => {
+    // A best-effort task with all criteria passing cannot verify (FR-04) —
+    // but it is DONE by design. If the continue branch fired on "unverified"
+    // rather than "unmet", this candidate would loop forever. The branch
+    // must fire only on actual unmet work.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_best_effort",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.remainingWork).toEqual([]);
+    }
+  });
+
+  it("Slice 2 live: budget_cap boundary never continues — runtime caps were the limiter", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", boundary: "budget_cap", finishReason: "length" }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"], budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("Slice 2 live: missing terminal never continues — truncated stream routes to recovery", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const decision = await ctrl.decide(
+      baseCandidate({ streamTerminalSeen: false, finishReason: null, content: "" }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"], budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
+  });
+
+  it("Slice 2 live: continuation exhausted guard holds before the continue branch (CONTINUATION_LIMIT)", async () => {
+    // isContinuationBudgetExhausted is consulted at step 6 (D4 gate) AND
+    // re-guarded in the continue branch — but the step-6 consult already
+    // returns finish(CONTINUATION_LIMIT) for a fully-spent allowance, so
+    // the continue branch is unreachable with an exhausted budget. This
+    // locks the invariant from the other side.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 1 });
+    budget.reserveContinuation("cont-spent");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 54/100.", boundary: "round_cap", finishReason: "length" }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"], budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
 });

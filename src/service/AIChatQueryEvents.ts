@@ -23,6 +23,10 @@ import type {
   AIChatRecoveryReason,
   ChatV2RecoveryMetadata,
 } from "@/service/AIChatRecoveryTypes";
+// Type-only: the loop-input binding field. TaskLoopConsult defines the local
+// closure-shaped interface (no runtime objects) so this file never imports
+// the controller/budget modules — keeps the events module renderer-safe.
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -383,6 +387,15 @@ export interface PendingPermissionTurn {
    * the user grants permission (AC-8). Present only when deferred mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /**
+   * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
+   * the originating turn's loopInput so the resumed loop still consults the
+   * same controller/budget after permission grant — budget persists across
+   * the pause. Undefined when the policy flag is off (byte-identical legacy
+   * resume). Closures capture the runtime controller/budget, so this is a
+   * main-process reference, never serialized.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -409,6 +422,13 @@ export interface PendingPlanQuestionTurn {
    * mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /**
+   * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
+   * the originating turn's loopInput so the resumed loop still consults the
+   * same controller/budget after the plan question is answered — budget
+   * persists across the pause. Undefined when the policy flag is off.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
 }
 
 /** Plan context carried through the loop. */
@@ -588,6 +608,16 @@ export interface AIChatQueryLoopInput {
    * current messages and lets preflight reject.
    */
   relieveBudgetPressure?: () => Promise<OpenAIChatMessage[] | null>;
+  /**
+   * Task-completion-policy binding for this turn (technical-design §7,
+   * Slice 2 Unit 4). Constructed by the engine's enrollment seam from the
+   * coordinator's `TaskExecutionBinding` when the feature flag is on and
+   * enrollment created/reused a binding; undefined otherwise (flag off →
+   * existing loop behavior byte-identical). Carries closures so the loop
+   * never imports controller/budget runtime types. Threaded through the
+   * pause/resume paths so budget persists across pending states.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
 }
 
 /** Request payload for resumeToolAfterPermission. */

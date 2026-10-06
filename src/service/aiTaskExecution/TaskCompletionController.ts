@@ -1,21 +1,24 @@
 /**
- * Shadow-mode completion controller (technical-design §7, FR-05/06/16).
+ * Completion controller (technical-design §7, FR-05/06/07/16).
  *
- * Slice 1: SHADOW EVALUATION ONLY. `decide()` classifies a response-end
- * candidate, records provenance, and returns a `TaskCompletionDecision`.
- * It does NOT dispatch maker continuations, alter persisted counters, or
- * gate live dispatch (§17 shadow-mode rules). A returned "continue" is
- * never produced in Slice 1; unfinished task candidates return
- * `finish(incomplete)` instead.
+ * Slice 1 shipped SHADOW EVALUATION: `decide()` classifies a response-end
+ * candidate, records provenance, and returns a `TaskCompletionDecision`
+ * without dispatching. Slice 2 (Unit 4) adds the LIVE continuation branch
+ * (§7.2 step 10): when a live budget is present and the candidate has
+ * feasible unmet work, `decide()` returns `continue` with the §7.3 targeted
+ * prompt. Shadow mode (no budget injected) is preserved byte-identical:
+ * unfinished task candidates still return `finish(incomplete)`.
  *
  * Decision precedence (§7.2) is implemented in order:
- *   1. Validate ownership/route (caller's responsibility in Slice 1).
+ *   1. Validate ownership/route (caller's responsibility).
  *   2. User cancellation wins — handled by the caller before calling decide.
  *   3. Safety restrictions / policy blocks → blocked_by_policy (no bypass).
  *   4. Pending permission/question/approval → wait.
  *   5. Response-only → finish_response.
  *   6. Task: all required criteria pass → verified_complete; else
- *      incomplete (shadow: no continuation).
+ *      6a. LIVE (budget injected): feasible unmet work → continue with a
+ *          targeted §7.3 prompt (§7.2 step 10).
+ *      6b. Otherwise: finish(incomplete) (shadow: no continuation).
  *
  * Provenance (FR-16): the candidate's `provenance` and `boundary` fields
  * are preserved on the decision's reason code; synthetic/unknown/missing-
@@ -33,6 +36,7 @@ import type {
 } from "@/service/aiTaskExecution/TaskEvidenceService";
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
+import { buildContinuationPrompt } from "@/service/aiTaskExecution/TaskLoopConsult";
 
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
@@ -182,6 +186,41 @@ export class TaskCompletionController {
     // Shadow mode (Slice 1): unfinished/unverifiable task candidates return
     // finish(incomplete). Live continuation dispatch is Slice 2.
     const unmet = required.filter((id) => !passedSet.has(id));
+
+    // §7.2 step 10 (Slice 2 Unit 4, FR-07): LIVE continuation branch. When a
+    // live budget is injected, unmet work is feasible (real provider stream,
+    // true terminal, boundary not a hard budget cap), and the lineage
+    // continuation allowance can still fund a dispatch, return `continue`
+    // with the §7.3 targeted prompt. Guards:
+    // - `budget` presence is the live-mode signal — shadow callers (flag
+    //   off, no budget) fall through to finish(incomplete), byte-identical
+    //   to Slice 1.
+    // - `unmet.length > 0` — a best-effort candidate whose criteria all pass
+    //   is done by design (FR-04: it can never verify); continuing it would
+    //   loop forever. Only candidates with actual remaining work continue.
+    // - `streamTerminalSeen` — the stream truly ended; a truncated stream
+    //   surfaces STREAM_INCOMPLETE via recovery, not a continuation.
+    // - `boundary !== "budget_cap"` — a budget-cap stop means the runtime
+    //   hard caps were already the limiting factor; the honest outcome is
+    //   incomplete, not another dispatch.
+    // - `isContinuationBudgetExhausted` — reserve-level gate; the loop also
+    //   re-checks `reserveContinuation` on the returned ID (dedup/atomicity).
+    if (
+      budget &&
+      unmet.length > 0 &&
+      candidate.streamTerminalSeen &&
+      candidate.boundary !== "budget_cap" &&
+      candidate.provenance === "provider" &&
+      !budget.isContinuationBudgetExhausted()
+    ) {
+      return {
+        type: "continue",
+        continuationId: `cont:${candidate.candidateId}`,
+        prompt: this.continuationPrompt(candidate, context, unmet, budget),
+        unmetCriterionIds: [...unmet],
+      };
+    }
+
     const reasonCode = this.incompleteReasonCode(candidate);
     return {
       type: "finish",
@@ -256,6 +295,32 @@ export class TaskCompletionController {
       evidenceIds: result.evidenceIds,
       requiredCriterionIds,
     };
+  }
+
+  /**
+   * Build the §7.3 targeted continuation prompt for the live continue
+   * branch. Objective falls back to a neutral phrase when no contract is
+   * present (best-effort route with caller-supplied criteria); verified
+   * progress is the bounded summary of the candidate content; remaining
+   * limits come from the live budget's remaining allowance — trusted
+   * runtime state, never model-reported.
+   */
+  private continuationPrompt(
+    candidate: TaskEndCandidate,
+    context: DecideContext,
+    unmet: readonly string[],
+    budget: TaskRunBudget
+  ): string {
+    const remaining = budget.getRemaining();
+    return buildContinuationPrompt({
+      objective: context.contract?.objective ?? "the approved task execution",
+      verifiedProgress: this.boundedSummary(candidate.content),
+      unmetCriteria: unmet,
+      // No failure summary is available to the controller (recovery-state
+      // details live in the loop); keep the line absent rather than inventing.
+      failures: "",
+      remainingLimits: `continuations: ${remaining.continuations}, providerAttempts: ${remaining.providerAttempts}, checkerAttempts: ${remaining.checkerAttempts}, tokens: ${remaining.tokens}`,
+    });
   }
 
   private incompleteReasonCode(candidate: TaskEndCandidate): string {

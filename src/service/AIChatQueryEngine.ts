@@ -115,6 +115,14 @@ import { buildResolverInput } from "@/service/outboundEmail/OutboundEmailPreviou
 import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
+import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
+import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
+import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { makeModuleBackedStore } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import type { TaskCompletionDecision } from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
@@ -383,6 +391,22 @@ export class AIChatQueryEngine {
     return epoch;
   }
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
+
+  /**
+   * Slice 2 Unit 4 — per-execution decision slots. The loop's consult closure
+   * records the controller's terminal decision here via the binding's
+   * `recordDecision` callback; the engine's finalization gate (Slice 2 Unit 5)
+   * reads it to tell "the loop already consulted" from "no consult ran" and
+   * only falls back to its own consult on the latter. Keyed by executionId
+   * (stable across pause/resume). Cleared in `clearConversationTurnState`.
+   */
+  private readonly taskDecisionSlots = new Map<
+    string,
+    {
+      get: () => TaskCompletionDecision | null;
+      set: (decision: TaskCompletionDecision | null) => void;
+    }
+  >();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly compactionCoordinator?: AIChatCompactionCoordinator;
@@ -950,6 +974,14 @@ export class AIChatQueryEngine {
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
     let sourceUserMessageId: string | undefined;
+    /**
+     * Slice 2 completion-policy binding for this turn (technical-design §5/§7).
+     * Constructed by the enrollment seam below from the coordinator's binding
+     * when the policy flag is on; undefined otherwise (byte-identical legacy
+     * behavior). Carried through loopInput and the three resume paths so
+     * budget persists across pause/resume.
+     */
+    let taskExecutionBinding: LoopTaskExecutionBinding | undefined;
     /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
     let historySelectionAcceptedIds: readonly string[] = [];
     /** Submitted refs whose source moved (§4.2), reported on `start`. */
@@ -1232,6 +1264,149 @@ export class AIChatQueryEngine {
         intentDecisionId = null;
       }
 
+      // ------------------------------------------------------------------
+      // Slice 2 Unit 4 — Enroll this turn into the completion policy
+      // (technical-design §5/§7, FR-01/02/03/04/19, AC-01/02/03/26).
+      //
+      // When the policy flag is on, resolve the request route, freeze a
+      // contract for verified tasks, call `coordinator.startManual`, and
+      // build the LoopTaskExecutionBinding the loop consults at its four
+      // terminal-stop sites. The binding carries closures (not the runtime
+      // controller/budget) so the loop never imports those types. Fail-closed:
+      // any enrollment error leaves `taskExecutionBinding` undefined and the
+      // turn proceeds with byte-identical legacy behavior (no consult). A
+      // `reused` result is a transport retry (no fresh effects); a `conflict`
+      // is a submissionId collision with different text — both skip consult.
+      // Flag-off: the whole block is skipped, `taskExecutionBinding` stays
+      // undefined, and the loop's consult guards no-op.
+      // ------------------------------------------------------------------
+      if (isAiTaskCompletionPolicyV1Enabled()) {
+        try {
+          const route = new TaskRequestResolver().classify({
+            userMessage: request.message || "",
+            hasApprovedTaskTemplate: false,
+          });
+          // Only enroll routes that can do work. response_only turns end
+          // naturally and never need a completion consult (FR-02);
+          // preparation turns wait on plan/permission and enroll when the
+          // user re-sends after approval.
+          if (route !== "response_only" && route !== "preparation") {
+            const coordinator = new TaskExecutionCoordinator();
+            const requestHash = hashUserAuthoredText(request.message || "");
+            const submissionId =
+              request.submissionId ??
+              `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            // Freeze a contract for verified routes (FR-19/04). Best-effort
+            // routes run without a contract — the controller treats them as
+            // degraded task_verified (criteria advisory; finish_response
+            // acceptable at response_end). Slice 2 ships best_effort without
+            // caller-supplied criteria; the contract service throws on zero
+            // required criteria for verified mode, so only freeze when we
+            // have a verified route with real criteria. A verified route
+            // without caller-supplied criteria is NOT enrolled for consult
+            // in Slice 2 — the contract service would throw, and enrolling
+            // best_effort without a contract yields no criteria to consult.
+            const shouldFreezeContract = route === "task_verified";
+            const contract = shouldFreezeContract
+              ? coordinator.freezeContract({
+                  objective: request.message.slice(0, 20000) || "User task",
+                  sourceUserMessageId: savedUser.messageId,
+                  approvedSourceMessageIds: [savedUser.messageId],
+                  mode: "verified",
+                  criteria: [],
+                })
+              : null;
+            const startResult = await coordinator.startManual({
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              submissionId,
+              requestHash,
+              route,
+              completionOwner: "standalone",
+              contract,
+            });
+            if (startResult.status === "created") {
+              const created = startResult.binding;
+              // Per-turn decision slot: the loop's consult closure records
+              // here, and the engine's finalization gate (Slice 2 Unit 5)
+              // reads it to tell "loop already consulted" from "no consult
+              // ran" — only falling back to its own consult on the latter.
+              // Keyed by executionId so the engine can look it up from the
+              // binding's executionId without holding the binding itself.
+              let recordedDecision: TaskCompletionDecision | null = null;
+              this.taskDecisionSlots.set(created.executionId, {
+                get: () => recordedDecision,
+                set: (d: TaskCompletionDecision | null) => {
+                  recordedDecision = d;
+                },
+              });
+              // Evidence service: evaluate criteria against assistant content
+              // / tool catalog so the controller's verified_complete vs.
+              // incomplete decision is real (not caller-supplied). Built on a
+              // no-op store: `expectedStateVersion` is left undefined so
+              // `persistEvidence` is skipped — the controller still gets the
+              // in-memory CheckResult for its decision. Evidence-row
+              // persistence lands in Unit 5's finalization gate (which holds
+              // the version token). Constructed lazily here (BaseModule TDZ).
+              const execModule = new AiTaskExecutionModule();
+              const evidenceService = new TaskEvidenceService(
+                makeModuleBackedStore({
+                  getExecutionState: async (executionId) => {
+                    const exec = await execModule.getExecution(executionId);
+                    if (!exec) return null;
+                    return {
+                      stateJson: exec.execution_state_json,
+                      version: exec.execution_state_version,
+                      finalized: exec.finalized,
+                    };
+                  },
+                  applyShadowDecisionCas: async () => false,
+                })
+              );
+              taskExecutionBinding = {
+                executionId: created.executionId,
+                consult: (candidate) =>
+                  created.controller.decide(candidate, {
+                    route: created.route,
+                    contract: created.contract ?? undefined,
+                    evidenceService,
+                    // expectedStateVersion omitted → persistEvidence skipped
+                    // (Unit 5 finalization gate owns persistence).
+                    evidenceContext: {
+                      content: candidate.content,
+                      source: "loop_consult",
+                      sourceRevision: "slice2-unit4",
+                    },
+                    budget: created.budget,
+                  }),
+                reserveContinuation: (continuationId) =>
+                  created.budget.reserveContinuation(continuationId),
+                recordDecision: (decision) => {
+                  recordedDecision = decision;
+                },
+              };
+            } else if (startResult.status === "reused") {
+              // Transport retry: the same (conversation, submission, hash)
+              // already enrolled. Do not re-dispatch or renew limits
+              // (AC-26). No binding — the existing execution's status is
+              // authoritative and Slice 2 does not resurrect it here.
+              console.log(
+                `[ai-chat-v2] task execution reused (submissionId=${submissionId}) — transport retry, no fresh consult`
+              );
+            } else {
+              // conflict: same submissionId, different request_hash. Surface
+              // and skip — never persist a second row.
+              console.error(
+                `[ai-chat-v2] task execution conflict (submissionId=${submissionId}) — SUBMISSION_CONFLICT, skipping consult`
+              );
+            }
+          }
+        } catch (err) {
+          console.error("[ai-chat-v2] task completion enrollment failed:", err);
+          taskExecutionBinding = undefined;
+        }
+      }
+
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
@@ -1475,6 +1650,7 @@ export class AIChatQueryEngine {
         await this.compactBeforeDispatch(conversationId, request.model);
         return reassembleMessages ? reassembleMessages() : null;
       },
+      taskExecutionBinding,
     };
 
     try {
@@ -1875,6 +2051,7 @@ export class AIChatQueryEngine {
           matchedByToolId.conversationId,
           Boolean(matchedByToolId.planContext)
         ),
+        taskExecutionBinding: matchedByToolId.taskExecutionBinding,
       };
 
       void this.loop
@@ -2027,6 +2204,7 @@ export class AIChatQueryEngine {
           conversationId,
           Boolean(matchedByToolId.planContext)
         ),
+        taskExecutionBinding: matchedByToolId.taskExecutionBinding,
       };
 
       void this.loop
@@ -2185,6 +2363,7 @@ export class AIChatQueryEngine {
         pending.conversationId,
         Boolean(planContext)
       ),
+      taskExecutionBinding: pending.taskExecutionBinding,
     };
 
     const module = new AIChatV2Module();

@@ -57,6 +57,7 @@ import {
 import {
   isToolOutputCaptureEnabled,
   isToolOutputModelRefsEnabled,
+  isAiTaskCompletionPolicyV1Enabled,
 } from "@/config/featureFlags";
 import type { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
@@ -80,6 +81,10 @@ import {
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
+import {
+  consultLoopEndCandidate,
+  type ConsultOutcome,
+} from "@/service/aiTaskExecution/TaskLoopConsult";
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
 export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
@@ -1327,6 +1332,68 @@ export class AIChatQueryLoop {
     messages.splice(insertAt, 0, { role: "system", content: announcement });
   }
 
+  // ----- Slice 2 Unit 4: completion-policy consult helpers (§7, FR-05/07) -----
+  // These wrap `consultLoopEndCandidate` so the four consult sites stay
+  // surgical. The flag+binding guard lives here so each site is a single
+  // call; flag-off returns null and the site runs its legacy nudge/break
+  // logic byte-identical.
+
+  /**
+   * Build the candidate content string from loop state. Mirrors the
+   * authoritative `fullContent` assembly on the completed path (line ~3130):
+   * the recovery prefix (recovered text from prior truncated rounds) + the
+   * current accumulator's full content. Falls back to "" when no
+   * accumulator has run yet (e.g. a round-cap on the very first round).
+   */
+  private policyConsultContent(
+    input: AIChatQueryLoopInput,
+    recoveryState: { recoveredContentPrefix: string },
+    accumulator: OpenAIStreamAccumulator | null
+  ): string {
+    const roundContent = accumulator?.state.fullContent ?? "";
+    return recoveryState.recoveredContentPrefix + roundContent;
+  }
+
+  /**
+   * Consult the completion controller at a loop terminal-stop site when
+   * the policy flag is on AND the turn is enrolled (a binding was passed).
+   * Returns the mapped {@link ConsultOutcome}, or null when the policy is
+   * off / no binding / the consult threw (fail-closed: a thrown consult is
+   * treated as "no consult" so the legacy site logic runs — never crash the
+   * turn because of a policy consult).
+   */
+  private async maybeConsultPolicy(params: {
+    input: AIChatQueryLoopInput;
+    boundary: "round_cap" | "response_end";
+    content: string;
+    finishReason: string | null;
+  }): Promise<ConsultOutcome | null> {
+    if (!isAiTaskCompletionPolicyV1Enabled()) return null;
+    const binding = params.input.taskExecutionBinding;
+    if (!binding) return null;
+    try {
+      return await consultLoopEndCandidate({
+        binding,
+        boundary: params.boundary,
+        content: params.content,
+        finishReason: params.finishReason,
+        pendingPermission: false,
+        pendingQuestion: false,
+        pendingPlanApproval: false,
+        safetyRestriction: false,
+      });
+    } catch (err) {
+      // Fail-closed: a thrown consult (e.g. evidence service error) must
+      // not crash the turn. The legacy site logic runs instead, and the
+      // Unit 5 engine gate will surface the unfinalized execution.
+      console.error(
+        `[ai-chat-v2] task-completion policy consult failed at ${params.boundary}:`,
+        err
+      );
+      return null;
+    }
+  }
+
   /**
    * Public entry point. Runs the turn, auto-retrying if a content-level
    * transient AI-server failure (empty response, finish_reason=error) ends
@@ -1548,6 +1615,43 @@ export class AIChatQueryLoop {
 
       for (let round = input.startRound; ; round += 1) {
         if (round >= maxToolRounds) {
+          // Slice 2 Unit 4 (FR-05/07, §7.1): when the completion policy is
+          // on and this turn is enrolled, consult the controller before the
+          // legacy round-cap nudge. A `continue` outcome (controller
+          // authorized + budget reserved) emits the §7.3 targeted prompt
+          // INSTEAD of the generic round-cap nudge and re-enters the loop.
+          // Any other outcome (finish/wait/budget-overridden) breaks the
+          // loop without the legacy nudge. Flag-off or no binding → the
+          // existing nudge/break logic runs byte-identical.
+          const policyRoundCapOutcome = await this.maybeConsultPolicy({
+            input,
+            boundary: "round_cap",
+            content: this.policyConsultContent(input, recoveryState, finalAccumulator),
+            finishReason: finalAccumulator?.state.finishReason ?? null,
+          });
+          if (policyRoundCapOutcome) {
+            if (policyRoundCapOutcome.type === "continue") {
+              roundCapContinuations += 1;
+              emptyStopContinuations = 0;
+              messages.push({
+                role: "user",
+                content: policyRoundCapOutcome.prompt,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: roundCapContinuations,
+                maxAttempts: maxRoundCapContinuations,
+                message: "Continuing after tool-round cap (policy-authorized)",
+              });
+              round = -1;
+              continue;
+            }
+            break;
+          }
           const canKeepGoing =
             executedToolRound &&
             !input.abortController.signal.aborted &&
@@ -2160,6 +2264,41 @@ export class AIChatQueryLoop {
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length === 0;
           if (emptyAfterTools) {
+            // Slice 2 Unit 4: policy consult supersedes the legacy empty-stop
+            // nudges when enrolled. The candidate content is the recovered
+            // prefix + this round's (empty) content — the controller sees the
+            // turn made tool progress but produced no terminal text, and
+            // decides continue (§7.3 prompt) vs finish(incomplete) vs wait.
+            // Boundary is response_end: the stream did terminate (finish_reason
+            // =stop), just with no text. Flag-off/no binding → legacy nudges.
+            const policyEmptyStopOutcome = await this.maybeConsultPolicy({
+              input,
+              boundary: "response_end",
+              content: this.policyConsultContent(input, recoveryState, accumulator),
+              finishReason: accumulator.state.finishReason ?? null,
+            });
+            if (policyEmptyStopOutcome) {
+              if (policyEmptyStopOutcome.type === "continue") {
+                emptyStopContinuations += 1;
+                roundCapContinuations = 0;
+                messages.push({
+                  role: "user",
+                  content: policyEmptyStopOutcome.prompt,
+                });
+                eventSink.emit({
+                  type: "recovery_status",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  layer: "persistent_retry",
+                  reason: "server_error",
+                  attempt: emptyStopContinuations,
+                  maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+                  message: "Continuing after empty model stop (policy-authorized)",
+                });
+                continue;
+              }
+              break;
+            }
             if (
               emptyStopContinuations < MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
             ) {
@@ -2227,6 +2366,49 @@ export class AIChatQueryLoop {
             executedToolRound &&
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length > 0;
+          // Slice 2 Unit 4: policy consult supersedes the legacy goal-text
+          // nudge when enrolled. The controller sees the partial text as
+          // verified progress and decides whether the unmet goal criteria
+          // warrant a §7.3 continuation or a finish(incomplete). On continue,
+          // the partial is preserved (prefix + assistant message) exactly as
+          // the legacy branch does, so the persisted message keeps the text.
+          // Flag-off/no binding → legacy goal-text nudge.
+          if (goalTextStop) {
+            const policyGoalTextOutcome = await this.maybeConsultPolicy({
+              input,
+              boundary: "response_end",
+              content: this.policyConsultContent(input, recoveryState, accumulator),
+              finishReason: accumulator.state.finishReason ?? null,
+            });
+            if (policyGoalTextOutcome) {
+              if (policyGoalTextOutcome.type === "continue") {
+                goalTextStopContinuations += 1;
+                const partial = accumulator.state.fullContent || "";
+                recoveryState = {
+                  ...recoveryState,
+                  recoveredContentPrefix:
+                    recoveryState.recoveredContentPrefix + partial,
+                };
+                messages.push({ role: "assistant", content: partial });
+                messages.push({
+                  role: "user",
+                  content: policyGoalTextOutcome.prompt,
+                });
+                eventSink.emit({
+                  type: "recovery_status",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  layer: "persistent_retry",
+                  reason: "server_error",
+                  attempt: goalTextStopContinuations,
+                  maxAttempts: MAX_GOAL_TEXT_STOP_CONTINUATIONS,
+                  message: "Continuing goal after premature text-only stop (policy-authorized)",
+                });
+                continue;
+              }
+              break;
+            }
+          }
           // The nudge budget is per-runOnce; a separate run() (permission/
           // plan resume, or the outer goal-turn driver) gets a fresh budget
           // (see the declaration above). This is intentional and bounded by
@@ -2267,6 +2449,42 @@ export class AIChatQueryLoop {
             continue;
           }
 
+          // Slice 2 Unit 4: the loop-exit consult. The stream terminated
+          // (finish_reason=stop) without hitting a round-cap, empty-stop, or
+          // goal-text branch — a natural response_end. When the policy is on
+          // and the turn is enrolled, consult the controller before breaking.
+          // A continue outcome re-enters with the §7.3 prompt (this is the
+          // primary recovery path for an enrolled task that stops prematurely
+          // with content but unmet criteria). Any other outcome breaks. The
+          // Unit 5 engine finalization gate reads the recorded decision; if no
+          // consult ran here (flag off / no binding), the gate does its own
+          // fallback consult. Flag-off → unconditional break, byte-identical.
+          const policyLoopExitOutcome = await this.maybeConsultPolicy({
+            input,
+            boundary: "response_end",
+            content: this.policyConsultContent(input, recoveryState, accumulator),
+            finishReason: accumulator.state.finishReason ?? null,
+          });
+          if (policyLoopExitOutcome) {
+            if (policyLoopExitOutcome.type === "continue") {
+              messages.push({
+                role: "user",
+                content: policyLoopExitOutcome.prompt,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: 1,
+                maxAttempts: 1,
+                message: "Continuing after premature stop (policy-authorized)",
+              });
+              continue;
+            }
+            break;
+          }
           break;
         }
 
@@ -3069,6 +3287,11 @@ export class AIChatQueryLoop {
                       announcedDeferredNames
                     )
                   : undefined,
+                // Slice 2: carry the completion-policy binding through the
+                // permission pause so the resumed loop still consults the
+                // same controller/budget (budget persists across pause).
+                // Undefined when the flag is off — byte-identical legacy.
+                taskExecutionBinding: input.taskExecutionBinding,
               },
             };
           }
@@ -3375,6 +3598,10 @@ export class AIChatQueryLoop {
         planId: input.planContext.planState.planId,
         eventSink: eventSink,
         turnId: input.turnId,
+        // Slice 2: carry the completion-policy binding through the plan
+        // pause so the resumed loop still consults the same
+        // controller/budget. Undefined when the flag is off.
+        taskExecutionBinding: input.taskExecutionBinding,
       },
     };
   }
