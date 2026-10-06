@@ -1,16 +1,16 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, EntityManager, In } from "typeorm";
+import { Repository, EntityManager } from "typeorm";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
-import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
-import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
-import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { runReplyTxn } from "@/model/replyTxn";
+import {
+  readClusterEvidence,
+  evidenceToPhase,
+} from "@/model/replyClusterEvidence";
 import { pickReusableDraft } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import type {
   GuardPhase,
   EmailReplyPolicyCode,
-  EmailReplySendAttemptStatus,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
@@ -383,33 +383,11 @@ export class EmailReplyGuardModel extends BaseDb {
         replyKey: row.replyKey,
       });
 
-      let nextPhase: GuardPhase;
-      let activeDraftId: number | null = row.activeDraftId;
-      let activeAttemptId: number | null = null;
-      if (evidence.sentAttempts.length > 0 || evidence.sentDrafts.length > 0) {
-        nextPhase = "sent";
-        activeDraftId = evidence.sentDrafts[0]?.id ?? null;
-      } else if (
-        evidence.unknownDrafts.length > 0 ||
-        evidence.unknownAttempts.length > 0
-      ) {
-        nextPhase = "delivery_unknown";
-      } else if (
-        evidence.sendingDrafts.length > 0 ||
-        evidence.inFlightAttempts.length > 0
-      ) {
-        // An in-flight attempt still exists — preserve `sending` so the
-        // attempt recovery sweep owns the finalize. Do NOT reclaim to idle.
-        nextPhase = "sending";
-        activeAttemptId = evidence.inFlightAttempts[0]?.id ?? null;
-      } else if (evidence.liveDrafts.length > 0) {
-        // A committed live draft survived the crash — bind it.
-        nextPhase = "draft_ready";
-        activeDraftId = evidence.liveDrafts[0].id;
-      } else {
-        nextPhase = "idle";
-        activeDraftId = null;
-      }
+      // §5.2 precedence ladder shared with the send-claim sibling check
+      // (T08) via `evidenceToPhase` — never trust `idle` while a related
+      // sent/unknown/in-flight record exists.
+      const { phase: nextPhase, activeDraftId, activeAttemptId } =
+        evidenceToPhase(evidence);
 
       await guardRepo.update(
         { id: row.id },
@@ -424,124 +402,4 @@ export class EmailReplyGuardModel extends BaseDb {
       return true;
     });
   }
-}
-
-// ---- Cluster evidence reconciliation (shared by acquire + reclaim) ----
-
-interface ClusterEvidence {
-  readonly replyStatus: string | null;
-  readonly liveDrafts: EmailReplyDraftEntity[];
-  readonly sentDrafts: EmailReplyDraftEntity[];
-  readonly sendingDrafts: EmailReplyDraftEntity[];
-  readonly unknownDrafts: EmailReplyDraftEntity[];
-  readonly failedDrafts: EmailReplyDraftEntity[];
-  readonly sentAttempts: EmailReplySendAttemptEntity[];
-  readonly unknownAttempts: EmailReplySendAttemptEntity[];
-  readonly inFlightAttempts: EmailReplySendAttemptEntity[];
-}
-
-/**
- * Read every draft + attempt across the canonical cluster (§5.2/§8.1). Mirrors
- * the orchestrator's `evaluateMessageLevelState` precedence inputs but runs
- * inside the guard transaction's `manager` so the read is consistent with the
- * claim/reclaim in the same transaction.
- *
- * When `replyKey` is supplied directly (reclaim path), the cluster is resolved
- * by joining on the guard row's `emailServiceId` + the message rows that share
- * the seed message's `normalizedMessageId` (or the seed row alone when no RFC
- * id exists). When `normalizedMessageId` is supplied (acquire path), the
- * cluster is resolved the same way `findCanonicalEquivalents` does.
- */
-async function readClusterEvidence(
-  manager: EntityManager,
-  opts: {
-    emailServiceId: number;
-    normalizedMessageId: string | null;
-    seedMessageId: number;
-    replyKey?: string;
-  }
-): Promise<ClusterEvidence> {
-  const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
-  const draftRepo = manager.getRepository(EmailReplyDraftEntity);
-  const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
-
-  const seed = await messageRepo.findOne({ where: { id: opts.seedMessageId } });
-  const clusterRows: EmailReceivedMessageEntity[] = [];
-  if (seed) {
-    clusterRows.push(seed);
-    const normalizedId =
-      opts.normalizedMessageId ??
-      seed.normalizedMessageId ??
-      null;
-    if (normalizedId) {
-      const equivalents = await messageRepo.find({
-        where: {
-          emailServiceId: opts.emailServiceId,
-          normalizedMessageId: normalizedId,
-        },
-      });
-      for (const r of equivalents) {
-        if (!clusterRows.some((c) => c.id === r.id)) {
-          clusterRows.push(r);
-        }
-      }
-    }
-  }
-  const clusterRowIds = clusterRows.map((r) => r.id);
-  if (clusterRowIds.length === 0) {
-    return {
-      replyStatus: null,
-      liveDrafts: [],
-      sentDrafts: [],
-      sendingDrafts: [],
-      unknownDrafts: [],
-      failedDrafts: [],
-      sentAttempts: [],
-      unknownAttempts: [],
-      inFlightAttempts: [],
-    };
-  }
-
-  const drafts = await draftRepo.find({
-    where: { messageId: In(clusterRowIds) },
-  });
-  const attempts = await attemptRepo.find({
-    where: { messageId: In(clusterRowIds) },
-  });
-
-  const replyStatus = seed?.replyStatus ?? null;
-  const liveDrafts = drafts.filter((d) => isLiveDraftStatus(d.status));
-  const sentDrafts = drafts.filter((d) => d.status === "sent");
-  const sendingDrafts = drafts.filter((d) => d.status === "sending");
-  const unknownDrafts = drafts.filter((d) => d.status === "delivery_unknown");
-  const failedDrafts = drafts.filter((d) => d.status === "failed");
-  const sentAttempts = attempts.filter((a) => a.status === "sent");
-  const unknownAttempts = attempts.filter(
-    (a) => a.status === "delivery_unknown"
-  );
-  const inFlightAttempts = attempts.filter((a) =>
-    isAttemptInFlight(a.status)
-  );
-
-  return {
-    replyStatus,
-    liveDrafts,
-    sentDrafts,
-    sendingDrafts,
-    unknownDrafts,
-    failedDrafts,
-    sentAttempts,
-    unknownAttempts,
-    inFlightAttempts,
-  };
-}
-
-function isLiveDraftStatus(status: string): boolean {
-  return status === "draft" || status === "approved" || status === "sending";
-}
-
-function isAttemptInFlight(
-  status: EmailReplySendAttemptStatus
-): boolean {
-  return status === "claimed" || status === "submitted";
 }

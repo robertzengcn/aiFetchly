@@ -6,7 +6,11 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReplyDraftModel } from "@/model/EmailReplyDraft.model";
 import { EmailReplyApprovalModel } from "@/model/EmailReplyApproval.model";
 import { EmailReplySendAttemptModel } from "@/model/EmailReplySendAttempt.model";
+import { EmailReplyGuardModel } from "@/model/EmailReplyGuard.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import {
   hashApprovalEnvelope,
   hashApprovalToken,
@@ -14,6 +18,110 @@ import {
   generateApprovalToken,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
+
+/**
+ * Seed an approved draft + matching revision + active approval. Module scope
+ * so the T08 sibling-check describe below reuses it with its own model set.
+ */
+async function seedApprovedDraft(
+  models: {
+    draftModel: EmailReplyDraftModel;
+    approvalModel: EmailReplyApprovalModel;
+  },
+  over: {
+    emailServiceId?: number;
+    messageId?: number;
+  } = {}
+) {
+  const { draftModel, approvalModel } = models;
+  const emailServiceId = over.emailServiceId ?? 7;
+  const messageId = over.messageId ?? 100;
+  const draft = new EmailReplyDraftEntity();
+  draft.messageId = messageId;
+  draft.emailServiceId = emailServiceId;
+  draft.subject = "Re: Pricing";
+  draft.bodyText = "Here is our pricing.";
+  draft.bodyHtml = null;
+  draft.status = "draft";
+  draft.generationSource = "ai";
+  const savedDraft = await draftModel.create(draft);
+
+  const envelope: EmailReplyApprovalEnvelope = {
+    draftId: savedDraft.id,
+    revisionId: 0, // placeholder; set after revision insert
+    emailServiceId,
+    originalMessageId: messageId,
+    senderAddress: `owner@service${emailServiceId}.com`,
+    recipientAddress: "prospect@example.com",
+    subject: "Re: Pricing",
+    bodyText: "Here is our pricing.",
+    bodyHtml: null,
+    policyVersion: "policy-1",
+    validationVersion: "validator-1",
+  };
+
+  // Append revision 1 (compute real envelope hash with the revision id).
+  const appended = await draftModel.appendRevision({
+    draftId: savedDraft.id,
+    actor: "ai",
+    subject: envelope.subject,
+    bodyText: envelope.bodyText,
+    bodyHtml: null,
+    senderAddress: envelope.senderAddress,
+    recipientAddress: envelope.recipientAddress,
+    // contentHash is recomputed by the service in production; for the seed we
+    // set it explicitly below to match the approval envelope.
+    contentHash: "placeholder",
+  });
+
+  const realEnvelope = { ...envelope, revisionId: appended.revision.id };
+  const contentHash = hashApprovalEnvelope(realEnvelope);
+  // Persist the real hash onto the revision + projection.
+  await draftModel.applyContentHash(
+    savedDraft.id,
+    appended.revision.id,
+    contentHash
+  );
+
+  // Approve: flip draft -> approved for this revision + hash.
+  const ok = await draftModel.markApproved(
+    savedDraft.id,
+    appended.revision.id,
+    contentHash,
+    "policy-1"
+  );
+  expect(ok).toBe(true);
+
+  const token = generateApprovalToken();
+  const approvalRow = await approvalModel.create({
+    draftId: savedDraft.id,
+    revisionId: appended.revision.id,
+    approvedByType: "user",
+    approvedById: "test-user",
+    approvedHash: contentHash,
+    approvalTokenHash: hashApprovalToken(token),
+    approvedAt: new Date(),
+    expiresAt: null,
+    invalidatedAt: null,
+    invalidationReason: null,
+  } as never);
+
+  return {
+    draftId: savedDraft.id,
+    revisionId: appended.revision.id,
+    revisionNumber: appended.revision.revisionNumber,
+    approvalId: approvalRow.id,
+    contentHash,
+    token,
+    emailServiceId,
+    idempotencyKey: buildSendIdempotencyKey(
+      savedDraft.id,
+      appended.revision.id,
+      contentHash,
+      approvalRow.id
+    ),
+  };
+}
 
 /**
  * End-to-end persistence proof of the send-safety guarantees (FR-015/016/018,
@@ -50,98 +158,8 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
     }
   });
 
-  /** Seed an approved draft + matching revision + active approval. */
-  async function seedApprovedDraft(over: { emailServiceId?: number } = {}) {
-    const emailServiceId = over.emailServiceId ?? 7;
-    const draft = new EmailReplyDraftEntity();
-    draft.messageId = 100;
-    draft.emailServiceId = emailServiceId;
-    draft.subject = "Re: Pricing";
-    draft.bodyText = "Here is our pricing.";
-    draft.bodyHtml = null;
-    draft.status = "draft";
-    draft.generationSource = "ai";
-    const savedDraft = await draftModel.create(draft);
-
-    const envelope: EmailReplyApprovalEnvelope = {
-      draftId: savedDraft.id,
-      revisionId: 0, // placeholder; set after revision insert
-      emailServiceId,
-      originalMessageId: 100,
-      senderAddress: `owner@service${emailServiceId}.com`,
-      recipientAddress: "prospect@example.com",
-      subject: "Re: Pricing",
-      bodyText: "Here is our pricing.",
-      bodyHtml: null,
-      policyVersion: "policy-1",
-      validationVersion: "validator-1",
-    };
-
-    // Append revision 1 (compute real envelope hash with the revision id).
-    const appended = await draftModel.appendRevision({
-      draftId: savedDraft.id,
-      actor: "ai",
-      subject: envelope.subject,
-      bodyText: envelope.bodyText,
-      bodyHtml: null,
-      senderAddress: envelope.senderAddress,
-      recipientAddress: envelope.recipientAddress,
-      // contentHash is recomputed by the service in production; for the seed we
-      // set it explicitly below to match the approval envelope.
-      contentHash: "placeholder",
-    });
-
-    const realEnvelope = { ...envelope, revisionId: appended.revision.id };
-    const contentHash = hashApprovalEnvelope(realEnvelope);
-    // Persist the real hash onto the revision + projection.
-    await draftModel.applyContentHash(
-      savedDraft.id,
-      appended.revision.id,
-      contentHash
-    );
-
-    // Approve: flip draft -> approved for this revision + hash.
-    const ok = await draftModel.markApproved(
-      savedDraft.id,
-      appended.revision.id,
-      contentHash,
-      "policy-1"
-    );
-    expect(ok).toBe(true);
-
-    const token = generateApprovalToken();
-    const approvalRow = await approvalModel.create({
-      draftId: savedDraft.id,
-      revisionId: appended.revision.id,
-      approvedByType: "user",
-      approvedById: "test-user",
-      approvedHash: contentHash,
-      approvalTokenHash: hashApprovalToken(token),
-      approvedAt: new Date(),
-      expiresAt: null,
-      invalidatedAt: null,
-      invalidationReason: null,
-    } as never);
-
-    return {
-      draftId: savedDraft.id,
-      revisionId: appended.revision.id,
-      revisionNumber: appended.revision.revisionNumber,
-      approvalId: approvalRow.id,
-      contentHash,
-      token,
-      emailServiceId,
-      idempotencyKey: buildSendIdempotencyKey(
-        savedDraft.id,
-        appended.revision.id,
-        contentHash,
-        approvalRow.id
-      ),
-    };
-  }
-
   it("a single claim transitions draft -> sending and inserts a claimed attempt", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const result = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
@@ -166,7 +184,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("two concurrent claims for the same approved revision yield exactly one SMTP submission", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const claimInput = {
       draftId: seed.draftId,
       revisionId: seed.revisionId,
@@ -197,7 +215,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("a hash mismatch blocks the claim without inserting an attempt", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const result = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
@@ -221,7 +239,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("finalizeSendOutcome(sent) advances attempt+draft and consumes the approval", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const claim = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
@@ -258,7 +276,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("finalizeSendOutcome(delivery_unknown) is terminal and consumes approval", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const claim = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
@@ -291,7 +309,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("appending a revision (edit) invalidates the active approval and resets to draft", async () => {
-    const seed = await seedApprovedDraft();
+    const seed = await seedApprovedDraft({ draftModel, approvalModel });
     const before = await approvalModel.read(seed.approvalId);
     expect(before?.invalidatedAt).toBeNull();
 
@@ -346,5 +364,239 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       policyVersion: "policy-1",
     });
     expect(blocked.status).toBe("precondition_failed");
+  });
+});
+
+/**
+ * T08/FR-036 — message-level claim with canonical-cluster sibling check +
+ * guard `phase="sending"` binding (technical design §8.2). The claim
+ * transaction reads the cluster, refuses when a sibling is sent/unknown/
+ * in-flight, and binds the guard atomically with the attempt INSERT.
+ */
+describe("EmailReply send claim — message-level sibling check + guard binding (T08)", () => {
+  let dbpath: string;
+  let draftModel: EmailReplyDraftModel;
+  let approvalModel: EmailReplyApprovalModel;
+  let attemptModel: EmailReplySendAttemptModel;
+  let guardModel: EmailReplyGuardModel;
+
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-reply-claim-t08-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    draftModel = new EmailReplyDraftModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+    attemptModel = new EmailReplySendAttemptModel(dbpath);
+    guardModel = new EmailReplyGuardModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const SERVICE_ID = 7;
+
+  /**
+   * Seed a real received-message row — REQUIRED for the sibling check (the
+   * cluster is resolved from the seed message row; a missing row yields empty
+   * evidence, which is why the existing messageId-100 tests above are
+   * unaffected).
+   */
+  async function seedMessage(
+    normalizedMessageId: string | null
+  ): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = SERVICE_ID;
+    message.providerUid = `uid-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    message.normalizedMessageId = normalizedMessageId;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  /** Seed an idle guard row for a message's replyKey. */
+  async function seedIdleGuard(
+    message: EmailReceivedMessageEntity
+  ): Promise<EmailReplyGuardEntity> {
+    const guard = new EmailReplyGuardEntity();
+    guard.emailServiceId = SERVICE_ID;
+    guard.replyKey = `row:${message.id}`;
+    guard.messageId = message.id;
+    guard.phase = "idle";
+    guard.ownerToken = null;
+    guard.leaseExpiresAt = null;
+    guard.activeDraftId = null;
+    guard.activeAttemptId = null;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .save(guard);
+  }
+
+  /** Direct guard-row update (the guard model exposes read + findByReplyKey only). */
+  async function updateGuard(
+    id: number,
+    patch: Partial<EmailReplyGuardEntity>
+  ): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .update({ id }, patch);
+  }
+
+  function claimInputFor(
+    seed: Awaited<ReturnType<typeof seedApprovedDraft>>,
+    messageId: number,
+    guardId: number | null
+  ) {
+    return {
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: `owner@service${seed.emailServiceId}.com`,
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      guardId,
+    };
+  }
+
+  it("binds an idle guard to phase=sending + activeAttemptId on claim", async () => {
+    const msg = await seedMessage(null); // row: replyKey — singleton cluster
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+
+    expect(result.status).toBe("claimed");
+    if (result.status === "claimed") {
+      const row = await guardModel.read(guard.id);
+      expect(row?.phase).toBe("sending");
+      expect(row?.activeAttemptId).toBe(result.attemptId);
+    }
+  });
+
+  it("second sibling claim on the same cluster is refused before any write", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    // Two approved sibling drafts on the same cluster row.
+    const first = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    const second = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+
+    const firstClaim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(first, msg.id, guard.id)
+    );
+    expect(firstClaim.status).toBe("claimed");
+
+    // Guard is now `sending` (bound to the first attempt).
+    const bound = await guardModel.read(guard.id);
+    expect(bound?.phase).toBe("sending");
+
+    const secondClaim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(second, msg.id, guard.id)
+    );
+
+    expect(secondClaim.status).toBe("precondition_failed");
+    if (secondClaim.status === "precondition_failed") {
+      expect(secondClaim.reason).toContain("FR-029");
+    }
+    // No attempt was inserted for the second sibling.
+    const attempts = await attemptModel.listByDraft(second.draftId);
+    expect(attempts).toHaveLength(0);
+    // The second sibling's draft was never flipped to sending.
+    const secondDraft = await draftModel.readAggregate(second.draftId);
+    expect(secondDraft?.status).toBe("approved");
+    // Guard stays bound to the first attempt.
+    const after = await guardModel.read(guard.id);
+    expect(after?.phase).toBe("sending");
+    expect(after?.activeAttemptId).toBe(
+      firstClaim.status === "claimed" ? firstClaim.attemptId : null
+    );
+  });
+
+  it("stale projection: guard idle but a sent attempt exists on the cluster -> claim refused, guard -> sent", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    // A sent attempt on the same cluster (e.g. a sibling already replied).
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `t08-sent-${Math.random()}`;
+    attempt.draftId = seed.draftId;
+    attempt.revisionId = seed.revisionId;
+    attempt.approvalId = seed.approvalId;
+    attempt.messageId = msg.id;
+    attempt.conversationId = null;
+    attempt.emailServiceId = SERVICE_ID;
+    attempt.senderAddress = "me@x.com";
+    attempt.recipientAddress = "prospect@example.com";
+    attempt.status = "sent";
+    attempt.claimedAt = new Date();
+    await attemptModel.create(attempt);
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+
+    expect(result.status).toBe("precondition_failed");
+    // §5.2: the blocked path reconciles the guard to the evidence phase
+    // (`sent`), not `idle` — never trust `idle` while related records exist.
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+  });
+
+  it("orphan attempt: guard sending with no attempt row -> claim refused", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    // Simulate a crash mid-claim: guard bound to a phantom attempt.
+    await updateGuard(guard.id, {
+      phase: "sending",
+      activeAttemptId: 999999,
+    });
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+
+    expect(result.status).toBe("precondition_failed");
+    // Guard untouched — recovery (reclaimExpiredReservation) owns the fix.
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sending");
+  });
+
+  it("bind failure rolls back the attempt insert (guard already sent)", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    // Guard is terminal (`sent`) — the sibling check cannot see it (guard
+    // rows are not cluster evidence), but the bind fence must.
+    await updateGuard(guard.id, { phase: "sent" });
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+
+    // The bind's 0-rows throws -> the whole transaction (attempt INSERT)
+    // rolls back. SQLite in-transaction rollback surfaces as a thrown error.
+    expect(result.status).toBe("precondition_failed");
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
   });
 });

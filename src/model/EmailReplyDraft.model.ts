@@ -21,6 +21,12 @@ import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { runReplyTxn } from "@/model/replyTxn";
+import {
+  readClusterEvidence,
+  clusterEvidenceBlocksSend,
+  bindGuardToSendPhase,
+  evidenceToPhase,
+} from "@/model/replyClusterEvidence";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
 import { validateReplyOutput } from "@/service/emailReply/EmailReplyOutputValidator";
@@ -507,21 +513,34 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
-   * THE atomic send claim (technical design §15.3, FR-018, NFR-001).
+   * THE atomic send claim (technical design §15.3, §8.2, FR-018, FR-036,
+   * NFR-001).
    *
    * Owns a SQLite transaction that:
-   *   1. Conditionally `UPDATE draft SET status='sending' WHERE id=draftId AND
+   *   1. Canonical-cluster sibling check (FR-029/FR-036): reads every draft +
+   *      attempt across the message's canonical cluster INSIDE the same
+   *      transaction as the claim. Terminal or in-flight evidence on a
+   *      sibling (sent/delivery_unknown/claimed/submitted) returns
+   *      `precondition_failed` BEFORE any write — the FR-029 precedence
+   *      applies before the draft flips to `sending`.
+   *   2. Conditionally `UPDATE draft SET status='sending' WHERE id=draftId AND
    *      status='approved' AND currentRevisionId=revisionId AND contentHash=approvedHash`.
-   *   2. If zero rows affected, a concurrent caller already claimed (or the
+   *   3. If zero rows affected, a concurrent caller already claimed (or the
    *      precondition no longer holds) — return the existing attempt or a
    *      precondition_failed reason. SMTP is NEVER contacted in that case.
-   *   3. Inserts the send_attempt (`claimed`) with the deterministic
+   *   4. Inserts the send_attempt (`claimed`) with the deterministic
    *      idempotency key (unique index is the final duplicate defense).
-   *   4. Writes the transactional pre-submit audit row (NFR-001: a send may
+   *   5. Binds the guard row to `phase="sending"` + `activeAttemptId` —
+   *      fenced by `phase IN ("draft_ready", "idle")`. 0 rows means another
+   *      attempt is in flight or terminal evidence exists; THROWS so the
+   *      transaction (including the attempt INSERT) rolls back (§8.2).
+   *   6. Writes the transactional pre-submit audit row (NFR-001: a send may
    *      not begin if required audit persistence is unavailable).
    *
    * Two concurrent calls for the same approved revision therefore produce at
-   * most one `claimed` result and one `already_processed` result.
+   * most one `claimed` result and one `already_processed` result. A sibling
+   * flipping to sent between an outside read and this claim can no longer
+   * slip through — the sibling check and the claim are one transaction.
    */
   async claimApprovedRevisionForSend(
     input: ClaimSendInput
@@ -530,6 +549,59 @@ export class EmailReplyDraftModel extends BaseDb {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+
+      // 1. Canonical-cluster sibling check (§8.2) — before ANY write. The
+      // seed message row is input.messageId; the cluster join is
+      // (emailServiceId, normalizedMessageId) per §4.1.
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null, // resolved from the seed row below
+        seedMessageId: input.messageId,
+      });
+      if (clusterEvidenceBlocksSend(evidence, input.draftId)) {
+        // §5.2: the guard row's phase must not linger behind the cluster —
+        // reconcile it to the evidence phase (stale projection → sent) before
+        // refusing. Best-effort inside the same transaction; the refusal
+        // itself is the authority.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          const { phase, activeDraftId, activeAttemptId } =
+            evidenceToPhase(evidence);
+          await manager.getRepository(EmailReplyGuardEntity).update(
+            { id: input.guardId },
+            { phase, activeDraftId, activeAttemptId }
+          );
+        }
+        return {
+          status: "precondition_failed",
+          reason:
+            "Message-level state blocks send: a sibling draft or attempt is sent, delivery-unknown, or in flight (FR-029)",
+        };
+      }
+
+      // 2. Guard-phase precondition (T08/FR-036): a bound guard accepts a new
+      // send only from `draft_ready`/`idle`. A `sending`/`sent`/
+      // `delivery_unknown` guard is in-flight or terminal evidence — refuse
+      // BEFORE any write (§8.2). A missing guard row (deleted between the
+      // caller's resolution and this claim) skips binding entirely.
+      let bindGuardId: number | null = null;
+      if (input.guardId !== null && input.guardId !== undefined) {
+        const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+        const guardRow = await guardRepo.findOne({
+          where: { id: input.guardId },
+        });
+        if (guardRow) {
+          if (
+            guardRow.phase !== "draft_ready" &&
+            guardRow.phase !== "idle"
+          ) {
+            return {
+              status: "precondition_failed",
+              reason: `Message guard is ${guardRow.phase}; a new send requires draft_ready or idle (FR-029)`,
+            };
+          }
+          bindGuardId = input.guardId;
+        }
+      }
 
       const updateResult = await draftRepo
         .createQueryBuilder()
@@ -580,6 +652,23 @@ export class EmailReplyDraftModel extends BaseDb {
       attemptEntity.failureCode = null;
       attemptEntity.sanitizedError = null;
       const savedAttempt = await attemptRepo.save(attemptEntity);
+
+      // 5. Guard binding (T08/FR-036) — same transaction as the claim, using
+      // the pre-write-verified `bindGuardId`. 0 rows here means the guard
+      // phase changed between step 2 and this UPDATE (mutex serialization
+      // makes it near-impossible); THROW so the attempt INSERT rolls back
+      // (§8.2) rather than committing a claim without its cluster exclusion.
+      if (bindGuardId !== null) {
+        const bound = await bindGuardToSendPhase(manager, {
+          guardId: bindGuardId,
+          activeAttemptId: savedAttempt.id,
+        });
+        if (!bound) {
+          throw new Error(
+            `Guard ${bindGuardId} changed phase before the send bind; transaction rolled back`
+          );
+        }
+      }
 
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
@@ -950,6 +1039,14 @@ export interface ClaimSendInput {
   senderAddress: string;
   recipientAddress: string;
   policyVersion: string | null;
+  /**
+   * T08/FR-036: the guard row to bind to `phase="sending"` + the new
+   * attempt, resolved by the caller (delivery service) from the draft's
+   * `(emailServiceId, replyKey)` BEFORE the claim. Null/undefined (no guard
+   * row — e.g. legacy rows predating the guard) skips binding: the claim's
+   * conditional draft UPDATE + sibling check remain the authority.
+   */
+  guardId?: number | null;
 }
 
 export type ClaimSendResult =

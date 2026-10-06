@@ -2,6 +2,8 @@ import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
+import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
@@ -103,6 +105,7 @@ export class EmailReplyDeliveryService {
   private readonly revisionModule = new EmailReplyDraftRevisionModule();
   private readonly approvalModule = new EmailReplyApprovalModule();
   private readonly attemptModule = new EmailReplySendAttemptModule();
+  private readonly guardModule = new EmailReplyGuardModule();
   private readonly messageModule = new EmailReceivedMessageModule();
   private readonly serviceModule = new EmailServiceModule();
   private readonly auditModule = new EmailReplyAuditLogModule();
@@ -313,6 +316,18 @@ export class EmailReplyDeliveryService {
 
     // 6. Atomic claim: draft approved -> sending, insert attempt, write pre-submit
     //    audit. SMTP is never contacted if this returns non-claimed.
+    //    T08/FR-036: the claim transaction also runs the canonical-cluster
+    //    sibling check and binds the guard row to `phase="sending"` — resolve
+    //    the guard row for the draft's replyKey first (null when the guard
+    //    table has no row, e.g. legacy data; binding is then skipped and the
+    //    claim's conditional draft UPDATE remains the authority).
+    const guardRow = await this.guardModule.findByReplyKey(
+      emailServiceId,
+      canonicalReplyKey({
+        normalizedMessageId: message.normalizedMessageId,
+        rowId: message.id,
+      })
+    );
     const claim = await this.draftModule.claimApprovedRevisionForSend({
       draftId: draft.id,
       revisionId: revision.id,
@@ -325,6 +340,7 @@ export class EmailReplyDeliveryService {
       senderAddress: revision.senderAddress,
       recipientAddress: revision.recipientAddress,
       policyVersion: REPLY_POLICY_VERSION,
+      guardId: guardRow?.id ?? null,
     });
     if (claim.status === "already_processed") {
       incrementReplyMetric("send_claim", { outcome: "already_processed" });
