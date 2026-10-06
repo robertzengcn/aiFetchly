@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   parseReplyJson,
   validateLlmRawResult,
@@ -17,6 +17,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
@@ -2096,5 +2097,175 @@ describe("parseReplyJson", () => {
     const r = parseReplyJson("{not valid json}");
     expect(r.bodyText).toBe("");
     expect(r.classification).toBe("unknown");
+  });
+});
+
+describe("generation deadline enforcement (FR-035 slice / B13)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const auditModule = new EmailReplyAuditLogModule();
+
+  /** Seed one clean message on a distinct emailServiceId (isolated DB rows). */
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4247;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  beforeEach(() => {
+    drainCountersForTest();
+  });
+
+  it("blocks the correction call once the deadline expires mid-flight (B13: correction cannot start after expiry)", async () => {
+    const messageId = await seedMessage();
+    // First submission responds (malformed JSON → validation strike) and
+    // consumes the whole budget; the correction call must then be REFUSED at
+    // the gate — expiry is a transport failure, not a second validation strike.
+    let nowMs = 1_000_000;
+    let calls = 0;
+    const svc = new EmailReplyDraftGenerationService({
+      budget: { now: () => nowMs, budgetMs: 100 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () => {
+          calls += 1;
+          nowMs += 10_000; // the first call outlives the tiny budget
+          return completionResponse("{not valid json}");
+        },
+      }),
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("provider_error");
+    expect(result.error).toContain("deadline exceeded");
+    expect(result.next_action).toBe("discard_and_retry");
+    // Exactly ONE model call: the correction submission was gated off.
+    expect(calls).toBe(1);
+    // No draft, no draft_created reply audit, no reply_status bump.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(
+      records.filter((r) => r.action === "draft_created")
+    ).toHaveLength(0);
+    const after = await messageModule.read(messageId);
+    expect(after?.replyStatus).toBe("not_started");
+    // The deadline_exceeded metric fired for the correction stage (FR-039).
+    const counters = drainCountersForTest();
+    expect(counters.get("deadline_exceeded{stage=correction}")).toBe(1);
+  });
+
+  it("succeeds within budget and stamps callBudgetMs on the request", async () => {
+    const messageId = await seedMessage();
+    const requests: OpenAIChatCompletionRequest[] = [];
+    let nowMs = 1_000_000;
+    const svc = new EmailReplyDraftGenerationService({
+      budget: { now: () => nowMs, budgetMs: 60_000 },
+      apiFactory: () => ({
+        openAIChatCompletion: async (req) => {
+          requests.push(req);
+          nowMs += 100; // the call consumes a little of the budget
+          return completionResponse(validReplyJson);
+        },
+      }),
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // Each generation submission carries a bounded, capped callBudgetMs.
+    for (const req of requests) {
+      expect(req.callBudgetMs).toBeDefined();
+      if (req.callBudgetMs !== undefined) {
+        expect(req.callBudgetMs).toBeLessThanOrEqual(120_000);
+      }
+    }
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("drops late output at persistence when the deadline expired mid-flight (B13)", async () => {
+    const messageId = await seedMessage();
+    // The model responds with VALID JSON while the clock is in-budget; the
+    // deadline expires AFTER the response but BEFORE persistence. The
+    // late-output guard must discard the output: no draft, no audit.
+    let nowMs = 1_000_000;
+    const svc = new EmailReplyDraftGenerationService({
+      budget: { now: () => nowMs, budgetMs: 100 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () => {
+          const resp = completionResponse(validReplyJson);
+          // The call finished in-budget, but everything after it (knowledge
+          // retrieval, guard recheck, persistence) happens past expiry.
+          nowMs += 500;
+          return resp;
+        },
+      }),
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("deadline exceeded before persistence");
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(
+      records.filter((r) => r.action === "draft_created")
+    ).toHaveLength(0);
+    const after = await messageModule.read(messageId);
+    expect(after?.replyStatus).toBe("not_started");
+    const counters = drainCountersForTest();
+    expect(counters.get("deadline_exceeded{stage=persistence}")).toBe(1);
+  });
+
+  it("caps each model call at MODEL_CALL_CAP_MS even with budget remaining", async () => {
+    const messageId = await seedMessage();
+    const requests: OpenAIChatCompletionRequest[] = [];
+    const svc = new EmailReplyDraftGenerationService({
+      // Enormous aggregate budget, but every individual call is capped.
+      budget: { now: () => 1_000_000, budgetMs: 600_000 },
+      apiFactory: () => ({
+        openAIChatCompletion: async (req) => {
+          requests.push(req);
+          return completionResponse(validReplyJson);
+        },
+      }),
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    for (const req of requests) {
+      expect(req.callBudgetMs).toBe(120_000);
+    }
   });
 });

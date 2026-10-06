@@ -55,6 +55,11 @@ import {
   buildClassificationPrompt,
   type ModelClassifier,
 } from "@/service/emailReply/EmailMessageClassificationService";
+import {
+  startGenerationDeadline,
+  MODEL_CALL_CAP_MS,
+  type GenerationDeadline,
+} from "@/service/emailReply/EmailReplyGenerationBudget";
 
 /** Input to {@link EmailReplyDraftGenerationService.createDraft}. */
 export interface CreateDraftInput {
@@ -146,14 +151,26 @@ export class LlmTransportError extends Error {
    * generic network, server) do not set this and must NOT be retried.
    */
   readonly unsupportedResponseFormat: boolean;
+  /**
+   * True when the FR-035/B13 invocation deadline elapsed before a model call
+   * (or before persistence). Semantically a transport failure — NOT a
+   * validation strike — so deadline exhaustion never consumes one of the two
+   * bounded validation attempts.
+   */
+  readonly deadlineExceeded: boolean;
 
   constructor(
     message: string,
-    options?: { readonly unsupportedResponseFormat?: boolean }
+    options?: {
+      readonly unsupportedResponseFormat?: boolean;
+      /** FR-035 slice / B13: the invocation deadline elapsed. */
+      readonly deadlineExceeded?: boolean;
+    }
   ) {
     super(message);
     this.name = "LlmTransportError";
     this.unsupportedResponseFormat = options?.unsupportedResponseFormat ?? false;
+    this.deadlineExceeded = options?.deadlineExceeded ?? false;
   }
 }
 
@@ -220,9 +237,33 @@ export class EmailReplyDraftGenerationService {
   private replyAuditModule = new EmailReplyAuditLogModule();
   private autoAuditModule = new EmailAutoReplyAuditLogModule();
   private readonly apiFactory: AiChatApiFactory;
+  /**
+   * FR-035 slice / B13: injectable generation-budget options. Tests pass a
+   * tiny `budgetMs` (or a controllable `now`) to exercise deadline expiry
+   * without waiting wall-clock time. Production leaves it undefined → the
+   * default 5-minute invocation budget applies.
+   */
+  private readonly budgetOptions?:
+    | {
+        readonly now?: () => number;
+        readonly budgetMs?: number;
+      };
+  /**
+   * The live deadline for the CURRENT createDraft invocation. Created at
+   * entry (after the AI-enable gate) and read by every model-call site so
+   * classification, generation, hint-fallback, and correction all draw
+   * down the SAME aggregate budget. Null outside an invocation.
+   */
+  private deadline: GenerationDeadline | null = null;
 
-  constructor(options?: { readonly apiFactory?: AiChatApiFactory }) {
+  constructor(
+    options?: {
+      readonly apiFactory?: AiChatApiFactory;
+      readonly budget?: { readonly now?: () => number; readonly budgetMs?: number };
+    }
+  ) {
     this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
+    this.budgetOptions = options?.budget;
   }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
@@ -244,6 +285,16 @@ export class EmailReplyDraftGenerationService {
         requestCorrelationId,
       };
     }
+
+    // 1b. FR-035 slice / B13: start the per-invocation aggregate deadline.
+    //     Classification, generation, the hint-fallback retry, and the
+    //     correction all draw down this ONE budget; each model call is
+    //     additionally capped at MODEL_CALL_CAP_MS. The reservation/lease/
+    //     fencing machinery of FR-035 is T07/T08 — this deadline only bounds
+    //     the model calls of THIS invocation, and expiry is re-checked before
+    //     persistence so late output cannot be committed under an expired
+    //     owner.
+    this.deadline = startGenerationDeadline(this.budgetOptions);
 
     // 2. Load message.
     await this.messageModule.ensureConnection();
@@ -392,7 +443,9 @@ export class EmailReplyDraftGenerationService {
             listIdHeader: message.listIdHeader,
             listUnsubscribeHeader: message.listUnsubscribeHeader,
           },
-          buildLlmClassifier(this.apiFactory)
+          buildLlmClassifier(this.apiFactory, () =>
+            this.requireModelCallBudget("classification")
+          )
         );
         if (refined.classification !== "unknown") {
           await this.messageModule.updateClassification(
@@ -693,6 +746,25 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
+    // 6b. Late-output guard (B13 acceptance: "late output cannot persist
+    //     under an expired owner"). The model calls are individually bounded
+    //     by requireModelCallBudget, but guard-processing, knowledge
+    //     retrieval, and the post-generation race recheck can still consume
+    //     wall-clock time between the last model response and persistence.
+    //     If the invocation deadline expired by the time we are ready to
+    //     write, the output is stale: drop it — no draft row, no revision,
+    //     no reply_status bump, no draft_created audit. This is a transport
+    //     failure (deadline_exceeded), not a validation strike.
+    if (this.deadline?.expired()) {
+      incrementReplyMetric("deadline_exceeded", { stage: "persistence" });
+      return {
+        success: false,
+        error:
+          "Generation deadline exceeded before persistence; output discarded (no draft persisted)",
+        requestCorrelationId,
+      };
+    }
+
     // 7. Persist draft.
     const draft = new EmailReplyDraftEntity();
     draft.messageId = message.id;
@@ -804,6 +876,32 @@ export class EmailReplyDraftGenerationService {
   }
 
   /**
+   * Compute the `callBudgetMs` to attach to the next model call
+   * (FR-035 slice / B13): min(remaining invocation budget,
+   * MODEL_CALL_CAP_MS). Throws {@link LlmTransportError} when the deadline
+   * already expired — a transport failure, NOT a validation strike, so
+   * expiry never consumes one of the two bounded validation attempts.
+   * Emits the `deadline_exceeded` metric with the failing stage.
+   */
+  private requireModelCallBudget(stage: string): number {
+    const deadline = this.deadline;
+    if (!deadline) {
+      // No deadline started (defensive — every createDraft entry starts one).
+      // Do not impose a synthetic budget; the call proceeds unbounded exactly
+      // as before this slice for any non-createDraft caller.
+      return Number.NaN;
+    }
+    if (deadline.expired()) {
+      incrementReplyMetric("deadline_exceeded", { stage });
+      throw new LlmTransportError(
+        "Generation deadline exceeded before this model call.",
+        { deadlineExceeded: true }
+      );
+    }
+    return Math.min(deadline.remainingMs(), MODEL_CALL_CAP_MS);
+  }
+
+  /**
    * Call the LLM and return the typed raw result (FR-027). Captures
    * `finish_reason`, `model`, and `usage` so the validation loop can treat a
    * truncated `length` completion, a `content_filter` refusal, or an
@@ -813,14 +911,27 @@ export class EmailReplyDraftGenerationService {
    * `response_format: json_object` (FR-026) so providers that honor the hint
    * emit valid JSON only.
    *
+   * FR-035 slice / B13: the call carries `callBudgetMs` = min(remaining
+   * invocation budget, MODEL_CALL_CAP_MS) so both the response-headers phase
+   * and the response-body phase abort within the aggregate deadline. A
+   * missing deadline (defensive only) leaves the call unbounded, matching
+   * pre-B13 behavior.
+   *
    * Provider/transport failures throw {@link LlmTransportError} so the caller
    * can distinguish them from validation strikes.
    */
   private async callLlmRaw(
     systemMsg: OpenAIChatMessage,
     userMsg: OpenAIChatMessage,
-    options?: { readonly omitResponseFormat?: boolean }
+    options?: {
+      readonly omitResponseFormat?: boolean;
+      /** Deadline stage label for the `deadline_exceeded` metric (FR-039). */
+      readonly stage?: string;
+    }
   ): Promise<LlmRawResult> {
+    const callBudgetMs = this.requireModelCallBudget(
+      options?.stage ?? "generation"
+    );
     const api = this.apiFactory();
     let resp;
     try {
@@ -834,6 +945,9 @@ export class EmailReplyDraftGenerationService {
         ...(options?.omitResponseFormat
           ? {}
           : { response_format: { type: "json_object" as const } }),
+        ...(Number.isNaN(callBudgetMs)
+          ? {}
+          : { callBudgetMs: Math.max(0, callBudgetMs) }),
       });
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
@@ -875,19 +989,24 @@ export class EmailReplyDraftGenerationService {
    */
   private async callLlmRawWithHintFallback(
     systemMsg: OpenAIChatMessage,
-    userMsg: OpenAIChatMessage
+    userMsg: OpenAIChatMessage,
+    options?: { readonly stage?: string }
   ): Promise<LlmRawResult> {
     try {
-      return await this.callLlmRaw(systemMsg, userMsg);
+      return await this.callLlmRaw(systemMsg, userMsg, {
+        stage: options?.stage,
+      });
     } catch (error) {
       if (
         error instanceof LlmTransportError &&
         error.unsupportedResponseFormat
       ) {
         // One no-hint retry. If this also fails, surface the error — do NOT
-        // loop or fall through to validation.
+        // loop or fall through to validation. The no-hint retry draws down the
+        // SAME invocation deadline (stage label unchanged).
         return await this.callLlmRaw(systemMsg, userMsg, {
           omitResponseFormat: true,
+          stage: options?.stage,
         });
       }
       throw error;
@@ -937,13 +1056,17 @@ export class EmailReplyDraftGenerationService {
       if (first.ok) {
         return { kind: "ok", value: first.value };
       }
-      const secondRaw = await this.callLlmRawWithHintFallback(systemMsg, {
-        role: "user",
-        content: buildCorrectionPrompt({
-          originalUserContent: openAIContentToString(userMsg.content),
-          codes: first.codes,
-        }),
-      });
+      const secondRaw = await this.callLlmRawWithHintFallback(
+        systemMsg,
+        {
+          role: "user",
+          content: buildCorrectionPrompt({
+            originalUserContent: openAIContentToString(userMsg.content),
+            codes: first.codes,
+          }),
+        },
+        { stage: "correction" }
+      );
       const second = this.validateLlmResult(secondRaw);
       if (second.ok) {
         return { kind: "ok", value: second.value };
@@ -1286,9 +1409,20 @@ function clamp(n: number, min: number, max: number): number {
  * prompt through the configured OpenAI-compatible provider. Classification is
  * SEPARATE from prose generation (FR-007) — this prompt only asks for the
  * constrained JSON verdict and treats the email body as untrusted data.
+ *
+ * FR-035 slice / B13: `requireBudget` (when provided) is invoked immediately
+ * before the classification submission so classification draws down the SAME
+ * invocation deadline as generation, and the request carries the computed
+ * `callBudgetMs`. A deadline expiry throws {@link LlmTransportError} — the
+ * classification stage's catch treats it as a soft failure and continues with
+ * the stored value, so expiry here does not fail the whole draft.
  */
-function buildLlmClassifier(apiFactory: AiChatApiFactory): ModelClassifier {
+function buildLlmClassifier(
+  apiFactory: AiChatApiFactory,
+  requireBudget?: () => number
+): ModelClassifier {
   return async (input) => {
+    const callBudgetMs = requireBudget?.() ?? Number.NaN;
     const api = apiFactory();
     const resp = await api.openAIChatCompletion({
       messages: [
@@ -1301,6 +1435,9 @@ function buildLlmClassifier(apiFactory: AiChatApiFactory): ModelClassifier {
       ],
       temperature: 0,
       max_tokens: 60,
+      ...(Number.isNaN(callBudgetMs)
+        ? {}
+        : { callBudgetMs: Math.max(0, callBudgetMs) }),
     });
     return openAIContentToString(resp.choices?.[0]?.message?.content);
   };
