@@ -26,12 +26,15 @@ const mockAcquire = vi.hoisted(() => vi.fn());
 const mockBroadcastEmit = vi.hoisted(() => vi.fn());
 const mockBroadcastStream = vi.hoisted(() => vi.fn());
 const mockSubmit = vi.hoisted(() => vi.fn());
+const mockRunTurn = vi.hoisted(() => vi.fn());
 const mockCreateConversationIfNeeded = vi.hoisted(() =>
   vi.fn((id?: string) => (id && id.startsWith("v2-") ? id : "v2-minted"))
 );
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
+  /** TODO-11: the runner consumes the typed outcome via runTurn. */
+  runTurn: typeof mockRunTurn;
 }
 
 type MockConstructor<T> = new (...args: never[]) => T;
@@ -98,7 +101,7 @@ vi.mock("@/model/ScheduleTask.model", () => ({
 vi.mock("@/service/AIChatQueryEngineFactory", () => ({
   AIChatQueryEngineFactory: class {
     createScheduled(): MockEngine {
-      return { submitMessage: mockSubmit };
+      return { submitMessage: mockSubmit, runTurn: mockRunTurn };
     }
   },
 }));
@@ -215,6 +218,42 @@ beforeEach(() => {
       driveSink(input.eventSink);
     }
   );
+  // TODO-11: the runner consumes the typed outcome via runTurn; mirror the
+  // sink-driving behavior and classify the segment to match engineOutcome.
+  mockRunTurn.mockImplementation(
+    async (input: {
+      eventSink: { emit: (e: unknown) => void };
+      request: { conversationId: string };
+    }) => {
+      if (engineOutcome.value?.type === "throw") {
+        return {
+          type: "failed",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      driveSink(input.eventSink);
+      if (engineOutcome.value?.type === "error") {
+        return {
+          type: "failed",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      if (engineOutcome.value?.type === "blocked") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      return {
+        type: "completed",
+        conversationId: input.request.conversationId,
+        assistantMessageId: "scheduled-assistant-2-1",
+      };
+    }
+  );
   // Default: no workspace_path on TASK → bindTaskWorkspace returns early.
   // Tests that exercise the canonicalization path override both the stored
   // path and this mock's return value.
@@ -246,7 +285,7 @@ describe("ScheduledAiMessageRunner.runChatScheduledLoop", () => {
     engineOutcome.value = { type: "complete", content: "local ok" };
     const r = await call();
     expect(r.status).toBe("completed");
-    expect(mockSubmit).toHaveBeenCalled();
+    expect(mockRunTurn).toHaveBeenCalled();
   });
 
   it("rejects a task that is not chat_scheduled_loop", async () => {
@@ -371,8 +410,8 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
     engineOutcome.value = { type: "complete", content: "hello from schedule" };
     const r = await new ScheduledAiMessageRunner().run(1, 2);
     expect(r.status).toBe("completed");
-    expect(mockSubmit).toHaveBeenCalled();
-    const submitArg = mockSubmit.mock.calls[0][0] as {
+    expect(mockRunTurn).toHaveBeenCalled();
+    const submitArg = mockRunTurn.mock.calls[0][0] as {
       request: { conversationId: string; message: string };
     };
     expect(submitArg.request.conversationId).toBe("v2-schedule-conv");
@@ -392,7 +431,7 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
         conversationId: "v2-minted",
       })
     );
-    const submitArg = mockSubmit.mock.calls[0][0] as {
+    const submitArg = mockRunTurn.mock.calls[0][0] as {
       request: { conversationId: string };
     };
     expect(submitArg.request.conversationId).toBe("v2-minted");
