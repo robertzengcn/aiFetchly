@@ -33,6 +33,16 @@ type FetchImpl = typeof fetch;
 const LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS = 60_000;
 
 /**
+ * Time-to-response-body budget for non-streaming completions (B13). Once
+ * headers arrive the headers timer is cleared, but a provider that sends
+ * headers then stalls mid-body would otherwise hang `res.json()` forever.
+ * This second-phase timer bounds the body read. Streaming is exempt — the
+ * caller owns the abort signal for a stream and a short body timeout would
+ * kill legitimate long completions.
+ */
+const LOCAL_PROVIDER_BODY_TIMEOUT_MS = 60_000;
+
+/**
  * ChatProviderClient that talks to a user-configured OpenAI-compatible
  * endpoint (Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI, custom).
  *
@@ -45,18 +55,21 @@ const LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS = 60_000;
 export class OpenAICompatibleProviderClient implements ChatProviderClient {
   private readonly streamParser: OpenAIStreamParser;
   private readonly responseTimeoutMs: number;
+  private readonly bodyTimeoutMs: number;
 
   constructor(
     private readonly config: LocalAIProviderConfig,
     private readonly apiKey: string,
     fetchImpl?: FetchImpl,
     streamParser?: OpenAIStreamParser,
-    responseTimeoutMs: number = LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS
+    responseTimeoutMs: number = LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS,
+    bodyTimeoutMs: number = LOCAL_PROVIDER_BODY_TIMEOUT_MS
   ) {
     // Default to the global fetch; capture it once so tests can inject a stub.
     this.fetchImpl = fetchImpl ?? fetch;
     this.streamParser = streamParser ?? new OpenAIStreamParser();
     this.responseTimeoutMs = responseTimeoutMs;
+    this.bodyTimeoutMs = bodyTimeoutMs;
   }
 
   private readonly fetchImpl: FetchImpl;
@@ -184,19 +197,59 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       ...request,
       model: this.resolveModel(request.model),
     });
+    // B13: ONE AbortController spans both the response-headers phase and the
+    // response-body phase. Its signal is the one passed to `fetch` AND the one
+    // a real fetch uses to abort an in-flight `res.json()` body read — so a
+    // provider that sends headers then stalls mid-body still aborts within the
+    // configured body timeout (or the smaller remaining aggregate budget when
+    // `callBudgetMs` is set). Each phase arms a fresh timer on the SAME
+    // controller; the headers timer is cleared once headers arrive so a
+    // legitimate slow body is not killed by the headers budget, and the body
+    // timer is cleared once `res.json()` resolves. (Inlined rather than reusing
+    // fetchWithResponseTimeout because that helper allocates its own internal
+    // controller and clears its timer once headers arrive — leaving no live
+    // signal for the body phase.)
+    const deadline =
+      request.callBudgetMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + request.callBudgetMs;
+    const controller = new AbortController();
+    const headersTimeout = Math.max(
+      0,
+      Math.min(deadline - Date.now(), this.responseTimeoutMs)
+    );
+    let headersTimer: ReturnType<typeof setTimeout> | undefined;
+    if (Number.isFinite(headersTimeout)) {
+      if (headersTimeout === 0) {
+        controller.abort();
+      } else {
+        headersTimer = setTimeout(() => controller.abort(), headersTimeout);
+      }
+    }
     let res: Response;
     try {
-      res = await this.fetchWithResponseTimeout(
-        this.url("/chat/completions"),
-        {
-          method: "POST",
-          headers: this.jsonHeaders("application/json"),
-          body: JSON.stringify(payload),
-        },
-        this.responseTimeoutMs
-      );
+      res = await this.fetchImpl(this.url("/chat/completions"), {
+        method: "POST",
+        headers: this.jsonHeaders("application/json"),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
     } catch (err) {
+      // Headers-phase abort: the timer fired (budget elapsed) or a genuine
+      // network/transport failure. A timeout surfaces as a categorized network
+      // error so the generation service wraps it as a transport failure (not a
+      // validation strike); any other error is normalized.
+      if (controller.signal.aborted && headersTimer !== undefined) {
+        throw new AIProviderError(
+          "The AI provider took too long to respond. Check that it is running and not overloaded.",
+          "network"
+        );
+      }
       throw toNetworkProviderError(err);
+    } finally {
+      if (headersTimer !== undefined) {
+        clearTimeout(headersTimer);
+      }
     }
     if (!res.ok) {
       throw await toProviderError(res, {
@@ -204,7 +257,38 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         model: payload.model,
       });
     }
-    return (await res.json()) as OpenAIChatCompletionResponse;
+    // Body phase: arm a fresh timer on the SAME controller for the smaller of
+    // the remaining budget (Infinity when no callBudgetMs → just the body
+    // timeout) and the configured body timeout. If the budget already elapsed,
+    // abort immediately rather than await a JSON parse that may never resolve.
+    const remaining = deadline - Date.now();
+    const bodyTimeout = Number.isFinite(remaining)
+      ? Math.min(remaining, this.bodyTimeoutMs)
+      : this.bodyTimeoutMs;
+    let bodyTimer: ReturnType<typeof setTimeout> | undefined;
+    if (bodyTimeout <= 0) {
+      controller.abort();
+    } else {
+      bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
+    }
+    try {
+      return (await res.json()) as OpenAIChatCompletionResponse;
+    } catch (err) {
+      // An abort here is a body-phase timeout (the headers phase already
+      // succeeded). Surface it as a network error so the generation service
+      // wraps it as a transport failure (not a validation strike).
+      if (controller.signal.aborted && bodyTimer !== undefined) {
+        throw new AIProviderError(
+          "The AI provider sent response headers but stalled before finishing the body. Check that it is not overloaded.",
+          "network"
+        );
+      }
+      throw toNetworkProviderError(err);
+    } finally {
+      if (bodyTimer !== undefined) {
+        clearTimeout(bodyTimer);
+      }
+    }
   }
 
   async stream(

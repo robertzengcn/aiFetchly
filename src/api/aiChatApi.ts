@@ -541,6 +541,19 @@ export interface OpenAIChatCompletionRequest {
    * or with no model (server default) when absent.
    */
   fallbackModel?: string;
+  /**
+   * Desktop-internal per-call deadline budget in milliseconds (FR-035 /
+   * B13). Never serialized on the wire: every payload builder copies
+   * explicit fields only. When set, the local and hosted completion
+   * clients bound both the response-headers phase AND the response-body
+   * phase against this budget (one AbortController spans both so a
+   * provider that sends headers then stalls mid-body still aborts). A
+   * missing value leaves the default per-phase timeouts in effect. The
+   * generation service passes `min(remainingInvocationBudget,
+   * MODEL_CALL_CAP_MS)` so each model call is bounded to 120 s or the
+   * smaller remaining aggregate budget, whichever is less.
+   */
+  callBudgetMs?: number;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;

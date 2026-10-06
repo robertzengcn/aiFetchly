@@ -36,6 +36,55 @@ function signalAwareHangingFetch(): typeof fetch {
     })) as unknown as typeof fetch;
 }
 
+/**
+ * B13: a fetch that returns response headers (200 ok) but whose `res.json()`
+ * never resolves on its own — it only rejects when the request signal aborts.
+ * Simulates a provider that sends headers then stalls mid-body. The returned
+ * `Response.json()` reads the signal via the captured `init`; real fetch
+ * rejects the body read on abort, so the fake mirrors that contract.
+ */
+function signalAwareHangingBodyFetch(): typeof fetch {
+  return ((url: string | URL | Request, init?: RequestInit) => {
+    const sig = init?.signal as AbortSignal | undefined;
+    const body: Promise<Response> = new Promise((resolve) => {
+      // Headers arrive immediately.
+      resolve(
+        new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+    });
+    // Patch `.json()` so the body read honors the abort signal — mirroring
+    // the real fetch contract where an aborted signal rejects body reads.
+    return body.then((res) => {
+      const patched = {
+        ...res,
+        ok: res.ok,
+        status: res.status,
+        headers: res.headers,
+        json: () =>
+          new Promise<unknown>((_resolveJson, rejectJson) => {
+            const fail = (): void => {
+              const err = new Error("The operation was aborted.");
+              err.name = "AbortError";
+              rejectJson(err);
+            };
+            if (sig) {
+              if (sig.aborted) {
+                fail();
+              } else {
+                sig.addEventListener("abort", fail, { once: true });
+              }
+            }
+            // otherwise: body never resolves
+          }),
+      };
+      return patched as unknown as Response;
+    });
+  }) as unknown as typeof fetch;
+}
+
 describe("OpenAICompatibleProviderClient timeouts", () => {
   it("rejects with a timeout network error when the provider never responds", async () => {
     const client = new OpenAICompatibleProviderClient(
@@ -89,6 +138,103 @@ describe("OpenAICompatibleProviderClient timeouts", () => {
       const name = err instanceof Error ? err.name : "";
       return name === "AbortError";
     });
+  });
+
+  it("B13: aborts a stalled response body within the callBudgetMs budget", async () => {
+    // Headers arrive (200 ok) but res.json() never resolves. Without the
+    // body-phase deadline the call would hang forever. With callBudgetMs the
+    // shared AbortController fires and res.json() rejects within the budget.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 5000
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("B13: surfaces the body-phase timeout as an AIProviderError (network)", async () => {
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      5000,
+      5000
+    );
+    try {
+      await client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AIProviderError);
+      expect((err as AIProviderError).code).toBe("network");
+    }
+  });
+
+  it("B13: without callBudgetMs a stalled body still aborts via bodyTimeoutMs", async () => {
+    // No callBudgetMs supplied — fall back to the per-phase body timeout.
+    // Use a tiny bodyTimeoutMs so the test stays fast.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 20
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({ messages: [{ role: "user", content: "hi" }] })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("B13: a fast body resolves normally under a generous budget", async () => {
+    // Headers + body both resolve immediately — the budget must not fire.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "x",
+          object: "chat.completion",
+          created: 0,
+          model: "llama3.1",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "pong" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch,
+      undefined,
+      5000,
+      5000
+    );
+    const result = await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      callBudgetMs: 5000,
+    });
+    expect(result.choices?.[0]?.message?.content).toBe("pong");
   });
 });
 
