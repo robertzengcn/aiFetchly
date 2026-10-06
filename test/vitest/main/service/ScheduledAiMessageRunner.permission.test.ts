@@ -42,6 +42,7 @@ const mockDeny = vi.hoisted(() =>
   })
 );
 const mockSubmit = vi.hoisted(() => vi.fn());
+const mockRunTurn = vi.hoisted(() => vi.fn());
 /** Drives the sink from the test; set by each test before the run starts. */
 const terminalEvent = vi.hoisted(() => ({
   value: null as
@@ -56,6 +57,7 @@ const mockStopActiveTurn = vi.hoisted(() => vi.fn());
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
+  runTurn: typeof mockRunTurn;
   resumeToolAfterPermission: typeof mockResume;
   denyToolPermission: typeof mockDeny;
   stopActiveTurn: typeof mockStopActiveTurn;
@@ -127,6 +129,7 @@ vi.mock("@/service/AIChatQueryEngineFactory", () => ({
     createScheduled(): MockEngine {
       return {
         submitMessage: mockSubmit,
+        runTurn: mockRunTurn,
         resumeToolAfterPermission: mockResume,
         denyToolPermission: mockDeny,
         stopActiveTurn: mockStopActiveTurn,
@@ -263,6 +266,30 @@ beforeEach(() => {
     async (input: { eventSink: { emit: (e: unknown) => void } }) => {
       capturedSink = input.eventSink;
       driveSink(input.eventSink);
+    }
+  );
+  // TODO-11: the runner calls runTurn; mirror the sink-driving behavior and
+  // return a paused outcome when the fixture parked the turn (permission
+  // tests), completed otherwise.
+  mockRunTurn.mockImplementation(
+    async (input: {
+      eventSink: { emit: (e: unknown) => void };
+      request: { conversationId: string };
+    }) => {
+      capturedSink = input.eventSink;
+      driveSink(input.eventSink);
+      if (sinkOutcome.value === "pause") {
+        return {
+          type: "paused_for_permission",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      return {
+        type: "completed",
+        conversationId: input.request.conversationId,
+        assistantMessageId: "",
+      };
     }
   );
   // Mirrors production: grant/deny launches a resumed `void loop.run` that
