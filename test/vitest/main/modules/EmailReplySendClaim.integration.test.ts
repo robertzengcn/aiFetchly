@@ -585,6 +585,37 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     expect(row?.phase).toBe("sending");
   });
 
+  it("claim while a generation reservation holds the guard (generating) is refused before any write", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    // Generation holds the reservation: guard at `generating` with a live
+    // lease (T07). The claim must not run while the reservation owns the
+    // message — the guard-phase precondition refuses before ANY write.
+    await updateGuard(guard.id, {
+      phase: "generating",
+      ownerToken: "owner-generation",
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+
+    expect(result.status).toBe("precondition_failed");
+    // No attempt inserted for the blocked claim.
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
+    // The claiming draft was never flipped to sending.
+    const draft = await draftModel.readAggregate(seed.draftId);
+    expect(draft?.status).toBe("approved");
+    // Guard untouched — still held by the generation owner; recovery (the
+    // reservation sweep) owns the reclaim when the lease expires.
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("generating");
+    expect(row?.ownerToken).toBe("owner-generation");
+  });
+
   it("bind failure rolls back the attempt insert (guard already sent)", async () => {
     const msg = await seedMessage(null);
     const guard = await seedIdleGuard(msg);
