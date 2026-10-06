@@ -423,13 +423,14 @@ describe("AIChatTurnQueueService submit + drain", () => {
 
   it("AI-disabled drain holds the queue durably", async () => {
     const { service } = makeService();
+    // forceQueue: no drain fires at submission (the scenario under test is
+    // the DISABLED drain path, so triggering a healthy one only invites
+    // interference from prior tests' leaked chains).
     const submitted = service.submit({
       clientRequestId: "cr-hold",
       request: { message: "A", conversationId: "v2-hold" },
+      forceQueue: true,
     });
-    // The drain fires async; this scenario only asserts the durable pause
-    // below, so bound the submit to avoid inheriting a prior test's chain.
-    await Promise.race([submitted, new Promise((r) => setTimeout(r, 100))]);
     // Force a paused-ish state by disabling AI then submitting again:
     // simpler — directly pause via model like resume test, then verify
     // resume with AI disabled keeps rows paused.
