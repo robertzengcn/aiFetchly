@@ -108,6 +108,7 @@ import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.en
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
@@ -581,6 +582,7 @@ export class SqliteDb {
           EmailReplyDraftRevisionEntity,
           EmailReplyApprovalEntity,
           EmailReplySendAttemptEntity,
+          EmailReplyGuardEntity,
           OutboundEmailIntentEntity,
           OutboundEmailDraftBatchEntity,
           OutboundEmailDraftEntity,

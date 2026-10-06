@@ -23,6 +23,22 @@ export type EmailReplySendAttemptStatus =
   | "failed"
   | "delivery_unknown";
 
+/**
+ * Phase of the message-level generation/send guard (FR-035/FR-036, technical
+ * design §5.2). The guard is an ownership index over `(emailServiceId,
+ * replyKey)`; it transitions through these phases as work progresses. Recovery
+ * reclaims an expired `generating`/`draft_ready` lease only after reconciling
+ * against actual draft/attempt records (§8.2).
+ */
+export type GuardPhase =
+  | "idle"
+  | "generating"
+  | "draft_ready"
+  | "sending"
+  | "sent"
+  | "delivery_unknown"
+  | "conflict";
+
 /** How confidently a message was placed in a conversation (FR-001, §7.3). */
 export type EmailConversationContextConfidence =
   | "exact"
