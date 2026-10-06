@@ -766,6 +766,129 @@ describe("AiTaskExecutionModule (Mocha)", function () {
     });
   });
 
+  // ----- Slice 2 Unit 3: lineage + contract persistence + getLedgerById -----
+  describe("startExecution lineage + contract freeze (FR-19/21/22, Unit 3)", () => {
+    it("persists parent_execution_id, lineage_ledger_id, contract_snapshot_json, and contract_hash at creation", async () => {
+      const mod = new AiTaskExecutionModule();
+      const contractJson = JSON.stringify({
+        schemaVersion: 1,
+        contractId: "contract-test-1",
+        contractHash: "sha256:contract-hash-1",
+        objective: "Save 100 contacts",
+        sourceUserMessageId: "msg-1",
+        approvedSourceMessageIds: ["msg-1"],
+        mode: "verified",
+        criteria: [],
+      });
+      const result = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-lineage-1",
+        sourceUserMessageId: "msg-1",
+        submissionId: "sub-lineage-1",
+        requestHash: "sha256:lineage",
+        origin: { type: "manual", submissionId: "sub-lineage-1" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: "exec-parent",
+        lineageLedgerId: "ledger-lineage",
+        contractSnapshotJson: contractJson,
+        contractHash: "sha256:contract-hash-1",
+      }));
+
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const exec = await execRepo.findOne({
+        where: { execution_id: result.executionId },
+      });
+      // Lineage columns carry the caller-supplied values, not the defaults.
+      expect(exec?.parent_execution_id).to.equal("exec-parent");
+      expect(exec?.lineage_ledger_id).to.equal("ledger-lineage");
+      // Contract snapshot + hash persisted (FR-19).
+      expect(exec?.contract_hash).to.equal("sha256:contract-hash-1");
+      expect(exec?.contract_snapshot_json).to.equal(contractJson);
+    });
+
+    it("defaults lineage_ledger_id to the new execution's own ledger on a fresh start (no parent)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const result = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-lineage-2",
+        sourceUserMessageId: "msg-2",
+        submissionId: "sub-lineage-2",
+        requestHash: "sha256:fresh",
+        origin: { type: "manual", submissionId: "sub-lineage-2" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const exec = await execRepo.findOne({
+        where: { execution_id: result.executionId },
+      });
+      // No parent → lineage points at the row's own ledger; the column is
+      // never null.
+      expect(exec?.parent_execution_id).to.be.null;
+      expect(exec?.lineage_ledger_id).to.equal(result.ledgerId);
+      expect(exec?.contract_hash).to.be.null;
+      expect(exec?.contract_snapshot_json).to.be.null;
+    });
+
+    it("getLedgerById returns the owner_generation (leaseGeneration) and consumed counters", async () => {
+      const mod = new AiTaskExecutionModule();
+      const result = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ledger-1",
+        sourceUserMessageId: "msg-ledger",
+        submissionId: "sub-ledger",
+        requestHash: "sha256:ledger",
+        origin: { type: "manual", submissionId: "sub-ledger" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+
+      const ledger = await mod.getLedgerById(result.ledgerId);
+      expect(ledger).to.not.be.null;
+      if (!ledger) return;
+      // Fresh ledger: owner_generation 0 (the first leaseGeneration).
+      expect(ledger.ownerGeneration).to.equal(0);
+      expect(ledger.consumedContinuations).to.equal(0);
+      expect(ledger.consumedProviderAttempts).to.equal(0);
+      expect(ledger.status).to.equal("active");
+      // policy_limits_json is the clamped frozen budget, not "{}".
+      const frozen = JSON.parse(ledger.policyLimitsJson) as Record<
+        string,
+        unknown
+      >;
+      expect(frozen.maxContinuations).to.equal(
+        MANUAL_BUDGET_DEFAULTS.maxContinuations
+      );
+    });
+
+    it("getLedgerById returns null for an unknown ledger id", async () => {
+      const mod = new AiTaskExecutionModule();
+      const ledger = await mod.getLedgerById("ledger-does-not-exist");
+      expect(ledger).to.be.null;
+    });
+
+    it("finalizeScheduledExecution stub throws until Unit 6 (typed seam present)", async () => {
+      const mod = new AiTaskExecutionModule();
+      let threw = false;
+      try {
+        await mod.finalizeScheduledExecution({
+          executionId: "exec-stub",
+          expectedVersion: 0,
+        });
+      } catch (e) {
+        threw = true;
+        expect(String(e)).to.match(/not implemented until Slice 2 Unit 6/i);
+      }
+      expect(threw).to.equal(true);
+    });
+  });
+
   // ----- GAP-S1 #27: worker guard on every model write method (NFR-03) -----
   describe("worker guard (NFR-03, assertNotWorker)", () => {
     let previous: string | undefined;

@@ -44,6 +44,45 @@ export interface CreateExecutionInput {
    * or hostile task config can never produce an unbounded budget ledger.
    */
   readonly budgetLimits: BudgetLimitsInput;
+  /**
+   * Continue/retry lineage (FR-21/22, Unit 3). When set, the new execution
+   * shares the parent's lineage ledger (shared budget) and records its
+   * `parent_execution_id`. A fresh start leaves both null and mints a new
+   * ledger. `lineageLedgerId` defaults to the new execution's own ledger
+   * when absent so the column is never null.
+   */
+  readonly parentExecutionId?: string | null;
+  readonly lineageLedgerId?: string | null;
+  /**
+   * Frozen contract snapshot + canonical hash (FR-19, Unit 3). Persisted at
+   * creation so a crash between enrollment and finalization cannot lose the
+   * contract that authorized the work. Null when no contract was frozen
+   * (response_only / best_effort without criteria).
+   */
+  readonly contractSnapshotJson?: string | null;
+  readonly contractHash?: string | null;
+}
+
+/**
+ * Read-only projection of a ledger row returned by {@link getLedgerById}.
+ * The coordinator reads `owner_generation` (→ leaseGeneration fencing) and
+ * the consumed/policy fields to resurrect a {@link TaskRunBudget} mirror on
+ * the Continue path (FR-21/22, §9). Returned as a typed projection so the
+ * coordinator layer does not depend on TypeORM column shapes.
+ */
+export interface LedgerSnapshot {
+  readonly ledgerId: string;
+  readonly ownerGeneration: number;
+  readonly policyLimitsJson: string;
+  readonly consumedContinuations: number;
+  readonly consumedProviderAttempts: number;
+  readonly consumedToolExecutions: number;
+  readonly consumedCheckerAttempts: number;
+  readonly consumedTokens: number;
+  readonly consumedActiveMs: number;
+  readonly consumedWaitMs: number;
+  readonly noProgressStreak: number;
+  readonly status: string;
 }
 
 /**
@@ -238,6 +277,10 @@ export class AiTaskExecutionModel extends BaseDb {
 
     const executionId = `exec-${randomUUID()}`;
     const ledgerId = `ledger-${randomUUID()}`;
+    // FR-21/22: a Continue successor shares the parent's lineage ledger so its
+    // budget mirror resurrects the parent's spent allowance. A fresh start
+    // points lineage at its own ledger (the column is non-nullable).
+    const lineageLedgerId = input.lineageLedgerId ?? ledgerId;
 
     // Both rows in one transaction so a crash between saves cannot leave an
     // orphan ledger pointing at a nonexistent execution (B3, §6.2). The mutex
@@ -285,12 +328,19 @@ export class AiTaskExecutionModel extends BaseDb {
         exec.occurrence_key =
           input.origin.type === "scheduled" ? input.origin.occurrenceKey : null;
         exec.ledger_id = ledgerId;
-        exec.lineage_ledger_id = ledgerId;
-        exec.parent_execution_id = null;
-        exec.contract_snapshot_json = null;
+        // Lineage points at the shared parent ledger on Continue, or this
+        // row's own ledger on a fresh start (FR-21/22).
+        exec.lineage_ledger_id = lineageLedgerId;
+        // parent_execution_id is set only on Continue/retry successors.
+        exec.parent_execution_id = input.parentExecutionId ?? null;
+        // FR-19: persist the frozen contract snapshot + canonical hash at
+        // creation so a crash between enrollment and finalization cannot
+        // lose the contract that authorized the work. Null when no contract
+        // was frozen (response_only / best_effort without criteria).
+        exec.contract_snapshot_json = input.contractSnapshotJson ?? null;
+        exec.contract_hash = input.contractHash ?? null;
         exec.policy_snapshot_json = null;
         exec.execution_state_json = null;
-        exec.contract_hash = null;
         exec.execution_state_version = 0;
         exec.finalized = false;
         exec.finalized_at = null;
@@ -370,6 +420,34 @@ export class AiTaskExecutionModel extends BaseDb {
     return this.executionRepo.findOne({
       where: { execution_id: executionId },
     });
+  }
+
+  /**
+   * Load a ledger row as a typed projection (FR-21/22, §9). The coordinator
+   * reads `owner_generation` (→ leaseGeneration fencing) and the consumed +
+   * policy fields to resurrect a {@link TaskRunBudget} mirror on the
+   * Continue path so a successor shares the parent's spent allowance.
+   */
+  async getLedgerById(ledgerId: string): Promise<LedgerSnapshot | null> {
+    assertNotWorker("getLedgerById");
+    const ledger = await this.ledgerRepo.findOne({
+      where: { ledger_id: ledgerId },
+    });
+    if (!ledger) return null;
+    return {
+      ledgerId: ledger.ledger_id,
+      ownerGeneration: ledger.owner_generation,
+      policyLimitsJson: ledger.policy_limits_json,
+      consumedContinuations: ledger.consumed_continuations,
+      consumedProviderAttempts: ledger.consumed_provider_attempts,
+      consumedToolExecutions: ledger.consumed_tool_executions,
+      consumedCheckerAttempts: ledger.consumed_checker_attempts,
+      consumedTokens: ledger.consumed_tokens,
+      consumedActiveMs: ledger.consumed_active_ms,
+      consumedWaitMs: ledger.consumed_wait_ms,
+      noProgressStreak: ledger.no_progress_streak,
+      status: ledger.status,
+    };
   }
 
   async finalizeExecution(input: FinalizeInput): Promise<FinalizeResult> {

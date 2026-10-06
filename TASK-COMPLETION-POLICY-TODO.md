@@ -182,9 +182,12 @@ Contracts, evidence & verification:
       PRD: FR-03, FR-04, AC-03, AC-11, AC-20.
 - [ ] **[GAP-S2] `TaskProgressTracker`** (evidence fingerprints, stall detection §7.2 step 9, no-progress
       streak bound 3, discovery-traffic exclusion). PRD: FR-09, AC-05.
-- [ ] **[GAP-S2] Contract freezing per run** (template compiler + main-process validation, §4A.2/§5.1;
+- [~] **[GAP-S2] Contract freezing per run** (template compiler + main-process validation, §4A.2/§5.1;
       criterion offset-vs-message-body validation; baseline capture before change-evidence actions).
-      PRD: FR-01, FR-02, FR-19.
+      PRD: FR-01, FR-02, FR-19. ✅ Library done (Unit 3, `TaskExecutionCoordinator.freezeContract`
+      + `CreateExecutionInput.contractSnapshotJson`/`contractHash` persisted at creation); IPC/engine
+      enrollment seam lands in Unit 4 (the plan's `createQueryLoop:146` ref is wrong — the seam is
+      `engine.submitMessage` after `savedUser.messageId` at ~1169).
 - [ ] **[GAP-S2] Live `TaskRunBudget` enforcement**: ledger-backed reservations, dispatch gate on every
       resolver/maker/checker/compaction/fallback/HTTP-retry path, token-estimate reservation + actual
       reconciliation with dedup by request ID, active-time/1-hour-wait accounting, `HARD_CAPS` clamping.
@@ -192,16 +195,22 @@ Contracts, evidence & verification:
 
 Engine / loop / scheduler wiring (all behind `aiTaskCompletionPolicyV1`, frozen policy at acceptance):
 
-- [ ] **[GAP-S2] Engine acceptance path** (§4A.1): conversation lease, DB/user scope, durable user message by
+- [~] **[GAP-S2] Engine acceptance path** (§4A.1): conversation lease, DB/user scope, durable user message by
       stable `submissionId`, execution record + ledger before resolver/maker dispatch, trusted binding on
       every resume path (permission, plan-question, plan-approval). Renderer generates/retains
-      `submissionId`. PRD: FR-17, FR-20, AC-26.
+      `submissionId`. PRD: FR-17, FR-20, AC-26. ✅ Library done (Unit 3: `startManual`/`startScheduled`
+      build the binding with leaseGeneration from `owner_generation`, contract + lineage persisted,
+      budget resurrected via `getLedgerById` on Continue, `assertOwnership` STATE_CONFLICT guard);
+      IPC/engine enrollment seam lands in Unit 4.
 - [ ] **[GAP-S2] Loop consults controller before terminal event** (FR-05): every enrolled no-call ending and
       round/budget cap reaches `decide()`; suppress legacy `goalTextStop`/empty-stop/cap nudges for enrolled
       runs only (`AIChatQueryLoop.ts:2224-2268`, `:2164-2182` stay for non-enrolled). Valid parsed calls still
       execute even with `stop`. PRD: FR-05, FR-06, AC-02, AC-12, AC-18.
-- [ ] **[GAP-S2] Single-owner enforcement**: standalone vs goal owner per execution; unrelated active goals
+- [~] **[GAP-S2] Single-owner enforcement**: standalone vs goal owner per execution; unrelated active goals
       cannot take over manual requests (§4A.3); goal-maker iterations yield internally. PRD: FR-20, AC-14, AC-31.
+      ✅ Library done (Unit 3: `leaseGeneration` = fenced `owner_generation` from the ledger;
+      `assertOwnership` returns STATE_CONFLICT on mismatch; Continue successor bumps owner_generation
+      via the model layer); live consult/finalization gating lands in Units 4/5.
 - [ ] **[GAP-S2] `ScheduledLoopEventSink` rejects missing/malformed task result as `MISSING_TASK_OUTCOME`**
       (never falls back to success); manual path likewise. Consult must happen upstream of
       `ScheduledLoopEventSink.ts:68` first-wins guard. PRD: FR-05, FR-12.

@@ -26,6 +26,10 @@ import { MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/budgetDefaults
 import type { BudgetLimitsInput } from "@/service/aiTaskExecution/budgetDefaults";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
+import {
+  TaskCompletionContractService,
+} from "@/service/aiTaskExecution/TaskCompletionContractService";
+import type { FreezeInput } from "@/service/aiTaskExecution/TaskCompletionContractService";
 import type {
   CreateExecutionResult,
   ExistingExecutionSnapshot,
@@ -78,6 +82,21 @@ export interface StartManualInput {
   readonly requestHash: string;
   readonly route: TaskExecutionRoute;
   readonly completionOwner: "standalone" | "goal";
+  /**
+   * Optional frozen contract (FR-19). When supplied, the coordinator persists
+   * its snapshot + canonical hash at creation so a crash between enrollment
+   * and finalization cannot lose the contract that authorized the work.
+   * Null on response_only / best_effort routes without criteria.
+   */
+  readonly contract?: TaskCompletionContract | null;
+  /**
+   * Continue/retry lineage (FR-21/22). When set, the successor shares the
+   * parent's lineage ledger (shared budget) and records its
+   * `parent_execution_id`. The coordinator resurrects the budget from the
+   * lineage ledger and reads `owner_generation` for the fenced lease.
+   */
+  readonly parentExecutionId?: string | null;
+  readonly lineageLedgerId?: string | null;
 }
 
 export interface StartScheduledInput {
@@ -113,6 +132,9 @@ export class TaskExecutionCoordinator {
       origin,
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
       submissionId: input.submissionId,
+      contract: input.contract ?? null,
+      parentExecutionId: input.parentExecutionId ?? null,
+      lineageLedgerId: input.lineageLedgerId ?? null,
     });
   }
 
@@ -134,7 +156,22 @@ export class TaskExecutionCoordinator {
       origin,
       budgetLimits: input.budgetLimits,
       submissionId: null,
+      contract: null,
+      parentExecutionId: null,
+      lineageLedgerId: null,
     });
+  }
+
+  /**
+   * Freeze a completion contract (FR-19/04/18). Thin pass-through to
+   * {@link TaskCompletionContractService.freeze} so the enrollment seam in
+   * the IPC/engine layer calls one coordinator method instead of importing
+   * the contract service directly. Throws on zero required criteria for
+   * verified mode (FR-04) and on unapproved source references (FR-18).
+   */
+  freezeContract(input: FreezeInput): TaskCompletionContract {
+    const service = new TaskCompletionContractService();
+    return service.freeze(input);
   }
 
   private async startBinding(input: {
@@ -146,7 +183,19 @@ export class TaskExecutionCoordinator {
     origin: TaskExecutionOrigin;
     budgetLimits: BudgetLimitsInput;
     submissionId: string | null;
+    contract: TaskCompletionContract | null;
+    parentExecutionId: string | null;
+    lineageLedgerId: string | null;
   }): Promise<StartBindingResult> {
+    // Persist the frozen contract snapshot + hash at creation (FR-19) and
+    // thread Continue/retry lineage through to the model (FR-21/22). The
+    // contract snapshot is JSON we control; the canonical hash is the
+    // contract's own contractHash field, recomputable by verifyHash on load.
+    const contractSnapshotJson = input.contract
+      ? JSON.stringify(input.contract)
+      : null;
+    const contractHash = input.contract?.contractHash ?? null;
+
     const started: CreateExecutionResult = await this.module.startExecution({
       conversationId: input.conversationId,
       sourceUserMessageId: input.sourceUserMessageId,
@@ -156,12 +205,16 @@ export class TaskExecutionCoordinator {
       route: input.route,
       completionOwner: input.completionOwner,
       budgetLimits: input.budgetLimits,
+      parentExecutionId: input.parentExecutionId,
+      lineageLedgerId: input.lineageLedgerId,
+      contractSnapshotJson,
+      contractHash,
     });
 
     // AC-26: a reused or conflicting submission must NOT construct a fresh
     // budget/controller — that would renew limits or duplicate the binding.
-    // Propagate the typed result; Slice 2 resurrects the live budget from
-    // the ledger on the reused path.
+    // Propagate the typed result; the caller surfaces the existing/conflict
+    // status and never re-dispatches effects.
     if (started.status === "reused") {
       return { status: "reused", existing: started.existing };
     }
@@ -173,8 +226,25 @@ export class TaskExecutionCoordinator {
       };
     }
 
-    const budget = new TaskRunBudget(input.budgetLimits);
+    // FR-21/22: a Continue successor shares the parent's lineage ledger. Its
+    // budget mirror must be resurrected from the persisted ledger counters so
+    // spent allowance carries forward — a fresh budget would silently reset
+    // the lineage caps. A fresh start mints a new budget from the input
+    // limits. The ledger row is the authoritative source of truth (§9); the
+    // in-memory mirror is never authoritative itself.
+    const budget = await this.resurrectOrFreshBudget(
+      input.lineageLedgerId,
+      input.budgetLimits
+    );
     const controller = new TaskCompletionController();
+
+    // FR-20 single-owner lease: the fenced owner_generation on the ledger is
+    // the binding's leaseGeneration. The model bumps owner_generation when a
+    // Continue successor takes ownership of the shared lineage ledger, so a
+    // stale ancestor's consult/finalization CAS no longer matches and returns
+    // STATE_CONFLICT. Read it from the ledger row so the in-memory binding
+    // matches the persisted fence token.
+    const leaseGeneration = await this.readLeaseGeneration(started.ledgerId);
 
     return {
       status: "created",
@@ -185,14 +255,69 @@ export class TaskExecutionCoordinator {
         origin: input.origin,
         route: input.route,
         completionOwner: input.completionOwner,
-        leaseGeneration: 0,
+        leaseGeneration,
         ledgerId: started.ledgerId,
-        contract: null,
-        contractHash: null,
+        contract: input.contract,
+        contractHash,
         controller,
         budget,
       },
     };
+  }
+
+  /**
+   * Resurrect the budget from the lineage ledger on Continue, or mint a fresh
+   * one on a new execution. A missing lineage ledger (e.g. test stub without
+   * a seeded row) falls back to a fresh budget so enrollment never crashes on
+   * a coordinator-only test path — the authoritative counters come from the
+   * ledger when it exists.
+   */
+  private async resurrectOrFreshBudget(
+    lineageLedgerId: string | null,
+    freshLimits: BudgetLimitsInput
+  ): Promise<TaskRunBudget> {
+    if (!lineageLedgerId) return new TaskRunBudget(freshLimits);
+    const ledger = await this.module.getLedgerById(lineageLedgerId);
+    if (!ledger) return new TaskRunBudget(freshLimits);
+    return TaskRunBudget.resurrectFromLedger({
+      policy_limits_json: ledger.policyLimitsJson,
+      consumed_continuations: ledger.consumedContinuations,
+      consumed_provider_attempts: ledger.consumedProviderAttempts,
+      consumed_checker_attempts: ledger.consumedCheckerAttempts,
+      consumed_tool_executions: ledger.consumedToolExecutions,
+      consumed_tokens: ledger.consumedTokens,
+      consumed_active_ms: ledger.consumedActiveMs,
+      consumed_wait_ms: ledger.consumedWaitMs,
+      no_progress_streak: ledger.noProgressStreak,
+    });
+  }
+
+  /**
+   * Read the fenced owner_generation for the lease (FR-20). Returns 0 when
+   * the ledger is missing (coordinator-only test paths) so enrollment never
+   * crashes before the model layer is wired.
+   */
+  private async readLeaseGeneration(ledgerId: string): Promise<number> {
+    const ledger = await this.module.getLedgerById(ledgerId);
+    return ledger?.ownerGeneration ?? 0;
+  }
+
+  /**
+   * Single-owner lease guard (FR-20). Every consult/finalization must verify
+   * the caller's `leaseGeneration` matches the binding's expected value; a
+   * mismatch means a stale ancestor (a Continue successor has since taken
+   * ownership of the lineage ledger) is attempting to act, and the operation
+   * must be rejected with `STATE_CONFLICT` rather than overwriting a newer
+   * owner's state.
+   */
+  assertOwnership(
+    holder: { readonly leaseGeneration: number },
+    expected: number
+  ): { readonly ok: true } | { readonly ok: false; readonly reasonCode: "STATE_CONFLICT" } {
+    if (holder.leaseGeneration !== expected) {
+      return { ok: false, reasonCode: "STATE_CONFLICT" };
+    }
+    return { ok: true };
   }
 
   /** Serialize the binding for persistence; excludes runtime objects. */

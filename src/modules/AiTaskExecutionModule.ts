@@ -5,6 +5,7 @@ import type {
   CreateExecutionResult,
   FinalizeInput,
   FinalizeResult,
+  LedgerSnapshot,
 } from "@/model/AiTaskExecution.model";
 import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 
@@ -41,6 +42,16 @@ export class AiTaskExecutionModule extends BaseModule {
     return this.model.getById(executionId);
   }
 
+  /**
+   * Load a ledger row for the coordinator to resurrect a budget mirror on
+   * the Continue path (FR-21/22, §9). Passthrough to the model so IPC and
+   * engine layers never touch TypeORM repositories.
+   */
+  async getLedgerById(ledgerId: string): Promise<LedgerSnapshot | null> {
+    await this.ensureConnection();
+    return this.model.getLedgerById(ledgerId);
+  }
+
   async finalizeExecution(input: FinalizeInput): Promise<FinalizeResult> {
     await this.ensureConnection();
     return this.model.finalizeExecution(input);
@@ -49,6 +60,25 @@ export class AiTaskExecutionModule extends BaseModule {
   async getUnfinalizedExecutions(): Promise<AiTaskExecutionEntity[]> {
     await this.ensureConnection();
     return this.model.getUnfinalized();
+  }
+
+  /**
+   * Scheduled finalization stub (FR-12/13/15/17/18, §6.3). Slice 2 Unit 6
+   * fills this in with the multi-statement transaction: CAS-finalize the
+   * execution + release the ledger + update the run row + update schedule
+   * counters + pause-if-needed, all serialized via `executionCreateMutex`.
+   * Present now so the coordinator's scheduled wiring can target a stable
+   * seam, and so callers have a typed error to handle before the full
+   * implementation lands. Throws until Unit 6.
+   */
+  async finalizeScheduledExecution(_input: {
+    executionId: string;
+    expectedVersion: number;
+  }): Promise<FinalizeResult> {
+    await this.ensureConnection();
+    throw new Error(
+      "AiTaskExecutionModule.finalizeScheduledExecution: not implemented until Slice 2 Unit 6"
+    );
   }
 
   /**
