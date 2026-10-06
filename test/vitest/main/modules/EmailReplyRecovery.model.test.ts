@@ -299,3 +299,288 @@ describe("EmailReplySendRecoveryService reservation sweep (T07)", () => {
     expect(row?.phase).toBe("sent");
   });
 });
+
+/**
+ * T08/FR-036 (§9) — finalize/discard/reconcile guard transitions. The recovery
+ * sweep and manual reconciliation drive `finalizeSendOutcome` /
+ * `reconcileDelivery`, which now transition the bound guard row in the same
+ * transaction:
+ *   - stale in-flight attempt → `delivery_unknown` (guard follows).
+ *   - late `sent` after a recovery `delivery_unknown` → attempt + guard UPGRADE
+ *     to `sent` (§9: late success outranks an earlier unknown).
+ *   - late `failed` after `sent` → 0 rows, no downgrade (guard stays `sent`).
+ *   - `confirm_sent` → guard `sent`; `confirm_not_sent` refused while a
+ *     DIFFERENT attempt is in flight (§9).
+ */
+describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
+  let dbpath: string;
+  let guardModel: EmailReplyGuardModel;
+  let draftModel: EmailReplyDraftModel;
+  let attemptModule: EmailReplySendAttemptModule;
+
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-reply-recovery-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    mockTokenStore.set("USERSDBPATH", dbpath);
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Construct AFTER reset so BaseModule captures the isolated dbpath.
+    guardModel = new EmailReplyGuardModel(dbpath);
+    draftModel = new EmailReplyDraftModel(dbpath);
+    attemptModule = new EmailReplySendAttemptModule();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  const SERVICE_ID = 7;
+
+  async function seedMessage(): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = SERVICE_ID;
+    message.providerUid = `uid-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  /** Seed a guard row bound to a sending attempt (as the send claim leaves it). */
+  async function seedSendingGuard(
+    message: EmailReceivedMessageEntity,
+    attemptId: number,
+    phase: EmailReplyGuardEntity["phase"] = "sending",
+    activeAttemptId: number | null = attemptId
+  ): Promise<EmailReplyGuardEntity> {
+    const guard = new EmailReplyGuardEntity();
+    guard.emailServiceId = SERVICE_ID;
+    guard.replyKey = `row:${message.id}`;
+    guard.messageId = message.id;
+    guard.phase = phase;
+    guard.ownerToken = null;
+    guard.leaseExpiresAt = null;
+    guard.activeDraftId = null;
+    guard.activeAttemptId = activeAttemptId;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .save(guard);
+  }
+
+  async function seedAttempt(
+    message: EmailReceivedMessageEntity,
+    draftId: number,
+    status: "claimed" | "submitted" | "sent" | "failed" | "delivery_unknown",
+    claimedAt: Date
+  ): Promise<EmailReplySendAttemptEntity> {
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `t08-guard-${status}-${Math.random()}`;
+    attempt.draftId = draftId;
+    attempt.revisionId = 1;
+    attempt.approvalId = 1;
+    attempt.messageId = message.id;
+    attempt.conversationId = null;
+    attempt.emailServiceId = SERVICE_ID;
+    attempt.senderAddress = "me@x.com";
+    attempt.recipientAddress = "prospect@example.com";
+    attempt.status = status;
+    attempt.claimedAt = claimedAt;
+    return await attemptModule.create(attempt);
+  }
+
+  /** Seed a draft row on a message (mirrors the reservation-sweep seedDraft). */
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<EmailReplyDraftEntity> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = SERVICE_ID;
+    draft.subject = "Re: Pricing?";
+    draft.bodyText = "Here is our pricing.";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    return await draftModel.create(draft);
+  }
+
+  it("recovery sweep transitions a bound guard to delivery_unknown alongside the attempt", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sending");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "submitted", old);
+    const guard = await seedSendingGuard(msg, attempt.id);
+
+    const result =
+      await new EmailReplySendRecoveryService().recoverStaleAttempts(
+        5 * 60 * 1000
+      );
+
+    expect(result.recovered).toBe(1);
+    expect((await attemptModule.read(attempt.id))?.status).toBe(
+      "delivery_unknown"
+    );
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("delivery_unknown");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("a late sent finalization upgrades a recovery delivery_unknown (attempt + guard)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "delivery_unknown", null);
+
+    // Late SMTP success: the delivery service finalizes outcome=sent. The
+    // conditional fence must match `delivery_unknown` (§9 upgrade) for BOTH
+    // the attempt and the guard.
+    await draftModel.finalizeSendOutcome({
+      attemptId: attempt.id,
+      draftId: draft.id,
+      approvalId: attempt.approvalId,
+      emailServiceId: SERVICE_ID,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "late-smtp-1",
+      failureCode: null,
+      sanitizedError: null,
+      messageReplyStatus: "sent",
+      guardId: guard.id,
+    });
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("a late failed finalization cannot downgrade a sent attempt or guard", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sent");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "sent", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "sent", null);
+
+    // A late `failed` arrives after `sent` was authoritative — the strict
+    // fence `status IN (claimed, submitted)` must NOT match, so nothing is
+    // written (attempt, draft, guard all stay sent/terminal).
+    await draftModel.finalizeSendOutcome({
+      attemptId: attempt.id,
+      draftId: draft.id,
+      approvalId: attempt.approvalId,
+      emailServiceId: SERVICE_ID,
+      messageId: msg.id,
+      outcome: "failed",
+      failureCode: "unknown",
+      sanitizedError: "late disconnect",
+      guardId: guard.id,
+    });
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+  });
+
+  it("finalizeSendOutcome skips the guard transition when no guardId is passed (legacy)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sending");
+    const attempt = await seedAttempt(msg, draft.id, "submitted", new Date());
+    // A pre-guard guard row in some unrelated phase — must be untouched.
+    const guard = await seedSendingGuard(msg, attempt.id, "idle", null);
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: attempt.id,
+      draftId: draft.id,
+      approvalId: attempt.approvalId,
+      emailServiceId: SERVICE_ID,
+      messageId: msg.id,
+      outcome: "sent",
+      messageReplyStatus: "sent",
+      guardId: null,
+    });
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("idle");
+  });
+
+  it("confirm_sent reconciliation transitions the bound guard to sent", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "delivery_unknown", null);
+
+    const service = new EmailReplySendRecoveryService();
+    await service.reconcileAttempt({
+      attemptId: attempt.id,
+      action: "confirm_sent",
+      evidence: "mailbox verified",
+    });
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("confirm_not_sent is refused while a DIFFERENT attempt is in flight (§9)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    // The attempt being reconciled (delivery_unknown) + a DIFFERENT in-flight
+    // attempt on the same message (a sibling send still running).
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const sibling = await seedAttempt(msg, draft.id, "claimed", new Date());
+    const guard = await seedSendingGuard(msg, sibling.id, "sending", sibling.id);
+
+    const service = new EmailReplySendRecoveryService();
+    await expect(
+      service.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator checked the mailbox",
+      })
+    ).rejects.toThrow(/in flight/);
+
+    // Nothing was written: the attempt stays delivery_unknown, the draft is
+    // untouched, and the in-flight sibling's guard stays `sending`.
+    expect((await attemptModule.read(attempt.id))?.status).toBe(
+      "delivery_unknown"
+    );
+    expect((await attemptModule.read(sibling.id))?.status).toBe("claimed");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sending");
+    expect(row?.activeAttemptId).toBe(sibling.id);
+  });
+
+  it("confirm_not_sent reopens the draft and guard when no sibling is in flight", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "delivery_unknown", null);
+
+    const service = new EmailReplySendRecoveryService();
+    await service.reconcileAttempt({
+      attemptId: attempt.id,
+      action: "confirm_not_sent",
+      evidence: "operator checked the mailbox",
+    });
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("failed");
+    expect((await draftModel.read(draft.id))?.status).toBe("draft");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("draft_ready");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+});

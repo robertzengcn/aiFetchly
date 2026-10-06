@@ -179,14 +179,26 @@ export function evidenceToPhase(evidence: ClusterEvidence): {
  * draft (T08/FR-036 §8.2). The claim's own draft is excluded by id; anything
  * terminal or in-flight on a sibling blocks. A clean cluster (only the
  * claiming draft itself) does not block.
+ *
+ * Attempts are scoped by `draftId`: an in-flight/terminal attempt on the
+ * CLAIMING draft is not sibling evidence — it is this draft's own send (a
+ * concurrent replay of the same approval, which the B04 idempotency lookup
+ * after the conditional UPDATE resolves to `already_processed`). Only
+ * attempts on a DIFFERENT draft block the claim.
  */
 export function clusterEvidenceBlocksSend(
   evidence: ClusterEvidence,
   claimingDraftId: number
 ): boolean {
-  if (evidence.sentAttempts.length > 0) return true;
-  if (evidence.unknownAttempts.length > 0) return true;
-  if (evidence.inFlightAttempts.length > 0) return true;
+  for (const a of evidence.sentAttempts) {
+    if (a.draftId !== claimingDraftId) return true;
+  }
+  for (const a of evidence.unknownAttempts) {
+    if (a.draftId !== claimingDraftId) return true;
+  }
+  for (const a of evidence.inFlightAttempts) {
+    if (a.draftId !== claimingDraftId) return true;
+  }
   for (const d of evidence.sentDrafts) {
     if (d.id !== claimingDraftId) return true;
   }

@@ -1,6 +1,8 @@
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import { REPLY_SEND_RECOVERY_THRESHOLD_MS } from "@/service/emailReply/replyReliabilityVersions";
 import { incrementReplyMetric } from "@/service/emailReply/EmailReplyMetrics";
 
@@ -25,6 +27,7 @@ export class EmailReplySendRecoveryService {
   private readonly attemptModule = new EmailReplySendAttemptModule();
   private readonly draftModule = new EmailReplyDraftModule();
   private readonly guardModule = new EmailReplyGuardModule();
+  private readonly messageModule = new EmailReceivedMessageModule();
 
   /**
    * Sweep stale in-flight attempts older than {@link ageMs} (default
@@ -45,6 +48,23 @@ export class EmailReplySendRecoveryService {
     let recovered = 0;
     for (const attempt of stale) {
       try {
+        // T08: resolve the guard row for this attempt's replyKey so finalize
+        // transitions the guard in the same transaction. The attempt entity has
+        // no normalizedMessageId, so read the message row to derive it. A
+        // missing guard row (legacy data) → null → finalize skips the guard
+        // transition.
+        const message = await this.messageModule.read(attempt.messageId);
+        const guardId = message
+          ? (
+              await this.guardModule.findByReplyKey(
+                attempt.emailServiceId,
+                canonicalReplyKey({
+                  normalizedMessageId: message.normalizedMessageId,
+                  rowId: message.id,
+                })
+              )
+            )?.id ?? null
+          : null;
         await this.draftModule.finalizeSendOutcome({
           attemptId: attempt.id,
           draftId: attempt.draftId,
@@ -55,6 +75,7 @@ export class EmailReplySendRecoveryService {
           failureCode: "recovery_timeout",
           sanitizedError:
             "Recovered as delivery-unknown: in-flight attempt exceeded the recovery threshold",
+          guardId,
         });
         recovered += 1;
       } catch (error) {
@@ -137,6 +158,22 @@ export class EmailReplySendRecoveryService {
         `Cannot reconcile: send attempt ${input.attemptId} not found`
       );
     }
+    // T08: resolve the guard row for this attempt's replyKey so the guard
+    // transitions alongside the reconciliation (confirm_sent → sent,
+    // confirm_not_sent → draft_ready). The in-flight refusal for
+    // confirm_not_sent lives in reconcileDelivery itself.
+    const message = await this.messageModule.read(attempt.messageId);
+    const guardId = message
+      ? (
+          await this.guardModule.findByReplyKey(
+            attempt.emailServiceId,
+            canonicalReplyKey({
+              normalizedMessageId: message.normalizedMessageId,
+              rowId: message.id,
+            })
+          )
+        )?.id ?? null
+      : null;
     await this.draftModule.reconcileDelivery({
       attemptId: attempt.id,
       draftId: attempt.draftId,
@@ -145,6 +182,7 @@ export class EmailReplySendRecoveryService {
       action: input.action,
       evidence: input.evidence ?? null,
       providerMessageId: input.providerMessageId ?? null,
+      guardId,
     });
     return { reconciled: input.action !== "leave_unresolved" };
   }

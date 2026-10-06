@@ -535,12 +535,16 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     const msg = await seedMessage(null);
     const guard = await seedIdleGuard(msg);
     const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
-    // A sent attempt on the same cluster (e.g. a sibling already replied).
+    // A sent attempt on a SIBLING draft in the same cluster (a different
+    // draft already replied). The claiming draft is excluded by id, so a
+    // sent attempt on the claiming draft itself would NOT block (that's
+    // the B04 replay path); a sibling's sent attempt must.
+    const sibling = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
     const attempt = new EmailReplySendAttemptEntity();
     attempt.idempotencyKey = `t08-sent-${Math.random()}`;
-    attempt.draftId = seed.draftId;
-    attempt.revisionId = seed.revisionId;
-    attempt.approvalId = seed.approvalId;
+    attempt.draftId = sibling.draftId;
+    attempt.revisionId = sibling.revisionId;
+    attempt.approvalId = sibling.approvalId;
     attempt.messageId = msg.id;
     attempt.conversationId = null;
     attempt.emailServiceId = SERVICE_ID;
@@ -598,5 +602,117 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     expect(result.status).toBe("precondition_failed");
     const attempts = await attemptModel.listByDraft(seed.draftId);
     expect(attempts).toHaveLength(0);
+  });
+
+  it("finalizeSendOutcome(sent) transitions the bound guard to sent", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+    expect(claim.status).toBe("claimed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.status === "claimed" ? claim.attemptId : 0,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "<prov-guard-1@x>",
+      guardId: guard.id,
+    });
+
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("finalizeSendOutcome(failed) reopens the guard to draft_ready", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+    expect(claim.status).toBe("claimed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.status === "claimed" ? claim.attemptId : 0,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "failed",
+      failureCode: "definitely_rejected",
+      sanitizedError: "SMTP rejected",
+      guardId: guard.id,
+    });
+
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("draft_ready");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("finalizeSendOutcome(delivery_unknown) keeps the guard at delivery_unknown (not idle)", async () => {
+    const msg = await seedMessage(null);
+    const guard = await seedIdleGuard(msg);
+    const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, guard.id)
+    );
+    expect(claim.status).toBe("claimed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.status === "claimed" ? claim.attemptId : 0,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "delivery_unknown",
+      sanitizedError: "SMTP disconnect after possible acceptance",
+      guardId: guard.id,
+    });
+
+    // A timeout alone never releases the message (§5.2): the guard stays
+    // `delivery_unknown` so a new send claim is refused until reconciliation.
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("delivery_unknown");
+    expect(row?.activeAttemptId).toBeNull();
+  });
+
+  it("invalidateUnsentDraftsForMailbox releases a draft_ready guard but not a sending guard", async () => {
+    const msgA = await seedMessage(null);
+    const guardA = await seedIdleGuard(msgA);
+    const seedA = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msgA.id });
+    // Guard A bound to draft A in `draft_ready` (commit left it there).
+    await updateGuard(guardA.id, { phase: "draft_ready", activeDraftId: seedA.draftId });
+
+    const msgB = await seedMessage(null);
+    const guardB = await seedIdleGuard(msgB);
+    const seedB = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msgB.id });
+    // Guard B bound to draft B in `sending` (an in-flight send on this draft).
+    await updateGuard(guardB.id, { phase: "sending", activeDraftId: seedB.draftId, activeAttemptId: 424242 });
+
+    const invalidated = await draftModel.invalidateUnsentDraftsForMailbox(
+      seedA.emailServiceId,
+      "knowledge scope changed"
+    );
+    expect(invalidated).toBeGreaterThanOrEqual(2);
+
+    // Draft A's guard is released (the draft is no longer sendable).
+    const rowA = await guardModel.read(guardA.id);
+    expect(rowA?.phase).toBe("idle");
+    expect(rowA?.activeDraftId).toBeNull();
+
+    // Draft B's guard is NOT released: the in-flight send can still complete
+    // and must not lose its message-level exclusion (§9).
+    const rowB = await guardModel.read(guardB.id);
+    expect(rowB?.phase).toBe("sending");
+    expect(rowB?.activeAttemptId).toBe(424242);
   });
 });

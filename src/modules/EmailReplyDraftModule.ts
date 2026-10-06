@@ -266,6 +266,8 @@ export class EmailReplyDraftModule extends BaseModule {
     action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
     evidence?: string | null;
     providerMessageId?: string | null;
+    /** T08/FR-036: guard row bound to this attempt (null = legacy data). */
+    guardId?: number | null;
   }): Promise<void> {
     try {
       await this.ensureConnection();

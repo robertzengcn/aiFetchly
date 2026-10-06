@@ -691,8 +691,23 @@ export class EmailReplyDraftModel extends BaseDb {
 
   /**
    * Finalize a claimed attempt in ONE transaction: update attempt status,
-   * advance the draft state machine, consume the one-time approval, and write
-   * the outcome audit (technical design §15.5, FR-016/018/019).
+   * advance the draft state machine, consume the one-time approval, transition
+   * the guard, and write the outcome audit (technical design §15.5, §8.2,
+   * FR-016/018/019/036).
+   *
+   * Conditional fence (§9 final paragraph):
+   *   - `outcome = "sent"`: matches `status IN (claimed, submitted,
+   *     delivery_unknown)` — a late successful SMTP finalization UPGRADES an
+   *     earlier `delivery_unknown` (recovery timed out, then SMTP succeeded).
+   *   - `outcome = "failed" | "delivery_unknown"`: strict
+   *     `status IN (claimed, submitted)` — cannot downgrade a `sent`.
+   * 0 rows = another caller already finalized → leave everything untouched
+   * (fenced late-result rejection at the attempt level).
+   *
+   * Guard transition (T08): fenced by `phase="sending"` so a guard recovery
+   * already moved (to `sent`/`delivery_unknown`/`idle`) is left alone. The
+   * `delivery_unknown → sent` upgrade is allowed (late success); `sent → *`
+   * is forbidden (the fence refuses — guard stays `sent`).
    *
    * `delivery_unknown` is terminal: the approval is consumed and the draft
    * cannot be auto-retried — a fresh explicit approval on a (possibly new)
@@ -708,13 +723,14 @@ export class EmailReplyDraftModel extends BaseDb {
 
       const completedAt = new Date();
       const attemptStatus: EmailReplySendAttemptStatus = input.outcome;
-      // CONDITIONAL finalize: only advance an attempt that is still in-flight.
-      // A recovery sweep can select a stale 'claimed' attempt and then race with
-      // a late delivery finalize; without this guard, recovery would clobber a
-      // successful 'sent' -> 'delivery_unknown'. If 0 rows match, another caller
-      // already finalized — leave the attempt, draft, and approval untouched.
+      // CONDITIONAL finalize (§9). A late `sent` upgrades an earlier
+      // `delivery_unknown`; a downgrade cannot match a `sent` attempt.
+      const matchStatuses: EmailReplySendAttemptStatus[] =
+        input.outcome === "sent"
+          ? ["claimed", "submitted", "delivery_unknown"]
+          : ["claimed", "submitted"];
       const attemptUpdate = await attemptRepo.update(
-        { id: input.attemptId, status: In(["claimed", "submitted"]) },
+        { id: input.attemptId, status: In(matchStatuses) },
         {
           status: attemptStatus,
           completedAt,
@@ -756,6 +772,36 @@ export class EmailReplyDraftModel extends BaseDb {
           invalidationReason: `Consumed by ${input.outcome} attempt ${input.attemptId}`,
         }
       );
+
+      // T08 guard transition (§8.2). The fence mirrors the attempt fence:
+      //   - `outcome = "sent"` matches `phase IN (sending, delivery_unknown)` —
+      //     a late success upgrades an earlier unknown (recovery moved the
+      //     guard to `delivery_unknown`, then SMTP succeeded).
+      //   - `outcome = "failed" | "delivery_unknown"` matches only
+      //     `phase = "sending"` — never downgrade a `sent`, never release the
+      //     `delivery_unknown` protection (a timeout alone never opens the
+      //     message). A guard recovery already finalized (any other phase) is
+      //     left alone.
+      if (input.guardId !== null && input.guardId !== undefined) {
+        const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+        const guardPatch: Partial<EmailReplyGuardEntity> = {
+          phase:
+            input.outcome === "sent"
+              ? ("sent" as GuardPhase)
+              : input.outcome === "delivery_unknown"
+              ? ("delivery_unknown" as GuardPhase)
+              : ("draft_ready" as GuardPhase),
+          activeAttemptId: null,
+        };
+        const guardMatchPhases: GuardPhase[] =
+          input.outcome === "sent"
+            ? ["sending", "delivery_unknown"]
+            : ["sending"];
+        await guardRepo.update(
+          { id: input.guardId, phase: In(guardMatchPhases) },
+          guardPatch
+        );
+      }
 
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
@@ -817,6 +863,7 @@ export class EmailReplyDraftModel extends BaseDb {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const now = new Date();
 
       const approved = await draftRepo.find({
@@ -831,6 +878,22 @@ export class EmailReplyDraftModel extends BaseDb {
           await approvalRepo.update(
             { draftId: d.id, invalidatedAt: IsNull() as never },
             { invalidatedAt: now, invalidationReason: reason }
+          );
+          // T08/FR-036: release any guard bound to this now-invalidated draft.
+          // Fenced by `phase="draft_ready" AND activeDraftId = :draftId` so a
+          // guard that already moved to `sending` (an in-flight send on this
+          // draft) is NOT released — that send can still complete and must not
+          // lose its message-level exclusion (§9). 0 rows = no guard bound to
+          // this draft, or the guard already transitioned → leave untouched.
+          await guardRepo.update(
+            { activeDraftId: d.id, phase: "draft_ready" as GuardPhase },
+            {
+              phase: "idle" as GuardPhase,
+              ownerToken: null,
+              leaseExpiresAt: null,
+              activeDraftId: null,
+              activeAttemptId: null,
+            }
           );
         }
       }
@@ -861,13 +924,41 @@ export class EmailReplyDraftModel extends BaseDb {
     action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
     evidence?: string | null;
     providerMessageId?: string | null;
+    /**
+     * T08/FR-036: guard row bound to this attempt. When non-null, the guard
+     * transitions alongside the reconciliation. `confirm_not_sent` is REFUSED
+     * while a `sending` attempt is in flight on a different attempt id (§9:
+     * "While an original submitter could still be running, reconciliation
+     * cannot authorize retry").
+     */
+    guardId?: number | null;
   }): Promise<void> {
     await runReplyTxn(this.sqliteDb, async (manager) => {
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const now = new Date();
+
+      // T08/§9: refuse `confirm_not_sent` while a `sending` guard is bound to a
+      // DIFFERENT in-flight attempt. The original submitter could still be
+      // running and may yet succeed; reconciliation must not authorize a
+      // retry that races it. `confirm_sent` and `leave_unresolved` are always
+      // safe (terminal / no-op).
+      if (input.action === "confirm_not_sent" && input.guardId !== null && input.guardId !== undefined) {
+        const guardRow = await guardRepo.findOne({ where: { id: input.guardId } });
+        if (
+          guardRow &&
+          guardRow.phase === "sending" &&
+          guardRow.activeAttemptId !== null &&
+          guardRow.activeAttemptId !== input.attemptId
+        ) {
+          throw new Error(
+            `Reconciliation refused: a different send attempt (${guardRow.activeAttemptId}) is in flight on this message (§9)`
+          );
+        }
+      }
 
       if (input.action === "confirm_sent") {
         await attemptRepo.update(
@@ -887,6 +978,19 @@ export class EmailReplyDraftModel extends BaseDb {
           { id: input.messageId },
           { replyStatus: "sent", processedAt: now }
         );
+        // Guard → `sent` (terminal protection). Fenced by
+        // `phase IN (sending, delivery_unknown)`: the operator resolves the
+        // ambiguous state the guard is parked in; a guard already at `sent`
+        // (recovery or a sibling) is left alone.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          await guardRepo.update(
+            {
+              id: input.guardId,
+              phase: In(["sending", "delivery_unknown"] as GuardPhase[]),
+            },
+            { phase: "sent" as GuardPhase, activeAttemptId: null }
+          );
+        }
       } else if (input.action === "confirm_not_sent") {
         await attemptRepo.update(
           { id: input.attemptId },
@@ -900,8 +1004,20 @@ export class EmailReplyDraftModel extends BaseDb {
           { id: input.draftId },
           { status: "draft", sendError: input.evidence ?? null }
         );
+        // Guard → `draft_ready` (reopens the draft for a fresh approval +
+        // send). Same fence — `sending` is only reachable here after the
+        // in-flight refusal above confirmed no DIFFERENT attempt is running.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          await guardRepo.update(
+            {
+              id: input.guardId,
+              phase: In(["sending", "delivery_unknown"] as GuardPhase[]),
+            },
+            { phase: "draft_ready" as GuardPhase, activeAttemptId: null }
+          );
+        }
       }
-      // leave_unresolved: no state change.
+      // leave_unresolved: no state change, no guard change.
 
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
@@ -1073,6 +1189,13 @@ export interface FinalizeOutcomeInput {
    * delivery_unknown (no EmailReplyStatus for ambiguous delivery).
    */
   messageReplyStatus?: EmailReplyStatus;
+  /**
+   * T08/FR-036: guard row bound to this attempt's send claim. When non-null,
+   * {@link finalizeSendOutcome} transitions the guard in the SAME transaction
+   * (fenced by `phase="sending"`). Null = no guard (legacy data / pre-guard
+   * claim) → the attempt/draft conditional UPDATEs remain the authority.
+   */
+  guardId?: number | null;
 }
 
 /** Input to the atomic generation commit ({@link commitGeneratedDraft}). */

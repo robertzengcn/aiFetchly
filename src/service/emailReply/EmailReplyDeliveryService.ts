@@ -430,6 +430,11 @@ export class EmailReplyDeliveryService {
       failureCode: certainty === "accepted" ? null : certainty,
       sanitizedError,
       messageReplyStatus,
+      // T08: the guard row resolved before the claim (line 324) — pass its id
+      // so finalize transitions the guard in the same transaction as the
+      // attempt/draft/approval/audit. Null when no guard row exists (legacy
+      // data); finalize then skips the guard transition.
+      guardId: guardRow?.id ?? null,
     });
 
     if (outcome === "sent") {
