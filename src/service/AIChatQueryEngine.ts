@@ -2403,9 +2403,14 @@ export class AIChatQueryEngine {
     }
     const pendingPermission = this.pendingPermissions.get(conversationId);
     if (pendingPermission) {
+      const permSink =
+        this.pendingSinks.get(conversationId) ?? pendingPermission.eventSink;
       this.pendingPermissions.delete(conversationId);
+      this.pendingSinks.delete(conversationId);
+      this.runStreamModes.delete(conversationId);
+      this.stopHooksDispatched.delete(conversationId);
       pendingPermission.abortController.abort();
-      this.pendingSinks.get(conversationId)?.emit({
+      permSink?.emit({
         type: "cancelled",
         conversationId: pendingPermission.conversationId,
         messageId: pendingPermission.assistantMessageId,
@@ -2649,10 +2654,22 @@ export class AIChatQueryEngine {
       await this.flushEventSaves(eventSink);
 
       if (isPermissionPromptResult(toolResult)) {
-        // Permission still required — park again; the fresh prompt was
-        // emitted above so the surface re-renders the decision card.
+        // Permission still required — park again through the COMMON parking
+        // path (TODO-10, FR-021): refresh the side-map sink to the resume's
+        // destination so a later legacy resume and the owner both reach the
+        // CURRENT consumer, and re-notify the owner exactly once per park.
         this.activeTurns.delete(conversationId);
+        this.rememberPendingSink(conversationId, baseSink);
         this.pendingPermissions.set(conversationId, matchedByToolId);
+        this.notifyAwaiting(
+          matchedByToolId.lifecycle ?? lifecycle,
+          {
+            kind: "permission",
+            conversationId: matchedByToolId.conversationId,
+            assistantMessageId: matchedByToolId.assistantMessageId,
+            toolCallId: matchedByToolId.toolCallId,
+          }
+        );
         return {
           type: "paused_for_permission",
           conversationId,

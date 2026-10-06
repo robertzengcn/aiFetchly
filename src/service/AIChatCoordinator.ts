@@ -776,6 +776,12 @@ export class AIChatCoordinator {
         // The lifecycle listener may have transitioned already (FR-021);
         // defeat TS's assignment-based narrowing — the listener runs async
         // relative to this branch.
+        // TODO-06: wait for any in-flight lifecycle write before this
+        // branch's own transition so durable order matches memory order.
+        await (
+          (live as { lifecycleTransitions?: Promise<void> })
+            .lifecycleTransitions ?? Promise.resolve()
+        ).catch(() => undefined);
         const alreadyParked =
           (live.status as ChatRunStatus) === parked;
         live.status = parked;
@@ -866,9 +872,20 @@ export class AIChatCoordinator {
         assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
       });
     } finally {
-      lease.release();
-      this.deps.scheduler.complete(runId);
-      this.pump();
+      // TODO-06: the dispatch holds its lease until the last lifecycle-state
+      // write settles — memory and storage agree before capacity frees.
+      const pending = (live as { lifecycleTransitions?: Promise<void> })
+        .lifecycleTransitions;
+      const releaseCapacity = (): void => {
+        lease.release();
+        this.deps.scheduler.complete(runId);
+        this.pump();
+      };
+      if (pending) {
+        void pending.catch(() => undefined).then(releaseCapacity);
+      } else {
+        releaseCapacity();
+      }
     }
   }
 
@@ -964,23 +981,40 @@ export class AIChatCoordinator {
   private createLifecycleListener(
     live: LiveRunState
   ): AIChatTurnLifecycleListener {
+    // TODO-06 (FR-021): run-owned transition serialization — every waiting/
+    // resumed write chains onto the previous one, so a fast pause→resume
+    // sequence cannot interleave durable rows, and a failed write surfaces a
+    // classified error instead of silently leaving storage "running" while
+    // memory says "parked".
+    let transitionChain: Promise<void> = Promise.resolve();
     const transitionThenBroadcast = (
       status: ChatRunStatus,
       reason: ConversationSummaryEvent["reason"]
     ): void => {
-      void this.deps.runModule
-        .transition(live.runId, status)
+      transitionChain = transitionChain
+        .then(() => this.deps.runModule.transition(live.runId, status))
         .then(() => {
           void this.broadcastRunSummary(live.conversationId, reason);
         })
         .catch((err: unknown) => {
-          console.warn(
-            "[ai-chat-workspace] lifecycle transition failed for run",
+          console.error(
+            "[ai-chat-workspace] lifecycle transition FAILED for run",
             live.runId,
+            status,
             err
           );
+          // Failure is explicit, never silent: mark the in-memory state back
+          // to the last durably-known status so the next summary tells the
+          // truth (storage is the authority; restart reconciliation fixes
+          // the row).
+          live.status = "running";
+          void this.broadcastRunSummary(live.conversationId, "run_started");
         });
     };
+    // Exposed for executeDispatch: the dispatch must not release capacity
+    // while a waiting/resumed transition is still in flight (TODO-06).
+    (live as { lifecycleTransitions?: Promise<void> }).lifecycleTransitions =
+      transitionChain;
     return {
       onAwaiting: (event) => {
         const parked: ChatRunStatus =
