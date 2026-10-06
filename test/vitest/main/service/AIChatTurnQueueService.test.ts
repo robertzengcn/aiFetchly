@@ -157,6 +157,14 @@ beforeEach(async () => {
       }
     }
   }
+  // Re-initialize synchronously for every test: destroying without
+  // re-initializing left the first model call of each test racing
+  // DataSource init ("No metadata for AIChatPendingMessageEntity") and,
+  // under the shared worktree DB, "database is locked".
+  const { resolveTestDbPath: resolvePath } = await import("@/config/testDbPath");
+  const dbPath = resolvePath();
+  void SqliteDb.getInstance(dbPath);
+  await SqliteDb.ensureInitialized();
 });
 
 describe("AIChatTurnQueueService submit + drain", () => {
