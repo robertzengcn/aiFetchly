@@ -19,6 +19,8 @@ import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -2738,5 +2740,461 @@ describe("FR-039 generation/validation counters", () => {
     // the recheck, so generation_outcome{ok} fired inside the attempt while
     // the invocation overall failed.
     expect(counters.get("generation_outcome{outcome=ok}")).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T07/FR-035 — the service acquires the persistent generation reservation
+// AFTER the pre-draft guard allows and BEFORE classification/model work.
+// Losers pay no model cost: generation_in_progress / reusable / blocked are
+// decided in the acquire transaction. The reservation is released on every
+// failure path and bound to the committed draft on success (interim
+// commitDraftToGuard transition until the Step-4 atomic commit).
+// ---------------------------------------------------------------------------
+describe("createDraft acquires the generation reservation (T07)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+  // The guard module is shared across the services under test so the
+  // reservation rows are visible to assertions. Constructed at describe
+  // scope (BaseModule resolves the dbpath through Token — same pattern as
+  // every other block in this file).
+  const guardModule = new EmailReplyGuardModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4252;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"],
+    emailServiceId = 4252
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = emailServiceId;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  async function seedAttempt(
+    messageId: number,
+    status: EmailReplySendAttemptStatus,
+    emailServiceId = 4252
+  ): Promise<void> {
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `key-${Math.random()}`;
+    attempt.draftId = 900000 + Math.floor(Math.random() * 9999);
+    attempt.revisionId = attempt.draftId;
+    attempt.approvalId = attempt.draftId;
+    attempt.messageId = messageId;
+    attempt.conversationId = null;
+    attempt.emailServiceId = emailServiceId;
+    attempt.senderAddress = "owner@example.com";
+    attempt.recipientAddress = "person@example.com";
+    attempt.status = status;
+    attempt.claimedAt = new Date();
+    attempt.submittedAt = null;
+    attempt.completedAt = null;
+    attempt.providerMessageId = null;
+    attempt.failureCode = null;
+    attempt.sanitizedError = null;
+    await attemptModule.create(attempt);
+  }
+
+  /**
+   * Seed an unexpired `generating` guard row held by a foreign owner, as if
+   * a crashed/slow invocation left its lease behind. In this file the modules
+   * resolve through BaseModule's Token fallback (no USERSDBPATH store in
+   * vitest), so the singleton lives at the aifetchly-test fallback dir.
+   */
+  async function seedGeneratingGuard(
+    emailServiceId: number,
+    replyKey: string,
+    messageId: number
+  ): Promise<void> {
+    const { SqliteDb, getSqliteTestFallbackDir } = await import(
+      "@/config/SqliteDb"
+    );
+    const connection = SqliteDb.getInstance(
+      getSqliteTestFallbackDir()
+    ).connection;
+    const guard = new EmailReplyGuardEntity();
+    guard.emailServiceId = emailServiceId;
+    guard.replyKey = replyKey;
+    guard.messageId = messageId;
+    guard.phase = "generating";
+    guard.ownerToken = "f".repeat(128);
+    guard.leaseExpiresAt = new Date(Date.now() + 5 * 60_000);
+    await connection.getRepository(EmailReplyGuardEntity).save(guard);
+  }
+
+  /**
+   * Wrap the shared guard module so a mutation runs immediately before the
+   * acquire transaction — the window between the non-atomic pre-draft guard
+   * (2b) read and the reservation read. This is exactly the TOCTOU the
+   * reservation closes: a sibling that flips state after the read-side guard
+   * allowed must be caught with zero model cost.
+   */
+  function guardModuleThatMutatesBeforeAcquire(
+    mutation: () => Promise<void>
+  ): EmailReplyGuardModule {
+    const wrapped: EmailReplyGuardModule = Object.create(guardModule);
+    wrapped.acquireReservation = async (input) => {
+      await mutation();
+      return guardModule.acquireReservation(input);
+    };
+    return wrapped;
+  }
+
+  beforeEach(() => {
+    drainCountersForTest();
+  });
+
+  it("clean message: acquires, generates, and binds the guard to the committed draft", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(false);
+    expect(requests).toHaveLength(1);
+
+    const counters = drainCountersForTest();
+    expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(1);
+
+    // The guard row is bound to the committed draft in draft_ready — the
+    // interim commitDraftToGuard transition (owner-token fenced; the owner
+    // token is retained until Step 4 folds the transition into the atomic
+    // commit, where the lease binding is finalized).
+    const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
+    expect(guardRow).not.toBeNull();
+    expect(guardRow?.phase).toBe("draft_ready");
+    expect(guardRow?.activeDraftId).toBe(result.draftId);
+  });
+
+  it("second concurrent createDraft for the same message loses with generation_in_progress and zero model calls", async () => {
+    const messageId = await seedMessage();
+    // Gate: the winner's LLM call blocks until the loser's acquire has run.
+    const gate: { release: (() => void) | null } = { release: null };
+    const winnerGate = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    let winnerProceeded = false;
+    const { factory: realFactory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const winnerFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        // Hold the winner inside its LLM call while the second invocation
+        // attempts to acquire.
+        winnerProceeded = true;
+        await winnerGate;
+        return realFactory().openAIChatCompletion(req);
+      },
+    });
+    const winner = new EmailReplyDraftGenerationService({
+      apiFactory: winnerFactory,
+      guardModuleFactory: () => guardModule,
+    });
+    const loser = new EmailReplyDraftGenerationService({
+      apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
+      guardModuleFactory: () => guardModule,
+    });
+
+    const winnerPromise = winner
+      .createDraft({ messageId, useKnowledgeLibrary: false })
+      .then((r) => {
+        expect(winnerProceeded).toBe(true);
+        return r;
+      });
+    // Give the winner a tick to acquire its reservation inside the LLM call.
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    const loserPromise = loser.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    const loserResult = await loserPromise;
+    expect(loserResult.success).toBe(false);
+    if (loserResult.success) return;
+    expect(loserResult.code).toBe("generation_in_progress");
+    expect(loserResult.next_action).toBe("no_action");
+    expect(loserResult.error).toContain("generation_in_progress");
+    // The loser acquired its own connection but never reached the model.
+    const loserCounters = drainCountersForTest();
+    expect(
+      loserCounters.get("reservation_outcome{outcome=generation_in_progress}")
+    ).toBe(1);
+
+    // The winner proceeds after the loser returned and the gate opens.
+    if (gate.release) gate.release();
+    const winnerResult = await winnerPromise;
+    expect(winnerResult.success).toBe(true);
+    if (!winnerResult.success) return;
+    expect(requests).toHaveLength(1);
+    // Exactly one draft persisted across both invocations.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("reservation winner's failure path releases the guard so a retry can acquire", async () => {
+    const messageId = await seedMessage();
+    // First invocation: the model returns malformed output twice →
+    // validation_failed → the reservation is released.
+    const { factory } = fakeApiFactory([
+      completionResponse("{nope}"),
+      completionResponse("{still nope}"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const first = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(first.success).toBe(false);
+    if (first.success) return;
+    expect(first.code).toBe("needs_human_review");
+    // The first invocation DID acquire before the model work.
+    const firstCounters = drainCountersForTest();
+    expect(firstCounters.get("reservation_outcome{outcome=acquired}")).toBe(1);
+
+    // The guard row went back to idle with no owner (release on failure).
+    const released = await guardModule.findByReplyKey(4252, `row:${messageId}`);
+    expect(released?.phase).toBe("idle");
+    expect(released?.ownerToken).toBeNull();
+
+    // A retry acquires cleanly and generates.
+    const retryFactory = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const retry = new EmailReplyDraftGenerationService({
+      apiFactory: retryFactory.factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const second = await retry.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(second.success).toBe(true);
+    const counters = drainCountersForTest();
+    expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(1);
+  });
+
+  it("reusable sibling draft is returned with zero model calls (reservation short-circuit)", async () => {
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    expect(requests).toHaveLength(0);
+
+    const counters = drainCountersForTest();
+    expect(counters.get("reservation_outcome{outcome=reusable}")).toBe(1);
+    expect(counters.get("reservation_outcome{outcome=acquired}")).toBeUndefined();
+    // Reuse short-circuits BEFORE the INSERT — no guard row was created.
+    const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
+    expect(guardRow).toBeNull();
+  });
+
+  it("sent attempt appearing in the TOCTOU window blocks at the reservation (already_replied, zero model calls)", async () => {
+    const messageId = await seedMessage();
+    // The pre-draft guard (2b) reads BEFORE the attempt exists and allows;
+    // the attempt lands in the window between 2b and the acquire. The
+    // reservation's reconcile must catch it with zero model cost — this is
+    // the race the read-side guard misses.
+    const wrappedGuard = guardModuleThatMutatesBeforeAcquire(async () => {
+      await seedAttempt(messageId, "sent");
+    });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => wrappedGuard,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("already_replied");
+    // already_replied with no surfaced draft id maps to no_action.
+    expect(result.next_action).toBe("no_action");
+    expect(requests).toHaveLength(0);
+
+    const counters = drainCountersForTest();
+    expect(counters.get("reservation_outcome{outcome=blocked}")).toBe(1);
+    // No guard row was created for a blocked cluster.
+    const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
+    expect(guardRow).toBeNull();
+  });
+
+  it("a sent attempt seeded before the call is caught by the pre-draft guard (no reservation metric)", async () => {
+    // The existing FR-028 behavior: an attempt present up front is refused by
+    // the 2b guard before the reservation is ever consulted — the acquire is
+    // reached only on a guard-allowed cluster.
+    const messageId = await seedMessage();
+    await seedAttempt(messageId, "sent");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("already_replied");
+    expect(requests).toHaveLength(0);
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("reservation_outcome{outcome=blocked}")
+    ).toBeUndefined();
+  });
+
+  it("pre-seeded foreign generating lease returns generation_in_progress without a race", async () => {
+    const messageId = await seedMessage();
+    // A crashed/slow invocation left an unexpired generating guard row held
+    // by a foreign owner token; this invocation must lose immediately.
+    await seedGeneratingGuard(4252, `row:${messageId}`, messageId);
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("generation_in_progress");
+    expect(result.next_action).toBe("no_action");
+    // Zero model calls — classification and generation never ran.
+    expect(requests).toHaveLength(0);
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("reservation_outcome{outcome=generation_in_progress}")
+    ).toBe(1);
+    // The foreign lease is untouched (fence: non-owners cannot mutate it).
+    const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
+    expect(guardRow?.phase).toBe("generating");
+    expect(guardRow?.ownerToken).toBe("f".repeat(128));
+  });
+
+  it("all four reservation outcomes emit exactly one counter each", async () => {
+    // acquired
+    const acquiredMessageId = await seedMessage({ emailServiceId: 4253 });
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const acquiredSvc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const acquired = await acquiredSvc.createDraft({
+      messageId: acquiredMessageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(acquired.success).toBe(true);
+
+    // reusable
+    const reusableMessageId = await seedMessage({ emailServiceId: 4254 });
+    await seedDraft(reusableMessageId, "draft", 4254);
+    const reusableSvc = new EmailReplyDraftGenerationService({
+      apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const reusable = await reusableSvc.createDraft({
+      messageId: reusableMessageId,
+    });
+    expect(reusable.success).toBe(true);
+    if (!reusable.success) return;
+    expect(reusable.reused).toBe(true);
+
+    // blocked (already_replied) — the attempt lands in the TOCTOU window so
+    // the reservation (not the pre-draft guard) produces the blocked outcome.
+    const blockedMessageId = await seedMessage({ emailServiceId: 4255 });
+    const blockedSvc = new EmailReplyDraftGenerationService({
+      apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
+      guardModuleFactory: () =>
+        guardModuleThatMutatesBeforeAcquire(async () => {
+          await seedAttempt(blockedMessageId, "sent", 4255);
+        }),
+    });
+    const blocked = await blockedSvc.createDraft({
+      messageId: blockedMessageId,
+    });
+    expect(blocked.success).toBe(false);
+
+    // generation_in_progress
+    const inProgressMessageId = await seedMessage({ emailServiceId: 4256 });
+    await seedGeneratingGuard(4256, `row:${inProgressMessageId}`, inProgressMessageId);
+    const inProgressSvc = new EmailReplyDraftGenerationService({
+      apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const inProgress = await inProgressSvc.createDraft({
+      messageId: inProgressMessageId,
+    });
+    expect(inProgress.success).toBe(false);
+    if (inProgress.success) return;
+    expect(inProgress.code).toBe("generation_in_progress");
+
+    const counters = drainCountersForTest();
+    expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(1);
+    expect(counters.get("reservation_outcome{outcome=reusable}")).toBe(1);
+    expect(counters.get("reservation_outcome{outcome=blocked}")).toBe(1);
+    expect(
+      counters.get("reservation_outcome{outcome=generation_in_progress}")
+    ).toBe(1);
   });
 });

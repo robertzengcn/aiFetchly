@@ -59,8 +59,12 @@ import {
   startGenerationDeadline,
   MODEL_CALL_CAP_MS,
   REPLY_MAX_TOKENS_DEFAULT,
+  GENERATION_INVOCATION_BUDGET_MS,
   type GenerationDeadline,
 } from "@/service/emailReply/EmailReplyGenerationBudget";
+import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
+import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
+import { randomBytes } from "node:crypto";
 
 /** Input to {@link EmailReplyDraftGenerationService.createDraft}. */
 export interface CreateDraftInput {
@@ -274,6 +278,20 @@ export class EmailReplyDraftGenerationService {
    * down the SAME aggregate budget. Null outside an invocation.
    */
   private deadline: GenerationDeadline | null = null;
+  /**
+   * T07/FR-035: injectable guard module (test seam). Tests inject an in-memory
+   * stub or a module bound to an isolated temp DB; production constructs the
+   * real one lazily (never at module top level — BaseModule TDZ).
+   */
+  private guardModule: EmailReplyGuardModule | null = null;
+  private readonly guardModuleFactory: () => EmailReplyGuardModule;
+  /**
+   * The live reservation for the CURRENT createDraft invocation (T07/FR-035).
+   * Acquired after the pre-draft guard allows and before classification; held
+   * across the model calls; released on every failure path and on reuse. Null
+   * outside an invocation or when the cluster was blocked/reusable.
+   */
+  private reservation: { guardId: number; ownerToken: string } | null = null;
 
   constructor(
     options?: {
@@ -281,6 +299,8 @@ export class EmailReplyDraftGenerationService {
       readonly budget?: { readonly now?: () => number; readonly budgetMs?: number };
       /** Reply-generation output budget (FR-027); defaults to 1500 tokens. */
       readonly maxTokens?: number;
+      /** T07: injectable guard module factory (test seam). */
+      readonly guardModuleFactory?: () => EmailReplyGuardModule;
     }
   ) {
     this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
@@ -289,6 +309,8 @@ export class EmailReplyDraftGenerationService {
       options?.maxTokens !== undefined && Number.isFinite(options.maxTokens) && options.maxTokens > 0
         ? Math.floor(options.maxTokens)
         : REPLY_MAX_TOKENS_DEFAULT;
+    this.guardModuleFactory =
+      options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
   }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
@@ -381,18 +403,128 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
-    // 2c. Reuse an eligible existing draft instead of regenerating (FR-028).
-    //     The message-level guard (FR-029) already cleared the message: there
-    //     is at most one eligible draft (status draft/approved/failed per B08)
-    //     and no sent/in-flight/delivery_unknown/conflict state. If such a
-    //     draft exists, return it with reused=true and make NO LLM call, NO
-    //     edit, NO approval, NO send. Audit the reuse as a message_read_by_ai
-    //     event (not a refusal).
+    // 2c. T07/FR-035 — ATOMIC generation reservation (§8.1). The read-side
+    //     guard above (2b) is a non-atomic TOCTOU read; between its allow and
+    //     the persistence a sibling could flip state. The reservation closes
+    //     that window: it reconciles the canonical cluster's drafts + attempts
+    //     and claims a leased guard row in ONE transaction, so exactly one
+    //     concurrent invocation for this message wins and proceeds to model
+    //     work. Absorbs the old stage-2c reuse read: a losing invocation
+    //     learns what to do with no further reads.
     //
-    //     B01: this check also runs BEFORE classification — a reusable draft
-    //     means no generation, hence no need to refine an inconclusive
-    //     deterministic classification. The stored classification (or "unknown")
-    //     is returned as-is.
+    //     Model/mailbox network work is NEVER done inside the reservation
+    //     transaction (§8.1): acquire is short, the LLM call sits between the
+    //     acquire and the commit transaction (Step 4), bounded by the T09/B13
+    //     deadline. The lease (5 min) covers the full invocation budget.
+    const replyKey = canonicalReplyKey({
+      normalizedMessageId: message.normalizedMessageId,
+      rowId: message.id,
+    });
+    const ownerToken = randomBytes(64).toString("hex");
+    const leaseExpiresAt = new Date(
+      Date.now() + GENERATION_INVOCATION_BUDGET_MS
+    );
+    const reservation = await this.guardModuleForNow().acquireReservation({
+      emailServiceId: message.emailServiceId,
+      replyKey,
+      messageId: message.id,
+      ownerToken,
+      leaseExpiresAt,
+      now: new Date(),
+      normalizedMessageId: message.normalizedMessageId,
+    });
+    incrementReplyMetric("reservation_outcome", { outcome: reservation.status });
+    if (reservation.status !== "acquired") {
+      if (reservation.status === "reusable") {
+        // A sibling already holds an eligible draft (B08) — reuse it by ID
+        // with NO LLM call, falling through to the existing reuse-audit path.
+        const reusedDraft = await this.draftModule.read(
+          reservation.draftId
+        );
+        if (reusedDraft) {
+          try {
+            await this.writeReuseAudit(
+              message.emailServiceId,
+              message.id,
+              requestCorrelationId,
+              reusedDraft
+            );
+          } catch (auditError) {
+            // B09: audit persistence failure STOPS the work.
+            const auditErrMsg =
+              auditError instanceof Error
+                ? auditError.message
+                : String(auditError);
+            return {
+              success: false,
+              error: `Reuse audit persistence failed: ${auditErrMsg}`,
+              requestCorrelationId,
+              existing_draft_id: reusedDraft.id,
+            };
+          }
+          incrementReplyMetric("generation_outcome", { outcome: "reused" });
+          return {
+            success: true,
+            draftId: reusedDraft.id,
+            messageId: message.id,
+            subject: reusedDraft.subject,
+            bodyText: reusedDraft.bodyText,
+            bodyHtml: reusedDraft.bodyHtml,
+            classification: (message.classification ??
+              "unknown") as EmailMessageClassification,
+            knowledgeSources: [],
+            confidence: reusedDraft.confidence ?? null,
+            warnings: decodeStoredWarnings(reusedDraft.warningsJson),
+            reused: true,
+            code: "allowed",
+            requestCorrelationId,
+          };
+        }
+        // The reusable draft vanished between the reservation transaction and
+        // this read — fall through to the blocked outcome below rather than
+        // regenerating into an uncertain cluster state.
+        return {
+          success: false,
+          error:
+            "[reply_state_unknown] Reusable draft disappeared after reservation; requires human triage",
+          requestCorrelationId,
+          code: "reply_state_unknown",
+          next_action: nextActionForCode("reply_state_unknown", undefined),
+        };
+      }
+      if (reservation.status === "generation_in_progress") {
+        return {
+          success: false,
+          error:
+            "[generation_in_progress] Another generation is in progress for this message; try again shortly",
+          requestCorrelationId,
+          code: "generation_in_progress",
+          next_action: nextActionForCode("generation_in_progress", undefined),
+        };
+      }
+      // blocked: the cluster is in a state that forbids generation
+      // (already_replied / delivery_unknown / reply_in_progress /
+      // reply_state_conflict / reply_state_unknown).
+      return {
+        success: false,
+        error: `[${reservation.code}] Message reply state forbids generation`,
+        requestCorrelationId,
+        code: reservation.code,
+        next_action: nextActionForCode(reservation.code, undefined),
+      };
+    }
+    // status === "acquired": hold the reservation for the commit transaction
+    // (Step 4) and release it on every failure path below.
+    this.reservation = { guardId: reservation.guardId, ownerToken };
+
+    // 2c-legacy. Reuse an eligible existing draft instead of regenerating
+    //     (FR-028) — only reachable when the reservation returned `acquired`
+    //     (no eligible draft existed in the reservation transaction), which in
+    //     practice means the cluster is clean. Retained as a defensive
+    //     re-read: a sibling draft may have been committed between the
+    //     reservation's acquire and this read by an invocation whose commit
+    //     raced ours (its reservation claim lost, its draft persisted first).
+    //     If such a draft exists, reuse it rather than persist a duplicate.
     //
     //     B09: decode the stored warnings (complete strings — safe to surface)
     //     and record exactly ONE reuse decision event. The audit write is NOT
@@ -405,6 +537,7 @@ export class EmailReplyDraftGenerationService {
     const existingDrafts = await this.draftModule.listByMessage(message.id);
     const reusable = pickReusableDraft(existingDrafts);
     if (reusable) {
+      await this.releaseReservationSafely();
       try {
         await this.writeReuseAudit(
           message.emailServiceId,
@@ -580,6 +713,9 @@ export class EmailReplyDraftGenerationService {
     //    attempt and lost the intended stage/code).
     const attempt = await this.attemptLlmGeneration(systemMsg, userMsg);
     if (attempt.kind !== "ok") {
+      // T07: release the reservation on every failure path — the lease must
+      // not outlive a failed invocation (§8.2).
+      await this.releaseReservationSafely();
       if (attempt.kind === "validation_failed") {
         const allCodes = attempt.codes;
         // recordFailure is NOT inside a transport catch — a persistence error
@@ -639,6 +775,8 @@ export class EmailReplyDraftGenerationService {
       .slice(0, 998);
     const bodyText = generated.bodyText.trim();
     if (!bodyText) {
+      // T07: release the reservation — no draft will be persisted.
+      await this.releaseReservationSafely();
       warnings.push("Generated body was empty; draft not persisted.");
       await this.recordFailure(
         message.emailServiceId,
@@ -703,6 +841,9 @@ export class EmailReplyDraftGenerationService {
       messageId: message.id,
     });
     if (!recheckDecision.allowed) {
+      // T07: release the reservation — the cluster state changed under us and
+      // no draft will be persisted (§8.2).
+      await this.releaseReservationSafely();
       // FR-039: the post-generation recheck REFUSED after the pre-draft guard
       // allowed — the guard conflict counter (distinct from policy_decision,
       // which the pre-draft stage already emits).
@@ -745,6 +886,8 @@ export class EmailReplyDraftGenerationService {
     const recheckDrafts = await this.draftModule.listByMessage(message.id);
     const reusableNow = pickReusableDraft(recheckDrafts);
     if (reusableNow) {
+      // T07: release the reservation — a sibling draft won; we reuse it.
+      await this.releaseReservationSafely();
       // B09: the race-reuse path must record exactly ONE reuse decision event,
       //     just like the initial reuse path. A sibling appeared (or this same
       //     draft's status resolved) during the awaited LLM call; we reuse
@@ -796,6 +939,8 @@ export class EmailReplyDraftGenerationService {
     //     no reply_status bump, no draft_created audit. This is a transport
     //     failure (deadline_exceeded), not a validation strike.
     if (this.deadline?.expired()) {
+      // T07: release the reservation — the output is stale, nothing persists.
+      await this.releaseReservationSafely();
       incrementReplyMetric("deadline_exceeded", { stage: "persistence" });
       return {
         success: false,
@@ -904,6 +1049,29 @@ export class EmailReplyDraftGenerationService {
     //     authoritative classification was set at stage 2a (with provenance) and
     //     must NOT be overwritten by the model's draft-time intentSuggestion.
     await this.messageModule.updateReplyStatus(message.id, "draft_created");
+
+    // T07: transition the guard to `draft_ready` and bind the committed draft.
+    //     Interim form (pre-Step-4): the commit is still separate non-atomic
+    //     writes; the fenced commit gate re-checks ownerToken so a replaced
+    //     owner cannot bind. Step 4 folds this transition into the atomic
+    //     commit transaction.
+    const held = this.reservation;
+    if (held) {
+      try {
+        await this.guardModuleForNow().commitDraftToGuard({
+          guardId: held.guardId,
+          ownerToken: held.ownerToken,
+          now: new Date(),
+          activeDraftId: savedDraft.id,
+        });
+      } catch (error) {
+        console.error(
+          `Failed to transition guard ${held.guardId} to draft_ready:`,
+          error
+        );
+      }
+      this.reservation = null;
+    }
 
     // 9. Audit rows.
     await this.writeReplyAudit(
@@ -1310,6 +1478,44 @@ export class EmailReplyDraftGenerationService {
    * unrecorded refusal must never be followed by a silent success return. The
    * caller surfaces the persistence failure instead.
    */
+  /**
+   * T07: the guard module for THIS invocation. Lazily constructed on first
+   * use (never at module top level — BaseModule TDZ crash under vi.mock).
+   */
+  private guardModuleForNow(): EmailReplyGuardModule {
+    if (!this.guardModule) {
+      this.guardModule = this.guardModuleFactory();
+    }
+    return this.guardModule;
+  }
+
+  /**
+   * T07/FR-035: release the current invocation's reservation on a failure
+   * path (§8.2 — the lease must not outlive a failed invocation). Best-effort
+   * with a bounded, sanitized log: a release failure must not mask the
+   * original failure the caller is about to see, and the expired lease is
+   * recoverable by the recovery sweep (Step 5).
+   */
+  private async releaseReservationSafely(): Promise<void> {
+    const reservation = this.reservation;
+    this.reservation = null;
+    if (!reservation) {
+      return;
+    }
+    try {
+      await this.guardModuleForNow().releaseReservation({
+        guardId: reservation.guardId,
+        ownerToken: reservation.ownerToken,
+        now: new Date(),
+      });
+    } catch (error) {
+      console.error(
+        `Failed to release generation reservation ${reservation.guardId} (recoverable by sweep):`,
+        error
+      );
+    }
+  }
+
   private async recordFailure(
     emailServiceId: number,
     messageId: number,
