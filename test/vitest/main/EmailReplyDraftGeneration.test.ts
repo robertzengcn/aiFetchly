@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import {
   parseReplyJson,
   validateLlmRawResult,
@@ -21,6 +21,7 @@ import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { EmailReplyDraftModel } from "@/model/EmailReplyDraft.model";
 import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -34,6 +35,33 @@ vi.mock("@/service/AiFeatureGate", () => ({
   ensureHostedAiEnabled: vi.fn(async () => true),
   isAiEnabled: vi.fn(() => true),
 }));
+
+// Step 4 (T07): the atomic commit resolves the outbound envelope binding from
+// the email-service row BEFORE persisting (an unresolvable envelope is now a
+// needs_human_review refusal, not a silently unbound draft). Every fresh-
+// generation success path therefore requires an email_service row with a real
+// `from` for the service id its messages use. Seed them once at file scope —
+// TypeORM save with an explicit PK is idempotent, so re-seeding is safe.
+beforeAll(async () => {
+  const { EmailServiceModel } = await import("@/model/EmailService.model");
+  const { EmailServiceEntity } = await import("@/entity/EmailService.entity");
+  const model = new EmailServiceModel("");
+  const ids = [4244, 4245, 4247, 4248, 4249, 4251, 4252, 4253];
+  for (const id of ids) {
+    const entity = new EmailServiceEntity();
+    entity.id = id;
+    entity.name = `Step4 Test Service ${id}`;
+    entity.from = "owner@svc.com";
+    entity.smtpUsername = null;
+    entity.replyTo = null;
+    entity.password = "secret";
+    entity.host = "smtp.svc.com";
+    entity.port = "465";
+    entity.ssl = 1;
+    entity.status = 1;
+    await model.create(entity);
+  }
+});
 
 /** Build a minimal non-streaming completion response for a content string. */
 function completionResponse(
@@ -2902,10 +2930,9 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const counters = drainCountersForTest();
     expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(1);
 
-    // The guard row is bound to the committed draft in draft_ready — the
-    // interim commitDraftToGuard transition (owner-token fenced; the owner
-    // token is retained until Step 4 folds the transition into the atomic
-    // commit, where the lease binding is finalized).
+    // The guard row is bound to the committed draft in draft_ready inside the
+    // atomic commit transaction (Step 4): the owner-token-fenced transition
+    // rolls back together with the draft insert when it does not match.
     const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
     expect(guardRow).not.toBeNull();
     expect(guardRow?.phase).toBe("draft_ready");
@@ -3196,5 +3223,212 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     expect(
       counters.get("reservation_outcome{outcome=generation_in_progress}")
     ).toBe(1);
+  });
+
+  it("atomic commit persists draft + revision + hash + projection + guard + audit together (Step 4 happy path)", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // Draft row: sendable projection carries the envelope + hash.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    const draft = drafts[0];
+    expect(draft.status).toBe("draft");
+    expect(draft.senderAddress).toBe("owner@svc.com");
+    expect(draft.recipientAddress).toBe("person@example.com");
+
+    // Revision 1 was materialized INSIDE the commit (no unbound sendable
+    // draft): validation findings + generation metadata are on the revision.
+    const revisionModule = new EmailReplyDraftRevisionModule();
+    const revisions = await revisionModule.listByDraft(draft.id);
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0].revisionNumber).toBe(1);
+    expect(revisions[0].contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(revisions[0].validationFindingsJson).toBeTruthy();
+    const findings = JSON.parse(
+      revisions[0].validationFindingsJson ?? "{}"
+    ) as { validatorVersion?: string };
+    expect(findings.validatorVersion).toBe("reply-validator-v2-1");
+
+    // The draft projection references the materialized revision.
+    expect(draft.currentRevisionId).toBe(revisions[0].id);
+    expect(draft.revisionNumber).toBe(1);
+    expect(draft.contentHash).toMatch(/^[0-9a-f]{64}$/);
+
+    // The message projection was bumped inside the same transaction.
+    const after = await messageModule.read(messageId);
+    expect(after?.replyStatus).toBe("draft_created");
+    expect(after?.processedAt).not.toBeNull();
+
+    // The guard row is bound in draft_ready.
+    const guardRow = await guardModule.findByReplyKey(
+      4252,
+      `row:${messageId}`
+    );
+    expect(guardRow?.phase).toBe("draft_ready");
+    expect(guardRow?.activeDraftId).toBe(draft.id);
+
+    // Exactly ONE draft_created audit row, with the B11 correlation metadata.
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const created = records.filter((r) => r.action === "draft_created");
+    expect(created).toHaveLength(1);
+    const meta = JSON.parse(created[0].metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+      promptVersion?: string;
+    };
+    expect(meta.correlationId).toBe(result.requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+    expect(meta.promptVersion).toBe("owner-voice-v2");
+  });
+
+  it("a throw inside the commit rolls back draft, revision, audit, and guard state (Step 4 rollback)", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    // Install the prototype spy BEFORE the service is constructed:
+    // BaseDb.installConnectionGuards copies every async method onto the model
+    // instance at construction, closing over the prototype function — a spy
+    // installed after construction is shadowed by that instance copy.
+    const spy = vi
+      .spyOn(EmailReplyDraftModel.prototype, "appendRevisionWithManager")
+      .mockImplementation(async () => {
+        throw new Error("simulated commit failure");
+      });
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      guardModuleFactory: () => guardModule,
+    });
+    try {
+      await expect(
+        svc.createDraft({ messageId, useKnowledgeLibrary: false })
+      ).rejects.toThrow("simulated commit failure");
+    } finally {
+      spy.mockRestore();
+    }
+
+    // NOTHING persisted: no draft, no revision, no audit row.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(records.filter((r) => r.action === "draft_created")).toHaveLength(0);
+
+    // The guard was released back to idle (the reservation was released on
+    // the failure path), so a retry can acquire.
+    const guardRow = await guardModule.findByReplyKey(
+      4252,
+      `row:${messageId}`
+    );
+    expect(guardRow?.phase).toBe("idle");
+    expect(guardRow?.ownerToken).toBeNull();
+
+    // The message projection was never bumped.
+    const after = await messageModule.read(messageId);
+    expect(after?.replyStatus).toBe("not_started");
+    expect(after?.processedAt).toBeNull();
+
+    // A retry with a clean commit succeeds end to end.
+    const retryFactory = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const retry = new EmailReplyDraftGenerationService({
+      apiFactory: retryFactory.factory,
+      guardModuleFactory: () => guardModule,
+    });
+    const second = await retry.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(second.success).toBe(true);
+  });
+
+  it("fenced commit: an expired owner cannot persist (late output discarded)", async () => {
+    const messageId = await seedMessage();
+    const gate: { release: (() => void) | null } = { release: null };
+    const winnerGate = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    const { factory: realFactory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const winnerFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        // Hold the winner inside its LLM call while we expire its lease.
+        await winnerGate;
+        return realFactory().openAIChatCompletion(req);
+      },
+    });
+    const winner = new EmailReplyDraftGenerationService({
+      apiFactory: winnerFactory,
+      guardModuleFactory: () => guardModule,
+    });
+    const winnerPromise = winner.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    // Expire the winner's lease directly on the guard row while it is held.
+    const { SqliteDb, getSqliteTestFallbackDir } = await import(
+      "@/config/SqliteDb"
+    );
+    const connection = SqliteDb.getInstance(
+      getSqliteTestFallbackDir()
+    ).connection;
+    const guardRowBefore = await guardModule.findByReplyKey(
+      4252,
+      `row:${messageId}`
+    );
+    expect(guardRowBefore).not.toBeNull();
+    await connection
+      .getRepository(EmailReplyGuardEntity)
+      .update(
+        { id: guardRowBefore?.id },
+        { leaseExpiresAt: new Date(Date.now() - 1000) }
+      );
+
+    if (gate.release) gate.release();
+    const result = await winnerPromise;
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("Generation owner expired before commit");
+
+    // No draft persisted (the commit returned fenced before any write).
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+
+    // The fenced owner's cleanup release still succeeds: releaseReservation is
+    // fenced by ownerToken only (no lease condition), so the legitimate owner
+    // can always clean up its own stale row — the row returns to idle, and a
+    // retry acquires cleanly.
+    const guardRow = await guardModule.findByReplyKey(
+      4252,
+      `row:${messageId}`
+    );
+    expect(guardRow?.phase).toBe("idle");
+    expect(guardRow?.ownerToken).toBeNull();
   });
 });

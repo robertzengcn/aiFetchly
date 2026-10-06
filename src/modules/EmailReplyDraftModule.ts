@@ -6,6 +6,8 @@ import {
   ClaimSendInput,
   ClaimSendResult,
   FinalizeOutcomeInput,
+  CommitGeneratedDraftInput,
+  CommitGeneratedDraftResult,
 } from "@/model/EmailReplyDraft.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
@@ -169,6 +171,23 @@ export class EmailReplyDraftModule extends BaseModule {
       return await this.draftModel.claimApprovedRevisionForSend(input);
     } catch (error) {
       console.error("Error claiming reply draft for send:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Atomic generation commit (Step 4, T07): persists draft + revision +
+   * content hash + message replyStatus + guard transition + audit in ONE
+   * transaction. Delegates to {@link EmailReplyDraftModel.commitGeneratedDraft}.
+   */
+  async commitGeneratedDraft(
+    input: CommitGeneratedDraftInput
+  ): Promise<CommitGeneratedDraftResult> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.commitGeneratedDraft(input);
+    } catch (error) {
+      console.error("Error committing generated reply draft:", error);
       throw error;
     }
   }

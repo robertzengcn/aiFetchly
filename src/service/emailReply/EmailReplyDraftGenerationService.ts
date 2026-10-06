@@ -25,7 +25,6 @@ import {
   REPLY_PROMPT_VERSION,
 } from "@/service/emailReply/EmailReplyPromptBuilder";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
-import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import {
   EmailReplyPolicyOrchestrator,
   pickReusableDraft,
@@ -950,7 +949,42 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
-    // 7. Persist draft.
+    // 7a. Resolve the outbound envelope binding BEFORE the commit
+    //     transaction (§8.1 — no cross-domain reads inside the DB txn). The
+    //     revision write schema requires non-empty sender/recipient, so an
+    //     unresolvable envelope is a pre-commit refusal. The previous
+    //     behavior silently skipped revision materialization and persisted an
+    //     unbound draft — exactly the "unbound sendable draft" the atomic
+    //     commit forbids.
+    const emailService = await new EmailServiceModule().getEmailService(
+      message.emailServiceId
+    );
+    const senderAddress = emailService?.from ?? "";
+    const recipientAddress = (
+      message.replyToAddress ||
+      message.fromAddress ||
+      ""
+    ).trim();
+    if (!senderAddress || !recipientAddress) {
+      await this.releaseReservationSafely();
+      await this.recordFailure(
+        message.emailServiceId,
+        message.id,
+        requestCorrelationId,
+        "[needs_human_review] Cannot bind reply envelope: missing email service identity or recipient address",
+        { stage: "commit", code: "needs_human_review" }
+      );
+      return {
+        success: false,
+        error:
+          "[needs_human_review] Cannot bind reply envelope: missing email service identity or recipient address; no draft persisted",
+        requestCorrelationId,
+        code: "needs_human_review",
+        next_action: "await_human_review",
+      };
+    }
+
+    // 7. Build the draft entity (inserted inside the commit transaction).
     const draft = new EmailReplyDraftEntity();
     draft.messageId = message.id;
     draft.emailServiceId = message.emailServiceId;
@@ -985,105 +1019,95 @@ export class EmailReplyDraftGenerationService {
         })
       : null;
     draft.warningsJson = JSON.stringify(warnings);
-    const savedDraft = await this.draftModule.create(draft);
 
-    // 7b. Materialize immutable revision 1 + canonical hash so the draft is
-    // approvable through the idempotent delivery path (P0.1: this is now
-    // unconditional — the approved-revision path is authoritative). A
-    // materialization failure is logged but does not break draft creation; the
-    // draft still exists and approveDraft will give a clear error until a later
-    // edit or backfill creates the revision.
-    try {
-      const service = await new EmailServiceModule().getEmailService(
-        message.emailServiceId
-      );
-      const senderAddress = service?.from ?? "";
-      const recipientAddress = (
-        message.replyToAddress ||
-        message.fromAddress ||
-        ""
-      ).trim();
-      if (senderAddress && recipientAddress) {
-        await materializeRevision1(this.draftModule, {
-          draftId: savedDraft.id,
-          actor: "ai",
-          subject,
-          bodyText,
-          bodyHtml: null,
-          senderAddress,
-          recipientAddress,
-          emailServiceId: message.emailServiceId,
-          originalMessageId: message.id,
-          generationMetadataJson: JSON.stringify({
-            promptVersion: REPLY_PROMPT_VERSION,
-            identityProfileVersion,
-            knowledgeScopeVersion: knowledge.scopeVersion,
-            knowledgeAbstained: knowledge.abstained,
-            knowledgeOutcome: knowledge.relevance?.outcome ?? null,
-            conversationContext: contextMeta,
-            // T09/FR-027 completion telemetry: same values as the draft row's
-            // telemetry columns, plus honest "unavailable" flags and the
-            // generation-path provenance (correction / hint-fallback). No
-            // prompts, no bodies, no raw model output — metadata only.
-            model: winningRaw.returnedModel ?? null,
-            finishReason: winningRaw.finishReason ?? null,
-            usage: winningRaw.usage
-              ? {
-                  promptTokens: winningRaw.usage.prompt_tokens ?? null,
-                  completionTokens: winningRaw.usage.completion_tokens ?? null,
-                  totalTokens: winningRaw.usage.total_tokens ?? null,
-                }
-              : null,
-            finishReasonUnavailable: winningRaw.finishReason === null,
-            modelUnavailable: winningRaw.returnedModel === null,
-            correctionAttempted,
-            hintFallbackUsed,
-          }),
-        });
-      }
-    } catch (error) {
-      console.error("Failed to materialize revision 1 for draft:", error);
-    }
-
-    // 8. Update message state. B07: only replyStatus is bumped here — the
-    //     authoritative classification was set at stage 2a (with provenance) and
-    //     must NOT be overwritten by the model's draft-time intentSuggestion.
-    await this.messageModule.updateReplyStatus(message.id, "draft_created");
-
-    // T07: transition the guard to `draft_ready` and bind the committed draft.
-    //     Interim form (pre-Step-4): the commit is still separate non-atomic
-    //     writes; the fenced commit gate re-checks ownerToken so a replaced
-    //     owner cannot bind. Step 4 folds this transition into the atomic
-    //     commit transaction.
+    // 7b/8/9 folded into ONE atomic commit transaction (Step 4, T07): draft +
+    // revision + content hash + message replyStatus + guard transition +
+    // draft_created audit. A crash can no longer leave a partially committed
+    // draft with no revision. The fenced commit gate re-checks owner + lease
+    // inside the transaction; an expired/replaced owner returns `{ status:
+    // "fenced" }` (late output discarded). On a fenced outcome the reservation
+    // is released and a transport-error-style failure is surfaced. On a thrown
+    // error mid-commit the reservation is released and the error propagates
+    // (B10-consistent: persistence failures are not swallowed).
     const held = this.reservation;
-    if (held) {
-      try {
-        await this.guardModuleForNow().commitDraftToGuard({
-          guardId: held.guardId,
-          ownerToken: held.ownerToken,
-          now: new Date(),
-          activeDraftId: savedDraft.id,
-        });
-      } catch (error) {
-        console.error(
-          `Failed to transition guard ${held.guardId} to draft_ready:`,
-          error
-        );
+    if (!held) {
+      // Defensive: the reservation should be held by the time we reach the
+      // commit. If it isn't, refuse rather than persist an unbound draft.
+      throw new Error(
+        "Generation reservation missing at commit; cannot persist draft"
+      );
+    }
+    const generationMetadataJson = JSON.stringify({
+      promptVersion: REPLY_PROMPT_VERSION,
+      identityProfileVersion,
+      knowledgeScopeVersion: knowledge.scopeVersion,
+      knowledgeAbstained: knowledge.abstained,
+      knowledgeOutcome: knowledge.relevance?.outcome ?? null,
+      conversationContext: contextMeta,
+      // T09/FR-027 completion telemetry: same values as the draft row's
+      // telemetry columns, plus honest "unavailable" flags and the
+      // generation-path provenance (correction / hint-fallback). No
+      // prompts, no bodies, no raw model output — metadata only.
+      model: winningRaw.returnedModel ?? null,
+      finishReason: winningRaw.finishReason ?? null,
+      usage: winningRaw.usage
+        ? {
+            promptTokens: winningRaw.usage.prompt_tokens ?? null,
+            completionTokens: winningRaw.usage.completion_tokens ?? null,
+            totalTokens: winningRaw.usage.total_tokens ?? null,
+          }
+        : null,
+      finishReasonUnavailable: winningRaw.finishReason === null,
+      modelUnavailable: winningRaw.returnedModel === null,
+      correctionAttempted,
+      hintFallbackUsed,
+    });
+    let savedDraftId: number;
+    try {
+      const commitResult = await this.draftModule.commitGeneratedDraft({
+        guardId: held.guardId,
+        ownerToken: held.ownerToken,
+        rawDraft: draft,
+        emailServiceId: message.emailServiceId,
+        messageId: message.id,
+        subject,
+        bodyText,
+        senderAddress,
+        recipientAddress,
+        generationMetadataJson,
+        requestCorrelationId,
+        now: new Date(),
+      });
+      if (commitResult.status === "fenced") {
+        // Late output: an expired/replaced owner cannot commit (§8.2).
+        await this.releaseReservationSafely();
+        return {
+          success: false,
+          error: "Generation owner expired before commit; output discarded (no draft persisted)",
+          requestCorrelationId,
+        };
       }
+      savedDraftId = commitResult.draftId;
+      // The reservation is now bound to the guard row as draft_ready — clear
+      // the in-memory hold so it is not double-released.
       this.reservation = null;
+    } catch (error) {
+      // B10: persistence failures propagate; the reservation is released so
+      // a retry can acquire. No draft/revision/audit survived (the
+      // transaction rolled back).
+      await this.releaseReservationSafely();
+      throw error;
     }
 
-    // 9. Audit rows.
-    await this.writeReplyAudit(
-      message.emailServiceId,
-      message.id,
-      requestCorrelationId,
-      savedDraft.id
-    );
+    // 9b. Best-effort auto-reply audit (NOT part of the atomic commit — the
+    //     required `draft_created` audit row was written inside the commit
+    //     transaction with the request correlation id; this broader audit row
+    //     carries classification/knowledge/preview provenance and may fail
+    //     without affecting the persisted draft).
     await this.writeAutoAudit({
       emailServiceId: message.emailServiceId,
       messageId: message.id,
-      draftId: savedDraft.id,
+      draftId: savedDraftId,
       classification: authoritativeClassification,
       confidence: authoritativeConfidence,
       knowledgeQuery: knowledge.query,
@@ -1095,7 +1119,7 @@ export class EmailReplyDraftGenerationService {
 
     return {
       success: true,
-      draftId: savedDraft.id,
+      draftId: savedDraftId,
       messageId: message.id,
       subject,
       bodyText,
@@ -1395,31 +1419,6 @@ export class EmailReplyDraftGenerationService {
       // failure rather than a fabricated classification. This is NOT the
       // validation/transport path; it's a bug or invariant violation.
       throw error;
-    }
-  }
-
-  private async writeReplyAudit(
-    emailServiceId: number,
-    messageId: number,
-    requestCorrelationId: string,
-    draftId: number
-  ): Promise<void> {
-    try {
-      const log = new EmailReplyAuditLogEntity();
-      log.emailServiceId = emailServiceId;
-      log.messageId = messageId;
-      log.draftId = draftId;
-      log.action = "draft_created";
-      log.actor = "ai";
-      log.reason = "AI generated knowledge-grounded reply draft";
-      log.metadataJson = JSON.stringify({
-        correlationId: requestCorrelationId,
-        messageCorrelationId: correlationIdForMessage(messageId),
-        promptVersion: REPLY_PROMPT_VERSION,
-      });
-      await this.replyAuditModule.create(log);
-    } catch (e) {
-      console.error("Failed to write draft_created audit:", e);
     }
   }
 
