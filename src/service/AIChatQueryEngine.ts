@@ -117,12 +117,16 @@ import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
 import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
 import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { makeModuleBackedStore } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
-import type { TaskCompletionDecision } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  TaskCompletionDecision,
+  TaskEndCandidate,
+} from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
@@ -1655,7 +1659,7 @@ export class AIChatQueryEngine {
 
     try {
       const result = await this.loop.run(loopInput);
-      await this.handleLoopResult(result, module, streamEventSink);
+      await this.handleLoopResult(result, module, streamEventSink, taskExecutionBinding);
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
     } finally {
@@ -2057,7 +2061,12 @@ export class AIChatQueryEngine {
       void this.loop
         .run(loopInput)
         .then(async (result) => {
-          await this.handleLoopResult(result, module, eventSink);
+          await this.handleLoopResult(
+            result,
+            module,
+            eventSink,
+            matchedByToolId.taskExecutionBinding
+          );
         })
         .catch((err) => {
           console.error("[ai-chat-v2] resume loop failed:", err);
@@ -2210,7 +2219,12 @@ export class AIChatQueryEngine {
       void this.loop
         .run(loopInput)
         .then(async (result) => {
-          await this.handleLoopResult(result, module, eventSink);
+          await this.handleLoopResult(
+            result,
+            module,
+            eventSink,
+            matchedByToolId.taskExecutionBinding
+          );
         })
         .catch((err) => {
           console.error("[ai-chat-v2] deny-resume loop failed:", err);
@@ -2372,7 +2386,12 @@ export class AIChatQueryEngine {
     void this.loop
       .run({ ...loopInput, eventSink })
       .then(async (result) => {
-        await this.handleLoopResult(result, module, eventSink);
+        await this.handleLoopResult(
+          result,
+          module,
+          eventSink,
+          pending.taskExecutionBinding
+        );
       })
       .catch((err) => {
         console.error("[ai-chat-v2] answer-question loop failed:", err);
@@ -2400,7 +2419,8 @@ export class AIChatQueryEngine {
   private async handleLoopResult(
     result: AIChatQueryLoopResult,
     module: AIChatV2Module,
-    eventSink: AIChatQueryEventSink
+    eventSink: AIChatQueryEventSink,
+    taskExecutionBinding?: LoopTaskExecutionBinding
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
     // Persist deferred-catalog discovered state on terminal results so it
@@ -2444,6 +2464,14 @@ export class AIChatQueryEngine {
             },
             turnId: completedTurnId,
           });
+        }
+        // Slice 2 Unit 5 — hard finalization gate: when the turn was
+        // enrolled (binding present), finalize the execution row BEFORE
+        // the complete emit so the UI never sees a completion whose
+        // execution is still "running" (FR-10/15, AC-11/15). Flag-off /
+        // unenrolled turns no-op inside the gate.
+        if (taskExecutionBinding) {
+          await this.finalizeManualAtCompleteGate(result, taskExecutionBinding);
         }
         eventSink.emit({
           type: "complete",
@@ -2637,6 +2665,168 @@ export class AIChatQueryEngine {
         );
         break;
       }
+    }
+  }
+
+  /**
+   * Slice 2 Unit 5 — the HARD finalization gate (FR-10/15, AC-11/15).
+   * Runs inside the completed-case BEFORE the `complete` emit so the
+   * execution row is always finalized when the UI sees the completion.
+   *
+   * - No binding (flag off, response_only, transport retry, enrollment
+   *   failure) → no-op (legacy behavior).
+   * - A decision recorded by the loop's consult closures (Unit 4) is
+   *   authoritative and is used directly.
+   * - No recorded decision (natural response_end — no consult site hit) →
+   *   the gate consults the controller as a fallback, forming a
+   *   `TaskEndCandidate` from the final assistant content, then records
+   *   the decision.
+   * - Decision → finalization mapping: `finish` copies fields directly;
+   *   `finish_response` (the loop accepted the natural end) finalizes
+   *   incomplete/RESPONSE_ENDED; `continue` post-exit is defensive
+   *   (continuation is impossible after the loop returned) and finalizes
+   *   incomplete; `wait`/`yield_owner` post-exit finalize incomplete too.
+   * - Finalization failures never block the UI: `ok` and
+   *   `alreadyFinalized` count as success; anything else logs and the
+   *   `complete` emit still proceeds.
+   */
+  private async finalizeManualAtCompleteGate(
+    result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
+    binding: LoopTaskExecutionBinding
+  ): Promise<void> {
+    if (!isAiTaskCompletionPolicyV1Enabled()) return;
+    const slot = this.taskDecisionSlots.get(binding.executionId);
+    let decision = slot?.get() ?? null;
+    if (!decision) {
+      // Fallback consult: the loop ended naturally without hitting any
+      // consult site. Form the candidate from the final assistant content.
+      const candidate: TaskEndCandidate = {
+        candidateId: `cand:${binding.executionId}:response_end`,
+        executionId: binding.executionId,
+        content: result.fullContent,
+        finishReason: result.finishReason ?? null,
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        pendingPermission: false,
+        pendingQuestion: false,
+        pendingPlanApproval: false,
+        safetyRestriction: false,
+      };
+      try {
+        decision = await binding.consult(candidate);
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] completion-policy fallback consult failed (executionId=${binding.executionId}):`,
+          err
+        );
+        decision = null;
+      }
+      if (decision) {
+        slot?.set(decision);
+      }
+    }
+    if (!decision) {
+      console.error(
+        `[ai-chat-v2] completion-policy gate has no decision after fallback consult (executionId=${binding.executionId}) — finalizing incomplete/EVIDENCE_UNAVAILABLE`
+      );
+      decision = {
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode: "EVIDENCE_UNAVAILABLE",
+        evidenceIds: [],
+        summary: result.fullContent.slice(0, 2000),
+        remainingWork: [],
+      };
+    }
+    const finalizeInput = this.decisionToFinalizeInput(
+      result,
+      binding.executionId,
+      decision
+    );
+    if (!finalizeInput) {
+      return;
+    }
+    try {
+      const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
+        finalizeInput
+      );
+      if (finalizeResult.ok || finalizeResult.alreadyFinalized) return;
+      console.error(
+        `[ai-chat-v2] completion-policy finalize failed (executionId=${binding.executionId}): ${finalizeResult.reasonCode ?? "unknown"}`
+      );
+    } catch (err) {
+      console.error(
+        `[ai-chat-v2] completion-policy finalize threw (executionId=${binding.executionId}):`,
+        err
+      );
+    }
+  }
+
+  /**
+   * Map a `TaskCompletionDecision` to the manual-finalization input
+   * (Unit 5). Returns null only for decisions that must not finalize the
+   * row (none in practice — every branch maps to an outcome).
+   */
+  private decisionToFinalizeInput(
+    result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
+    executionId: string,
+    decision: TaskCompletionDecision
+  ): FinalizeManualInput {
+    const summary = result.fullContent.slice(0, 2000);
+    switch (decision.type) {
+      case "finish":
+        return {
+          executionId,
+          outcome: decision.outcome,
+          reasonCode: decision.reasonCode,
+          summary: decision.summary || summary,
+          evidenceIds: decision.evidenceIds,
+          remainingWork: decision.remainingWork,
+          assistantResultMessageId: result.assistantMessageId,
+        };
+      case "finish_response":
+        // The loop accepted the natural end of the response.
+        return {
+          executionId,
+          outcome: "incomplete",
+          reasonCode: "RESPONSE_ENDED",
+          summary,
+          evidenceIds: [],
+          remainingWork: [],
+          assistantResultMessageId: result.assistantMessageId,
+        };
+      case "continue":
+        // Defensive: continuation is impossible after the loop returned.
+        // Finalize incomplete so the row never stays running (FR-15).
+        console.error(
+          "[ai-chat-v2] completion-policy continue decision after loop exit — finalizing incomplete"
+        );
+        return {
+          executionId,
+          outcome: "incomplete",
+          reasonCode: "NO_PROGRESS",
+          summary,
+          evidenceIds: [],
+          remainingWork: decision.unmetCriterionIds,
+          assistantResultMessageId: result.assistantMessageId,
+        };
+      case "wait":
+      case "yield_owner":
+        // Defensive post-exit: no dispatch is possible after the loop
+        // returned; finalize incomplete so the row never stays running.
+        console.error(
+          `[ai-chat-v2] completion-policy ${decision.type} decision after loop exit — finalizing incomplete`
+        );
+        return {
+          executionId,
+          outcome: "incomplete",
+          reasonCode: "NO_PROGRESS",
+          summary,
+          evidenceIds: [],
+          remainingWork: [],
+          assistantResultMessageId: result.assistantMessageId,
+        };
     }
   }
 

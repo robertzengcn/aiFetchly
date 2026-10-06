@@ -33,6 +33,8 @@ import type { FreezeInput } from "@/service/aiTaskExecution/TaskCompletionContra
 import type {
   CreateExecutionResult,
   ExistingExecutionSnapshot,
+  FinalizeInput,
+  FinalizeResult,
 } from "@/model/AiTaskExecution.model";
 
 export interface TaskExecutionBinding {
@@ -110,6 +112,21 @@ export interface StartScheduledInput {
   readonly budgetLimits: BudgetLimitsInput;
 }
 
+/**
+ * Manual-finalization input for the engine's completed-case gate (Unit 5).
+ * Same fields as the model's `FinalizeInput` minus `expectedVersion` — the
+ * coordinator reads the current version from the row (see finalizeManual).
+ */
+export interface FinalizeManualInput {
+  readonly executionId: string;
+  readonly outcome: FinalizeInput["outcome"];
+  readonly reasonCode: string;
+  readonly summary: string;
+  readonly evidenceIds: readonly string[];
+  readonly remainingWork: readonly string[];
+  readonly assistantResultMessageId?: string | null;
+}
+
 export class TaskExecutionCoordinator {
   private readonly module: AiTaskExecutionModule;
 
@@ -172,6 +189,65 @@ export class TaskExecutionCoordinator {
   freezeContract(input: FreezeInput): TaskCompletionContract {
     const service = new TaskCompletionContractService();
     return service.freeze(input);
+  }
+
+  /**
+   * Finalize a manual execution at the engine's completed-case gate (FR-10/15,
+   * AC-11/15). CAS-finalizes via the module and returns a typed result the
+   * gate maps to emit/no-emit behavior.
+   *
+   * The caller (the engine gate) does NOT supply `expectedVersion` — the
+   * binding does not carry the version token, and the gate runs after the
+   * loop returns when the row's version is authoritative. The coordinator
+   * reads the current version here via `module.getExecution` and passes it to
+   * the CAS UPDATE:
+   * - no row → `MISSING_TASK_OUTCOME` (ok:false);
+   * - already finalized → `ALREADY_FINALIZED` no-op (the gate treats this as
+   *   success — §6.3: the second finalizer never rewrites the outcome);
+   * - `STATE_CONFLICT` (concurrent finalizer bumped the version between our
+   *   read and the UPDATE) → re-read + retry ONCE; a second conflict surfaces
+   *   `STATE_CONFLICT` (a newer owner won — never overwrite).
+   */
+  async finalizeManual(
+    input: FinalizeManualInput
+  ): Promise<FinalizeResult> {
+    const exec = await this.module.getExecution(input.executionId);
+    if (!exec) {
+      return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
+    }
+    if (exec.finalized) {
+      return { ok: true, alreadyFinalized: true };
+    }
+
+    const attempt = (expectedVersion: number): Promise<FinalizeResult> =>
+      this.module.finalizeExecution({
+        executionId: input.executionId,
+        expectedVersion,
+        outcome: input.outcome,
+        reasonCode: input.reasonCode,
+        summary: input.summary,
+        evidenceIds: input.evidenceIds,
+        remainingWork: input.remainingWork,
+        assistantResultMessageId: input.assistantResultMessageId ?? null,
+      });
+
+    const first = await attempt(exec.execution_state_version);
+    if (first.ok || first.alreadyFinalized) return first;
+    if (first.reasonCode !== "STATE_CONFLICT") return first;
+
+    // STATE_CONFLICT: a concurrent finalizer bumped the version between our
+    // read and the UPDATE. Re-read and retry ONCE — the row was not finalized
+    // (the model distinguishes ALREADY_FINALIZED from STATE_CONFLICT), so a
+    // retry against the fresh version usually lands. A second conflict means
+    // ownership genuinely moved; surface it rather than overwrite.
+    const fresh = await this.module.getExecution(input.executionId);
+    if (!fresh) {
+      return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
+    }
+    if (fresh.finalized) {
+      return { ok: true, alreadyFinalized: true };
+    }
+    return attempt(fresh.execution_state_version);
   }
 
   private async startBinding(input: {
