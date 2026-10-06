@@ -6,6 +6,7 @@ import {
   EmailReplyDraftGenerationService,
   decodeStoredWarnings,
   type LlmRawResult,
+  type LlmSubmissionResult,
   type AiChatApiFactory,
 } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
@@ -439,13 +441,15 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
       callLlmRawWithHintFallback: (
         a: unknown,
         b: unknown
-      ) => Promise<LlmRawResult>;
+      ) => Promise<LlmSubmissionResult>;
     }).callLlmRawWithHintFallback.bind(svc);
     const result = await fallback(
       { role: "system", content: "sys" },
       { role: "user", content: "u" }
     );
-    expect(result.content).toBe(validReplyJson);
+    expect(result.raw.content).toBe(validReplyJson);
+    // The winning result came from the no-hint retry → fallback provenance.
+    expect(result.usedHintFallback).toBe(true);
     // Two calls: the first WITH the hint (rejected), the second WITHOUT it.
     expect(requests).toHaveLength(2);
     expect(requests[0].response_format).toEqual({ type: "json_object" });
@@ -464,7 +468,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
         callLlmRawWithHintFallback: (
           a: unknown,
           b: unknown
-        ) => Promise<LlmRawResult>;
+        ) => Promise<LlmSubmissionResult>;
       }).callLlmRawWithHintFallback.bind(svc);
       await expect(
         fallback(
@@ -488,7 +492,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
       callLlmRawWithHintFallback: (
         a: unknown,
         b: unknown
-      ) => Promise<LlmRawResult>;
+      ) => Promise<LlmSubmissionResult>;
     }).callLlmRawWithHintFallback.bind(svc);
     await expect(
       fallback(
@@ -508,7 +512,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
       callLlmRawWithHintFallback: (
         a: unknown,
         b: unknown
-      ) => Promise<LlmRawResult>;
+      ) => Promise<LlmSubmissionResult>;
     }).callLlmRawWithHintFallback.bind(svc);
     await expect(
       fallback(
@@ -2267,5 +2271,209 @@ describe("generation deadline enforcement (FR-035 slice / B13)", () => {
     for (const req of requests) {
       expect(req.callBudgetMs).toBe(120_000);
     }
+  });
+});
+
+describe("completion telemetry persistence (T09/FR-027)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const revisionModule = new EmailReplyDraftRevisionModule();
+
+  /**
+   * Seed the email-service row the generation flow reads for the sender
+   * address. Without a real `from`, stage 7b skips revision materialization
+   * (senderAddress is required) and the revision assertions below see zero
+   * rows.
+   */
+  async function seedEmailService(): Promise<void> {
+    const { EmailServiceModel } = await import("@/model/EmailService.model");
+    const { EmailServiceEntity } = await import("@/entity/EmailService.entity");
+    const model = new EmailServiceModel("");
+    const entity = new EmailServiceEntity();
+    entity.id = 4249;
+    entity.name = "Telemetry Test Service";
+    entity.from = "owner@svc.com";
+    entity.smtpUsername = null;
+    entity.replyTo = null;
+    entity.password = "secret";
+    entity.host = "smtp.svc.com";
+    entity.port = "465";
+    entity.ssl = 1;
+    entity.status = 1;
+    await model.create(entity);
+  }
+
+  /** Seed one clean message on a distinct emailServiceId (isolated DB rows). */
+  async function seedMessage(): Promise<number> {
+    await seedEmailService();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4249;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("persists the returned model, finish_reason, and token usage on the draft + revision", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    // The ACTUAL model from the completion response — not the pre-T09
+    // "openai-compatible" literal.
+    expect(drafts[0].modelName).toBe("test-model");
+    expect(drafts[0].finishReason).toBe("stop");
+    expect(drafts[0].promptTokens).toBe(10);
+    expect(drafts[0].completionTokens).toBe(20);
+    expect(drafts[0].totalTokens).toBe(30);
+    // The materialized revision carries the same telemetry + honest
+    // availability flags + generation-path provenance.
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    expect(revisions).toHaveLength(1);
+    const meta = JSON.parse(
+      revisions[0].generationMetadataJson ?? "{}"
+    ) as {
+      model?: string | null;
+      finishReason?: string | null;
+      usage?: {
+        promptTokens?: number | null;
+        completionTokens?: number | null;
+        totalTokens?: number | null;
+      } | null;
+      finishReasonUnavailable?: boolean;
+      modelUnavailable?: boolean;
+      correctionAttempted?: boolean;
+      hintFallbackUsed?: boolean;
+    };
+    expect(meta.model).toBe("test-model");
+    expect(meta.finishReason).toBe("stop");
+    expect(meta.usage?.promptTokens).toBe(10);
+    expect(meta.usage?.completionTokens).toBe(20);
+    expect(meta.usage?.totalTokens).toBe(30);
+    expect(meta.finishReasonUnavailable).toBe(false);
+    expect(meta.modelUnavailable).toBe(false);
+    expect(meta.correctionAttempted).toBe(false);
+    expect(meta.hintFallbackUsed).toBe(false);
+  });
+
+  it("persists honest nulls (never the literal) when the provider omits model/usage/finish_reason", async () => {
+    const messageId = await seedMessage();
+    const bare = completionResponse(validReplyJson, "stop");
+    delete (bare as { model?: unknown }).model;
+    delete (bare as { usage?: unknown }).usage;
+    bare.choices[0].finish_reason = null;
+    const { factory } = fakeApiFactory([bare]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].modelName).toBeNull();
+    expect(drafts[0].finishReason).toBeNull();
+    expect(drafts[0].promptTokens).toBeNull();
+    expect(drafts[0].completionTokens).toBeNull();
+    expect(drafts[0].totalTokens).toBeNull();
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    expect(revisions).toHaveLength(1);
+    const meta = JSON.parse(
+      revisions[0].generationMetadataJson ?? "{}"
+    ) as {
+      model?: string | null;
+      finishReasonUnavailable?: boolean;
+      modelUnavailable?: boolean;
+      usage?: unknown;
+    };
+    expect(meta.model).toBeNull();
+    expect(meta.usage).toBeNull();
+    expect(meta.finishReasonUnavailable).toBe(true);
+    expect(meta.modelUnavailable).toBe(true);
+  });
+
+  it("records correctionAttempted=true on the revision when the second attempt wins", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse("{not valid json}"),
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Two submissions: the malformed first, the corrected second.
+    expect(requests).toHaveLength(2);
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    // The draft row carries the WINNING (second) response's telemetry.
+    expect(drafts[0].modelName).toBe("test-model");
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    const meta = JSON.parse(
+      revisions[0].generationMetadataJson ?? "{}"
+    ) as { correctionAttempted?: boolean; hintFallbackUsed?: boolean };
+    expect(meta.correctionAttempted).toBe(true);
+    expect(meta.hintFallbackUsed).toBe(false);
+  });
+
+  it("records hintFallbackUsed=true when the B06 no-hint retry wins", async () => {
+    const messageId = await seedMessage();
+    // First call rejects response_format as an unsupported parameter; the
+    // retry (without the hint) succeeds. The request factory captures both.
+    const requests: OpenAIChatCompletionRequest[] = [];
+    let call = 0;
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        requests.push(req);
+        call += 1;
+        if (call === 1) {
+          // A real provider 400: status + response_format in the message
+          // (the detector requires BOTH — see isUnsupportedResponseFormatError).
+          const err = new Error(
+            "Bad request: response_format is not supported by this model"
+          );
+          (err as unknown as { status: number }).status = 400;
+          throw err;
+        }
+        // The retry must omit response_format.
+        expect(req.response_format).toBeUndefined();
+        return completionResponse(validReplyJson, "stop");
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(requests).toHaveLength(2);
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    const meta = JSON.parse(
+      revisions[0].generationMetadataJson ?? "{}"
+    ) as { correctionAttempted?: boolean; hintFallbackUsed?: boolean };
+    expect(meta.hintFallbackUsed).toBe(true);
+    expect(meta.correctionAttempted).toBe(false);
   });
 });

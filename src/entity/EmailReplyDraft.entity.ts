@@ -41,6 +41,28 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   @Column("varchar", { length: 100, nullable: true })
   modelName: string | null;
 
+  // ---- Completion telemetry (T09/FR-027): the actual model, completion
+  // reason, and token usage of the winning generation, or an honest null
+  // when the provider omitted them. Replaces the pre-T09 hardcoded
+  // "openai-compatible" literal so consumers can tell WHICH model produced
+  // the draft and audit token spend.
+
+  /** `finish_reason` of the winning completion (`stop`, `length`, ...). */
+  @Column("varchar", { length: 50, nullable: true })
+  finishReason: string | null;
+
+  /** Prompt token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  promptTokens: number | null;
+
+  /** Completion token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  completionTokens: number | null;
+
+  /** Total token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  totalTokens: number | null;
+
   @Column("varchar", { length: 50, nullable: true })
   promptVersion: string | null;
 

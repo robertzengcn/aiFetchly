@@ -137,6 +137,16 @@ export interface LlmRawResult {
 }
 
 /**
+ * One model submission wrapped with its B06 fallback provenance (T09):
+ * `usedHintFallback` is true when the winning result came from the one-shot
+ * no-`response_format` retry after an explicit unsupported-parameter rejection.
+ */
+export interface LlmSubmissionResult {
+  readonly raw: LlmRawResult;
+  readonly usedHintFallback: boolean;
+}
+
+/**
  * Transport-level failure (network/timeout/HTTP/unsupported-parameter),
  * distinct from a VALIDATION failure. Transport failures are NOT counted as
  * one of the two validation strikes — the bounded regeneration budget exists
@@ -597,6 +607,12 @@ export class EmailReplyDraftGenerationService {
       };
     }
     const generated = attempt.value;
+    // T09: the winning raw completion metadata (model / finishReason /
+    // usage) now flows out of the attempt instead of being discarded. Stage
+    // 7 persists it on the draft row + revision metadata; the flags record
+    // which generation path produced the draft.
+    const winningRaw = attempt.raw;
+    const { correctionAttempted, hintFallbackUsed } = attempt;
 
     // 6b. Validate output.
     const warnings: string[] = [];
@@ -774,7 +790,16 @@ export class EmailReplyDraftGenerationService {
     draft.bodyHtml = null;
     draft.status = "draft";
     draft.generationSource = "ai";
-    draft.modelName = "openai-compatible";
+    // T09: persist the model that ACTUALLY produced the draft, or an honest
+    // null when the provider omitted it — never the pre-T09 "openai-compatible"
+    // literal, which lied about which model ran. Bounded to the column width.
+    draft.modelName = winningRaw.returnedModel?.trim()
+      ? winningRaw.returnedModel.slice(0, 100)
+      : null;
+    draft.finishReason = winningRaw.finishReason ?? null;
+    draft.promptTokens = winningRaw.usage?.prompt_tokens ?? null;
+    draft.completionTokens = winningRaw.usage?.completion_tokens ?? null;
+    draft.totalTokens = winningRaw.usage?.total_tokens ?? null;
     draft.promptVersion = REPLY_PROMPT_VERSION;
     draft.confidence = authoritativeConfidence;
     // B07: persist the model's intent suggestion as metadata only.
@@ -827,6 +852,23 @@ export class EmailReplyDraftGenerationService {
             knowledgeAbstained: knowledge.abstained,
             knowledgeOutcome: knowledge.relevance?.outcome ?? null,
             conversationContext: contextMeta,
+            // T09/FR-027 completion telemetry: same values as the draft row's
+            // telemetry columns, plus honest "unavailable" flags and the
+            // generation-path provenance (correction / hint-fallback). No
+            // prompts, no bodies, no raw model output — metadata only.
+            model: winningRaw.returnedModel ?? null,
+            finishReason: winningRaw.finishReason ?? null,
+            usage: winningRaw.usage
+              ? {
+                  promptTokens: winningRaw.usage.prompt_tokens ?? null,
+                  completionTokens: winningRaw.usage.completion_tokens ?? null,
+                  totalTokens: winningRaw.usage.total_tokens ?? null,
+                }
+              : null,
+            finishReasonUnavailable: winningRaw.finishReason === null,
+            modelUnavailable: winningRaw.returnedModel === null,
+            correctionAttempted,
+            hintFallbackUsed,
           }),
         });
       }
@@ -991,11 +1033,12 @@ export class EmailReplyDraftGenerationService {
     systemMsg: OpenAIChatMessage,
     userMsg: OpenAIChatMessage,
     options?: { readonly stage?: string }
-  ): Promise<LlmRawResult> {
+  ): Promise<LlmSubmissionResult> {
     try {
-      return await this.callLlmRaw(systemMsg, userMsg, {
+      const raw = await this.callLlmRaw(systemMsg, userMsg, {
         stage: options?.stage,
       });
+      return { raw, usedHintFallback: false };
     } catch (error) {
       if (
         error instanceof LlmTransportError &&
@@ -1004,10 +1047,11 @@ export class EmailReplyDraftGenerationService {
         // One no-hint retry. If this also fails, surface the error — do NOT
         // loop or fall through to validation. The no-hint retry draws down the
         // SAME invocation deadline (stage label unchanged).
-        return await this.callLlmRaw(systemMsg, userMsg, {
+        const raw = await this.callLlmRaw(systemMsg, userMsg, {
           omitResponseFormat: true,
           stage: options?.stage,
         });
+        return { raw, usedHintFallback: true };
       }
       throw error;
     }
@@ -1036,7 +1080,10 @@ export class EmailReplyDraftGenerationService {
    * error.
    *
    * Outcomes:
-   *  - `ok`: validation passed on the first or second attempt.
+   *  - `ok`: validation passed on the first or second attempt. Carries the
+   *    WINNING raw completion metadata (T09: model / finishReason / usage)
+   *    plus `correctionAttempted` / `hintFallbackUsed` so persistence can
+   *    record the actual generation path, not a hardcoded literal.
    *  - `validation_failed`: both attempts failed validation; the caller
    *    writes the `needs_human_review` audit (codes = first ∪ second).
    *  - `transport_error`: a provider/transport failure (`LlmTransportError`);
@@ -1046,17 +1093,32 @@ export class EmailReplyDraftGenerationService {
     systemMsg: OpenAIChatMessage,
     userMsg: OpenAIChatMessage
   ): Promise<
-    | { readonly kind: "ok"; readonly value: GeneratedEmailReply }
+    | {
+        readonly kind: "ok";
+        readonly value: GeneratedEmailReply;
+        readonly raw: LlmRawResult;
+        readonly correctionAttempted: boolean;
+        readonly hintFallbackUsed: boolean;
+      }
     | { readonly kind: "validation_failed"; readonly codes: readonly string[] }
     | { readonly kind: "transport_error"; readonly error: LlmTransportError }
   > {
     try {
-      const firstRaw = await this.callLlmRawWithHintFallback(systemMsg, userMsg);
-      const first = this.validateLlmResult(firstRaw);
+      const firstSubmission = await this.callLlmRawWithHintFallback(
+        systemMsg,
+        userMsg
+      );
+      const first = this.validateLlmResult(firstSubmission.raw);
       if (first.ok) {
-        return { kind: "ok", value: first.value };
+        return {
+          kind: "ok",
+          value: first.value,
+          raw: firstSubmission.raw,
+          correctionAttempted: false,
+          hintFallbackUsed: firstSubmission.usedHintFallback,
+        };
       }
-      const secondRaw = await this.callLlmRawWithHintFallback(
+      const secondSubmission = await this.callLlmRawWithHintFallback(
         systemMsg,
         {
           role: "user",
@@ -1067,9 +1129,15 @@ export class EmailReplyDraftGenerationService {
         },
         { stage: "correction" }
       );
-      const second = this.validateLlmResult(secondRaw);
+      const second = this.validateLlmResult(secondSubmission.raw);
       if (second.ok) {
-        return { kind: "ok", value: second.value };
+        return {
+          kind: "ok",
+          value: second.value,
+          raw: secondSubmission.raw,
+          correctionAttempted: true,
+          hintFallbackUsed: secondSubmission.usedHintFallback,
+        };
       }
       return {
         kind: "validation_failed",

@@ -12,6 +12,12 @@ export const emailReplyDraftWriteSchema = lazySchema(() =>
     status: z.string().optional(),
     generationSource: z.string().optional(),
     modelName: z.string().nullable().optional(),
+    // T09/FR-027 completion telemetry: the winning completion's
+    // finish_reason and token usage, or null when the provider omitted them.
+    finishReason: z.string().nullable().optional(),
+    promptTokens: z.number().int().nullable().optional(),
+    completionTokens: z.number().int().nullable().optional(),
+    totalTokens: z.number().int().nullable().optional(),
     promptVersion: z.string().nullable().optional(),
     confidence: z.number().nullable().optional(),
     // B07: model intent suggestion, metadata only — never overwrites the
