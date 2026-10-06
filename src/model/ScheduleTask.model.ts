@@ -861,15 +861,17 @@ export class ScheduleTaskModel extends BaseDb {
    */
   async updateIntervalAfterResult(input: IntervalResultUpdate): Promise<void> {
     assertNotWorker("updateIntervalAfterResult");
-    const update: Partial<ScheduleTaskEntity> = {
+    const update: QueryDeepPartialEntity<ScheduleTaskEntity> = {
       next_run_time: input.nextRunAt,
       last_modified: new Date(),
     };
     if (input.success) {
       update.consecutive_failure_count = 0;
     } else {
-      update.consecutive_failure_count = (() =>
-        "consecutive_failure_count + 1") as unknown as number;
+      // SQL expression lambda (TypeORM increments the column in-database);
+      // matches incrementExecutionCount's pattern. A plain number would need
+      // a read-modify-write, which races concurrent occurrences.
+      update.consecutive_failure_count = () => "consecutive_failure_count + 1";
     }
     if (input.terminalStatus === "expired") {
       update.is_active = false;
@@ -884,7 +886,7 @@ export class ScheduleTaskModel extends BaseDb {
       update.status = ScheduleStatus.STOPPED;
       update.terminal_reason = input.terminalReason ?? "STOPPED";
     }
-    await this.repository.update({ id: input.scheduleId }, update as never);
+    await this.repository.update({ id: input.scheduleId }, update);
   }
 
   /** Mark a schedule paused with a stable terminal reason (history kept). */

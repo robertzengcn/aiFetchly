@@ -482,6 +482,11 @@ export class BackgroundScheduler extends BaseDb {
         occurrence: claim.occurrence,
         catchUp: claim.catchUp,
         scheduledFor: claim.scheduledFor,
+        // Unit 6 (GAP-S2 #9): forward the claim's occurrence key so the
+        // execution row, run row, and claim share one identity — a crash-retry
+        // CAS-collides on the existing execution instead of enrolling a
+        // duplicate (FR-17, single-owner).
+        idempotencyKey: claim.idempotencyKey,
       });
     } catch (error) {
       console.error(`Error executing interval schedule ${schedule.id}:`, error);

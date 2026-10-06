@@ -1284,7 +1284,7 @@ export class AIChatQueryEngine {
       // Flag-off: the whole block is skipped, `taskExecutionBinding` stays
       // undefined, and the loop's consult guards no-op.
       // ------------------------------------------------------------------
-      if (isAiTaskCompletionPolicyV1Enabled()) {
+      if (isAiTaskCompletionPolicyV1Enabled() && !scheduledContext) {
         try {
           const route = new TaskRequestResolver().classify({
             userMessage: request.message || "",
@@ -1294,6 +1294,11 @@ export class AIChatQueryEngine {
           // naturally and never need a completion consult (FR-02);
           // preparation turns wait on plan/permission and enroll when the
           // user re-sends after approval.
+          // Unit 6 seam guard (GAP-S2 #8): scheduled turns are enrolled by
+          // ScheduledAiMessageRunner via startScheduled (with the claim's
+          // occurrence key). This manual-enrollment seam must not
+          // double-enroll them as manual executions — scheduledContext is
+          // trusted main-process metadata the renderer cannot forge.
           if (route !== "response_only" && route !== "preparation") {
             const coordinator = new TaskExecutionCoordinator();
             const requestHash = hashUserAuthoredText(request.message || "");

@@ -1,7 +1,10 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
+import type { QueryDeepPartialEntity } from "typeorm/query-builder/QueryPartialEntity";
 import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
+import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { ScheduleTaskEntity, ScheduleStatus } from "@/entity/ScheduleTask.entity";
 import { assertNotWorker } from "@/model/workerDbGuard";
 import { AsyncMutex } from "@/utils/asyncMutex";
 import { randomUUID } from "node:crypto";
@@ -29,6 +32,28 @@ import type {
  * the SQL-level guarantee; the mutex removes the connection overlap.
  */
 const executionCreateMutex = new AsyncMutex();
+
+/**
+ * Internal control-flow signals for the scheduled-finalization transaction.
+ * Thrown inside the transaction body to roll back an abortive CAS (the
+ * transaction must be rolled back when the execution CAS affected zero rows
+ * — the run/schedule accounting that follows must never commit without a
+ * finalized execution row). The module layer translates them into the typed
+ * `FinalizeResult` variants.
+ */
+class AlreadyFinalizedError extends Error {
+  constructor() {
+    super("ALREADY_FINALIZED");
+    this.name = "AlreadyFinalizedError";
+  }
+}
+
+class StateConflictError extends Error {
+  constructor() {
+    super("STATE_CONFLICT");
+    this.name = "StateConflictError";
+  }
+}
 
 export interface CreateExecutionInput {
   readonly conversationId: string;
@@ -164,6 +189,33 @@ export interface FinalizeResult {
   readonly ok: boolean;
   readonly alreadyFinalized?: boolean;
   readonly reasonCode?: string;
+}
+
+/**
+ * Input for the scheduled-finalization transaction (Unit 6, FR-12, §6.3).
+ * Carries the REAL schedule id + run id explicitly — the execution row's
+ * `schedule_id` column stores the TASK id (a known quirk of
+ * `createExecution`), so the caller must not rely on it for schedule
+ * accounting.
+ */
+export interface FinalizeScheduledInput {
+  readonly executionId: string;
+  readonly expectedVersion: number;
+  readonly runId: number;
+  readonly scheduleId: number;
+  readonly taskOutcome: TaskOutcome;
+  readonly reasonCode: string;
+  readonly summary: string;
+  readonly evidenceIds: readonly string[];
+  readonly remainingWork: readonly string[];
+  readonly idempotencyKey: string;
+  /** Failed/incomplete/timeout increments the streak; cancelled never does. */
+  readonly incrementFailure: boolean;
+  readonly nextRunAt: Date;
+  readonly terminalStatus?: "expired" | "failed" | "stopped";
+  readonly terminalReason?: string;
+  readonly pause?: { readonly reason: string };
+  readonly assistantResultMessageId?: string | null;
 }
 
 /**
@@ -576,6 +628,222 @@ export class AiTaskExecutionModel extends BaseDb {
     } finally {
       await runner.release();
     }
+  }
+
+  /**
+   * Scheduled finalization in ONE transaction (GAP-S2 #9, FR-12, §6.3,
+   * AC-32): CAS-finalize the execution + release the ledger + update the run
+   * row + update schedule counters + pause-if-needed, all serialized via the
+   * `executionCreateMutex` so the multi-statement transaction cannot overlap
+   * a concurrent `createExecution` on the single better-sqlite3 connection.
+   *
+   * Missing execution → `MISSING_TASK_OUTCOME` (ok:false) and NO schedule
+   * accounting happens (never fall back to success). Already finalized →
+   * ok:false alreadyFinalized (the outcome is immutable; counters increment
+   * at most once). CAS conflict → STATE_CONFLICT; the caller re-reads.
+   */
+  async finalizeScheduledExecution(
+    input: FinalizeScheduledInput
+  ): Promise<FinalizeResult> {
+    assertNotWorker("finalizeScheduledExecution");
+
+    const exec = await this.executionRepo.findOne({
+      where: { execution_id: input.executionId },
+    });
+    if (!exec) {
+      return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
+    }
+    if (exec.finalized) {
+      // §6.3: counters increment at most once — repeated finalization
+      // never re-applies schedule accounting.
+      return {
+        ok: false,
+        alreadyFinalized: true,
+        reasonCode: "ALREADY_FINALIZED",
+      };
+    }
+
+    const checkpoint = JSON.stringify({
+      outcome: input.taskOutcome,
+      reasonCode: input.reasonCode,
+      evidenceIds: [...input.evidenceIds],
+      remainingWork: [...input.remainingWork],
+      assistantResultMessageId: input.assistantResultMessageId ?? null,
+      finalizedAt: new Date().toISOString(),
+    });
+    const finalEventIdentity = `execution-result:${input.executionId}`;
+
+    try {
+      await executionCreateMutex.run(async () => {
+        // Manually-managed QueryRunner transaction (mirrors TypeORM's own
+        // `transaction()` internals). We CANNOT use
+        // `connection.transaction((manager) => ...)` here: EntityManager.query
+        // forwards only (sql, params) to DataSource.query, which drops any
+        // third argument — so the transaction manager can never request
+        // `useStructuredResult=true` and `.affected` stays undefined. A manual
+        // runner reaches the driver QueryRunner directly (3-arg query works)
+        // while `runner.manager` still provides the transactional entity
+        // manager for the entity updates below.
+        const runner = this.sqliteDb.connection.createQueryRunner();
+        await runner.startTransaction();
+        try {
+          const manager = runner.manager;
+
+          // 1. CAS-finalize the execution row (same predicate as
+          // finalizeExecution so a concurrent finalizer still loses).
+          const casResult = (await runner.query(
+            `UPDATE ai_task_execution
+               SET finalized = 1,
+                   finalized_at = ?,
+                   task_outcome = ?,
+                   outcome_reason_code = ?,
+                   outcome_summary = ?,
+                   final_event_identity = ?,
+                   execution_state_version = execution_state_version + 1,
+                   stage = 'terminal',
+                   execution_state_json = ?,
+                   assistant_result_message_id = COALESCE(?, assistant_result_message_id)
+             WHERE execution_id = ?
+               AND execution_state_version = ?
+               AND finalized = 0`,
+            [
+              new Date().toISOString(),
+              input.taskOutcome,
+              input.reasonCode,
+              input.summary,
+              finalEventIdentity,
+              checkpoint,
+              input.assistantResultMessageId ?? null,
+              input.executionId,
+              input.expectedVersion,
+            ],
+            true // useStructuredResult — exposes .affected on the driver result
+          )) as { affected?: number };
+          if ((casResult.affected ?? 0) !== 1) {
+            const fresh = await manager.findOne(AiTaskExecutionEntity, {
+              where: { execution_id: input.executionId },
+            });
+            if (fresh?.finalized) {
+              throw new AlreadyFinalizedError();
+            }
+            throw new StateConflictError();
+          }
+
+          // 2. Release the ledger owner (§6.3). Spent allowance persists.
+          await manager.query(
+            `UPDATE ai_task_execution_ledger
+                SET active_execution_id = NULL,
+                    status = 'released',
+                    execution_state_version = execution_state_version + 1
+              WHERE ledger_id = ?`,
+            [exec.ledger_id]
+          );
+
+          // 3. Update the run row: link the execution + outcome + terminal
+          // status (FR-12 §6.3 step 2 — outcome, reason, summary linked and
+          // the row leaves "pending"/"running" before terminal events). The
+          // run status derives from the task outcome: verified_complete →
+          // completed; incomplete → incomplete; needs_user_input →
+          // needs_user_input; failed/timeout → failed/timeout; everything
+          // else (cancelled, blocked_by_policy) maps 1:1.
+          const runStatus: AiMessageTaskRunEntity["status"] = (() => {
+            switch (input.taskOutcome) {
+              case "verified_complete":
+                return "completed";
+              case "incomplete":
+                return "incomplete";
+              case "needs_user_input":
+                return "needs_user_input";
+              case "failed":
+                return "failed";
+              case "timeout":
+                return "timeout";
+              case "blocked_by_policy":
+                return "blocked_by_policy";
+              case "cancelled":
+                return "cancelled";
+              default:
+                return "failed";
+            }
+          })();
+          await manager.update(
+            AiMessageTaskRunEntity,
+            { id: input.runId },
+            {
+              execution_id: input.executionId,
+              status: runStatus,
+              finished_at: new Date(),
+              task_outcome: input.taskOutcome,
+              task_outcome_reason: input.reasonCode,
+              task_result_summary: input.summary,
+            }
+          );
+
+          // 4. Schedule accounting — exactly once inside the transaction.
+          if (input.pause) {
+            await manager.update(ScheduleTaskEntity, { id: input.scheduleId }, {
+              is_active: false,
+              status: ScheduleStatus.PAUSED,
+              terminal_reason: input.pause.reason,
+              last_modified: new Date(),
+            });
+          } else {
+            const update: QueryDeepPartialEntity<ScheduleTaskEntity> = {
+              next_run_time: input.nextRunAt,
+              last_modified: new Date(),
+            };
+            if (input.incrementFailure) {
+              update.failure_count = () => "failure_count + 1";
+              update.consecutive_failure_count = () =>
+                "consecutive_failure_count + 1";
+            }
+            // incrementFailure:false (cancelled, FR-12): the streak is left
+            // untouched — cancellation is not a failure and not a success,
+            // so neither reset nor increment.
+            if (input.terminalStatus === "expired") {
+              update.is_active = false;
+              update.status = ScheduleStatus.EXPIRED;
+              update.terminal_reason =
+                input.terminalReason ?? "SCHEDULE_EXPIRED";
+            } else if (input.terminalStatus === "failed") {
+              update.is_active = false;
+              update.status = ScheduleStatus.FAILED;
+              update.terminal_reason =
+                input.terminalReason ?? "REPEATED_RUN_FAILURE";
+            } else if (input.terminalStatus === "stopped") {
+              update.is_active = false;
+              update.status = ScheduleStatus.STOPPED;
+              update.terminal_reason = input.terminalReason ?? "STOPPED";
+            }
+            await manager.update(
+              ScheduleTaskEntity,
+              { id: input.scheduleId },
+              update
+            );
+          }
+          await runner.commitTransaction();
+        } catch (txError) {
+          await runner.rollbackTransaction();
+          throw txError;
+        } finally {
+          await runner.release();
+        }
+      });
+    } catch (error) {
+      if (error instanceof AlreadyFinalizedError) {
+        return {
+          ok: false,
+          alreadyFinalized: true,
+          reasonCode: "ALREADY_FINALIZED",
+        };
+      }
+      if (error instanceof StateConflictError) {
+        return { ok: false, reasonCode: "STATE_CONFLICT" };
+      }
+      throw error;
+    }
+
+    return { ok: true };
   }
 
   async getUnfinalized(): Promise<AiTaskExecutionEntity[]> {

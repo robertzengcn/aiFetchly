@@ -35,6 +35,7 @@ import type {
   ExistingExecutionSnapshot,
   FinalizeInput,
   FinalizeResult,
+  FinalizeScheduledInput,
 } from "@/model/AiTaskExecution.model";
 
 export interface TaskExecutionBinding {
@@ -248,6 +249,26 @@ export class TaskExecutionCoordinator {
       return { ok: true, alreadyFinalized: true };
     }
     return attempt(fresh.execution_state_version);
+  }
+
+  /**
+   * Finalize a scheduled execution (FR-12/13/15/17/18, §6.3). Thin
+   * pass-through to {@link AiTaskExecutionModule.finalizeScheduledExecution}
+   * — the runChatScheduledLoop runner supplies `expectedVersion` from the
+   * binding captured at enrollment, and the model runs the multi-statement
+   * transaction (CAS-finalize + ledger release + run row + schedule
+   * counters + pause) serialized via `executionCreateMutex`.
+   *
+   * Unlike {@link finalizeManual}, no version retry here: the scheduled
+   * binding's version is the enrollment snapshot, and a STATE_CONFLICT means
+   * another finalizer genuinely owns the row — the model returns the typed
+   * result and the runner maps a missing/conflicted outcome to
+   * missing_outcome (never success, AC-15/17).
+   */
+  async finalizeScheduled(
+    input: FinalizeScheduledInput
+  ): Promise<FinalizeResult> {
+    return this.module.finalizeScheduledExecution(input);
   }
 
   private async startBinding(input: {

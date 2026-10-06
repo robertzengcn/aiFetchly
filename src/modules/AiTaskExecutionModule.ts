@@ -5,6 +5,7 @@ import type {
   CreateExecutionResult,
   FinalizeInput,
   FinalizeResult,
+  FinalizeScheduledInput,
   LedgerSnapshot,
 } from "@/model/AiTaskExecution.model";
 import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
@@ -63,22 +64,19 @@ export class AiTaskExecutionModule extends BaseModule {
   }
 
   /**
-   * Scheduled finalization stub (FR-12/13/15/17/18, §6.3). Slice 2 Unit 6
-   * fills this in with the multi-statement transaction: CAS-finalize the
-   * execution + release the ledger + update the run row + update schedule
-   * counters + pause-if-needed, all serialized via `executionCreateMutex`.
-   * Present now so the coordinator's scheduled wiring can target a stable
-   * seam, and so callers have a typed error to handle before the full
-   * implementation lands. Throws until Unit 6.
+   * Scheduled finalization (FR-12/13/15/17/18, §6.3). Runs the multi-statement
+   * transaction in the model: CAS-finalize the execution + release the ledger
+   * + update the run row + update schedule counters + pause-if-needed, all
+   * serialized via `executionCreateMutex` on the shared better-sqlite3
+   * connection. Missing execution → MISSING_TASK_OUTCOME (ok:false, never
+   * success); already finalized → ok:false alreadyFinalized (counters
+   * increment at most once); CAS conflict → STATE_CONFLICT.
    */
-  async finalizeScheduledExecution(_input: {
-    executionId: string;
-    expectedVersion: number;
-  }): Promise<FinalizeResult> {
+  async finalizeScheduledExecution(
+    input: FinalizeScheduledInput
+  ): Promise<FinalizeResult> {
     await this.ensureConnection();
-    throw new Error(
-      "AiTaskExecutionModule.finalizeScheduledExecution: not implemented until Slice 2 Unit 6"
-    );
+    return this.model.finalizeScheduledExecution(input);
   }
 
   /**

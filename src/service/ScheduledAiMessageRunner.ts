@@ -15,6 +15,7 @@ import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
 import { OUTBOUND_EMAIL_SEND_TOOL } from "@/service/AIChatQueryLoop";
 import {
   ScheduledLoopEventSink,
+  type ScheduledLoopPolicyBinding,
   type ScheduledTurnOutcome,
 } from "@/service/ScheduledLoopEventSink";
 import {
@@ -36,6 +37,11 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import { showNotification } from "@/modules/lib/function";
+import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
+import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import type { FinalizeScheduledInput } from "@/model/AiTaskExecution.model";
+import { buildScheduledBudgetLimits } from "@/service/aiTaskExecution/budgetDefaults";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -189,6 +195,14 @@ export class ScheduledAiMessageRunner {
     readonly occurrence: number;
     readonly catchUp: boolean;
     readonly scheduledFor: Date;
+    /**
+     * Occurrence idempotency key from the scheduler's atomic claim (Unit 6).
+     * Forwarded into the completion-policy enrollment's `occurrenceKey` so the
+     * execution row, run row, and claim share one identity — a crash-retry
+     * with the same key CAS-collides on the existing execution instead of
+     * enrolling a duplicate. Falls back to the schedule/occurrence composite.
+     */
+    readonly idempotencyKey?: string;
   }): Promise<ScheduledAiMessageRunResult> {
     const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
       input;
@@ -264,6 +278,94 @@ export class ScheduledAiMessageRunner {
     await this.runModule.updateRunStatus(runId, "running", {
       started_at: startedAt,
     });
+
+    // Unit 6 (GAP-S2 #8/#9): enroll this occurrence into the completion
+    // policy BEFORE the engine runs. The enrollment creates the durable
+    // execution row (single owner via the claim's idempotency key), so Stop
+    // and finalization work from the very first provider token. Fail-closed:
+    // any enrollment error leaves policyBinding undefined and the run
+    // proceeds with the legacy blind mapping (no consult, no missing-outcome
+    // rejection) — the scheduled turn itself must never crash on policy
+    // plumbing. Flag-off: skipped entirely.
+    let policyBinding: ScheduledLoopPolicyBinding | undefined;
+    // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
+    // execution row after the turn ends. Fresh scheduled executions start at
+    // execution_state_version = 0 and nothing bumps it in the scheduled path.
+    // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
+    // execution row after the turn ends. Fresh scheduled executions start at
+    // execution_state_version = 0 and nothing bumps it in the scheduled path.
+    let policyExecution: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    } | null = null;
+    if (isAiTaskCompletionPolicyV1Enabled()) {
+      try {
+        const execCoordinator = new TaskExecutionCoordinator();
+        const startResult = await execCoordinator.startScheduled({
+          conversationId,
+          sourceUserMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+          requestHash: hashUserAuthoredText(task.message || ""),
+          route: "task_best_effort",
+          taskId,
+          runId,
+          occurrenceKey:
+            input.idempotencyKey ??
+            `scheduled-loop:${scheduleId}:${occurrence}`,
+          budgetLimits: buildScheduledBudgetLimits({
+            maxContinueCalls: task.max_continue_calls,
+            maxToolCalls: task.max_tool_calls,
+            maxRuntimeMs: task.max_runtime_ms,
+          }),
+        });
+        if (startResult.status === "created") {
+          const binding = startResult.binding;
+          policyBinding = {
+            executionId: binding.executionId,
+            controller: binding.controller,
+            budget: binding.budget,
+            // task_best_effort runs without a frozen contract (degraded
+            // verified — criteria advisory). Contract freeze for scheduled
+            // verified routes lands with criteria authoring (Slice 3).
+            contract: null,
+            route: binding.route,
+            expectedVersion: binding.leaseGeneration,
+          };
+          policyExecution = {
+            executionId: binding.executionId,
+            expectedVersion: 0,
+            idempotencyKey:
+              input.idempotencyKey ??
+              `scheduled-loop:${scheduleId}:${occurrence}`,
+          };
+        } else if (startResult.status === "reused") {
+          // Crash-retry of the same occurrence: the execution row already
+          // exists (same occurrence key). No fresh binding — the existing
+          // row's status is authoritative and its finalization already
+          // happened (or belongs to another attempt). Finalize the run row
+          // with the existing state so the claim is not stuck "running".
+          console.log(
+            `[scheduled-loop] occurrence already enrolled (runId=${runId}) — transport retry, no fresh consult`
+          );
+          return this.finalizeChatRun({
+            runId,
+            taskId,
+            scheduleId,
+            startedAt,
+            outcome: { kind: "failed", errorMessage: "OCCURRENCE_ALREADY_ENROLLED" },
+            errorCode: "OCCURRENCE_ALREADY_ENROLLED",
+            conversationId,
+          });
+        } else {
+          console.error(
+            `[scheduled-loop] occurrence enrollment conflict (runId=${runId}) — skipping consult`
+          );
+        }
+      } catch (err) {
+        console.error("[scheduled-loop] completion-policy enrollment failed:", err);
+        policyBinding = undefined;
+      }
+    }
 
     // 5. Acquire the conversation turn lease (FR-7) + register the abort handle.
     const coordinator = AIChatConversationTurnCoordinator.getInstance();
@@ -358,7 +460,8 @@ export class ScheduledAiMessageRunner {
         clearPermissionBackstop,
       });
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const sink = new ScheduledLoopEventSink(
+        (event) => {
         // Gated tool paused for permission: suspend the runtime timeout,
         // notify, broadcast, publish pending metadata, and start the
         // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
@@ -480,7 +583,9 @@ export class ScheduledAiMessageRunner {
               event.type === "error" ? event.errorMessage : undefined,
           });
         }
-      });
+        },
+        policyBinding
+      );
       await engine.submitMessage({
         eventSink: sink,
         request: {
@@ -526,6 +631,7 @@ export class ScheduledAiMessageRunner {
       startedAt,
       outcome,
       conversationId,
+      policyExecution,
     });
   }
 
@@ -533,6 +639,14 @@ export class ScheduledAiMessageRunner {
    * Finalize a chat-bound occurrence: map the engine outcome to a run status,
    * persist the run + schedule counters, and broadcast a refresh hint (FR-11,
    * FR-12, FR-15). Status mapping per technical-design §17.3.
+   *
+   * Unit 6 (GAP-S2 #9, FR-12/13/15/17/18): when the occurrence was enrolled
+   * into the completion policy (policyExecution present) and the flag is on,
+   * finalization delegates to the atomic single-transaction
+   * `finalizeScheduledExecution` — CAS execution + ledger release + run row +
+   * schedule counters + pause, exactly once (AC-16/20/21/22) — and the legacy
+   * inline run-row persistence + schedule accounting are SKIPPED (the model
+   * transaction owns both; running them too would double-account).
    */
   private async finalizeChatRun(input: {
     runId: number;
@@ -543,6 +657,11 @@ export class ScheduledAiMessageRunner {
     conversationId?: string;
     errorCode?: string;
     pauseSchedule?: boolean;
+    policyExecution?: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    } | null;
   }): Promise<ScheduledAiMessageRunResult> {
     const {
       runId,
@@ -553,9 +672,22 @@ export class ScheduledAiMessageRunner {
       conversationId,
       errorCode,
       pauseSchedule,
+      policyExecution,
     } = input;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    if (policyExecution && isAiTaskCompletionPolicyV1Enabled()) {
+      return this.finalizeScheduledPolicyRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome,
+        conversationId,
+        policyExecution,
+      });
+    }
 
     let status: ScheduledAiMessageRunResult["status"] = "failed";
     let assistantMessageId: string | undefined;
@@ -624,8 +756,12 @@ export class ScheduledAiMessageRunner {
         finished_at: finishedAt,
         duration_ms: durationMs,
       } as never);
-    } catch {
-      // Persistence failures are logged by the module; the run is best-effort.
+    } catch (err) {
+      // AC-15: persistence failures are never swallowed — the run row is the
+      // durable record of the occurrence; a silent failure would leave the
+      // claim's run stuck and the scheduler blind to the crash.
+      console.error("[scheduled-loop] run-row persistence failed:", err);
+      throw err instanceof Error ? err : new Error(String(err));
     }
 
     // Update schedule counters + terminal state (FR-15).
@@ -697,6 +833,145 @@ export class ScheduledAiMessageRunner {
       toolCallsCount: 0,
       blockedToolCalls: [],
       errorMessage: status === "completed" ? undefined : resultErrorCode,
+    };
+  }
+
+  /**
+   * Flag-on finalization for an enrolled occurrence (Unit 6, FR-12/13/15/17/18,
+   * AC-16/20/21/22): map the turn outcome to a `FinalizeScheduledInput` and
+   * delegate to the model's atomic single-transaction
+   * `finalizeScheduledExecution` (CAS execution + ledger release + run row +
+   * schedule counters + pause, exactly once). Skips the legacy inline run-row
+   * persistence + schedule accounting in {@link finalizeChatRun} — the
+   * transaction owns both, and running them too would double-account.
+   *
+   * Outcome mapping (§6.1): verified_complete → "verified_complete";
+   * incomplete / missing_outcome / failed / cancelled → honest outcome with
+   * incrementFailure=true except cancelled (FR-12: cancelled never increments
+   * the failure streak); blocked → "blocked_by_policy" + schedule pause.
+   * A finalization failure is thrown (AC-15: never swallow — the scheduler's
+   * claim must see the failure), while a `!ok` typed result is logged and
+   * surfaced on the returned error message.
+   */
+  private async finalizeScheduledPolicyRun(input: {
+    runId: number;
+    taskId: number;
+    scheduleId: number;
+    startedAt: Date;
+    outcome: ScheduledTurnOutcome;
+    conversationId?: string;
+    policyExecution: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    };
+  }): Promise<ScheduledAiMessageRunResult> {
+    const { runId, taskId, scheduleId, startedAt, outcome, conversationId } =
+      input;
+    const policyExecution = input.policyExecution;
+    const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    // Compute the next occurrence + terminal state from the schedule row —
+    // same derivation as the legacy block so the transaction's schedule
+    // accounting matches regardless of which path finalizes.
+    const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+    const nowMs = Date.now();
+    const nextRunAt =
+      schedule && schedule.interval_ms && schedule.interval_anchor_at
+        ? new Date(
+            nextFutureOccurrence(
+              schedule.interval_anchor_at.getTime(),
+              schedule.interval_ms,
+              nowMs
+            ).timeMs
+          )
+        : new Date(nowMs);
+
+    const mapping = mapOutcomeToFinalizeInput(outcome, durationMs);
+    // Same threshold derivation as the legacy block: a failed/incomplete
+    // outcome past the repeated-failure threshold marks the schedule terminal
+    // inside the transaction. Computed BEFORE the literal so the input stays
+    // immutable (no post-construction mutation of readonly fields).
+    const consecutive = (schedule?.consecutive_failure_count ?? 0) + 1;
+    const thresholdHit =
+      mapping.terminalStatus === undefined &&
+      mapping.taskOutcome !== "verified_complete" &&
+      mapping.incrementFailure &&
+      consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES;
+    const finalizeInput: FinalizeScheduledInput = {
+      executionId: policyExecution.executionId,
+      expectedVersion: policyExecution.expectedVersion,
+      runId,
+      scheduleId,
+      taskOutcome: mapping.taskOutcome,
+      reasonCode: mapping.reasonCode,
+      summary: mapping.summary,
+      evidenceIds: [],
+      remainingWork: mapping.remainingWork,
+      idempotencyKey: policyExecution.idempotencyKey,
+      incrementFailure: mapping.incrementFailure,
+      nextRunAt,
+      terminalStatus:
+        mapping.terminalStatus ?? (thresholdHit ? "failed" : undefined),
+      terminalReason:
+        mapping.terminalReason ??
+        (thresholdHit ? "REPEATED_RUN_FAILURE" : undefined),
+      pause: mapping.pause,
+      assistantResultMessageId: mapping.assistantResultMessageId ?? null,
+    };
+
+    try {
+      const result = await new TaskExecutionCoordinator().finalizeScheduled(
+        finalizeInput
+      );
+      if (!result.ok) {
+        console.error(
+          `[scheduled-loop] scheduled finalization not applied (runId=${runId}):`,
+          result.reasonCode
+        );
+        throw new Error(
+          `SCHEDULED_FINALIZATION_FAILED: ${result.reasonCode ?? "unknown"}`
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[scheduled-loop] scheduled finalization transaction failed:",
+        err
+      );
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+
+    // Broadcast a narrow refresh hint to any open renderer (FR-11).
+    if (conversationId) {
+      const event: ChatV2ConversationUpdatedEvent = {
+        conversationId,
+        reason:
+          mapping.taskOutcome === "verified_complete"
+            ? "scheduled_turn_completed"
+            : "scheduled_turn_failed",
+        scheduleId,
+        runId,
+        assistantMessageId: mapping.assistantResultMessageId ?? undefined,
+        occurredAt: new Date().toISOString(),
+      };
+      try {
+        this.broadcaster.emit(event);
+      } catch {
+        // Renderer delivery failure does not fail the run (FR-12).
+      }
+    }
+
+    return {
+      runId,
+      status: mapOutcomeToRunStatus(mapping.taskOutcome),
+      assistantFinalMessage: mapping.summary,
+      toolCallsCount: 0,
+      blockedToolCalls: [],
+      errorMessage:
+        mapping.taskOutcome === "verified_complete"
+          ? undefined
+          : mapping.reasonCode,
     };
   }
 
@@ -1205,5 +1480,106 @@ export class ScheduledAiMessageRunner {
         errorMessage,
       };
     }
+  }
+}
+
+/** Pure mapping from a turn outcome to the scheduled finalize input fields. */
+interface ScheduledFinalizeMapping {
+  readonly taskOutcome: FinalizeScheduledInput["taskOutcome"];
+  readonly reasonCode: string;
+  readonly summary: string;
+  readonly remainingWork: readonly string[];
+  readonly incrementFailure: boolean;
+  readonly terminalStatus?: "expired" | "failed" | "stopped";
+  readonly terminalReason?: string;
+  readonly pause?: { readonly reason: string };
+  readonly assistantResultMessageId?: string | null;
+}
+
+/**
+ * Map a ScheduledTurnOutcome onto the scheduled finalization's typed fields
+ * (Unit 6, §6.1). Pure — no I/O — so the mapping stays testable in one place.
+ * incrementFailure follows FR-12: failed/incomplete/missing increment the
+ * failure streak; cancelled and blocked never do.
+ */
+export function mapOutcomeToFinalizeInput(
+  outcome: ScheduledTurnOutcome,
+  durationMs: number
+): ScheduledFinalizeMapping {
+  switch (outcome.kind) {
+    case "completed":
+      return {
+        taskOutcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        summary: outcome.content,
+        remainingWork: [],
+        incrementFailure: false,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "incomplete":
+      return {
+        taskOutcome: "incomplete",
+        reasonCode: outcome.reasonCode,
+        summary: outcome.content || outcome.reasonCode,
+        remainingWork: outcome.remainingWork,
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "missing_outcome":
+      return {
+        taskOutcome: "incomplete",
+        reasonCode: outcome.reasonCode,
+        summary: outcome.reasonCode,
+        remainingWork: [],
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "failed":
+      return {
+        taskOutcome: "failed",
+        reasonCode: outcome.errorMessage || "REMOTE_AI_ERROR",
+        summary: outcome.errorMessage || "REMOTE_AI_ERROR",
+        remainingWork: [],
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "blocked":
+      return {
+        taskOutcome: "blocked_by_policy",
+        reasonCode: outcome.reason || "BLOCKED_BY_POLICY",
+        summary: outcome.reason || "BLOCKED_BY_POLICY",
+        remainingWork: [],
+        incrementFailure: false,
+        pause: { reason: outcome.reason || "BLOCKED_BY_POLICY" },
+      };
+    case "cancelled":
+      return {
+        taskOutcome: "cancelled",
+        reasonCode: "RUN_INTERRUPTED",
+        summary: outcome.content || "RUN_INTERRUPTED",
+        remainingWork: [],
+        incrementFailure: false,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+  }
+}
+
+/** Map a TaskOutcome to the run row's terminal status (§17.3). */
+export function mapOutcomeToRunStatus(
+  outcome: FinalizeScheduledInput["taskOutcome"]
+): ScheduledAiMessageRunResult["status"] {
+  switch (outcome) {
+    case "verified_complete":
+      return "completed";
+    case "blocked_by_policy":
+      return "blocked_by_policy";
+    case "cancelled":
+      return "failed";
+    case "timeout":
+      return "timeout";
+    case "incomplete":
+    case "needs_user_input":
+    case "failed":
+      return "failed";
   }
 }

@@ -873,19 +873,26 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       expect(ledger).to.be.null;
     });
 
-    it("finalizeScheduledExecution stub throws until Unit 6 (typed seam present)", async () => {
+    it("finalizeScheduledExecution resolves as not-found for an unknown execution (typed seam present)", async () => {
+      // Unit 6 replaced the stub with the real pass-through to the model's
+      // transaction. An unknown execution id is a typed result, not a throw.
       const mod = new AiTaskExecutionModule();
-      let threw = false;
-      try {
-        await mod.finalizeScheduledExecution({
-          executionId: "exec-stub",
-          expectedVersion: 0,
-        });
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/not implemented until Slice 2 Unit 6/i);
-      }
-      expect(threw).to.equal(true);
+      const result = await mod.finalizeScheduledExecution({
+        executionId: "exec-stub",
+        expectedVersion: 0,
+        runId: 0,
+        scheduleId: 0,
+        taskOutcome: "incomplete",
+        reasonCode: "MISSING_TASK_OUTCOME",
+        summary: "missing",
+        evidenceIds: [],
+        remainingWork: [],
+        idempotencyKey: "scheduled-loop:0:0",
+        incrementFailure: true,
+        nextRunAt: new Date(),
+      });
+      expect(result.ok).to.equal(false);
+      expect(result.reasonCode).to.equal("MISSING_TASK_OUTCOME");
     });
   });
 

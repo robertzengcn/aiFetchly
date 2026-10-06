@@ -307,6 +307,14 @@ export interface IntervalResultUpdate {
   readonly terminalReason?: string;
   readonly terminalStatus?: "expired" | "failed" | "stopped";
   readonly coalescedDelta?: number;
+  /**
+   * Completion-policy task outcome driving the accounting (Unit 6, FR-12).
+   * When set, `incrementFailure` derives from the outcome (cancelled never
+   * counts as a failure) instead of the legacy boolean `success` flag.
+   */
+  readonly taskOutcome?: import("@/entityTypes/aiTaskExecutionTypes").TaskOutcome;
+  /** Reason code from the completion policy decision (Unit 6, FR-12). */
+  readonly outcomeReasonCode?: string;
 }
 
 /** Input for persistently creating a scheduled-loop occurrence run row. */

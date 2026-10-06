@@ -328,6 +328,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
 
     // Wait until the pause branch has run: submitMessage resolved, the
@@ -381,6 +382,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>
@@ -420,6 +422,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>
@@ -503,6 +506,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>

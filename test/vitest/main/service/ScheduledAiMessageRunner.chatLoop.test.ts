@@ -221,7 +221,13 @@ beforeEach(() => {
   mockBindApprovedWorkspace.mockResolvedValue("/tmp/ws");
 });
 
-const call = (overrides: Partial<{ occurrence: number; runId: number }> = {}) =>
+const call = (
+  overrides: Partial<{
+    occurrence: number;
+    runId: number;
+    idempotencyKey?: string;
+  }> = {}
+) =>
   new ScheduledAiMessageRunner().runChatScheduledLoop({
     taskId: 1,
     scheduleId: 2,
@@ -229,6 +235,7 @@ const call = (overrides: Partial<{ occurrence: number; runId: number }> = {}) =>
     occurrence: overrides.occurrence ?? 1,
     catchUp: false,
     scheduledFor: new Date(),
+    idempotencyKey: "scheduled-loop:2:1",
   });
 
 describe("ScheduledAiMessageRunner.runChatScheduledLoop", () => {
