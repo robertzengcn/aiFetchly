@@ -4328,6 +4328,23 @@ function isSkillRuntimeEnabled(
   ) {
     return false;
   }
+  // Catalog honesty for the tool_result retrieval tools (TD §13.4 rollback
+  // semantics): with capture AND modelRefs both off, the conversation-scoped
+  // gate would deny every call, so advertising the tools only invites
+  // guaranteed-failing `RETRIEVAL_NOT_ENABLED` calls. Exclude them from the
+  // model-facing catalog instead. A conversation with committed outputs under
+  // this opt-out keeps them readable through the gate's registry fallback —
+  // this filter only controls what is ADVERTISED, matching the documented
+  // rollback rule ("modelRefs off -> no new references are advertised").
+  if (
+    skill.source === "built-in" &&
+    (skill.name === TOOL_RESULT_READ_TOOL_NAME ||
+      skill.name === TOOL_RESULT_SEARCH_TOOL_NAME) &&
+    !isToolOutputModelRefsEnabled() &&
+    !isToolOutputCaptureEnabled()
+  ) {
+    return false;
+  }
   if (skill.source === "built-in") return true;
 
   const installed = enablement.installedSkillsByName?.get(skill.name);

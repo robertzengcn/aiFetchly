@@ -139,11 +139,16 @@ export function resetFeatureFlagCacheForTest(): void {
 /**
  * Recoverable large tool results rollout flags (technical design §13.4).
  *
- * Three independently gated stages, all DEFAULT OFF and FAIL CLOSED: a broken
- * Token store must never silently enable capture, model-visible references, or
- * the new viewer. Read live on each call (a local electron-store file, invoked
- * per user action, not on a hot path) so support staff can toggle a stage at
- * runtime without an app restart.
+ * Three independently gated stages, all DEFAULT ON and FAIL OPEN: the feature
+ * shipped through its audit (T01–T18 closed) and the release gate, so a fresh
+ * install must have tool_result_read/search working without an operator step.
+ * The default-off posture left the feature dormant — `enableToolResultFlags`
+ * had no production caller, so every call returned RETRIEVAL_NOT_ENABLED and
+ * the catalog still advertised the tools into that dead end. The explicit
+ * value "false" is the per-install opt-out; any other value (including an
+ * unreadable store) keeps the stage enabled. Read live on each call (a local
+ * electron-store file, invoked per user action, not on a hot path) so support
+ * staff can toggle a stage at runtime without an app restart.
  *
  * Rollback semantics are asymmetric on purpose:
  *   - capture off  -> no NEW file writes; readers for existing committed
@@ -157,34 +162,34 @@ export function resetFeatureFlagCacheForTest(): void {
 /** Stage 1: additive schema/read support and new file capture. */
 export function isToolOutputCaptureEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.capture) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.capture) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /** Stage 2: emit model-readable output references (requires read/search). */
 export function isToolOutputModelRefsEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.modelRefs) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.modelRefs) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /** Stage 3: the paged result viewer. */
 export function isToolOutputUiEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.ui) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.ui) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /**
- * Operator helper — write all three Token keys to "true" in stage order.
- * Fail-loud: a Token-store error propagates rather than silently claiming
- * the stages are enabled.
+ * Operator helper — write all three Token keys to "true" (explicit re-enable
+ * after an opt-out). Fail-loud: a Token-store error propagates rather than
+ * silently claiming the stages are enabled.
  */
 export function enableToolResultFlags(): void {
   const token = new Token();
