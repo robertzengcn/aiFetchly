@@ -35,6 +35,17 @@ export const MODEL_CALL_CAP_MS = 120_000;
  */
 export const GENERATION_INVOCATION_BUDGET_MS = 5 * 60_000;
 
+/**
+ * Default output budget for a reply generation call (FR-027: the 1500-token
+ * default, no longer a call-site literal). A 400-word reply can approach
+ * ~700 tokens with JSON framing, so the default keeps headroom for strict
+ * JSON + the correction loop. Configurable per service instance so callers
+ * can tune it without editing the call site; per-model clamping (reading
+ * `max_output_tokens` from the provider's models list) remains deferred
+ * capability detection (T09 honest scope).
+ */
+export const REPLY_MAX_TOKENS_DEFAULT = 1500;
+
 /** A started, read-only deadline for one generation invocation. */
 export interface GenerationDeadline {
   /** Remaining budget in ms, clamped to 0 once elapsed. */

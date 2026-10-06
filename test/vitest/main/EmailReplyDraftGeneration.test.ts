@@ -2476,6 +2476,69 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     expect(meta.hintFallbackUsed).toBe(true);
     expect(meta.correctionAttempted).toBe(false);
   });
+
+  it("sends the default 1500-token output budget when maxTokens is not configured", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // T09: the output budget is the FR-027 default, not a call-site literal
+    // that only the edit site can change.
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(1500);
+    }
+  });
+
+  it("honors a configured maxTokens override on every generation submission", async () => {
+    const messageId = await seedMessage();
+    const requests: OpenAIChatCompletionRequest[] = [];
+    let call = 0;
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        requests.push(req);
+        call += 1;
+        if (call === 1) {
+          // First submission is malformed → the correction submission must
+          // ALSO carry the configured budget.
+          return completionResponse("{not valid json}", "stop");
+        }
+        return completionResponse(validReplyJson, "stop");
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      maxTokens: 900,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    expect(requests).toHaveLength(2);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(900);
+    }
+    // The override reaches the persisted draft too.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("falls back to the default when maxTokens is invalid (zero, negative, NaN)", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+      maxTokens: 0,
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(1500);
+    }
+  });
 });
 
 describe("FR-039 generation/validation counters", () => {

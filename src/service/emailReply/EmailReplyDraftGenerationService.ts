@@ -58,6 +58,7 @@ import {
 import {
   startGenerationDeadline,
   MODEL_CALL_CAP_MS,
+  REPLY_MAX_TOKENS_DEFAULT,
   type GenerationDeadline,
 } from "@/service/emailReply/EmailReplyGenerationBudget";
 
@@ -259,6 +260,14 @@ export class EmailReplyDraftGenerationService {
         readonly budgetMs?: number;
       };
   /**
+   * T09: output budget for each reply-generation model call (FR-027).
+   * Defaults to {@link REPLY_MAX_TOKENS_DEFAULT} (1500) — no longer a
+   * call-site literal; callers can tune it without editing the request.
+   * Per-model clamping (reading `max_output_tokens` from the provider's
+   * models list) remains deferred capability detection.
+   */
+  private readonly replyMaxTokens: number;
+  /**
    * The live deadline for the CURRENT createDraft invocation. Created at
    * entry (after the AI-enable gate) and read by every model-call site so
    * classification, generation, hint-fallback, and correction all draw
@@ -270,10 +279,16 @@ export class EmailReplyDraftGenerationService {
     options?: {
       readonly apiFactory?: AiChatApiFactory;
       readonly budget?: { readonly now?: () => number; readonly budgetMs?: number };
+      /** Reply-generation output budget (FR-027); defaults to 1500 tokens. */
+      readonly maxTokens?: number;
     }
   ) {
     this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
     this.budgetOptions = options?.budget;
+    this.replyMaxTokens =
+      options?.maxTokens !== undefined && Number.isFinite(options.maxTokens) && options.maxTokens > 0
+        ? Math.floor(options.maxTokens)
+        : REPLY_MAX_TOKENS_DEFAULT;
   }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
@@ -957,8 +972,9 @@ export class EmailReplyDraftGenerationService {
    * `finish_reason`, `model`, and `usage` so the validation loop can treat a
    * truncated `length` completion, a `content_filter` refusal, or an
    * unexpected tool-call as a validation failure even if the JSON happens to
-   * parse. Raises `max_tokens` to 1500 (a 400-word reply can approach ~700
-   * tokens with JSON framing and the model needs headroom) and passes
+   * parse. Sends `max_tokens: this.replyMaxTokens` (the FR-027 output budget,
+   * default 1500 — a 400-word reply can approach ~700 tokens with JSON framing
+   * and the model needs headroom) and passes
    * `response_format: json_object` (FR-026) so providers that honor the hint
    * emit valid JSON only.
    *
@@ -989,7 +1005,7 @@ export class EmailReplyDraftGenerationService {
       resp = await api.openAIChatCompletion({
         messages: [systemMsg, userMsg],
         temperature: 0.4,
-        max_tokens: 1500,
+        max_tokens: this.replyMaxTokens,
         // B06/FR-026: omit the JSON hint when retrying after an explicit
         // unsupported-parameter rejection. The provider proved it does not
         // honor response_format; local strict parsing still validates the body.
