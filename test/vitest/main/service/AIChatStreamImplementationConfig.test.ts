@@ -450,3 +450,69 @@ describe("AIChatQueryLoop.run facade cleanup on persistence failure (review fix)
     expect(events.some((e) => e.type === "tool_call")).toBe(true);
   });
 });
+
+describe("TODO-08: acceptance-time mode capture (AC-14)", () => {
+  it("a run accepted before a provider change keeps its accepted mode for the whole segment", async () => {
+    const provider = createMutableStreamImplementationConfig("callback");
+    let loopCalls = 0;
+    let releaseLoop!: (v: unknown) => void;
+    const loop = {
+      run: vi.fn(async (): Promise<never> => {
+        loopCalls += 1;
+        return new Promise((resolve) => {
+          releaseLoop = resolve as (v: unknown) => void;
+        }) as never;
+      }),
+      async *iterate(): AsyncGenerator<never, never, void> {
+        throw new Error("iterate must not run in callback mode");
+      },
+    };
+    const engine = new AIChatQueryEngine(loop as never, {
+      streamImplementation: provider,
+    });
+    const outcomePromise = engine.runTurn({
+      request: { message: "hi", conversationId: "v2-AC14" },
+      eventSink: makeEventCollector().sink,
+    });
+    await vi.waitFor(() => expect(loopCalls).toBe(1));
+    // Provider flips WHILE the accepted run is executing.
+    provider.setMode("generator");
+    releaseLoop({
+      type: "completed",
+      conversationId: "v2-AC14",
+      assistantMessageId: "a",
+      fullContent: "",
+      finishReason: "stop",
+    });
+    const outcome = await outcomePromise;
+    expect(outcome).toMatchObject({ type: "completed" });
+    // The whole segment used run() (callback) — pinned at acceptance.
+    expect(loopCalls).toBe(1);
+  });
+
+  it("a newly accepted run after the flip uses the new mode", async () => {
+    const provider = createMutableStreamImplementationConfig("generator");
+    const loop = {
+      run: vi.fn(async (): Promise<never> => {
+        throw new Error("run must not be called in generator mode");
+      }),
+      async *iterate(input: { conversationId: string; assistantMessageId: string }) {
+        return {
+          type: "completed",
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          fullContent: "",
+          finishReason: "stop",
+        } as never;
+      },
+    };
+    const engine = new AIChatQueryEngine(loop as never, {
+      streamImplementation: provider,
+    });
+    const outcome = await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-AC14b" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(outcome).toMatchObject({ type: "completed" });
+  });
+});

@@ -83,3 +83,27 @@ export function setRunOwnerResumeRouter(router: RunOwnerResumeRouter): void {
 export function getRunOwnerResumeRouter(): RunOwnerResumeRouter | null {
   return runOwnerResumeRouter;
 }
+
+/**
+ * TODO-08 (FR-018, design §16): the STARTUP-owned production delivery-mode
+ * provider. One instance per process, read once at first use — a later
+ * environment change never affects already-constructed engines within this
+ * process (a change requires restart, where reconciliation applies).
+ */
+import { EnvAIChatStreamImplementationConfig } from "./aiChat/AIChatStreamImplementationConfig";
+
+let startupStreamConfig: EnvAIChatStreamImplementationConfig | null = null;
+
+export function getStartupStreamImplementationConfig(): EnvAIChatStreamImplementationConfig {
+  if (!startupStreamConfig) {
+    // Static import would be fine here (pure module, no Node APIs), but the
+    // lazy construction keeps the single-read at first engine construction.
+    const config = (
+      globalThis as {
+        __aifetchlyStartupStreamConfig?: EnvAIChatStreamImplementationConfig;
+      }
+    ).__aifetchlyStartupStreamConfig;
+    startupStreamConfig = config ?? new EnvAIChatStreamImplementationConfig();
+  }
+  return startupStreamConfig;
+}

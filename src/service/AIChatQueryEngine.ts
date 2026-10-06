@@ -80,12 +80,12 @@ import { ConversationToolStateService } from "@/service/ConversationToolStateSer
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
 import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
-import {
-  EnvAIChatStreamImplementationConfig,
-  type AIChatStreamImplementationConfigProvider,
-  type AIChatStreamImplementationMode,
+import type {
+  AIChatStreamImplementationConfigProvider,
+  AIChatStreamImplementationMode,
 } from "@/service/aiChat/AIChatStreamImplementationConfig";
 import { consumeGenerator } from "@/service/aiChat/consumeGenerator";
+import { getStartupStreamImplementationConfig } from "@/service/aiChatWorkspaceRuntime";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -576,7 +576,7 @@ export class AIChatQueryEngine {
     this.onTurnTerminalCb = deps?.onTurnTerminal;
     this.onSegmentDurableCb = deps?.onSegmentDurable;
     this.streamImplementation =
-      deps?.streamImplementation ?? new EnvAIChatStreamImplementationConfig();
+      deps?.streamImplementation ?? getStartupStreamImplementationConfig();
     this.historyRetrievalServiceFactory = deps?.historyRetrievalServiceFactory;
     this.compactionCoordinator = deps?.compactionCoordinator;
   }
@@ -895,6 +895,10 @@ export class AIChatQueryEngine {
    * inferring completion from the absence of a terminal event.
    */
   async runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
+    // TODO-08 (FR-018/AC-14): capture the delivery mode at OWNER ACCEPTANCE —
+    // before admission/preparation — so an already-accepted run keeps its
+    // mode even if the provider changes while it waits for capacity.
+    this.captureStreamMode(input.request.conversationId ?? "");
     const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
       input;
     const module = new AIChatV2Module();
@@ -1424,6 +1428,7 @@ export class AIChatQueryEngine {
   async submitPersistedUserMessage(input: {
     readonly eventSink: AIChatQueryEventSink;
     readonly request: ChatV2StreamRequest;
+    // (mode captured at the top of the body — see TODO-08 below)
     readonly savedUser: AIChatMessageEntity;
     readonly modelContent: string;
     readonly contentParts?:
@@ -1431,6 +1436,8 @@ export class AIChatQueryEngine {
       | undefined;
     readonly assistantMessageId?: string;
   }): Promise<AIChatTurnTerminalEvent> {
+    // TODO-08: acceptance-time capture for queue-drained runs.
+    this.captureStreamMode(input.savedUser.conversationId);
     const { eventSink, request, savedUser, modelContent } = input;
     const conversationId = savedUser.conversationId;
     const planModule = new AIChatPlanModule();
