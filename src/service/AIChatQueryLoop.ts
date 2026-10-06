@@ -290,6 +290,23 @@ const TEXT_TOOL_CALL_PARAMETER_RE =
 const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
 
+/**
+ * Some OpenAI-compatible providers (observed on agnes-3.0-flash) occasionally
+ * respond to a truncated tool result by hallucinating a bracketed placeholder
+ * such as "[tool result missing due to content budget; retrying with a smaller
+ * read]" instead of producing a real reply, then stop. No code in this app
+ * emits that prose — tool results are always delivered as structured tool
+ * messages or JSON receipts — so an assistant response that consists solely of
+ * such a placeholder is a confabulation worth one corrective retry.
+ */
+const MAX_TOOL_RESULT_PLACEHOLDER_RETRIES = 1;
+
+const TOOL_RESULT_PLACEHOLDER_RE =
+  /^\s*\[tool result missing due to content budget[^\]]*\]\s*$/i;
+
+const TOOL_RESULT_PLACEHOLDER_RETRY_PROMPT =
+  "Your previous reply was a bracketed placeholder note, not a real response. Tool results are always delivered to you as tool messages — none are missing. If a tool result says truncated or includes a warning, summarize from the data that IS present or call the tool again with narrower parameters. Now produce your actual reply.";
+
 const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
 const ATTACH_LOCAL_IMAGES_TOOL_NAME = "attach_local_images";
 const PROCESS_ARTIFACT_BATCH_TOOL_NAME = "process_artifact_batch";
@@ -518,6 +535,16 @@ export function shouldForceSubmitPlanForApproval(message: string): boolean {
 
 function isTextToolCallMarker(content: string): boolean {
   return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
+}
+
+/**
+ * Detect a hallucinated tool-result placeholder (see
+ * MAX_TOOL_RESULT_PLACEHOLDER_RETRIES). The response must consist ONLY of the
+ * bracketed note so ordinary prose that quotes or mentions such a note is
+ * never intercepted.
+ */
+function isToolResultPlaceholder(content: string): boolean {
+  return TOOL_RESULT_PLACEHOLDER_RE.test(content.trim());
 }
 
 function parseTextToolCallValue(raw: string): unknown {
@@ -1472,6 +1499,10 @@ export class AIChatQueryLoop {
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
     let textToolCallMarkerRetryCount = 0;
+    // Tracks corrective retries for hallucinated tool-result placeholders (see
+    // MAX_TOOL_RESULT_PLACEHOLDER_RETRIES). Scoped per runOnce() like
+    // textToolCallMarkerRetryCount; a productive tool round resets it below.
+    let toolResultPlaceholderRetryCount = 0;
     let executedToolRound = false;
     let emptyStopContinuations = 0;
     // Per-runOnce nudge budget for goal text-stops (Finding 8). This counter
@@ -2092,6 +2123,39 @@ export class AIChatQueryLoop {
             continue;
           }
 
+          // Hallucinated tool-result placeholder (see
+          // MAX_TOOL_RESULT_PLACEHOLDER_RETRIES): the model emitted a bracketed
+          // "tool result missing" note as its entire reply and stopped. That
+          // note is never real output, so instead of persisting it as the
+          // assistant's answer, nudge the model to produce an actual reply from
+          // the tool results it already received.
+          if (isToolResultPlaceholder(accumulator.state.fullContent)) {
+            if (
+              toolResultPlaceholderRetryCount >=
+              MAX_TOOL_RESULT_PLACEHOLDER_RETRIES
+            ) {
+              throw new Error(
+                "AI server returned a hallucinated tool-result placeholder instead of a real response. Please retry the message."
+              );
+            }
+            toolResultPlaceholderRetryCount += 1;
+            messages.push({
+              role: "user",
+              content: TOOL_RESULT_PLACEHOLDER_RETRY_PROMPT,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "server_error",
+              attempt: toolResultPlaceholderRetryCount,
+              maxAttempts: MAX_TOOL_RESULT_PLACEHOLDER_RETRIES,
+              message: "Retrying hallucinated tool-result placeholder response",
+            });
+            continue;
+          }
+
           // If the turn was aborted, the accumulator likely ingested nothing
           // (the onChunk callback early-returns on abort). Return "cancelled"
           // here rather than falling through to the empty-response guard
@@ -2304,6 +2368,10 @@ export class AIChatQueryLoop {
         // goal text-stop nudge budget so a long /goal run is not capped by
         // text stops that happened before productive rounds.
         goalTextStopContinuations = 0;
+        // Same rationale for the placeholder retry budget: after a productive
+        // round the model has demonstrably recovered, so allow a fresh retry
+        // if a later round hallucinates a placeholder again.
+        toolResultPlaceholderRetryCount = 0;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
