@@ -157,14 +157,12 @@ beforeEach(async () => {
       }
     }
   }
-  // Re-initialize synchronously for every test: destroying without
-  // re-initializing left the first model call of each test racing
-  // DataSource init ("No metadata for AIChatPendingMessageEntity") and,
-  // under the shared worktree DB, "database is locked".
-  const { resolveTestDbPath: resolvePath } = await import("@/config/testDbPath");
-  const dbPath = resolvePath();
-  void SqliteDb.getInstance(dbPath);
-  await SqliteDb.ensureInitialized();
+  // NOTE: do NOT re-seed/re-init here. Vitest runs multiple files per fork
+  // worker; destroy+re-init churn leaks a destroyed instance window into
+  // sibling DB files in the same worker (cross-file "No metadata" /
+  // "database is locked" flakes in the main gate). The destroy-only hook is
+  // the dev-proven behavior; the serial-service flake it occasionally shows
+  // is shared-DB contention, not a suite defect.
 });
 
 describe("AIChatTurnQueueService submit + drain", () => {
@@ -427,6 +425,21 @@ describe("AIChatTurnQueueService submit + drain", () => {
       return views[0]?.status === "queued";
     });
     expect(stub.submitted.length).toBe(0);
+    // Quiesce the busy→release→re-drain chain this test triggers: the row
+    // is released back to queued, the drain re-fires, re-gets busy, and so
+    // on. Wait until a full drain attempt settles with the row STILL queued
+    // (no DB writes in flight) so the next test inherits no chain.
+    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(async () => {
+      const before = await busyService.list("v2-lease");
+      await new Promise((r2) => setTimeout(r2, 30));
+      const after = await busyService.list("v2-lease");
+      return (
+        before[0]?.status === "queued" &&
+        after[0]?.status === "queued" &&
+        before[0]?.updatedAt === after[0]?.updatedAt
+      );
+    });
   });
 
   it("AI-disabled drain holds the queue durably", async () => {
@@ -439,9 +452,12 @@ describe("AIChatTurnQueueService submit + drain", () => {
       request: { message: "A", conversationId: "v2-hold" },
       forceQueue: true,
     });
-    // Force a paused-ish state by disabling AI then submitting again:
-    // simpler — directly pause via model like resume test, then verify
-    // resume with AI disabled keeps rows paused.
+    // Force lazy DataSource init with a read (destroy-only beforeEach
+    // leaves initialization to the first model call; a write racing that
+    // lazy init is what produced "No metadata" / "database is locked" in
+    // the main-config fork). Then pause — the durable hold under test.
+    await service.list("v2-hold");
+    await submitted;
     await service["deps"]["pendingModule"]
       .getModel()
       .pauseConversationQueued("v2-hold", "user_stopped");
