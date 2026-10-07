@@ -292,8 +292,11 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     const pendingArea = wrapper.find('[data-testid="pending-tag-names"]');
     expect(pendingArea.exists()).toBe(false); // nothing added yet
     // Add via the addPendingTagName handler through the component instance.
-    const detail = wrapper.findComponent(EmailServiceDetail);
-    (detail.vm as unknown as { addPendingTagName: (n: string) => void }).addPendingTagName("NewTag");
+    // Use the mounted root instance directly: since the page template was
+    // wrapped in AppPageShell, findComponent(EmailServiceDetail) matches the
+    // unnamed script-setup wrapper instead of the page component, while the
+    // root wrapper's setupState reliably holds the page's bindings.
+    (wrapper.vm as unknown as { addPendingTagName: (n: string) => void }).addPendingTagName("NewTag");
     await flushPromises();
     // The chip renders and lists the typed name.
     const chips = wrapper.findAll('[data-testid="pending-tag-names"] .v-chip');
