@@ -292,6 +292,14 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     originalMessageId: string,
     cap: number
   ): Promise<ReplyHeaderCandidate[] | false> {
+    // Open the Sent folder before searching — imapflow requires a selected
+    // mailbox before `search`/`fetchOne` (omitting `mailboxOpen` runs the
+    // search against whatever folder was last selected, or none, yielding
+    // empty results). UIDVALIDITY is not re-checked here: the Sent side
+    // settles a positive only via exact-token + sender verification, never
+    // via UID longevity — so a UIDVALIDITY change on the Sent folder cannot
+    // produce a false positive (§7.2).
+    await client.mailboxOpen(folder);
     // substring search on both threading headers — exact equality is
     // validated locally from the fetched header block (§7.2).
     const uids = await client.search(

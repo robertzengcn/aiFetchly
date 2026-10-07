@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type {
   FetchQueryObject,
   ListResponse,
+  MailboxObject,
   SearchObject,
 } from "imapflow";
 
@@ -54,8 +55,19 @@ function fakeImapConnection(input: {
       if (input.listThrows) throw input.listThrows;
       return input.folders ?? [];
     },
-    async mailboxOpen(): Promise<never> {
-      throw new Error("not used by these probes");
+    async mailboxOpen(): Promise<MailboxObject> {
+      // searchReplyHeaders opens the Sent folder before searching (imapflow
+      // requires a selected mailbox). Return a stable UIDVALIDITY — the
+      // Sent side never re-checks it (verified positive goes through
+      // exact-token + sender equality, not UID longevity, per §7.2).
+      return {
+        path: "Sent",
+        delimiter: "/",
+        flags: new Set<string>(),
+        uidValidity: BigInt(1),
+        uidNext: 1,
+        exists: 0,
+      };
     },
     async search(query): Promise<number[] | false> {
       calls.searchQueries.push(query);
