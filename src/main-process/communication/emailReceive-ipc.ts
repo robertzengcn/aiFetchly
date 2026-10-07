@@ -589,7 +589,8 @@ export function registerEmailReceiveIpcHandlers(): void {
 
 // ---- DTO mappers (no secrets leak) ----
 
-function toMessageListDto(
+/** Exported for renderer-DTO contract tests (FR-030). */
+export function toMessageListDto(
   e: EmailReceivedMessageEntity
 ): ReceivedMessageListDto {
   return {
@@ -613,7 +614,8 @@ function toMessageListDto(
   };
 }
 
-function toMessageDetailDto(
+/** Exported for renderer-DTO contract tests (FR-030). */
+export function toMessageDetailDto(
   e: EmailReceivedMessageEntity
 ): ReceivedMessageDetailDto {
   return {

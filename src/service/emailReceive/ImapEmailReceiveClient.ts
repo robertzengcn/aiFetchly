@@ -1,5 +1,12 @@
 import { ImapFlow } from "imapflow";
-import type { ImapFlowOptions } from "imapflow";
+import type {
+  FetchMessageObject,
+  FetchQueryObject,
+  ImapFlowOptions,
+  MailboxObject,
+  SearchObject,
+  SequenceString,
+} from "imapflow";
 import { simpleParser } from "mailparser";
 import type { EmailMessage, ParsedMail } from "mailparser";
 import {
@@ -9,6 +16,7 @@ import {
 import {
   EmailReceiveClient,
   ParsedInboundEmail,
+  RefreshedFlags,
   addressListToStrings,
   firstAddress,
 } from "@/service/emailReceive/EmailReceiveClient";
@@ -31,6 +39,31 @@ const IMAP_IMPLICIT_TLS_PORT = 993;
 type ImapConnectionMode = "configured" | "implicitTls";
 
 /**
+ * Narrow structural view of an ImapFlow connection this client consumes
+ * (FR-031). The real `ImapFlow` satisfies it directly; tests inject behavioral
+ * fakes through the `imapFlowFactory` constructor seam (pattern:
+ * `ReplySenderFactory` in EmailReplyDeliveryService).
+ */
+export interface ImapFlowConnection {
+  connect(): Promise<void>;
+  logout(): Promise<void>;
+  close(): void;
+  mailboxOpen(path: string | string[]): Promise<MailboxObject>;
+  search(
+    query: SearchObject,
+    options?: { uid?: boolean }
+  ): Promise<number[] | false>;
+  fetchOne(
+    seq: SequenceString,
+    query: FetchQueryObject,
+    options?: { uid?: boolean }
+  ): Promise<FetchMessageObject | false>;
+}
+
+/** Factory for IMAP connections; overridable for tests. */
+export type ImapFlowFactory = (options: ImapFlowOptions) => ImapFlowConnection;
+
+/**
  * ImapFlow-backed receive client. Connects with TLS based on `ssl`, opens the
  * configured folder, searches a bounded set of messages, parses each via
  * `mailparser`, sanitizes HTML, and returns typed {@link ParsedInboundEmail}.
@@ -38,6 +71,14 @@ type ImapConnectionMode = "configured" | "implicitTls";
  * No DB, no entity imports, no Electron APIs — network + parse only.
  */
 export class ImapEmailReceiveClient implements EmailReceiveClient {
+  private readonly imapFlowFactory: ImapFlowFactory;
+
+  constructor(options?: { imapFlowFactory?: ImapFlowFactory }) {
+    // Production default constructs the real ImapFlow; tests pass a fake
+    // factory to exercise UIDVALIDITY guards and PEEK semantics offline.
+    this.imapFlowFactory =
+      options?.imapFlowFactory ?? ((opts) => new ImapFlow(opts));
+  }
   async testConnection(config: EmailReceiveConnectionConfig): Promise<void> {
     let client = this.createClient(config);
     try {
@@ -100,12 +141,90 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
   private createClient(
     config: EmailReceiveConnectionConfig,
     mode: ImapConnectionMode = "configured"
-  ): ImapFlow {
-    return new ImapFlow(buildImapFlowOptions(config, mode));
+  ): ImapFlowConnection {
+    return this.imapFlowFactory(buildImapFlowOptions(config, mode));
+  }
+
+  /**
+   * UID-scoped flag observation for reply detection (FR-031, §7.1 step 5):
+   * open the folder, fetch ONE message's flags by UID, close. Header/flags
+   * only — imapflow's fetchOne never sets `\Seen` on flag/source fetches, so
+   * this is read-only for the mailbox (PEEK semantics).
+   *
+   * Returns null when the UID no longer exists in the folder (expunged or
+   * moved) — that is a legitimate observation, not an error.
+   */
+  async refreshMessageFlags(input: {
+    config: EmailReceiveConnectionConfig;
+    folder: string;
+    uidValidity: string;
+    uid: string;
+  }): Promise<RefreshedFlags | null> {
+    let client = this.createClient(input.config);
+    try {
+      await client.connect();
+      return await this.refreshFlagsFromConnectedClient(
+        client,
+        input.folder,
+        input.uid,
+        input.uidValidity
+      );
+    } catch (error) {
+      if (!shouldRetryWithImplicitTls(error, input.config)) {
+        throw error;
+      }
+      await closeClient(client);
+      client = this.createClient(input.config, "implicitTls");
+      await client.connect();
+      return await this.refreshFlagsFromConnectedClient(
+        client,
+        input.folder,
+        input.uid,
+        input.uidValidity
+      );
+    } finally {
+      await closeClient(client);
+    }
+  }
+
+  private async refreshFlagsFromConnectedClient(
+    client: ImapFlowConnection,
+    folder: string,
+    uid: string,
+    expectedUidValidity: string
+  ): Promise<RefreshedFlags | null> {
+    const mailbox = await client.mailboxOpen(folder);
+    // UIDVALIDITY guard (§5.1): a UID is only valid within its namespace. If
+    // the folder's validity changed since sync stored it, the UID names a
+    // different (or no) message — report it as gone rather than trusting it.
+    if (
+      mailbox &&
+      mailbox.uidValidity != null &&
+      String(mailbox.uidValidity) !== expectedUidValidity
+    ) {
+      return null;
+    }
+
+    const msg = await client.fetchOne(
+      Number(uid),
+      { flags: true, internalDate: true },
+      { uid: true }
+    );
+    if (!msg) return null;
+
+    const rawFlags = msg.flags ?? new Set<string>();
+    const flags = Array.from(rawFlags, (flag) => flag.toLowerCase());
+    return {
+      uid,
+      isAnswered: flags.includes("\\answered"),
+      isSeen: flags.includes("\\seen"),
+      flags,
+      checkedAt: new Date(),
+    };
   }
 
   private async fetchFromConnectedClient(
-    client: ImapFlow,
+    client: ImapFlowConnection,
     folder: string,
     options: EmailReceiveFetchOptions,
     limit: number
@@ -121,13 +240,11 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         : null;
 
     // UIDs of messages matching the criteria (most recent at the end).
-    const searchCriteria: Record<string, unknown> = {};
+    const searchCriteria: SearchObject = {};
     if (options.unreadOnly) searchCriteria.seen = false;
     if (options.since) searchCriteria.since = options.since;
 
-    const uids = (await client.search(searchCriteria, {
-      uid: true,
-    })) as number[];
+    const uids = await client.search(searchCriteria, { uid: true });
     if (!Array.isArray(uids) || uids.length === 0) return [];
 
     // Take the most recent `limit` UIDs.
@@ -249,7 +366,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
   }
 }
 
-async function closeClient(client: ImapFlow): Promise<void> {
+async function closeClient(client: ImapFlowConnection): Promise<void> {
   try {
     await client.logout();
   } catch {

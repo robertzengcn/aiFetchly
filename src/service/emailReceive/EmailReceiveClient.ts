@@ -70,6 +70,24 @@ export interface EmailReceiveClient {
   ): Promise<ParsedInboundEmail[]>;
 }
 
+/**
+ * UID-scoped flag observation for reply detection (FR-031, technical design
+ * §7.1 step 5). One message, header/flags only — never a body fetch, never a
+ * flag write (PEEK semantics; the detector must not mark mail read/answered).
+ */
+export interface RefreshedFlags {
+  /** IMAP UID the observation was made under. */
+  readonly uid: string;
+  /** Raw `\Answered` flag state, lowercased-normalized. */
+  readonly isAnswered: boolean;
+  /** Raw `\Seen` flag state, lowercased-normalized. */
+  readonly isSeen: boolean;
+  /** Full flag set as stored by the server (lowercased). */
+  readonly flags: readonly string[];
+  /** When this observation was made (server response time). */
+  readonly checkedAt: Date;
+}
+
 /** Normalize a parsed address header value into "address" or "Name <address>". */
 export function firstAddress(
   value: { address?: string; name?: string } | null | undefined
