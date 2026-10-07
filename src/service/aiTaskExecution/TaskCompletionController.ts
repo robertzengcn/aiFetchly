@@ -15,10 +15,19 @@
  *   3. Safety restrictions / policy blocks → blocked_by_policy (no bypass).
  *   4. Pending permission/question/approval → wait.
  *   5. Response-only → finish_response.
- *   6. Task: all required criteria pass → verified_complete; else
- *      6a. LIVE (budget injected): feasible unmet work → continue with a
- *          targeted §7.3 prompt (§7.2 step 10).
- *      6b. Otherwise: finish(incomplete) (shadow: no continuation).
+ *   6. Preparation route → finish(incomplete, PREPARATION_REQUIRED).
+ *   7. Evaluate admissible evidence (T07): local deterministic adapters +
+ *      the separately-budgeted qualitative checker. All required criteria
+ *      pass → verified_complete — regardless of maker-budget state, so a
+ *      clean terminal on the final allowed attempt verifies (FR-06/08,
+ *      AC-03/08).
+ *   8. Maker-budget exhaustion (continuation/provider) gates NEW dispatch
+ *      only — applied AFTER evidence so already-collected evidence can
+ *      still verify. Exhausted + unfinished → finish(incomplete,
+ *      CONTINUATION_LIMIT / MODEL_ATTEMPT_LIMIT).
+ *   9. LIVE (budget injected): feasible unmet work → continue with a
+ *      targeted §7.3 prompt (§7.2 step 10).
+ *  10. Otherwise: finish(incomplete) (shadow: no continuation).
  *
  * Provenance (FR-16): the candidate's `provenance` and `boundary` fields
  * are preserved on the decision's reason code; synthetic/unknown/missing-
@@ -106,36 +115,6 @@ export class TaskCompletionController {
       return { type: "finish_response", result: "response_ended" };
     }
 
-    // D4 (FR-08/09): live budget consult precedes criteria evaluation. A
-    // spent allowance means no further dispatch is possible, so the honest
-    // outcome is incomplete with the matching reason code — never a
-    // continue the budget cannot fund, and never a verified_complete the
-    // evidence check could not fund either (checker budget exhaustion skips
-    // qualitative evidence downstream via the gated reserve function).
-    const budget = context.budget;
-    if (budget) {
-      if (budget.isContinuationBudgetExhausted()) {
-        return {
-          type: "finish",
-          outcome: "incomplete",
-          reasonCode: "CONTINUATION_LIMIT",
-          evidenceIds: [],
-          summary: this.boundedSummary(candidate.content),
-          remainingWork: [...(context.unmetCriterionIds ?? [])],
-        };
-      }
-      if (budget.isProviderBudgetExhausted()) {
-        return {
-          type: "finish",
-          outcome: "incomplete",
-          reasonCode: "MODEL_ATTEMPT_LIMIT",
-          evidenceIds: [],
-          summary: this.boundedSummary(candidate.content),
-          remainingWork: [...(context.unmetCriterionIds ?? [])],
-        };
-      }
-    }
-
     // Preparation route cannot finish executable work (FR-21).
     if (context.route === "preparation") {
       return {
@@ -148,19 +127,32 @@ export class TaskCompletionController {
       };
     }
 
-    // Task route (task_verified or task_best_effort): evaluate criteria.
-    // Slice 2: when the caller injects the evidence service, consult it here
-    // to obtain real {@link TaskEvidence} rows (criteria evaluated against
-    // assistant content / tool catalog / checker LLM). The result drives the
-    // verified_complete / incomplete outcome + the evidenceIds list. Slice 1
-    // callers (shadow mode, flag off) supply passedCriterionIds directly and
-    // get evidenceIds:[] — the Slice 1 placeholder behavior, preserved.
+    // T07 / §7.2 step 6: evaluate admissible local/already-collected evidence
+    // BEFORE the maker-budget exhaustion gates. A spent continuation or
+    // provider allowance means no further maker dispatch is possible, but
+    // local bounded deterministic evidence (observation/operation_receipt/
+    // record_count) and the separately-budgeted qualitative checker can
+    // still establish genuine completion on the final allowed attempt — so
+    // a clean terminal with all required criteria passed verifies regardless
+    // of maker-budget state (FR-06/08, AC-03/08). The qualitative checker
+    // has its OWN reservation (`budgetReserveChecker` → `reserveCheckerAttempt`,
+    // per-run + per-candidate caps), so checker work is gated independently
+    // and never depends on the maker budget.
+    //
+    // Slice 1 callers (shadow mode, flag off) supply passedCriterionIds
+    // directly and get evidenceIds:[] — the Slice 1 placeholder behavior,
+    // preserved.
     const evidence = await this.maybeEvaluateEvidence(candidate, context);
 
     const required = evidence?.requiredCriterionIds ?? context.requiredCriterionIds ?? [];
     const passedSet = new Set(evidence?.passedCriterionIds ?? context.passedCriterionIds ?? []);
     const allRequiredPass =
       required.length > 0 && required.every((id) => passedSet.has(id));
+    // Derive the unmet list once so every incomplete path reports the SAME
+    // remaining work (T07: the budget-exhaustion path now mirrors the
+    // fallthrough path's unmet derivation, not a caller-supplied list that
+    // might be absent).
+    const unmet = required.filter((id) => !passedSet.has(id));
 
     // §7.2 step 6: all required criteria pass → verified_complete.
     // AC-12: synthetic/unknown/missing-terminal provenance can never verify.
@@ -183,9 +175,40 @@ export class TaskCompletionController {
       };
     }
 
+    // D4 (FR-08/09): maker-budget exhaustion gates only NEW maker dispatch,
+    // NOT already-collected evidence (T07 above). Now that the candidate has
+    // not verified, a spent continuation/provider allowance means no further
+    // dispatch is possible, so the honest outcome is incomplete with the
+    // matching reason code — never a continue the budget cannot fund.
+    const budget = context.budget;
+    if (budget) {
+      if (budget.isContinuationBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "CONTINUATION_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
+      if (budget.isProviderBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "MODEL_ATTEMPT_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
+    }
+
     // Shadow mode (Slice 1): unfinished/unverifiable task candidates return
     // finish(incomplete). Live continuation dispatch is Slice 2.
-    const unmet = required.filter((id) => !passedSet.has(id));
+    // `unmet` was derived above (before the budget gates) so every incomplete
+    // path — budget exhaustion, fallthrough, and the live continue guard —
+    // reports the SAME remaining work.
 
     // §7.2 step 10 (Slice 2 Unit 4, FR-07): LIVE continuation branch. When a
     // live budget is injected, unmet work is feasible (real provider stream,

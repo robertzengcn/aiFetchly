@@ -528,6 +528,129 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     }
   });
 
+  // ----- T07 (FR-06/08, AC-03/08): evidence-first completion at exhausted
+  // maker budgets. Already-collected evidence can establish genuine
+  // completion on the final allowed attempt; only UNFINISHED work is
+  // rejected when the maker budget is spent. -----
+
+  it("T07: continuation exhausted + all required criteria passed → verified_complete (not CONTINUATION_LIMIT)", async () => {
+    // The audit probe: spend the sole continuation, supply a clean terminal
+    // with all required criteria passed. Before T07 this returned
+    // incomplete/CONTINUATION_LIMIT with remainingWork empty. Now evidence
+    // is evaluated BEFORE the maker-budget gate, so genuine completion wins.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 1 });
+    budget.reserveContinuation("cont-spent"); // sole continuation spent
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
+      expect(decision.remainingWork).toEqual([]);
+    }
+  });
+
+  it("T07: provider exhausted + all required criteria passed → verified_complete (not MODEL_ATTEMPT_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxProviderAttempts: 2 });
+    budget.reserveProviderAttempt("prov-1");
+    budget.reserveProviderAttempt("prov-2"); // provider allowance spent
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
+    }
+  });
+
+  it("T07: continuation exhausted + unfinished work → incomplete/CONTINUATION_LIMIT (evidence evaluated, no false verified)", async () => {
+    // Unfinished task → explicit non-success, no further dispatch. Evidence
+    // is still evaluated (evidenceIds populated, remainingWork from unmet).
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxContinuations: 1 });
+    budget.reserveContinuation("cont-spent");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 50/100.", finishReason: "length", boundary: "round_cap" }),
+      {
+        route: "task_verified",
+        passedCriterionIds: [],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+      expect(decision.remainingWork).toEqual(["rec-1"]);
+    }
+  });
+
+  it("T07: both continuations and provider exhausted + unfinished → CONTINUATION_LIMIT (precedence preserved)", async () => {
+    // The continuation-before-provider precedence still holds when evidence
+    // does not verify.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxContinuations: 0,
+      maxProviderAttempts: 0,
+    });
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 50/100.", finishReason: "length", boundary: "round_cap" }),
+      {
+        route: "task_verified",
+        passedCriterionIds: [],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("T07: genuine completion on the LAST allowed provider attempt → verified (final attempt not mislabeled incomplete)", async () => {
+    // Do not incorrectly label work completed on the final allowed attempt
+    // incomplete (audit regression). Spend all but the boundary is clean,
+    // criteria pass → verified regardless of maker-budget state.
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxProviderAttempts: 3 });
+    budget.reserveProviderAttempt("prov-1");
+    budget.reserveProviderAttempt("prov-2");
+    budget.reserveProviderAttempt("prov-3"); // final allowed attempt spent
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+    }
+  });
+
   it("Slice 2 budget: undefined budget → no consult (Slice 1 behavior preserved)", async () => {
     const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(

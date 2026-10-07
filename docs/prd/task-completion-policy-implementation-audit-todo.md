@@ -149,7 +149,7 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T07 — Allow already-evidenced completion at exhausted maker budgets [P1, reproduced]
 
-- [ ] Evaluate admissible local/already-collected evidence before rejecting additional maker dispatch.
+- [x] Evaluate admissible local/already-collected evidence before rejecting additional maker dispatch.
 
 **Evidence:** `TaskCompletionController.ts:117–135` returns incomplete for continuation/provider exhaustion before evidence evaluation. Probe: spend the sole continuation, supply a clean terminal with all required criteria passed → `incomplete/CONTINUATION_LIMIT`, remaining work empty. The provider limit has the same ordering problem.
 
