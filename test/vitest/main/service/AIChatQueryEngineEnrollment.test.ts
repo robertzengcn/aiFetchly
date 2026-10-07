@@ -281,11 +281,19 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
       binding: {
         executionId: "exec-9",
         controller: { decide: vi.fn() },
-        budget: { reserveContinuation: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
         route: "task_best_effort",
         contract: null,
         contractHash: null,
-      },
+        ledgerId: "ledger-9",
+        leaseGeneration: 0,
+      } as never,
     });
     let captured: AIChatQueryLoopInput | undefined;
     const { engine } = createEngineCapturingInput((input) => {
@@ -301,6 +309,17 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
       captured!.taskExecutionBinding;
     expect(binding).toBeDefined();
     expect(binding!.executionId).toBe("exec-9");
+    // T05: the durable budget closures are wired by the engine enrollment
+    // seam. They capture `execModule` (a real AiTaskExecutionModule) +
+    // `created.ledgerId`/`leaseGeneration`/`executionId`, so they're
+    // callable (not undefined) when the binding is accepted.
+    expect(binding!.ledgerId).toBe("ledger-9");
+    expect(binding!.leaseGeneration).toBe(0);
+    expect(typeof binding!.persistBudget).toBe("function");
+    expect(typeof binding!.reserveProviderAttempt).toBe("function");
+    expect(typeof binding!.reserveToolExecution).toBe("function");
+    expect(typeof binding!.reconcileTokens).toBe("function");
+    expect(typeof binding!.addActiveRuntime).toBe("function");
   });
 
   it("flag-on + response_only route: does not enroll (binding undefined)", async () => {

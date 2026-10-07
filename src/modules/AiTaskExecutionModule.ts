@@ -53,6 +53,37 @@ export class AiTaskExecutionModule extends BaseModule {
     return this.model.getLedgerById(ledgerId);
   }
 
+  /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): durably persist budget consumption
+   * to the lineage ledger at actual dispatch time. The in-memory
+   * `TaskRunBudget` is a mirror; the ledger row is authoritative. This is
+   * the atomic CAS-guarded counterpart to the in-memory `reserve*` /
+   * `addActiveRuntime` / `addWaitMs` / `reconcileTokens` calls — fenced by
+   * `owner_generation` + `active_execution_id` so only the currently-active
+   * execution may spend against the ledger. Returns false when the lease no
+   * longer holds (released, superseded by a Continue successor, or missing);
+   * callers fail-closed on false (FR-08: refuse to dispatch when persistence
+   * fails).
+   */
+  async persistBudgetConsumption(input: {
+    readonly ledgerId: string;
+    readonly expectedOwnerGeneration: number;
+    readonly activeExecutionId: string;
+    readonly delta: {
+      readonly continuations?: number;
+      readonly providerAttempts?: number;
+      readonly toolExecutions?: number;
+      readonly checkerAttempts?: number;
+      readonly tokens?: number;
+      readonly activeRuntimeMs?: number;
+      readonly waitMs?: number;
+      readonly noProgressStreak?: number;
+    };
+  }): Promise<boolean> {
+    await this.ensureConnection();
+    return this.model.persistBudgetConsumption(input);
+  }
+
   async finalizeExecution(input: FinalizeInput): Promise<FinalizeResult> {
     await this.ensureConnection();
     return this.model.finalizeExecution(input);

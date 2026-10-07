@@ -43,6 +43,96 @@ export interface LoopTaskExecutionBinding {
     continuationId: string
   ) => BudgetReservationResult;
   /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): gate a provider dispatch attempt
+   * against the execution budget before the actual streamChatCompletion call.
+   * The loop forms a stable per-round request ID (`prov:<executionId>:<round>`)
+   * so a transport-retried same-round attempt dedups (AlreadyReserved — the
+   * reservation holds, dispatch proceeds) instead of double-counting. On
+   * `Exhausted` the loop fail-closed throws `RecoverableHistoryError(
+   * "MODEL_ATTEMPT_LIMIT")` — the controller's incomplete route owns the
+   * finish (D4: provider retry exhaustion → finish(incomplete,
+   * MODEL_ATTEMPT_LIMIT)). On `Reserved` the loop calls `persistBudget(
+   * {providerAttempts:1})`; if that returns false (lease lost) the loop
+   * fail-closed throws the same error. Optional so flag-off callers, tests,
+   * and the scheduled sink path (no loop binding) can omit it; when absent
+   * the dispatch site skips reservation (byte-identical legacy — the
+   * in-memory mirror still tracks via the controller).
+   */
+  readonly reserveProviderAttempt?: (
+    requestId: string
+  ) => BudgetReservationResult;
+  /**
+   * T05 (FR-08/10/23, AC-27): record a tool execution against the execution
+   * budget before the actual `deps.executeTool` call. Per D4 this is
+   * record-but-no-gate: gating mid-operation (the tool has already claimed
+   * resources / produced side effects) would leave tool state in limbo, so
+   * the hard cap is enforced at continuation time via `HARD_CAPS` instead.
+   * The loop forms a stable ID (`tool:<call.id>`) so a retried same-call
+   * execution dedups. `Exhausted` is logged but the call still proceeds
+   * (record-but-no-gate); `Reserved` triggers `persistBudget(
+   * {toolExecutions:1})` (false → logged, call still proceeds — fail-OPEN
+   * for tool exec per D4, since the operation is already in flight).
+   * Optional so flag-off callers and tests can omit it; when absent the
+   * dispatch site skips recording (byte-identical legacy).
+   */
+  readonly reserveToolExecution?: (
+    toolRequestId: string
+  ) => BudgetReservationResult;
+  /**
+   * T05 (FR-08/10/23, AC-22): reconcile actual token usage after a dispatch
+   * against the in-memory budget mirror. Returns true when the request ID
+   * was new (the caller should then persist `tokens` to the durable ledger
+   * via `persistBudget`); false when it was a dedup replay (the caller skips
+   * the persist so the ledger doesn't double-count). The loop calls this
+   * with the same `prov:<executionId>:<round>` ID used for the provider
+   * reservation. Optional so flag-off callers and tests can omit it; when
+   * absent the dispatch site skips reconciliation (byte-identical legacy —
+   * the controller's token cap consults zero, which is safe fail-closed).
+   */
+  readonly reconcileTokens?: (
+    requestId: string,
+    actualTokens: number
+  ) => boolean;
+  /**
+   * T05 (FR-08/10/23, AC-29): accumulate active runtime (provider stream
+   * wall-clock) against the in-memory budget mirror. The loop calls this
+   * after each provider stream completes with the per-round delta. Returns
+   * the new total `activeRuntimeMs` so the caller can persist the delta to
+   * the ledger if desired. Optional so flag-off callers and tests can omit
+   * it; when absent the active-runtime cap is not enforced (byte-identical
+   * legacy — the controller's runtime consult reads zero).
+   */
+  readonly addActiveRuntime?: (ms: number) => void;
+  /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): durably persist budget consumption
+   * to the lineage ledger at actual dispatch time. The in-memory
+   * `TaskRunBudget` is a mirror; the ledger row is authoritative. The engine
+   * enrollment seam constructs this closure from the coordinator's binding
+   * (`ledgerId` + `leaseGeneration` + `executionId` + the
+   * `AiTaskExecutionModule`). Returns false when the lease no longer holds
+   * (released, superseded by a Continue successor, or missing); the loop's
+   * dispatch sites fail-closed on false (FR-08: refuse to dispatch when
+   * persistence fails). Optional so flag-off callers, tests, and the
+   * scheduled sink path (which consults at response_end without a loop
+   * binding) can omit it; when absent the dispatch sites skip persistence
+   * (byte-identical to legacy behavior — the in-memory mirror still tracks
+   * consumption for the run).
+   */
+  readonly ledgerId?: string;
+  readonly leaseGeneration?: number;
+  readonly persistBudget?: (
+    delta: {
+      readonly continuations?: number;
+      readonly providerAttempts?: number;
+      readonly toolExecutions?: number;
+      readonly checkerAttempts?: number;
+      readonly tokens?: number;
+      readonly activeRuntimeMs?: number;
+      readonly waitMs?: number;
+      readonly noProgressStreak?: number;
+    }
+  ) => Promise<boolean>;
+  /**
    * T16 / NFR-12 / AC-12/32: the completion-policy flag value FROZEN at
    * enrollment time. Downstream handling of an ACCEPTED execution — the
    * loop's consult sites, the engine's finalization gate, and Stop-cancel —

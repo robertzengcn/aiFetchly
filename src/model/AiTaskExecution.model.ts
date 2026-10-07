@@ -169,6 +169,13 @@ export interface LedgerSnapshot {
   readonly consumedWaitMs: number;
   readonly noProgressStreak: number;
   readonly status: string;
+  /**
+   * T05: the CAS version token. Bumped by every state mutation
+   * (`persistBudgetConsumption`, `applyShadowDecisionCas`, finalize).
+   * Callers read it to fence their own CAS operations and to detect
+   * concurrent mutations between a read and a subsequent write.
+   */
+  readonly executionStateVersion: number;
 }
 
 /**
@@ -573,7 +580,101 @@ export class AiTaskExecutionModel extends BaseDb {
       consumedWaitMs: ledger.consumed_wait_ms,
       noProgressStreak: ledger.no_progress_streak,
       status: ledger.status,
+      executionStateVersion: ledger.execution_state_version,
     };
+  }
+
+  /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): atomically increment the ledger's
+   * consumed counters and bump the CAS version, fenced by `owner_generation`
+   * and `active_execution_id`. This is the durable counterpart to the
+   * in-memory {@link TaskRunBudget.reserve*} / `addActiveRuntime` /
+   * `addWaitMs` / `reconcileTokens` calls — the in-memory object is a mirror;
+   * the ledger row is authoritative. Persisting consumption at actual dispatch
+   * (not only at finalize) is what makes a pause/reconstruct/resume/Continue
+   * carry exact spent totals forward and prevent exhausted work from
+   * dispatching (T05 regression).
+   *
+   * The WHERE predicate enforces single-owner lease fencing:
+   *  - `active_execution_id = ?` — only the currently-active execution may
+   *    spend against this ledger. A released ledger (post-finalize) is
+   *    immutable; a successor that has not yet claimed the lineage ledger
+   *    cannot spend against the parent's row.
+   *  - `owner_generation = ?` — the fenced lease generation. A stale
+   *    binding whose `leaseGeneration` was superseded by a Continue successor
+   *    (which bumps `owner_generation` when it claims the shared lineage
+   *    ledger) affects zero rows and returns false.
+   *  - `status = 'active'` — defense-in-depth: a released ledger is immutable
+   *    even if `active_execution_id` lags the release.
+   *
+   * Returns true when exactly one row was affected (the consumption was
+   * durably recorded and the version bumped). Returns false when the ledger
+   * is missing, released, owned by a different execution, or at a different
+   * generation — callers must fail-closed (FR-08: refuse to dispatch when
+   * persistence fails). The in-memory mirror has already incremented by the
+   * time this is called; a false return therefore desynchronizes the mirror
+   * from the ledger, which the caller surfaces as a persistence error rather
+   * than silently accepting.
+   *
+   * Single atomic statement (no transaction wrapper): the UPDATE is the
+   * atomic unit — better-sqlite3 evaluates the WHERE predicate and SET in one
+   * step, so two concurrent dispatches cannot both succeed against the same
+   * generation. The `execution_state_version + 1` bump is the CAS token a
+   * subsequent finalizer or resurrector re-reads.
+   */
+  async persistBudgetConsumption(input: {
+    readonly ledgerId: string;
+    readonly expectedOwnerGeneration: number;
+    readonly activeExecutionId: string;
+    readonly delta: {
+      readonly continuations?: number;
+      readonly providerAttempts?: number;
+      readonly toolExecutions?: number;
+      readonly checkerAttempts?: number;
+      readonly tokens?: number;
+      readonly activeRuntimeMs?: number;
+      readonly waitMs?: number;
+      readonly noProgressStreak?: number;
+    };
+  }): Promise<boolean> {
+    assertNotWorker("persistBudgetConsumption");
+    const d = input.delta;
+    const runner = this.sqliteDb.connection.createQueryRunner();
+    try {
+      const result = (await runner.query(
+        `UPDATE ai_task_execution_ledger
+            SET consumed_continuations = consumed_continuations + ?,
+                consumed_provider_attempts = consumed_provider_attempts + ?,
+                consumed_tool_executions = consumed_tool_executions + ?,
+                consumed_checker_attempts = consumed_checker_attempts + ?,
+                consumed_tokens = consumed_tokens + ?,
+                consumed_active_ms = consumed_active_ms + ?,
+                consumed_wait_ms = consumed_wait_ms + ?,
+                no_progress_streak = no_progress_streak + ?,
+                execution_state_version = execution_state_version + 1
+          WHERE ledger_id = ?
+            AND active_execution_id = ?
+            AND owner_generation = ?
+            AND status = 'active'`,
+        [
+          d.continuations ?? 0,
+          d.providerAttempts ?? 0,
+          d.toolExecutions ?? 0,
+          d.checkerAttempts ?? 0,
+          d.tokens ?? 0,
+          d.activeRuntimeMs ?? 0,
+          d.waitMs ?? 0,
+          d.noProgressStreak ?? 0,
+          input.ledgerId,
+          input.activeExecutionId,
+          input.expectedOwnerGeneration,
+        ],
+        true // useStructuredResult — exposes .affected (see finalizeExecution)
+      )) as { affected?: number };
+      return (result.affected ?? 0) === 1;
+    } finally {
+      await runner.release();
+    }
   }
 
   async finalizeExecution(input: FinalizeInput): Promise<FinalizeResult> {

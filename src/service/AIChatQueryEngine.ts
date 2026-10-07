@@ -1481,6 +1481,53 @@ export class AIChatQueryEngine {
                   }),
                 reserveContinuation: (continuationId) =>
                   created.budget.reserveContinuation(continuationId),
+                // T05 (FR-08/10/23, AC-06/08/22/27/29): provider-attempt gate.
+                // The loop calls this before streamChatCompletion with a
+                // stable `prov:<executionId>:<round>` ID. Exhausted → loop
+                // throws RecoverableHistoryError("MODEL_ATTEMPT_LIMIT").
+                reserveProviderAttempt: (requestId) =>
+                  created.budget.reserveProviderAttempt(requestId),
+                // T05 (FR-08/10/23, AC-27): tool-execution record-but-no-gate
+                // (D4 — gating mid-operation leaves tool state in limbo; the
+                // hard cap is enforced at continuation time). The loop calls
+                // this with a stable `tool:<call.id>` ID before
+                // deps.executeTool.
+                reserveToolExecution: (toolRequestId) =>
+                  created.budget.reserveToolExecution(toolRequestId),
+                // T05 (FR-08/10/23, AC-22): reconcile actual token usage after
+                // a dispatch against the in-memory mirror. Returns true when
+                // the round was new (loop then persists `tokens` to the
+                // ledger); false on dedup (loop skips the persist).
+                reconcileTokens: (requestId, actualTokens) =>
+                  created.budget.reconcileTokens(requestId, actualTokens),
+                // T05 (FR-08/10/23, AC-29): accumulate active runtime (provider
+                // stream wall-clock) against the in-memory mirror. The loop
+                // calls this after each stream completes with the per-round
+                // delta.
+                addActiveRuntime: (ms) =>
+                  created.budget.addActiveRuntime(ms),
+                // T05 (FR-08/10/23, AC-06/08/22/27/29): durable ledger-backed
+                // budget persistence. The in-memory `created.budget` is a
+                // mirror; this closure is the authoritative path. Each dispatch
+                // site in the loop calls it after a successful in-memory
+                // reservation, fenced by `leaseGeneration` (= owner_generation)
+                // + `executionId` (= active_execution_id) so only the
+                // currently-active execution may spend. Returns false when the
+                // lease no longer holds (released, superseded by a Continue
+                // successor, or row missing) — the loop's dispatch sites
+                // fail-closed on false (FR-08: refuse to dispatch when
+                // persistence fails). The closure captures `execModule`
+                // (already in scope above) so the loop never imports the model
+                // or coordinator types.
+                ledgerId: created.ledgerId,
+                leaseGeneration: created.leaseGeneration,
+                persistBudget: (delta) =>
+                  execModule.persistBudgetConsumption({
+                    ledgerId: created.ledgerId,
+                    expectedOwnerGeneration: created.leaseGeneration,
+                    activeExecutionId: created.executionId,
+                    delta,
+                  }),
                 recordDecision: (decision) => {
                   recordedDecision = decision;
                 },

@@ -133,6 +133,29 @@ describe("TaskRunBudget reconcileTokens (§9)", () => {
     expect(budget.getConsumed().providerAttempts).toBe(1);
     expect(budget.getConsumed().tokens).toBe(100);
   });
+
+  it("T05: reconcileTokens returns true on a new request and false on dedup", () => {
+    // T05 (FR-08/10/23, AC-22): the boolean return gates the durable ledger
+    // persist so a transport-retried same-round attempt doesn't double-count
+    // tokens on the ledger. The in-memory dedup is the single source of
+    // truth for "did this round already count".
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    expect(budget.reconcileTokens("prov:exec-1:0", 1000)).toBe(true);
+    expect(budget.reconcileTokens("prov:exec-1:0", 1000)).toBe(false);
+    expect(budget.reconcileTokens("prov:exec-1:1", 500)).toBe(true);
+    expect(budget.getConsumed().tokens).toBe(1500);
+  });
+
+  it("T05: reconcileTokens returns true even when actualTokens clamps to 0", () => {
+    // A NaN/Infinity/negative actual still counts as a reconciled request
+    // (the dedup set records the ID); only the accumulated total is clamped.
+    // The caller persists tokens:0 to the ledger (no-op increment) but the
+    // boolean correctly reflects "this round was new".
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    expect(budget.reconcileTokens("prov:exec-1:0", Number.NaN)).toBe(true);
+    expect(budget.reconcileTokens("prov:exec-1:0", 100)).toBe(false);
+    expect(budget.getConsumed().tokens).toBe(0);
+  });
 });
 
 describe("TaskRunBudget accumulators (§9)", () => {

@@ -84,6 +84,7 @@ import {
   consultLoopEndCandidate,
   type ConsultOutcome,
 } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
 export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
@@ -1400,6 +1401,51 @@ export class AIChatQueryLoop {
   }
 
   /**
+   * T05 (FR-08/10/23, AC-27): record a tool execution against the execution
+   * budget before the actual `deps.executeTool` call, then persist the
+   * consumption to the durable ledger. Record-but-no-gate per D4: gating
+   * mid-operation (the tool has already claimed resources / produced side
+   * effects by the time we know it's running) would leave tool state in
+   * limbo, so `Exhausted` is logged but the call still proceeds; the hard
+   * cap is enforced at continuation time via `HARD_CAPS`. `Reserved`
+   * triggers `persistBudget({toolExecutions:1})`; a false return (lease
+   * lost) is logged but the call still proceeds — fail-OPEN for tool exec
+   * per D4. The stable ID `tool:<call.id>` dedups a retried same-call
+   * execution (AlreadyReserved — no persist). Skipped entirely when no
+   * binding or not-accepted (byte-identical legacy).
+   */
+  private async reserveToolExecutionBudget(
+    input: AIChatQueryLoopInput,
+    call: { id: string }
+  ): Promise<void> {
+    const binding = input.taskExecutionBinding;
+    if (!binding?.policyAccepted || !binding.reserveToolExecution) return;
+    const toolRequestId = `tool:${call.id}`;
+    const reservation = binding.reserveToolExecution(toolRequestId);
+    if (reservation === BudgetReservationResult.Reserved && binding.persistBudget) {
+      try {
+        const ok = await binding.persistBudget({ toolExecutions: 1 });
+        if (!ok) {
+          console.warn(
+            `[ai-chat-v2] T05 tool budget persistence failed (lease released or superseded) for ${toolRequestId}`
+          );
+        }
+      } catch (err) {
+        // Fail-OPEN per D4: the operation is already in flight; a ledger
+        // write error must not abort a tool that has claimed resources.
+        console.warn(
+          `[ai-chat-v2] T05 tool budget persistence error for ${toolRequestId}:`,
+          err
+        );
+      }
+    } else if (reservation === BudgetReservationResult.Exhausted) {
+      console.warn(
+        `[ai-chat-v2] T05 tool execution budget exhausted for ${toolRequestId} — proceeding (D4 record-but-no-gate)`
+      );
+    }
+  }
+
+  /**
    * Public entry point. Runs the turn, auto-retrying if a content-level
    * transient AI-server failure (empty response, finish_reason=error) ends
    * the turn BEFORE any content has been delivered to the UI. See
@@ -1879,6 +1925,49 @@ export class AIChatQueryLoop {
           currentMaxTokens = outputReserve;
         }
 
+        // T05 (FR-08/10/23, AC-06/08/22/27/29): gate the provider dispatch
+        // against the execution budget BEFORE the actual stream call, then
+        // persist the consumption to the durable ledger. The stable ID
+        // `prov:<executionId>:<round>` dedups a transport-retried same-round
+        // attempt (AlreadyReserved — reservation holds, dispatch proceeds).
+        // Exhausted → fail-closed throw; the controller's incomplete route
+        // owns the finish (D4). Reserved → persist; false (lease lost) →
+        // fail-closed throw. Skipped entirely when no binding or not-accepted
+        // (byte-identical legacy). Throws RecoverableHistoryError so the
+        // outer retry layer treats this as a terminal-for-this-attempt
+        // failure, not a transport retry.
+        const binding = input.taskExecutionBinding;
+        if (binding?.policyAccepted && binding.reserveProviderAttempt) {
+          const providerRequestId = `prov:${binding.executionId}:${round}`;
+          const reservation =
+            binding.reserveProviderAttempt(providerRequestId);
+          if (reservation === BudgetReservationResult.Exhausted) {
+            throw new RecoverableHistoryError(
+              "MODEL_ATTEMPT_LIMIT",
+              "provider attempt budget exhausted before dispatch"
+            );
+          }
+          if (reservation === BudgetReservationResult.Reserved) {
+            const persisted = binding.persistBudget
+              ? await binding.persistBudget({ providerAttempts: 1 })
+              : true;
+            if (!persisted) {
+              throw new RecoverableHistoryError(
+                "MODEL_ATTEMPT_LIMIT",
+                "budget persistence failed (lease released or superseded)"
+              );
+            }
+          }
+        }
+
+        // T05 (FR-08/10/23, AC-29): capture the provider-stream wall-clock
+        // start so the per-round active-runtime delta can be accumulated
+        // after the stream completes. Measured here (after the budget gate,
+        // before the await) so the delta reflects the actual stream duration
+        // only — not the preflight/budget work, which is amortized into the
+        // round but is not "active runtime" in the §9 sense.
+        const streamStartedAt = Date.now();
+
         await this.deps.streamChatCompletion(
           {
             messages,
@@ -1986,6 +2075,53 @@ export class AIChatQueryLoop {
             }
           : estimateTokenUsage(messages, accumulator.state.fullContent);
         lastReportedUsage = resolvedUsage;
+        // T05 (FR-08/10/23, AC-22/29): reconcile actual token usage AND active
+        // runtime against the execution budget after each round, then persist
+        // the deltas to the durable ledger. The stable ID
+        // `prov:<executionId>:<round>` (the same key used for the
+        // provider-attempt reservation) dedups so a transport-retried round
+        // doesn't double-count tokens. The in-memory `reconcileTokens` is the
+        // mirror (returns false on dedup); `persistBudget({tokens,
+        // activeRuntimeMs})` is the authoritative path. Skipped when no
+        // binding or not-accepted (byte-identical legacy). Persistence failure
+        // is logged, not thrown: token/runtime accounting is advisory for the
+        // budget's caps, not a dispatch gate (the reservation gates already
+        // threw fail-closed before the stream).
+        if (binding?.policyAccepted && binding.reconcileTokens) {
+          const providerRequestId = `prov:${binding.executionId}:${round}`;
+          const counted = binding.reconcileTokens(
+            providerRequestId,
+            resolvedUsage.totalTokens
+          );
+          // AC-29: accumulate the per-round active runtime into the mirror.
+          // The delta is bounded by the stream duration (the await above);
+          // negative/NaN is clamped to 0 by `addActiveRuntime`'s
+          // asFiniteNonNegative guard.
+          const activeRuntimeDelta = Date.now() - streamStartedAt;
+          if (binding.addActiveRuntime) {
+            binding.addActiveRuntime(activeRuntimeDelta);
+          }
+          if (counted && binding.persistBudget) {
+            binding
+              .persistBudget({
+                tokens: resolvedUsage.totalTokens,
+                activeRuntimeMs: activeRuntimeDelta,
+              })
+              .then((ok) => {
+                if (!ok) {
+                  console.warn(
+                    `[ai-chat-v2] T05 token/runtime persistence failed (lease released or superseded) for ${providerRequestId}`
+                  );
+                }
+              })
+              .catch((err) => {
+                console.warn(
+                  `[ai-chat-v2] T05 token/runtime persistence error for ${providerRequestId}:`,
+                  err
+                );
+              });
+          }
+        }
         eventSink.emit({
           type: "usage_update",
           conversationId: input.conversationId,
@@ -3669,6 +3805,10 @@ export class AIChatQueryLoop {
       throw new Error("AI features are not enabled on this plan.");
     }
 
+    // T05 (FR-08/10/23, AC-27): record this tool execution against the
+    // execution budget before dispatching (record-but-no-gate per D4).
+    await this.reserveToolExecutionBudget(input, call);
+
     const registry = getDefaultToolJobRegistry();
     const { jobId } = registry.start(
       call.name,
@@ -4188,6 +4328,10 @@ export class AIChatQueryLoop {
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
+
+    // T05 (FR-08/10/23, AC-27): record this tool execution against the
+    // execution budget before dispatching (record-but-no-gate per D4).
+    await this.reserveToolExecutionBudget(input, call);
 
     const executePromise = this.deps.executeTool(
       call.name,

@@ -299,9 +299,15 @@ export class TaskRunBudget {
   }
 
   /**
-   * Reconcile actual token usage after a dispatch (§9).
+   * Reconcile actual token usage after a dispatch (§9). Returns true when the
+   * request ID was new and the usage was counted; false when it was a dedup
+   * (AlreadyReserved) replay of a previously reconciled request. T05 callers
+   * use the boolean to gate the durable ledger persist so a transport-retried
+   * same-round attempt doesn't double-count tokens on the ledger (the
+   * in-memory dedup is the single source of truth for "did this round
+   * already count").
    */
-  reconcileTokens(requestId: string, actualTokens: number): void {
+  reconcileTokens(requestId: string, actualTokens: number): boolean {
     // Dedup on a SEPARATE set from reservedRequestIds. The three reserve*
     // methods share `reservedRequestIds`; token reconciliation tracks its
     // own keyspace so a reservation of "X" and a token reconcile of "X"
@@ -311,13 +317,14 @@ export class TaskRunBudget {
     // "foo", and a reconcile of "x" silently absorbed a later reservation
     // of "tokens:x".
     if (this.tokenReconciledIds.has(requestId)) {
-      return;
+      return false;
     }
     this.tokenReconciledIds.add(requestId);
     this.consumed = {
       ...this.consumed,
       tokens: this.consumed.tokens + this.asFiniteNonNegative(actualTokens),
     };
+    return true;
   }
 
   /** Accumulate active runtime across resumes (§9). */

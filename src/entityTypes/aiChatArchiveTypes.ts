@@ -169,6 +169,16 @@ export type RecoverableHistoryErrorCode =
   | "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
   | "MODEL_BUDGET_UNAVAILABLE"
   /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): the execution's provider-attempt
+   * budget is exhausted (max 60 attempts including retries/compaction/
+   * fallback) OR the durable ledger persist failed (lease released or
+   * superseded by a Continue successor). The loop's provider-dispatch gate
+   * throws this fail-closed so the controller's incomplete route owns the
+   * finish. Distinct from `MODEL_BUDGET_UNAVAILABLE` (no budget at all):
+   * here a budget exists but is spent.
+   */
+  | "MODEL_ATTEMPT_LIMIT"
+  /**
    * The serialized request body exceeds the transport ceiling even though the
    * token preflight passed. Distinct from
    * `CONTEXT_REQUIRED_CONTENT_TOO_LARGE`: that one is about model context,
