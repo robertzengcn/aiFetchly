@@ -35,6 +35,7 @@ import { ToolResultModule } from "@/modules/ToolResultModule";
 import {
   isHistoryUiEnabled,
   isNewCompactionEnabled,
+  isAiTaskCompletionPolicyV1Enabled,
 } from "@/config/featureFlags";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
@@ -73,6 +74,8 @@ import {
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
   AI_CHAT_V2_COMPACTION_START,
+  AI_CHAT_V2_TASK_CONTINUE,
+  AI_CHAT_V2_TASK_RETRY,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -107,6 +110,17 @@ import type {
   ArchiveReadPage,
   RecoverableHistoryErrorCode,
 } from "@/entityTypes/aiChatArchiveTypes";
+import { z } from "zod/v4";
+import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import {
+  taskExecutionRouteSchema,
+  taskCompletionContractSchema,
+  type TaskCompletionContract,
+  type TaskExecutionRoute,
+} from "@/entityTypes/aiTaskExecutionTypes";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -1961,6 +1975,180 @@ async function handleCompactionCancel(
   }
 }
 
+// -------------------------------------------------------------------------
+// Unit 7 (PRD FR-21/22, AC-27/28): continueTask / retryTask IPC handlers.
+//
+// The renderer sends ONLY opaque tokens (parentExecutionId + a fresh
+// submissionId) — never ledger ids, contracts, or routes. The main process
+// loads the parent row and derives everything trusted itself: the lineage
+// ledger id (Continue shares it, Retry mints a new one), the route, and the
+// re-attached contract snapshot.
+//
+// Contract handling: the successor reuses the parent's stored
+// `contract_snapshot_json` (already Zod-validated when the parent enrolled).
+// Re-freezing from a bare renderer `message` would either throw (verified
+// mode with zero criteria — `TaskCompletionContractService.freeze` blocks
+// that at FR-04) or mint a different hash, defeating Continue's "unchanged
+// contract" comparability (§5.1). When the renderer's message differs from
+// the parent's objective, Retry is the correct flow — the renderer opts in
+// by calling retryTask, not continueTask.
+//
+// AI-feature IPC rule: check AI enable FIRST (before parsing request data).
+// Flag rule: the completion policy is DEFAULT OFF — when off, these handlers
+// deny with a clear message (no work, no rows).
+// -------------------------------------------------------------------------
+
+/** Zod schema for the renderer's continue/retry payload (boundary validation). */
+const taskSuccessorRequestSchema = z.object({
+  parentExecutionId: z.string().min(1).max(200),
+  submissionId: aiChatHistorySubmissionIdSchema,
+  message: z.string().max(20000).optional(),
+});
+
+type TaskSuccessorRequest = z.infer<typeof taskSuccessorRequestSchema>;
+
+/**
+ * Parse + validate the successor request payload. Returns null on any
+ * malformed field (the caller denies with a clear message).
+ */
+function parseTaskSuccessorRequest(data: string): TaskSuccessorRequest | null {
+  try {
+    const parsed: unknown = JSON.parse(data);
+    const result = taskSuccessorRequestSchema.safeParse(parsed);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the parent's frozen contract snapshot (Zod-validated on load). null
+ * when the parent ran without a contract (best_effort routes). Throws on a
+ * corrupt snapshot so the catch-all in the handler surfaces a clear error
+ * rather than silently enrolling a successor with no contract.
+ */
+function loadParentContract(parent: AiTaskExecutionEntity): TaskCompletionContract | null {
+  if (!parent.contract_snapshot_json) return null;
+  const parsed: unknown = JSON.parse(parent.contract_snapshot_json);
+  return taskCompletionContractSchema.parse(parsed);
+}
+
+/**
+ * Load the parent execution row. Returns null when the parent is unknown
+ * (the caller denies with "Unknown parentExecutionId").
+ */
+async function loadParentExecution(
+  parentExecutionId: string
+): Promise<AiTaskExecutionEntity | null> {
+  const module = new AiTaskExecutionModule();
+  return module.getExecution(parentExecutionId);
+}
+
+/**
+ * Shared successor handler body: gates, parent load, coordinator call.
+ * `mode` selects Continue (shared lineage ledger) vs Retry (new ledger).
+ */
+async function handleTaskSuccessor(
+  data: string,
+  mode: "continue" | "retry"
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  // AI-feature IPC rule: check AI enable FIRST.
+  if (!(await ensureHostedAiEnabled())) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  const parsed = parseTaskSuccessorRequest(data);
+  if (!parsed) {
+    return denied(
+      "Invalid request payload: parentExecutionId and submissionId are required"
+    );
+  }
+  // Flag rule: the completion policy is DEFAULT OFF; the successor flows
+  // only exist under it.
+  if (!isAiTaskCompletionPolicyV1Enabled()) {
+    return denied(
+      "Task recovery is unavailable: the completion policy is not enabled."
+    );
+  }
+  const parent = await loadParentExecution(parsed.parentExecutionId);
+  if (!parent) {
+    return denied("Unknown parentExecutionId");
+  }
+  const route = taskExecutionRouteSchema.parse(parent.route);
+  const lineageLedgerId = parent.lineage_ledger_id || null;
+  // Continue REQUIRES a lineage ledger (shared budget); the parent row may
+  // predate ledger persistence (GAP-S2 #4) — deny with a clear message
+  // rather than silently minting a fresh one (that would be a Retry).
+  if (mode === "continue" && !lineageLedgerId) {
+    return denied(
+      "Parent execution has no lineage ledger to continue; use Retry instead."
+    );
+  }
+  // Reuse the parent's frozen contract snapshot (see block docstring). The
+  // renderer's optional `message` is for the next user turn, not for
+  // re-authoring the contract — re-authoring happens via retryTask with a
+  // fresh submissionId + the renderer's own freeze step (Slice 3+).
+  let contract: TaskCompletionContract | null = null;
+  try {
+    contract = loadParentContract(parent);
+  } catch (err) {
+    console.error(
+      `[ai-chat-v2] task ${mode} parent contract load failed:`,
+      err
+    );
+    return denied("Parent execution has a corrupt contract snapshot");
+  }
+  const message = parsed.message ?? "";
+  const requestHash = hashUserAuthoredText(message);
+  const submissionId = parsed.submissionId;
+  const sourceUserMessageId = parent.source_user_message_id ?? "";
+  const conversationId = parent.conversation_id ?? "";
+  try {
+    const coordinator = new TaskExecutionCoordinator();
+    const baseInput = {
+      parentExecutionId: parsed.parentExecutionId,
+      conversationId,
+      sourceUserMessageId,
+      submissionId,
+      requestHash,
+      route,
+      completionOwner: parent.completion_owner,
+      contract,
+    };
+    const result =
+      mode === "continue"
+        ? await coordinator.continueExecution({
+            ...baseInput,
+            lineageLedgerId: lineageLedgerId as string,
+          })
+        : await coordinator.retryExecution(baseInput);
+    if (result.status === "created") {
+      return ok({
+        executionId: result.binding.executionId,
+        status: "created",
+      });
+    }
+    if (result.status === "reused") {
+      return ok({ executionId: null, status: "reused" });
+    }
+    return denied(`Task ${mode} conflict: SUBMISSION_CONFLICT`);
+  } catch (err) {
+    console.error(`[ai-chat-v2] task ${mode} failed:`, err);
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleTaskContinue(
+  data: string
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  return handleTaskSuccessor(data, "continue");
+}
+
+async function handleTaskRetry(
+  data: string
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  return handleTaskSuccessor(data, "retry");
+}
+
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -2033,6 +2221,16 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_COMPACTION_START, async (_e, data: unknown) =>
     handleCompactionStart((data as string) ?? "")
+  );
+  // Unit 7 (FR-21/22, AC-27/28): Continue shares the parent's lineage
+  // ledger; Retry mints a new one. Both are AI-gated + flag-gated inside
+  // the handler — registered before STREAM so they exist when the renderer
+  // probes them.
+  ipcMain.handle(AI_CHAT_V2_TASK_CONTINUE, async (_e, data: unknown) =>
+    handleTaskContinue((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_TASK_RETRY, async (_e, data: unknown) =>
+    handleTaskRetry((data as string) ?? "")
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

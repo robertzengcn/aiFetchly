@@ -414,6 +414,18 @@ export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
 export const AI_CHAT_V2_COMPACTION_START = "ai-chat-v2:compaction-start";
 /** Main->renderer compaction run lifecycle/progress broadcast (§13.1). */
 export const AI_CHAT_V2_COMPACTION_PROGRESS = "ai-chat-v2:compaction-progress";
+/**
+ * Renderer->Main: continue an incomplete task execution (PRD FR-21, AC-27).
+ * Creates a successor execution sharing the parent's lineage ledger (spent
+ * allowance carries forward) and re-enters the loop. AI-gated + flag-gated.
+ */
+export const AI_CHAT_V2_TASK_CONTINUE = "ai-chat-v2:task-continue";
+/**
+ * Renderer->Main: retry a failed/cancelled task execution (PRD FR-22, AC-28).
+ * Disclosed new attempt: a NEW lineage ledger with fresh allowances, the
+ * parent recorded for lineage. AI-gated + flag-gated.
+ */
+export const AI_CHAT_V2_TASK_RETRY = "ai-chat-v2:task-retry";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

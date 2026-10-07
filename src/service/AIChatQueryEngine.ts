@@ -411,6 +411,17 @@ export class AIChatQueryEngine {
       set: (decision: TaskCompletionDecision | null) => void;
     }
   >();
+  /**
+   * Slice 2 Unit 7 — per-conversation bound execution ids (GAP-S2 #10,
+   * FR-22/23, AC-24). Populated at the enrollment seam when a manual
+   * execution is created; read by `stopConversation` so the Stop button
+   * cancels the enrolled execution through the coordinator BEFORE the
+   * turn's controller is aborted (the row is finalized while still owned).
+   * Removed at the complete-gate (the row is finalized there — a later
+   * Stop click must not double-finalize) and cleared with the conversation's
+   * turn state. Keyed by conversationId, mirroring activeTurns.
+   */
+  private readonly taskExecutionBindings = new Map<string, string>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly compactionCoordinator?: AIChatCompactionCoordinator;
@@ -1336,6 +1347,36 @@ export class AIChatQueryEngine {
             });
             if (startResult.status === "created") {
               const created = startResult.binding;
+              // Unit 7 (AC-25): a replacement submission fences the old
+              // execution — the prior turn was already aborted above; finalize
+              // its execution cancelled/TASK_REPLACED so it can never emit a
+              // late verified outcome. Fire-and-forget: enrollment must never
+              // block the new turn, and the new execution wins the lease.
+              const replacedExecutionId =
+                this.taskExecutionBindings.get(conversationId);
+              if (replacedExecutionId) {
+                void new TaskExecutionCoordinator()
+                  .cancel(replacedExecutionId)
+                  .then((cancelResult) => {
+                    if (!cancelResult.ok && !cancelResult.alreadyFinalized) {
+                      console.error(
+                        `[ai-chat-v2] task-replacement fencing failed (executionId=${replacedExecutionId}): ${cancelResult.reasonCode ?? "unknown"}`
+                      );
+                    }
+                  })
+                  .catch((err: unknown) =>
+                    console.error(
+                      `[ai-chat-v2] task-replacement fencing threw (executionId=${replacedExecutionId}):`,
+                      err
+                    )
+                  );
+              }
+              // Bind the new execution to the conversation so Stop cancels it
+              // (Unit 7 stop wiring, FR-22/23).
+              this.taskExecutionBindings.set(
+                conversationId,
+                created.executionId
+              );
               // Per-turn decision slot: the loop's consult closure records
               // here, and the engine's finalization gate (Slice 2 Unit 5)
               // reads it to tell "loop already consulted" from "no consult
@@ -1735,9 +1776,46 @@ export class AIChatQueryEngine {
    * Stop a single conversation's active or pending turn. Only emits `cancelled`
    * for pending-permission / pending-plan-question turns — running streaming
    * turns are aborted and their loop resolves `cancelled`, which emits + persists.
+   *
+   * Unit 7 (FR-22/23, AC-24): when the completion policy is on and this
+   * conversation has a bound execution (enrolled at the submission seam), the
+   * execution is cancelled through the coordinator BEFORE any controller is
+   * aborted — the row finalizes cancelled/USER_CANCELLED while still owned,
+   * so a stop during checking/recovery can never produce a late
+   * verified_complete. The in-flight consult (if any) sees its fetch abort
+   * and returns unknown criteria; the controller's finish decision then
+   * hits ALREADY_FINALIZED and no-ops. Covers all three turn shapes: active
+   * streaming, paused-for-permission, and paused-for-plan-question — a paused
+   * turn's execution stays enrolled, so Stop must cancel it too.
    */
   private stopConversation(conversationId: string): void {
     this.dispatchStop(conversationId, "user_stopped");
+    if (
+      isAiTaskCompletionPolicyV1Enabled() &&
+      this.taskExecutionBindings.has(conversationId)
+    ) {
+      const boundExecutionId = this.taskExecutionBindings.get(conversationId);
+      // The binding is consumed: a second Stop click (or the loop's own
+      // cancelled resolution) must not double-finalize.
+      this.taskExecutionBindings.delete(conversationId);
+      if (boundExecutionId) {
+        void new TaskExecutionCoordinator()
+          .cancel(boundExecutionId)
+          .then((cancelResult) => {
+            if (!cancelResult.ok && !cancelResult.alreadyFinalized) {
+              console.error(
+                `[ai-chat-v2] task-execution cancel failed (executionId=${boundExecutionId}): ${cancelResult.reasonCode ?? "unknown"}`
+              );
+            }
+          })
+          .catch((err: unknown) =>
+            console.error(
+              `[ai-chat-v2] task-execution cancel threw (executionId=${boundExecutionId}):`,
+              err
+            )
+          );
+      }
+    }
     const pendingPermission = this.pendingPermissions.get(conversationId);
     if (pendingPermission) {
       this.pendingPermissions.delete(conversationId);
@@ -2477,6 +2555,11 @@ export class AIChatQueryEngine {
         // unenrolled turns no-op inside the gate.
         if (taskExecutionBinding) {
           await this.finalizeManualAtCompleteGate(result, taskExecutionBinding);
+          // Unit 7: the row is finalized (or the gate logged the failure) —
+          // drop the conversation binding so a later Stop click never
+          // double-finalizes. ALREADY_FINALIZED is idempotent, but the map
+          // should not claim a live binding for a finished execution.
+          this.taskExecutionBindings.delete(conversationId);
         }
         eventSink.emit({
           type: "complete",
@@ -2876,6 +2959,7 @@ export class AIChatQueryEngine {
     this.clearActiveTurnState(conversationId, assistantMessageId);
     this.pendingPermissions.delete(conversationId);
     this.pendingPlanQuestions.delete(conversationId);
+    this.taskExecutionBindings.delete(conversationId);
   }
 
   private createPersistingEventSink(

@@ -102,6 +102,34 @@ export interface StartManualInput {
   readonly lineageLedgerId?: string | null;
 }
 
+/**
+ * Continue input (FR-21, AC-27). The successor records `parent_execution_id`
+ * and shares the parent's lineage ledger — spent allowance carries forward
+ * and the budget mirror is resurrected from the ledger, never renewed.
+ */
+export type ContinueExecutionInput = Omit<
+  StartManualInput,
+  "parentExecutionId" | "lineageLedgerId" | "completionOwner"
+> & {
+  readonly parentExecutionId: string;
+  readonly lineageLedgerId: string;
+  readonly completionOwner?: "standalone" | "goal";
+};
+
+/**
+ * Retry input (FR-22, AC-28). A disclosed new attempt: a NEW lineage ledger
+ * (fresh bounded allowances, never an auto-refresh of the parent's exhausted
+ * ones), `parent_execution_id` kept for lineage, and the contract re-frozen
+ * by the caller when the request changed.
+ */
+export type RetryExecutionInput = Omit<
+  StartManualInput,
+  "parentExecutionId" | "lineageLedgerId" | "completionOwner"
+> & {
+  readonly parentExecutionId: string;
+  readonly completionOwner?: "standalone" | "goal";
+};
+
 export interface StartScheduledInput {
   readonly conversationId: string;
   readonly sourceUserMessageId: string;
@@ -212,15 +240,7 @@ export class TaskExecutionCoordinator {
   async finalizeManual(
     input: FinalizeManualInput
   ): Promise<FinalizeResult> {
-    const exec = await this.module.getExecution(input.executionId);
-    if (!exec) {
-      return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
-    }
-    if (exec.finalized) {
-      return { ok: true, alreadyFinalized: true };
-    }
-
-    const attempt = (expectedVersion: number): Promise<FinalizeResult> =>
+    return this.finalizeWithCasRetry(input.executionId, (expectedVersion) =>
       this.module.finalizeExecution({
         executionId: input.executionId,
         expectedVersion,
@@ -230,7 +250,36 @@ export class TaskExecutionCoordinator {
         evidenceIds: input.evidenceIds,
         remainingWork: input.remainingWork,
         assistantResultMessageId: input.assistantResultMessageId ?? null,
-      });
+      })
+    );
+  }
+
+  /**
+   * Shared CAS-finalize skeleton for the manual-style paths
+   * ({@link finalizeManual}, {@link cancel}): read the current version, run
+   * the CAS UPDATE, and on `STATE_CONFLICT` re-read + retry ONCE.
+   *
+   * The caller does NOT supply `expectedVersion` — the binding does not carry
+   * the version token, and these paths run when the row's version is
+   * authoritative. The coordinator reads it via `module.getExecution`:
+   * - no row → `MISSING_TASK_OUTCOME` (ok:false);
+   * - already finalized → `ALREADY_FINALIZED` no-op (the terminal outcome is
+   *   immutable — §6.3: the second finalizer never rewrites it);
+   * - `STATE_CONFLICT` (concurrent finalizer bumped the version between our
+   *   read and the UPDATE) → re-read + retry ONCE; a second conflict surfaces
+   *   `STATE_CONFLICT` (a newer owner won — never overwrite).
+   */
+  private async finalizeWithCasRetry(
+    executionId: string,
+    attempt: (expectedVersion: number) => Promise<FinalizeResult>
+  ): Promise<FinalizeResult> {
+    const exec = await this.module.getExecution(executionId);
+    if (!exec) {
+      return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
+    }
+    if (exec.finalized) {
+      return { ok: true, alreadyFinalized: true };
+    }
 
     const first = await attempt(exec.execution_state_version);
     if (first.ok || first.alreadyFinalized) return first;
@@ -241,7 +290,7 @@ export class TaskExecutionCoordinator {
     // (the model distinguishes ALREADY_FINALIZED from STATE_CONFLICT), so a
     // retry against the fresh version usually lands. A second conflict means
     // ownership genuinely moved; surface it rather than overwrite.
-    const fresh = await this.module.getExecution(input.executionId);
+    const fresh = await this.module.getExecution(executionId);
     if (!fresh) {
       return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
     }
@@ -249,6 +298,73 @@ export class TaskExecutionCoordinator {
       return { ok: true, alreadyFinalized: true };
     }
     return attempt(fresh.execution_state_version);
+  }
+
+  /**
+   * Cancel an execution (FR-22, AC-23/24). Wired through the engine's
+   * `stopActiveTurn`/`stopConversation` path BEFORE the turn's controller is
+   * aborted, so the terminal outcome is committed while the row is still
+   * owned. Finalizes with `cancelled` / `USER_CANCELLED` and no evidence or
+   * remaining work — cancelled work is never `verified_complete` (D6).
+   *
+   * Same CAS-retry semantics as {@link finalizeManual}: ALREADY_FINALIZED is
+   * a success no-op (a second stop click must be idempotent), a missing row
+   * surfaces `MISSING_TASK_OUTCOME`, and a STATE_CONFLICT retries once.
+   */
+  async cancel(
+    executionId: string,
+    _expectedVersion?: number
+  ): Promise<FinalizeResult> {
+    return this.finalizeWithCasRetry(executionId, (expectedVersion) =>
+      this.module.finalizeExecution({
+        executionId,
+        expectedVersion,
+        outcome: "cancelled",
+        reasonCode: "USER_CANCELLED",
+        summary: "Cancelled by user request",
+        evidenceIds: [],
+        remainingWork: [],
+        assistantResultMessageId: null,
+      })
+    );
+  }
+
+  /**
+   * Continue an incomplete execution (FR-21, AC-27). Creates a successor
+   * execution that shares the parent's lineage ledger: spent allowance
+   * carries forward (the budget mirror is resurrected from the persisted
+   * ledger counters) and the model bumps the ledger's `owner_generation` so
+   * the successor holds the fenced lease — a stale ancestor's consult or
+   * finalization CAS no longer matches. Exactly one active successor per
+   * lineage; never auto-renews exhausted allowances.
+   */
+  async continueExecution(
+    input: ContinueExecutionInput
+  ): Promise<StartBindingResult> {
+    return this.startManual({
+      ...input,
+      completionOwner: input.completionOwner ?? "standalone",
+      parentExecutionId: input.parentExecutionId,
+      lineageLedgerId: input.lineageLedgerId,
+    });
+  }
+
+  /**
+   * Explicitly retry a failed or cancelled execution (FR-22, AC-28). A
+   * disclosed new attempt: a NEW lineage ledger with fresh bounded
+   * allowances from the manual defaults (never an auto-refresh of the
+   * parent's exhausted ones), `parent_execution_id` recorded for lineage,
+   * and the contract re-frozen by the caller when the request changed.
+   */
+  async retryExecution(
+    input: RetryExecutionInput
+  ): Promise<StartBindingResult> {
+    return this.startManual({
+      ...input,
+      completionOwner: input.completionOwner ?? "standalone",
+      parentExecutionId: input.parentExecutionId,
+      lineageLedgerId: null,
+    });
   }
 
   /**
