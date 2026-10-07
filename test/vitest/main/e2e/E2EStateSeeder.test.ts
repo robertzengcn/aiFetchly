@@ -16,6 +16,7 @@ function makeEnv(root: string, stateFile: string): E2EEnvironment {
     workspacePath: path.join(root, "workspace"),
     downloadsPath: path.join(root, "downloads"),
     logsPath: path.join(root, "logs"),
+    toolOutputRootPath: path.join(root, "tool-outputs"),
     fakeAiBaseUrl: "http://127.0.0.1:6000/v1",
     allowedOrigins: ["http://127.0.0.1:5173"],
     stateFilePath: stateFile,

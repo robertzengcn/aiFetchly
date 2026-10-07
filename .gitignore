@@ -164,3 +164,6 @@ test-results/
 test-results/playwright/
 .yarn/install-state.gz
 debug/*
+
+# Local worktree: node_modules is symlinked to the primary checkout.
+node_modules

@@ -54,7 +54,9 @@ import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import * as path from "path";
 import { pathToFileURL } from "url";
+import Database from "better-sqlite3";
 import { Token } from "@/modules/token";
+import { snapshotLegacyServiceTags } from "@/modules/migrations/emailServiceTagMigration";
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import {
   USERSDBPATH,
@@ -597,7 +599,7 @@ let terminalFallbackArmed = false;
 function armTerminalFallback(label: string): void {
   if (terminalFallbackArmed) return;
   terminalFallbackArmed = true;
-  const timer = setTimeout(() => {
+  setTimeout(() => {
     if (process.exitCode === null) process.exitCode = 0;
     log.error(
       `[lifecycle] terminal fallback engaged (${label}): process had not exited ${TERMINAL_FALLBACK_MS}ms after terminal handoff; forcing exit`
@@ -1769,8 +1771,50 @@ function initialize() {
         );
       }
       const appDataSource = SqliteDb.getInstance(userdataPath);
+      // Snapshot legacy service→tag assignments BEFORE TypeORM synchronize
+      // runs (synchronize may drop the old tagId column during init). The
+      // snapshot is replayed into the new junction table after init.
+      let legacyTagSnapshot: Array<{ id: number; tagId: number }> = [];
+      try {
+        const dbFile = path.join(userdataPath, "scraper.db");
+        if (fs.existsSync(dbFile)) {
+          const rawDb = new Database(dbFile, { readonly: true });
+          legacyTagSnapshot = snapshotLegacyServiceTags(rawDb);
+          rawDb.close();
+        }
+      } catch (err) {
+        log.warn(
+          "[email-service-tag-migration] pre-init snapshot failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
       if (!appDataSource.connection.isInitialized) {
         await SqliteDb.ensureInitialized();
+      }
+      // Multi-tag migration: replay the legacy snapshot into the junction
+      // table, then drop the old tagId column. Idempotent — no-op on an
+      // already-migrated DB. Fire-and-forget so it never blocks startup,
+      // but awaited in tests via migrateEmailServiceTagsToManyToMany.
+      try {
+        const { replayLegacyServiceTags, dropLegacyServiceTagColumn } =
+          await import("@/modules/migrations/emailServiceTagMigration");
+        const backfilled = await replayLegacyServiceTags(
+          appDataSource.connection,
+          legacyTagSnapshot
+        );
+        const columnDropped = await dropLegacyServiceTagColumn(
+          appDataSource.connection
+        );
+        if (backfilled > 0 || columnDropped) {
+          log.info(
+            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}`
+          );
+        }
+      } catch (err) {
+        log.error(
+          "[email-service-tag-migration] replay/drop failed:",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // Best-effort cache cleanup so stale paste expansions do not grow
@@ -1798,6 +1842,44 @@ function initialize() {
       } catch (err) {
         log.warn(
           "[archive-recovery] startup sweep failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
+      // Preserved tool outputs: install the persistent cursor key and run the
+      // reconciliation sweep (technical design §12.2). Without this the cursor
+      // key is ephemeral per process, so every cursor a model received before a
+      // restart is rejected afterwards, and crash residue is never reclaimed.
+      // Fire-and-forget and never fatal.
+      try {
+        const {
+          runToolResultStartup,
+          createToolResultStorage,
+          TOOL_RESULT_CURSOR_SECRET_KEY,
+        } = await import("@/service/toolResult/ToolResultStartupService");
+        const { ToolResultModule } = await import("@/modules/ToolResultModule");
+        const { isToolOutputCaptureEnabled } = await import(
+          "@/config/featureFlags"
+        );
+        const token = new Token();
+        void runToolResultStartup({
+          module: new ToolResultModule(),
+          storage: createToolResultStorage(),
+          captureEnabled: isToolOutputCaptureEnabled(),
+          readSecret: () => token.getValue(TOOL_RESULT_CURSOR_SECRET_KEY),
+          writeSecret: (secret: string) =>
+            token.setValue(TOOL_RESULT_CURSOR_SECRET_KEY, secret),
+          onLog: (message: string) => log.info(message),
+          // The legacy projection backfill (T14 / design §10.2) writes bounded
+          // derived rows over oversized legacy messages; it needs the live
+          // DataSource to scan the source table. Runs regardless of capture
+          // (it touches only the projection table, not artifacts).
+          dataSource: appDataSource.connection,
+          profileId: "default",
+        });
+      } catch (err) {
+        log.warn(
+          "[tool-result] startup sequence failed to launch:",
           err instanceof Error ? err.message : String(err)
         );
       }

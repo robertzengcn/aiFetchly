@@ -41,6 +41,10 @@ import { MessageType } from "@/entityTypes/commonType";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import { log } from "@/modules/Logger";
+import type {
+  LegacyProjection,
+  LegacyProjectionLookup,
+} from "@/entityTypes/toolResultTypes";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import type { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 
@@ -100,6 +104,15 @@ export interface AIChatContextAssemblerDeps {
    * (engine default, IPC, scheduled factory).
    */
   readonly archiveModule?: AIChatArchiveModule;
+  /**
+   * Legacy projection lookup (T14 / design §10.2). When supplied, the
+   * assembler substitutes a bounded projection's content for any legacy
+   * oversized row whose `messageId` has a projection — the original row is
+   * never mutated, and the bounded content is what gets costed and sent.
+   * When absent, legacy rows are loaded with their raw content (the
+   * pre-T14 behavior), so this is a strictly additive enhancement.
+   */
+  readonly projectionLookup?: LegacyProjectionLookup;
 }
 
 export interface AIChatContextAssembleInput {
@@ -203,10 +216,16 @@ export class AIChatContextAssembler {
   private readonly compactionReader?: AIChatContextCompactionReader;
   /** Archive access for turn-backed retention; absent → bounded-row fallback. */
   private readonly archiveModule?: AIChatArchiveModule;
+  /**
+   * Legacy projection lookup (T14). When present, oversized legacy rows are
+   * replaced by their bounded projection at read time. Absent → raw content.
+   */
+  private readonly projectionLookup?: LegacyProjectionLookup;
 
   constructor(deps?: AIChatContextAssemblerDeps) {
     this.compactionReader = deps?.compactionReader;
     this.archiveModule = deps?.archiveModule;
+    this.projectionLookup = deps?.projectionLookup;
   }
 
   /**
@@ -814,6 +833,82 @@ export class AIChatContextAssembler {
   }
 
   /**
+   * Replace oversized legacy rows with their bounded projection content
+   * (T14 / design §10.2). The original row objects are NEVER mutated — for
+   * each row whose `messageId` has a projection, a shallow copy carries the
+   * projection's bounded `content` instead. Rows without a projection pass
+   * through unchanged. When no `projectionLookup` is wired, this is a no-op
+   * (the pre-T14 raw-content behavior).
+   *
+   * The substitution is read-only with respect to the source archive: the
+   * original evidence stays immutable on disk, only the in-memory copy the
+   * assembler costs and sends is bounded. This is why the lookup is never
+   * asked to create a projection synchronously in the read hot path — that
+   * would re-materialize the full payload to truncate it, the exact
+   * anti-pattern the design forbids.
+   */
+  private async substituteProjections(
+    rows: AIChatMessageEntity[]
+  ): Promise<AIChatMessageEntity[]> {
+    if (!this.projectionLookup || rows.length === 0) return rows;
+    const keys = rows.map((r) => r.messageId);
+    let byKey: ReadonlyMap<string, LegacyProjection>;
+    try {
+      byKey = await this.projectionLookup.lookup({
+        profileId: "default",
+        sourceRowKeys: keys,
+      });
+    } catch {
+      // A lookup failure must never break context assembly — fall back to raw.
+      return rows;
+    }
+    if (byKey.size === 0) return rows;
+    let touched = false;
+    const out: AIChatMessageEntity[] = rows.map((row) => {
+      const proj = byKey.get(row.messageId);
+      if (!proj) return row;
+      touched = true;
+      // Immutable copy with the bounded content swapped in. `Object.assign`
+      // onto a fresh instance sharing the original's prototype preserves the
+      // `AIChatMessageEntity` type (a plain spread would drop the TypeORM
+      // entity methods), so downstream code that reads entity fields keeps
+      // type-checking without a cast. The original row object is untouched.
+      const copy = Object.create(
+        Object.getPrototypeOf(row)
+      ) as AIChatMessageEntity;
+      Object.assign(copy, row, {
+        content: proj.content,
+        metadata: this.mergeProjectionMetadata(row.metadata, proj),
+      });
+      return copy;
+    });
+    return touched ? out : rows;
+  }
+
+  /**
+   * Merge a projection's output references into a row's existing metadata
+   * JSON without clobbering unrelated keys. If the merge fails (corrupt
+   * metadata), keep the original metadata rather than dropping the row.
+   */
+  private mergeProjectionMetadata(
+    existing: string | undefined,
+    proj: LegacyProjection
+  ): string | undefined {
+    const refsJson = proj.outputRefsJson ?? "[]";
+    if (!existing) {
+      return JSON.stringify({ toolOutputRefs: JSON.parse(refsJson) });
+    }
+    try {
+      const parsed = JSON.parse(existing) as Record<string, unknown>;
+      const refs = JSON.parse(refsJson) as unknown;
+      return JSON.stringify({ ...parsed, toolOutputRefs: refs });
+    } catch {
+      // Keep the original metadata on any parse failure.
+      return existing;
+    }
+  }
+
+  /**
    * Turn-projection retention: the live tail always, plus newest complete
    * turns newest-first while the token budget allows. Turns that cannot be
    * loaded fully, or that exceed the budget alone, become labeled receipts
@@ -861,6 +956,11 @@ export class AIChatContextAssembler {
         `live tail past turn ${newest.turnId} exceeds bounded reads; shorten the current turn or split it before retrying`
       );
     }
+    // T14: substitute bounded projections for oversized legacy rows BEFORE the
+    // cost estimate so a turn with projections is costed at its bounded size
+    // (an oversized turn that has a projection now fits the budget instead of
+    // becoming a receipt). Original rows are never mutated.
+    const liveRows = await this.substituteProjections(live.rows);
 
     // Newest complete turns first, while the shared budget allows.
     const kept: AIChatMessageEntity[] = [];
@@ -868,7 +968,7 @@ export class AIChatContextAssembler {
     let spent = 0;
     for (let i = ranges.length - 1; i >= 0; i--) {
       const turn = ranges[i];
-      const { rows, complete } = await archive.readTurnRows(
+      const { rows: rawRows, complete } = await archive.readTurnRows(
         input.conversationId,
         turn.firstTimestampMs,
         turn.firstRowId,
@@ -881,7 +981,7 @@ export class AIChatContextAssembler {
         // truncation (FR-05). Boundary message ids scope the retrieval range.
         receipts.unshift({
           turnId: turn.turnId,
-          detail: `could not be fully loaded within bounded reads (${rows.length}+ rows)`,
+          detail: `could not be fully loaded within bounded reads (${rawRows.length}+ rows)`,
           firstRef: `#${turn.firstRowId}`,
           lastRef: `#${turn.lastRowId}`,
         });
@@ -890,6 +990,9 @@ export class AIChatContextAssembler {
         );
         continue;
       }
+      // T14: substitute projections before costing, so the budget sees the
+      // bounded content rather than the raw oversized body.
+      const rows = await this.substituteProjections(rawRows);
       const cost = rows.reduce(
         (sum, r) => sum + this.estimator.estimateText(r.content ?? ""),
         0
@@ -915,7 +1018,7 @@ export class AIChatContextAssembler {
       spent += cost;
       kept.unshift(...rows);
     }
-    return { rows: [...kept, ...live.rows], receipts };
+    return { rows: [...kept, ...liveRows], receipts };
   }
 
   private async buildEnvironmentContext(): Promise<string> {

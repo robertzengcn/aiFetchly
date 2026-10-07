@@ -94,6 +94,37 @@ export interface ShellExecutionResult {
   readonly permission_verdict?: "allow" | "deny" | "ask";
   /** Machine-readable verdict code, present when permission_verdict is set. */
   readonly permission_code?: string;
+  /**
+   * Reference to a preserved output artifact holding the full (possibly
+   * truncated) combined stdout+stderr stream (T16). Present only when the
+   * recoverable-output feature is enabled AND the stream was externalized
+   * to `ToolResultStorageService` instead of held in memory. When present,
+   * `stdout`/`stderr` carry only a bounded inline preview and the model/UI
+   * should read the rest via `tool_result_read` using `output_id`.
+   */
+  readonly tool_result_ref?: ShellToolResultRef;
+}
+
+/**
+ * Descriptor pointing back to the preserved shell-output artifact. Mirrors
+ * the `StoredToolOutputRef` shape (snake_case for the model) so the receipt
+ * reference is consistent across tool families.
+ */
+export interface ShellToolResultRef {
+  /** The preserved output id (`out_…`). Use with `tool_result_read`. */
+  readonly output_id: string;
+  /** Byte length captured into the artifact (may be less than original_bytes). */
+  readonly captured_bytes: number;
+  /** Original stream length before the artifact cap, when known. */
+  readonly original_bytes?: number;
+  /** `complete` unless the stream hit the artifact ceiling. */
+  readonly preservation: "complete" | "partial";
+  /** True when stdout was truncated before externalization. */
+  readonly stdout_truncated: boolean;
+  /** True when stderr was truncated before externalization. */
+  readonly stderr_truncated: boolean;
+  /** First bytes of the combined stream, for inline display. */
+  readonly preview: string;
 }
 
 // ---------------------------------------------------------------------------

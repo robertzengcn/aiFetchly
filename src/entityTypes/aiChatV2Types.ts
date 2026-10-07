@@ -152,6 +152,22 @@ export interface ChatV2MessageMetadata {
   toolArguments?: Record<string, unknown>;
   toolResult?: Record<string, unknown>;
   toolResultStatus?: "success" | "error";
+  /**
+   * Bounded preserved-output references for a large tool result
+   * (recoverable large tool results). These descriptors contain NO bulk
+   * payload - only identity, sizes, and preservation state - so message
+   * metadata stays small no matter how large the tool output was.
+   */
+  toolOutputRefs?: Array<{
+    outputId: string;
+    capturedBytes: number;
+    preservation: "complete" | "partial";
+    sourceCompleteness: "complete" | "partial" | "unknown";
+  }>;
+  /** "complete" | "partial" | "unavailable" - what WE preserved. */
+  toolOutputPreservation?: "complete" | "partial" | "unavailable";
+  /** Bounded preview, explicitly labelled as a preview in the UI. */
+  toolOutputPreview?: string;
   toolResultSummary?: string;
   /**
    * Presentation-only marker set by the renderer presenter when a permission

@@ -411,6 +411,88 @@ describe("OutboundEmailSendLogModule.getUnifiedSendLogDetail", () => {
     expect(detail.log).toBeUndefined();
   });
 
+  it("returns the revision bodyHtml for HTML preview", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+
+    const batch = new OutboundEmailDraftBatchEntity();
+    batch.conversationId = "conv-html";
+    batch.sourceUserMessageId = "msg-html";
+    batch.intentDecisionId = 1;
+    batch.status = "sent";
+    batch.recipientSourceType = "direct";
+    batch.recipientSourceId = null;
+    batch.recipientCount = 1;
+    batch.validRecipientCount = 1;
+    batch.emailServiceIdsJson = "[1]";
+    batch.batchHash = HASH;
+    batch.policyVersion = null;
+    batch.validationVersion = null;
+    batch.authorizationId = null;
+    batch.legacyTaskId = null;
+    batch.sendAttemptId = null;
+    batch.lastErrorCode = null;
+    batch.authorizedAt = null;
+    batch.queuedAt = null;
+    batch.completedAt = null;
+    const savedBatch = await draftModel.createBatch(batch);
+
+    const draft = new OutboundEmailDraftEntity();
+    draft.batchId = savedBatch.id;
+    draft.recipientAddress = "html@x.com";
+    draft.recipientDisplayName = null;
+    draft.recipientSourceRef = null;
+    draft.status = "sent";
+    draft.currentRevisionId = null;
+    draft.revisionNumber = 1;
+    draft.contentHash = HASH;
+    draft.lastErrorCode = null;
+    const savedDraft = await draftModel.createDraft(draft);
+
+    const rev = new OutboundEmailDraftRevisionEntity();
+    rev.draftId = savedDraft.id;
+    rev.revisionNumber = 1;
+    rev.actor = "ai";
+    rev.emailServiceId = 1;
+    rev.senderAddress = "sender@example.com";
+    rev.recipientAddress = "html@x.com";
+    rev.subject = "HTML Subject";
+    rev.bodyText = "Hello text";
+    rev.bodyHtml = "<p>Hello <b>html</b></p>";
+    rev.contentHash = HASH;
+    rev.personalizationEvidenceJson = null;
+    rev.knowledgeSourcesJson = null;
+    rev.generationMetadataJson = null;
+    rev.validationFindingsJson = null;
+    const savedRev = await draftModel.createRevision(rev);
+
+    const outcome = new OutboundEmailDeliveryOutcomeEntity();
+    outcome.sendAttemptId = 1;
+    outcome.batchId = savedBatch.id;
+    outcome.draftId = savedDraft.id;
+    outcome.revisionId = savedRev.id;
+    outcome.envelopeHash = HASH;
+    outcome.recipientAddress = "html@x.com";
+    outcome.status = "sent";
+    outcome.providerMessageId = null;
+    outcome.errorCode = null;
+    outcome.submittedAt = null;
+    outcome.completedAt = new Date();
+    const savedOutcome = await deliveryModel.createOutcome(outcome);
+
+    const module = new OutboundEmailSendLogModule();
+    const detail = await module.getUnifiedSendLogDetail(
+      "authorized",
+      savedOutcome.id
+    );
+
+    expect(detail.bodyHtml).toBe("<p>Hello <b>html</b></p>");
+    expect(detail.bodyText).toBe("Hello text");
+  });
+
   it("throws for an unknown legacy id", async () => {
     SqliteDb.getInstance(tmpDir);
     await SqliteDb.ensureInitialized();

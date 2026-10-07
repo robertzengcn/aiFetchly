@@ -1,0 +1,4 @@
+# The codesign retry shim is a Bash script without a file extension (see
+# scripts/codesign-retry-shim/README.md); eslint's JS parser cannot parse it.
+# Kept out of linting so lint-staged and yarn lint don't fail on it.
+scripts/codesign-retry-shim/codesign

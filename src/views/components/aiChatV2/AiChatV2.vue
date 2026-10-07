@@ -877,32 +877,6 @@ import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
-  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-  downloadVoiceModel,
-  getVoiceSettings,
-  getVoiceStatus,
-  notifyVoiceModelsChanged,
-  onVoiceModelDownloadProgress,
-  setVoiceSettings,
-} from "@/views/api/aiChatV2Voice";
-import {
-  installLocalAiRuntime,
-  onLocalAiRuntimeProgress,
-  prepareLocalAiRuntimeInstall,
-} from "@/views/api/localAiRuntime";
-import type {
-  AiChatVoiceRuntimeStatus,
-  AiChatVoiceSettingsView,
-  AiChatVoiceTtsMode,
-  VoiceModelDownloadProgress,
-} from "@/entityTypes/aiChatVoiceTypes";
-import type {
-  LocalAiRuntimeDownloadProgress,
-  LocalAiRuntimeInstallOffer,
-} from "@/entityTypes/localAiRuntimeTypes";
-import { SpeechResponseController } from "./voice/SpeechResponseController";
-import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
 } from "@/views/api/aiProvider";
@@ -972,7 +946,12 @@ import type {
 import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
-import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
+import {
+  extractArtifactMetadata,
+  extractToolOutputDescriptors,
+  ensureArtifactMetadata,
+  ensureToolOutputMetadata,
+} from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
   mergeFileOperationRecords,
@@ -3503,8 +3482,14 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // shortcut. Re-derive it on load so artifact cards reappear on history
     // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
     // tool_result chunks auto-open.
-    const persistedMessages = (resp?.messages ?? []).map(
-      ensureArtifactMetadata
+    //
+    // The same nesting applies to the preserved-output descriptors
+    // (`toolOutputRefs`/`toolOutputPreservation`/`toolOutputPreview`): they
+    // live under `metadata.toolResult` in persisted rows but are read at the
+    // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
+    // receipt card visible after a restart (PRD §11 cross-restart durability).
+    const persistedMessages = (resp?.messages ?? []).map((m) =>
+      ensureToolOutputMetadata(ensureArtifactMetadata(m))
     );
     // Seed pending bubbles from the durable queue (FR-43).
     patchConversationRuntimeState(conversationId, {
@@ -3831,6 +3816,13 @@ const upsertToolResultMessage = (
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
     artifact: extractArtifactMetadata(toolResult),
+    // Preserved-output descriptors (recoverable large tool results): the
+    // capture pipeline spreads these into the live `tool_result` payload via
+    // `toolResultReceiptUiMetadata`, so extract them to the metadata top level
+    // on the same boundary as `artifact`. Without this the receipt card never
+    // renders during a live stream — the descriptors are present but nested
+    // under `metadata.toolResult`, where `preservedOutput` does not read.
+    ...(extractToolOutputDescriptors(toolResult) ?? {}),
   };
 
   if (existingIdx !== -1) {

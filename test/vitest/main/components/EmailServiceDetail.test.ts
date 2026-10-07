@@ -157,6 +157,21 @@ const stubs = {
   VSpacer: true,
   VSelect: { name: "VSelect", props: ["modelValue", "items"], emits: ["update:modelValue"], template: "<select />" },
   VAutocomplete: { name: "VAutocomplete", props: ["modelValue", "items"], emits: ["update:modelValue"], template: "<select />" },
+  // Pending tag names render as chips; expose the close affordance.
+  VChip: {
+    props: {
+      // Boolean type so the bare `closable` attribute casts to true.
+      closable: { type: Boolean, default: false },
+      size: { type: String, default: undefined },
+    },
+    emits: ["click:close"],
+    template:
+      '<span class="v-chip"><slot /><span v-if="closable" class="v-chip__close" @click="$emit(\'click:close\')" /></span>',
+  },
+  VList: { template: "<div><slot /></div>" },
+  VListItem: { template: "<div><slot name=\"prepend\" /><slot /></div>" },
+  VListItemTitle: { template: "<span><slot /></span>" },
+  VIcon: { template: "<i />" },
   EmailServiceTagDialog: true,
   ErrorDialog: true,
   LoadingDialog: true,
@@ -209,19 +224,90 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
       { id: 4, name: "Sales", normalizedName: "sales", serviceCount: 1 },
       { id: 5, name: "Support", normalizedName: "support", serviceCount: 0 },
     ]);
-    apiMocks.getEmailServiceDetail.mockResolvedValue({ ...STORED_SERVICE, tagId: 4, tag: "Sales" });
+    apiMocks.getEmailServiceDetail.mockResolvedValue({
+      ...STORED_SERVICE,
+      tagIds: [4],
+      tags: [{ id: 4, name: "Sales" }],
+    });
     const wrapper = mountDetail(9);
     await flushPromises();
     const select = wrapper.findComponent({ name: "VAutocomplete" });
-    expect(select.props("modelValue")).toBe(4);
-    select.vm.$emit("update:modelValue", 5);
+    expect(select.props("modelValue")).toEqual([4]);
+    select.vm.$emit("update:modelValue", [5]);
     await wrapper.find("form").trigger("submit");
     await flushPromises();
-    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: 5, password: "" }));
-    select.vm.$emit("update:modelValue", null);
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tagIds: [5], password: "" })
+    );
+    select.vm.$emit("update:modelValue", []);
     await wrapper.find("form").trigger("submit");
     await flushPromises();
-    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: null, password: "" }));
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tagIds: [], password: "" })
+    );
+    wrapper.unmount();
+  });
+
+  it("supports multiple tags and auto-creates a typed name on save", async () => {
+    apiMocks.getEmailServiceTags.mockResolvedValue([
+      { id: 4, name: "Sales", normalizedName: "sales", serviceCount: 1 },
+    ]);
+    apiMocks.getEmailServiceDetail.mockResolvedValue({
+      ...STORED_SERVICE,
+      tagIds: [4],
+      tags: [{ id: 4, name: "Sales" }],
+    });
+    const wrapper = mountDetail(9);
+    await flushPromises();
+    const select = wrapper.findComponent({ name: "VAutocomplete" });
+    // Existing tag id 4 selected + a typed name not in the options.
+    select.vm.$emit("update:modelValue", [4, "NewTag"]);
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    // Known IDs go in tagIds; typed names go in tagNames for server-side
+    // auto-create.
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tagIds: [4], tagNames: ["NewTag"] })
+    );
+    wrapper.unmount();
+  });
+
+  it("renders typed pending tag names as removable chips and drops them before submit", async () => {
+    apiMocks.getEmailServiceTags.mockResolvedValue([
+      { id: 4, name: "Sales", normalizedName: "sales", serviceCount: 1 },
+    ]);
+    apiMocks.getEmailServiceDetail.mockResolvedValue({
+      ...STORED_SERVICE,
+      tagIds: [4],
+      tags: [{ id: 4, name: "Sales" }],
+    });
+    const wrapper = mountDetail(9);
+    await flushPromises();
+    const select = wrapper.findComponent({ name: "VAutocomplete" });
+    // The addPendingTagName path: emit the search text then the click on the
+    // "Create ..." list item is stubbed away, so call the exposed handler via
+    // the model instead — pending chips render from pendingTagNames.
+    select.vm.$emit("update:search", "NewTag");
+    await flushPromises();
+    const pendingArea = wrapper.find('[data-testid="pending-tag-names"]');
+    expect(pendingArea.exists()).toBe(false); // nothing added yet
+    // Add via the addPendingTagName handler through the component instance.
+    const detail = wrapper.findComponent(EmailServiceDetail);
+    (detail.vm as unknown as { addPendingTagName: (n: string) => void }).addPendingTagName("NewTag");
+    await flushPromises();
+    // The chip renders and lists the typed name.
+    const chips = wrapper.findAll('[data-testid="pending-tag-names"] .v-chip');
+    expect(chips.length).toBe(1);
+    expect(chips[0].text()).toContain("NewTag");
+    // Removing the chip drops the pending name — submit carries no tagNames.
+    await chips[0].find(".v-chip__close").trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pending-tag-names"]').exists()).toBe(false);
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tagIds: [4], tagNames: [] })
+    );
     wrapper.unmount();
   });
 

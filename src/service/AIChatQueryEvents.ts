@@ -589,6 +589,15 @@ export interface AIChatQueryLoopInput {
    */
   sourceUserMessageId?: string;
   /**
+   * Trusted identity of the agent that owns this turn (main process, never
+   * tool arguments).
+   *
+   * Threaded into `SkillExecutionContext.ownerAgentId` so preserved-output
+   * retrieval scopes its per-turn allowance per agent: a sub-agent cannot spend
+   * the parent's budget, and the two are never silently merged.
+   */
+  ownerAgentId?: string;
+  /**
    * Persisted outbound-email intent decision id for this turn. Null when the
    * turn did not resolve an outbound-email intent (e.g. not marketing-related)
    * or the resolver failed. Supplied by the main process, not tool arguments.

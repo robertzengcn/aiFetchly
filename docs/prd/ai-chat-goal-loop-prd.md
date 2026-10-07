@@ -7,6 +7,8 @@ Related documents:
 
 ## Overview
 
+Completion-policy integration (2026-10-04): the [shared task-completion PRD](./scheduled-loop-premature-stop-recovery-advice.md) and [technical design](./scheduled-loop-premature-stop-recovery-technical-design.md) also protect ordinary manually typed tasks without requiring these commands. Actual goal loops retain one explicit goal completion owner; a conversation goal cannot silently take over an unrelated manual request, and standalone/goal continuation loops cannot stack.
+
 AiFetchly should support `/goal` and `/loop` commands in AI Chat V2 to let users define a durable objective and optionally ask the agent to continue bounded autonomous work toward that objective.
 
 The implementation should reuse the existing AI Chat V2 slash-command, Plan Mode, and query-loop infrastructure rather than placing command semantics directly in `src/views/components/aiChatV2/AiChatV2.vue`.

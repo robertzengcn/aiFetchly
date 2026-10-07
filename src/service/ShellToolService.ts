@@ -34,6 +34,9 @@ import type {
   ShellInterpreter,
 } from "@/entityTypes/shellTypes";
 import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
+import {
+  attachShellCapture,
+} from "@/service/ShellCaptureService";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -47,7 +50,8 @@ import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
  */
 export async function executeShellCommand(
   rawArgs: Record<string, unknown>,
-  conversationId: string
+  conversationId: string,
+  toolCallId?: string
 ): Promise<ShellExecutionResult> {
   const startTime = Date.now();
 
@@ -114,7 +118,9 @@ export async function executeShellCommand(
     env,
     timeoutMs,
     startTime,
-    autoBackground
+    autoBackground,
+    conversationId,
+    toolCallId
   );
 
   // Attach validated fields for audit logging
@@ -303,7 +309,9 @@ async function runShell(
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
   startTime: number,
-  autoBackground: boolean
+  autoBackground: boolean,
+  conversationId: string,
+  toolCallId?: string
 ): Promise<ShellExecutionResult> {
   return new Promise<ShellExecutionResult>((resolve) => {
     let stdout = "";
@@ -344,15 +352,36 @@ async function runShell(
       isolatedProcessGroupId: child.pid ?? undefined,
     });
 
+    // T16: when capture is enabled, spool stdout/stderr into a preserved
+    // artifact. `attachShellCapture` is SYNCHRONOUS: it registers the data
+    // listeners before any chunks can arrive (claim runs in the background and
+    // chunks buffer until the stream is ready), so no early output is lost.
+    // The legacy inline accumulators below still run for the bounded preview
+    // fields when capture is absent; when capture is present, its own inline
+    // getters are authoritative at finalize time.
+    const capture = toolCallId
+      ? attachShellCapture(child, {
+          conversationId,
+          toolCallId,
+          toolName: "shell_execute",
+          executionId: `${conversationId}:exec:${toolCallId}`,
+        })
+      : null;
+
     const timer = setTimeout(() => {
       timedOut = true;
       if (autoBackground) {
-        // Mark as detained BEFORE calling registry.detain so the data
-        // handlers below no-op from this point forward. The registry
-        // attaches its own listeners to take over collection.
+        // Mark as detained BEFORE handing off so the foreground data handlers
+        // below no-op from this point forward. Detach the capture's own
+        // listeners too, so the registry's listeners are the ONLY writers to
+        // the artifact sink — otherwise both would append (double-write).
         detained = true;
+        if (capture) {
+          capture.detach(child);
+        }
         const shellId = getDefaultBackgroundShellRegistry().detain(child, {
           command,
+          ...(capture ? { capture } : {}),
         });
         resolve({
           success: true,
@@ -398,6 +427,10 @@ async function runShell(
 
     child.on("error", (err: Error) => {
       clearTimeout(timer);
+      // Abort the capture on a spawn failure so quota is not leaked.
+      if (capture) {
+        capture.abort().catch(() => undefined);
+      }
       resolve({
         success: false,
         exit_code: null,
@@ -411,8 +444,8 @@ async function runShell(
       });
     });
 
-    child.on("close", (code: number | null) => {
-      if (detained) return; // backgrounded — registry takes over; skip dead-code path
+    child.on("close", async (code: number | null) => {
+      if (detained) return; // backgrounded — registry takes over
       clearTimeout(timer);
       const durationMs = Date.now() - startTime;
 
@@ -422,18 +455,43 @@ async function runShell(
         stderr = stderr.replace(/\r\n/g, "\n");
       }
 
+      // T16: finalize the preserved artifact. `finalize` awaits the
+      // background claim internally, so no captureReady polling is needed —
+      // it resolves once the stream is open (or never, if begin failed, in
+      // which case it returns null and the inline preview is the result).
+      let toolResultRef: ShellExecutionResult["tool_result_ref"];
+      if (capture) {
+        try {
+          const ref = await capture.finalize();
+          toolResultRef = ref ?? undefined;
+        } catch {
+          toolResultRef = undefined;
+        }
+      }
+
+      // Prefer the capture's honest truncation/preview fields when present.
+      const finalStdout = capture ? capture.getInlineStdout() : stdout;
+      const finalStderr = capture ? capture.getInlineStderr() : stderr;
+      const finalStdoutTruncated = capture
+        ? capture.getStdoutTruncated()
+        : stdoutTruncated;
+      const finalStderrTruncated = capture
+        ? capture.getStderrTruncated()
+        : stderrTruncated;
+
       resolve({
         success: !timedOut && code === 0,
         exit_code: timedOut ? null : code,
-        stdout,
-        stderr,
+        stdout: finalStdout,
+        stderr: finalStderr,
         duration_ms: durationMs,
-        stdout_truncated: stdoutTruncated,
-        stderr_truncated: stderrTruncated,
+        stdout_truncated: finalStdoutTruncated,
+        stderr_truncated: finalStderrTruncated,
         timed_out: timedOut,
         ...(timedOut
           ? { error: `Command timed out after ${timeoutMs}ms` }
           : {}),
+        ...(toolResultRef ? { tool_result_ref: toolResultRef } : {}),
       });
     });
   });

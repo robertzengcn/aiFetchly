@@ -311,8 +311,6 @@ export function registerEmailMarketingIpcHandlers() {
         }
         const entity = new EmailServiceEntity();
         entity.name = qdata.name ?? existing.name;
-        entity.tagId =
-          qdata.tagId !== undefined ? qdata.tagId : existing.tagId ?? null;
         entity.host = qdata.host ?? existing.host;
         // Schema normalizes numeric ports to strings, but coerce defensively:
         // v-number-input emits numbers and validateEmailService calls .trim().
@@ -373,6 +371,19 @@ export function registerEmailMarketingIpcHandlers() {
           serviceId
         );
         await emailmarketCon.updateEmailService(serviceId, entity);
+        // Multi-tag: apply the tag set after the row update. The controller's
+        // createEmailService handles this internally, but the IPC update path
+        // updates the entity directly, so apply tags here.
+        //  - tagIds absent + tagNames absent → preserve existing tags.
+        //  - tagIds: []                     → clear all tags.
+        //  - tagIds: [...]                   → replace.
+        if (qdata.tagIds !== undefined || qdata.tagNames !== undefined) {
+          await emailmarketCon.applyEmailServiceTagsFromForm(
+            serviceId,
+            qdata.tagIds,
+            qdata.tagNames
+          );
+        }
         return { id: serviceId } satisfies CommonIdrequest<number>;
       }
 
@@ -381,7 +392,6 @@ export function registerEmailMarketingIpcHandlers() {
       // same shape here to reject CR/LF before any row is written.
       const createEntity = new EmailServiceEntity();
       createEntity.name = qdata.name;
-      createEntity.tagId = qdata.tagId ?? null;
       createEntity.host = qdata.host;
       createEntity.port =
         qdata.port !== undefined && qdata.port !== null

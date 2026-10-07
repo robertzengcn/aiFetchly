@@ -2,6 +2,8 @@
 
 ## 1. Purpose and scope
 
+Completion-policy integration (2026-10-04): the [shared task-completion PRD](./scheduled-loop-premature-stop-recovery-advice.md) and [technical design](./scheduled-loop-premature-stop-recovery-technical-design.md) require a trusted goal-owner adapter carrying execution identity and budgets across maker iterations. The existing goal controller remains the sole goal-verification/semantic-continuation owner. Normal manual/scheduled tasks use the standalone controller without creating a temporary goal.
+
 This document describes how to implement the evidence-driven `/goal` and `/loop` features defined in [the PRD](./ai-chat-goal-loop-prd.md).
 
 The feature gives an AI Chat V2 conversation a durable goal contract and lets the user run bounded autonomous iterations toward it. It does not create a second agent framework. It wraps the existing `AIChatQueryEngine` and `AIChatQueryLoop` with a controller that owns iteration limits, evidence collection, verification, and the final terminal decision.
@@ -497,5 +499,5 @@ Critical acceptance tests:
 ## Related documents
 
 - [AI Chat V2 Goal and Loop Commands PRD](./ai-chat-goal-loop-prd.md)
-- [AI Chat Query Engine Technical Design](../ai-chat-query-engine-technical-design.md)
-- [AI Chat V2 Attachment Upload Technical Design](../ai-chat-v2-attachment-upload-technical-design.md)
+- [AI Chat Query Engine Technical Design](./ai-chat-query-engine-technical-design.md)
+- [AI Chat V2 Attachment Upload Technical Design](./ai-chat-v2-attachment-upload-technical-design.md)

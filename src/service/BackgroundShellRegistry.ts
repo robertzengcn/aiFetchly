@@ -34,6 +34,16 @@ export interface BackgroundShellState {
   stderr: string;
   readonly startedAt: number;
   endedAt: number | null;
+  /**
+   * Preserved-output reference, present when the shell was captured to an
+   * artifact at detain time (T16). `poll()` surfaces this so the model can
+   * `tool_result_read` the full stream rather than the bounded inline copy.
+   */
+  tool_result_ref?: {
+    readonly output_id: string;
+    readonly captured_bytes: number;
+    readonly preservation: "complete" | "partial";
+  };
 }
 
 /**
@@ -42,6 +52,23 @@ export interface BackgroundShellState {
 export interface DetainMeta {
   /** The original command line, for audit/display purposes. */
   readonly command: string;
+  /**
+   * Optional preserved-output capture handle (T16). When supplied, the
+   * registry's data handlers append to the SAME artifact sink instead of the
+   * in-memory accumulators, so a backgrounded shell's full output still
+   * reaches the bounded artifact store. The registry finalizes the artifact
+   * when the child closes (or aborts on kill).
+   */
+  readonly capture?: {
+    readonly appendStdout: (chunk: Buffer) => void;
+    readonly appendStderr: (chunk: Buffer) => void;
+    readonly finalize: () => Promise<unknown>;
+    readonly abort: () => Promise<void>;
+    readonly getInlineStdout: () => string;
+    readonly getInlineStderr: () => string;
+    readonly getStdoutTruncated: () => boolean;
+    readonly getStderrTruncated: () => boolean;
+  };
 }
 
 /**
@@ -59,6 +86,7 @@ export interface DetainMeta {
 export class BackgroundShellRegistry {
   private readonly shells = new Map<string, BackgroundShellState>();
   private readonly children = new Map<string, ChildProcess>();
+  private readonly captures = new Map<string, DetainMeta["capture"]>();
 
   /**
    * Remove completed/failed/killed shells that have been idle longer than
@@ -94,16 +122,43 @@ export class BackgroundShellRegistry {
     };
     this.shells.set(shellId, state);
     this.children.set(shellId, child);
+    const capture = meta.capture;
+    if (capture) {
+      this.captures.set(shellId, capture);
+    }
 
     child.stdout?.on("data", (b: Buffer) => {
-      if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+      if (capture) {
+        // Spool to the SAME artifact sink the foreground path opened, so the
+        // full backgrounded stream still reaches the bounded artifact store.
+        capture.appendStdout(b);
+        // Bound the inline preview per chunk (O(1) per chunk) rather than
+        // re-reading the full inline buffer on every chunk (O(n²) over the
+        // output size — a chatty backgrounded shell could freeze the main
+        // process). The authoritative final snapshot is synced from the
+        // capture on close below.
+        if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+          state.stdout += b
+            .toString("utf-8")
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stdout.length);
+        }
+      } else if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
         state.stdout += b
           .toString("utf-8")
           .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stdout.length);
       }
     });
     child.stderr?.on("data", (b: Buffer) => {
-      if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+      if (capture) {
+        capture.appendStderr(b);
+        // Per-chunk bounded append (see stdout comment): never re-read the
+        // full inline buffer per chunk.
+        if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
+          state.stderr += b
+            .toString("utf-8")
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stderr.length);
+        }
+      } else if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
         state.stderr += b
           .toString("utf-8")
           .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stderr.length);
@@ -117,6 +172,45 @@ export class BackgroundShellRegistry {
         state.endedAt = Date.now();
       }
       this.children.delete(shellId);
+      // T16: finalize the preserved artifact now that the child is done. The
+      // ref is surfaced on the state so poll()/check_shell_status can point
+      // the model at tool_result_read. Best-effort: a finalize failure still
+      // leaves the terminal status above intact.
+      const activeCapture = this.captures.get(shellId);
+      if (activeCapture) {
+        // Sync the inline preview ONCE on close from the authoritative capture
+        // buffer, so poll() reflects the capture's final state rather than the
+        // per-chunk appends (which cap early and never re-read). This replaces
+        // the O(n²) per-chunk re-read the capture branch used to do.
+        try {
+          state.stdout = activeCapture
+            .getInlineStdout()
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS);
+          state.stderr = activeCapture
+            .getInlineStderr()
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS);
+        } catch {
+          // Best-effort: the per-chunk preview remains if the sync throws.
+        }
+        activeCapture
+          .finalize()
+          .then((ref) => {
+            if (ref && typeof ref === "object" && "output_id" in ref) {
+              const r = ref as {
+                output_id: string;
+                captured_bytes: number;
+                preservation: "complete" | "partial";
+              };
+              state.tool_result_ref = {
+                output_id: r.output_id,
+                captured_bytes: r.captured_bytes,
+                preservation: r.preservation,
+              };
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => this.captures.delete(shellId));
+      }
     });
     // Defensive: if the child errors before 'close', still record terminal state.
     child.on("error", () => {
@@ -125,6 +219,12 @@ export class BackgroundShellRegistry {
         state.endedAt = Date.now();
       }
       this.children.delete(shellId);
+      const errCapture = this.captures.get(shellId);
+      if (errCapture) {
+        errCapture.abort().catch(() => undefined).finally(() =>
+          this.captures.delete(shellId)
+        );
+      }
     });
 
     return shellId;
@@ -170,6 +270,15 @@ export class BackgroundShellRegistry {
     state.status = "killed";
     state.endedAt = Date.now();
     this.children.delete(shellId);
+    // T16: abort the preserved-output capture so a killed shell does not leave
+    // a half-written staging file or leaked quota. The close handler would
+    // otherwise try to finalize a sink for a process we just killed.
+    const killCapture = this.captures.get(shellId);
+    if (killCapture) {
+      killCapture.abort().catch(() => undefined).finally(() =>
+        this.captures.delete(shellId)
+      );
+    }
     return true;
   }
 }

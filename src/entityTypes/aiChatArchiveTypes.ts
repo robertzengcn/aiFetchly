@@ -163,11 +163,19 @@ export type RecoverableHistoryErrorCode =
   | "HISTORY_UNAVAILABLE"
   | "COMPACTION_BUSY"
   | "COMPACTION_OUTPUT_INVALID"
+  | "COMPACTION_OUTPUT_TRUNCATED"
   | "COMPACTION_CONTEXT_REJECTED"
   | "COMPACTION_STALE_CLAIM"
   | "COMPACTION_STORAGE_FAILED"
   | "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
-  | "MODEL_BUDGET_UNAVAILABLE";
+  | "MODEL_BUDGET_UNAVAILABLE"
+  /**
+   * The serialized request body exceeds the transport ceiling even though the
+   * token preflight passed. Distinct from
+   * `CONTEXT_REQUIRED_CONTENT_TOO_LARGE`: that one is about model context,
+   * this one is about the wire.
+   */
+  | "REQUEST_BODY_TOO_LARGE";
 
 export class RecoverableHistoryError extends Error {
   readonly code: RecoverableHistoryErrorCode;

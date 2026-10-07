@@ -16,6 +16,8 @@ export const E2E_ENV = {
   AI_BASE_URL: "AIFETCHLY_E2E_AI_BASE_URL",
   ALLOWED_ORIGINS: "AIFETCHLY_E2E_ALLOWED_ORIGINS",
   USER_DATA_PATH: "ELECTRON_USER_DATA_PATH",
+  /** Tool-output root override (mirror src/service/toolResult/toolResultRoot.ts). */
+  TOOL_OUTPUT_ROOT: "AIFETCHLY_TOOL_OUTPUT_ROOT",
   IS_TEST: "IS_TEST",
   NODE_ENV: "NODE_ENV",
 } as const;
@@ -31,6 +33,8 @@ export interface E2ETestRoot {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /** Per-test root for preserved tool-output artifacts (mirror of E2EEnvironment). */
+  readonly toolOutputRootPath: string;
   readonly stateFilePath: string;
   readonly networkViolationsPath: string;
   /** Recursively remove the root only after containment validation passes. */

@@ -20,7 +20,13 @@ import type {
 import {
   isArchiveReadsEnabled,
   isHistoryToolsEnabled,
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
 } from "@/config/featureFlags";
+import {
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+} from "@/entityTypes/toolResultToolTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -1333,6 +1339,115 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: TOOL_RESULT_READ_TOOL_NAME,
+    description:
+      "Read a bounded page of a large saved tool result by output_id (given in a tool result receipt). " +
+      "Returns a page of text plus a next_cursor; keep passing the cursor until complete is true. " +
+      "The receipt's preview is only a sample, so read before concluding a large result does not contain " +
+      "something. If you stop reading early, say so rather than claiming you reviewed the whole output. " +
+      "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+        },
+        max_tokens: {
+          type: "number",
+          description:
+            "Optional smaller page request in tokens. Can only reduce the page, never exceed the limit.",
+          minimum: 1,
+          maximum: 32000,
+        },
+      },
+      required: ["output_id"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      // Available while reference delivery is on OR this conversation already
+      // holds committed references (technical design §8.1). Gating on the
+      // `capture` flag instead would make a default install return
+      // RETRIEVAL_NOT_ENABLED for artifacts it already saved, which is exactly
+      // what PRD §12 and TD §13.4 forbid.
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
+        };
+      }
+      const { handleToolResultRead } = await import(
+        "@/service/agentTools/toolResultReadTool"
+      );
+      return handleToolResultRead(args, context);
+    },
+  },
+  {
+    name: TOOL_RESULT_SEARCH_TOOL_NAME,
+    description:
+      "Search a large saved tool result for a literal phrase (1-200 chars) by output_id. " +
+      "Returns bounded matches with read cursors. No-match is final only when scan_complete is true; " +
+      "otherwise resume with next_cursor. scan_complete refers to the saved bytes only - if " +
+      "source_completeness is 'partial', the producer itself truncated and absence cannot be concluded. " +
+      "The query is literal text, never a regular expression.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        query: {
+          type: "string",
+          description: "Literal text to search for (1-200 characters). Never a regex.",
+          minLength: 1,
+          maxLength: 200,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+        },
+        max_matches: {
+          type: "number",
+          description: "Max matches to return (default 10, max 20).",
+          default: 10,
+          minimum: 1,
+          maximum: 20,
+        },
+      },
+      required: ["output_id", "query"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
+        };
+      }
+      const { handleToolResultSearch } = await import(
+        "@/service/agentTools/toolResultSearchTool"
+      );
+      return handleToolResultSearch(args, context);
+    },
+  },
+  {
     name: "file_edit",
     description:
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
@@ -2459,7 +2574,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const shellResult = await executeShellCommand(
         args,
-        context.conversationId
+        context.conversationId,
+        context.toolCallId
       );
 
       // Fire-and-forget audit logging (use validated fields from result)
@@ -4063,7 +4179,7 @@ function managedBrowserToolWrapper(
     }) => void;
   }
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
-  const service = getDefaultManagedBrowserAiToolService();
+  getDefaultManagedBrowserAiToolService();
   return method(args, {
     conversationId: context.conversationId,
     toolCallId: context.toolCallId,
@@ -4565,6 +4681,93 @@ const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
   CONVERSATION_HISTORY_READ_TOOL_NAME,
 ]);
 
+/**
+ * True when the retrieval tools may run for this conversation.
+ *
+ * Two independent reasons, both required by the design:
+ *   1. model-visible reference delivery is enabled, OR
+ *   2. the conversation already holds committed references.
+ *
+ * Condition 2 is what makes rollback safe: disabling capture stops new writes
+ * but must never unregister readers for output that is already on disk.
+ */
+async function isToolResultRetrievalAvailable(
+  context: { conversationId: string }
+): Promise<boolean> {
+  // The two rollout flags short-circuit the registry lookup entirely: when
+  // either is on, retrieval is unconditionally available regardless of
+  // whether this conversation has ever saved an output.
+  if (isToolOutputModelRefsEnabled()) return true;
+  if (isToolOutputCaptureEnabled()) return true;
+
+  // Both flags are off. Retrieval is still allowed IF this conversation
+  // already holds a committed artifact (TD §13.4: turning capture off must
+  // not erase readability of what was already saved). Otherwise the gate
+  // denies — and a denied `tool_result_read`/`tool_result_search` call
+  // returns the opaque `OUTPUT_NOT_AVAILABLE` to the model.
+  let committed = false;
+  let registryError: unknown = null;
+  try {
+    const { ToolResultModule } = await import("@/modules/ToolResultModule");
+    const { hasCommittedOutputs } = await import(
+      "@/service/toolResult/toolResultAvailability"
+    );
+    committed = await hasCommittedOutputs(
+      new ToolResultModule(),
+      context.conversationId
+    );
+  } catch (e) {
+    // Fail closed: an unreadable registry must not expose retrieval.
+    registryError = e;
+  }
+
+  if (committed) return true;
+
+  // Diagnose WHY the gate denied, without changing the model-facing code.
+  // The gate collapses feature-off / no-committed-outputs / registry-error
+  // into one opaque `OUTPUT_NOT_AVAILABLE` (correct for the contract:
+  // existence must not leak). But that leaves a human debugging a ~3ms
+  // bail with no signal as to which condition fired. This log line makes
+  // the three cases distinguishable at a glance in the main-process log:
+  //   - flags_off_no_committed_outputs: rollout flags off AND this
+  //     conversation never saved an output (the common hallucinated-id
+  //     case — the model is calling tool_result_read against an id that
+  //     was never issued here).
+  //   - registry_error: the registry lookup itself threw (e.g. DB not
+  //     openable), which fail-closed into denial.
+  logRetrievalDenialReason(
+    context.conversationId,
+    registryError
+      ? "registry_error"
+      : "flags_off_no_committed_outputs",
+    registryError instanceof Error
+      ? registryError.message
+      : registryError
+        ? String(registryError)
+        : undefined
+  );
+  return false;
+}
+
+/**
+ * Diagnostic helper: record WHY retrieval was denied for a conversation.
+ *
+ * Kept separate from the gate so the gate stays branch-free and fast on
+ * the happy path (flags on → immediate `true`, no extra work). Only the
+ * denial path pays for stringifying the reason.
+ */
+function logRetrievalDenialReason(
+  conversationId: string,
+  detail: "flags_off_no_committed_outputs" | "registry_error",
+  extra?: string
+): void {
+  console.warn(
+    `[SkillRegistry] tool_result retrieval unavailable for conversation "${conversationId}" (${detail})${
+      extra ? `: ${extra}` : ""
+    }`
+  );
+}
+
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,
   enablement: SkillRuntimeEnablement
@@ -4573,6 +4776,23 @@ function isSkillRuntimeEnabled(
     skill.source === "built-in" &&
     HISTORY_TOOL_NAMES.has(skill.name) &&
     (!isHistoryToolsEnabled() || !isArchiveReadsEnabled())
+  ) {
+    return false;
+  }
+  // Catalog honesty for the tool_result retrieval tools (TD §13.4 rollback
+  // semantics): with capture AND modelRefs both off, the conversation-scoped
+  // gate would deny every call, so advertising the tools only invites
+  // guaranteed-failing `RETRIEVAL_NOT_ENABLED` calls. Exclude them from the
+  // model-facing catalog instead. A conversation with committed outputs under
+  // this opt-out keeps them readable through the gate's registry fallback —
+  // this filter only controls what is ADVERTISED, matching the documented
+  // rollback rule ("modelRefs off -> no new references are advertised").
+  if (
+    skill.source === "built-in" &&
+    (skill.name === TOOL_RESULT_READ_TOOL_NAME ||
+      skill.name === TOOL_RESULT_SEARCH_TOOL_NAME) &&
+    !isToolOutputModelRefsEnabled() &&
+    !isToolOutputCaptureEnabled()
   ) {
     return false;
   }

@@ -915,3 +915,13 @@ export const APPLICATION_LIFECYCLE_STATE_CHANGED =
 // test harness needs a direct, gated seeding path. They never exist in a
 // production or development run.
 export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
+
+// ---------------------------------------------------------------------------
+// Recoverable large tool results (AI Chat V2).
+// The viewer is an AI-gated surface; saved data stays on disk regardless, so
+// disabling AI stops access here without deleting anything.
+// ---------------------------------------------------------------------------
+export const AI_TOOL_RESULT_GET = "ai-tool-result:get";
+export const AI_TOOL_RESULT_READ = "ai-tool-result:read";
+export const AI_TOOL_RESULT_SEARCH = "ai-tool-result:search";
+export const AI_TOOL_RESULT_EXPORT = "ai-tool-result:export";
