@@ -32,6 +32,23 @@ import { ToolResultModule } from "@/modules/ToolResultModule";
  * {@link AIChatConversationTurnCoordinator} prevents separate instances from
  * racing on one conversation (design §13.2).
  */
+/**
+ * Process-wide cached model catalog for scheduled engines. Mirrors the
+ * interactive IPC's `getCompactModelCatalog` singleton: every scheduled task
+ * shares one catalog so we don't refetch `/api/ai/v1/models` per
+ * `createScheduled()` call. `resolveLimits` is safe on an unloaded catalog
+ * (returns a fallback), and `ensureLoaded()` is idempotent, so the first
+ * scheduled task pays the fetch and subsequent tasks reuse it.
+ */
+let scheduledModelCatalog: AIChatModelCatalogService | null = null;
+
+function getScheduledModelCatalog(): AIChatModelCatalogService {
+  if (!scheduledModelCatalog) {
+    scheduledModelCatalog = new AIChatModelCatalogService();
+  }
+  return scheduledModelCatalog;
+}
+
 export class AIChatQueryEngineFactory {
   /**
    * Create a dedicated engine for a scheduled occurrence. Tool exposure AND
@@ -77,7 +94,7 @@ export class AIChatQueryEngineFactory {
     // UNKNOWN_MODEL_FALLBACK_LIMITS outputLimit (1,024). Without this, a
     // CJK-dense section summary truncates mid-string at the 1,024-token fallback
     // and the coordinator's schema-repair ladder cannot fix the truncation.
-    const modelCatalog = new AIChatModelCatalogService();
+    const modelCatalog = getScheduledModelCatalog();
     await modelCatalog.ensureLoaded();
     const modelLimitResolver: ModelLimitResolver = (model) =>
       modelCatalog.resolveLimits(model);
