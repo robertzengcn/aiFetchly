@@ -1,0 +1,1027 @@
+import { describe, it, expect, vi } from "vitest";
+
+// The detection service imports the real default ports (Modules + Client) at
+// construction time. The Modules extend BaseModule which touches Token / Db
+// at construction; mock electron + Logger BEFORE the import so the lazy
+// getters never reach the real ipcMain. Tests inject fake ports through the
+// constructor seam so the defaults are never used.
+vi.mock("electron", () => ({
+  ipcMain: { handle: vi.fn() },
+}));
+vi.mock("@/modules/Logger", () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import type { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import type {
+  RefreshedFlags,
+  ReplyHeaderCandidate,
+  SentFolder,
+} from "@/service/emailReceive/EmailReceiveClient";
+import {
+  EmailReplyDetectionService,
+  REPLY_DETECTOR_VERSION,
+  type ReplyDetectionMessagePort,
+  type ReplyDetectionDraftPort,
+  type ReplyDetectionAttemptPort,
+  type ReplyDetectionEmailServicePort,
+  type ReplyDetectionImapPort,
+} from "@/service/emailReceive/EmailReplyDetectionService";
+
+// ---------------------------------------------------------------------------
+// Builders — real entities (no `as Entity` casts), real values.
+// ---------------------------------------------------------------------------
+
+function messageFixture(overrides: Partial<EmailReceivedMessageEntity> = {}): EmailReceivedMessageEntity {
+  const e = new EmailReceivedMessageEntity();
+  e.id = 100;
+  e.emailServiceId = 5;
+  e.providerUid = "imap:aaaaaaaaaaaaaaaa:424242:77";
+  e.messageId = "<orig-77@example.com>";
+  e.normalizedMessageId = "<orig-77@example.com>";
+  e.replyStatus = "not_started";
+  e.isAnswered = 0;
+  e.answeredFlagCheckedAt = null;
+  e.replyDetectedAt = null;
+  e.replyDetectionSource = null;
+  e.replyMatchedMessageId = null;
+  e.replyNegativeCheckAt = null;
+  e.replyNegativeContextHash = null;
+  e.providerFolder = "INBOX";
+  e.providerUidValidity = "424242";
+  Object.assign(e, overrides);
+  return e;
+}
+
+function draftEntity(id: number, messageId: number, status: string): EmailReplyDraftEntity {
+  return {
+    id,
+    messageId,
+    status,
+  } as EmailReplyDraftEntity;
+}
+
+function attemptEntity(id: number, messageId: number, status: string): EmailReplySendAttemptEntity {
+  return {
+    id,
+    messageId,
+    status,
+  } as EmailReplySendAttemptEntity;
+}
+
+function imapConfig(): EmailReceiveConnectionConfig {
+  return {
+    emailServiceId: 5,
+    protocol: "imap",
+    host: "imap.example.com",
+    port: 993,
+    ssl: true,
+    username: "me@example.com",
+    password: "secret-pw",
+    folder: "INBOX",
+  };
+}
+
+function candidateFixture(overrides: Partial<ReplyHeaderCandidate> = {}): ReplyHeaderCandidate {
+  return {
+    folder: "Sent",
+    uid: 501,
+    messageId: "<sent-501@example.com>",
+    inReplyTo: "<orig-77@example.com>",
+    references: "<orig-77@example.com>",
+    from: "me@example.com",
+    to: "prospect@example.com",
+    date: "2026-10-05T11:00:00Z",
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fake ports — behavioral fakes with controllable, observable state.
+// ---------------------------------------------------------------------------
+
+interface FakeMessagePortOptions {
+  message: EmailReceivedMessageEntity;
+  cluster?: EmailReceivedMessageEntity[];
+  updateCalls: Array<Record<string, unknown>>;
+}
+
+function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePort & {
+  updateCalls: Array<Record<string, unknown>>;
+} {
+  const updateCalls = opts.updateCalls;
+  return {
+    async read(id: number) {
+      return id === opts.message.id ? opts.message : null;
+    },
+    async findCanonicalEquivalents() {
+      return opts.cluster ?? [opts.message];
+    },
+    async updateReplyEvidence(input) {
+      updateCalls.push(input);
+      return true;
+    },
+    updateCalls,
+  };
+}
+
+function fakeDraftPort(draftsByMessage: Map<number, EmailReplyDraftEntity[]>): ReplyDetectionDraftPort {
+  return {
+    async listByMessage(messageId: number) {
+      return draftsByMessage.get(messageId) ?? [];
+    },
+  };
+}
+
+function fakeAttemptPort(attemptsByMessage: Map<number, EmailReplySendAttemptEntity[]>): ReplyDetectionAttemptPort {
+  return {
+    async listByMessage(messageId: number) {
+      return attemptsByMessage.get(messageId) ?? [];
+    },
+  };
+}
+
+interface FakeEmailServicePortOptions {
+  config: EmailReceiveConnectionConfig | null;
+  identity: { smtpUsername: string; fromAddress: string; replyToAddress: string | null; receiveUsername: string } | null;
+  /** Return a different config on the SECOND getEmailServiceReceiveConfig call (mid-probe reconfig). */
+  reconfiguredConfig?: EmailReceiveConnectionConfig | null;
+}
+
+function fakeEmailServicePort(opts: FakeEmailServicePortOptions): ReplyDetectionEmailServicePort & { callCount: number } {
+  let callCount = 0;
+  return {
+    async getEmailServiceReceiveConfig() {
+      callCount += 1;
+      if (callCount === 2 && opts.reconfiguredConfig !== undefined) {
+        return opts.reconfiguredConfig;
+      }
+      return opts.config;
+    },
+    async readIdentity() {
+      return opts.identity;
+    },
+    get callCount() {
+      return callCount;
+    },
+  };
+}
+
+interface FakeImapPortOptions {
+  flags?: RefreshedFlags | null;
+  flagsThrows?: boolean;
+  sentFolders?: SentFolder[];
+  sentFoldersThrow?: boolean;
+  candidatesByFolder?: Map<string, ReplyHeaderCandidate[] | false>;
+  candidatesThrow?: boolean;
+}
+
+function fakeImapPort(opts: FakeImapPortOptions = {}): ReplyDetectionImapPort & {
+  refreshCalls: Array<{ folder: string; uidValidity: string; uid: string }>;
+  searchCalls: Array<{ folder: string; originalMessageId: string; cap: number }>;
+} {
+  const refreshCalls: Array<{ folder: string; uidValidity: string; uid: string }> = [];
+  const searchCalls: Array<{ folder: string; originalMessageId: string; cap: number }> = [];
+  return {
+    async refreshMessageFlags(input) {
+      refreshCalls.push({ folder: input.folder, uidValidity: input.uidValidity, uid: input.uid });
+      if (opts.flagsThrows) throw new Error("imap flag refresh failed");
+      return opts.flags ?? null;
+    },
+    async discoverSentFolders() {
+      if (opts.sentFoldersThrow) throw new Error("imap list failed");
+      return opts.sentFolders ?? [];
+    },
+    async searchReplyHeaders(input) {
+      searchCalls.push({ folder: input.folder, originalMessageId: input.originalMessageId, cap: input.cap });
+      if (opts.candidatesThrow) throw new Error("imap search failed");
+      return opts.candidatesByFolder?.get(input.folder) ?? [];
+    },
+    refreshCalls,
+    searchCalls,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Service builder — wires all fake ports together.
+// ---------------------------------------------------------------------------
+
+interface ServiceKit {
+  service: EmailReplyDetectionService;
+  messagePort: ReturnType<typeof fakeMessagePort>;
+  draftPort: ReplyDetectionDraftPort;
+  attemptPort: ReplyDetectionAttemptPort;
+  emailServicePort: ReturnType<typeof fakeEmailServicePort>;
+  imapPort: ReturnType<typeof fakeImapPort>;
+  nowMs: { value: number };
+}
+
+function buildServiceKit(input: {
+  message: EmailReceivedMessageEntity;
+  cluster?: EmailReceivedMessageEntity[];
+  draftsByMessage?: Map<number, EmailReplyDraftEntity[]>;
+  attemptsByMessage?: Map<number, EmailReplySendAttemptEntity[]>;
+  emailServiceOptions: FakeEmailServicePortOptions;
+  imapOptions?: FakeImapPortOptions;
+}): ServiceKit {
+  const updateCalls: Array<Record<string, unknown>> = [];
+  const nowMs = { value: 1_000_000 };
+  const messagePort = fakeMessagePort({
+    message: input.message,
+    cluster: input.cluster,
+    updateCalls,
+  });
+  const draftPort = fakeDraftPort(input.draftsByMessage ?? new Map());
+  const attemptPort = fakeAttemptPort(input.attemptsByMessage ?? new Map());
+  const emailServicePort = fakeEmailServicePort(input.emailServiceOptions);
+  const imapPort = fakeImapPort(input.imapOptions);
+  const service = new EmailReplyDetectionService({
+    messagePort,
+    draftPort,
+    attemptPort,
+    emailServicePort,
+    imapPort,
+    now: () => nowMs.value,
+  });
+  return { service, messagePort, draftPort, attemptPort, emailServicePort, imapPort, nowMs };
+}
+
+// ===========================================================================
+// §7.1 step 1 — local-first short-circuits (no IMAP round trip).
+// ===========================================================================
+
+describe("EmailReplyDetectionService — local-first short-circuits (§7.1 step 1)", () => {
+  it("returns replied(local_state) when replyStatus is already 'sent'", async () => {
+    const message = messageFixture({ replyStatus: "sent" });
+    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    expect(result.source).toBe("local_state");
+    expect(result.reasonCode).toBe("already_replied");
+    expect(result.coverage).toBe("local_only");
+    expect(result.fromCache).toBe(true);
+    // No mailbox I/O whatsoever.
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+    expect(kit.imapPort.searchCalls.length).toBe(0);
+  });
+
+  it("returns replied(local_state) when a sent draft exists in the cluster", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const drafts = new Map([[100, [draftEntity(1, 100, "sent")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    expect(result.source).toBe("local_state");
+    expect(result.reasonCode).toBe("already_replied");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("returns replied(local_state) when a sent send-attempt exists in the cluster", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const attempts = new Map([[100, [attemptEntity(1, 100, "sent")]]]);
+    const kit = buildServiceKit({
+      message,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    expect(result.source).toBe("local_state");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("returns unknown(local_state, reply_in_progress) when a sending draft is in-flight", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const drafts = new Map([[100, [draftEntity(1, 100, "sending")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("reply_in_progress");
+    expect(result.source).toBe("local_state");
+    expect(result.coverage).toBe("local_only");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("returns unknown(local_state, reply_in_progress) when an attempt is claimed/in-flight", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const attempts = new Map([[100, [attemptEntity(1, 100, "claimed")]]]);
+    const kit = buildServiceKit({
+      message,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("reply_in_progress");
+  });
+
+  it("returns unknown(local_state, delivery_unknown) when a prior attempt is unresolved", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const drafts = new Map([[100, [draftEntity(1, 100, "delivery_unknown")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("delivery_unknown");
+    expect(result.source).toBe("local_state");
+  });
+});
+
+// ===========================================================================
+// §7.1 step 2 — sticky positive evidence reuse.
+// ===========================================================================
+
+describe("EmailReplyDetectionService — sticky positive reuse (§7.1 step 2)", () => {
+  it("returns replied from cache when replyDetectedAt is set (mailbox_flag)", async () => {
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyDetectedAt: new Date("2026-10-05T11:00:00Z"),
+      replyDetectionSource: "mailbox_flag",
+      replyMatchedMessageId: null,
+    });
+    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("mailbox_flag");
+    expect(result.fromCache).toBe(true);
+    expect(result.coverage).toBe("configured_imap");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+    expect(kit.imapPort.searchCalls.length).toBe(0);
+  });
+
+  it("returns replied from cache when replyDetectedAt is set (sent_search) carrying matchedMessageId", async () => {
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyDetectedAt: new Date("2026-10-05T11:00:00Z"),
+      replyDetectionSource: "sent_search",
+      replyMatchedMessageId: "<sent-501@example.com>",
+    });
+    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("sent_search");
+    expect(result.matchedMessageId).toBe("<sent-501@example.com>");
+    expect(result.fromCache).toBe(true);
+  });
+});
+
+// ===========================================================================
+// §7.1 step 3 — negative reuse (draft checks only; age 0–60s + matching hash).
+// ===========================================================================
+
+describe("EmailReplyDetectionService — negative reuse (§7.1 step 3)", () => {
+  it("returns not_replied from cache when observation is 30s old and hash present", async () => {
+    // nowMs starts at 1_000_000; observation 30s ago.
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: "some-hash",
+    });
+    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("not_replied");
+    if (result.state !== "not_replied") throw new Error("expected not_replied");
+    expect(result.source).toBe("sent_search");
+    expect(result.fromCache).toBe(true);
+    expect(result.coverage).toBe("configured_imap");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+    expect(kit.imapPort.searchCalls.length).toBe(0);
+  });
+
+  it("does NOT reuse a cached negative older than 60s (proceeds to mailbox)", async () => {
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 - 90_000), // 90s ago → expired
+      replyNegativeContextHash: "some-hash",
+    });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    // Proceeded to mailbox and observed a complete negative.
+    expect(result.state).toBe("not_replied");
+    expect(kit.imapPort.refreshCalls.length).toBe(1);
+    expect(kit.imapPort.searchCalls.length).toBe(1);
+  });
+
+  it("forceRefresh skips the cached negative (delivery path)", async () => {
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 - 5_000), // 5s ago — fresh
+      replyNegativeContextHash: "some-hash",
+    });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100, forceRefresh: true });
+
+    // Cache skipped; mailbox probed.
+    expect(kit.imapPort.refreshCalls.length).toBe(1);
+    expect(kit.imapPort.searchCalls.length).toBe(1);
+    expect(result.state).toBe("not_replied");
+  });
+
+  it("does not reuse a cached negative with a future timestamp (clock skew)", async () => {
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 + 60_000), // 60s in the future
+      replyNegativeContextHash: "some-hash",
+    });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(kit.imapPort.refreshCalls.length).toBe(1);
+    expect(result.state).toBe("not_replied");
+  });
+});
+
+// ===========================================================================
+// §7.1 step 4 — POP3 / config-unavailable / missing RFC ID → typed unknown.
+// ===========================================================================
+
+describe("EmailReplyDetectionService — typed unknown (§7.1 step 4)", () => {
+  it("returns unknown(missing_message_id) when no normalized RFC id exists", async () => {
+    const message = messageFixture({
+      normalizedMessageId: null,
+      messageId: null,
+    });
+    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("missing_message_id");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("returns unknown(receive_unavailable) when the receive config is missing", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: { config: null, identity: null },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("receive_unavailable");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("returns unknown(unsupported_protocol) for a POP3 account — never constructs an IMAP client", async () => {
+    const message = messageFixture();
+    const pop3Config: EmailReceiveConnectionConfig = {
+      emailServiceId: 5,
+      protocol: "pop3",
+      host: "pop.example.com",
+      port: 995,
+      ssl: true,
+      username: "me@example.com",
+      password: "pop-pw",
+      folder: "INBOX",
+    };
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: { config: pop3Config, identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" } },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("unsupported_protocol");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+    expect(kit.imapPort.searchCalls.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// §7.1 step 5 — positive `\Answered` flag → replied (mailbox_flag).
+// ===========================================================================
+
+describe("EmailReplyDetectionService — \\Answered flag (§7.1 step 5)", () => {
+  it("returns replied(mailbox_flag) and persists a sticky positive when \\Answered is set", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: true, isSeen: true, flags: ["\\seen", "\\answered"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("mailbox_flag");
+    expect(result.fromCache).toBe(false);
+    expect(result.coverage).toBe("configured_imap");
+    // Persisted the sticky positive.
+    expect(kit.messagePort.updateCalls.length).toBe(1);
+    const write = kit.messagePort.updateCalls[0];
+    expect(write.replyDetectedAt).toBeDefined();
+    expect(write.replyDetectionSource).toBe("mailbox_flag");
+    // No Sent search needed — the flag settled it.
+    expect(kit.imapPort.searchCalls.length).toBe(0);
+  });
+
+  it("returns unknown(probe_failed) — not negative — when the flag side is expunged (null flags) and Sent search incomplete", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: null, // expunged/moved/UIDVALIDITY changed
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", false]]), // search failed
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_failed");
+    // No negative persisted.
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// §7.1 step 6 — Sent-folder search + §7.2 matching rules.
+// ===========================================================================
+
+describe("EmailReplyDetectionService — Sent-search matching (§7.1 step 6, §7.2)", () => {
+  it("returns replied(sent_search) when a verified direct parent is found and persists the positive", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([
+          ["Sent", [candidateFixture()]],
+        ]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("sent_search");
+    // matchedMessageId is the normalized candidate Message-ID (brackets
+    // stripped) — the same canonical form used for token equality.
+    expect(result.matchedMessageId).toBe("sent-501@example.com");
+    expect(kit.messagePort.updateCalls.length).toBe(1);
+    expect(kit.messagePort.updateCalls[0].replyDetectionSource).toBe("sent_search");
+    expect(kit.messagePort.updateCalls[0].replyMatchedMessageId).toBe("sent-501@example.com");
+  });
+
+  it("returns replied(sent_search) even when the flag side was expunged (verified direct match still settles)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: null, // expunged — flag side incomplete
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", [candidateFixture()]]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("sent_search");
+  });
+
+  it("returns unknown(ambiguous_match) for a References-only candidate (no In-Reply-To direct parent)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([
+          // Token only in References, not In-Reply-To; sender matches.
+          ["Sent", [candidateFixture({ inReplyTo: "<other@example.com>", references: "<orig-77@example.com>" })]],
+        ]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("ambiguous_match");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+
+  it("returns unknown(ambiguous_match) when the sender does not match the configured sending identity", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([
+          // Direct parent token but wrong sender (alias).
+          ["Sent", [candidateFixture({ from: "other@example.com" })]],
+        ]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("ambiguous_match");
+  });
+
+  it("verified direct match takes precedence over an ambiguous candidate in another folder", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [
+          { folder: "Sent", verified: true },
+          { folder: "Other", verified: false },
+        ],
+        candidatesByFolder: new Map([
+          // First folder ambiguous (wrong sender), second folder verified.
+          ["Sent", [candidateFixture({ from: "other@example.com" })]],
+          ["Other", [candidateFixture()]],
+        ]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("sent_search");
+  });
+
+  it("returns unknown(sent_folder_unavailable) when no Sent folder is discovered (not a negative)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [], // none
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("sent_folder_unavailable");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+
+  it("returns unknown(probe_failed) — not negative — when discoverSentFolders throws", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFoldersThrow: true,
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_failed");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+
+  it("returns not_replied (no_reply_observed) when flag side complete and Sent search empty + persists negative", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("not_replied");
+    if (result.state !== "not_replied") throw new Error("expected not_replied");
+    expect(result.reasonCode).toBe("no_reply_observed");
+    expect(result.coverage).toBe("configured_imap");
+    expect(kit.messagePort.updateCalls.length).toBe(1);
+    const write = kit.messagePort.updateCalls[0];
+    expect(write.replyNegativeCheckAt).toBeDefined();
+    expect(write.replyNegativeContextHash).toBeDefined();
+  });
+
+  it("returns unknown(probe_limit_exceeded) when cap is exhausted without a settled match", async () => {
+    const message = messageFixture();
+    // Build 250 candidates to overflow the 200 cap.
+    const many: ReplyHeaderCandidate[] = Array.from({ length: 250 }, (_, i) =>
+      candidateFixture({ uid: 1000 + i, inReplyTo: "<other@example.com>", references: "" })
+    );
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", many]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_limit_exceeded");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// §7.1 step 7 — context-change during I/O → negative not stored.
+// ===========================================================================
+
+describe("EmailReplyDetectionService — context-change guard (§7.1 step 7)", () => {
+  it("returns unknown(identity_conflict) and does NOT persist a negative when the account is reconfigured mid-probe", async () => {
+    const message = messageFixture();
+    const reconfigured: EmailReceiveConnectionConfig = {
+      emailServiceId: 5,
+      protocol: "imap",
+      host: "imap.different.example.com", // host changed
+      port: 993,
+      ssl: true,
+      username: "me@example.com",
+      password: "secret-pw-2",
+      folder: "INBOX",
+    };
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+        reconfiguredConfig: reconfigured,
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("identity_conflict");
+    // The negative MUST NOT have been persisted.
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+    // The post-probe re-read happened.
+    expect(kit.emailServicePort.callCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns unknown(identity_conflict) when the config vanishes mid-probe", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+        reconfiguredConfig: null, // account disabled/deleted during I/O
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("identity_conflict");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+});
+
+// ===========================================================================
+// §4.2 DTO wrapper (FR-032) — checkReply maps to snake_case DTO.
+// ===========================================================================
+
+describe("EmailReplyDetectionService.checkReply — DTO wrapper (§4.2)", () => {
+  it("maps a replied result to the snake_case DTO", async () => {
+    const message = messageFixture({ replyStatus: "sent" });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const dto = await kit.service.checkReply({ messageId: 100 });
+
+    expect(dto.success).toBe(true);
+    expect(dto.result).toBeDefined();
+    if (!dto.result) throw new Error("expected result");
+    expect(dto.result.message_id).toBe(100);
+    expect(dto.result.state).toBe("replied");
+    expect(dto.result.replied).toBe(true);
+    expect(dto.result.source).toBe("local_state");
+    expect(dto.result.reason_code).toBe("already_replied");
+    expect(dto.result.from_cache).toBe(true);
+    expect(dto.result.coverage).toBe("local_only");
+    // No secrets ever leak into the DTO.
+    expect(JSON.stringify(dto.result)).not.toContain("secret");
+    expect(JSON.stringify(dto.result)).not.toContain("password");
+  });
+
+  it("maps an unknown result with replied: null", async () => {
+    const message = messageFixture({ normalizedMessageId: null, messageId: null });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+    });
+
+    const dto = await kit.service.checkReply({ messageId: 100 });
+
+    expect(dto.success).toBe(true);
+    if (!dto.result) throw new Error("expected result");
+    expect(dto.result.state).toBe("unknown");
+    expect(dto.result.replied).toBe(null);
+    expect(dto.result.reason_code).toBe("missing_message_id");
+  });
+
+  it("returns success:false with a sanitized error when detect throws", async () => {
+    // Force a throw by making findCanonicalEquivalents reject. We build a
+    // one-off message port that throws on read; the message fixture is
+    // irrelevant because read() rejects before it is consulted.
+    const throwingPort: ReplyDetectionMessagePort = {
+      async read() {
+        throw new Error("db connection lost");
+      },
+      async findCanonicalEquivalents() {
+        return [];
+      },
+      async updateReplyEvidence() {
+        return true;
+      },
+    };
+    const service = new EmailReplyDetectionService({
+      messagePort: throwingPort,
+      draftPort: fakeDraftPort(new Map()),
+      attemptPort: fakeAttemptPort(new Map()),
+      emailServicePort: fakeEmailServicePort({ config: imapConfig(), identity: null }),
+      imapPort: fakeImapPort(),
+      now: () => 1_000_000,
+    });
+
+    const dto = await service.checkReply({ messageId: 100 });
+
+    expect(dto.success).toBe(false);
+    expect(dto.error).toContain("db connection lost");
+    expect(dto.result).toBeUndefined();
+    // No stack trace leaked.
+    expect(dto.error).not.toContain("at ");
+  });
+});
+
+// ===========================================================================
+// Detector version constant.
+// ===========================================================================
+
+describe("REPLY_DETECTOR_VERSION", () => {
+  it("is a stable, low-cardinality string stamped into the context hash", () => {
+    expect(REPLY_DETECTOR_VERSION).toBe("reply-detection-v1");
+    expect(REPLY_DETECTOR_VERSION.length).toBeLessThan(40);
+  });
+});
