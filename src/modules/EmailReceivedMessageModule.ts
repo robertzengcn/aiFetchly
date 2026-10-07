@@ -155,6 +155,63 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /**
+   * Detection-owned evidence write (FR-030/FR-031). Sticky positive: once
+   * `replyDetectedAt` is set it is never cleared; negatives only land while
+   * no positive evidence exists. See the model for the full fence semantics.
+   */
+  async updateReplyEvidence(input: {
+    id: number;
+    replyDetectedAt?: Date | null;
+    replyDetectionSource?: string | null;
+    replyMatchedMessageId?: string | null;
+    replyNegativeCheckAt?: Date | null;
+    replyNegativeContextHash?: string | null;
+    isAnswered?: number;
+    answeredFlagCheckedAt?: Date | null;
+  }): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.updateReplyEvidence(input);
+    } catch (error) {
+      console.error("Error updating reply evidence:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Adopt a legacy bare-UID row into the namespaced providerUid scheme.
+   * Caller must have validated the source identity first (step 3).
+   */
+  async updateProviderUidNamespacing(input: {
+    id: number;
+    providerUid: string;
+    providerFolder: string | null;
+    providerUidValidity: string | null;
+  }): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.updateProviderUidNamespacing(input);
+    } catch (error) {
+      console.error("Error namespacing provider uid:", error);
+      throw error;
+    }
+  }
+
+  /** Legacy bare-UID row lookup for adoption consideration (step 3). */
+  async findLegacyBareUidRow(input: {
+    emailServiceId: number;
+    bareUid: string;
+  }): Promise<EmailReceivedMessageEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.findLegacyBareUidRow(input);
+    } catch (error) {
+      console.error("Error finding legacy bare-uid row:", error);
+      throw error;
+    }
+  }
+
   async listByEmailService(
     input: ReceivedMessageListInput
   ): Promise<{ records: EmailReceivedMessageEntity[]; total: number }> {

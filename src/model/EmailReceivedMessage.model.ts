@@ -35,9 +35,14 @@ export class EmailReceivedMessageModel extends BaseDb {
    * Upsert by the unique `(emailServiceId, providerUid)` key.
    *
    * On conflict, provider-supplied metadata (subject, body, addresses, headers,
-   * receivedAt, unread flag) is refreshed while LOCAL processing state
-   * (`replyStatus`, `classification`, `classificationConfidence`, `processedAt`)
-   * is preserved — repeated syncs must never reset reply state.
+   * receivedAt, unread flag, answered flag + provenance) is refreshed with a
+   * TARGETED update while LOCAL processing state (`replyStatus`,
+   * `classification`, `classificationConfidence`, `processedAt`) and the
+   * detection-owned evidence columns (`replyDetectedAt`,
+   * `replyDetectionSource`, `replyMatchedMessageId`, `replyNegativeCheckAt`,
+   * `replyNegativeContextHash`) are preserved — repeated syncs must never
+   * reset reply state, clobber a concurrently changed lifecycle, or erase a
+   * sticky positive (FR-030, technical design §5.1).
    */
   async upsertByProviderUid(
     entity: EmailReceivedMessageEntity
@@ -55,36 +60,169 @@ export class EmailReceivedMessageModel extends BaseDb {
     });
 
     if (existing) {
-      existing.messageId = stripped.messageId;
-      existing.threadKey = stripped.threadKey;
-      existing.inReplyTo = stripped.inReplyTo;
-      existing.referencesHeader = stripped.referencesHeader;
-      existing.fromAddress = stripped.fromAddress;
-      existing.fromName = stripped.fromName;
-      existing.replyToAddress = stripped.replyToAddress;
-      existing.toAddressesJson = stripped.toAddressesJson;
-      existing.ccAddressesJson = stripped.ccAddressesJson;
-      existing.subject = stripped.subject;
-      existing.bodyText = stripped.bodyText;
-      existing.bodyHtmlSanitized = stripped.bodyHtmlSanitized;
-      existing.snippet = stripped.snippet;
-      existing.receivedAt = stripped.receivedAt;
-      existing.isUnread = stripped.isUnread;
-      if (
-        shouldPromoteReplyStatusFromProvider(
-          stripped.replyStatus as EmailReplyStatus | undefined,
-          existing.replyStatus
-        )
-      ) {
-        existing.replyStatus = "sent";
-        existing.processedAt = new Date();
+      const providerPatch = this.buildProviderFieldPatch(stripped);
+      // Historical sent promotion stays the ONLY replyStatus write sync may
+      // perform, and only strengthens (never downgrades) — narrowed to also
+      // require the freshly-observed \Answered flag (FR-030).
+      const promote = shouldPromoteReplyStatusFromProvider(
+        stripped.isAnswered === 1 ? "sent" : undefined,
+        existing.replyStatus
+      );
+      if (promote) {
+        await this.repository.update(
+          { id: existing.id },
+          {
+            ...providerPatch,
+            replyStatus: "sent",
+            processedAt: new Date(),
+          }
+        );
+      } else {
+        await this.repository.update({ id: existing.id }, providerPatch);
       }
-      // classification intentionally preserved.
-      return await this.repository.save(existing);
+      const refreshed = await this.repository.findOne({
+        where: { id: existing.id },
+      });
+      return refreshed ?? existing;
     }
 
     const created = this.repository.create(stripped);
     return await this.repository.save(created);
+  }
+
+  /**
+   * Provider-owned field patch for the targeted sync update. Deliberately
+   * excludes every write-owned-by-someone-else column: `replyStatus` /
+   * `processedAt` (app delivery), classification fields (classifier), and the
+   * detection evidence columns (detector). Only the raw flag observation
+   * (`isAnswered` + check time) and UID provenance belong to sync.
+   */
+  private buildProviderFieldPatch(
+    stripped: EmailReceivedMessageEntity
+  ): Partial<EmailReceivedMessageEntity> {
+    return {
+      messageId: stripped.messageId,
+      threadKey: stripped.threadKey,
+      inReplyTo: stripped.inReplyTo,
+      referencesHeader: stripped.referencesHeader,
+      fromAddress: stripped.fromAddress,
+      fromName: stripped.fromName,
+      replyToAddress: stripped.replyToAddress,
+      toAddressesJson: stripped.toAddressesJson,
+      ccAddressesJson: stripped.ccAddressesJson,
+      subject: stripped.subject,
+      bodyText: stripped.bodyText,
+      bodyHtmlSanitized: stripped.bodyHtmlSanitized,
+      snippet: stripped.snippet,
+      receivedAt: stripped.receivedAt,
+      isUnread: stripped.isUnread,
+      isAnswered: stripped.isAnswered,
+      answeredFlagCheckedAt: stripped.answeredFlagCheckedAt ?? new Date(),
+      providerFolder: stripped.providerFolder,
+      providerUidValidity: stripped.providerUidValidity,
+    };
+  }
+
+  /**
+   * Detection-owned evidence write (FR-030/FR-031, technical design §5.1).
+   *
+   * STICKY POSITIVE FENCE: once `replyDetectedAt` is set it is never cleared
+   * and never overwritten — a later observation carrying no positive evidence
+   * (zero flag, empty search) cannot reset a protected message. Negative
+   * fields are written only while no positive evidence exists; once positive,
+   * negatives are not written at all.
+   */
+  async updateReplyEvidence(input: {
+    id: number;
+    replyDetectedAt?: Date | null;
+    replyDetectionSource?: string | null;
+    replyMatchedMessageId?: string | null;
+    replyNegativeCheckAt?: Date | null;
+    replyNegativeContextHash?: string | null;
+    isAnswered?: number;
+    answeredFlagCheckedAt?: Date | null;
+  }): Promise<boolean> {
+    const positive = input.replyDetectedAt != null;
+
+    if (positive) {
+      // Strengthen only: fill the first-positive timestamp when unset; never
+      // move it, never clear it. Provenance fields ride along.
+      const result = await this.repository
+        .createQueryBuilder()
+        .update(EmailReceivedMessageEntity)
+        .set({
+          replyDetectedAt: () => "COALESCE(replyDetectedAt, :detectedAt)",
+          replyDetectionSource: input.replyDetectionSource ?? undefined,
+          replyMatchedMessageId: input.replyMatchedMessageId ?? undefined,
+          ...(input.isAnswered != null ? { isAnswered: input.isAnswered } : {}),
+          ...(input.answeredFlagCheckedAt != null
+            ? { answeredFlagCheckedAt: input.answeredFlagCheckedAt }
+            : {}),
+        })
+        .where("id = :id", { id: input.id })
+        .setParameters({ detectedAt: input.replyDetectedAt })
+        .execute();
+      return (result.affected ?? 0) === 1;
+    }
+
+    // Negative observation: only when NO positive evidence exists on the row.
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReceivedMessageEntity)
+      .set({
+        replyNegativeCheckAt: input.replyNegativeCheckAt ?? null,
+        replyNegativeContextHash: input.replyNegativeContextHash ?? null,
+        ...(input.isAnswered != null ? { isAnswered: input.isAnswered } : {}),
+        ...(input.answeredFlagCheckedAt != null
+          ? { answeredFlagCheckedAt: input.answeredFlagCheckedAt }
+          : {}),
+      })
+      .where("id = :id AND replyDetectedAt IS NULL", { id: input.id })
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
+  /**
+   * Adopt a legacy bare-UID row into the namespaced providerUid scheme
+   * (T03 step 3). Targeted update: preserves ALL local state (replyStatus,
+   * classification, evidence, processedAt) — only the dedupe key + UID
+   * provenance change. The caller must have validated the source identity
+   * (fetched header matches the expected RFC Message-ID) first.
+   */
+  async updateProviderUidNamespacing(input: {
+    id: number;
+    providerUid: string;
+    providerFolder: string | null;
+    providerUidValidity: string | null;
+  }): Promise<boolean> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReceivedMessageEntity)
+      .set({
+        providerUid: input.providerUid,
+        providerFolder: input.providerFolder,
+        providerUidValidity: input.providerUidValidity,
+      })
+      .where("id = :id", { id: input.id })
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
+  /**
+   * Find a legacy bare-UID row for the same service whose providerUid equals
+   * the raw UID string (pre-namespacing syncs stored `String(uid)`). Returns
+   * null when no legacy row exists for adoption consideration.
+   */
+  async findLegacyBareUidRow(input: {
+    emailServiceId: number;
+    bareUid: string;
+  }): Promise<EmailReceivedMessageEntity | null> {
+    return await this.repository.findOne({
+      where: {
+        emailServiceId: input.emailServiceId,
+        providerUid: input.bareUid,
+      },
+    });
   }
 
   async read(id: number): Promise<EmailReceivedMessageEntity | null> {
@@ -304,6 +442,14 @@ export class EmailReceivedMessageModel extends BaseDb {
   }
 }
 
+/**
+ * Historical sent promotion (FR-030 narrowing): sync may strengthen the
+ * replyStatus projection to `sent` only when the freshly-observed IMAP
+ * `\Answered` flag is set (caller passes "sent" only in that case) and the
+ * existing projection is not already `sent`. A cleared flag or later
+ * zero/negative observation NEVER downgrades — that is the sticky-positive
+ * rule enforced by `updateReplyEvidence`.
+ */
 export function shouldPromoteReplyStatusFromProvider(
   incomingStatus: EmailReplyStatus | undefined,
   existingStatus: EmailReplyStatus
