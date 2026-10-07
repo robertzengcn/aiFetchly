@@ -176,55 +176,81 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
 
 Contracts, evidence & verification:
 
-- [ ] **[GAP-S2] `TaskEvidenceService`** (adapters, deterministic checks, checker dispatch, §8.1/§8.2):
+- [x] **[GAP-S2] `TaskEvidenceService`** (adapters, deterministic checks, checker dispatch, §8.1/§8.2):
       record/file/operation/observation/text evidence with source revision + baseline handling; qualitative
       checker with schema validation, reference-membership checks, retry budget (1 retry/candidate, 6/run).
-      PRD: FR-03, FR-04, AC-03, AC-11, AC-20.
-- [ ] **[GAP-S2] `TaskProgressTracker`** (evidence fingerprints, stall detection §7.2 step 9, no-progress
-      streak bound 3, discovery-traffic exclusion). PRD: FR-09, AC-05.
-- [~] **[GAP-S2] Contract freezing per run** (template compiler + main-process validation, §4A.2/§5.1;
+      PRD: FR-03, FR-04, AC-03, AC-11, AC-20. ✅ Shipped Unit 1 (`0f5eab92`): `TaskEvidenceService` +
+      `criteriaAdapters` (observation/operation_receipt/record_count/qualitative/artifact→unknown);
+      controller wires `checkCandidate` into `decide()` for verified/best-effort routes and populates real
+      `evidenceIds` on the decision.
+- [x] **[GAP-S2] `TaskProgressTracker`** (evidence fingerprints, stall detection §7.2 step 9, no-progress
+      streak bound 3, discovery-traffic exclusion). PRD: FR-09, AC-05. ✅ Shipped post-Unit-8
+      (`a6cbf44c`): `TaskProgressTracker` per-execution fingerprint (normalized tool name + arguments +
+      result, strips timestamps/random IDs/excludes `tool_catalog_search`); `recordToolRoundProgress`
+      closure on `LoopTaskExecutionBinding`; loop observes every committed tool round; controller continue
+      branch gates on `!budget.isNoProgressStreakExhausted()` and `incompleteReasonCode` returns
+      NO_PROGRESS (precedence over boundary-derived CONTINUATION_LIMIT). Changed error resets streak
+      without replenishing continuation allowance.
+- [x] **[GAP-S2] Contract freezing per run** (template compiler + main-process validation, §4A.2/§5.1;
       criterion offset-vs-message-body validation; baseline capture before change-evidence actions).
-      PRD: FR-01, FR-02, FR-19. ✅ Library done (Unit 3, `TaskExecutionCoordinator.freezeContract`
-      + `CreateExecutionInput.contractSnapshotJson`/`contractHash` persisted at creation); IPC/engine
-      enrollment seam lands in Unit 4 (the plan's `createQueryLoop:146` ref is wrong — the seam is
-      `engine.submitMessage` after `savedUser.messageId` at ~1169).
-- [ ] **[GAP-S2] Live `TaskRunBudget` enforcement**: ledger-backed reservations, dispatch gate on every
+      PRD: FR-01, FR-02, FR-19. ✅ Library Unit 3 (`TaskExecutionCoordinator.freezeContract` +
+      `CreateExecutionInput.contractSnapshotJson`/`contractHash` persisted at creation); engine enrollment
+      seam wired in Unit 4 (`4a6c97f5`, `engine.submitMessage` after `savedUser.messageId` at ~1169).
+- [x] **[GAP-S2] Live `TaskRunBudget` enforcement**: ledger-backed reservations, dispatch gate on every
       resolver/maker/checker/compaction/fallback/HTTP-retry path, token-estimate reservation + actual
       reconciliation with dedup by request ID, active-time/1-hour-wait accounting, `HARD_CAPS` clamping.
-      PRD: FR-08, AC-08, AC-29.
+      PRD: FR-08, AC-08, AC-29. ✅ Shipped Unit 2 (`5203ac40`): `reserveCheckerAttempt`, the three
+      `is*BudgetExhausted` accessors, `resurrectFromLedger` round-trip; controller consults them in
+      `decide()`. OPEN SUB-ITEM (GAP-S2 #4 reservations PERSISTENCE): budget is resurrected from ledger
+      COUNTERS only on Continue; per-request reservations are still in-memory. Tracked as post-Slice-2.
 
 Engine / loop / scheduler wiring (all behind `aiTaskCompletionPolicyV1`, frozen policy at acceptance):
 
-- [~] **[GAP-S2] Engine acceptance path** (§4A.1): conversation lease, DB/user scope, durable user message by
+- [x] **[GAP-S2] Engine acceptance path** (§4A.1): conversation lease, DB/user scope, durable user message by
       stable `submissionId`, execution record + ledger before resolver/maker dispatch, trusted binding on
       every resume path (permission, plan-question, plan-approval). Renderer generates/retains
-      `submissionId`. PRD: FR-17, FR-20, AC-26. ✅ Library done (Unit 3: `startManual`/`startScheduled`
+      `submissionId`. PRD: FR-17, FR-20, AC-26. ✅ Library Unit 3 (`e29c7811`): `startManual`/`startScheduled`
       build the binding with leaseGeneration from `owner_generation`, contract + lineage persisted,
       budget resurrected via `getLedgerById` on Continue, `assertOwnership` STATE_CONFLICT guard);
-      IPC/engine enrollment seam lands in Unit 4.
-- [ ] **[GAP-S2] Loop consults controller before terminal event** (FR-05): every enrolled no-call ending and
+      engine enrollment seam wired in Unit 4 (`4a6c97f5`) and carried through the three resume paths.
+- [x] **[GAP-S2] Loop consults controller before terminal event** (FR-05): every enrolled no-call ending and
       round/budget cap reaches `decide()`; suppress legacy `goalTextStop`/empty-stop/cap nudges for enrolled
       runs only (`AIChatQueryLoop.ts:2224-2268`, `:2164-2182` stay for non-enrolled). Valid parsed calls still
-      execute even with `stop`. PRD: FR-05, FR-06, AC-02, AC-12, AC-18.
-- [~] **[GAP-S2] Single-owner enforcement**: standalone vs goal owner per execution; unrelated active goals
+      execute even with `stop`. PRD: FR-05, FR-06, AC-02, AC-12, AC-18. ✅ Shipped Unit 4 (`4a6c97f5`):
+      four consult sites (round-cap, empty-stop-after-tools, goalTextStop, loop-exit) call
+      `maybeConsultPolicy` → `consultLoopEndCandidate`; flag-off / no-binding is byte-identical legacy.
+- [x] **[GAP-S2] Single-owner enforcement**: standalone vs goal owner per execution; unrelated active goals
       cannot take over manual requests (§4A.3); goal-maker iterations yield internally. PRD: FR-20, AC-14, AC-31.
-      ✅ Library done (Unit 3: `leaseGeneration` = fenced `owner_generation` from the ledger;
+      ✅ Library Unit 3 (`e29c7811`): `leaseGeneration` = fenced `owner_generation` from the ledger;
       `assertOwnership` returns STATE_CONFLICT on mismatch; Continue successor bumps owner_generation
-      via the model layer); live consult/finalization gating lands in Units 4/5.
-- [ ] **[GAP-S2] `ScheduledLoopEventSink` rejects missing/malformed task result as `MISSING_TASK_OUTCOME`**
+      via the model layer; live consult/finalization gating wired in Units 4/5 (`4a6c97f5`/`76430ed9`).
+- [x] **[GAP-S2] `ScheduledLoopEventSink` rejects missing/malformed task result as `MISSING_TASK_OUTCOME`**
       (never falls back to success); manual path likewise. Consult must happen upstream of
-      `ScheduledLoopEventSink.ts:68` first-wins guard. PRD: FR-05, FR-12.
-- [ ] **[GAP-S2] Atomic finalization with schedule accounting** (`AiTaskExecutionModule.finalizeExecution`
+      `ScheduledLoopEventSink.ts:68` first-wins guard. PRD: FR-05, FR-12. ✅ Shipped Unit 6 (`caa2630b`):
+      sink DI seam `policyBinding` consults `controller.decide` on `complete`, maps decision→outcome
+      (`verified_complete`→`completed`, else `incomplete`/`blocked`/`cancelled`/`failed`); `failOutstanding`
+      commits `missing_outcome`/`STREAM_INCOMPLETE` when flag on; flag-off blind mapping byte-identical.
+- [x] **[GAP-S2] Atomic finalization with schedule accounting** (`AiTaskExecutionModule.finalizeExecution`
       + scheduled adapter in one transaction: outcome/reason/evidence/counters + occurrence status/counters/
       next-run exactly once; manual path touches no schedule tables; `verified_complete→completed` mapping
       preserves semantic outcome; unknown-action-outcome pauses schedule immediately). PRD: FR-12, §6.3, AC-32.
-- [ ] **[GAP-S2] Pause/resume/cancel/Continue/Retry semantics** (§4A.4, §12): same-execution grant/deny and
+      ✅ Shipped Unit 5 manual (`76430ed9`) + Unit 6 scheduled (`caa2630b`): `finalizeManualAtCompleteGate`
+      fallback consult + CAS; `finalizeScheduledExecution` multi-statement txn (CAS + ledger release + run
+      row + schedule counters + pause-if-needed) serialized via `executionCreateMutex`;
+      `updateIntervalAfterResult` literal-string bug FIXED; swallowing `catch {}` FIXED (AC-15).
+- [x] **[GAP-S2] Pause/resume/cancel/Continue/Retry semantics** (§4A.4, §12): same-execution grant/deny and
       question/approval resume with remaining ledger; Stop/Replace fencing (`TASK_REPLACED`, late-callback
       fencing); linked Continue successor (immutable ancestor, shared lineage ledger, one active successor);
       explicit Retry as disclosed new ledger; transport retry idempotency. PRD: FR-10, FR-21, FR-22, AC-06,
-      AC-07, AC-22–27.
-- [ ] **[GAP-S2] Stop during checking/recovery** aborts owner + checker/transport waits, no further dispatch,
-      no late success (AC-24); replacement message fences old execution (AC-25).
+      AC-07, AC-22–27. ✅ Shipped Unit 7 (`5c393e7f`): `coordinator.cancel`/`continueExecution`/
+      `retryExecution`; `stopActiveTurn` → `coordinator.cancel` when flag on; Continue shares lineage ledger
+      + resurrects budget; Retry mints new ledger; `AI_CHAT_V2_TASK_CONTINUE/RETRY` IPC (AI-gate → flag-gate
+      → parent lookup → Zod); replacement fencing on new submission.
+- [x] **[GAP-S2] Stop during checking/recovery** aborts owner + checker/transport waits, no further dispatch,
+      no late success (AC-24); replacement message fences old execution (AC-25). ✅ Shipped Unit 7
+      (`5c393e7f`): `checkCandidate` catches `AbortError` from the checker LLM → `unknown` for un-evaluated
+      criteria → `finish(cancelled, USER_CANCELLED)`; abort during continuation dispatch →
+      `finish(incomplete, USER_CANCELLED)`; never `verified_complete`.
 
 Renderer / i18n / tests:
 
