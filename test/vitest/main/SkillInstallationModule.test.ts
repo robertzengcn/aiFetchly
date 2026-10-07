@@ -29,7 +29,12 @@ vi.mock("@/service/SkillDependencyOrchestrator", async (importOriginal) => {
   // Probe mode: "real" consults the runner's PATH (ffmpeg etc.), which made
   // CI results depend on whether the runner image ships ffmpeg. Tests that
   // need a deterministic post-install probe force "satisfied" instead.
-  let probeMode: "real" | "missing" | "satisfied" = "real";
+  let probeMode:
+    | "real"
+    | "missing"
+    | "satisfied"
+    | "incompatible"
+    | "unknown" = "real";
   return {
     ...actual,
     detectAll: (
@@ -37,7 +42,11 @@ vi.mock("@/service/SkillDependencyOrchestrator", async (importOriginal) => {
       cwd: string
     ) => {
       if (probeMode === "real") return actual.detectAll(items, cwd);
-      const currentStatus = probeMode as "missing" | "satisfied";
+      const currentStatus = probeMode as
+        | "missing"
+        | "satisfied"
+        | "incompatible"
+        | "unknown";
       return Promise.resolve(items.map((i) => ({ ...i, currentStatus })));
     },
     __setForceDependencyMissing: (value: boolean) => {
@@ -45,6 +54,12 @@ vi.mock("@/service/SkillDependencyOrchestrator", async (importOriginal) => {
     },
     __setForceDependencySatisfied: (value: boolean) => {
       probeMode = value ? "satisfied" : "real";
+    },
+    // E6 seam extensions: deterministic incompatible/unknown probes.
+    __setForceDependencyStatus: (
+      status: "incompatible" | "unknown" | "real"
+    ) => {
+      probeMode = status;
     },
   };
 });
@@ -2421,6 +2436,16 @@ describe("reuse correlation + ready identity (audit R4)", () => {
   });
 
   it("a different-subdirectory request is not answered by the root ready row", async () => {
+    // E1: CI runners ship no ffmpeg — force the probe seam satisfied so
+    // the identity assertions below run (the hold behavior is covered by
+    // the dependency tests with the seam off).
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    orchestrator.__setForceDependencySatisfied(true);
+    try {
     const module = new SkillInstallationModule();
     const prepared = await module.prepare({
       conversationId: "conv-r4-root",
@@ -2446,9 +2471,22 @@ describe("reuse correlation + ready identity (audit R4)", () => {
       subdirectory: "nested",
     });
     expect(nested?.state).not.toBe("ready");
+    } finally {
+      orchestrator.__setForceDependencySatisfied(false);
+    }
   }, 120_000);
 
   it("a linked-mode request accepts a symbolic-link ready row (representation match)", async () => {
+    // E1: CI runners ship no ffmpeg — force the probe seam satisfied so
+    // the identity assertions below run (the hold behavior is covered by
+    // the dependency tests with the seam off).
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    orchestrator.__setForceDependencySatisfied(true);
+    try {
     const module = new SkillInstallationModule();
     // Install the local fixture in linked mode.
     const prepared = await module.prepare({
@@ -2481,6 +2519,9 @@ describe("reuse correlation + ready identity (audit R4)", () => {
       mode: "managed-copy",
     });
     expect(managed?.state).not.toBe("ready");
+    } finally {
+      orchestrator.__setForceDependencySatisfied(false);
+    }
   }, 120_000);
 });
 
@@ -2657,6 +2698,15 @@ describe("dependency contract upgrade (audit R9 / PRD §18)", () => {
   });
 
   it("persisted bindings surface in the management rows after ready", async () => {
+    // E1: force the probe seam — CI runners ship no ffmpeg, and this test
+    // must reach ready to exercise the binding persistence.
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    orchestrator.__setForceDependencySatisfied(true);
+    try {
     const module = new SkillInstallationModule();
     const prepared = await module.prepare({
       conversationId: "conv-dep-bindings",
@@ -2689,5 +2739,119 @@ describe("dependency contract upgrade (audit R9 / PRD §18)", () => {
       // managed copies have no linked target — only linked rows do.
       expect(row.linkedTargetPath).toBeUndefined();
     }
+    } finally {
+      orchestrator.__setForceDependencySatisfied(false);
+    }
   }, 120_000);
+});
+
+describe("RV7/RV8 deterministic coverage (review tickets item 11 / E6)", () => {
+  it("RV8: an INCOMPATIBLE dependency holds at installing_dependencies; unknown does not", async () => {
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencyStatus: (
+        s: "incompatible" | "unknown" | "real"
+      ) => void;
+    };
+    orchestrator.__setForceDependencyStatus("incompatible");
+    try {
+      const module = new SkillInstallationModule();
+      const prepared = await module.prepare({
+        conversationId: "conv-rv8",
+        source: fixtureRoot,
+      });
+      let approved = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
+      if (approved.state === "awaiting_secret") {
+        approved = await module.resumeAfterSecret(prepared.sessionId);
+      }
+      // A probe-passed-but-too-old version must HOLD, not report ready.
+      expect(approved.state).toBe("installing_dependencies");
+
+      // 'unknown' classification items never block — a fresh session
+      // proceeds past the dependency hold (secret pause or later).
+      orchestrator.__setForceDependencyStatus("unknown");
+      const module2 = new SkillInstallationModule();
+      const prepared2 = await module2.prepare({
+        conversationId: "conv-rv8b",
+        source: fixtureRoot,
+      });
+      let approved2 = await module2.approve({
+        sessionId: prepared2.sessionId,
+        planRevision: prepared2.planRevision as string,
+        approve: true,
+        approvalToken: (await module2.getApprovalToken(prepared2.sessionId)) ?? "",
+      });
+      if (approved2.state === "awaiting_secret") {
+        approved2 = await module2.resumeAfterSecret(prepared2.sessionId);
+      }
+      expect(approved2.state).not.toBe("installing_dependencies");
+      expect(["ready", "awaiting_commands", "awaiting_secret"]).toContain(
+        approved2.state
+      );
+    } finally {
+      orchestrator.__setForceDependencyStatus("real");
+    }
+  }, 180_000);
+
+  it("RV7: a candidate ending rollback_required is not concealed by a later ready candidate", async () => {
+    const { SkillActivationService } = await import(
+      "@/service/SkillActivationService"
+    );
+    // Two-candidate fixture (skills/<name>/SKILL.md each).
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "rv7-fixture-"));
+    const makeSkill = (name: string): void => {
+      const dir = path.join(repo, "skills", name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\n\n# Usage\n\nDo things.`
+      );
+    };
+    makeSkill("rv7-bad");
+    makeSkill("rv7-good");
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    orchestrator.__setForceDependencySatisfied(true);
+    const verifySpy = vi
+      .spyOn(SkillActivationService.prototype, "verifyActivation")
+      .mockImplementation((p: string) => !p.includes("rv7-bad"));
+    try {
+      const module = new SkillInstallationModule();
+      const prepared = await module.prepare({
+        conversationId: "conv-rv7",
+        source: repo,
+      });
+      // Approve with BOTH candidates selected (R2 multi-select flow).
+      const approved = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+        selectedSkillIds: ["skills/rv7-bad:prompt", "skills/rv7-good:prompt"],
+      });
+      // The FIRST candidate's rollback_required terminal must surface —
+      // not be overwritten by the second candidate's success.
+      // The terminal surfaces as failed/ACTIVATION_VERIFICATION_FAILED
+      // after the rollback SUCCEEDED (rollback_required is the
+      // rollback-FAILED state) — the point: the loop STOPPED at the first
+      // candidate's terminal instead of letting the second candidate
+      // overwrite it with ready.
+      expect(approved.state).toBe("failed");
+      expect(approved.errorCode).toBe("ACTIVATION_VERIFICATION_FAILED");
+      expect(approved.state).not.toBe("ready");
+    } finally {
+      verifySpy.mockRestore();
+      orchestrator.__setForceDependencySatisfied(false);
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

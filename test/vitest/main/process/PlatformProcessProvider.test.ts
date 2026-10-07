@@ -557,6 +557,40 @@ describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () =>
       expectOutput
     );
 
+  it("PRD §16.4: shallow local Git clone — target exists and commit matches", async () => {
+    if (!WINDOWS) return;
+    // E4: the PRD's native-Git row. A local fixture repo is cloned with
+    // --depth 1 through the Windows provider; the clone must exist and its
+    // HEAD commit must equal the fixture's HEAD.
+    const fs = await import("fs");
+    const path = await import("path");
+    const fixture = fs.mkdtempSync(path.join(cwd, "git-shallow-src-"));
+    fs.writeFileSync(path.join(fixture, "SKILL.md"), "---\nname: shallow\n---\nbody");
+    const git = (args: string[], expectOutput = false) =>
+      run("git", args, expectOutput);
+    const init = await git(["init", "-q", "."]);
+    expect(init.exitCode).toBe(0);
+    const add = await git(["add", "-A"]);
+    expect(add.exitCode).toBe(0);
+    const commit = await git([
+      "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init",
+    ]);
+    expect(commit.exitCode).toBe(0);
+    const head = await git(["rev-parse", "HEAD"], true);
+    expect(head.exitCode).toBe(0);
+    const fixtureHead = head.stdout.trim();
+    expect(fixtureHead.length).toBeGreaterThan(0);
+
+    const target = path.join(cwd, "git-shallow-clone");
+    const clone = await git(["clone", "-q", "--depth", "1", fixture, target], true);
+    expect(clone.exitCode).toBe(0);
+    expect(fs.existsSync(path.join(target, "SKILL.md"))).toBe(true);
+    const cloned = await git(["-C", target, "rev-parse", "HEAD"], true);
+    expect(cloned.exitCode).toBe(0);
+    // A shallow clone of the current HEAD reports the SAME commit.
+    expect(cloned.stdout.trim()).toBe(fixtureHead);
+  }, 120_000);
+
   it("pwsh: when installed, resolves and runs; provider falls back to powershell.exe otherwise", async () => {
     if (!WINDOWS) return;
     // The provider prefers pwsh.exe; when absent, the PROCESS_SPAWN_FAILED

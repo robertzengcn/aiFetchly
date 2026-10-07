@@ -52,6 +52,7 @@ export type AcquisitionResult =
       readonly ok: false;
       readonly code:
         | "SOURCE_ACQUISITION_FAILED"
+        | "SOURCE_AUTH_REQUIRED"
         | "SOURCE_LIMIT_EXCEEDED"
         | "SOURCE_INVALID";
       readonly message: string;
@@ -181,7 +182,19 @@ export class SkillSourceAcquisitionService {
         .map((e) => e.message)
         .join("; ")
         .replace(/https?:\/\/[^\s]+/g, "[source]"); // redact URLs
-      return { ok: false, code: "SOURCE_ACQUISITION_FAILED", message };
+      // E5 (PRD §23.1 source-auth-required): authentication/authorization
+      // failures against the remote are their own typed code — the fix is
+      // credentials (helper/agent), not a retry.
+      const authFailure = /\b(auth|authentication|permission denied|403|access denied|could not read from remote)\b/i.test(
+        message
+      );
+      return {
+        ok: false,
+        code: authFailure ? "SOURCE_AUTH_REQUIRED" : "SOURCE_ACQUISITION_FAILED",
+        message: authFailure
+          ? `${message} (source authentication required — configure a Git credential helper or SSH key)`
+          : message,
+      };
     }
 
     const { localRoot, cleanup } = acquired.source;

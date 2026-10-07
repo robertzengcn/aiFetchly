@@ -1242,6 +1242,21 @@ At minimum, support:
 
 Each error includes recoverability, user action, sanitized technical detail, and installation session ID.
 
+**Shipped vocabulary (2026-10-07, E5):** the implementation emits
+`SCREAMING_SNAKE` codes. The kebab-case names above map to the shipped
+names as follows; the shipped names are authoritative.
+
+| PRD name (kebab) | Shipped code |
+| --- | --- |
+| `workspace-required` | `WORKSPACE_NOT_APPROVED` |
+| `plan-approval-required` | `APPROVAL_REQUIRED` |
+| `activation-conflict` | `ACTIVATION_COLLISION` |
+| `readiness-check-failed` | `ACTIVATION_VERIFICATION_FAILED` |
+| `shell-output-missing` | `PROCESS_OUTPUT_EMPTY_UNEXPECTED` |
+| `install-plan-revision-stale` | `PLAN_REVISION_MISMATCH` |
+| `install-routing-required` | `INSTALL_GENERIC_TOOL_FALLBACK_BLOCKED` (the enforced substitute block carries the routing instruction in its message) |
+| `source-auth-required` | `SOURCE_AUTH_REQUIRED` (implemented 2026-10-07: acquisition failures matching authentication/authorization patterns classify separately from `SOURCE_ACQUISITION_FAILED`) |
+
 ### 23.2 Progress events
 
 Progress events must be monotonic and scoped to a session. Suggested fields:
