@@ -86,7 +86,24 @@ export type EmailReplyPolicyCode =
   // FR-027: generation produced invalid content twice; no draft persisted.
   | "needs_human_review"
   // FR-036: ambiguous delivery outcome on a prior attempt for this message.
-  | "delivery_unknown";
+  | "delivery_unknown"
+  // FR-031: detection-engine unknown codes that surface as refusals when the
+  // shared mailbox detector returns inconclusive before draft generation or
+  // SMTP. Never treated as a negative — generation/sending does not proceed on
+  // an inconclusive reply state. See ReplyDetectionUnknownCode (§4.2) for the
+  // verbatim meanings. `no_reply_observed` is the complete-negative code; it
+  // is a policy code so the post-detection allow path can carry it on the
+  // success side without a separate union.
+  | "unsupported_protocol"
+  | "missing_message_id"
+  | "receive_unavailable"
+  | "sent_folder_unavailable"
+  | "ambiguous_match"
+  | "identity_conflict"
+  | "probe_timeout"
+  | "probe_limit_exceeded"
+  | "probe_failed"
+  | "no_reply_observed";
 
 /** Authoritative decision returned by the policy orchestrator. */
 export interface EmailReplyPolicyDecision {

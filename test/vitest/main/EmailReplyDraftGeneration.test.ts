@@ -14,6 +14,8 @@ import type {
   OpenAIChatCompletionResponse,
   OpenAIToolCall,
 } from "@/api/aiChatApi";
+import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
+import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
@@ -113,6 +115,53 @@ const validReplyJson = JSON.stringify({
   intentSuggestion: "interested",
   confidence: 0.8,
 });
+
+/**
+ * T04 step 7 (FR-031 §8.1): the generation service now runs the shared mailbox
+ * detector BEFORE classification. The 80 existing positive-generation tests
+ * predate detection and seed messages whose `emailServiceId` (4244, etc.) has
+ * NO receive config — a real detector would return `unknown(receive_unavailable)`
+ * and block every positive path. `buildService` injects a default fake detection
+ * factory returning `not_replied`, so existing tests exercise the generation
+ * path unchanged. New Step 7 spec tests pass a `detectionResult` override to
+ * assert the wiring's refusal/proceed behavior.
+ *
+ * The factory returns a fresh stub per call (the service caches one instance
+ * per `EmailReplyDraftGenerationService` via the lazy `detectionServiceForNow`
+ * getter), so `detect` counts and `forceRefresh` flags stay per-service.
+ */
+function buildService(
+  options: ConstructorParameters<typeof EmailReplyDraftGenerationService>[0] & {
+    /** Override the default `not_replied` detection outcome. */
+    detectionResult?: ReplyDetectionResult;
+  } = {}
+): EmailReplyDraftGenerationService {
+  const detectionResult: ReplyDetectionResult =
+    options.detectionResult ?? {
+      state: "not_replied",
+      replied: false,
+      source: "sent_search",
+      matchedMessageId: null,
+      reasonCode: "no_reply_observed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "configured_imap",
+    };
+  // Strip the test-only override before forwarding to the real constructor.
+  const forwarded: ConstructorParameters<
+    typeof EmailReplyDraftGenerationService
+  >[0] = options;
+  return new EmailReplyDraftGenerationService({
+    ...forwarded,
+    detectionServiceFactory: () => {
+      const svc = new EmailReplyDetectionService();
+      const spy = vi
+        .spyOn(svc, "detect")
+        .mockImplementation(async () => detectionResult);
+      return Object.assign(svc, { detectSpy: spy });
+    },
+  });
+}
 
 describe("validateLlmRawResult (FR-027)", () => {
   it("accepts a valid JSON reply with finish_reason stop", () => {
@@ -358,7 +407,7 @@ describe("callLlmRaw captures refusal and tool_calls fields (B05)", () => {
     const factory: AiChatApiFactory = () => ({
       openAIChatCompletion: async () => refusalResponse,
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const callLlmRaw = (svc as unknown as {
       callLlmRaw: (a: unknown, b: unknown) => Promise<LlmRawResult>;
     }).callLlmRaw.bind(svc);
@@ -381,7 +430,7 @@ describe("callLlmRaw payload + transport-error classification (FR-027)", () => {
     ]);
     // Use the service's internal callLlmRaw via a cast to access the private
     // method. The apiFactory seam determines what the call hits.
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const callLlmRaw = (svc as unknown as {
       callLlmRaw: (a: unknown, b: unknown) => Promise<LlmRawResult>;
     }).callLlmRaw.bind(svc);
@@ -406,7 +455,7 @@ describe("callLlmRaw payload + transport-error classification (FR-027)", () => {
         throw new Error("network timeout");
       },
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const callLlmRaw = (svc as unknown as {
       callLlmRaw: (a: unknown, b: unknown) => Promise<LlmRawResult>;
     }).callLlmRaw.bind(svc);
@@ -466,7 +515,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
       },
       { kind: "respond", content: validReplyJson },
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const fallback = (svc as unknown as {
       callLlmRawWithHintFallback: (
         a: unknown,
@@ -491,7 +540,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
       const { factory, requests } = stagedFactory([
         { kind: "throw", status, message: `Server returned ${status}` },
       ]);
-      const svc = new EmailReplyDraftGenerationService({
+      const svc = buildService({
         apiFactory: factory,
       });
       const fallback = (svc as unknown as {
@@ -517,7 +566,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
     const { factory, requests } = stagedFactory([
       { kind: "throw", status: 400, message: "Invalid request body shape" },
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const fallback = (svc as unknown as {
       callLlmRawWithHintFallback: (
         a: unknown,
@@ -537,7 +586,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
     const { factory, requests } = stagedFactory([
       { kind: "throw", message: "network timeout" },
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const fallback = (svc as unknown as {
       callLlmRawWithHintFallback: (
         a: unknown,
@@ -595,7 +644,7 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
     msg.replyStatus = "not_started";
     msg.processedAt = null;
     const saved = await messageModule.upsertByProviderUid(msg);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId: saved.id,
       useKnowledgeLibrary: false,
@@ -671,7 +720,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -690,7 +739,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -708,7 +757,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -729,7 +778,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -747,7 +796,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -760,7 +809,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -773,7 +822,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -799,7 +848,7 @@ describe("createDraft guard + reuse (FR-028)", () => {
         return real.openAIChatCompletion(req);
       },
     });
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: flippingFactory,
     });
     const result = await svc.createDraft({
@@ -812,6 +861,209 @@ describe("createDraft guard + reuse (FR-028)", () => {
     // No duplicate draft was persisted despite a valid generation.
     const drafts = await draftModule.listByMessage(messageId);
     expect(drafts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T04 step 7 (FR-031 §8.1): the shared mailbox detector runs BEFORE
+// classification. `replied`/`unknown` → no model call, reservation released,
+// one `reply_skipped` audit (stage `pre_draft`) with the typed detection code.
+// `not_replied` → proceeds to classification. The reuse path reruns detection
+// and reloads bindings afterward (a fresh positive appearing mid-reuse must
+// not surface a newly-sent draft as editable).
+// ---------------------------------------------------------------------------
+describe("createDraft pre-draft detection (T04 step 7, §8.1)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const auditModule = new EmailReplyAuditLogModule();
+  const guardModule = new EmailReplyGuardModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.providerUid = `det-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4244;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "draft body";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("detection `replied` before classification → no model call, reservation released, code already_replied", async () => {
+    const messageId = await seedMessage();
+    // No seeded draft → reservation returns `acquired` → the pre-draft
+    // detection on the acquire path runs and refuses before classification.
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      detectionResult: {
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        matchedMessageId: "sent-123@example.com",
+        reasonCode: "already_replied",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "configured_imap",
+      },
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(requests).toHaveLength(0); // NO model call
+    expect(result.code).toBe("already_replied");
+    // No existing draft on a clean message → next_action falls through to
+    // no_action (approve_existing_draft requires an existing draft).
+    expect(result.next_action).toBe("no_action");
+    // One `reply_skipped` audit row, stage pre_draft.
+    const { records: auditRecords } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const skipped = auditRecords.filter((a) => a.action === "reply_skipped");
+    expect(skipped).toHaveLength(1);
+    // Reservation released — the guard row is back to `idle`, not holding a
+    // `generating`/`draft_ready` lease.
+    const guardRow = await guardModule.findByReplyKey(
+      4244,
+      `row:${messageId}`
+    );
+    expect(guardRow).not.toBeNull();
+    expect(guardRow?.phase).toBe("idle");
+  });
+
+  it("detection `unknown` before classification → no model call, code = detection unknown code", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      detectionResult: {
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        matchedMessageId: null,
+        reasonCode: "probe_timeout",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "partial",
+      },
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(requests).toHaveLength(0);
+    expect(result.code).toBe("probe_timeout");
+    expect(result.next_action).toBe("discard_and_retry");
+    const { records: auditRecords } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const skipped = auditRecords.filter((a) => a.action === "reply_skipped");
+    expect(skipped).toHaveLength(1);
+  });
+
+  it("detection `not_replied` proceeds to classification and generation", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      // default detectionResult is `not_replied`
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(requests).toHaveLength(1); // model WAS called
+    expect(result.reused).toBe(false);
+  });
+
+  it("reuse path reruns detection and refuses when a positive appears before reuse", async () => {
+    // Seed an eligible draft for reuse (reservation returns `reusable`). The
+    // §8.1 reuse-path detection then runs BEFORE the draft is returned; a
+    // positive outcome refuses the reuse with `already_replied` and surfaces
+    // the seeded draft as `existing_draft_id` — never silently returning a
+    // replied draft as editable. NO model call.
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft");
+    expect(draftId).toBeGreaterThan(0);
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      detectionResult: {
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        matchedMessageId: "sent-456@example.com",
+        reasonCode: "already_replied",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "configured_imap",
+      },
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    // The reuse-path detection refused → no model call, code already_replied,
+    // existing_draft_id points at the seeded draft (route user to approve).
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(requests).toHaveLength(0);
+    expect(result.code).toBe("already_replied");
+    expect(result.existing_draft_id).toBe(draftId);
+    expect(result.next_action).toBe("approve_existing_draft");
   });
 });
 
@@ -885,7 +1137,7 @@ describe("createDraft runs guard + reuse before classification (B01)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -902,7 +1154,7 @@ describe("createDraft runs guard + reuse before classification (B01)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -927,7 +1179,7 @@ describe("createDraft runs guard + reuse before classification (B01)", () => {
       completionResponse(classifierJson),
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1007,7 +1259,7 @@ describe("createDraft refusal audits (FR-034)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     const refusals = await refusalAuditsFor(messageId);
@@ -1031,7 +1283,7 @@ describe("createDraft refusal audits (FR-034)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     const refusals = await refusalAuditsFor(messageId);
@@ -1049,7 +1301,7 @@ describe("createDraft refusal audits (FR-034)", () => {
     const messageId = await seedMessage({ replyStatus: "draft_created" });
     await seedDraft(messageId, "draft");
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -1063,7 +1315,7 @@ describe("createDraft refusal audits (FR-034)", () => {
     const { factory } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
     });
     const result = await svc.createDraft({
@@ -1089,7 +1341,7 @@ describe("createDraft refusal audits (FR-034)", () => {
         return real.openAIChatCompletion(req);
       },
     });
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: flippingFactory,
     });
     const result = await svc.createDraft({
@@ -1197,7 +1449,7 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -1223,7 +1475,7 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
       2 /* knowledgeAuditCount */
     );
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     const reuses = await reuseAuditsFor(messageId);
@@ -1246,7 +1498,7 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
     const messageId = await seedMessage();
     await seedDraftWithWarnings(messageId, "draft", ["w1"]);
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     const { records } = await auditModule.list({
@@ -1274,7 +1526,7 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
         return real.openAIChatCompletion(req);
       },
     });
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: siblingInsertingFactory,
     });
     const result = await svc.createDraft({
@@ -1302,7 +1554,7 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
     const messageId = await seedMessage();
     await seedDraftWithWarnings(messageId, "draft", ["w1"]);
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     // Force the audit write to throw by monkey-patching the module method.
     const original = svc["replyAuditModule"].create.bind(
       svc["replyAuditModule"]
@@ -1413,7 +1665,7 @@ describe("createDraft failure-audit separation (B10)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1450,7 +1702,7 @@ describe("createDraft failure-audit separation (B10)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const createCalls: EmailReplyAuditLogEntity[] = [];
     const originalCreate = svc["replyAuditModule"].create.bind(
       svc["replyAuditModule"]
@@ -1490,7 +1742,7 @@ describe("createDraft failure-audit separation (B10)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const createCalls: EmailReplyAuditLogEntity[] = [];
     const originalCreate = svc["replyAuditModule"].create.bind(
       svc["replyAuditModule"]
@@ -1529,7 +1781,7 @@ describe("createDraft failure-audit separation (B10)", () => {
         throw new Error("network timeout");
       },
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1632,7 +1884,7 @@ describe("createDraft request correlation id (B11)", () => {
     const messageId = await seedMessage();
     await seedDraft(messageId, "draft");
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
 
     const result1 = await svc.createDraft({ messageId });
     const result2 = await svc.createDraft({ messageId });
@@ -1659,7 +1911,7 @@ describe("createDraft request correlation id (B11)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1699,7 +1951,7 @@ describe("createDraft request correlation id (B11)", () => {
       completionResponse(validReplyJson),
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
 
     const r1 = await svc.createDraft({ messageId });
     const r2 = await svc.createDraft({ messageId });
@@ -1741,7 +1993,7 @@ describe("createDraft request correlation id (B11)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1870,7 +2122,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
       const siblingId = await seedDraft(messageId, "draft");
       await draftModule.markSent(siblingId, new Date());
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1889,7 +2141,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
     const factory = factoryThatMutatesDuringCall(async () => {
       await seedDraft(messageId, "delivery_unknown");
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1907,7 +2159,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
     const factory = factoryThatMutatesDuringCall(async () => {
       await seedDraft(messageId, "sending");
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1924,7 +2176,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
     const factory = factoryThatMutatesDuringCall(async () => {
       await seedAttempt(messageId, "sent");
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1942,7 +2194,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
       await seedDraft(messageId, "draft");
       await seedDraft(messageId, "draft");
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -1962,7 +2214,7 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
     const factory = factoryThatMutatesDuringCall(async () => {
       await seedDraft(messageId, "draft");
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -2030,7 +2282,7 @@ describe("createDraft preserves authoritative classification (B07)", () => {
         })
       ),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -2070,7 +2322,7 @@ describe("createDraft preserves authoritative classification (B07)", () => {
         })
       ),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({
       messageId,
       useKnowledgeLibrary: false,
@@ -2180,7 +2432,7 @@ describe("generation deadline enforcement (FR-035 slice / B13)", () => {
     // the gate — expiry is a transport failure, not a second validation strike.
     let nowMs = 1_000_000;
     let calls = 0;
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       budget: { now: () => nowMs, budgetMs: 100 },
       apiFactory: () => ({
         openAIChatCompletion: async () => {
@@ -2220,7 +2472,7 @@ describe("generation deadline enforcement (FR-035 slice / B13)", () => {
     const messageId = await seedMessage();
     const requests: OpenAIChatCompletionRequest[] = [];
     let nowMs = 1_000_000;
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       budget: { now: () => nowMs, budgetMs: 60_000 },
       apiFactory: () => ({
         openAIChatCompletion: async (req) => {
@@ -2250,7 +2502,7 @@ describe("generation deadline enforcement (FR-035 slice / B13)", () => {
     // deadline expires AFTER the response but BEFORE persistence. The
     // late-output guard must discard the output: no draft, no audit.
     let nowMs = 1_000_000;
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       budget: { now: () => nowMs, budgetMs: 100 },
       apiFactory: () => ({
         openAIChatCompletion: async () => {
@@ -2285,7 +2537,7 @@ describe("generation deadline enforcement (FR-035 slice / B13)", () => {
   it("caps each model call at MODEL_CALL_CAP_MS even with budget remaining", async () => {
     const messageId = await seedMessage();
     const requests: OpenAIChatCompletionRequest[] = [];
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       // Enormous aggregate budget, but every individual call is capped.
       budget: { now: () => 1_000_000, budgetMs: 600_000 },
       apiFactory: () => ({
@@ -2367,7 +2619,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     const { factory } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -2417,7 +2669,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     delete (bare as { usage?: unknown }).usage;
     bare.choices[0].finish_reason = null;
     const { factory } = fakeApiFactory([bare]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -2450,7 +2702,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
       completionResponse("{not valid json}"),
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -2492,7 +2744,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
         return completionResponse(validReplyJson, "stop");
       },
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -2512,7 +2764,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     expect(requests.length).toBeGreaterThanOrEqual(1);
@@ -2539,7 +2791,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
         return completionResponse(validReplyJson, "stop");
       },
     });
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       maxTokens: 900,
     });
@@ -2559,7 +2811,7 @@ describe("completion telemetry persistence (T09/FR-027)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       maxTokens: 0,
     });
@@ -2630,7 +2882,7 @@ describe("FR-039 generation/validation counters", () => {
     const { factory } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     const counters = drainCountersForTest();
@@ -2651,7 +2903,7 @@ describe("FR-039 generation/validation counters", () => {
       completionResponse("{not valid json}"),
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     const counters = drainCountersForTest();
@@ -2667,7 +2919,7 @@ describe("FR-039 generation/validation counters", () => {
       completionResponse("{not valid json}"),
       completionResponse("{also not valid}"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     const counters = drainCountersForTest();
@@ -2683,7 +2935,7 @@ describe("FR-039 generation/validation counters", () => {
       completionResponse(validReplyJson, "length"),
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     const counters = drainCountersForTest();
@@ -2713,7 +2965,7 @@ describe("FR-039 generation/validation counters", () => {
       },
     });
     void factory;
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: stagedFactory,
     });
     const result = await svc.createDraft({ messageId });
@@ -2729,7 +2981,7 @@ describe("FR-039 generation/validation counters", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -2756,7 +3008,7 @@ describe("FR-039 generation/validation counters", () => {
         return completionResponse(validReplyJson, "stop");
       },
     });
-    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -2914,7 +3166,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -2959,11 +3211,11 @@ describe("createDraft acquires the generation reservation (T07)", () => {
         return realFactory().openAIChatCompletion(req);
       },
     });
-    const winner = new EmailReplyDraftGenerationService({
+    const winner = buildService({
       apiFactory: winnerFactory,
       guardModuleFactory: () => guardModule,
     });
-    const loser = new EmailReplyDraftGenerationService({
+    const loser = buildService({
       apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3011,7 +3263,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       completionResponse("{nope}"),
       completionResponse("{still nope}"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3035,7 +3287,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const retryFactory = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const retry = new EmailReplyDraftGenerationService({
+    const retry = buildService({
       apiFactory: retryFactory.factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3054,7 +3306,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3085,7 +3337,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => wrappedGuard,
     });
@@ -3113,7 +3365,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3136,7 +3388,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3163,7 +3415,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const acquiredSvc = new EmailReplyDraftGenerationService({
+    const acquiredSvc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3176,7 +3428,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     // reusable
     const reusableMessageId = await seedMessage({ emailServiceId: 4254 });
     await seedDraft(reusableMessageId, "draft", 4254);
-    const reusableSvc = new EmailReplyDraftGenerationService({
+    const reusableSvc = buildService({
       apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3190,7 +3442,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     // blocked (already_replied) — the attempt lands in the TOCTOU window so
     // the reservation (not the pre-draft guard) produces the blocked outcome.
     const blockedMessageId = await seedMessage({ emailServiceId: 4255 });
-    const blockedSvc = new EmailReplyDraftGenerationService({
+    const blockedSvc = buildService({
       apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
       guardModuleFactory: () =>
         guardModuleThatMutatesBeforeAcquire(async () => {
@@ -3205,7 +3457,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     // generation_in_progress
     const inProgressMessageId = await seedMessage({ emailServiceId: 4256 });
     await seedGeneratingGuard(4256, `row:${inProgressMessageId}`, inProgressMessageId);
-    const inProgressSvc = new EmailReplyDraftGenerationService({
+    const inProgressSvc = buildService({
       apiFactory: fakeApiFactory([completionResponse(validReplyJson)]).factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3230,7 +3482,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const { factory } = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3313,7 +3565,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       .mockImplementation(async () => {
         throw new Error("simulated commit failure");
       });
-    const svc = new EmailReplyDraftGenerationService({
+    const svc = buildService({
       apiFactory: factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3354,7 +3606,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const retryFactory = fakeApiFactory([
       completionResponse(validReplyJson, "stop"),
     ]);
-    const retry = new EmailReplyDraftGenerationService({
+    const retry = buildService({
       apiFactory: retryFactory.factory,
       guardModuleFactory: () => guardModule,
     });
@@ -3381,7 +3633,7 @@ describe("createDraft acquires the generation reservation (T07)", () => {
         return realFactory().openAIChatCompletion(req);
       },
     });
-    const winner = new EmailReplyDraftGenerationService({
+    const winner = buildService({
       apiFactory: winnerFactory,
       guardModuleFactory: () => guardModule,
     });

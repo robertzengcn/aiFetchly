@@ -32,15 +32,32 @@ export function nextActionForCode(
     code === "needs_human_review" ||
     code === "delivery_unknown" ||
     code === "reply_state_unknown" ||
-    code === "reply_state_conflict"
+    code === "reply_state_conflict" ||
+    code === "unsupported_protocol" ||
+    code === "missing_message_id" ||
+    code === "receive_unavailable" ||
+    code === "sent_folder_unavailable" ||
+    code === "ambiguous_match" ||
+    code === "identity_conflict"
   ) {
     return "await_human_review";
   }
-  if (code === "reply_in_progress" || code === "generation_in_progress") {
+  if (
+    code === "reply_in_progress" ||
+    code === "generation_in_progress"
+  ) {
     return "no_action";
   }
-  if (code === "provider_error") {
+  if (
+    code === "provider_error" ||
+    code === "probe_timeout" ||
+    code === "probe_limit_exceeded" ||
+    code === "probe_failed"
+  ) {
     return "discard_and_retry";
+  }
+  if (code === "no_reply_observed") {
+    return "no_action";
   }
   return "no_action";
 }
