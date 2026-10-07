@@ -19,6 +19,9 @@ import type {
   TaskExecutionRoute,
   TaskOutcome,
 } from "@/entityTypes/aiTaskExecutionTypes";
+import {
+  buildFinalizationCheckpointFields,
+} from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Process-wide serializer for execution-create transactions. See
@@ -66,6 +69,51 @@ class LinkedRecordMismatchError extends Error {
     super("LINKED_RECORD_MISMATCH");
     this.name = "LinkedRecordMismatchError";
   }
+}
+
+/**
+ * T20 (FR-03/09/24, §6.1): build the finalization checkpoint by MERGING the
+ * finalization facts into the EXISTING `execution_state_json` object — never
+ * replacing it. The previous form stringified a fresh
+ * `{outcome, reasonCode, evidenceIds, ...}` object and wrote it over
+ * `execution_state_json`, dropping evidence rows (key `evidence`), shadow
+ * decisions (key `shadowDecision`), and any other per-run state accumulated
+ * during the run (baselines, source evidence, progress history). Terminal
+ * and Continue must retain that data (FR-03/24; AC-05/06/27/29).
+ *
+ * Parse failures and non-object legacy values are preserved under `__legacy`
+ * (same mirror as `recordShadowDecision`), so corrupt legacy state is still
+ * readable after finalization instead of silently discarded. Returns the
+ * merged JSON string for the CAS UPDATE's `execution_state_json` parameter.
+ */
+function mergeFinalizationCheckpoint(
+  existingStateJson: string | null,
+  facts: {
+    readonly outcome: TaskOutcome;
+    readonly reasonCode: string;
+    readonly evidenceIds: readonly string[];
+    readonly remainingWork: readonly string[];
+    readonly assistantResultMessageId?: string | null;
+    readonly finalizedAt: string;
+  }
+): string {
+  const existing: Record<string, unknown> = (() => {
+    if (!existingStateJson) return {};
+    try {
+      const parsed = JSON.parse(existingStateJson) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { __legacy: parsed };
+    } catch {
+      return { __legacy: existingStateJson };
+    }
+  })();
+  const checkpoint = buildFinalizationCheckpointFields(facts);
+  const merged: Record<string, unknown> = {
+    ...existing,
+    finalization: checkpoint,
+  };
+  return JSON.stringify(merged);
 }
 
 export interface CreateExecutionInput {
@@ -550,18 +598,22 @@ export class AiTaskExecutionModel extends BaseDb {
       };
     }
 
-    // B6: persist the evidenceIds/remainingWork checkpoint and the assistant
-    // result message id so caller inputs are not silently dropped. Slice 1
-    // has no evidence store, so these are recorded into execution_state_json
-    // as a finalization checkpoint until the Slice 2 checkpoint format lands.
-    const checkpoint = JSON.stringify({
-      outcome: input.outcome,
-      reasonCode: input.reasonCode,
-      evidenceIds: [...input.evidenceIds],
-      remainingWork: [...input.remainingWork],
-      assistantResultMessageId: input.assistantResultMessageId ?? null,
-      finalizedAt: new Date().toISOString(),
-    });
+    // B6 + T20: persist the evidenceIds/remainingWork checkpoint and the
+    // assistant result message id so caller inputs are not silently dropped.
+    // T20: MERGE into the existing execution_state_json (preserving evidence
+    // rows, shadow decisions, and any prior state) instead of replacing it —
+    // see {@link mergeFinalizationCheckpoint}.
+    const checkpoint = mergeFinalizationCheckpoint(
+      exec.execution_state_json,
+      {
+        outcome: input.outcome,
+        reasonCode: input.reasonCode,
+        evidenceIds: input.evidenceIds,
+        remainingWork: input.remainingWork,
+        assistantResultMessageId: input.assistantResultMessageId ?? null,
+        finalizedAt: new Date().toISOString(),
+      }
+    );
 
     // B2: atomic CAS finalization. A single UPDATE statement is atomic in
     // SQLite — the WHERE predicate (execution_state_version = ? AND
@@ -689,14 +741,21 @@ export class AiTaskExecutionModel extends BaseDb {
       };
     }
 
-    const checkpoint = JSON.stringify({
-      outcome: input.taskOutcome,
-      reasonCode: input.reasonCode,
-      evidenceIds: [...input.evidenceIds],
-      remainingWork: [...input.remainingWork],
-      assistantResultMessageId: input.assistantResultMessageId ?? null,
-      finalizedAt: new Date().toISOString(),
-    });
+    // T20: MERGE the finalization facts into the existing
+    // execution_state_json (preserving evidence rows, shadow decisions, and
+    // prior state) instead of replacing it — see
+    // {@link mergeFinalizationCheckpoint}.
+    const checkpoint = mergeFinalizationCheckpoint(
+      exec.execution_state_json,
+      {
+        outcome: input.taskOutcome,
+        reasonCode: input.reasonCode,
+        evidenceIds: input.evidenceIds,
+        remainingWork: input.remainingWork,
+        assistantResultMessageId: input.assistantResultMessageId ?? null,
+        finalizedAt: new Date().toISOString(),
+      }
+    );
     const finalEventIdentity = `execution-result:${input.executionId}`;
 
     // T19 (FR-12/24, AC-04/05/10/15/32): three-way failure-streak semantics

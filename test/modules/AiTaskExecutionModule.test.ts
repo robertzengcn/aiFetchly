@@ -565,17 +565,149 @@ describe("AiTaskExecutionModule (Mocha)", function () {
     expect(exec?.finalized).to.equal(true);
     expect(exec?.assistant_result_message_id).to.equal("msg-result-1");
 
-    // B6: the checkpoint holds the caller inputs instead of silently dropping
-    // them. Slice 1 has no evidence store, so they land in
-    // execution_state_json until the Slice 2 checkpoint format lands.
+    // B6 + T20: the checkpoint holds the caller inputs instead of silently
+    // dropping them. T20: the finalization facts live under the bounded
+    // `finalization` key merged into the existing state object.
     const parsed = JSON.parse(
       exec?.execution_state_json ?? "{}"
     ) as Record<string, unknown>;
-    expect(parsed.evidenceIds).to.deep.equal(["ev-1", "ev-2"]);
-    expect(parsed.remainingWork).to.deep.equal(["rec-2"]);
-    expect(parsed.assistantResultMessageId).to.equal("msg-result-1");
-    expect(parsed.outcome).to.equal("incomplete");
-    expect(parsed.reasonCode).to.equal("NO_PROGRESS");
+    const checkpoint = parsed.finalization as Record<string, unknown>;
+    expect(checkpoint).to.not.equal(undefined);
+    expect(checkpoint.evidenceIds).to.deep.equal(["ev-1", "ev-2"]);
+    expect(checkpoint.remainingWork).to.deep.equal(["rec-2"]);
+    expect(checkpoint.assistantResultMessageId).to.equal("msg-result-1");
+    expect(checkpoint.outcome).to.equal("incomplete");
+    expect(checkpoint.reasonCode).to.equal("NO_PROGRESS");
+  });
+
+  // ----- T20a: finalization merges into existing state instead of replacing -----
+  it("finalizeExecution preserves prior evidence/shadow state under the merged checkpoint (T20a, FR-03/24)", async () => {
+    const mod = new AiTaskExecutionModule();
+    const started = unwrapCreated(await mod.startExecution({
+      conversationId: "conv-t20a",
+      sourceUserMessageId: "msg-t20a",
+      submissionId: "sub-t20a",
+      requestHash: "sha256:t20a",
+      origin: { type: "manual", submissionId: "sub-t20a" },
+      route: "task_verified",
+      completionOwner: "standalone",
+      budgetLimits: MANUAL_BUDGET_DEFAULTS,
+    }));
+
+    // Seed state accumulated during the run: evidence rows + a shadow
+    // decision + a baseline. The pre-T20 finalizer REPLACED all of this.
+    const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AiTaskExecutionEntity
+    );
+    await execRepo.update(
+      { execution_id: started.executionId },
+      {
+        execution_state_json: JSON.stringify({
+          contractHash: "sha256:contract-t20a",
+          baseline: { contactsAtStart: 40 },
+          evidence: [
+            {
+              evidenceId: "ev-run-1",
+              criterionId: "rec-1",
+              contractHash: "sha256:contract-t20a",
+              executionId: started.executionId,
+              observedAt: "2026-10-07T00:00:00.000Z",
+              source: "loop_consult",
+              sourceRevision: "r1",
+              state: "pass",
+              referenceIds: ["rec-1"],
+              summary: "40 contacts saved",
+            },
+          ],
+          shadowDecision: { type: "continue" },
+        }),
+        execution_state_version: 2,
+      }
+    );
+
+    const result = await mod.finalizeExecution({
+      executionId: started.executionId,
+      expectedVersion: 2,
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      summary: "partial",
+      evidenceIds: ["ev-final-1"],
+      remainingWork: ["rec-2"],
+      assistantResultMessageId: "msg-result-t20a",
+    });
+    expect(result.ok).to.equal(true);
+
+    const exec = await execRepo.findOne({
+      where: { execution_id: started.executionId },
+    });
+    const parsed = JSON.parse(
+      exec?.execution_state_json ?? "{}"
+    ) as Record<string, unknown>;
+
+    // T20a core assertion: run-accumulated state survives finalization.
+    expect(parsed.contractHash).to.equal("sha256:contract-t20a");
+    expect(parsed.baseline).to.deep.equal({ contactsAtStart: 40 });
+    expect(parsed.shadowDecision).to.deep.equal({ type: "continue" });
+    const evidence = parsed.evidence as Array<Record<string, unknown>>;
+    expect(evidence).to.have.lengthOf(1);
+    expect(evidence[0].evidenceId).to.equal("ev-run-1");
+
+    // The finalization facts merged under the stable `finalization` key.
+    const checkpoint = parsed.finalization as Record<string, unknown>;
+    expect(checkpoint.outcome).to.equal("incomplete");
+    expect(checkpoint.reasonCode).to.equal("NO_PROGRESS");
+    expect(checkpoint.evidenceIds).to.deep.equal(["ev-final-1"]);
+    expect(checkpoint.assistantResultMessageId).to.equal("msg-result-t20a");
+    expect(checkpoint.schemaVersion).to.equal(1);
+  });
+
+  it("finalizeExecution preserves corrupt legacy state under __legacy (T20a)", async () => {
+    const mod = new AiTaskExecutionModule();
+    const started = unwrapCreated(await mod.startExecution({
+      conversationId: "conv-t20b",
+      sourceUserMessageId: "msg-t20b",
+      submissionId: "sub-t20b",
+      requestHash: "sha256:t20b",
+      origin: { type: "manual", submissionId: "sub-t20b" },
+      route: "task_verified",
+      completionOwner: "standalone",
+      budgetLimits: MANUAL_BUDGET_DEFAULTS,
+    }));
+
+    const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AiTaskExecutionEntity
+    );
+    // Non-JSON legacy value in execution_state_json.
+    await execRepo.update(
+      { execution_id: started.executionId },
+      {
+        execution_state_json: "legacy-plain-text-state",
+        execution_state_version: 1,
+      }
+    );
+
+    const result = await mod.finalizeExecution({
+      executionId: started.executionId,
+      expectedVersion: 1,
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      summary: "partial",
+      evidenceIds: [],
+      remainingWork: [],
+    });
+    expect(result.ok).to.equal(true);
+
+    const exec = await execRepo.findOne({
+      where: { execution_id: started.executionId },
+    });
+    const parsed = JSON.parse(
+      exec?.execution_state_json ?? "{}"
+    ) as Record<string, unknown>;
+    // Legacy value preserved under __legacy rather than discarded.
+    expect(parsed.__legacy).to.equal("legacy-plain-text-state");
+    expect((parsed.finalization as Record<string, unknown>).outcome).to.equal(
+      "incomplete"
+    );
   });
 
   // ----- B8: recordShadowDecision merge + finalized guard + version bump -----

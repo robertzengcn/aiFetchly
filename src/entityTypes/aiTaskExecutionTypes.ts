@@ -27,6 +27,69 @@ export const taskOutcomeSchema = z.enum([
 ]);
 export type TaskOutcome = z.infer<typeof taskOutcomeSchema>;
 
+// ----- §6.1 Finalization checkpoint (T20, FR-03/09/10/24) -----
+
+/**
+ * Bounded schema for the finalization checkpoint merged into
+ * `execution_state_json` at finalize time (T20). The finalizer must MERGE
+ * these fields into the EXISTING state object — never replace it — so
+ * evidence rows (key `evidence`), shadow decisions (key `shadowDecision`),
+ * and any other per-run state accumulated during the run survive
+ * finalization (FR-03/24: baselines and source evidence are retained
+ * terminal/Continue).
+ *
+ * `finalization` is the merged-in key. Its schema is intentionally narrow:
+ * only the caller-supplied finalization facts (outcome, reason, evidence/
+ * remaining-work summaries, linked result message, timestamp). Unknown extra
+ * keys on a persisted object are stripped by `.parse()` on read; the merge in
+ * the model preserves them in the written form regardless.
+ */
+export const taskFinalizationCheckpointSchema = z.object({
+  schemaVersion: z.literal(1),
+  outcome: taskOutcomeSchema,
+  reasonCode: z.string().min(1).max(120),
+  evidenceIds: z.array(z.string().min(1).max(200)),
+  remainingWork: z.array(z.string().min(1).max(400)),
+  assistantResultMessageId: z.string().min(1).max(200).nullable(),
+  finalizedAt: z.string().min(1).max(60),
+});
+export type TaskFinalizationCheckpoint = z.infer<
+  typeof taskFinalizationCheckpointSchema
+>;
+
+/**
+ * Merge the caller's finalization facts under the `finalization` key with
+ * defensive truncation so a hostile/oversized input can never write an
+ * unbounded checkpoint (T20 bounded schema). Pure function — used by both
+ * `finalizeExecution` and `finalizeScheduledExecution` so manual and
+ * scheduled paths share one merge/validate implementation.
+ */
+export function buildFinalizationCheckpointFields(input: {
+  readonly outcome: TaskOutcome;
+  readonly reasonCode: string;
+  readonly evidenceIds: readonly string[];
+  readonly remainingWork: readonly string[];
+  readonly assistantResultMessageId?: string | null;
+  readonly finalizedAt: string;
+}): TaskFinalizationCheckpoint {
+  const safeReasonCode = input.reasonCode.slice(0, 120);
+  return {
+    schemaVersion: 1,
+    outcome: taskOutcomeSchema.parse(input.outcome),
+    reasonCode: safeReasonCode.length > 0 ? safeReasonCode : "UNKNOWN",
+    evidenceIds: input.evidenceIds
+      .filter((id) => id.length > 0)
+      .map((id) => id.slice(0, 200)),
+    remainingWork: input.remainingWork
+      .filter((entry) => entry.length > 0)
+      .map((entry) => entry.slice(0, 400)),
+    assistantResultMessageId: input.assistantResultMessageId
+      ? input.assistantResultMessageId.slice(0, 200)
+      : null,
+    finalizedAt: input.finalizedAt.slice(0, 60),
+  };
+}
+
 // ----- §5.1 Completion contract -----
 
 export const taskCriterionSourceSchema = z.object({

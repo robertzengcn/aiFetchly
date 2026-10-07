@@ -593,4 +593,79 @@ describe("AiTaskExecutionScheduledFinalize (Mocha)", function () {
     });
     expect(exec?.finalized).to.equal(false);
   });
+
+  it("T20a: finalizeScheduledExecution preserves prior evidence/shadow state under the merged checkpoint", async () => {
+    const mod = new AiTaskExecutionModule();
+    const seeded = await seedScheduledWorld("conv-t20a-sched", 1);
+
+    // Seed state accumulated during the run: evidence rows + a shadow
+    // decision. The pre-T20 scheduled finalizer REPLACED all of this.
+    const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AiTaskExecutionEntity
+    );
+    await execRepo.update(
+      { execution_id: seeded.executionId },
+      {
+        execution_state_json: JSON.stringify({
+          contractHash: "sha256:contract-t20a-sched",
+          baseline: { contactsAtStart: 10 },
+          evidence: [
+            {
+              evidenceId: "ev-sched-1",
+              criterionId: "rec-1",
+              contractHash: "sha256:contract-t20a-sched",
+              executionId: seeded.executionId,
+              observedAt: "2026-10-07T00:00:00.000Z",
+              source: "scheduled_sink",
+              sourceRevision: "r1",
+              state: "pass",
+              referenceIds: ["rec-1"],
+              summary: "10 contacts saved",
+            },
+          ],
+          shadowDecision: { type: "continue" },
+        }),
+        execution_state_version: 2,
+      }
+    );
+
+    const result = await mod.finalizeScheduledExecution({
+      executionId: seeded.executionId,
+      expectedVersion: 2,
+      runId: seeded.runId,
+      scheduleId: seeded.scheduleId,
+      taskOutcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      summary: "partial run",
+      evidenceIds: ["ev-sched-final"],
+      remainingWork: ["rec-2"],
+      // T19 linkage check: must match the run row's idempotency key.
+      idempotencyKey: `scheduled-loop:${seeded.scheduleId}:1`,
+      incrementFailure: true,
+      nextRunAt: new Date(Date.now() + 60_000),
+    });
+    expect(result.ok).to.equal(true);
+
+    const exec = await execRepo.findOne({
+      where: { execution_id: seeded.executionId },
+    });
+    const parsed = JSON.parse(
+      exec?.execution_state_json ?? "{}"
+    ) as Record<string, unknown>;
+
+    // T20a core assertion: run-accumulated state survives finalization.
+    expect(parsed.contractHash).to.equal("sha256:contract-t20a-sched");
+    expect(parsed.baseline).to.deep.equal({ contactsAtStart: 10 });
+    expect(parsed.shadowDecision).to.deep.equal({ type: "continue" });
+    const evidence = parsed.evidence as Array<Record<string, unknown>>;
+    expect(evidence).to.have.lengthOf(1);
+    expect(evidence[0].evidenceId).to.equal("ev-sched-1");
+
+    // The finalization facts merged under the stable `finalization` key.
+    const checkpoint = parsed.finalization as Record<string, unknown>;
+    expect(checkpoint.outcome).to.equal("incomplete");
+    expect(checkpoint.reasonCode).to.equal("STREAM_INCOMPLETE");
+    expect(checkpoint.evidenceIds).to.deep.equal(["ev-sched-final"]);
+    expect(checkpoint.schemaVersion).to.equal(1);
+  });
 });
