@@ -55,6 +55,19 @@ class StateConflictError extends Error {
   }
 }
 
+/**
+ * T19 (FR-24, AC-32): the run/schedule/idempotency-key supplied to
+ * `finalizeScheduledExecution` does not link back to the execution row being
+ * finalized. Thrown inside the transaction so the whole finalization rolls
+ * back — no partial schedule-accounting on an unrelated schedule.
+ */
+class LinkedRecordMismatchError extends Error {
+  constructor() {
+    super("LINKED_RECORD_MISMATCH");
+    this.name = "LinkedRecordMismatchError";
+  }
+}
+
 export interface CreateExecutionInput {
   readonly conversationId: string;
   readonly sourceUserMessageId: string;
@@ -209,8 +222,21 @@ export interface FinalizeScheduledInput {
   readonly evidenceIds: readonly string[];
   readonly remainingWork: readonly string[];
   readonly idempotencyKey: string;
-  /** Failed/incomplete/timeout increments the streak; cancelled never does. */
+  /**
+   * Failed/incomplete/timeout increments the streak; cancelled never does.
+   * Legacy boolean — still honoured for backward compatibility with the
+   * ScheduledAiMessageRunner outcome mapping. When false, the streak
+   * semantics derive from `taskOutcome` (T19): verified_complete resets to
+   * 0, cancelled stays untouched, other outcomes increment.
+   */
   readonly incrementFailure: boolean;
+  /**
+   * T19: explicit success override — reset consecutive_failure_count to 0
+   * regardless of `incrementFailure`/`taskOutcome`. Callers that already
+   * know the run succeeded (e.g. a verified contract) set this true instead
+   * of relying on outcome derivation. Defaults false.
+   */
+  readonly resetStreak?: boolean;
   readonly nextRunAt: Date;
   readonly terminalStatus?: "expired" | "failed" | "stopped";
   readonly terminalReason?: string;
@@ -673,6 +699,31 @@ export class AiTaskExecutionModel extends BaseDb {
     });
     const finalEventIdentity = `execution-result:${input.executionId}`;
 
+    // T19 (FR-12/24, AC-04/05/10/15/32): three-way failure-streak semantics
+    // derived from taskOutcome. The prior `incrementFailure` boolean only
+    // encoded increment-vs-leave-untouched, so verified_complete (callers pass
+    // incrementFailure=false) LEFT the streak untouched — a failure → success
+    // → failure sequence grew the streak across the success and triggered
+    // premature REPEATED_RUN_FAILURE. The fix:
+    //   - verified_complete → reset consecutive_failure_count to 0 (success
+    //     breaks the failure streak, matching ScheduleTask.model.ts:869).
+    //   - cancelled → leave untouched (FR-12: cancellation is neither a
+    //     failure nor a success; neither reset nor increment).
+    //   - incomplete/failed/timeout/blocked_by_policy/needs_user_input →
+    //     increment (failure streak grows).
+    // `resetStreak` on the input (set explicitly by callers that want
+    // success-semantics without relying on the outcome) takes precedence;
+    // otherwise the outcome decides. `incrementFailure=true` still honoured
+    // for backward compatibility with the existing mapping at
+    // ScheduledAiMessageRunner.ts:1505 — when set it forces increment.
+    const streakMode: "reset" | "increment" | "untouched" = (() => {
+      if (input.resetStreak === true) return "reset";
+      if (input.incrementFailure) return "increment";
+      if (input.taskOutcome === "verified_complete") return "reset";
+      if (input.taskOutcome === "cancelled") return "untouched";
+      return "increment";
+    })();
+
     try {
       await executionCreateMutex.run(async () => {
         // Manually-managed QueryRunner transaction (mirrors TypeORM's own
@@ -688,6 +739,33 @@ export class AiTaskExecutionModel extends BaseDb {
         await runner.startTransaction();
         try {
           const manager = runner.manager;
+
+          // 0. T19 (FR-24, AC-32): linked-record validation — the run row
+          // must belong to this execution (exec.run_id set at create time)
+          // and to the supplied schedule, and the run's idempotency key must
+          // match the finalize input. A mismatch means the caller wired the
+          // wrong run/schedule to the execution — abort the whole transaction
+          // with LINKED_RECORD_MISMATCH and update nothing (no partial
+          // finalization, no schedule accounting). This guards against a
+          // wrong-schedule count increment that would silently corrupt the
+          // streak/next-run accounting of an unrelated schedule.
+          const runRow = await manager.findOne(AiMessageTaskRunEntity, {
+            where: { id: input.runId },
+          });
+          const scheduleRow = await manager.findOne(ScheduleTaskEntity, {
+            where: { id: input.scheduleId },
+          });
+          const linkedOk =
+            runRow !== null &&
+            scheduleRow !== null &&
+            (exec.run_id === null || exec.run_id === input.runId) &&
+            runRow.schedule_id === input.scheduleId &&
+            runRow.task_id === scheduleRow.task_id &&
+            (runRow.idempotency_key === null ||
+              runRow.idempotency_key === input.idempotencyKey);
+          if (!linkedOk) {
+            throw new LinkedRecordMismatchError();
+          }
 
           // 1. CAS-finalize the execution row (same predicate as
           // finalizeExecution so a concurrent finalizer still loses).
@@ -792,14 +870,22 @@ export class AiTaskExecutionModel extends BaseDb {
               next_run_time: input.nextRunAt,
               last_modified: new Date(),
             };
-            if (input.incrementFailure) {
+            // T19: three-way streak semantics. reset → 0 (success);
+            // increment → +1 (failure); untouched → no change (cancelled).
+            // failure_count is cumulative — only ever incremented, never
+            // reset (a success does not erase the historical failure tally).
+            if (streakMode === "increment") {
               update.failure_count = () => "failure_count + 1";
               update.consecutive_failure_count = () =>
                 "consecutive_failure_count + 1";
+            } else if (streakMode === "reset") {
+              update.consecutive_failure_count = 0;
+              // failure_count intentionally NOT reset — it tracks total
+              // failures across the schedule's lifetime, not the streak.
             }
-            // incrementFailure:false (cancelled, FR-12): the streak is left
-            // untouched — cancellation is not a failure and not a success,
-            // so neither reset nor increment.
+            // streakMode === "untouched" (cancelled, FR-12): neither reset
+            // nor increment — cancellation is not a failure and not a
+            // success, so the streak is left as-is.
             if (input.terminalStatus === "expired") {
               update.is_active = false;
               update.status = ScheduleStatus.EXPIRED;
@@ -839,6 +925,9 @@ export class AiTaskExecutionModel extends BaseDb {
       }
       if (error instanceof StateConflictError) {
         return { ok: false, reasonCode: "STATE_CONFLICT" };
+      }
+      if (error instanceof LinkedRecordMismatchError) {
+        return { ok: false, reasonCode: "LINKED_RECORD_MISMATCH" };
       }
       throw error;
     }
