@@ -12,6 +12,47 @@
           :status="planState.status"
           class="ml-2"
         />
+        <TaskExecutionStatusBadge
+          v-if="activeTaskExecution"
+          :status="activeTaskExecution.status"
+          :reason-code="activeTaskExecution.reasonCode"
+          class="ml-2"
+        />
+        <v-btn
+          v-if="
+            activeTaskExecution &&
+            activeTaskExecution.status === 'terminal' &&
+            activeTaskExecution.outcome !== 'verified_complete'
+          "
+          size="x-small"
+          variant="text"
+          icon="mdi-play"
+          :aria-label="t('aiChatV2.taskExecution.actions.continue') || 'Continue'"
+          @click="continueTaskExecution"
+        />
+        <v-btn
+          v-if="
+            activeTaskExecution &&
+            activeTaskExecution.status === 'terminal' &&
+            activeTaskExecution.outcome !== 'verified_complete'
+          "
+          size="x-small"
+          variant="text"
+          icon="mdi-refresh"
+          :aria-label="t('aiChatV2.taskExecution.actions.retry') || 'Retry'"
+          @click="retryTaskExecution"
+        />
+        <v-btn
+          v-if="
+            activeTaskExecution &&
+            activeTaskExecution.status !== 'terminal'
+          "
+          size="x-small"
+          variant="text"
+          icon="mdi-stop"
+          :aria-label="t('aiChatV2.taskExecution.actions.cancel') || 'Stop task'"
+          @click="cancelTaskExecution"
+        />
         <v-chip
           v-if="activeGoal"
           size="x-small"
@@ -850,6 +891,7 @@ import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
+import TaskExecutionStatusBadge from "./TaskExecutionStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
 import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
@@ -878,6 +920,7 @@ import {
   startGoalLoop,
   stopGoalLoop,
 } from "@/views/api/aiChatGoal";
+import { continueTask, retryTask } from "@/views/api/aiChatTaskExecution";
 import {
   parseAiGoalCommand,
   isValidLoopCount,
@@ -894,6 +937,10 @@ import {
   unsubscribeScheduledStream,
 } from "@/views/api/aiChatScheduledLoop";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
+import type {
+  AiTaskExecutionStatus,
+  TaskOutcome,
+} from "@/entityTypes/aiTaskExecutionTypes";
 import type {
   ScheduledLoopView,
   ScheduledLoopParseErrorCode,
@@ -1551,6 +1598,61 @@ async function refreshActiveGoal(): Promise<void> {
   }
 }
 
+/** Continue an incomplete task: same lineage ledger, resurrected budget
+ * (PRD FR-14, AC-27). Reuses the parent's frozen contract — never re-freezes
+ * from renderer input. Renders as a normal assistant turn once the
+ * continuation stream begins. */
+async function continueTaskExecution(): Promise<void> {
+  const parent = activeTaskExecution.value;
+  if (!parent) return;
+  const submissionId = crypto.randomUUID();
+  try {
+    const result = await continueTask({
+      parentExecutionId: parent.executionId,
+      submissionId,
+    });
+    if (result && result.status === "created" && result.executionId) {
+      // Optimistically mark continuing; the next task_execution_state chunk
+      // confirms. A reused/deduped result leaves the existing badge as-is.
+      activeTaskExecution.value = {
+        ...parent,
+        status: "continuing",
+      };
+    }
+  } catch (err) {
+    console.error("[AiChatV2] continueTask failed:", err);
+  }
+}
+
+/** Retry an incomplete task: new ledger, fresh manual-default budget, same
+ * lineage (PRD FR-14, AC-28). Like Continue, reuses the parent contract. */
+async function retryTaskExecution(): Promise<void> {
+  const parent = activeTaskExecution.value;
+  if (!parent) return;
+  const submissionId = crypto.randomUUID();
+  try {
+    const result = await retryTask({
+      parentExecutionId: parent.executionId,
+      submissionId,
+    });
+    if (result && result.status === "created" && result.executionId) {
+      activeTaskExecution.value = {
+        ...parent,
+        status: "resolving",
+      };
+    }
+  } catch (err) {
+    console.error("[AiChatV2] retryTask failed:", err);
+  }
+}
+
+/** Cancel the active task execution via the standard stream stop path
+ * (PRD FR-14: manual Stop cancels that execution, including checker/recovery).
+ * The main-process stop handler calls coordinator.cancel before abort. */
+function cancelTaskExecution(): void {
+  onStop();
+}
+
 /** Handle /loop: validate bounds + active goal, then start the loop run. */
 async function runLoopCommand(count: number | null): Promise<void> {
   const command = `/loop${count === null ? "" : ` ${count}`}`;
@@ -2104,6 +2206,8 @@ watch(activeConversationId, (id, previousId) => {
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
+  // Task execution state is per-conversation; clear on switch (PRD FR-13).
+  activeTaskExecution.value = null;
   if (id) {
     void refreshScheduledLoopStatus();
   }
@@ -2745,6 +2849,18 @@ const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 // Goal / loop state (renderer display only; authoritative state lives in main).
 const activeGoal = ref<AIChatGoalView | null>(null);
+/** Active task execution for the current conversation (renderer display only;
+ * the main process is authoritative via task_execution_state stream chunks).
+ * PRD FR-13: show checking-completion and continuing-work states. */
+type ActiveTaskExecutionView = {
+  readonly executionId: string;
+  readonly conversationId: string;
+  readonly status: AiTaskExecutionStatus;
+  readonly reasonCode?: string;
+  readonly outcome?: TaskOutcome;
+  readonly remainingWork?: string;
+};
+const activeTaskExecution = ref<ActiveTaskExecutionView | null>(null);
 /** Active scheduled loop for the current conversation (renderer display only;
  * the main process is authoritative via getScheduledLoopStatus). */
 const activeScheduledLoop = ref<ScheduledLoopView | null>(null);
@@ -2833,6 +2949,79 @@ const goalStatusDescriptor = computed(() => {
       };
     default:
       return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
+  }
+});
+const taskStatusDescriptor = computed(() => {
+  const status = activeTaskExecution.value?.status;
+  switch (status) {
+    case "resolving":
+      return {
+        color: "default",
+        icon: "mdi-dot-net",
+        label: t("aiChatV2.taskExecution.status_resolving") || "resolving",
+      };
+    case "preparing":
+      return {
+        color: "info",
+        icon: "mdi-progress-pencil",
+        label: t("aiChatV2.taskExecution.status_preparing") || "preparing",
+      };
+    case "active":
+      return {
+        color: "primary",
+        icon: "mdi-autorenew",
+        label: t("aiChatV2.taskExecution.status_active") || "working",
+      };
+    case "verifying":
+      return {
+        color: "info",
+        icon: "mdi-check-decagram",
+        label: t("aiChatV2.taskExecution.status_verifying") || "checking",
+      };
+    case "continuing":
+      return {
+        color: "primary",
+        icon: "mdi-fast-forward",
+        label: t("aiChatV2.taskExecution.status_continuing") || "continuing",
+      };
+    case "waiting_permission":
+      return {
+        color: "warning",
+        icon: "mdi-shield-account",
+        label:
+          t("aiChatV2.taskExecution.status_waiting_permission") ||
+          "awaiting permission",
+      };
+    case "waiting_input":
+      return {
+        color: "warning",
+        icon: "mdi-help-circle",
+        label: t("aiChatV2.taskExecution.status_waiting_input") || "needs input",
+      };
+    case "waiting_approval":
+      return {
+        color: "warning",
+        icon: "mdi-clock-alert",
+        label:
+          t("aiChatV2.taskExecution.status_waiting_approval") ||
+          "awaiting approval",
+      };
+    case "waiting_external_job":
+      return {
+        color: "info",
+        icon: "mdi-link-variant",
+        label:
+          t("aiChatV2.taskExecution.status_waiting_external_job") ||
+          "awaiting external job",
+      };
+    case "terminal":
+      return {
+        color: "success",
+        icon: "mdi-flag-checkered",
+        label: t("aiChatV2.taskExecution.status_terminal") || "completed",
+      };
+    default:
+      return { color: "default", icon: "mdi-circle-outline", label: status ?? "task" };
   }
 });
 const scheduledLoopDescriptor = computed(() => {
@@ -4543,6 +4732,22 @@ const onSend = async (
               },
             });
           }
+        } else if (
+          chunk.eventType === "task_execution_state" &&
+          chunk.taskExecutionState
+        ) {
+          // Task completion policy (PRD FR-13): keep the badge in sync with
+          // main-process authoritative state. Continue/Retry use the
+          // executionId once the run reaches a terminal outcome.
+          const te = chunk.taskExecutionState;
+          activeTaskExecution.value = {
+            executionId: te.executionId,
+            conversationId: te.conversationId,
+            status: te.status,
+            reasonCode: te.reasonCode,
+            outcome: te.outcome,
+            remainingWork: te.remainingWork,
+          };
         } else if (chunk.eventType === "goal_state" && chunk.goalState) {
           // Loop engine (later phase) pushes goal status; keep display in sync.
           const g = chunk.goalState;

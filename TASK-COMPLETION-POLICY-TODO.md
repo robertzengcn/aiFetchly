@@ -228,17 +228,26 @@ Engine / loop / scheduler wiring (all behind `aiTaskCompletionPolicyV1`, frozen 
 
 Renderer / i18n / tests:
 
-- [ ] **[GAP-S2] Renderer + history surfaces**: `ChatV2StreamChunk` / event→IPC / store / `AiChatV2.vue` /
-      scheduled history: Working / Checking / Continuing / waiting / Verified-Incomplete-NeedsInput-Blocked-
-      Cancelled-TimedOut states; `response_ended` never shows a task-success badge; no per-attempt duplicate
-      toasts; stale/duplicate event filtering by execution ID/generation/event ID. PRD: FR-13, FR-14, AC-16, AC-32.
-- [ ] **[GAP-S2] Six-language translations** (`en zh es fr de ja` + English fallbacks) for every new
-      state/message/action. PRD: FR-15.
-- [ ] **[GAP-S2] Component tests** (`test/vitest/main/components/`) for new status/progress/history/grant-deny/
-      run-stop-vs-schedule-stop UI; **E2E** (`test/e2e/specs/`) for plain-message manual + scheduled
-      fake-stream tool-stop-recovery, ordinary-answer no-loop, text deliverable, pause-resume-stop, reload
-      honesty, Stop-during-recovery, stale-event-after-replacement, effect-simulator-dispatched-once.
-      PRD: FR-15, §15 (test table), AC-01–08/11/15–27/29–32.
+- [x] **[GAP-S2] Renderer + history surfaces** (Slice 2 Unit 8): `ChatV2StreamChunk.taskExecutionState` +
+      `ChatV2TaskExecutionStateEvent` type (`aiTaskExecutionTypes.ts`) + `task_execution_state` chunk routing
+      in `AiChatV2.vue` (mirrors `goal_state`); `activeTaskExecution` ref + `TaskExecutionStatusBadge.vue`
+      (all 10 statuses, honest terminal labels, reason-code tooltip); Continue/Retry buttons at terminal
+      non-verified (fresh submissionId via recovery IPC, Unit 7); Stop button delegates to the existing
+      stream-stop → `coordinator.cancel` path; per-conversation reset. NOTE: the main-process
+      `task_execution_state` EMITTER is renderer-ahead wiring (ships with the scheduled-runner push in a
+      later phase — same pattern `goal_state` used); component tests drive chunks directly. Stale/duplicate
+      event filtering by executionId is deferred with the emitter. PRD: FR-13, FR-14, AC-16, AC-29/32.
+- [x] **[GAP-S2] Six-language translations** (`en zh es fr de ja` + English fallbacks) —
+      `aiChatV2.taskExecution` section: 10 status labels + actions + all 31 reason-code messages per
+      language; parity is enforced by the extended `AIChatHistoryI18n.test.ts` (any missing key in any
+      language fails). PRD: FR-15.
+- [x] **[GAP-S2] Component tests** — `TaskExecutionStatusBadge.test.ts` (labels, tooltip, te() fallbacks);
+      `AiChatV2TaskChunkRouting.test.ts` (chunk routing, button gating, Continue/Retry IPC payloads,
+      per-conversation reset). **E2E** — `scheduled-incomplete-recovery.spec.ts` (flag-off denial,
+      flag-on unknown-parent denial, malformed payload rejection on the real preload bridge) and
+      `manual-cancel-during-checking.spec.ts` (enrolled turn → Stop mid-stream → conversation recovers;
+      recovery IPC fails closed). E2E for the full scheduled badge loop + stale-event filtering lands with
+      the emitter (renderer-ahead note above). PRD: FR-15, §15 (test table), AC-24/25/27/28/29–32.
 
 Acceptance mapping (all currently failing live; Slice 2 gate requires all green):
 AC-01 (54/100 continue), AC-02 (first-response no-tool recovery), AC-03 (genuine completion, no extra maker

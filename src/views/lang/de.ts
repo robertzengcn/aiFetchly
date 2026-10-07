@@ -2625,6 +2625,67 @@ export default {
           "Für eine geplante Schleife ist ein Prompt erforderlich.",
       },
     },
+    taskExecution: {
+      status_resolving: "wird aufgelöst",
+      status_preparing: "wird vorbereitet",
+      status_active: "läuft",
+      status_verifying: "wird geprüft",
+      status_continuing: "wird fortgesetzt",
+      status_waiting_permission: "berechtigung ausstehend",
+      status_waiting_input: "eingabe erforderlich",
+      status_waiting_approval: "freigabe ausstehend",
+      status_waiting_external_job: "externer Vorgang ausstehend",
+      status_terminal: "abgeschlossen",
+      actions: {
+        continue: "Fortsetzen",
+        retry: "Erneut versuchen",
+        cancel: "Aufgabe stoppen",
+      },
+      errors: {
+        CRITERIA_SATISFIED: "Alle Abschlusskriterien wurden erfüllt.",
+        NO_PROGRESS: "Die Aufgabe machte keinen weiteren Fortschritt.",
+        CONTINUATION_LIMIT:
+          "Das Fortsetzungslimit wurde erreicht; die Aufgabe blieb unvollständig.",
+        MODEL_ATTEMPT_LIMIT:
+          "Das Modellversuchslimit wurde erreicht; die Aufgabe blieb unvollständig.",
+        TOOL_LIMIT: "Das Tool-Ausführungslimit wurde erreicht.",
+        TOKEN_LIMIT: "Das Token-Limit wurde erreicht.",
+        ACTIVE_RUNTIME_LIMIT: "Das Laufzeitlimit wurde erreicht.",
+        VERIFICATION_UNAVAILABLE:
+          "Der Abschluss konnte nicht verifiziert werden, da kein Prüfer verfügbar war.",
+        INVALID_VERIFIER_RESPONSE:
+          "Der Prüfer gab eine ungültige Antwort; Abschluss nicht verifiziert.",
+        EVIDENCE_UNAVAILABLE:
+          "Erforderliche Beweise waren nicht verfügbar; Abschluss nicht verifiziert.",
+        UNKNOWN_ACTION_OUTCOME:
+          "Eine folgenreiche Aktion hat ein unbekanntes Ergebnis und muss abgeglichen werden.",
+        INPUT_REQUIRED: "Die Aufgabe benötigt eine Eingabe, bevor sie fortgesetzt werden kann.",
+        PERMISSION_DENIED: "Eine erforderliche Berechtigung wurde verweigert.",
+        CONTENT_RESTRICTED: "Der Inhalt wurde durch die Richtlinie eingeschränkt.",
+        AI_DISABLED: "Die KI-Funktionalität ist für dieses Konto deaktiviert.",
+        AUTH_QUOTA_ERROR: "Ein Authentifizierungs- oder Kontingentfehler hat die Aufgabe gestoppt.",
+        STREAM_INCOMPLETE: "Der Stream endete bevor die Aufgabe abgeschlossen war.",
+        OUTPUT_TRUNCATED: "Die Ausgabe wurde vor dem Abschluss abgeschnitten.",
+        PERSISTENCE_FAILED: "Speichern des Aufgabenergebnisses fehlgeschlagen.",
+        STATE_CONFLICT:
+          "Der Aufgabenstatus hat sich während des Vorgangs geändert; kein Duplikat wurde geschrieben.",
+        MISSING_TASK_OUTCOME:
+          "Es wurde kein Aufgabenergebnis erfasst; die Aufgabe blieb unvollständig.",
+        SUBMISSION_CONFLICT:
+          "Ein Übermittlungskonflikt hat den Start der Aufgabe verhindert.",
+        ALREADY_FINALIZED:
+          "Die Aufgabe war bereits finalisiert; kein doppeltes Ergebnis wurde geschrieben.",
+        OPERATION_NOT_FOUND: "Der referenzierte Vorgang wurde nicht gefunden.",
+        INTENT_CONFLICT: "Eine widersprüchliche Absicht ist aktiv; die Aufgabe wurde nicht gestartet.",
+        INTENT_UNRESOLVED: "Die Aufgabenabsicht konnte nicht aufgelöst werden.",
+        PREPARATION_REQUIRED: "Vor der Ausführung der Aufgabe ist eine Vorbereitung erforderlich.",
+        USER_CANCELLED: "Die Aufgabe wurde vom Benutzer abgebrochen.",
+        TASK_REPLACED: "Die Aufgabe wurde vor Abschluss durch neue Eingabe ersetzt.",
+        SCHEDULE_STOPPED: "Der Zeitplan wurde gestoppt; die Aufgabe wurde nicht wiederholt.",
+        RESPONSE_ENDED: "Die Antwort endete bevor die Aufgabe verifiziert abgeschlossen war.",
+        SHADOW_EVALUATION: "Nur Schatten-Auswertung; kein echtes Verhalten angewendet.",
+      },
+    },
     voice: {
       microphone: "Spracheingabe",
       start_recording: "Aufnahme starten",

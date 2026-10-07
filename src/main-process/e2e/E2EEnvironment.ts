@@ -28,6 +28,7 @@ import * as os from "os";
 import * as fs from "fs";
 import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
 import { TOOL_RESULT_FLAGS } from "@/config/toolResultConfig";
+import { AI_TASK_COMPLETION_POLICY_V1_FLAG } from "@/config/featureFlags";
 
 /** The shared run-root segment that every E2E temp root must live under. */
 export const E2E_RUN_ROOT_SEGMENT = "aifetchly-e2e";
@@ -103,6 +104,9 @@ const ALLOWED_MANIFEST_KEYS: ReadonlySet<string> = new Set([
 const ALLOWED_TOKEN_OVERRIDE_KEYS: ReadonlySet<string> = new Set([
   ...Object.values(AI_CHAT_RECOVERABLE_FLAGS),
   ...Object.values(TOOL_RESULT_FLAGS),
+  // Task Completion Policy V1 (default OFF; E2E specs flip it on to exercise
+  // enrolled recovery flows — scheduled-incomplete / manual-cancel).
+  AI_TASK_COMPLETION_POLICY_V1_FLAG,
 ]);
 
 export class E2EEnvironmentError extends Error {

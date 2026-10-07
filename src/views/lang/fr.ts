@@ -2616,6 +2616,67 @@ export default {
         PROMPT_REQUIRED: "Une invite est requise pour une boucle planifiée.",
       },
     },
+    taskExecution: {
+      status_resolving: "résolution",
+      status_preparing: "préparation",
+      status_active: "en cours",
+      status_verifying: "vérification",
+      status_continuing: "reprise",
+      status_waiting_permission: "permission requise",
+      status_waiting_input: "saisie requise",
+      status_waiting_approval: "approbation requise",
+      status_waiting_external_job: "tâche externe en attente",
+      status_terminal: "terminé",
+      actions: {
+        continue: "Continuer",
+        retry: "Réessayer",
+        cancel: "Arrêter la tâche",
+      },
+      errors: {
+        CRITERIA_SATISFIED: "Tous les critères d'achèvement étaient satisfaits.",
+        NO_PROGRESS: "La tâche n'a pas progressé davantage.",
+        CONTINUATION_LIMIT:
+          "La limite de reprises a été atteinte ; la tâche est restée incomplète.",
+        MODEL_ATTEMPT_LIMIT:
+          "La limite de tentatives du modèle a été atteinte ; la tâche est restée incomplète.",
+        TOOL_LIMIT: "La limite d'exécution d'outils a été atteinte.",
+        TOKEN_LIMIT: "La limite de jetons a été atteinte.",
+        ACTIVE_RUNTIME_LIMIT: "La limite de durée d'exécution a été atteinte.",
+        VERIFICATION_UNAVAILABLE:
+          "L'achèvement n'a pas pu être vérifié faute de vérificateur disponible.",
+        INVALID_VERIFIER_RESPONSE:
+          "Le vérificateur a renvoyé une réponse invalide ; achèvement non vérifié.",
+        EVIDENCE_UNAVAILABLE:
+          "La preuve requise était indisponible ; achèvement non vérifié.",
+        UNKNOWN_ACTION_OUTCOME:
+          "Une action conséquente a un résultat inconnu et nécessite une réconciliation.",
+        INPUT_REQUIRED: "La tâche nécessite une saisie avant de continuer.",
+        PERMISSION_DENIED: "Une permission requise a été refusée.",
+        CONTENT_RESTRICTED: "Le contenu a été restreint par la politique.",
+        AI_DISABLED: "La fonctionnalité IA est désactivée pour ce compte.",
+        AUTH_QUOTA_ERROR: "Une erreur d'authentification ou de quota a arrêté la tâche.",
+        STREAM_INCOMPLETE: "Le flux s'est terminé avant la fin de la tâche.",
+        OUTPUT_TRUNCATED: "La sortie a été tronquée avant l'achèvement.",
+        PERSISTENCE_FAILED: "Échec de l'enregistrement du résultat de la tâche.",
+        STATE_CONFLICT:
+          "L'état de la tâche a changé pendant l'opération ; aucun doublon n'a été écrit.",
+        MISSING_TASK_OUTCOME:
+          "Aucun résultat enregistré ; la tâche est restée incomplète.",
+        SUBMISSION_CONFLICT:
+          "Un conflit d'envoi a empêché la tâche de démarrer.",
+        ALREADY_FINALIZED:
+          "La tâche était déjà finalisée ; aucun résultat en double n'a été écrit.",
+        OPERATION_NOT_FOUND: "L'opération référencée est introuvable.",
+        INTENT_CONFLICT: "Une intention conflictuelle est en cours ; la tâche n'a pas démarré.",
+        INTENT_UNRESOLVED: "L'intention de la tâche n'a pas pu être résolue.",
+        PREPARATION_REQUIRED: "Une préparation est nécessaire avant l'exécution de la tâche.",
+        USER_CANCELLED: "La tâche a été annulée par l'utilisateur.",
+        TASK_REPLACED: "La tâche a été remplacée par une nouvelle saisie avant son achèvement.",
+        SCHEDULE_STOPPED: "La planification a été arrêtée ; la tâche ne s'est pas répétée.",
+        RESPONSE_ENDED: "La réponse s'est terminée avant la vérification de la tâche.",
+        SHADOW_EVALUATION: "Évaluation fantôme uniquement ; aucun comportement réel appliqué.",
+      },
+    },
     voice: {
       microphone: "Saisie vocale",
       start_recording: "Commencer l'enregistrement",

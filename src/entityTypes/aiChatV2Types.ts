@@ -14,6 +14,7 @@ import type {
   ChatV2GoalEvidenceEvent,
   ChatV2GoalVerificationEvent,
 } from "@/entityTypes/aiChatGoalTypes";
+import type { ChatV2TaskExecutionStateEvent } from "@/entityTypes/aiTaskExecutionTypes";
 import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 import type {
   AIChatRecoveryLayer,
@@ -359,7 +360,8 @@ export type ChatV2StreamEventType =
   | "goal_state"
   | "goal_iteration"
   | "goal_evidence"
-  | "goal_verification";
+  | "goal_verification"
+  | "task_execution_state";
 
 export interface ChatV2StreamChunk {
   eventType: ChatV2StreamEventType;
@@ -437,6 +439,8 @@ export interface ChatV2StreamChunk {
   goalIteration?: ChatV2GoalIterationEvent;
   goalEvidence?: ChatV2GoalEvidenceEvent;
   goalVerification?: ChatV2GoalVerificationEvent;
+  // Task execution payload (present only on task_execution_state chunks).
+  taskExecutionState?: ChatV2TaskExecutionStateEvent;
 }
 
 /**

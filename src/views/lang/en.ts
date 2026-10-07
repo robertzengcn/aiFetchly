@@ -2623,6 +2623,72 @@ export default {
         PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
       },
     },
+    taskExecution: {
+      status_resolving: "resolving",
+      status_preparing: "preparing",
+      status_active: "working",
+      status_verifying: "checking",
+      status_continuing: "continuing",
+      status_waiting_permission: "awaiting permission",
+      status_waiting_input: "needs input",
+      status_waiting_approval: "awaiting approval",
+      status_waiting_external_job: "awaiting external job",
+      status_terminal: "completed",
+      actions: {
+        continue: "Continue",
+        retry: "Retry",
+        cancel: "Stop task",
+      },
+      errors: {
+        CRITERIA_SATISFIED: "All completion criteria were satisfied.",
+        NO_PROGRESS: "The task made no further progress.",
+        CONTINUATION_LIMIT:
+          "The continuation limit was reached; the task stopped incomplete.",
+        MODEL_ATTEMPT_LIMIT:
+          "The model attempt limit was reached; the task stopped incomplete.",
+        TOOL_LIMIT: "The tool execution limit was reached.",
+        TOKEN_LIMIT: "The token limit was reached.",
+        ACTIVE_RUNTIME_LIMIT: "The active runtime limit was reached.",
+        VERIFICATION_UNAVAILABLE:
+          "Completion could not be verified because no checker was available.",
+        INVALID_VERIFIER_RESPONSE:
+          "The verifier returned an invalid response; completion unverified.",
+        EVIDENCE_UNAVAILABLE:
+          "Required evidence was unavailable; completion unverified.",
+        UNKNOWN_ACTION_OUTCOME:
+          "A consequential action has an unknown outcome and needs reconciliation.",
+        INPUT_REQUIRED: "The task needs input before it can continue.",
+        PERMISSION_DENIED: "A required permission was denied.",
+        CONTENT_RESTRICTED: "The content was restricted by policy.",
+        AI_DISABLED: "AI functionality is disabled for this account.",
+        AUTH_QUOTA_ERROR: "An authentication or quota error stopped the task.",
+        STREAM_INCOMPLETE: "The stream ended before the task completed.",
+        OUTPUT_TRUNCATED: "The output was truncated before completion.",
+        PERSISTENCE_FAILED: "Saving the task result failed.",
+        STATE_CONFLICT:
+          "The task state changed during the operation; no duplicate was written.",
+        MISSING_TASK_OUTCOME:
+          "No task outcome was recorded; the task stopped incomplete.",
+        SUBMISSION_CONFLICT:
+          "A submission conflict prevented the task from starting.",
+        ALREADY_FINALIZED:
+          "The task was already finalized; no duplicate outcome was written.",
+        OPERATION_NOT_FOUND: "The referenced operation could not be found.",
+        INTENT_CONFLICT:
+          "A conflicting intent is in flight; the task was not started.",
+        INTENT_UNRESOLVED: "The task intent could not be resolved.",
+        PREPARATION_REQUIRED:
+          "Preparation is required before the task can run.",
+        USER_CANCELLED: "The task was cancelled by the user.",
+        TASK_REPLACED:
+          "The task was replaced by new input before it completed.",
+        SCHEDULE_STOPPED: "The schedule was stopped; the task did not recur.",
+        RESPONSE_ENDED:
+          "The response ended before the task was verified complete.",
+        SHADOW_EVALUATION:
+          "Shadow evaluation only; no live behavior was applied.",
+      },
+    },
     voice: {
       microphone: "Voice input",
       start_recording: "Start recording",

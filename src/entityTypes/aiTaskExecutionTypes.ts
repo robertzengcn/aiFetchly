@@ -237,6 +237,25 @@ export const TASK_EXECUTION_STATUSES = [
 ] as const;
 export type AiTaskExecutionStatus = (typeof TASK_EXECUTION_STATUSES)[number];
 
+/**
+ * Renderer-facing task execution state pushed via the `task_execution_state`
+ * stream chunk (PRD FR-13: show checking-completion and continuing-work
+ * states). Mirrors `ChatV2GoalStateEvent`: all fields readonly, main-process
+ * authoritative, renderer display only. `executionId` lets the renderer wire
+ * Continue/Retry to the parent execution (PRD FR-14).
+ */
+export interface ChatV2TaskExecutionStateEvent {
+  readonly executionId: string;
+  readonly conversationId: string;
+  readonly status: AiTaskExecutionStatus;
+  /** Terminal reason code (TASK_EXECUTION_REASON_CODES) when status is terminal. */
+  readonly reasonCode?: string;
+  /** Honest outcome (TaskOutcome) when finalized. */
+  readonly outcome?: TaskOutcome;
+  /** Human-readable remaining work / blocker summary (PRD FR-13). */
+  readonly remainingWork?: string;
+}
+
 export const TASK_EXECUTION_LEDGER_STATUSES = [
   "active",
   "released",
