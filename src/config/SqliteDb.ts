@@ -464,7 +464,22 @@ function normalizeDbDir(filepath: string): string {
 }
 
 function isTestFallbackDir(filepath: string): boolean {
-  return normalizeDbDir(filepath) === getSqliteTestFallbackDir();
+  const normalized = normalizeDbDir(filepath);
+  if (normalized === getSqliteTestFallbackDir()) {
+    return true;
+  }
+  // resolveTestDbPath() (@/config/testDbPath) namespaces the fallback dir per
+  // vitest worker (`aifetchly-test-<VITEST_POOL_ID>`) so concurrent workers
+  // don't share one SQLite file. Recognize those suffixed dirs too — otherwise
+  // the getInstance guard below never fires for them, and any empty-path
+  // BaseDb/BaseModule construction under vitest resets (and fire-and-forget
+  // destroys) the live DataSource mid-test, leaving repositories bound to the
+  // destroyed connection (EntityMetadataNotFoundError on next use).
+  const fallbackParent = path.dirname(getSqliteTestFallbackDir());
+  return (
+    path.dirname(normalized) === fallbackParent &&
+    /^aifetchly-test(-\d+)?$/.test(path.basename(normalized))
+  );
 }
 
 /**
@@ -770,6 +785,7 @@ export class SqliteDb {
       console.log(
         `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${normalized}, resetting instance...`
       );
+
       // Destroy old connection asynchronously (fire and forget)
       // The old instance will be replaced immediately with a new one
       const oldInstance = SqliteDb.instance;
