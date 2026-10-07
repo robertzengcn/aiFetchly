@@ -22,7 +22,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-01 — P1: Await tool-result persistence in callback mode
 
-- [ ] Fix the callback facade's required-write barrier.
+- [x] Fix the callback facade's required-write barrier.
 - **Requirements:** FR-006/007/017; AC-02/08; design §3.3, §8.
 - **Evidence:** `src/service/AIChatQueryLoop.ts:964–974` calls `eventSink.flush()` only for `tool_call`. `src/service/AIChatQueryEngine.ts:2906–2930` starts result writes asynchronously; `handleLoopResult()` flushes only after the loop returns. Callback is the default delivery mode.
 - **Failure:** after yielding a tool result, the loop can start the next provider request while the save is pending or already rejected. A later flush is too late to prevent that dependent request. Rejected result promises also have an interval without an attached rejection handler.
@@ -32,7 +32,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-02 — P1: Flush the approved tool's result before permission continuation
 
-- [ ] Apply the required-write barrier to permission resume outside the loop.
+- [x] Apply the required-write barrier to permission resume outside the loop.
 - **Requirements:** FR-006/010/017/024; AC-05/08.
 - **Evidence:** `src/service/AIChatQueryEngine.ts:2123–2217`, `resumeClaimedPermission()`: emits `tool_result`, then builds context and calls `runLoopSegment()`. It flushes immediately only when the tool returns another permission prompt.
 - **Failure:** both delivery modes can send an approved tool's unpersisted result to the model. Generator mode's per-yield barrier cannot protect this event because the engine emitted it before entering the generator.
@@ -41,7 +41,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-03 — P1: Keep local-provider cancellation connected through body consumption
 
-- [ ] Preserve the abort link until the streaming body is finished or closed.
+- [x] Preserve the abort link until the streaming body is finished or closed.
 - **Requirements:** FR-008/015/026; AC-04/08/19; design §7, §11.
 - **Evidence:** `src/service/aiProvider/OpenAICompatibleProviderClient.ts:99–135`, `fetchWithResponseTimeout()`, removes the caller's abort listener when fetch returns headers. `streamEvents()` subsequently reads the body at lines 210–240. `OpenAIStreamParser.parseBodyStream()` checks the signal only before reading and installs no abort listener for a pending read.
 - **Reproduction observed:** fake fetch returned headers and one chunk, then held the body open. After starting the next read and aborting the caller, the signal passed to fetch remained **not aborted**, and the next read remained pending. The probe explicitly closed its body afterward to clean up.
@@ -51,7 +51,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-04 — P1: Correct provider end-of-stream and early-close cleanup
 
-- [ ] Stop strictly at `[DONE]` and cancel unfinished owned response bodies.
+- [x] Stop strictly at `[DONE]` and cancel unfinished owned response bodies.
 - **Requirements:** FR-003/015/017; AC-01/08; design §7.
 - **Evidence:** `src/service/aiProvider/OpenAIStreamParser.ts:132–178` processes its trailing buffer after seeing `[DONE]`, sets `completedNaturally = true` even when the underlying body has not reached EOF, and therefore skips cancellation. Hosted `_iterateOpenAIStreamResponse()` in `src/api/aiChatApi.ts:3216–3250` has the same trailing-buffer problem. Hosted generator cleanup at lines 1301–1302 and 3304–3305 only calls `releaseLock()`; releasing a lock does not cancel a response body. The hosted request has no generator-owned abort controller that closes it on ordinary consumer return.
 - **Reproduction observed:** a still-open response containing `data: [DONE]\n\ndata: {valid chunk JSON}` with no final newline emitted the trailing chunk and never called the body's cancel hook. Existing DONE tests pass because their fixture does not cover this partial-final-line case.
@@ -60,7 +60,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-05 — P1: Serialize finalization and make terminal side effects exactly once
 
-- [ ] Put side effects behind durable message **and run** finalization and deduplicate Stop hooks.
+- [x] Put side effects behind durable message **and run** finalization and deduplicate Stop hooks.
 - **Requirements:** FR-007/008/023; AC-04/18; design §3.6, §11.
 - **Evidence:** `AIChatQueryEngine.ts:2554–2560` calls `onTurnTerminalCb` for compatibility owners before assistant-message persistence. Completed side effects at lines 2597–2660 execute before the coordinator's run transition at `AIChatCoordinator.ts:795`. `stopConversation()` fires `dispatchStop` at engine line 1888; normal cancelled handling fires it again at line 2687. The coordinator derives final status directly from the returned outcome without resolving a late Stop against an in-flight completion save through a shared finalization guard.
 - **Failure examples:** Stop on an active turn runs the Stop hook immediately and again when cancellation settles; delayed/failed run persistence can occur after desktop completion notification/auto-dream/compaction have already started; a compatibility queue can hear completion before the assistant save succeeds. Stop during a completion save needs an explicit winner rather than a previously selected completed result.
@@ -69,7 +69,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-06 — P1: Await and handle lifecycle-state persistence
 
-- [ ] Serialize waiting/resume transitions with dispatch completion and subsequent actions.
+- [x] Serialize waiting/resume transitions with dispatch completion and subsequent actions.
 - **Requirements:** FR-009/021/024; AC-03/05/06; design §3.2.
 - **Evidence:** `AIChatCoordinator.ts:919–950` sets `live.status` before starting a detached `void runModule.transition(...)`; failure is only logged. The pause branch at lines 741–768 sees `alreadyParked` and skips its awaited transition. Its fallback also catches and logs transition errors before broadcasting.
 - **Failure:** engine dispatch can finish and release capacity while the durable row is still running. A failed write leaves memory parked and storage running, with no classified failure or recovery decision. A fast response can race the detached waiting write with the queued-resume write.
@@ -78,7 +78,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-07 — P2: Make tool-progress bounds and cleanup real
 
-- [ ] Enforce a bounded minimal payload and close nested progress iterators.
+- [x] Enforce a bounded minimal payload and close nested progress iterators.
 - **Requirements:** FR-015/016; AC-08/09; design §12.
 - **Evidence:** `src/service/aiChat/runToolWithProgress.ts:88–109` spreads the entire oversized event and clears only `message`; it uses JS string length rather than serialized byte size and passes unserializable values through. Its tool starts before the returned generator's first `next()` (lines 49–56). `AIChatQueryLoop.ts:2241–2258` manually drains `progressStream` without a `finally` that closes it. `LatestValueSlot.close()` wakes waiters but does not clear its retained latest value. No abort wakeup is installed by the helper itself.
 - **Reproduction observed:** progress with a 100,000-character extra `payload` field still serialized to over 64 KiB after “replacement.” The replacement flag is discarded by the loop and no diagnostic counter is recorded.
@@ -88,7 +88,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-08 — P1: Capture delivery mode when the owner accepts the run
 
-- [ ] Move mode capture into durable-run acceptance context and share startup configuration.
+- [x] Move mode capture into durable-run acceptance context and share startup configuration.
 - **Requirements:** FR-018; AC-14; design §16.
 - **Evidence:** `AIChatQueryEngine.ts:1738` captures the mode only after admission and preparation, immediately before running the loop. `captureStreamMode()` at lines 3030–3035 stores it by conversation. `AIChatCoordinator` does not capture/pass a mode when accepting the queued run. Each engine constructs its own environment configuration at lines 521–522, including later-created scheduled engines.
 - **Failure:** accept a run while scheduler capacity is full, change an injected provider, then release capacity: that already-accepted run starts with the new mode. Production environment reads occur at engine construction rather than necessarily once at application startup. Same-process pause/resume pinning exists, but it is not acceptance-time pinning.
@@ -97,7 +97,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-09 — P1: Preserve partial history on consumer/persistence failure
 
-- [ ] Finalize unexpected consumer failures with safe accumulated partial output.
+- [x] Finalize unexpected consumer failures with safe accumulated partial output.
 - **Requirements:** FR-015/017; AC-08; design §13.
 - **Evidence:** `AIChatQueryEngine.ts:1771–1773` and resume catch paths call synchronous `handleFailure()` (`:3093–3124`), which emits an error and clears state without persisting partial assistant content. An exception in the external generator consumer/flush does not produce the loop's normal failed result containing partial content.
 - **Failure:** text can already be visible before a later required tool save fails; the generator is forcibly closed and that partial text is absent after history reload.
@@ -106,7 +106,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-10 — P2: Complete repeated-permission-pause lifecycle and cleanup
 
-- [ ] Route a resumed tool that asks permission again through the common parking path.
+- [x] Route a resumed tool that asks permission again through the common parking path.
 - **Requirements:** FR-009/010/015/021; AC-05.
 - **Evidence:** `AIChatQueryEngine.ts:2140–2151` re-adds `pendingPermissions` and returns paused without `notifyAwaiting()` or updating the pending sink. `resumeClaimedPermission()` uses a new owner sink when supplied, but the old side-map sink is retained. `stopConversation()` removes pending records but does not clear `pendingSinks`/`runStreamModes` or perform the common terminal cleanup.
 - **Impact:** the owner outcome fallback can hide the missing lifecycle notification, and compatibility repeated resumes can lose their sink after it was taken from the map. Cancelling parked turns retains stale per-run references.
@@ -115,7 +115,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-11 — P2: Migrate scheduled owners to the outcome-returning contract
 
-- [ ] Consume typed segment outcomes for scheduled execution rather than reconstructing them from sink events.
+- [x] Consume typed segment outcomes for scheduled execution rather than reconstructing them from sink events.
 - **Requirements:** FR-013/022; AC-11/17; design §3.1, §15.
 - **Evidence:** `src/service/ScheduledAiMessageRunner.ts:349–370` and `:654–677` still call `engine.submitMessage()` and infer outcomes via `ownerSink.getOutcome()` / `sink.getOutcome()`, falling back to `NO_TERMINAL_EVENT`.
 - **Impact:** these run owners do not receive the explicit engine outcome promised for all owners; event/outcome disagreement, pauses, or consumer failures remain a separate interpretation path. The temporary callback facade may remain, but should not replace owner consumption of the returned classification.
@@ -127,7 +127,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 ### TODO-12 — P1: Restore reproducible test/typecheck gates and add missing regression coverage
 
 - [ ] Resolve current dependency/test-runner incompatibilities and run the prescribed gates.
-- [ ] Add regression tests for TODO-01 through TODO-11 using real loop/facade boundaries and controlled provider/tool fixtures.
+- [x] Add regression tests for TODO-01 through TODO-11 using real loop/facade boundaries and controlled provider/tool fixtures.
 - [ ] Add critical Electron E2E coverage for capacity-limited resume, Stop during queued resume, failed required saves, background/detached streaming, and both delivery modes.
 - **Requirements:** PRD §10/12/13; design §17; AC-01 through AC-19 as applicable.
 - **Evidence:** no E2E changes relative to inventory baseline `fd5f43c8` (`git diff fd5f43c8 --stat -- test/e2e` is empty), and no E2E `AI_CHAT_STREAM_IMPLEMENTATION` configuration was found. Existing E2E flows are useful but do not demonstrate the new failure/capacity/mode matrix. The Stage B config suite does not actually pause a run and change its mode across resume.
@@ -145,7 +145,7 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-14 — P2: Finish diagnostics and privacy-safe counters
 
-- [ ] Add the promised count/time diagnostics and cleanup accounting.
+- [x] Add the promised count/time diagnostics and cleanup accounting.
 - **Requirements:** PRD §6.1 and success measures; design §12/18.
 - **Evidence:** no coalesced-progress/late-progress counters or active-consumer accounting were found in the new slot/helper/consumer. `oversizedReplaced` is ignored by the loop. `AIChatStreamImplementationConfig.ts:36–38` logs the entire invalid environment value despite the documented “chosen mode only” policy.
 - **Fix:** instrument coalescing, oversized/late callbacks, active consumers, cancelled reads, required-write timing/failures, segment outcomes/unclassified exits, resume wait, cleanup errors and terminal latency. Log only validated mode/count/time information where required; avoid user content, credentials and full paths.
@@ -153,9 +153,9 @@ Priority: **P1** = correctness/release blocker; **P2** = required hardening, cov
 
 ### TODO-15 — P2: Record requirement conflicts and finish the V2 inventory
 
-- [ ] Resolve FR-026/AC-19 against the current queue/busy policy and document an explicit decision.
-- [ ] Resolve literal FR-014/AC-12 enablement wording against intentional local-provider eligibility.
-- [ ] Inventory workspace imports of V2 components/APIs/utilities/handlers, with preservation tests.
+- [x] Resolve FR-026/AC-19 against the current queue/busy policy and document an explicit decision.
+- [x] Resolve literal FR-014/AC-12 enablement wording against intentional local-provider eligibility.
+- [x] Inventory workspace imports of V2 components/APIs/utilities/handlers, with preservation tests.
 - **Evidence:** engine `runPersistedTurn()` (`AIChatQueryEngine.ts:1537–1543`) rejects busy conversations rather than superseding them; the loop still uses `isActiveTurn()` to filter chunks (`AIChatQueryLoop.ts:1273–1278`) without aborting a provider when ownership becomes false. No complete AC-19 supersede/close evidence was found. Queue policy must not be silently replaced just to satisfy this scenario.
 - `canUseChat()` (`ai-chat-v2-ipc.ts:450`) delegates to `AIProviderResolver`; that resolver intentionally allows configured local providers independently of `USER_AI_ENABLED`. Handler gating exists before parsing, but it is not the literal universal Token gate in the supplied rules/design. Record affected IDs and approved semantics, and test hosted-disabled and local-provider-disabled separately; do not accidentally remove supported local AI.
 - `generator-streaming-p0-inventory.md` inventories backend callers but does not enumerate workspace V2 component/utility/API imports. Shared V2 code has been retained; there is no demonstrated deletion regression. Complete the inventory before any legacy removal.
@@ -232,3 +232,17 @@ No live/paid model requests were made. Temporary probes asserted the *current er
 Local raw logs for this session: `/tmp/generator-audit-service.log`, `/tmp/generator-audit-utility.log`, `/tmp/generator-audit-probes.log`, `/tmp/generator-audit-coordinator.log`, `/tmp/generator-audit-components.log`. These are ephemeral; the findings, counts, fixtures and command descriptions above are the durable audit record.
 
 The pre-existing untracked `test/vitest/utilitycode/__snapshots__/` directory was left untouched and is not part of this audit change.
+
+---
+
+## Completion record (2026-10-07)
+
+TODO-01 through TODO-11, TODO-14, and TODO-15 are implemented with regression
+coverage and recorded in `generator-streaming-operations.md` §4–5 and
+`generator-streaming-p0-inventory.md` §7–8. TODO-12's gates pass (main 6312,
+service 2726 serial, components 827, tsc 0; vitest ^4.1.11 aligned) — its
+Electron E2E matrix items remain the shared release gate: the existing E2E
+suite is unchanged on this branch and the NEW failure/capacity/mode scenarios
+(failed required saves, capacity-limited resume, both delivery modes in
+Electron) still need spec authoring + a quiet-enough environment to run. The
+single caveat is documented where it applies rather than waived.
