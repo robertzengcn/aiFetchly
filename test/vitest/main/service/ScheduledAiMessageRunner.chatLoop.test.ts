@@ -48,10 +48,20 @@ function createMockClass<T extends object>(
   return cls;
 }
 
+const testDbDir = vi.hoisted(() => () => {
+  // Pool-namespaced test DB (resolveTestDbPath pattern): a fixed
+  // /tmp/test-db made two workers' DataSource.synchronize collide
+  // on the same SQLite file ("database is locked") in shared runs.
+  const os = require("os") as typeof import("os");
+  const path = require("path") as typeof import("path");
+  const poolId = process.env.VITEST_POOL_ID ?? "0";
+  return path.join(os.tmpdir(), "aifetchly-test", poolId, "scraper.db");
+});
+
 vi.mock("@/modules/token", () => ({
   Token: createMockClass(() => ({
     getValue: vi.fn((key: string) =>
-      key === "user_ai_enabled" ? aiEnabled.value : "/tmp/test-db"
+      key === "user_ai_enabled" ? aiEnabled.value : testDbDir()
     ),
   })),
 }));
