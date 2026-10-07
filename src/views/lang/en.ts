@@ -1201,6 +1201,41 @@ export default {
     style_notes: "Style Notes",
     forbidden_phrases: "Forbidden Phrases (comma-separated)",
     disclose_automation: "Disclose AI assistance",
+    // FR-033: stable refusal-code labels for the future UI (T10 surfaces these
+    // in the audit list / refusal banners). Model-facing tool descriptions stay
+    // English; these are the user-facing translations keyed by policy code.
+    policyCode: {
+      already_replied: "Already replied",
+      reply_in_progress: "Reply in progress",
+      generation_in_progress: "Generation in progress",
+      reply_state_conflict: "Reply state conflict",
+      reply_state_unknown: "Reply state unknown",
+      needs_human_review: "Needs human review",
+      delivery_unknown: "Delivery unknown",
+      unsupported_protocol: "Unsupported protocol (POP3)",
+      missing_message_id: "Missing message id",
+      receive_unavailable: "Receive unavailable",
+      sent_folder_unavailable: "Sent folder unavailable",
+      ambiguous_match: "Ambiguous match",
+      identity_conflict: "Identity conflict",
+      probe_timeout: "Probe timeout",
+      probe_limit_exceeded: "Probe limit exceeded",
+      probe_failed: "Probe failed",
+      no_reply_observed: "No reply observed",
+    },
+    // FR-032: check_email_replied tool UI labels (T10 surfaces the three-state
+    // detection result in the message detail / audit views).
+    replyDetection: {
+      state_replied: "Replied",
+      state_not_replied: "Not replied",
+      state_unknown: "Unknown",
+      checked_at: "Checked at",
+      from_cache: "From cache",
+      coverage_local_only: "Local only",
+      coverage_configured_imap: "Configured IMAP",
+      coverage_partial: "Partial",
+      check_button: "Check reply status",
+    },
   },
   emailAutoReplyAudit: {
     title: "AI Auto Replies",

@@ -80,6 +80,16 @@ export const markEmailProcessedSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 
+/**
+ * FR-032: diagnostic reply-check tool. Returns the three-state detection
+ * evidence (replied / not_replied / unknown) for a stored inbound message.
+ * Read-only — does not mutate the mailbox and needs no confirmation. Ordinary
+ * cache behavior (no forceRefresh) per §7.3.
+ */
+export const checkEmailRepliedSchema = z.object({
+  message_id: emailReceiveId,
+});
+
 // ---- Result DTOs (no secrets, no raw credentials) ----
 
 /** Summary of a receive-enabled inbox. No passwords/tokens. */

@@ -62,6 +62,7 @@ import {
   markEmailProcessed,
   createEmailReplyDraft,
   sendEmailReply,
+  checkEmailReplied,
 } from "@/service/EmailReceiveAiTools";
 import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 import {
@@ -2501,6 +2502,39 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "check_email_replied",
+    description:
+      "Diagnostic tool: check whether an inbound message already has a reply. Returns a three-state " +
+      "typed result — `replied` (a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
+      "complete negative across all required sources within the cache window), or `unknown` (inconclusive: " +
+      "POP3, config-unavailable, missing identity, partial/failed search, folder-auth error, timeout, " +
+      "exhausted bounds). An unknown is NEVER a negative. Read-only — does not mutate the mailbox and " +
+      "needs no confirmation; the local detection cache/read audit may update. The same detector enforces " +
+      "reply safety before draft generation and before SMTP, so tool invocation is not a prerequisite for " +
+      "safety. AI must be enabled. Requires message_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id to check for an existing reply.",
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await checkEmailReplied(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "shell_execute",
     description:
       "Execute a local shell command with explicit user confirmation and safety controls. " +
@@ -4237,7 +4271,14 @@ const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
  * They are the only way the model can reach an output it was just told about.
  * If a receipt names an output_id but the reader sits behind a discovery tool,
  * the model cannot act on the reference and will report the data as missing.
+ *
+ * NOTE: currently referenced only for documentation/derivation purposes — the
+ * retrieval tools are registered unconditionally as core tools (see
+ * `isCoreTool`), so this set is not yet consulted by a `has(skill.name)` gate.
+ * Underscore prefix keeps eslint's no-unused-vars satisfied until a future
+ * change adds the gate that consumes it.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_RESULT_READ_TOOL_NAME,
   TOOL_RESULT_SEARCH_TOOL_NAME,

@@ -6,6 +6,8 @@ import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
+import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
 import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
@@ -26,6 +28,7 @@ import {
   markEmailProcessedSchema,
   createEmailReplyDraftSchema,
   sendEmailReplySchema,
+  checkEmailRepliedSchema,
 } from "@/entityTypes/emailReceiveAiTypes";
 import type {
   EmailReceiveAiToolResult,
@@ -56,6 +59,20 @@ function validationFailure(error: ZodError) {
 
 function failure(error: unknown) {
   return { success: false as const, error: formatError(error) };
+}
+
+/**
+ * Default AI feature gate for the diagnostic reply-check tool (FR-032).
+ * Lazy-reconciles once when currently disabled (PRD FR-6.1), then re-reads the
+ * flag. GET failures keep the cache, so a Community user is never falsely
+ * unlocked. Mirrors {@link KnowledgeLibraryAiTools.defaultIsAiEnabled}.
+ */
+async function defaultIsAiEnabled(): Promise<boolean> {
+  try {
+    return await ensureHostedAiEnabled();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -438,6 +455,87 @@ export async function sendEmailReply(args: unknown): Promise<
     return error instanceof ZodError
       ? validationFailure(error)
       : failure(error);
+  }
+}
+
+// ---- check_email_replied ----
+
+/**
+ * FR-032: diagnostic reply-check tool. Runs the shared §7.1 detection
+ * algorithm (ordinary cache, no forceRefresh) and returns the three-state
+ * typed result as a snake_case DTO. Read-only — does not mutate the mailbox
+ * and needs no confirmation; local cache/read audit may update.
+ *
+ * AI-enable is checked at the tool boundary BEFORE input parsing or Module
+ * creation (FR-6.1). Disabled → `{ success: false, error: "AI feature is not
+ * enabled" }` with no detection work performed.
+ *
+ * Never leaks credentials, raw provider errors, bodies, or internal exception
+ * details — the DTO carries only low-cardinality codes, booleans, timestamps,
+ * and the matched message id (FR-039).
+ */
+export async function checkEmailReplied(args: unknown): Promise<
+  EmailReceiveAiToolResult<{
+    message_id: number;
+    state: "replied" | "not_replied" | "unknown";
+    replied: boolean | null;
+    source: string;
+    reason_code: string;
+    matched_message_id: string | null;
+    checked_at: string | null;
+    from_cache: boolean;
+    coverage: string;
+  }>
+> {
+  // AI-enable check at the boundary (FR-6.1): before parsing request data or
+  // constructing any Module. A disabled-AI caller gets no detection work.
+  if (!(await defaultIsAiEnabled())) {
+    return { success: false, error: "AI feature is not enabled" };
+  }
+  let messageId: number;
+  try {
+    const input = checkEmailRepliedSchema.parse(args);
+    messageId = input.message_id;
+  } catch (error) {
+    return error instanceof ZodError
+      ? validationFailure(error)
+      : failure(error);
+  }
+  // Verify the seed message exists BEFORE detection (the detector needs the
+  // row to resolve the account + identity). Missing → typed failure, no
+  // detection probe.
+  const messageModule = new EmailReceivedMessageModule();
+  await messageModule.ensureConnection();
+  const msg = await messageModule.read(messageId);
+  if (!msg) {
+    return { success: false, error: "Message not found" };
+  }
+  try {
+    const detectionModule = new EmailReplyDetectionModule();
+    const outcome = await detectionModule.checkReply({ messageId });
+    if (!outcome.success || !outcome.result) {
+      // Persistence/detection failure — sanitize via the bounded error string
+      // the service already produced (no raw provider errors, no credentials).
+      return { success: false, error: outcome.error ?? "Reply detection failed" };
+    }
+    // Carry the safe DTO fields through the tool envelope. The detection
+    // service already mapped the result to snake_case; pass it through verbatim
+    // (no English parsing, no code recovery).
+    const dto = outcome.result;
+    return {
+      success: true,
+      message_id: dto.message_id,
+      state: dto.state,
+      replied: dto.replied,
+      source: dto.source,
+      reason_code: dto.reason_code,
+      matched_message_id: dto.matched_message_id,
+      checked_at: dto.checked_at,
+      from_cache: dto.from_cache,
+      coverage: dto.coverage,
+    };
+  } catch (error) {
+    return failure(error);
   }
 }
 

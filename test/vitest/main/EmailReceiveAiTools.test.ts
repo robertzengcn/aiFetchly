@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock heavy dependencies that the registry pulls in transitively, so the test
 // can load skillsRegistry without a live DB / Electron / vector store.
@@ -16,6 +16,21 @@ const draftGenStub = { createDraft: vi.fn() };
 const deliveryStub = { sendApprovedReply: vi.fn() };
 const approvalStub = { approveDraft: vi.fn() };
 const draftModuleStub = { ensureConnection: vi.fn(), read: vi.fn() };
+
+// FR-032 check_email_replied stubs: the tool layer constructs these via
+// `new ModuleName()` before calling checkReply/read. Each is a function
+// declaration returning the stub object so `new` works.
+const detectionModuleStub = {
+  ensureConnection: vi.fn(),
+  checkReply: vi.fn(),
+};
+const messageModuleStub = {
+  ensureConnection: vi.fn(),
+  read: vi.fn(),
+};
+// AI-enable gate (FR-6.1): default true so happy-path tests proceed; the
+// disabled-AI test flips this to false.
+let aiEnabled = true;
 
 vi.mock("@/service/emailReply/EmailReplyDraftGenerationService", () => ({
   EmailReplyDraftGenerationService: function () {
@@ -37,6 +52,21 @@ vi.mock("@/modules/EmailReplyDraftModule", () => ({
     return draftModuleStub;
   },
 }));
+vi.mock("@/modules/EmailReplyDetectionModule", () => ({
+  EmailReplyDetectionModule: function () {
+    return detectionModuleStub;
+  },
+}));
+vi.mock("@/modules/EmailReceivedMessageModule", () => ({
+  EmailReceivedMessageModule: function () {
+    return messageModuleStub;
+  },
+}));
+vi.mock("@/service/AiFeatureGate", () => ({
+  // The tool's defaultIsAiEnabled() reads this; the disabled-AI test
+  // flips the handle to false.
+  ensureHostedAiEnabled: () => Promise.resolve(aiEnabled),
+}));
 vi.mock("@/config/featureFlags", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/featureFlags")>();
   return {
@@ -49,6 +79,7 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import {
   createEmailReplyDraft,
   sendEmailReply,
+  checkEmailReplied,
 } from "@/service/EmailReceiveAiTools";
 import {
   SendPolicyRejection,
@@ -322,5 +353,228 @@ describe("sendEmailReply — stable refusal envelope (FR-033)", () => {
     if (!result.success) return;
     expect(result.draft_id).toBe(14);
     expect(result.sent_at).toBe("2026-10-05T00:00:00.000Z");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// check_email_replied (FR-032) — diagnostic reply-check tool
+// ---------------------------------------------------------------------------
+
+describe("check_email_replied — registration (FR-032)", () => {
+  it("registers as a built-in read tool with NO confirmation", () => {
+    const skill = SkillRegistry.getSkill("check_email_replied");
+    expect(skill).not.toBeNull();
+    expect(skill!.source).toBe("built-in");
+    expect(skill!.tier).toBe("main");
+    expect(skill!.permissionCategory).toBe("network");
+    expect(skill!.requiresConfirmation).toBe(false);
+    expect(skill!.parameters.required).toContain("message_id");
+    expect(typeof skill!.execute).toBe("function");
+  });
+
+  it("advertises check_email_replied to the LLM", async () => {
+    const fns = await SkillRegistry.getAllToolFunctions();
+    const names = new Set(fns.map((f) => (f as { name: string }).name));
+    expect(names.has("check_email_replied")).toBe(true);
+  });
+});
+
+describe("checkEmailReplied — three-state happy path (FR-032)", () => {
+  // Seed-message row the tool's existence check returns. Only the fields the
+  // tool reads (id) matter; detection is fully mocked.
+  function stubMessageExists(messageId: number): void {
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    messageModuleStub.read.mockResolvedValue({ id: messageId, emailServiceId: 1 });
+    detectionModuleStub.ensureConnection.mockResolvedValue(undefined);
+  }
+
+  it("surfaces state=replied (positive, sticky) with matched_message_id", async () => {
+    stubMessageExists(101);
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 101,
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        reason_code: "already_replied",
+        matched_message_id: "<outgoing-123@svc.com>",
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: true,
+        coverage: "configured_imap",
+      },
+    });
+    const result = await checkEmailReplied({ message_id: 101 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message_id).toBe(101);
+    expect(result.state).toBe("replied");
+    expect(result.replied).toBe(true);
+    expect(result.reason_code).toBe("already_replied");
+    expect(result.matched_message_id).toBe("<outgoing-123@svc.com>");
+    expect(result.from_cache).toBe(true);
+    expect(result.coverage).toBe("configured_imap");
+  });
+
+  it("surfaces state=not_replied (complete negative) with no_reply_observed", async () => {
+    stubMessageExists(102);
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 102,
+        state: "not_replied",
+        replied: false,
+        source: "sent_search",
+        reason_code: "no_reply_observed",
+        matched_message_id: null,
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: false,
+        coverage: "configured_imap",
+      },
+    });
+    const result = await checkEmailReplied({ message_id: 102 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.state).toBe("not_replied");
+    expect(result.replied).toBe(false);
+    expect(result.reason_code).toBe("no_reply_observed");
+    expect(result.matched_message_id).toBeNull();
+  });
+
+  it("surfaces state=unknown (inconclusive) with replied=null and a typed code", async () => {
+    stubMessageExists(103);
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 103,
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        reason_code: "sent_folder_unavailable",
+        matched_message_id: null,
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: false,
+        coverage: "partial",
+      },
+    });
+    const result = await checkEmailReplied({ message_id: 103 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.state).toBe("unknown");
+    expect(result.replied).toBeNull();
+    expect(result.reason_code).toBe("sent_folder_unavailable");
+    expect(result.coverage).toBe("partial");
+  });
+});
+
+describe("checkEmailReplied — boundary failures (FR-032)", () => {
+  beforeEach(() => {
+    aiEnabled = true;
+    // Mock call counts leak across describe blocks (the happy-path suite
+    // above calls checkReply/read). Reset before each boundary test so the
+    // `not.toHaveBeenCalled()` assertions are authoritative.
+    vi.clearAllMocks();
+  });
+
+  it("returns {success:false} when AI is disabled BEFORE any Module is constructed", async () => {
+    // FR-6.1: the AI-enable gate runs before parsing and before any Module.
+    // No detection work should happen — assert checkReply is never reached.
+    aiEnabled = false;
+    detectionModuleStub.checkReply.mockResolvedValue({ success: true });
+    messageModuleStub.read.mockResolvedValue({ id: 1 });
+    const result = await checkEmailReplied({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("AI feature is not enabled");
+    expect(detectionModuleStub.checkReply).not.toHaveBeenCalled();
+    expect(messageModuleStub.read).not.toHaveBeenCalled();
+  });
+
+  it("returns {success:false} when the seed message is missing (no detection probe)", async () => {
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    messageModuleStub.read.mockResolvedValue(null);
+    const result = await checkEmailReplied({ message_id: 999 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("Message not found");
+    expect(detectionModuleStub.checkReply).not.toHaveBeenCalled();
+  });
+
+  it("returns {success:false} on a detection persistence failure (no raw errors leaked)", async () => {
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    messageModuleStub.read.mockResolvedValue({ id: 5, emailServiceId: 1 });
+    detectionModuleStub.ensureConnection.mockResolvedValue(undefined);
+    // The service already sanitizes to a bounded error string.
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: false,
+      error: "Reply detection failed",
+    });
+    const result = await checkEmailReplied({ message_id: 5 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("Reply detection failed");
+    // No code/matched_message_id leakage on a failure envelope.
+    expect(result.code).toBeUndefined();
+  });
+
+  it("returns a validation failure on bad input (no detection work)", async () => {
+    const result = await checkEmailReplied({ message_id: "not-a-number" });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.validation_errors).toBeDefined();
+    expect(detectionModuleStub.checkReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkEmailReplied — no-leak invariant (FR-039)", () => {
+  // The DTO must never carry credentials, raw provider errors, bodies, or
+  // internal exception details — only low-cardinality codes, booleans,
+  // timestamps, and the matched message id. Assert the safe field set on a
+  // successful result and confirm no secret-shaped keys appear.
+  it("carries only safe low-cardinality fields on a replied result", async () => {
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    messageModuleStub.read.mockResolvedValue({ id: 7, emailServiceId: 1 });
+    detectionModuleStub.ensureConnection.mockResolvedValue(undefined);
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 7,
+        state: "replied",
+        replied: true,
+        source: "mailbox_flag",
+        reason_code: "already_replied",
+        matched_message_id: "<outgoing-7@svc.com>",
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: true,
+        coverage: "local_only",
+      },
+    });
+    const result = await checkEmailReplied({ message_id: 7 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const keys = Object.keys(result);
+    // Allowlisted safe fields only — no password/secret/body/raw-error keys.
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "success",
+        "message_id",
+        "state",
+        "replied",
+        "source",
+        "reason_code",
+        "matched_message_id",
+        "checked_at",
+        "from_cache",
+        "coverage",
+      ])
+    );
+    const forbidden = keys.filter((k) =>
+      /password|secret|token|credential|body|raw|stack|exception/i.test(k)
+    );
+    expect(forbidden).toEqual([]);
   });
 });
