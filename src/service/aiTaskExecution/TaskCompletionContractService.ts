@@ -24,6 +24,15 @@ export interface FreezeInput {
   readonly objective: string;
   readonly sourceUserMessageId: string;
   readonly approvedSourceMessageIds: readonly string[];
+  /**
+   * T17 (FR-19): when the caller supplies the actual approved message
+   * contents (messageId → text), criterion offsets are validated against the
+   * real content length — an endOffset past the end of the source message is
+   * an unanchored criterion and freeze throws. Optional: callers that only
+   * have IDs (or synthetic sources) omit it and only the membership/direction
+   * checks apply.
+   */
+  readonly approvedSourceContents?: Readonly<Record<string, string>>;
   readonly mode: "verified" | "best_effort";
   readonly criteria: readonly TaskCriterion[];
 }
@@ -69,6 +78,13 @@ export class TaskCompletionContractService {
       );
     }
     for (const criterion of input.criteria) {
+      // T17 (FR-03/19): a required criterion with no sourceRefs has no anchor
+      // into the approved user message — anything could satisfy it. Reject.
+      if (criterion.required && criterion.sourceRefs.length === 0) {
+        throw new Error(
+          `required criterion ${criterion.id} has empty sourceRefs`
+        );
+      }
       for (const ref of criterion.sourceRefs) {
         if (!approvedSet.has(ref.messageId)) {
           throw new Error(
@@ -80,7 +96,27 @@ export class TaskCompletionContractService {
             `criterion ${criterion.id} has invalid offset range`
           );
         }
+        // T17 (FR-19): validate offsets against the actual approved message
+        // content when the caller supplied it — an endOffset past the end of
+        // the real message is an unanchored criterion.
+        const content = input.approvedSourceContents?.[ref.messageId];
+        if (content !== undefined && ref.endOffset > content.length) {
+          throw new Error(
+            `criterion ${criterion.id} offset ${ref.endOffset} is beyond the approved content length ${content.length} for message ${ref.messageId}`
+          );
+        }
       }
+    }
+
+    // T17 (FR-01/19): duplicate criterion IDs let one passed criterion ID
+    // satisfy distinct required criteria even when another criterion with the
+    // same ID fails. Reject at freeze time.
+    const seenIds = new Set<string>();
+    for (const criterion of input.criteria) {
+      if (seenIds.has(criterion.id)) {
+        throw new Error(`duplicate criterion id ${criterion.id}`);
+      }
+      seenIds.add(criterion.id);
     }
 
     // FR-04: a verified-mode contract with zero required criteria cannot
@@ -95,11 +131,11 @@ export class TaskCompletionContractService {
     }
 
     const contractId = `contract-${randomUUID()}`;
-    const contractHash = this.computeHash(input);
-    const contract: TaskCompletionContract = {
+    const preHashContract: TaskCompletionContract = {
       schemaVersion: 1,
       contractId,
-      contractHash,
+      // Placeholder — replaced below after normalization (T17).
+      contractHash: "sha256:pending",
       objective: input.objective,
       sourceUserMessageId: input.sourceUserMessageId,
       approvedSourceMessageIds: [...input.approvedSourceMessageIds],
@@ -119,8 +155,24 @@ export class TaskCompletionContractService {
     // IDs) never leave freeze(). The ad-hoc checks above catch only the
     // common cases; this is the boundary the type system and downstream
     // loaders will enforce.
-    taskCompletionContractSchema.parse(contract);
-    return contract;
+    //
+    // T17: normalize via the schema BEFORE hashing, and return exactly the
+    // normalized representation. Zod strips unknown fields on parse, so a
+    // contract carrying an extra criterion property would leave freeze with
+    // the field attached but lose it on reload (storage re-parses) — after
+    // which verifyHash returns false for an untampered contract. The hash is
+    // computed over the NORMALIZED criteria (post-strip), so the frozen,
+    // persisted, and reloaded forms are identical and the hash stable for
+    // clean inputs too.
+    const normalized: TaskCompletionContract = taskCompletionContractSchema.parse(preHashContract);
+    const contractHash = this.computeHash({
+      objective: normalized.objective,
+      sourceUserMessageId: normalized.sourceUserMessageId,
+      approvedSourceMessageIds: normalized.approvedSourceMessageIds,
+      mode: normalized.mode,
+      criteria: normalized.criteria,
+    });
+    return { ...normalized, contractHash };
   }
 
   /** Recompute the hash for an existing contract to verify integrity on load. */
