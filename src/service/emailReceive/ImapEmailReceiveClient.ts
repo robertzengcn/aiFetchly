@@ -3,6 +3,7 @@ import type {
   FetchMessageObject,
   FetchQueryObject,
   ImapFlowOptions,
+  ListResponse,
   MailboxObject,
   SearchObject,
   SequenceString,
@@ -17,8 +18,11 @@ import {
   EmailReceiveClient,
   ParsedInboundEmail,
   RefreshedFlags,
+  ReplyHeaderCandidate,
+  SentFolder,
   addressListToStrings,
   firstAddress,
+  parseHeaderBlock,
 } from "@/service/emailReceive/EmailReceiveClient";
 import {
   sanitizeEmailHtml,
@@ -39,6 +43,19 @@ const IMAP_IMPLICIT_TLS_PORT = 993;
 type ImapConnectionMode = "configured" | "implicitTls";
 
 /**
+ * Conventional Sent-folder names tried when the server advertises no `\Sent`
+ * special-use folder (FR-031 §7.2). Exactly ONE unambiguous match is accepted.
+ */
+const SENT_FOLDER_FALLBACK_NAMES = [
+  "Sent",
+  "Sent Items",
+  "Sent Messages",
+  "[Gmail]/Sent Mail",
+  "INBOX/Sent",
+  "INBOX.Sent",
+] as const;
+
+/**
  * Narrow structural view of an ImapFlow connection this client consumes
  * (FR-031). The real `ImapFlow` satisfies it directly; tests inject behavioral
  * fakes through the `imapFlowFactory` constructor seam (pattern:
@@ -48,6 +65,7 @@ export interface ImapFlowConnection {
   connect(): Promise<void>;
   logout(): Promise<void>;
   close(): void;
+  list(): Promise<ListResponse[]>;
   mailboxOpen(path: string | string[]): Promise<MailboxObject>;
   search(
     query: SearchObject,
@@ -185,6 +203,133 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     } finally {
       await closeClient(client);
     }
+  }
+
+  /**
+   * Discover Sent folders for reply-header search (FR-031, §7.2).
+   *
+   * Prefers folders the server advertises with the `\Sent` special-use flag
+   * (verified). If the server advertises none, falls back to conventional
+   * names (`Sent`, `Sent Items`, `[Gmail]/Sent Mail`, `INBOX/Sent`); exactly
+   * ONE unambiguous fallback is accepted, otherwise the result is [] and the
+   * caller maps that to `sent_folder_unavailable` — never silently treated as
+   * "no reply exists".
+   *
+   * Auth/permission/connection failures PROPAGATE (the detector maps them to
+   * `unknown`, not to folder absence).
+   */
+  async discoverSentFolders(
+    config: EmailReceiveConnectionConfig
+  ): Promise<SentFolder[]> {
+    const client = this.createClient(config);
+    try {
+      await client.connect();
+      return await this.discoverSentFoldersFromConnectedClient(client);
+    } finally {
+      await closeClient(client);
+    }
+  }
+
+  private async discoverSentFoldersFromConnectedClient(
+    client: ImapFlowConnection
+  ): Promise<SentFolder[]> {
+    const listing = await client.list();
+
+    const advertised = listing.filter(
+      (f) => (f.specialUse ?? "").toLowerCase() === "\\sent"
+    );
+    if (advertised.length > 0) {
+      // Server-declared \Sent folders — authoritative.
+      return advertised.map((f) => ({ folder: f.path, verified: true }));
+    }
+
+    // Fallback: conventional names. Accept exactly ONE unambiguous match;
+    // multiple or zero candidates stay unverified and the caller decides
+    // (§7.2: multiple unverified folders must not be silently trusted).
+    const matches = SENT_FOLDER_FALLBACK_NAMES.flatMap((name) =>
+      listing.filter((f) => f.path.toLowerCase() === name.toLowerCase())
+    );
+    if (matches.length !== 1) return [];
+    return [{ folder: matches[0].path, verified: false }];
+  }
+
+  /**
+   * Search ONE Sent folder for messages whose In-Reply-To or References
+   * headers contain the original message id, then fetch the bounded header
+   * block of each candidate (FR-031, §7.2).
+   *
+   * IMAP HEADER search is substring-based, so the caller must validate
+   * exact-token equality locally — the returned candidates carry the raw
+   * header values for that verification.
+   *
+   * Returns false when the search itself fails/incompletes (imapflow's
+   * `false`), which callers must map to `unknown` — NOT to no-matches.
+   * Candidates are capped at `cap` (bounding the header fetches, FR-039).
+   */
+  async searchReplyHeaders(input: {
+    config: EmailReceiveConnectionConfig;
+    folder: string;
+    originalMessageId: string;
+    cap: number;
+  }): Promise<ReplyHeaderCandidate[] | false> {
+    const client = this.createClient(input.config);
+    try {
+      await client.connect();
+      return await this.searchReplyHeadersFromConnectedClient(
+        client,
+        input.folder,
+        input.originalMessageId,
+        input.cap
+      );
+    } finally {
+      await closeClient(client);
+    }
+  }
+
+  private async searchReplyHeadersFromConnectedClient(
+    client: ImapFlowConnection,
+    folder: string,
+    originalMessageId: string,
+    cap: number
+  ): Promise<ReplyHeaderCandidate[] | false> {
+    // substring search on both threading headers — exact equality is
+    // validated locally from the fetched header block (§7.2).
+    const uids = await client.search(
+      {
+        or: [
+          { header: { "in-reply-to": originalMessageId } },
+          { header: { references: originalMessageId } },
+        ],
+      },
+      { uid: true }
+    );
+    if (uids === false) return false;
+
+    const bounded = uids.slice(0, Math.max(0, cap));
+    const candidates: ReplyHeaderCandidate[] = [];
+    for (const uid of bounded) {
+      // Header-only fetch, PEEK semantics — no body, no flag writes.
+      const msg = await client.fetchOne(
+        uid,
+        {
+          headers: ["Message-ID", "In-Reply-To", "References", "From", "To", "Date"],
+        },
+        { uid: true }
+      );
+      if (!msg) continue;
+      const headers = parseHeaderBlock(msg.headers);
+      candidates.push({
+        folder,
+        uid,
+        messageId: headers.get("message-id") ?? null,
+        inReplyTo: headers.get("in-reply-to") ?? null,
+        references: headers.get("references") ?? null,
+        from: headers.get("from") ?? null,
+        to: headers.get("to") ?? null,
+        date: headers.get("date") ?? null,
+      });
+    }
+    return candidates;
   }
 
   private async refreshFlagsFromConnectedClient(

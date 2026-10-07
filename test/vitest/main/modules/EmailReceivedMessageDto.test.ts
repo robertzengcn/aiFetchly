@@ -143,6 +143,9 @@ describe("ImapEmailReceiveClient.refreshMessageFlags (T03 step 4)", () => {
       async connect(): Promise<void> {},
       async logout(): Promise<void> {},
       close(): void {},
+      async list(): Promise<[]> {
+        return [];
+      },
       async mailboxOpen(folder: string | string[]) {
         return {
           path: typeof folder === "string" ? folder : folder[0],

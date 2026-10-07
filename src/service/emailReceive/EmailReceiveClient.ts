@@ -88,6 +88,78 @@ export interface RefreshedFlags {
   readonly checkedAt: Date;
 }
 
+/**
+ * A resolved Sent folder for reply-header search (FR-031, §7.2). Either the
+ * server advertised it via the `\Sent` special-use flag (verified=true) or it
+ * matched a conventional fallback name and still needs local verification.
+ */
+export interface SentFolder {
+  readonly folder: string;
+  /** True when discovered via `\Sent` special-use, false for name fallbacks. */
+  readonly verified: boolean;
+}
+
+/**
+ * One candidate message found by the Sent-folder header search, with the raw
+ * header tokens needed for local exact-match verification (FR-031, §7.2:
+ * IMAP HEADER search is substring-based, so equality is validated locally,
+ * never trusted from the server).
+ */
+export interface ReplyHeaderCandidate {
+  readonly folder: string;
+  readonly uid: number;
+  /** Raw Message-ID header value (unnormalized). */
+  readonly messageId: string | null;
+  /** Raw In-Reply-To header value (unnormalized). */
+  readonly inReplyTo: string | null;
+  /** Raw References header value (unnormalized). */
+  readonly references: string | null;
+  /** Raw From header value as the server returned it. */
+  readonly from: string | null;
+  /** Raw To header value as the server returned it. */
+  readonly to: string | null;
+  /** Raw Date header value as the server returned it. */
+  readonly date: string | null;
+}
+
+/**
+ * Parse a raw RFC-5322 header block (as returned by imapflow's `headers`
+ * fetch) into a lowercased-key → trimmed-value map, unfolding continuation
+ * lines per RFC 5322 §2.2.3. Pure; used by the Sent-search reply-header
+ * parser (FR-031 §7.2).
+ */
+export function parseHeaderBlock(raw: Buffer | string | null | undefined): Map<
+  string,
+  string
+> {
+  const out = new Map<string, string>();
+  if (!raw) return out;
+  const text =
+    typeof raw === "string" ? raw : raw.toString("utf8");
+  const lines = text.split(/\r?\n/);
+  let lastKey: string | null = null;
+  for (const line of lines) {
+    if (line.length === 0) continue;
+    // Continuation line (folded header value) — append to the previous key.
+    if (/^[ \t]/.test(line) && lastKey) {
+      const existing = out.get(lastKey) ?? "";
+      out.set(lastKey, `${existing} ${line.trim()}`.trim());
+      continue;
+    }
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue; // malformed line — skip, never throw
+    const key = line.slice(0, colon).trim().toLowerCase();
+    if (!key) {
+      lastKey = null;
+      continue;
+    }
+    const value = line.slice(colon + 1).trim();
+    out.set(key, value);
+    lastKey = key;
+  }
+  return out;
+}
+
 /** Normalize a parsed address header value into "address" or "Name <address>". */
 export function firstAddress(
   value: { address?: string; name?: string } | null | undefined
