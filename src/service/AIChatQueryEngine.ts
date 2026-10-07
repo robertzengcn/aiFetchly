@@ -1010,6 +1010,22 @@ export class AIChatQueryEngine {
      * budget persists across pause/resume.
      */
     let taskExecutionBinding: LoopTaskExecutionBinding | undefined;
+    /**
+     * T10 (FR-17/21, AC-26): accepted-submission dedup short-circuit. Set by
+     * the enrollment seam when `startManual` returns `reused` (transport retry
+     * of the same accepted submission) or `conflict` (same submissionId,
+     * different requestHash). When set, the loop dispatch is skipped — no
+     * maker/provider re-dispatch, no renewed budget, no repeated effect. The
+     * engine emits a terminal event carrying the dedup signal so the renderer
+     * and tests can verify no dispatch happened. The DB-level dedup alone
+     * never stopped duplicate work; this gate makes the dedup decisive at the
+     * dispatch boundary. Cleared (undefined) on the `created` path and when
+     * the flag is off, so legacy/created behavior is byte-identical.
+     */
+    let dedupShortCircuit:
+      | { kind: "reused"; executionId: string; finalized: boolean }
+      | { kind: "conflict"; executionId: string }
+      | undefined;
     /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
     let historySelectionAcceptedIds: readonly string[] = [];
     /** Submitted refs whose source moved (§4.2), reported on `start`. */
@@ -1478,18 +1494,32 @@ export class AIChatQueryEngine {
                 },
               };
             } else if (startResult.status === "reused") {
-              // Transport retry: the same (conversation, submission, hash)
-              // already enrolled. Do not re-dispatch or renew limits
-              // (AC-26). No binding — the existing execution's status is
-              // authoritative and Slice 2 does not resurrect it here.
+              // T10 (FR-17/21, AC-26): transport retry of the same accepted
+              // submission. The DB dedup recorded the existing execution — but
+              // dedup at the DB layer alone never stopped the maker from
+              // re-dispatching. Set the short-circuit so the loop dispatch is
+              // skipped: no provider call, no renewed budget, no repeated
+              // effect. The existing execution's current/final status is
+              // authoritative; the engine emits a terminal event so the
+              // renderer stops the turn instead of running new work.
+              dedupShortCircuit = {
+                kind: "reused",
+                executionId: startResult.existing.executionId,
+                finalized: startResult.existing.finalized,
+              };
               console.log(
-                `[ai-chat-v2] task execution reused (submissionId=${submissionId}) — transport retry, no fresh consult`
+                `[ai-chat-v2] task execution reused (submissionId=${submissionId}) — transport retry, skipping dispatch`
               );
             } else {
-              // conflict: same submissionId, different request_hash. Surface
-              // and skip — never persist a second row.
+              // T10: conflict — same submissionId, different requestHash.
+              // Surface SUBMISSION_CONFLICT and skip dispatch entirely. Never
+              // persist a second row, never run the maker.
+              dedupShortCircuit = {
+                kind: "conflict",
+                executionId: startResult.existing.executionId,
+              };
               console.error(
-                `[ai-chat-v2] task execution conflict (submissionId=${submissionId}) — SUBMISSION_CONFLICT, skipping consult`
+                `[ai-chat-v2] task execution conflict (submissionId=${submissionId}) — SUBMISSION_CONFLICT, skipping dispatch`
               );
             }
           }
@@ -1744,6 +1774,47 @@ export class AIChatQueryEngine {
       },
       taskExecutionBinding,
     };
+
+    // T10 (FR-17/21, AC-26): accepted-submission dedup short-circuit. On a
+    // transport retry (reused) or a submissionId conflict, the enrollment
+    // seam set `dedupShortCircuit`. The DB-level dedup already recorded the
+    // existing execution — but dedup at the DB layer alone never stopped the
+    // maker from re-dispatching (the original bug: the engine logged
+    // reused/conflict, dropped the consult binding, then ran the loop
+    // anyway). Skip the loop dispatch entirely: no provider call, no renewed
+    // budget, no repeated effect, no second assistant message. Emit a
+    // terminal event so the renderer ends the turn cleanly.
+    if (dedupShortCircuit) {
+      if (dedupShortCircuit.kind === "conflict") {
+        // SUBMISSION_CONFLICT surfaces as an explicit error before any work.
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          messageId: assistantMessageId,
+          errorMessage: `SUBMISSION_CONFLICT: submissionId already accepted with different request content (executionId=${dedupShortCircuit.executionId})`,
+        });
+      } else {
+        // Reused transport retry: the existing execution's status is
+        // authoritative. Emit a `complete` event with empty content so the
+        // renderer ends the turn — the prior turn's assistant message is
+        // already in history (a transport retry re-fetches it). Carries no
+        // new content and no final event identity, so the renderer does not
+        // treat this as a fresh verified result.
+        eventSink.emit({
+          type: "complete",
+          conversationId,
+          messageId: assistantMessageId,
+          fullContent: "",
+          finishReason: "stop",
+        });
+      }
+      // Clear the active turn entry — no loop ran, no pause possible.
+      const entry = this.activeTurns.get(conversationId);
+      if (entry && entry.assistantMessageId === assistantMessageId) {
+        this.activeTurns.delete(conversationId);
+      }
+      return;
+    }
 
     try {
       const result = await this.loop.run(loopInput);

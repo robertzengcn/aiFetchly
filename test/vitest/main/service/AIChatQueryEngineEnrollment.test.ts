@@ -215,23 +215,24 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
 
 /**
  * Build an engine whose loop.run() captures the loopInput for assertion.
+ * Returns the loop.run mock alongside the engine so T10 tests can assert
+ * the dispatch was skipped (loop.run never called) on reuse/conflict.
  */
 function createEngineCapturingInput(
   capture: (input: AIChatQueryLoopInput) => void
-): AIChatQueryEngine {
-  const fakeLoop = {
-    run: vi.fn(async (input: AIChatQueryLoopInput) => {
-      capture(input);
-      return {
-        type: "completed" as const,
-        conversationId: "v2-test-conv",
-        assistantMessageId: "a1",
-        fullContent: "",
-        finishReason: "stop",
-      } as AIChatQueryLoopResult;
-    }),
-  } as unknown as AIChatQueryLoop;
-  return new AIChatQueryEngine(fakeLoop);
+): { engine: AIChatQueryEngine; runMock: ReturnType<typeof vi.fn> } {
+  const runMock = vi.fn(async (input: AIChatQueryLoopInput) => {
+    capture(input);
+    return {
+      type: "completed" as const,
+      conversationId: "v2-test-conv",
+      assistantMessageId: "a1",
+      fullContent: "",
+      finishReason: "stop",
+    } as AIChatQueryLoopResult;
+  });
+  const fakeLoop = { run: runMock } as unknown as AIChatQueryLoop;
+  return { engine: new AIChatQueryEngine(fakeLoop), runMock };
 }
 
 /** Minimal request the engine accepts for a non-plan interactive turn. */
@@ -260,7 +261,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
   it("flag-off: leaves taskExecutionBinding undefined on loopInput", async () => {
     flagMock.mockReturnValue(false);
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine } = createEngineCapturingInput((input) => {
       captured = input;
     });
     await engine.submitMessage({
@@ -287,7 +288,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
       },
     });
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine } = createEngineCapturingInput((input) => {
       captured = input;
     });
     await engine.submitMessage({
@@ -306,7 +307,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("response_only");
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine } = createEngineCapturingInput((input) => {
       captured = input;
     });
     await engine.submitMessage({
@@ -317,42 +318,72 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     expect(captured!.taskExecutionBinding).toBeUndefined();
   });
 
-  it("flag-on + transport retry (reused): no fresh binding on loopInput", async () => {
+  it("T10 flag-on + transport retry (reused): no dispatch, terminal complete event emitted (FR-17/21, AC-26)", async () => {
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
     startManualMock.mockResolvedValue({
       status: "reused",
-      existing: { executionId: "exec-old", status: "running" },
+      existing: {
+        executionId: "exec-old",
+        finalized: false,
+        taskOutcome: null,
+      },
     });
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine, runMock } = createEngineCapturingInput((input) => {
       captured = input;
     });
+    const emit = vi.fn();
     await engine.submitMessage({
       request: makeRequest(),
-      eventSink: { emit: vi.fn() } as never,
+      eventSink: { emit } as never,
     } as never);
     expect(startManualMock).toHaveBeenCalledTimes(1);
-    expect(captured!.taskExecutionBinding).toBeUndefined();
+    // T10: the loop never ran — no provider call, no renewed budget, no
+    // repeated effect. The DB-level dedup alone never stopped the maker; the
+    // dispatch gate does.
+    expect(runMock).not.toHaveBeenCalled();
+    expect(captured).toBeUndefined();
+    // The engine emits a terminal `complete` event so the renderer ends the
+    // turn instead of running new work. The prior turn's assistant message
+    // is already in history; a transport retry re-fetches it.
+    const completeEvent = emit.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
   });
 
-  it("flag-on + submission conflict: no fresh binding on loopInput", async () => {
+  it("T10 flag-on + submission conflict: no dispatch, SUBMISSION_CONFLICT error before work (FR-17/21, AC-26)", async () => {
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
     startManualMock.mockResolvedValue({
       status: "conflict",
       reasonCode: "SUBMISSION_CONFLICT",
-      existing: { executionId: "exec-conflict", status: "running" },
+      existing: {
+        executionId: "exec-conflict",
+        finalized: false,
+        taskOutcome: null,
+      },
     });
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine, runMock } = createEngineCapturingInput((input) => {
       captured = input;
     });
+    const emit = vi.fn();
     await engine.submitMessage({
       request: makeRequest(),
-      eventSink: { emit: vi.fn() } as never,
+      eventSink: { emit } as never,
     } as never);
-    expect(captured!.taskExecutionBinding).toBeUndefined();
+    // T10: the loop never ran — different requestHash on the same
+    // submissionId surfaces SUBMISSION_CONFLICT before any work.
+    expect(runMock).not.toHaveBeenCalled();
+    expect(captured).toBeUndefined();
+    const errorEvent = emit.mock.calls
+      .map((c) => c[0])
+      .find(
+        (e) => e.type === "error" && String(e.errorMessage).includes("SUBMISSION_CONFLICT")
+      );
+    expect(errorEvent).toBeDefined();
   });
 
   it("flag-on + startManual throws: fail-closed (binding undefined, turn proceeds)", async () => {
@@ -360,7 +391,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     classifyMock.mockReturnValue("task_best_effort");
     startManualMock.mockRejectedValue(new Error("db connection lost"));
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine } = createEngineCapturingInput((input) => {
       captured = input;
     });
     await engine.submitMessage({
@@ -399,7 +430,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
       },
     });
     let captured: AIChatQueryLoopInput | undefined;
-    const engine = createEngineCapturingInput((input) => {
+    const { engine } = createEngineCapturingInput((input) => {
       captured = input;
     });
     await engine.submitMessage({

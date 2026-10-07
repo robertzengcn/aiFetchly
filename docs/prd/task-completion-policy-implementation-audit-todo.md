@@ -185,8 +185,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T10 — Reject/reuse transport submissions before redispatch [P1, confirmed]
 
-- [ ] Return the accepted execution/status on reuse; reject changed-hash collisions; do not run the maker again.
-- [ ] Apply accepted-submission dedup to saved message and preprocessing identity as well as execution rows.
+- [x] Return the accepted execution/status on reuse; reject changed-hash collisions; do not run the maker again.
+- [x] Apply accepted-submission dedup to saved message and preprocessing identity as well as execution rows.
 
 **Evidence:** engine `AIChatQueryEngine.ts:1451–1464` logs reused/conflict and removes consult binding, then continues to `loop.run()` at `:1720`. Execution database dedup alone therefore does not stop duplicate work or changed-scope dispatch. User saving/preprocessing precedes this outcome.
 
