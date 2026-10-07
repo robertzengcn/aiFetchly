@@ -87,6 +87,18 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
 
     const created = this.repository.create(stripped);
+    // Same narrowed historical promotion on FIRST insert: an inbound message
+    // observed \Answered is already answered in the mailbox (possibly by a
+    // human mail client) — the app must not draft another reply to it.
+    if (
+      shouldPromoteReplyStatusFromProvider(
+        stripped.isAnswered === 1 ? "sent" : undefined,
+        created.replyStatus
+      )
+    ) {
+      created.replyStatus = "sent";
+      created.processedAt = new Date();
+    }
     return await this.repository.save(created);
   }
 
@@ -188,9 +200,18 @@ export class EmailReceivedMessageModel extends BaseDb {
    * classification, evidence, processedAt) — only the dedupe key + UID
    * provenance change. The caller must have validated the source identity
    * (fetched header matches the expected RFC Message-ID) first.
+   *
+   * COLLISION-SAFE: the rebase is refused (returns false, no write) when
+   * another row in the same service already holds the target namespaced
+   * key — e.g. a prior sync inserted the namespaced row while the legacy
+   * row lingered. The unique `(emailServiceId, providerUid)` index would
+   * otherwise abort the whole sync; the caller falls through to the normal
+   * upsert, which refreshes the existing namespaced row and leaves the
+   * legacy row guarded by its own canonical reply keys.
    */
   async updateProviderUidNamespacing(input: {
     id: number;
+    emailServiceId: number;
     providerUid: string;
     providerFolder: string | null;
     providerUidValidity: string | null;
@@ -203,7 +224,18 @@ export class EmailReceivedMessageModel extends BaseDb {
         providerFolder: input.providerFolder,
         providerUidValidity: input.providerUidValidity,
       })
-      .where("id = :id", { id: input.id })
+      .where(
+        "id = :id AND NOT EXISTS (" +
+          "SELECT 1 FROM email_received_message" +
+          " WHERE emailServiceId = :emailServiceId" +
+          " AND providerUid = :targetUid AND id <> :id" +
+          ")",
+        {
+          id: input.id,
+          emailServiceId: input.emailServiceId,
+          targetUid: input.providerUid,
+        }
+      )
       .execute();
     return (result.affected ?? 0) === 1;
   }

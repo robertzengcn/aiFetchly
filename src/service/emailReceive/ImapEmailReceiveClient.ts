@@ -20,6 +20,10 @@ import {
   buildSnippet,
   extractThreadKey,
 } from "@/service/emailReceive/EmailMessageParser";
+import {
+  buildNamespacedProviderUid,
+  providerUidFitsColumn,
+} from "@/service/emailReceive/EmailReplyIdentity";
 
 /** Hard cap on messages returned per fetch, regardless of caller limit. */
 const MAX_FETCH_CAP = 50;
@@ -107,7 +111,14 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     limit: number
   ): Promise<ParsedInboundEmail[]> {
     const results: ParsedInboundEmail[] = [];
-    await client.mailboxOpen(folder);
+    const mailbox = await client.mailboxOpen(folder);
+    // UIDVALIDITY namespaces every UID in this folder (§5.1): a bare UID
+    // reused after a rename or validity bump would attribute the wrong
+    // message's flags to an old row. Stored losslessly as a string.
+    const uidValidity =
+      mailbox && mailbox.uidValidity != null
+        ? String(mailbox.uidValidity)
+        : null;
 
     // UIDs of messages matching the criteria (most recent at the end).
     const searchCriteria: Record<string, unknown> = {};
@@ -131,7 +142,13 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       if (!msg || !msg.source) continue;
 
       const parsed = await simpleParser(msg.source as Buffer);
-      const record = this.toParsedInboundEmail(uid, parsed, msg);
+      const record = this.toParsedInboundEmail(
+        uid,
+        parsed,
+        msg,
+        folder,
+        uidValidity
+      );
       if (record) results.push(record);
     }
 
@@ -141,10 +158,22 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
   private toParsedInboundEmail(
     uid: number,
     parsed: ParsedMail,
-    msg: { flags?: Set<string> }
+    msg: { flags?: Set<string> },
+    folder: string,
+    uidValidity: string | null
   ): ParsedInboundEmail | null {
     const from = firstAddress(parsed.from?.value?.[0] ?? null);
     if (!from.address) return null;
+
+    // Namespaced providerUid `imap:<folderHash>:<uidValidity>:<uid>` (§5.1).
+    // Falls back to the bare legacy form only when UIDVALIDITY is somehow
+    // unobservable, so the message still syncs; adoption of that legacy row
+    // requires header validation later (sync service).
+    const providerUid =
+      uidValidity != null
+        ? buildNamespacedProviderUid({ folder, uidValidity, uid })
+        : String(uid);
+    if (!providerUidFitsColumn(providerUid)) return null;
 
     const rawHtml = typeof parsed.html === "string" ? parsed.html : null;
     const bodyHtmlSanitized = sanitizeEmailHtml(rawHtml);
@@ -190,7 +219,9 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     }));
 
     return {
-      providerUid: String(uid),
+      providerUid,
+      providerFolder: folder,
+      providerUidValidity: uidValidity,
       messageId,
       threadKey,
       inReplyTo,

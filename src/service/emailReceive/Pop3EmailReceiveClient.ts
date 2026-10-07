@@ -123,6 +123,10 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
 
     return {
       providerUid: String(uid),
+      // POP3 has no folders or UIDVALIDITY; the providerUid is a UIDL-derived
+      // hash, so both provenance fields stay null (FR-030 §5.1).
+      providerFolder: null,
+      providerUidValidity: null,
       messageId,
       threadKey,
       inReplyTo,

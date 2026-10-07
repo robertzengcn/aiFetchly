@@ -181,10 +181,13 @@ export class EmailReceivedMessageModule extends BaseModule {
 
   /**
    * Adopt a legacy bare-UID row into the namespaced providerUid scheme.
-   * Caller must have validated the source identity first (step 3).
+   * Collision-safe: refuses (false, no write) when another row already holds
+   * the target namespaced key. Caller must validate the source identity
+   * first (step 3).
    */
   async updateProviderUidNamespacing(input: {
     id: number;
+    emailServiceId: number;
     providerUid: string;
     providerFolder: string | null;
     providerUidValidity: string | null;

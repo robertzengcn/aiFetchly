@@ -262,6 +262,7 @@ describe("EmailReceivedMessageModel targeted upsert + sticky evidence (T03)", ()
 
     const ok = await model.updateProviderUidNamespacing({
       id: seeded.id,
+      emailServiceId: SERVICE_ID,
       providerUid: `imap:INBOX:42:${bare}`,
       providerFolder: "INBOX",
       providerUidValidity: "42",
@@ -276,6 +277,44 @@ describe("EmailReceivedMessageModel targeted upsert + sticky evidence (T03)", ()
     expect(after.classification).toBe("interested");
     expect(after.replyStatus).toBe("sent");
     expect(after.processedAt?.toISOString()).toBe("2026-10-05T12:00:00.000Z");
+  });
+
+  it("updateProviderUidNamespacing refuses when the target key is already taken", async () => {
+    // A prior sync inserted the namespaced row while the legacy row lingered.
+    const bare = `coll-${Math.floor(Math.random() * 1e9)}`;
+    const target = `imap:INBOX:42:${bare}`;
+    await seedMessage({ providerUid: target, subject: "already namespaced" });
+    const legacy = await seedMessage({ providerUid: bare });
+
+    const ok = await model.updateProviderUidNamespacing({
+      id: legacy.id,
+      emailServiceId: SERVICE_ID,
+      providerUid: target,
+      providerFolder: "INBOX",
+      providerUidValidity: "42",
+    });
+    expect(ok).toBe(false);
+
+    // Neither row changed: the legacy row keeps its bare key, and the
+    // existing namespaced row was not overwritten.
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    const legacyAfter = await repo.findOneByOrFail({ id: legacy.id });
+    expect(legacyAfter.providerUid).toBe(bare);
+    const targetRows = await repo.find({
+      where: { emailServiceId: SERVICE_ID, providerUid: target },
+    });
+    expect(targetRows.length).toBe(1);
+    expect(targetRows[0].subject).toBe("already namespaced");
+  });
+
+  it("insert path applies the narrowed answered promotion on first sight", async () => {
+    const seeded = await seedMessage({ isAnswered: 1 });
+    // Fresh insert with the \Answered flag observed → historical promotion
+    // applies at insert time too (the mailbox already knows this answered).
+    expect(seeded.replyStatus).toBe("sent");
+    expect(seeded.processedAt).toBeInstanceOf(Date);
   });
 
   it("findLegacyBareUidRow locates only the exact bare-UID row", async () => {

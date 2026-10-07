@@ -10,6 +10,19 @@ import {
  */
 export interface ParsedInboundEmail {
   readonly providerUid: string;
+  /**
+   * Folder the message was observed in (IMAP). Null for POP3, which has no
+   * folder concept — the providerUid there is a UIDL hash, not a folder UID.
+   */
+  readonly providerFolder: string | null;
+  /**
+   * IMAP UIDVALIDITY for the observing session, stored losslessly as a
+   * string (bigint source; leading zeros and the full 32-bit value must
+   * survive). Null for POP3. Together with providerFolder this namespaces
+   * the providerUid so UIDs can never be attributed across folder renames
+   * or UIDVALIDITY bumps (FR-030, technical design §5.1).
+   */
+  readonly providerUidValidity: string | null;
   readonly messageId: string | null;
   readonly threadKey: string | null;
   readonly inReplyTo: string | null;
