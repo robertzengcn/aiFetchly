@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Date | 2026-09-27 |
-| Stage | **A complete** (P0, A1, A2a-c, A3a-b) on branch `generator-streaming` (worktree `.worktrees/generator-streaming`) |
+| Stage | **A + B implemented** (P0–A3, B1–B3) with the audit TODO backlog (TODO-01..11, 13, 14, 15) closed on branch `generator-streaming` (worktree `.worktrees/generator-streaming`); see §5 for exact status and §6 for the remaining release gates |
 | PRD | [Generator streaming PRD](./ai-chat-workspace-generator-streaming-prd.md) |
 | Inventory | [P0 caller inventory](./generator-streaming-p0-inventory.md) |
 
@@ -66,7 +66,40 @@ the environment is quiet; the numbers above are the recorded in-branch
 evidence. Run cancellation fixture note: cancellation ordering is covered by
 the async-poll/Stop suites, not this timing harness.
 
-## 5. Stage B status — COMPLETE (2026-09-30)
+## 5. Stage A + B status — implemented, audit TODO backlog closed (2026-10-07)
+
+The 2026-10-04 audit (`ai-chat-workspace-generator-streaming-todo.md`) found
+implementation defects and incomplete requirements in the 2026-09-30 state;
+the earlier "COMPLETE" claim was overstated. As of 2026-10-07 every audited
+defect and requirement item has code + regression coverage:
+
+- **TODO-01/02** required-write barriers: facade flushes tool_result as well
+  as tool_call; permission resume awaits the approved tool's result save on
+  every branch before any continuation.
+- **TODO-03/04** provider cleanup: caller abort stays linked through body
+  reads (transport aborts mid-read); both SSE parsers stop strictly at
+  `[DONE]` (no trailing-buffer parse after the marker).
+- **TODO-05** finalization: Stop hooks exactly once; compatibility
+  `onTurnTerminal` after durable writes; `onSegmentDurable` gate awaited
+  between durable message writes and post-terminal side effects (the
+  coordinator injects the run transition).
+- **TODO-06/10** lifecycle: run-owned serialized waiting/resumed transitions
+  with explicit failure handling; repeat permission parks go through the
+  common path with sink refresh + exactly-one notification; side maps clear
+  on all terminal paths.
+- **TODO-08** acceptance-time mode capture; startup-owned production
+  provider (AC-14 matrix covered).
+- **TODO-09** partial history preserved on consumer/persistence failure.
+- **TODO-11** scheduled owners consume typed `runTurn` outcomes.
+- **TODO-07/14** real progress bounds (whitelisted fields, UTF-8 bytes,
+  unserializable-safe) + nested cleanup + count-only diagnostics; env value
+  never echoed.
+- **TODO-12** gates: main 6312 passed / service 2726 passed (serial,
+  root-caused the queue-suite DB flake) / components 827 / tsc 0.
+- **TODO-13/15** perf fixtures measured (§4), conflict decisions + V2
+  inventory recorded (P0 inventory §7–8).
+
+### Original Stage B delivery (2026-09-30, retained for history)
 
 **B1 — provider iterator + callback facade:** `ChatProviderStreamEvent`
 (chunk|retry|recovery in causal order) + `streamEvents` on the provider
