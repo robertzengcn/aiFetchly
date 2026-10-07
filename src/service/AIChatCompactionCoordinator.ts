@@ -964,14 +964,28 @@ export class AIChatCompactionCoordinator extends BaseModule {
           input.signal
         );
       } catch (err) {
-        if (this.isContextRejection(err) && reductions < maxReductions) {
+        // Length truncation (COMPACTION_OUTPUT_TRUNCATED) is recoverable by
+        // reducing INPUT capacity: a denser source produces a shorter summary
+        // that fits the model's output cap. Treat it as a reduction trigger
+        // alongside context rejection, so long as reduction budget remains.
+        const isTruncation =
+          err instanceof RecoverableHistoryError &&
+          err.code === "COMPACTION_OUTPUT_TRUNCATED";
+        if (
+          (isTruncation || this.isContextRejection(err)) &&
+          reductions < maxReductions
+        ) {
           reductions += 1;
           const reduced = Math.max(
             64,
             Math.floor(input.getCapacity() / 2)
           );
           input.onReduceCapacity(reduced);
-          lastErrors = [`context rejected; reduced capacity to ${reduced}`];
+          lastErrors = [
+            isTruncation
+              ? `output truncated; reduced input capacity to ${reduced} so the summary fits the output cap`
+              : `context rejected; reduced capacity to ${reduced}`,
+          ];
           continue;
         }
         throw err instanceof RecoverableHistoryError

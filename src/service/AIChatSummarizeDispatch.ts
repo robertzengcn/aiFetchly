@@ -8,6 +8,15 @@
  * rejected locally as CONTEXT_REQUIRED_CONTENT_TOO_LARGE (recoverable) — the
  * coordinator's bounded retry loop treats it as a context rejection and
  * reduces capacity; the provider is never sent a request that cannot fit.
+ *
+ * Length truncation (provider signals `finish_reason === "length"`) is surfaced
+ * as COMPACTION_OUTPUT_TRUNCATED rather than returned as a silently cut string.
+ * Before this, a CJK-dense section summary truncated mid-string at the
+ * provider output cap produced "Unterminated string in JSON at position 2571"
+ * and the coordinator wasted all 4 bounded attempts on schema repair — the
+ * repair prompt cannot fix truncation. The distinct code lets the coordinator
+ * reduce input capacity (denser source → shorter summary → fits the cap)
+ * instead of asking the model for "valid JSON".
  */
 
 import type {
@@ -39,7 +48,9 @@ export interface SectionSummarizeDispatchInput {
 /**
  * Preflight + dispatch one compaction summarize request (§8.5): rejects
  * oversized input before the provider call and pins the explicit output cap.
- * Returns the raw provider content string.
+ * Returns the raw provider content string. Throws COMPACTION_OUTPUT_TRUNCATED
+ * when the provider signals the response was cut mid-generation by the output
+ * cap (`finish_reason === "length"`).
  */
 export async function dispatchSectionSummarize(
   input: SectionSummarizeDispatchInput
@@ -71,5 +82,16 @@ export async function dispatchSectionSummarize(
     messages,
     ...(input.model ? { model: input.model } : {}),
   });
-  return openAIContentToString(resp.choices?.[0]?.message?.content);
+  const choice = resp.choices?.[0];
+  // Length truncation is a distinct, recoverable failure: the provider stopped
+  // before emitting a complete token because the request hit its output cap.
+  // Surfacing it as a parse error (the prior behavior) sent the coordinator's
+  // repair ladder down a schema-repair path that can never fix truncation.
+  if (choice?.finish_reason === "length") {
+    throw new RecoverableHistoryError(
+      "COMPACTION_OUTPUT_TRUNCATED",
+      `summary truncated at provider output cap (max_tokens=${preflight.outputReserve}); reduce input capacity so the summary fits`
+    );
+  }
+  return openAIContentToString(choice?.message?.content);
 }

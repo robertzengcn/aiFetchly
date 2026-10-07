@@ -13,6 +13,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import type { ModelLimitResolver } from "@/service/AIChatRequestBudgetService";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
@@ -253,9 +254,7 @@ function getCompactAgent(): AIChatCompactAgentService {
   }
   if (!compactAgent) {
     const tokenService = new Token();
-    if (!compactModelCatalog) {
-      compactModelCatalog = new AIChatModelCatalogService();
-    }
+    const catalog = getCompactModelCatalog();
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       // Compact follows the chat availability resolver so local-provider users
@@ -266,7 +265,12 @@ function getCompactAgent(): AIChatCompactAgentService {
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
-      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
+      getContextWindow: (model) => catalog.getContextWindow(model),
+      // Live model-limit resolver for the budget-checked summarize dispatch:
+      // caps max_tokens at min(sectionOutputCapTokens, realModel.outputLimit)
+      // instead of the 1,024-token unknown-model fallback, so CJK-dense
+      // summaries are not truncated mid-string at the provider output cap.
+      modelLimitResolver: (model) => catalog.resolveLimits(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
@@ -294,21 +298,46 @@ function getCompactAgent(): AIChatCompactAgentService {
 }
 
 /**
+ * Shared model catalog backing the compaction summarize resolver. The catalog
+ * caches the /api/ai/v1/models response in-process, so the limit lookup is
+ * free after the first fetch. Lazily loaded — the first summarize call pays
+ * the fetch, subsequent calls reuse the cache. Provider-level state; reset on
+ * user/DB switch via {@link resetAiChatV2RuntimeForDatabaseSwitch}.
+ */
+function getCompactModelCatalog(): AIChatModelCatalogService {
+  if (!compactModelCatalog) {
+    compactModelCatalog = new AIChatModelCatalogService();
+  }
+  return compactModelCatalog;
+}
+
+/**
  * Provider-backed summarize callback shared by every coordinator run in this
  * process (manual, auto, session-memory, reactive). Preflights the exact
  * serialized request against the model window (§8.5) and pins the explicit
  * output cap (§8.3); oversized input/output is rejected locally, never sent
  * or blindly cut.
+ *
+ * Wires the live model catalog resolver so max_tokens is capped at
+ * min(sectionOutputCapTokens, realModel.outputLimit) instead of the
+ * UNKNOWN_MODEL_FALLBACK_LIMITS outputLimit (1,024). Without this, a CJK-dense
+ * section summary truncates mid-string at the 1,024-token fallback and the
+ * coordinator's schema-repair ladder cannot fix the truncation.
  */
 async function providerSummarize(
   systemPrompt: string,
   userPrompt: string,
   model?: string
 ): Promise<string> {
+  const catalog = getCompactModelCatalog();
+  await catalog.ensureLoaded();
+  const modelLimitResolver: ModelLimitResolver = (m) =>
+    catalog.resolveLimits(m);
   return dispatchSectionSummarize({
     systemPrompt,
     userPrompt,
     model,
+    modelLimitResolver,
     completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
   });
 }

@@ -5,11 +5,13 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import type { ModelLimitResolver } from "@/service/AIChatRequestBudgetService";
 import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
@@ -69,6 +71,16 @@ export class AIChatQueryEngineFactory {
     // post-turn hook calls requestCompactionForTurn (§12 incremental path);
     // when AI is disabled or the provider call fails, the coordinator cancels
     // the run and the engine keeps the legacy behavior.
+    //
+    // Wire the live model catalog resolver so the dispatch caps max_tokens at
+    // min(sectionOutputCapTokens, realModel.outputLimit) instead of the
+    // UNKNOWN_MODEL_FALLBACK_LIMITS outputLimit (1,024). Without this, a
+    // CJK-dense section summary truncates mid-string at the 1,024-token fallback
+    // and the coordinator's schema-repair ladder cannot fix the truncation.
+    const modelCatalog = new AIChatModelCatalogService();
+    await modelCatalog.ensureLoaded();
+    const modelLimitResolver: ModelLimitResolver = (model) =>
+      modelCatalog.resolveLimits(model);
     const coordinator = new AIChatCompactionCoordinator({
       summarize: async (
         systemPrompt: string,
@@ -79,6 +91,7 @@ export class AIChatQueryEngineFactory {
           systemPrompt,
           userPrompt,
           model,
+          modelLimitResolver,
           completeChat: (request) =>
             new AiChatApi().openAIChatCompletion(request),
         }),

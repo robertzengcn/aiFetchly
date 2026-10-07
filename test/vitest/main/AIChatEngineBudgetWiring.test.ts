@@ -98,6 +98,33 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
   });
 
   it("forwards the model and preflighted output cap through scheduled compaction", async () => {
+    // The scheduled factory must wire the live model catalog resolver into the
+    // compaction summarize dispatch (same regression class as the /goal bug):
+    // without it, the dispatch falls back to UNKNOWN_MODEL_FALLBACK_LIMITS
+    // (outputLimit 1,024) and caps the 1,500-token section reserve to 1,024,
+    // truncating CJK-dense summaries mid-string ("Unterminated string in JSON
+    // at position 2571"). With a real resolver reporting a 16,384 output
+    // limit, the cap is the 1,500-token reserve itself.
+    //
+    // The oversized-input assertion uses a SMALL (8k) context window so the
+    // 40,000-char payload (~10,000 tokens) genuinely exceeds it — proving the
+    // preflight still rejects locally rather than sending an oversized request.
+    const modelsSpy = vi
+      .spyOn(AiChatApi.prototype, "listOpenAIModels")
+      .mockResolvedValue({
+        object: "list",
+        data: [
+          {
+            id: "selected-model",
+            object: "model",
+            created: 1,
+            owned_by: "test",
+            context_window: 8_000,
+            max_tokens: 16_384,
+          },
+        ],
+        default_model: "selected-model",
+      });
     const { AIChatQueryEngineFactory } = await import("@/service/AIChatQueryEngineFactory");
     const engine = await new AIChatQueryEngineFactory().createScheduled({
       allowedTools: [], autoApproveTools: false, allowSkills: false,
@@ -122,9 +149,10 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
       });
     try {
       await summarizeFn("system", "source", "selected-model");
+      expect(modelsSpy).toHaveBeenCalled();
       expect(complete).toHaveBeenCalledWith({
         model: "selected-model",
-        max_tokens: 1_024,
+        max_tokens: 1_500,
         messages: [
           { role: "system", content: "system" },
           { role: "user", content: "source" },
@@ -136,6 +164,7 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
       expect(complete).not.toHaveBeenCalled();
     } finally {
       complete.mockRestore();
+      modelsSpy.mockRestore();
     }
   });
 
