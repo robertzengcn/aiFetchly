@@ -27,6 +27,9 @@ import type {
 // closure-shaped interface (no runtime objects) so this file never imports
 // the controller/budget modules — keeps the events module renderer-safe.
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+// T12: TaskOutcome carried on the complete event so terminal delivery is
+// bound to a durable finalization decision, not to a generic stream-end.
+import type { TaskOutcome } from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -192,6 +195,30 @@ export interface AIChatQueryCompleteEvent {
   completionTokens?: number;
   /** Final accumulated reasoning so the renderer can recover if live deltas were missed. */
   reasoningContent?: string;
+  /**
+   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32: when the turn was
+   * enrolled in the completion policy and reached a durable finalization
+   * decision, the semantic task outcome carried into terminal delivery. A
+   * generic `complete` event is NOT proof that an enrolled task is
+   * `verified_complete` — the renderer must read this field (absent on
+   * unenrolled turns) to badge honestly. Present only when the engine's
+   * finalization gate committed (or recorded) an outcome for the bound
+   * execution; absent for flag-off / response-only / transport-reuse turns.
+   */
+  taskOutcome?: TaskOutcome;
+  /**
+   * T12: the bound execution id whose durable finalization produced
+   * {@link taskOutcome}. Carries final event identity so the renderer can
+   * dedup repeated delivery (same executionId) and route follow-up actions
+   * (Continue/Retry) at the right execution.
+   */
+  taskExecutionId?: string;
+  /**
+   * T12: stable reason code for the outcome (e.g. `CRITERIA_SATISFIED`,
+   * `CONTINUATION_LIMIT`, `RESPONSE_ENDED`). Lets the renderer show an honest
+   * explanation and pick safe actions without re-deriving the reason.
+   */
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryCancelledEvent {
@@ -199,6 +226,15 @@ export interface AIChatQueryCancelledEvent {
   conversationId: string;
   messageId?: string;
   fullContent: string;
+  /**
+   * T12: when the cancelled turn was enrolled in the completion policy, the
+   * durable outcome carried into terminal delivery (`cancelled` /
+   * `USER_CANCELLED`). Lets the renderer badge honestly and dedup repeated
+   * delivery by executionId.
+   */
+  taskOutcome?: TaskOutcome;
+  taskExecutionId?: string;
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryErrorEvent {
@@ -206,6 +242,15 @@ export interface AIChatQueryErrorEvent {
   conversationId: string;
   messageId?: string;
   errorMessage: string;
+  /**
+   * T12: when the failed turn was enrolled in the completion policy, the
+   * durable outcome carried into terminal delivery (`failed` /
+   * `MODEL_FAILURE` or the recorded decision's outcome). Lets the renderer
+   * badge honestly and dedup repeated delivery by executionId.
+   */
+  taskOutcome?: TaskOutcome;
+  taskExecutionId?: string;
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {

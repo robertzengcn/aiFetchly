@@ -127,6 +127,7 @@ import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTrack
 import type {
   TaskCompletionDecision,
   TaskEndCandidate,
+  TaskOutcome,
 } from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
@@ -1820,7 +1821,13 @@ export class AIChatQueryEngine {
       const result = await this.loop.run(loopInput);
       await this.handleLoopResult(result, module, streamEventSink, taskExecutionBinding);
     } catch (err) {
-      this.handleFailure(err, conversationId, assistantMessageId, eventSink);
+      await this.handleFailure(
+        err,
+        conversationId,
+        assistantMessageId,
+        eventSink,
+        taskExecutionBinding
+      );
     } finally {
       // Clear this turn's map entry unless it was paused (permission/plan
       // question handlers move the entry into the pending maps themselves).
@@ -1916,6 +1923,16 @@ export class AIChatQueryEngine {
       this.taskExecutionBindings.delete(conversationId);
       this.policyAcceptedConversations.delete(conversationId);
       if (boundExecutionId) {
+        // T12: a Stop-cancel write failure must NOT be swallowed silently.
+        // The row may stay `running` with no durable outcome — surface it
+        // as a recoverable persistence error event so the renderer can show
+        // the user the durable record is suspect and restart-time repair
+        // (AC-24/25) is required. Fire-and-forget: Stop must return
+        // promptly so the UI aborts the streaming turn without waiting on
+        // the durable write, but the error is emitted (not just logged).
+        const cancelSink = this.pendingPermissions.get(conversationId)?.eventSink
+          ?? this.pendingPlanQuestions.get(conversationId)?.eventSink
+          ?? this.activeTurns.get(conversationId)?.eventSink;
         void new TaskExecutionCoordinator()
           .cancel(boundExecutionId)
           .then((cancelResult) => {
@@ -1923,14 +1940,32 @@ export class AIChatQueryEngine {
               console.error(
                 `[ai-chat-v2] task-execution cancel failed (executionId=${boundExecutionId}): ${cancelResult.reasonCode ?? "unknown"}`
               );
+              cancelSink?.emit({
+                type: "error",
+                conversationId,
+                messageId: this.activeTurns.get(conversationId)?.assistantMessageId,
+                errorMessage: `Task cancel persistence failed (${cancelResult.reasonCode ?? "unknown"}); the execution row may need restart-time repair.`,
+                taskOutcome: "cancelled",
+                taskExecutionId: boundExecutionId,
+                taskReasonCode: cancelResult.reasonCode ?? "CANCEL_FAILED",
+              });
             }
           })
-          .catch((err: unknown) =>
+          .catch((err: unknown) => {
             console.error(
               `[ai-chat-v2] task-execution cancel threw (executionId=${boundExecutionId}):`,
               err
-            )
-          );
+            );
+            cancelSink?.emit({
+              type: "error",
+              conversationId,
+              messageId: this.activeTurns.get(conversationId)?.assistantMessageId,
+              errorMessage: `Task cancel persistence threw; the execution row may need restart-time repair.`,
+              taskOutcome: "cancelled",
+              taskExecutionId: boundExecutionId,
+              taskReasonCode: "CANCEL_THREW",
+            });
+          });
       }
     }
     const pendingPermission = this.pendingPermissions.get(conversationId);
@@ -2268,16 +2303,19 @@ export class AIChatQueryEngine {
             matchedByToolId.taskExecutionBinding
           );
         })
-        .catch((err) => {
+        .catch(async (err) => {
           console.error("[ai-chat-v2] resume loop failed:", err);
           void redirectToLoginOnAuthExpired(err);
-          matchedByToolId.eventSink.emit({
-            type: "error",
-            conversationId: matchedByToolId.conversationId,
-            messageId: matchedByToolId.assistantMessageId,
-            errorMessage: userSafeError(err),
-          });
-          this.clearConversationTurnState(matchedByToolId.conversationId);
+          // T12: finalize the enrolled execution as failed/MODEL_FAILURE
+          // before the error emit so the row never stays running on a
+          // resume-path throw (FR-10/12/14/24, AC-24/25).
+          await this.handleFailure(
+            err,
+            matchedByToolId.conversationId,
+            matchedByToolId.assistantMessageId,
+            matchedByToolId.eventSink,
+            matchedByToolId.taskExecutionBinding
+          );
         });
 
       return { ok: true };
@@ -2426,16 +2464,19 @@ export class AIChatQueryEngine {
             matchedByToolId.taskExecutionBinding
           );
         })
-        .catch((err) => {
+        .catch(async (err) => {
           console.error("[ai-chat-v2] deny-resume loop failed:", err);
           void redirectToLoginOnAuthExpired(err);
-          matchedByToolId.eventSink.emit({
-            type: "error",
+          // T12: finalize the enrolled execution as failed/MODEL_FAILURE
+          // before the error emit so the row never stays running on a
+          // deny-resume throw (FR-10/12/14/24, AC-24/25).
+          await this.handleFailure(
+            err,
             conversationId,
-            messageId: matchedByToolId.assistantMessageId,
-            errorMessage: userSafeError(err),
-          });
-          this.clearConversationTurnState(conversationId);
+            matchedByToolId.assistantMessageId,
+            matchedByToolId.eventSink,
+            matchedByToolId.taskExecutionBinding
+          );
         });
 
       return { ok: true };
@@ -2670,8 +2711,24 @@ export class AIChatQueryEngine {
         // the complete emit so the UI never sees a completion whose
         // execution is still "running" (FR-10/15, AC-11/15). Flag-off /
         // unenrolled turns no-op inside the gate.
+        // T12: the gate returns the committed (or synthesized) outcome +
+        // reasonCode so the complete event carries them as terminal-delivery
+        // identity. A generic `complete` event is NOT proof that an enrolled
+        // task is verified_complete — the renderer reads `taskOutcome` to
+        // badge honestly (FR-10/12/14/24, NFR-10/11, AC-15/24/25/30/32).
+        let taskOutcome: TaskOutcome | undefined;
+        let taskExecutionId: string | undefined;
+        let taskReasonCode: string | undefined;
         if (taskExecutionBinding) {
-          await this.finalizeManualAtCompleteGate(result, taskExecutionBinding);
+          const carried = await this.finalizeManualAtCompleteGate(
+            result,
+            taskExecutionBinding
+          );
+          if (carried) {
+            taskOutcome = carried.outcome;
+            taskExecutionId = taskExecutionBinding.executionId;
+            taskReasonCode = carried.reasonCode;
+          }
           // Unit 7: the row is finalized (or the gate logged the failure) —
           // drop the conversation binding so a later Stop click never
           // double-finalizes. ALREADY_FINALIZED is idempotent, but the map
@@ -2694,6 +2751,9 @@ export class AIChatQueryEngine {
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
           reasoningContent: result.reasoningContent,
+          taskOutcome,
+          taskExecutionId,
+          taskReasonCode,
         });
         // Post-turn compaction. The durable incremental coordinator (§11) takes
         // precedence when injected — it dedups concurrent requests, acquires a
@@ -2796,12 +2856,41 @@ export class AIChatQueryEngine {
             turnId: cancelledTurnId,
           });
         }
+        // T12: durable finalization gate for the CANCELLED path. If the loop
+        // resolved `cancelled` for a reason OTHER than the user hitting Stop
+        // (window close mid-stream, controller abort, etc.), the enrolled
+        // execution still needs an honest `cancelled`/`USER_CANCELLED` row —
+        // otherwise it stays `running` and restart cannot tell the work was
+        // abandoned (FR-10/12/14/24, NFR-10/11, AC-24/25). Stop's own cancel
+        // already finalized the row in that path; ALREADY_FINALIZED is a
+        // no-op success here.
+        let cancelledTaskOutcome: TaskOutcome | undefined;
+        let cancelledTaskExecutionId: string | undefined;
+        let cancelledTaskReasonCode: string | undefined;
+        if (taskExecutionBinding) {
+          const carried = await this.finalizeManualAtTerminalFailure(
+            taskExecutionBinding,
+            "cancelled",
+            "USER_CANCELLED",
+            result.partialContent
+          );
+          if (carried) {
+            cancelledTaskOutcome = carried.outcome;
+            cancelledTaskExecutionId = taskExecutionBinding.executionId;
+            cancelledTaskReasonCode = carried.reasonCode;
+          }
+          this.taskExecutionBindings.delete(conversationId);
+          this.policyAcceptedConversations.delete(conversationId);
+        }
         eventSink.emit({
           type: "cancelled",
           conversationId,
           messageId:
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           fullContent: result.partialContent,
+          taskOutcome: cancelledTaskOutcome,
+          taskExecutionId: cancelledTaskExecutionId,
+          taskReasonCode: cancelledTaskReasonCode,
         });
         this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState(conversationId, assistantMessageId);
@@ -2838,12 +2927,40 @@ export class AIChatQueryEngine {
             turnId: failedTurnId,
           });
         }
+        // T12: durable finalization gate for the FAILED path. An enrolled
+        // execution whose loop failed must NOT stay `running` — the row gets
+        // a `failed` outcome (or honors a recorded finish decision) BEFORE
+        // the error emit so restart/repair can see the work is dead and why
+        // (FR-10/12/14/24, NFR-10/11, AC-15/24/25/30/32). Stop already
+        // cancelled the row if the user hit Stop; ALREADY_FINALIZED is a
+        // no-op success here.
+        let failedTaskOutcome: TaskOutcome | undefined;
+        let failedTaskExecutionId: string | undefined;
+        let failedTaskReasonCode: string | undefined;
+        if (taskExecutionBinding) {
+          const carried = await this.finalizeManualAtTerminalFailure(
+            taskExecutionBinding,
+            "failed",
+            "MODEL_FAILURE",
+            result.partialContent
+          );
+          if (carried) {
+            failedTaskOutcome = carried.outcome;
+            failedTaskExecutionId = taskExecutionBinding.executionId;
+            failedTaskReasonCode = carried.reasonCode;
+          }
+          this.taskExecutionBindings.delete(conversationId);
+          this.policyAcceptedConversations.delete(conversationId);
+        }
         eventSink.emit({
           type: "error",
           conversationId,
           messageId:
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
+          taskOutcome: failedTaskOutcome,
+          taskExecutionId: failedTaskExecutionId,
+          taskReasonCode: failedTaskReasonCode,
         });
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
@@ -2898,11 +3015,18 @@ export class AIChatQueryEngine {
    * - Finalization failures never block the UI: `ok` and
    *   `alreadyFinalized` count as success; anything else logs and the
    *   `complete` emit still proceeds.
+   *
+   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32: returns the
+   * committed (or synthesized) outcome + reasonCode so the complete-case
+   * caller can carry them on the `complete` event. Terminal delivery is
+   * now bound to a durable finalization decision, not to a generic
+   * stream-end: a `complete` event without `taskOutcome` is NOT proof
+   * that an enrolled task is `verified_complete`.
    */
   private async finalizeManualAtCompleteGate(
     result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
     binding: LoopTaskExecutionBinding
-  ): Promise<void> {
+  ): Promise<{ outcome: TaskOutcome; reasonCode: string } | null> {
     // T16: check the FROZEN flag-at-enrollment value on the binding, not the
     // live runtime flag. An execution enrolled while the flag was on stays
     // accepted for finalization even if the flag was turned off midstream —
@@ -2910,7 +3034,7 @@ export class AIChatQueryEngine {
     // emit could convert accepted unfinished work to unchecked success
     // (NFR-12, AC-12/32). The binding is undefined for flag-off/unenrolled
     // turns, and the complete-case caller already guards on its presence.
-    if (!binding.policyAccepted) return;
+    if (!binding.policyAccepted) return null;
     const slot = this.taskDecisionSlots.get(binding.executionId);
     let decision = slot?.get() ?? null;
     if (!decision) {
@@ -2961,21 +3085,33 @@ export class AIChatQueryEngine {
       decision
     );
     if (!finalizeInput) {
-      return;
+      return null;
     }
+    const carried: { outcome: TaskOutcome; reasonCode: string } = {
+      outcome: finalizeInput.outcome,
+      reasonCode: finalizeInput.reasonCode,
+    };
     try {
       const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
         finalizeInput
       );
-      if (finalizeResult.ok || finalizeResult.alreadyFinalized) return;
+      if (finalizeResult.ok || finalizeResult.alreadyFinalized) {
+        return carried;
+      }
+      // T12: a finalization failure must NOT be swallowed silently. The row
+      // may still be `running` with no durable outcome — return the intended
+      // outcome anyway (so the renderer badges honestly) but the engine
+      // surfaces the failure as a recoverable persistence error below.
       console.error(
         `[ai-chat-v2] completion-policy finalize failed (executionId=${binding.executionId}): ${finalizeResult.reasonCode ?? "unknown"}`
       );
+      return { ...carried, reasonCode: finalizeResult.reasonCode ?? carried.reasonCode };
     } catch (err) {
       console.error(
         `[ai-chat-v2] completion-policy finalize threw (executionId=${binding.executionId}):`,
         err
       );
+      return { ...carried, reasonCode: "FINALIZE_THREW" };
     }
   }
 
@@ -3043,6 +3179,85 @@ export class AIChatQueryEngine {
           remainingWork: [],
           assistantResultMessageId: result.assistantMessageId,
         };
+    }
+  }
+
+  /**
+   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32 — durable
+   * finalization gate for the FAILED and CANCELLED terminal paths.
+   *
+   * The completed-case gate ({@link finalizeManualAtCompleteGate}) is the
+   * happy path. But a loop that ends `failed` or `cancelled` (or throws and
+   * lands in {@link handleFailure}) on an enrolled execution must ALSO
+   * leave an honest durable record — otherwise the row stays `running` and
+   * a later restart cannot tell that the work is dead, let alone why
+   * (AC-24/25: restart interruption + repair requires a finalized row).
+   *
+   * Behavior:
+   * - No binding / `policyAccepted` false → no-op (legacy behavior).
+   * - Honors any controller decision the loop already recorded on the slot
+   *   (a `finish` decision at a consult site that then threw, for example).
+   *   The recorded decision's outcome is used as-is when it is a terminal
+   *   finish; a `continue`/`wait` recorded decision is overridden to the
+   *   caller's terminal outcome (continue/wait are impossible after the loop
+   *   has failed or been cancelled).
+   * - Otherwise synthesizes the caller's outcome + reasonCode (failed/
+   *   MODEL_FAILURE or cancelled/USER_CANCELLED).
+   * - Finalizes via the SAME CAS path as the complete gate
+   *   ({@link TaskExecutionCoordinator.finalizeManual}); ALREADY_FINALIZED
+   *   is a no-op success (Stop already cancelled, for example).
+   * - Failures are logged AND surfaced to the caller via the returned
+   *   reasonCode so the terminal emit can carry them; the UI never sees a
+   *   generic terminal event as proof of an enrolled verified outcome.
+   */
+  private async finalizeManualAtTerminalFailure(
+    binding: LoopTaskExecutionBinding,
+    terminalOutcome: TaskOutcome,
+    terminalReasonCode: string,
+    summary: string
+  ): Promise<{ outcome: TaskOutcome; reasonCode: string } | null> {
+    if (!binding.policyAccepted) return null;
+    const slot = this.taskDecisionSlots.get(binding.executionId);
+    const recorded = slot?.get() ?? null;
+    let outcome = terminalOutcome;
+    let reasonCode = terminalReasonCode;
+    // Honor a recorded finish decision's outcome/reason when it is itself a
+    // terminal finish (a consult site decided finish before the loop threw).
+    // continue/wait post-failure is impossible; keep the caller's terminal
+    // outcome so the row never lands verified_complete by accident.
+    if (recorded && recorded.type === "finish") {
+      outcome = recorded.outcome;
+      reasonCode = recorded.reasonCode;
+    }
+    const finalizeInput: FinalizeManualInput = {
+      executionId: binding.executionId,
+      outcome,
+      reasonCode,
+      summary: summary.slice(0, 2000),
+      evidenceIds: [],
+      remainingWork:
+        recorded && recorded.type === "finish"
+          ? recorded.remainingWork
+          : [],
+      assistantResultMessageId: null,
+    };
+    try {
+      const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
+        finalizeInput
+      );
+      if (finalizeResult.ok || finalizeResult.alreadyFinalized) {
+        return { outcome, reasonCode };
+      }
+      console.error(
+        `[ai-chat-v2] completion-policy terminal-failure finalize failed (executionId=${binding.executionId}, outcome=${outcome}): ${finalizeResult.reasonCode ?? "unknown"}`
+      );
+      return { outcome, reasonCode: finalizeResult.reasonCode ?? reasonCode };
+    } catch (err) {
+      console.error(
+        `[ai-chat-v2] completion-policy terminal-failure finalize threw (executionId=${binding.executionId}):`,
+        err
+      );
+      return { outcome, reasonCode: "FINALIZE_THREW" };
     }
   }
 
@@ -3219,20 +3434,50 @@ export class AIChatQueryEngine {
   /**
    * Handle an unexpected failure during the loop run.
    */
-  private handleFailure(
+  private async handleFailure(
     err: unknown,
     conversationId: string,
     assistantMessageId: string,
-    eventSink: AIChatQueryEventSink
-  ): void {
+    eventSink: AIChatQueryEventSink,
+    taskExecutionBinding?: LoopTaskExecutionBinding
+  ): Promise<void> {
     this.dispatchStop(conversationId, "error");
     console.error("[ai-chat-v2] engine failure:", err);
     void redirectToLoginOnAuthExpired(err);
+    // T12: durable finalization gate for the catch path. An enrolled
+    // execution whose loop THREW (vs. cleanly resolved `failed`) must still
+    // leave an honest durable record — finalize `failed`/MODEL_FAILURE
+    // before the error emit. A write failure here is logged inside the
+    // helper and the row stays `running` for restart-time repair
+    // (AC-24/25). The map is cleared so a later Stop click never
+    // double-finalizes. ALREADY_FINALIZED (Stop already cancelled) is a
+    // no-op success.
+    let failureTaskOutcome: TaskOutcome | undefined;
+    let failureTaskExecutionId: string | undefined;
+    let failureTaskReasonCode: string | undefined;
+    if (taskExecutionBinding) {
+      failureTaskExecutionId = taskExecutionBinding.executionId;
+      const carried = await this.finalizeManualAtTerminalFailure(
+        taskExecutionBinding,
+        "failed",
+        "MODEL_FAILURE",
+        userSafeError(err)
+      );
+      if (carried) {
+        failureTaskOutcome = carried.outcome;
+        failureTaskReasonCode = carried.reasonCode;
+      }
+      this.taskExecutionBindings.delete(conversationId);
+      this.policyAcceptedConversations.delete(conversationId);
+    }
     eventSink.emit({
       type: "error",
       conversationId,
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
+      taskOutcome: failureTaskOutcome,
+      taskExecutionId: failureTaskExecutionId,
+      taskReasonCode: failureTaskReasonCode,
     });
     this.clearConversationTurnState(conversationId, assistantMessageId);
   }

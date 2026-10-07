@@ -208,8 +208,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T12 — Make durable finalization a real terminal-delivery gate [P1, confirmed]
 
-- [ ] Stop swallowing finalization failures and dropping recovery ownership before durability.
-- [ ] Finalize or persist a recoverable interruption for all failed/cancelled/abort paths; carry outcome and final event identity into delivery.
+- [x] Stop swallowing finalization failures and dropping recovery ownership before durability.
+- [x] Finalize or persist a recoverable interruption for all failed/cancelled/abort paths; carry outcome and final event identity into delivery.
 
 **Evidence:** `AIChatQueryEngine.ts:2851–2864` logs finalization failure and returns; `:2575` deletes the binding; `:2577` still emits complete without task outcome/final identity. The failed result branch `:2702–2742` does not finalize the enrolled execution. Stop `:1813–1828` deletes binding and performs fire-and-forget cancellation; a write failure only logs. Replacement cancellation is similarly asynchronous and occurs only after new task creation. Existing assistant metadata at `:2553` does not carry task outcome.
 
