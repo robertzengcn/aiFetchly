@@ -504,4 +504,76 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     const completeEvent = emits.find((e) => e.type === "complete");
     expect(completeEvent).toBeDefined();
   });
+
+  // T16 — Freeze accepted policy across flag rollback (NFR-12, AC-12/32).
+  // The flag value is FROZEN at enrollment: a turn enrolled while the flag
+  // was on stays accepted for finalization even if the flag is turned off
+  // midstream. The runtime flag controls only NEW enrollment; accepted
+  // in-flight handling never falls back to the legacy blind-complete path.
+  it("T16: flag-off midstream (after flag-on enrollment) still finalizes via the policy gate", async () => {
+    const finishDecision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: [],
+      summary: "partial",
+      remainingWork: ["verify_email_column"],
+    };
+    enrollCreated();
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(finishDecision);
+        // Flip the live flag OFF midstream — the turn was already enrolled
+        // (policyAccepted frozen true on the binding). The gate must still
+        // finalize; it must NOT fall back to the legacy blind complete→
+        // success path.
+        flagMock.mockReturnValue(false);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+    });
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
+
+  it("T16: flag-off midstream + no loop-recorded decision → fallback consult still runs (frozen accepted)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "RESPONSE_ENDED",
+      evidenceIds: [],
+      summary: "ended",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      () => {
+        // No recordDecision call — the loop ended naturally. Flip the flag
+        // off midstream. The gate's fallback consult must still run because
+        // the binding carries policyAccepted=true from enrollment.
+        flagMock.mockReturnValue(false);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(consultDecide).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+    });
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
 });

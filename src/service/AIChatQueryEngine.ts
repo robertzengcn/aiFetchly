@@ -423,6 +423,18 @@ export class AIChatQueryEngine {
    * turn state. Keyed by conversationId, mirroring activeTurns.
    */
   private readonly taskExecutionBindings = new Map<string, string>();
+  /**
+   * T16 / NFR-12: conversations whose execution was enrolled WHILE the
+   * completion-policy flag was on. The flag value is FROZEN at enrollment
+   * and carried here so downstream handling of an ACCEPTED execution
+   * (Stop-cancel, finalization gate) does not re-check the mutable runtime
+   * flag. Turning the flag off after enrollment cannot convert accepted
+   * unfinished work to unchecked success — Stop still cancels the enrolled
+   * row, the finalization gate still consults the controller. Mirrors
+   * `taskExecutionBindings` keys: set on enrollment, cleared at the
+   * complete-gate / Stop / conversation teardown.
+   */
+  private readonly policyAcceptedConversations = new Set<string>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly compactionCoordinator?: AIChatCompactionCoordinator;
@@ -1378,6 +1390,10 @@ export class AIChatQueryEngine {
                 conversationId,
                 created.executionId
               );
+              // T16: freeze the flag-at-enrollment value so Stop-cancel and
+              // the finalization gate do not re-check the mutable runtime
+              // flag for this accepted execution (NFR-12, AC-12/32).
+              this.policyAcceptedConversations.add(conversationId);
               // Per-turn decision slot: the loop's consult closure records
               // here, and the engine's finalization gate (Slice 2 Unit 5)
               // reads it to tell "loop already consulted" from "no consult
@@ -1425,6 +1441,13 @@ export class AIChatQueryEngine {
               });
               taskExecutionBinding = {
                 executionId: created.executionId,
+                // T16: freeze the flag value at enrollment so downstream
+                // handling of THIS accepted execution (loop consult,
+                // finalization gate, Stop-cancel) does not re-check the
+                // mutable runtime flag. Turning the flag off after
+                // enrollment cannot convert accepted unfinished work to
+                // unchecked success (NFR-12, AC-12/32).
+                policyAccepted: true,
                 consult: (candidate) =>
                   created.controller.decide(candidate, {
                     route: created.route,
@@ -1809,14 +1832,18 @@ export class AIChatQueryEngine {
    */
   private stopConversation(conversationId: string): void {
     this.dispatchStop(conversationId, "user_stopped");
-    if (
-      isAiTaskCompletionPolicyV1Enabled() &&
-      this.taskExecutionBindings.has(conversationId)
-    ) {
+    // T16: check the FROZEN flag-at-enrollment value, not the live runtime
+    // flag. An execution enrolled while the flag was on stays accepted for
+    // Stop-cancel even if the flag was turned off midstream — otherwise
+    // the row would never be finalized cancelled and a late complete emit
+    // could convert accepted unfinished work to unchecked success
+    // (NFR-12, AC-12/32).
+    if (this.policyAcceptedConversations.has(conversationId)) {
       const boundExecutionId = this.taskExecutionBindings.get(conversationId);
       // The binding is consumed: a second Stop click (or the loop's own
       // cancelled resolution) must not double-finalize.
       this.taskExecutionBindings.delete(conversationId);
+      this.policyAcceptedConversations.delete(conversationId);
       if (boundExecutionId) {
         void new TaskExecutionCoordinator()
           .cancel(boundExecutionId)
@@ -2579,6 +2606,10 @@ export class AIChatQueryEngine {
           // double-finalizes. ALREADY_FINALIZED is idempotent, but the map
           // should not claim a live binding for a finished execution.
           this.taskExecutionBindings.delete(conversationId);
+          // T16: also drop the frozen-policy marker so the set does not leak
+          // past the turn (the execution is finalized; the conversation no
+          // longer holds an accepted execution).
+          this.policyAcceptedConversations.delete(conversationId);
         }
         eventSink.emit({
           type: "complete",
@@ -2801,7 +2832,14 @@ export class AIChatQueryEngine {
     result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
     binding: LoopTaskExecutionBinding
   ): Promise<void> {
-    if (!isAiTaskCompletionPolicyV1Enabled()) return;
+    // T16: check the FROZEN flag-at-enrollment value on the binding, not the
+    // live runtime flag. An execution enrolled while the flag was on stays
+    // accepted for finalization even if the flag was turned off midstream —
+    // otherwise the row would never receive its outcome and a late complete
+    // emit could convert accepted unfinished work to unchecked success
+    // (NFR-12, AC-12/32). The binding is undefined for flag-off/unenrolled
+    // turns, and the complete-case caller already guards on its presence.
+    if (!binding.policyAccepted) return;
     const slot = this.taskDecisionSlots.get(binding.executionId);
     let decision = slot?.get() ?? null;
     if (!decision) {

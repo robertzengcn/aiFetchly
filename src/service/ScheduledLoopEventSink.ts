@@ -1,4 +1,3 @@
-import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
 import type {
   TaskCompletionController,
   DecideContext,
@@ -72,6 +71,17 @@ export interface ScheduledLoopPolicyBinding {
   readonly contract?: TaskCompletionContract | null;
   readonly route: TaskExecutionRoute;
   readonly expectedVersion: number;
+  /**
+   * T16 / NFR-12 / AC-12/32: the completion-policy flag value FROZEN at
+   * enrollment time (when the runner constructed this binding). The sink's
+   * consult and failOutstanding paths check this frozen value, NOT the live
+   * runtime flag — turning the flag off after enrollment cannot convert
+   * accepted unfinished scheduled work to unchecked success (the blind
+   * `completed` mapping at line 131-137 would otherwise run). Optional so
+   * flag-off callers and tests can omit it; when absent the sink treats the
+   * binding as not-accepted (blind legacy mapping, byte-identical).
+   */
+  readonly policyAccepted?: boolean;
 }
 
 /**
@@ -119,12 +129,14 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
     if (this.outcome) return; // terminal already recorded
     switch (event.type) {
       case "complete":
-        // Unit 6 (FR-05): when the policy binding is present and the flag is
-        // on, the controller's decision — not the transport event — decides
-        // the outcome. The consult is fire-and-forget: emit() stays sync,
-        // and the commit happens when the decision resolves. Flag-off or no
-        // binding keeps the blind mapping byte-identical to Slice 1.
-        if (this.policyBinding && isAiTaskCompletionPolicyV1Enabled()) {
+        // Unit 6 (FR-05): when the policy binding is present and was
+        // accepted at enrollment (T16: frozen flag value, not the live
+        // runtime flag), the controller's decision — not the transport
+        // event — decides the outcome. The consult is fire-and-forget:
+        // emit() stays sync, and the commit happens when the decision
+        // resolves. Flag-off or no binding keeps the blind mapping
+        // byte-identical to Slice 1.
+        if (this.policyBinding?.policyAccepted) {
           this.consultPolicyOnComplete(event);
           return;
         }
@@ -272,7 +284,10 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
    * STREAM_INCOMPLETE — never a verified/success outcome.
    */
   failOutstanding(errorMessage: string): void {
-    if (this.policyBinding && isAiTaskCompletionPolicyV1Enabled()) {
+    // T16: frozen flag-at-enrollment value — a stream that died without a
+    // terminal event commits missing_outcome even if the flag was turned
+    // off midstream (NFR-12, AC-12/32).
+    if (this.policyBinding?.policyAccepted) {
       this.commitOutcome({
         kind: "missing_outcome",
         reasonCode: "STREAM_INCOMPLETE",

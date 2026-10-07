@@ -48,7 +48,7 @@ const decideMock = vi.hoisted(() => vi.fn<DecideFn>());
 // carries just that member; cast through unknown because the production
 // TaskCompletionController type has more surface than the stub exercises.
 function makeBinding(
-  overrides?: { decide?: DecideFn }
+  overrides?: { decide?: DecideFn; policyAccepted?: boolean }
 ): ScheduledLoopPolicyBinding {
   return {
     executionId: "exec-sink-1",
@@ -57,6 +57,11 @@ function makeBinding(
     } as unknown as TaskCompletionController,
     route: "task_best_effort",
     expectedVersion: 0,
+    // T16: the frozen flag-at-enrollment value. Defaults to true because
+    // most tests exercise the policy-on path; the flag-off path tests pass
+    // `policyAccepted: false` (or omit the binding) to exercise the blind
+    // legacy mapping.
+    policyAccepted: overrides?.policyAccepted ?? true,
   };
 }
 
@@ -86,7 +91,12 @@ beforeEach(() => {
 describe("ScheduledLoopEventSink — policy DI consult", () => {
   it("flag-off: blind complete→completed mapping unchanged, decide never called", () => {
     flagMock.mockReturnValue(false);
-    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    // T16: a binding constructed while the flag was OFF carries
+    // policyAccepted=false → blind legacy mapping, decide never called.
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ policyAccepted: false })
+    );
     sink.emit(completeEvent());
     const outcome = sink.getOutcome();
     expect(outcome?.kind).toBe("completed");
@@ -229,6 +239,48 @@ describe("ScheduledLoopEventSink — failOutstanding missing-outcome rejection",
     const sink = new ScheduledLoopEventSink();
     sink.failOutstanding("backstop auto-deny");
     expect(sink.getOutcome()?.kind).toBe("failed");
+  });
+
+  // T16 — Freeze accepted policy across flag rollback (NFR-12, AC-12/32).
+  // A binding constructed while the flag was ON carries policyAccepted=true
+  // (frozen at enrollment). Turning the live flag OFF midstream must NOT
+  // convert accepted unfinished work to unchecked success: the consult
+  // still runs and the controller's decision still wins over the blind
+  // complete→completed mapping.
+  it("T16: flag-off midstream + policyAccepted=true binding → consult still runs (no blind success fallback)", async () => {
+    flagMock.mockReturnValue(false);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: [],
+      summary: "partial",
+      remainingWork: ["verify_email_column"],
+    });
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ policyAccepted: true })
+    );
+    sink.emit(completeEvent());
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    expect(decideMock).toHaveBeenCalledTimes(1);
+    expect(sink.getOutcome()?.kind).toBe("incomplete");
+  });
+
+  it("T16: flag-off midstream + policyAccepted=true binding → failOutstanding still commits missing_outcome", () => {
+    flagMock.mockReturnValue(false);
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ policyAccepted: true })
+    );
+    sink.failOutstanding("backstop auto-deny");
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("missing_outcome");
+    if (outcome?.kind === "missing_outcome") {
+      expect(outcome.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
   });
 });
 

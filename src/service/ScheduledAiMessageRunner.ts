@@ -330,6 +330,13 @@ export class ScheduledAiMessageRunner {
             contract: null,
             route: binding.route,
             expectedVersion: binding.leaseGeneration,
+            // T16: freeze the flag-at-enrollment value so the sink's consult
+            // and failOutstanding paths do not re-check the mutable runtime
+            // flag. A scheduled turn enrolled while the flag was on stays
+            // accepted even if the flag is turned off midstream — never
+            // convert accepted unfinished work to unchecked success
+            // (NFR-12, AC-12/32).
+            policyAccepted: true,
           };
           policyExecution = {
             executionId: binding.executionId,
@@ -677,7 +684,13 @@ export class ScheduledAiMessageRunner {
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
 
-    if (policyExecution && isAiTaskCompletionPolicyV1Enabled()) {
+    // T16: a policyExecution captured at enrollment means the run was
+    // accepted under the flag. Finalize it through the policy path even if
+    // the flag was turned off midstream — never convert accepted unfinished
+    // scheduled work to unchecked success via the legacy switch below
+    // (NFR-12, AC-12/32). The live flag controls only NEW enrollment
+    // (line 302 above).
+    if (policyExecution) {
       return this.finalizeScheduledPolicyRun({
         runId,
         taskId,

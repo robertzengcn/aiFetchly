@@ -57,7 +57,6 @@ import {
 import {
   isToolOutputCaptureEnabled,
   isToolOutputModelRefsEnabled,
-  isAiTaskCompletionPolicyV1Enabled,
 } from "@/config/featureFlags";
 import type { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
@@ -1368,9 +1367,15 @@ export class AIChatQueryLoop {
     content: string;
     finishReason: string | null;
   }): Promise<ConsultOutcome | null> {
-    if (!isAiTaskCompletionPolicyV1Enabled()) return null;
     const binding = params.input.taskExecutionBinding;
     if (!binding) return null;
+    // T16: check the FROZEN flag-at-enrollment value on the binding, not the
+    // live runtime flag. An execution enrolled while the flag was on stays
+    // accepted for consult even if the flag was turned off midstream —
+    // otherwise the loop's consult sites would no-op and legacy site logic
+    // could convert accepted unfinished work to unchecked success
+    // (NFR-12, AC-12/32).
+    if (!binding.policyAccepted) return null;
     try {
       return await consultLoopEndCandidate({
         binding,

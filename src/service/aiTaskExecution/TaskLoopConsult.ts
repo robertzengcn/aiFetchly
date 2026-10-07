@@ -43,6 +43,22 @@ export interface LoopTaskExecutionBinding {
     continuationId: string
   ) => BudgetReservationResult;
   /**
+   * T16 / NFR-12 / AC-12/32: the completion-policy flag value FROZEN at
+   * enrollment time. Downstream handling of an ACCEPTED execution — the
+   * loop's consult sites, the engine's finalization gate, and Stop-cancel —
+   * consult this frozen value, NOT the live runtime flag. Turning the flag
+   * off after enrollment therefore cannot convert accepted unfinished work
+   * to unchecked success: the binding still carries `policyAccepted: true`
+   * and the consult/finalize/cancel paths run as if the flag were on. The
+   * runtime flag controls only NEW enrollment (the engine's submission
+   * seam re-checks `isAiTaskCompletionPolicyV1Enabled()` to decide whether
+   * to enroll a fresh submission). Optional so flag-off callers and tests
+   * that never enroll can omit it; when absent the downstream sites treat
+   * the binding as not-accepted (no consult, no finalize, no cancel) —
+   * byte-identical to legacy behavior.
+   */
+  readonly policyAccepted?: boolean;
+  /**
    * Records the controller's decision for this turn so the engine's
    * finalization gate (Slice 2 Unit 5) can tell "the loop already
    * consulted" apart from "no consult ran" and only fall back to its

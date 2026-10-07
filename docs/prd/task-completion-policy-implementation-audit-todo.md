@@ -255,7 +255,7 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T16 — Freeze accepted policy across flag rollback [P1, confirmed]
 
-- [ ] Use accepted execution policy for in-flight handling; runtime flag controls new enrollment, not unchecked fallback of accepted work.
+- [x] Use accepted execution policy for in-flight handling; runtime flag controls new enrollment, not unchecked fallback of accepted work.
 
 **Evidence:** `AIChatQueryLoop.ts:1371`, `AIChatQueryEngine.ts:2798`, Stop `:1807`, and `ScheduledLoopEventSink.ts:127` recheck the mutable flag. Turning it off after enrollment skips consult/finalization/cancellation, and scheduled sink `:131–137` restores blind completed mapping.
 
