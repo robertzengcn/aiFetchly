@@ -605,3 +605,222 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
     expect(draft?.status).toBe("sent");
   });
 });
+
+// ---------------------------------------------------------------------------
+// T05 step 11 (FR-031 §9.3): forced-send 5s freshness window. The claim
+// transaction's first action is a freshness fence — if the pre-send detection
+// observation (replyNegativeCheckAt) is older than FORCED_FRESHNESS_WINDOW_MS
+// (5s) by the time the transaction opens, the claim returns `freshness_stale`
+// with NO write. The delivery service reruns detection OUTSIDE the transaction
+// and re-claims ONCE. §9.3: "Allow one delayed refresh; further delay refuses
+// with no SMTP submission." A second `freshness_stale` → SendPolicyRejection
+// (code = probe_timeout). No SMTP.
+//
+// These tests mirror production's persistNegative: the fake detection spy
+// writes replyNegativeCheckAt to the seed message on each call, so the
+// freshness fence sees a realistic observation timestamp (not a mock that
+// bypasses the persistence the fence reads).
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply forced-freshness window (T05 step 11, §9.3)", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+  const messageModule = new EmailReceivedMessageModule();
+
+  async function refusalAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  /**
+   * Build a delivery service whose detection spy writes a `replyNegativeCheckAt`
+   * observation to the seed message (mirroring production's persistNegative)
+   * and returns `not_replied`. `observedAtSupplier` controls the timestamp
+   * written: `() => new Date()` = fresh (within the 5s window);
+   * `() => new Date(Date.now() - 6000)` = stale (outside the window).
+   */
+  function buildFreshnessDelivery(
+    observedAtSupplier: () => Date
+  ): { delivery: EmailReplyDeliveryService; smtpCalls: { count: number } } {
+    const smtpCalls = { count: 0 };
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        smtpCalls.count += 1;
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-${smtpCalls.count}@x>`,
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(
+        async (input: { messageId: number }) => {
+          // Mirror production persistNegative: write the observation timestamp
+          // the freshness fence will read. The supplier controls fresh vs stale.
+          await messageModule.updateReplyEvidence({
+            id: input.messageId,
+            replyNegativeCheckAt: observedAtSupplier(),
+            replyNegativeContextHash: "test-context-hash",
+            isAnswered: 0,
+            answeredFlagCheckedAt: observedAtSupplier(),
+          });
+          return {
+            state: "not_replied",
+            replied: false,
+            source: "sent_search",
+            matchedMessageId: null,
+            reasonCode: "no_reply_observed",
+            checkedAt: new Date().toISOString(),
+            fromCache: false,
+            coverage: "configured_imap",
+          } satisfies ReplyDetectionResult;
+        }
+      );
+      return svc;
+    };
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+    return { delivery, smtpCalls };
+  }
+
+  it("observation ≤5s old -> claim proceeds, SMTP fires once, draft -> sent", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const { delivery, smtpCalls } = buildFreshnessDelivery(() => new Date());
+
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    // No refusal audit on the happy path.
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+
+  it("first detection stale -> freshness_stale, ONE refresh writes fresh observation, second claim proceeds -> sent", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // First detection call writes a stale observation (6s old) -> first claim
+    // returns freshness_stale. Subsequent calls write a fresh observation so
+    // the re-claim after the refresh proceeds.
+    let detectCalls = 0;
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: "<prov-fresh@x>",
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(
+        async (input: { messageId: number }) => {
+          detectCalls += 1;
+          // First detect call (step 5b) writes stale; the refresh call writes
+          // fresh so the re-claim passes the fence.
+          const observedAt =
+            detectCalls === 1
+              ? new Date(Date.now() - 6_000) // stale: outside the 5s window
+              : new Date(); // fresh: within the window
+          await messageModule.updateReplyEvidence({
+            id: input.messageId,
+            replyNegativeCheckAt: observedAt,
+            replyNegativeContextHash: "test-context-hash",
+            isAnswered: 0,
+            answeredFlagCheckedAt: observedAt,
+          });
+          return {
+            state: "not_replied",
+            replied: false,
+            source: "sent_search",
+            matchedMessageId: null,
+            reasonCode: "no_reply_observed",
+            checkedAt: new Date().toISOString(),
+            fromCache: false,
+            coverage: "configured_imap",
+          } satisfies ReplyDetectionResult;
+        }
+      );
+      return svc;
+    };
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+
+    expect(outcome.status).toBe("sent");
+    // The refresh reran detection (2 detect calls total) but SMTP fired once.
+    expect(detectCalls).toBe(2);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+
+  it("refresh still stale -> no SMTP, SendPolicyRejection code=probe_timeout, ONE reply_skipped audit", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // Every detection call writes a stale observation (6s old). The first
+    // claim returns freshness_stale; the refresh reruns detection (still
+    // stale); the second claim returns freshness_stale again -> refuse.
+    const { delivery, smtpCalls } = buildFreshnessDelivery(
+      () => new Date(Date.now() - 6_000)
+    );
+
+    let rejection: SendPolicyRejection | null = null;
+    let outcome: { status: string } | null = null;
+    try {
+      outcome = await delivery.sendApprovedReply({
+        draftId,
+        approvalToken: token,
+      });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+
+    // Refused — no SMTP side effect.
+    expect(outcome).toBeNull();
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("probe_timeout");
+    expect(smtpCalls.count).toBe(0);
+
+    // Exactly ONE reply_skipped audit (stage pre_send, code probe_timeout).
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[probe_timeout]");
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      source?: string;
+    };
+    expect(meta.stage).toBe("pre_send");
+    expect(meta.code).toBe("probe_timeout");
+    expect(meta.source).toBe("reply_detection");
+
+    // The draft stays `approved` — never flipped to sending (the fence wrote
+    // nothing, and no claim ever succeeded).
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("approved");
+  });
+});

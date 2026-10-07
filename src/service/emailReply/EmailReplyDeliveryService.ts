@@ -359,6 +359,17 @@ export class EmailReplyDeliveryService {
     //    the guard row for the draft's replyKey first (null when the guard
     //    table has no row, e.g. legacy data; binding is then skipped and the
     //    claim's conditional draft UPDATE remains the authority).
+    //
+    //    T05 step 11 (FR-031 §9.3): the claim's first action is the forced-
+    //    freshness fence — if the pre-send observation (step 5b) is older than
+    //    FORCED_FRESHNESS_WINDOW_MS by the time the transaction opens, it
+    //    returns `freshness_stale` with NO write. The delivery service then
+    //    reruns detection OUTSIDE the transaction and re-claims ONCE. §9.3:
+    //    "Allow one delayed refresh; further delay refuses with no SMTP
+    //    submission." A second `freshness_stale` → SendPolicyRejection (no SMTP).
+    //    The refresh recognizes only THIS invocation's exact attempt as the
+    //    current owner — the internal ownership handle is the approval.id /
+    //    idempotencyKey being claimed, never a tool/IPC parameter.
     const guardRow = await this.guardModule.findByReplyKey(
       emailServiceId,
       canonicalReplyKey({
@@ -366,7 +377,7 @@ export class EmailReplyDeliveryService {
         rowId: message.id,
       })
     );
-    const claim = await this.draftModule.claimApprovedRevisionForSend({
+    const claimInput = {
       draftId: draft.id,
       revisionId: revision.id,
       approvedHash: recomputedHash,
@@ -379,7 +390,65 @@ export class EmailReplyDeliveryService {
       recipientAddress: revision.recipientAddress,
       policyVersion: REPLY_POLICY_VERSION,
       guardId: guardRow?.id ?? null,
-    });
+    };
+    let claim = await this.draftModule.claimApprovedRevisionForSend(claimInput);
+
+    // §9.3: one delayed refresh. The fence wrote nothing, so re-claiming with
+    // the same idempotency key is safe. The rerun is OUTSIDE the transaction
+    // (retains nothing) and forceRefresh: true (never the 60s negative cache).
+    if (
+      claim.status === "precondition_failed" &&
+      claim.reason === "freshness_stale"
+    ) {
+      incrementReplyMetric("send_claim", {
+        outcome: "freshness_stale_retry",
+      });
+      // Re-run the forced pre-send detection. runPreSendDetection throws
+      // SendPolicyRejection on replied/unknown — which is the correct §9.3
+      // behavior: if the refresh finds a reply, the send is refused with the
+      // detection code and ONE reply_skipped audit (written by
+      // runPreSendDetection). No SMTP, no second claim.
+      await this.runPreSendDetection(message, draft.id, requestCorrelationId);
+      claim = await this.draftModule.claimApprovedRevisionForSend(claimInput);
+      if (
+        claim.status === "precondition_failed" &&
+        claim.reason === "freshness_stale"
+      ) {
+        // Second stale → the mailbox is too slow to keep up; refuse with no
+        // SMTP. The code is detection-unknown (`probe_timeout` conveys "the
+        // probe could not settle within the window"); one reply_skipped audit.
+        const code: EmailReplyPolicyCode = "probe_timeout";
+        incrementReplyMetric("send_claim", {
+          outcome: "freshness_stale_refused",
+        });
+        incrementReplyMetric("detection_outcome", {
+          stage: "pre_send",
+          state: "unknown",
+          code,
+        });
+        try {
+          await this.writeDetectionRefusalAudit(
+            message,
+            draft.id,
+            requestCorrelationId,
+            code,
+            "Forced-freshness window exceeded twice; reply state could not be settled (§9.3)"
+          );
+        } catch (auditError) {
+          const auditErrMsg =
+            auditError instanceof Error ? auditError.message : String(auditError);
+          throw new SendPolicyRejection(
+            `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
+            code
+          );
+        }
+        throw new SendPolicyRejection(
+          `Send rejected by reply detection: [${code}] Forced-freshness window exceeded twice (§9.3)`,
+          code
+        );
+      }
+    }
+
     if (claim.status === "already_processed") {
       incrementReplyMetric("send_claim", { outcome: "already_processed" });
       return {

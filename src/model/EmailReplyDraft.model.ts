@@ -42,6 +42,17 @@ import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabi
 // transactions on the same in-process mutex — see replyTxn.ts for the
 // rationale and the cross-process/cross-crash fencing disclaimer.
 
+/**
+ * Forced-send freshness window (FR-031 §9.3): the most recent reply-detection
+ * observation on the seed message must be ≤ this many milliseconds old at the
+ * moment the claim transaction opens. The fence inspects the persisted
+ * observation timestamp ONLY — it does NOT await the mailbox inside the
+ * transaction (§9.3). A stale observation returns `freshness_stale` with NO
+ * write, so the delivery service can rerun detection OUTSIDE the transaction
+ * and re-claim once.
+ */
+export const FORCED_FRESHNESS_WINDOW_MS = 5_000;
+
 export interface ReplyDraftListInput {
   emailServiceId?: number;
   messageId?: number;
@@ -549,6 +560,35 @@ export class EmailReplyDraftModel extends BaseDb {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+
+      // 0. Forced-freshness fence (FR-031 §9.3) — BEFORE the sibling check.
+      // The pre-send detection (step 8) wrote a fresh observation just before
+      // this claim; if that observation is older than FORCED_FRESHNESS_WINDOW_MS
+      // by the time the transaction opens, the negative may be stale (a reply
+      // could have arrived in the gap). The fence inspects the persisted
+      // observation timestamp ONLY — it does NOT await the mailbox inside the
+      // transaction (§9.3). A sticky positive (replyDetectedAt) is always
+      // fresh enough (a known positive short-circuits; the send is refused
+      // upstream by runPreSendDetection). Returns freshness_stale with NO
+      // write so the delivery service can rerun detection OUTSIDE the
+      // transaction and re-claim once.
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      const seedMessage = await messageRepo.findOne({
+        where: { id: input.messageId },
+      });
+      if (seedMessage) {
+        const observedAt =
+          seedMessage.replyNegativeCheckAt ?? seedMessage.replyDetectedAt;
+        if (observedAt !== null) {
+          const ageMs = Date.now() - observedAt.getTime();
+          if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
+            return {
+              status: "precondition_failed",
+              reason: "freshness_stale",
+            };
+          }
+        }
+      }
 
       // 1. Canonical-cluster sibling check (§8.2) — before ANY write. The
       // seed message row is input.messageId; the cluster join is

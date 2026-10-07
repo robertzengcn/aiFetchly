@@ -747,3 +747,243 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     expect(rowB?.activeAttemptId).toBe(424242);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T05 step 11 (FR-031 §9.3): forced-freshness fence at the model layer. The
+// claim transaction's first action reads the seed message's
+// replyNegativeCheckAt (or replyDetectedAt for a positive); if the observation
+// is older than FORCED_FRESHNESS_WINDOW_MS (5s) it returns `freshness_stale`
+// with NO write. The delivery service (covered in EmailReplyDeliveryFakeSmtp)
+// reruns detection outside the transaction and re-claims once. These tests
+// prove the fence semantics directly against the model: the read is non-
+// writing, the timestamp comparison is correct, and the sibling check remains
+// authoritative when a sibling sends during the refresh window.
+// ---------------------------------------------------------------------------
+describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)", () => {
+  let dbpath: string;
+  let draftModel: EmailReplyDraftModel;
+  let approvalModel: EmailReplyApprovalModel;
+  let attemptModel: EmailReplySendAttemptModel;
+
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-reply-freshness-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    draftModel = new EmailReplyDraftModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+    attemptModel = new EmailReplySendAttemptModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const SERVICE_ID = 7;
+
+  async function seedMessage(): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = SERVICE_ID;
+    message.providerUid = `uid-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    message.normalizedMessageId = null;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  /** Write a replyNegativeCheckAt observation directly to the seed message. */
+  async function writeObservation(
+    messageId: number,
+    observedAt: Date
+  ): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: messageId }, { replyNegativeCheckAt: observedAt });
+  }
+
+  function claimInputFor(
+    seed: Awaited<ReturnType<typeof seedApprovedDraft>>,
+    messageId: number
+  ) {
+    return {
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: `owner@service${seed.emailServiceId}.com`,
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      guardId: null,
+    };
+  }
+
+  it("observation ≤5s old -> claim proceeds (no freshness_stale)", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    // Fresh observation: 1 second old (within the 5s window).
+    await writeObservation(msg.id, new Date(Date.now() - 1_000));
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("claimed");
+    if (result.status === "claimed") {
+      const attempt = await attemptModel.read(result.attemptId);
+      expect(attempt?.status).toBe("claimed");
+    }
+  });
+
+  it("observation 6s old -> freshness_stale with NO write (draft stays approved, no attempt)", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    // Stale observation: 6 seconds old (outside the 5s window).
+    await writeObservation(msg.id, new Date(Date.now() - 6_000));
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.reason).toBe("freshness_stale");
+    }
+    // NO write: the draft stays approved, and no attempt row was inserted.
+    const draft = await draftModel.readAggregate(seed.draftId);
+    expect(draft?.status).toBe("approved");
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
+  });
+
+  it("no observation on the seed message -> fence skipped, claim proceeds (back-compat)", async () => {
+    // A legacy message row with no replyNegativeCheckAt/replyDetectedAt (e.g.
+    // populated from before T03) must not be blocked by the fence — the fence
+    // only fires when an observation EXISTS and is stale. This preserves the
+    // claim's authority for messages that have not yet been through detection.
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    // No writeObservation call — both timestamps are null.
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("claimed");
+  });
+
+  it("a sticky positive (replyDetectedAt) within the window -> claim proceeds", async () => {
+    // A sticky positive observation (replyDetectedAt) is also accepted by the
+    // fence when fresh. (In production, runPreSendDetection refuses a positive
+    // BEFORE the claim — this test isolates the fence's timestamp logic only.)
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update(
+        { id: msg.id },
+        { replyDetectedAt: new Date(Date.now() - 2_000), replyNegativeCheckAt: null }
+      );
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("claimed");
+  });
+
+  it("sibling sent during the freshness refresh window -> re-claim refused by the sibling check", async () => {
+    // §9.3: the fence returns freshness_stale with NO write. The delivery
+    // service reruns detection outside the transaction and re-claims. If a
+    // SIBLING send completes between the freshness-stale refusal and the
+    // re-claim, the re-claim MUST be refused by the canonical-cluster sibling
+    // check (the sibling check is still authoritative, even after a successful
+    // refresh). This test isolates the model-level re-claim behavior: the
+    // first claim is freshness_stale; a sibling send lands; the re-claim with
+    // a now-fresh observation is STILL refused because the cluster blocks it.
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    // Stale observation on the first claim.
+    await writeObservation(msg.id, new Date(Date.now() - 6_000));
+
+    const firstClaim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+    expect(firstClaim.status).toBe("precondition_failed");
+    if (firstClaim.status !== "precondition_failed") return;
+    expect(firstClaim.reason).toBe("freshness_stale");
+
+    // Simulate a sibling send completing during the refresh window: insert a
+    // `sent` attempt on a SIBLING draft in the same cluster (a different
+    // approved draft on the same message row). This is what a sibling draft's
+    // finalizeSendOutcome(sent) would leave behind, and it is the cluster
+    // evidence the canonical-cluster sibling check reads (§8.2).
+    const sibling = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    const siblingAttempt = new EmailReplySendAttemptEntity();
+    siblingAttempt.idempotencyKey = `freshness-sibling-${Math.random()}`;
+    siblingAttempt.draftId = sibling.draftId;
+    siblingAttempt.revisionId = sibling.revisionId;
+    siblingAttempt.approvalId = sibling.approvalId;
+    siblingAttempt.messageId = msg.id;
+    siblingAttempt.conversationId = null;
+    siblingAttempt.emailServiceId = SERVICE_ID;
+    siblingAttempt.senderAddress = "me@x.com";
+    siblingAttempt.recipientAddress = "prospect@example.com";
+    siblingAttempt.status = "sent";
+    siblingAttempt.claimedAt = new Date();
+    await attemptModel.create(siblingAttempt);
+
+    // The refresh writes a fresh observation (the fence would now pass)...
+    await writeObservation(msg.id, new Date(Date.now() - 1_000));
+    // ...but the re-claim MUST be refused by the sibling check, because a
+    // sibling send is terminal evidence (§8.2).
+    const reClaim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(reClaim.status).toBe("precondition_failed");
+    if (reClaim.status === "precondition_failed") {
+      // The refusal reason is the sibling-check reason, NOT freshness_stale —
+      // proving the sibling check runs after the fence and is authoritative.
+      expect(reClaim.reason).not.toBe("freshness_stale");
+      expect(reClaim.reason).toContain("Message-level state blocks send");
+    }
+    // No attempt was ever inserted for THIS draft (the sibling's attempt is
+    // on its own draft, not the claiming draft).
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
+  });
+});
