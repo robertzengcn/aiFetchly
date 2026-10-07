@@ -305,7 +305,7 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
       const resumed = await invoke<InstallSnapshot>(
         app2,
         "skill-install:prepare",
-        { conversationId: "e2e-restart-secret-2", source: fixture }
+        { conversationId: "e2e-restart-secret", source: fixture }
       );
       expect(resumed?.sessionId).toBe(sessionId);
       expect(resumed?.state).toBe("awaiting_secret");

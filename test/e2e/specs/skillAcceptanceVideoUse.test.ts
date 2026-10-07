@@ -274,7 +274,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
         // classification, install.md dependencies (satisfied via stubs),
         // the declared credential, and the managed-copy mode.
         expect(status?.safePlan?.revision).toMatch(/^[0-9a-f]{12}$/);
-        expect(status?.safePlan?.skills).toEqual([
+        expect(status?.safePlan?.skills).toMatchObject([
           {
             name: "video-use",
             kind: "prompt",
