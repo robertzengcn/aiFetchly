@@ -530,6 +530,163 @@ describe("AiTaskExecutionModule (Mocha)", function () {
     expect(exec?.execution_state_version).to.equal(1); // bumped exactly once
   });
 
+  // ----- T11: atomic manual finalize + fenced owner release -----
+  // The terminal CAS and the ledger-owner release must commit in ONE
+  // transaction serialized via `executionCreateMutex`. The original code ran
+  // two independent atomic statements with no shared transaction: a real
+  // SQLite trigger failure on the ledger UPDATE left `finalized=1`, outcome
+  // incomplete, and the ledger still `active`; a retry returned
+  // ALREADY_FINALIZED and could not repair the release. With the wrapped
+  // transaction, any ledger-release failure rolls back the CAS too, so the
+  // execution stays unfinalized and a retry succeeds (FR-12/20/24, NFR-10,
+  // AC-15/32).
+  it("T11: ledger-release failure rolls back the CAS so retry succeeds (FR-12/20/24, AC-15/32)", async () => {
+    const mod = new AiTaskExecutionModule();
+    const started = unwrapCreated(await mod.startExecution({
+      conversationId: "conv-t11-trigger",
+      sourceUserMessageId: "msg-t11-trigger",
+      submissionId: "sub-t11-trigger",
+      requestHash: "sha256:t11-trigger",
+      origin: { type: "manual", submissionId: "sub-t11-trigger" },
+      route: "task_verified",
+      completionOwner: "standalone",
+      budgetLimits: MANUAL_BUDGET_DEFAULTS,
+    }));
+
+    // Install a SQLite trigger that makes the ledger release UPDATE fail
+    // (RAISE ABORT) — faithfully reproduces a real trigger failure on the
+    // ledger table. The CAS UPDATE on the execution row succeeds, but the
+    // ledger release inside the same transaction aborts and the whole
+    // transaction rolls back.
+    const conn = SqliteDb.getInstance(tmpDir).connection;
+    await conn.query(
+      `CREATE TRIGGER t11_ledger_release_fail
+         BEFORE UPDATE ON ai_task_execution_ledger
+         WHEN NEW.status = 'released'
+         BEGIN
+           SELECT RAISE(ABORT, 'T11 injected ledger release failure');
+         END`
+    );
+
+    // The finalize must NOT report success — the ledger release aborts and
+    // the CAS rolls back with it.
+    let finalizeError: unknown = null;
+    try {
+      await mod.finalizeExecution({
+        executionId: started.executionId,
+        expectedVersion: 0,
+        outcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        summary: "should roll back",
+        evidenceIds: [],
+        remainingWork: [],
+      });
+    } catch (e) {
+      finalizeError = e;
+    }
+    expect(finalizeError).to.not.equal(null);
+    expect(String(finalizeError)).to.match(/T11 injected ledger release failure/);
+
+    // The execution must NOT be finalized — the CAS rolled back with the
+    // ledger release. A retry returning ALREADY_FINALIZED here would be the
+    // original T11 bug.
+    const execRepo = conn.getRepository(AiTaskExecutionEntity);
+    const execAfterFail = await execRepo.findOne({
+      where: { execution_id: started.executionId },
+    });
+    expect(execAfterFail?.finalized).to.equal(false);
+    expect(execAfterFail?.task_outcome).to.equal(null);
+
+    // The ledger must still be active — the release rolled back too.
+    const ledgerRepo = conn.getRepository(AiTaskExecutionLedgerEntity);
+    const ledgerAfterFail = await ledgerRepo.findOne({
+      where: { ledger_id: started.ledgerId },
+    });
+    expect(ledgerAfterFail?.status).to.equal("active");
+
+    // Drop the failing trigger and retry — now both writes commit and the
+    // retry succeeds (the original bug returned ALREADY_FINALIZED here and
+    // could never repair the release).
+    await conn.query(`DROP TRIGGER t11_ledger_release_fail`);
+    const retry = await mod.finalizeExecution({
+      executionId: started.executionId,
+      expectedVersion: 0,
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      summary: "retry succeeds",
+      evidenceIds: [],
+      remainingWork: [],
+    });
+    expect(retry.ok).to.equal(true);
+
+    const execAfterRetry = await execRepo.findOne({
+      where: { execution_id: started.executionId },
+    });
+    expect(execAfterRetry?.finalized).to.equal(true);
+    expect(execAfterRetry?.task_outcome).to.equal("verified_complete");
+    const ledgerAfterRetry = await ledgerRepo.findOne({
+      where: { ledger_id: started.ledgerId },
+    });
+    expect(ledgerAfterRetry?.status).to.equal("released");
+  });
+
+  it("T11: a competing rolled-back transaction cannot roll back a committed manual outcome (NFR-10, AC-32)", async () => {
+    const mod = new AiTaskExecutionModule();
+    const started = unwrapCreated(await mod.startExecution({
+      conversationId: "conv-t11-compete",
+      sourceUserMessageId: "msg-t11-compete",
+      submissionId: "sub-t11-compete",
+      requestHash: "sha256:t11-compete",
+      origin: { type: "manual", submissionId: "sub-t11-compete" },
+      route: "task_verified",
+      completionOwner: "standalone",
+      budgetLimits: MANUAL_BUDGET_DEFAULTS,
+    }));
+
+    // Commit a manual finalize — the terminal CAS + ledger release commit
+    // together in one transaction serialized by `executionCreateMutex`.
+    const committed = await mod.finalizeExecution({
+      executionId: started.executionId,
+      expectedVersion: 0,
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      summary: "committed outcome",
+      evidenceIds: [],
+      remainingWork: [],
+    });
+    expect(committed.ok).to.equal(true);
+
+    const conn = SqliteDb.getInstance(tmpDir).connection;
+    const execRepo = conn.getRepository(AiTaskExecutionEntity);
+
+    // The original T11 bug: a competing transaction that opened a sibling
+    // QueryRunner and rolled back could roll back a manual outcome that had
+    // already reported committed success (because the CAS and release ran
+    // outside a serialized transaction). With the wrapped transaction the
+    // manual outcome is durable — a sibling transaction that rolls back
+    // cannot touch it.
+    const competingRunner = conn.createQueryRunner();
+    await competingRunner.startTransaction();
+    try {
+      await competingRunner.query(
+        `UPDATE ai_task_execution SET finalized = 0 WHERE execution_id = ?`,
+        [started.executionId]
+      );
+      // Roll back the sibling transaction — none of its writes should
+      // survive. The committed manual outcome must be untouched.
+      await competingRunner.rollbackTransaction();
+    } finally {
+      await competingRunner.release();
+    }
+
+    const execAfterCompete = await execRepo.findOne({
+      where: { execution_id: started.executionId },
+    });
+    expect(execAfterCompete?.finalized).to.equal(true);
+    expect(execAfterCompete?.task_outcome).to.equal("verified_complete");
+    expect(execAfterCompete?.execution_state_version).to.equal(1);
+  });
+
   // ----- B6: evidence checkpoint + assistantResultMessageId persistence -----
   it("finalizeExecution persists evidenceIds/remainingWork/assistantResultMessageId into execution_state_json (B6, §6.3, FR-12)", async () => {
     const mod = new AiTaskExecutionModule();

@@ -615,20 +615,21 @@ export class AiTaskExecutionModel extends BaseDb {
       }
     );
 
-    // B2: atomic CAS finalization. A single UPDATE statement is atomic in
-    // SQLite — the WHERE predicate (execution_state_version = ? AND
-    // finalized = 0) is evaluated atomically with the SET, so two concurrent
-    // finalizers racing on the same expectedVersion cannot both succeed:
-    // exactly one UPDATE affects a row, the other affects zero rows.
-    //
-    // We do NOT wrap this in `connection.transaction()`. better-sqlite3 uses
-    // a single connection with no pool; two concurrent `transaction()` calls
-    // on it collide with "cannot start a transaction within a transaction".
-    // The CAS UPDATE does not need a transaction wrapper — it is one atomic
-    // statement. The ledger release below is a separate atomic UPDATE. If the
-    // process crashes between them, the execution is finalized but the ledger
-    // stays "active"; a recovery pass can detect finalized executions whose
-    // ledger is still active and release it. The CAS itself is never broken.
+    // T11 (FR-12/20/24, NFR-10, AC-15/32): the terminal CAS and the fenced
+    // owner release commit in ONE transaction serialized via the same
+    // `executionCreateMutex` that serializes `createExecution` and
+    // `finalizeScheduledExecution`. The previous form ran two independent
+    // atomic statements with no shared transaction: a real SQLite trigger
+    // failure on the ledger UPDATE left `finalized=1`, outcome incomplete,
+    // and the ledger still `active`; a retry returned `ALREADY_FINALIZED`
+    // and could not repair the release. A competing transaction that
+    // rolled back a sibling QueryRunner could also roll back a manual
+    // outcome that had already reported committed success. Wrapping both
+    // writes in one committed transaction makes the durable outcome and the
+    // owner release all-or-nothing; on any ledger-release failure the CAS
+    // rolls back too, so the execution stays unfinalized and a retry
+    // succeeds. The CAS predicate (`execution_state_version = ? AND
+    // finalized = 0`) still guarantees exactly one competing finalizer wins.
     //
     // IMPORTANT: `manager.query()` / `connection.query()` only forward
     // (sql, params) to the driver — they drop any third argument.
@@ -642,70 +643,100 @@ export class AiTaskExecutionModel extends BaseDb {
     // lastInsertRowid, `.affected` would be undefined, and every finalization
     // would wrongly report STATE_CONFLICT.
     const finalEventIdentity = `execution-result:${input.executionId}`;
-    const runner = this.sqliteDb.connection.createQueryRunner();
     try {
-      const result = (await runner.query(
-        `UPDATE ai_task_execution
-           SET finalized = 1,
-               finalized_at = ?,
-               task_outcome = ?,
-               outcome_reason_code = ?,
-               outcome_summary = ?,
-               final_event_identity = ?,
-               execution_state_version = execution_state_version + 1,
-               stage = 'terminal',
-               execution_state_json = ?,
-               assistant_result_message_id = COALESCE(?, assistant_result_message_id)
-         WHERE execution_id = ?
-           AND execution_state_version = ?
-           AND finalized = 0`,
-        [
-          new Date().toISOString(),
-          input.outcome,
-          input.reasonCode,
-          input.summary,
-          finalEventIdentity,
-          checkpoint,
-          input.assistantResultMessageId ?? null,
-          input.executionId,
-          input.expectedVersion,
-        ],
-        true // useStructuredResult — exposes .affected on the driver result
-      )) as { affected?: number };
-      const affected = result.affected ?? 0;
-      if (affected !== 1) {
-        // Between our read and the UPDATE, a concurrent finalizer either
-        // bumped the version (STATE_CONFLICT) or finalized the row
-        // (ALREADY_FINALIZED). Re-read to distinguish.
-        const fresh = await this.executionRepo.findOne({
-          where: { execution_id: input.executionId },
-        });
-        if (fresh?.finalized) {
-          return {
-            ok: false,
-            alreadyFinalized: true,
-            reasonCode: "ALREADY_FINALIZED",
-          };
+      await executionCreateMutex.run(async () => {
+        const runner = this.sqliteDb.connection.createQueryRunner();
+        await runner.startTransaction();
+        try {
+          const manager = runner.manager;
+
+          // 1. CAS-finalize the execution row (B2). A single UPDATE is
+          // atomic in SQLite — the WHERE predicate is evaluated atomically
+          // with the SET, so two concurrent finalizers racing on the same
+          // expectedVersion cannot both succeed: exactly one UPDATE affects
+          // a row, the other affects zero rows. The transaction wrapper
+          // does not change the CAS semantics; it couples the outcome to
+          // the ledger release below so neither commits without the other.
+          const casResult = (await runner.query(
+            `UPDATE ai_task_execution
+               SET finalized = 1,
+                   finalized_at = ?,
+                   task_outcome = ?,
+                   outcome_reason_code = ?,
+                   outcome_summary = ?,
+                   final_event_identity = ?,
+                   execution_state_version = execution_state_version + 1,
+                   stage = 'terminal',
+                   execution_state_json = ?,
+                   assistant_result_message_id = COALESCE(?, assistant_result_message_id)
+             WHERE execution_id = ?
+               AND execution_state_version = ?
+               AND finalized = 0`,
+            [
+              new Date().toISOString(),
+              input.outcome,
+              input.reasonCode,
+              input.summary,
+              finalEventIdentity,
+              checkpoint,
+              input.assistantResultMessageId ?? null,
+              input.executionId,
+              input.expectedVersion,
+            ],
+            true // useStructuredResult — exposes .affected on the driver result
+          )) as { affected?: number };
+          if ((casResult.affected ?? 0) !== 1) {
+            // Between our read and the UPDATE, a concurrent finalizer either
+            // bumped the version (STATE_CONFLICT) or finalized the row
+            // (ALREADY_FINALIZED). Re-read inside the transaction to
+            // distinguish. Either way the CAS affected zero rows — nothing
+            // is committed by this transaction.
+            const fresh = await manager.findOne(AiTaskExecutionEntity, {
+              where: { execution_id: input.executionId },
+            });
+            if (fresh?.finalized) {
+              throw new AlreadyFinalizedError();
+            }
+            throw new StateConflictError();
+          }
+
+          // 2. Release the ledger owner (§6.3). Spent allowance persists. Now
+          // inside the same transaction as the CAS — a failure here rolls
+          // back the CAS too, so the execution stays unfinalized and a retry
+          // can repair the release instead of returning ALREADY_FINALIZED
+          // (the original T11 bug).
+          await manager.query(
+            `UPDATE ai_task_execution_ledger
+                SET active_execution_id = NULL,
+                    status = 'released',
+                    execution_state_version = execution_state_version + 1
+              WHERE ledger_id = ?`,
+            [exec.ledger_id]
+          );
+
+          await runner.commitTransaction();
+        } catch (txError) {
+          await runner.rollbackTransaction();
+          throw txError;
+        } finally {
+          await runner.release();
         }
+      });
+    } catch (error) {
+      if (error instanceof AlreadyFinalizedError) {
+        return {
+          ok: false,
+          alreadyFinalized: true,
+          reasonCode: "ALREADY_FINALIZED",
+        };
+      }
+      if (error instanceof StateConflictError) {
         return { ok: false, reasonCode: "STATE_CONFLICT" };
       }
-
-      // Release the ledger owner (§6.3). Spent allowance persists. Separate
-      // atomic UPDATE — see the note above on why this is not in the same
-      // transaction as the CAS UPDATE.
-      await runner.query(
-        `UPDATE ai_task_execution_ledger
-            SET active_execution_id = NULL,
-                status = 'released',
-                execution_state_version = execution_state_version + 1
-          WHERE ledger_id = ?`,
-        [exec.ledger_id]
-      );
-
-      return { ok: true };
-    } finally {
-      await runner.release();
+      throw error;
     }
+
+    return { ok: true };
   }
 
   /**

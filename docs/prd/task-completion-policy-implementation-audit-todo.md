@@ -196,7 +196,7 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T11 — Atomically finalize manual execution and release its fenced owner [P1, real SQLite reproduced]
 
-- [ ] Use the same serialized transaction boundary as other execution writes; commit the terminal outcome and ledger release together.
+- [x] Use the same serialized transaction boundary as other execution writes; commit the terminal outcome and ledger release together.
 
 **Evidence:** `AiTaskExecution.model.ts:566–624` performs separate terminal CAS and ledger release without the creation/scheduled mutex or transaction. Real SQLite trigger failure on ledger update leaves `finalized=1`, outcome incomplete, ledger active. Retry returns ALREADY_FINALIZED and cannot repair the release. A second real probe opens the driver's shared QueryRunner transaction, calls manual finalize (`ok:true`), then rolls back that other transaction: manual finalized/version return to zero. The single terminal CAS is atomic, but the complete durable transaction is not.
 
