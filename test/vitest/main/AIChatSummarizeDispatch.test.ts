@@ -138,6 +138,56 @@ describe("AIChatSummarizeDispatch", () => {
     ).resolves.toBe('{"version":1}');
   });
 
+  it("surfaces COMPACTION_OUTPUT_TRUNCATED when the provider signals finish_reason=content_filter", async () => {
+    // Content blocked mid-generation by a content filter leaves a partial
+    // payload that parses as invalid JSON — the same unrecoverable state as
+    // length truncation. Route it to the reduction path, not schema repair.
+    const completeChat = vi.fn(async () => ({
+      id: "resp-cf",
+      object: "chat.completion",
+      created: 0,
+      model: "tiny-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: '{"version":1,"synopsis":"bl' },
+          finish_reason: "content_filter",
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    } as OpenAIChatCompletionResponse));
+    await expect(
+      dispatchSectionSummarize(baseInput({ completeChat }))
+    ).rejects.toMatchObject({
+      code: "COMPACTION_OUTPUT_TRUNCATED",
+    });
+  });
+
+  it("surfaces COMPACTION_OUTPUT_TRUNCATED when finish_reason is null and content is empty", async () => {
+    // Some providers signal forced truncation by omitting finish_reason while
+    // returning empty content. An empty payload is unrecoverable by schema
+    // repair, so treat it as truncation rather than a parse error.
+    const completeChat = vi.fn(async () => ({
+      id: "resp-null",
+      object: "chat.completion",
+      created: 0,
+      model: "tiny-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "" },
+          finish_reason: null,
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    } as OpenAIChatCompletionResponse));
+    await expect(
+      dispatchSectionSummarize(baseInput({ completeChat }))
+    ).rejects.toMatchObject({
+      code: "COMPACTION_OUTPUT_TRUNCATED",
+    });
+  });
+
   it("uses the injected model-limit resolver to cap max_tokens (not the 1024 fallback)", async () => {
     // The production bug: call sites omitted modelLimitResolver, so the budget
     // service used UNKNOWN_MODEL_FALLBACK_LIMITS (outputLimit 1,024) and capped

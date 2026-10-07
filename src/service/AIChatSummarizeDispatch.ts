@@ -83,15 +83,31 @@ export async function dispatchSectionSummarize(
     ...(input.model ? { model: input.model } : {}),
   });
   const choice = resp.choices?.[0];
-  // Length truncation is a distinct, recoverable failure: the provider stopped
-  // before emitting a complete token because the request hit its output cap.
-  // Surfacing it as a parse error (the prior behavior) sent the coordinator's
-  // repair ladder down a schema-repair path that can never fix truncation.
-  if (choice?.finish_reason === "length") {
+  const finishReason = choice?.finish_reason;
+  const content = openAIContentToString(choice?.message?.content);
+  // Truncation is a distinct, recoverable failure: the provider stopped before
+  // emitting a complete response. Surfacing it as a parse error (the prior
+  // behavior) sent the coordinator's repair ladder down a schema-repair path
+  // that can never fix truncation. Cover the three ways providers signal this:
+  //  - "length": hit the max_tokens output cap mid-token (the common case).
+  //  - "content_filter": content blocked mid-generation; the partial payload
+  //    parses as invalid JSON and is unrecoverable by schema repair.
+  //  - A present choice with null/undefined finish_reason and EMPTY content:
+  //    some providers emit no finish_reason and no content on forced
+  //    truncation. Treat the empty-content case as truncation (rather than a
+  //    parse error) so it routes to the reduction path. This requires a
+  //    present choice — a missing choices array is a different error class
+  //    (malformed response), not truncation. Short-but-non-empty content
+  //    (e.g. "{}") is a valid response and must NOT be flagged.
+  const isTruncationSignal =
+    finishReason === "length" ||
+    finishReason === "content_filter" ||
+    (!!choice && !finishReason && content.length === 0);
+  if (isTruncationSignal) {
     throw new RecoverableHistoryError(
       "COMPACTION_OUTPUT_TRUNCATED",
-      `summary truncated at provider output cap (max_tokens=${preflight.outputReserve}); reduce input capacity so the summary fits`
+      `summary truncated at provider output cap (max_tokens=${preflight.outputReserve}, finish_reason=${finishReason ?? "null"}); reduce input capacity so the summary fits`
     );
   }
-  return openAIContentToString(choice?.message?.content);
+  return content;
 }
