@@ -15,6 +15,7 @@
  * controller/budget objects themselves) so the loop never imports the
  * controller or budget types directly, avoiding a circular module edge.
  */
+import { createHash } from "crypto";
 import type {
   TaskCompletionDecision,
   TaskEndCandidate,
@@ -112,16 +113,55 @@ export interface ConsultLoopEndCandidateInput {
 }
 
 /**
+ * T06a: Build a stable, per-candidate identity. Two consults form the SAME
+ * candidate when their IMMUTABLE observation is identical — same execution,
+ * same boundary, same bounded content, same finish reason, same pending
+ * flags and safety-restriction state. Replay of the same response (a
+ * transport retry re-entering the same consult) hashes to the same ID and
+ * is therefore retained; a genuinely different response (different content)
+ * hashes to a different ID and gets its own continuation allowance.
+ *
+ * The candidateId is NOT a reservation ID — the controller derives the
+ * reservation continuationId from it (`cont:${candidateId}`), and the
+ * budget's dedup keyspace is shared across the four `reserve*` methods.
+ * The candidateId also scopes the per-candidate checker window via
+ * `beginCheckerCandidate`.
+ *
+ * Content is bounded to 2 KiB before hashing (matching the controller's
+ * `boundedSummary`) so a runaway assistant stream cannot grow the ID string
+ * unboundedly, and well-known generated-noise keys in the candidate content
+ * do NOT feed the hash — the engine's constant evidence revision is not a
+ * source revision (FR-09; T20b RESULT_NOISE_KEYS principle).
+ *
+ * Regression per audit (FR-08/23; AC-05/08/29): "distinct responses consume
+ * three continuations; fourth cannot dispatch. Replay of one candidate
+ * dispatches once." Same-content replay → same ID → `reserveContinuation`
+ * returns AlreadyReserved → the loop does NOT re-dispatch (T06b).
+ */
+function buildCandidateId(input: ConsultLoopEndCandidateInput): string {
+  const MAX_CONTENT_HASH = 2000;
+  const boundedContent = input.content.slice(0, MAX_CONTENT_HASH);
+  const canonical = JSON.stringify({
+    executionId: input.binding.executionId,
+    boundary: input.boundary,
+    content: boundedContent,
+    finishReason: input.finishReason ?? "",
+    pendingPermission: input.pendingPermission,
+    pendingQuestion: input.pendingQuestion,
+    pendingPlanApproval: input.pendingPlanApproval,
+    safetyRestriction: input.safetyRestriction,
+  });
+  const hash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+  return `cand:${input.binding.executionId}:${input.boundary}:${hash}`;
+}
+
+/**
  * Form a {@link TaskEndCandidate} from loop state, consult the controller,
  * and map the decision to a {@link ConsultOutcome}.
  *
  * Candidate formation (§5.2, AC-04/05/06):
- * - `candidateId`: stable-shaped per (executionId, boundary). The budget's
- *   dedup keyspace is shared across the four `reserve*` methods, but the
- *   candidateId itself is NOT a reservation ID — it scopes the per-candidate
- *   checker window via `beginCheckerCandidate`. Each consult at the same
- *   site resets that window, which is the intended behavior (a new consult
- *   is a new candidate instance).
+ * - `candidateId` (T06a): stable-shaped per (executionId, boundary, immutable
+ *   observation). See {@link buildCandidateId}.
  * - `provenance`: "provider" — the loop saw a real provider stream.
  * - `streamTerminalSeen`: true — the loop only consults after the stream
  *   reached a terminal stop (finish_reason=stop, or a round cap with a
@@ -133,6 +173,14 @@ export interface ConsultLoopEndCandidateInput {
  * Decision→outcome mapping (§7.2, AC-07/08):
  * - `continue` + `reserveContinuation` Reserved → continue outcome with the
  *   decision's prompt.
+ * - `continue` + `reserveContinuation` AlreadyReserved → break
+ *   (CANDIDATE_REPLAYED). T06b: the same continuation ID was already
+ *   reserved (a replay of the same candidate, transport retry, or a
+ *   re-consult at the same boundary with identical immutable state).
+ *   Re-dispatching would double-count work the budget already funded, so
+ *   the honest outcome is to break — never a second dispatch of the same
+ *   continuation. This is distinct from `Exhausted` (no budget) and from
+ *   `Reserved` (fresh dispatch).
  * - `continue` + `reserveContinuation` Exhausted → break (CONTINUATION_LIMIT).
  *   The budget overrides the controller's authorization: a `Exhausted` result
  *   means the lineage cap is spent, so the honest outcome is incomplete with
@@ -144,7 +192,7 @@ export async function consultLoopEndCandidate(
   input: ConsultLoopEndCandidateInput
 ): Promise<ConsultOutcome> {
   const candidate: TaskEndCandidate = {
-    candidateId: `cand:${input.binding.executionId}:${input.boundary}`,
+    candidateId: buildCandidateId(input),
     executionId: input.binding.executionId,
     content: input.content,
     finishReason: input.finishReason,
@@ -168,15 +216,24 @@ function mapDecisionToOutcome(
 ): ConsultOutcome {
   if (decision.type === "continue") {
     // Budget gate: the controller authorized a continuation, but the
-    // lineage budget has the final say. An Exhausted result means the
-    // continuation allowance is spent — surface CONTINUATION_LIMIT rather
-    // than dispatching an unfunded continuation.
+    // lineage budget has the final say. Three reservation results map to
+    // three distinct honest outcomes (T06b):
+    // - Reserved: fresh dispatch — proceed with the continuation prompt.
+    // - AlreadyReserved: this exact continuation ID was already reserved
+    //   (a replay of the same candidate, transport retry, or a re-consult
+    //   at the same boundary with identical immutable state). Re-dispatching
+    //   would double-count work the budget already funded, so BREAK with
+    //   CANDIDATE_REPLAYED — never a second dispatch of the same
+    //   continuation. AC-08/29.
+    // - Exhausted: the lineage continuation allowance is spent — surface
+    //   CONTINUATION_LIMIT rather than dispatching an unfunded continuation.
     const reservation = binding.reserveContinuation(decision.continuationId);
+    if (reservation === BudgetReservationResult.AlreadyReserved) {
+      return { type: "break", reason: "CANDIDATE_REPLAYED" };
+    }
     if (reservation === BudgetReservationResult.Exhausted) {
       return { type: "break", reason: "CONTINUATION_LIMIT" };
     }
-    // Reserved or AlreadyReserved (transport retry of the same
-    // continuationId) → proceed with the continuation.
     return { type: "continue", prompt: decision.prompt };
   }
   if (decision.type === "wait") {

@@ -21,7 +21,13 @@ import {
   buildContinuationPrompt,
   type LoopTaskExecutionBinding,
 } from "@/service/aiTaskExecution/TaskLoopConsult";
-import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
+import {
+  TaskRunBudget,
+} from "@/service/aiTaskExecution/TaskRunBudget";
+import {
+  BudgetReservationResult,
+} from "@/service/aiTaskExecution/TaskRunBudget";
+import { MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/budgetDefaults";
 import type { TaskCompletionDecision, TaskEndCandidate } from "@/entityTypes/aiTaskExecutionTypes";
 
 /** Build a binding whose `consult` returns a fixed decision and whose
@@ -344,5 +350,242 @@ describe("buildContinuationPrompt — §7.3 template", () => {
     });
     expect(prompt).toContain("Failures or restrictions:");
     expect(prompt).toContain("search_maps_businesses timed out");
+  });
+});
+
+// T06a: immutable per-candidate identity, retained only on re-handling the
+// same candidate. Distinct responses at the same boundary get distinct IDs;
+// replay of the same response (transport retry, identical immutable state)
+// retains the same ID so the budget dedups it. FR-08/23; AC-05/08/29.
+describe("consultLoopEndCandidate T06a — per-candidate identity (FR-08/23, AC-05/08/29)", () => {
+  it("same immutable observation at the same boundary → same candidateId (replay retained)", async () => {
+    const captured: string[] = [];
+    const binding = makeBinding({
+      decision: { type: "finish_response", result: "response_ended" },
+      capture: (c) => captured.push(c.candidateId),
+    });
+    const params = {
+      binding,
+      boundary: "response_end" as const,
+      ...baseParams,
+    };
+    await consultLoopEndCandidate(params);
+    await consultLoopEndCandidate(params); // replay: identical immutable state
+    expect(captured).toHaveLength(2);
+    expect(captured[0]).toBe(captured[1]);
+  });
+
+  it("distinct responses at the same boundary → distinct candidateIds", async () => {
+    const captured: string[] = [];
+    const binding = makeBinding({
+      decision: { type: "finish_response", result: "response_ended" },
+      capture: (c) => captured.push(c.candidateId),
+    });
+    await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Saved 54 contacts so far.",
+    });
+    await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Saved 61 contacts so far.", // genuinely different response
+    });
+    expect(captured[0]).not.toBe(captured[1]);
+  });
+
+  it("distinct responses consume three continuations; the fourth cannot dispatch", async () => {
+    // Drive three distinct responses through continue decisions and assert
+    // the budget increments continuations monotonically; the fourth exhausts.
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const continueDecision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "", // filled per-candidate below
+      prompt: "go",
+      unmetCriterionIds: ["rec-1"],
+    };
+    const contents = [
+      "Saved 54 contacts.",
+      "Saved 61 contacts.",
+      "Saved 70 contacts.",
+    ];
+    const binding: LoopTaskExecutionBinding = {
+      executionId: "exec-1",
+      consult: async (candidate) => {
+        // Controller derives continuationId from candidateId; mirror that.
+        return { ...continueDecision, continuationId: `cont:${candidate.candidateId}` };
+      },
+      reserveContinuation: (id) => budget.reserveContinuation(id),
+    };
+    for (const content of contents) {
+      const outcome = await consultLoopEndCandidate({
+        binding,
+        boundary: "response_end",
+        ...baseParams,
+        content,
+      });
+      expect(outcome.type).toBe("continue");
+    }
+    // Three distinct continuations consumed; maxContinuations is 3 in
+    // MANUAL_BUDGET_DEFAULTS, so the fourth distinct response exhausts.
+    expect(budget.getConsumed().continuations).toBe(3);
+    const fourth = await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Saved 75 contacts.", // fourth distinct response
+    });
+    expect(fourth.type).toBe("break");
+    if (fourth.type === "break") {
+      expect(fourth.reason).toBe("CONTINUATION_LIMIT");
+    }
+    // The consumed counter did NOT over-shoot to 4 — exhaustion refuses.
+    expect(budget.getConsumed().continuations).toBe(3);
+  });
+
+  it("replay of one candidate dispatches once (AlreadyReserved does not consume a second unit)", async () => {
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const continueDecision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "",
+      prompt: "go",
+      unmetCriterionIds: ["rec-1"],
+    };
+    const binding: LoopTaskExecutionBinding = {
+      executionId: "exec-1",
+      consult: async (candidate) => ({
+        ...continueDecision,
+        continuationId: `cont:${candidate.candidateId}`,
+      }),
+      reserveContinuation: (id) => budget.reserveContinuation(id),
+    };
+    // First consult on the candidate → Reserved, dispatch.
+    const first = await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Saved 54 contacts.",
+    });
+    expect(first.type).toBe("continue");
+    expect(budget.getConsumed().continuations).toBe(1);
+    // Replay: identical immutable observation → same candidateId → same
+    // continuationId → AlreadyReserved. T06b: break, NOT another dispatch.
+    const replay = await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Saved 54 contacts.",
+    });
+    expect(replay.type).toBe("break");
+    if (replay.type === "break") {
+      expect(replay.reason).toBe("CANDIDATE_REPLAYED");
+    }
+    // The replay did NOT consume a second unit.
+    expect(budget.getConsumed().continuations).toBe(1);
+  });
+
+  it("candidateId is bounded against runaway content length", async () => {
+    let captured: TaskEndCandidate | undefined;
+    const binding = makeBinding({
+      decision: { type: "finish_response", result: "response_ended" },
+      capture: (c) => {
+        captured = c;
+      },
+    });
+    const huge = "x".repeat(50_000);
+    await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: huge,
+    });
+    // candidateId stays a bounded, fixed-shape string regardless of content.
+    expect(captured!.candidateId.length).toBeLessThan(200);
+  });
+
+  it("finishReason, pending flags, safetyRestriction are part of the identity", async () => {
+    const captured: string[] = [];
+    const binding = makeBinding({
+      decision: { type: "finish_response", result: "response_ended" },
+      capture: (c) => captured.push(c.candidateId),
+    });
+    await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Same content.",
+      finishReason: "stop",
+    });
+    await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+      content: "Same content.",
+      finishReason: "length", // different finish reason → different candidate
+    });
+    expect(captured[0]).not.toBe(captured[1]);
+  });
+});
+
+// T06b: AlreadyReserved must NOT cause another dispatch of the same
+// continuation. The loop breaks with CANDIDATE_REPLAYED instead of re-entering.
+describe("consultLoopEndCandidate T06b — AlreadyReserved breaks, no re-dispatch (FR-08/23, AC-08/29)", () => {
+  it("continue + reserveContinuation AlreadyReserved → break (CANDIDATE_REPLAYED)", async () => {
+    const decision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "cont-replayed",
+      prompt: "go",
+      unmetCriterionIds: [],
+    };
+    const binding = makeBinding({
+      decision,
+      reservation: BudgetReservationResult.AlreadyReserved,
+    });
+    const outcome = await consultLoopEndCandidate({
+      binding,
+      boundary: "response_end",
+      ...baseParams,
+    });
+    expect(outcome.type).toBe("break");
+    if (outcome.type === "break") {
+      expect(outcome.reason).toBe("CANDIDATE_REPLAYED");
+    }
+  });
+
+  it("CANDIDATE_REPLAYED is distinct from CONTINUATION_LIMIT (Exhausted) and from a fresh continue (Reserved)", async () => {
+    const decision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "cont-x",
+      prompt: "go",
+      unmetCriterionIds: [],
+    };
+    const reserved = await consultLoopEndCandidate({
+      binding: makeBinding({ decision, reservation: BudgetReservationResult.Reserved }),
+      boundary: "response_end",
+      ...baseParams,
+    });
+    expect(reserved.type).toBe("continue");
+
+    const already = await consultLoopEndCandidate({
+      binding: makeBinding({ decision, reservation: BudgetReservationResult.AlreadyReserved }),
+      boundary: "response_end",
+      ...baseParams,
+    });
+    expect(already.type).toBe("break");
+    if (already.type === "break") {
+      expect(already.reason).toBe("CANDIDATE_REPLAYED");
+    }
+
+    const exhausted = await consultLoopEndCandidate({
+      binding: makeBinding({ decision, reservation: BudgetReservationResult.Exhausted }),
+      boundary: "response_end",
+      ...baseParams,
+    });
+    expect(exhausted.type).toBe("break");
+    if (exhausted.type === "break") {
+      expect(exhausted.reason).toBe("CONTINUATION_LIMIT");
+    }
   });
 });
