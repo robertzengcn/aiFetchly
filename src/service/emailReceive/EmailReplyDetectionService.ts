@@ -53,6 +53,10 @@ import {
   validateReceiveEndpointConfig,
 } from "@/service/emailReceive/EmailReceiveSyncService";
 import {
+  startGenerationDeadline,
+  type GenerationDeadline,
+} from "@/service/emailReply/EmailReplyGenerationBudget";
+import {
   incrementReplyMetric,
   timedReplyStage,
 } from "@/service/emailReply/EmailReplyMetrics";
@@ -82,6 +86,14 @@ export const REPLY_DETECTOR_VERSION = "reply-detection-v1";
 
 /** Negative cache TTL (§7.3): a complete negative is reusable for 60s. */
 const NEGATIVE_CACHE_TTL_MS = 60_000;
+
+/**
+ * Overall probe deadline (§7.3): one mailbox probe must complete within 15s,
+ * including any queue wait while a prior probe on the same mailbox holds the
+ * single-flight lock. A probe whose result resolves after the deadline is
+ * discarded and the caller receives `probe_timeout`.
+ */
+const PROBE_DEADLINE_MS = 15_000;
 
 /** At most this many Sent folders are searched (§7.3). */
 const MAX_SENT_FOLDERS = 5;
@@ -161,6 +173,19 @@ type CandidateMatch =
   | { kind: "no_match" };
 
 /**
+ * One cached detection entry. Negatives expire at 60s; positives are sticky
+ * (no expiry). The cache key is `${messageId}:${contextHash}` — the context
+ * hash invalidates the entry when the account endpoint/protocol/username,
+ * configured sender, or detector version changes (§7.3).
+ */
+interface CachedDetection {
+  readonly result: ReplyDetectionResult;
+  readonly observedAt: number;
+  readonly contextHash: string;
+  readonly mailboxId: number;
+}
+
+/**
  * Shared mailbox reply-detection service. One instance per process is fine
  * (the cache layer in step 10 will make it stateful); the generation and
  * delivery services construct it lazily through a factory getter.
@@ -172,6 +197,36 @@ export class EmailReplyDetectionService {
   private readonly emailServicePort: ReplyDetectionEmailServicePort;
   private readonly imapPort: ReplyDetectionImapPort;
   private readonly now: () => number;
+
+  /**
+   * In-memory detection cache (§7.3): key = `${messageId}:${contextHash}`.
+   * Negatives expire at {@link NEGATIVE_CACHE_TTL_MS}; positives are sticky.
+   * `forceRefresh: true` skips the negative cache but still honors sticky
+   * positives (a known positive short-circuits — no repeated network scan).
+   */
+  private readonly cache: Map<string, CachedDetection> = new Map();
+
+  /**
+   * Single-flight (§7.3): one in-flight probe per `(messageId, contextHash)`.
+   * A forced send check may JOIN a live network probe begun for the same
+   * unchanged context during that send invocation, but never a cached
+   * pre-invocation negative. Keyed identically to {@link cache}.
+   */
+  private readonly inFlight: Map<
+    string,
+    Promise<ReplyDetectionResult>
+  > = new Map();
+
+  /**
+   * One active IMAP probe per mailbox (§7.3): key = `emailServiceId`. A
+   * second probe for the same mailbox WAITS (queued behind the deadline,
+   * not concurrently opening a second connection). A probe for a different
+   * mailbox proceeds without waiting.
+   */
+  private readonly mailboxInFlight: Map<
+    number,
+    Promise<ReplyDetectionResult>
+  > = new Map();
 
   constructor(options?: {
     messagePort?: ReplyDetectionMessagePort;
@@ -252,15 +307,259 @@ export class EmailReplyDetectionService {
       return this.unknown("unsupported_protocol");
     }
 
-    // Steps 5–7 — bounded mailbox probe. The timed stage captures the probe
-    // duration as a low-cardinality metric (stage `database` is the closest
-    // existing ReplyMetricStage; the 15s deadline enforcement lands in T05).
-    return timedReplyStage(
-      "database",
-      (): Promise<ReplyDetectionResult> =>
-        this.probeMailbox(message, config, normalizedId),
-      { message_id: message.id }
+    // Steps 5–7 — bounded mailbox probe, routed through the in-memory cache
+    // + single-flight + 15s deadline layer (§7.3). The persisted negative
+    // cache (Step 3 above) covers cross-process/cross-restart reuse; the
+    // in-memory layer coalesces concurrent calls within this process.
+    return this.runCachedProbe(message, config, normalizedId, forceRefresh);
+  }
+
+  /**
+   * In-memory cache + single-flight + 15s deadline wrapper around
+   * {@link probeMailbox} (§7.3). Computes a pre-probe context hash to key
+   * the cache + in-flight map, checks the in-memory cache (negative ≤60s,
+   * positive sticky; `forceRefresh` skips the negative), joins a live probe
+   * for the same `(messageId, contextHash)` if one is in flight, otherwise
+   * runs the probe under the mailbox-level single-flight lock + 15s deadline.
+   * Late results (probe resolves after the deadline) are discarded and the
+   * caller receives `probe_timeout`.
+   */
+  private async runCachedProbe(
+    message: EmailReceivedMessageEntity,
+    rawConfig: EmailReceiveConnectionConfig,
+    normalizedId: string,
+    forceRefresh: boolean
+  ): Promise<ReplyDetectionResult> {
+    const normalizedConfig = normalizeReceiveConnectionConfig(rawConfig);
+    const validationError =
+      validateReceiveEndpointConfig(normalizedConfig);
+    if (validationError) {
+      return this.unknown("receive_unavailable");
+    }
+
+    const identity = await this.emailServicePort.readIdentity(
+      message.emailServiceId
     );
+    if (!identity) {
+      return this.unknown("receive_unavailable");
+    }
+
+    // Pre-probe context hash: the cache key (§7.3). Sent scope is unknown
+    // before discovery, so the pre-probe hash uses an empty scope; this is
+    // stable across calls under the same account/identity/detector-version,
+    // and changes when any of those change (invalidating the entry). The
+    // post-probe re-check inside `probeMailbox` recomputes WITH the resolved
+    // scope to isolate scope changes from account changes.
+    const contextHash = this.hashContext(
+      normalizedConfig,
+      identity.fromAddress,
+      "" // pre-probe: Sent scope unknown
+    );
+    const cacheKey = `${message.id}:${contextHash}`;
+
+    // Sticky positive short-circuit (§7.3: "Sticky positive observations need
+    // no repeated network scan"). Honored even under forceRefresh — a known
+    // positive is authoritative.
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      const ageMs = this.now() - cached.observedAt;
+      const isPositive = cached.result.state === "replied";
+      const negativeLive =
+        !isPositive && ageMs >= 0 && ageMs <= NEGATIVE_CACHE_TTL_MS;
+      if (isPositive) {
+        incrementReplyMetric("detection_cache", { hit: true, kind: "positive" });
+        return this.repliedFromCache(
+          cached.result.source === "mailbox_flag"
+            ? "mailbox_flag"
+            : "sent_search",
+          cached.result.matchedMessageId
+        );
+      }
+      if (!forceRefresh && negativeLive) {
+        incrementReplyMetric("detection_cache", { hit: true, kind: "negative" });
+        // Serve from the in-memory cache with fromCache: true (mirror the
+        // persisted-cache path in readCachedNegative). The cached result's
+        // original fromCache was false (probeMailbox sets it on first
+        // observation); a cache HIT must report fromCache: true. Construct a
+        // fresh immutable copy — never mutate the cached entry.
+        return this.notRepliedFromCache(cached.result.checkedAt);
+      }
+      if (!isPositive && !negativeLive) {
+        // Expired negative — drop the stale entry.
+        this.cache.delete(cacheKey);
+        incrementReplyMetric("detection_cache", { hit: false, expired: true });
+      }
+    }
+
+    // Single-flight (§7.3): join a live probe for the same context if one
+    // exists. A forced send check MAY join a probe begun for the same
+    // unchanged context during that send invocation; it must never join a
+    // cached pre-invocation negative (forceRefresh already skipped the
+    // negative cache above, so a join here is a join on a LIVE probe).
+    const live = this.inFlight.get(cacheKey);
+    if (live) {
+      incrementReplyMetric("detection_cache", { hit: true, kind: "inflight" });
+      return live;
+    }
+
+    // One active IMAP probe per mailbox (§7.3): a second probe for the same
+    // mailbox WAITS for the prior to finish (queued behind the deadline, not
+    // concurrently opening a second connection). A probe for a different
+    // mailbox proceeds without waiting. The mailbox lock is held for the
+    // duration of the probe; the deadline is started BEFORE acquiring so
+    // queue wait is included (§7.3: "15s overall deadline, incl. queue wait").
+    const deadline = startGenerationDeadline({
+      now: this.now,
+      budgetMs: PROBE_DEADLINE_MS,
+    });
+
+    const probe = this.runProbeUnderMailboxLock(
+      cacheKey,
+      message,
+      normalizedConfig,
+      normalizedId,
+      identity.fromAddress,
+      deadline
+    );
+    this.inFlight.set(cacheKey, probe);
+    try {
+      const result = await probe;
+      // Late results (probe resolved after the deadline) are discarded —
+      // the caller already received probe_timeout. This branch runs only
+      // when the probe resolved before the deadline check below.
+      return result;
+    } finally {
+      this.inFlight.delete(cacheKey);
+    }
+  }
+
+  /**
+   * Acquire the mailbox-level single-flight lock, run the probe, and apply
+   * the 15s deadline. If the probe is still running when the deadline elapses,
+   * the caller receives `probe_timeout` and the late result is discarded (not
+   * cached). A successful (on-time) result is cached: positives sticky,
+   * negatives for 60s.
+   */
+  private async runProbeUnderMailboxLock(
+    cacheKey: string,
+    message: EmailReceivedMessageEntity,
+    normalizedConfig: EmailReceiveConnectionConfig,
+    normalizedId: string,
+    configuredSender: string,
+    deadline: GenerationDeadline
+  ): Promise<ReplyDetectionResult> {
+    const mailboxId = normalizedConfig.emailServiceId;
+    // Queue behind a prior probe on the same mailbox. The deadline was
+    // started before this call, so queue wait is counted against the 15s.
+    const prior = this.mailboxInFlight.get(mailboxId);
+    if (prior) {
+      try {
+        await prior;
+      } catch {
+        // A prior probe's failure must not abort this one; the deadline is
+        // the only thing that decides whether THIS probe proceeds.
+      }
+      // Re-check the deadline after the queue wait — if exhausted, the
+      // caller gets probe_timeout without opening a connection.
+      if (deadline.expired()) {
+        incrementReplyMetric("detection_outcome", {
+          state: "unknown",
+          reason: "probe_timeout",
+          stage: "queue_wait",
+        });
+        return this.unknown("probe_timeout");
+      }
+    }
+
+    // Run the probe under a per-mailbox lock so a second probe for the same
+    // mailbox queues. The lock promise resolves with this probe's result.
+    const run = (async (): Promise<ReplyDetectionResult> => {
+      // If the deadline already elapsed during queue wait, do not open a
+      // connection — return probe_timeout immediately.
+      if (deadline.expired()) {
+        return this.unknown("probe_timeout");
+      }
+      // Race the probe against the deadline. The probe resolves with a
+      // result; the deadline-racer resolves with `null` when the budget
+      // is exhausted. whichever resolves first wins; the other is
+      // discarded.
+      const result = await this.raceProbeAgainstDeadline(
+        () =>
+          timedReplyStage(
+            "database",
+            (): Promise<ReplyDetectionResult> =>
+              this.probeMailbox(
+                message,
+                normalizedConfig,
+                normalizedId,
+                configuredSender
+              ),
+            { message_id: message.id }
+          ),
+        deadline
+      );
+      // Cache the result. Only positives and COMPLETE negatives are cacheable
+      // (§7.3: "no cacheable negative on timeout/unsupported/partial/false-
+      // search/folder-auth"). `probe_timeout`, `probe_failed`,
+      // `sent_folder_unavailable`, `ambiguous_match`, `probe_limit_exceeded`,
+      // `identity_conflict`, etc. are `unknown`-state outcomes that must NOT
+      // be cached — the next caller must re-probe. A late result (probe
+      // resolved after the deadline) returns probe_timeout here and is also
+      // not cached; the underlying probe's resolution is discarded by
+      // `Promise.race` in `raceProbeAgainstDeadline`.
+      if (result.state === "replied" || result.state === "not_replied") {
+        this.cache.set(cacheKey, {
+          result,
+          observedAt: this.now(),
+          contextHash: cacheKey.split(":").slice(1).join(":"),
+          mailboxId,
+        });
+      }
+      return result;
+    })();
+
+    this.mailboxInFlight.set(mailboxId, run);
+    try {
+      const result = await run;
+      return result;
+    } finally {
+      // Only clear the mailbox lock if this probe IS the lock holder. A
+      // later probe for the same mailbox may have already replaced this
+      // entry; deleting it would drop that probe's lock. Use a sentinel
+      // comparison instead.
+      if (this.mailboxInFlight.get(mailboxId) === run) {
+        this.mailboxInFlight.delete(mailboxId);
+      }
+    }
+  }
+
+  /**
+   * Race a probe promise against the deadline. If the probe resolves first,
+   * return its result. If the deadline elapses first, return `probe_timeout`
+   * and let the probe continue in the background (its eventual resolution is
+   * discarded by the caller — never cached).
+   */
+  private async raceProbeAgainstDeadline(
+    probe: () => Promise<ReplyDetectionResult>,
+    deadline: GenerationDeadline
+  ): Promise<ReplyDetectionResult> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<ReplyDetectionResult>((resolve) => {
+      const remaining = deadline.remainingMs();
+      // setTimeout clamps to 1ms minimum; a 0 remaining still fires the
+      // timeout on the next tick, giving the probe one microtask to win.
+      timeoutId = setTimeout(
+        () => resolve(this.unknown("probe_timeout")),
+        Math.max(1, remaining)
+      );
+    });
+    try {
+      return await Promise.race([probe(), timeout]);
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 
   /**
@@ -380,31 +679,15 @@ export class EmailReplyDetectionService {
 
   private async probeMailbox(
     message: EmailReceivedMessageEntity,
-    rawConfig: EmailReceiveConnectionConfig,
-    normalizedId: string
+    normalizedConfig: EmailReceiveConnectionConfig,
+    normalizedId: string,
+    configuredSender: string
   ): Promise<ReplyDetectionResult> {
-    const normalizedConfig = normalizeReceiveConnectionConfig(rawConfig);
-    const validationError = validateReceiveEndpointConfig(normalizedConfig);
-    if (validationError) {
-      return this.unknown("receive_unavailable");
-    }
-
-    const identity = await this.emailServicePort.readIdentity(
-      message.emailServiceId
-    );
-    if (!identity) {
-      return this.unknown("receive_unavailable");
-    }
-
-    // Step 7 precondition — the account context hash is captured BEFORE any
-    // mailbox I/O and recomputed AFTER the probe; a mismatch means the
-    // account was reconfigured mid-probe and the observed negative is not
-    // safely attributable to the current context (§7.1 step 7). The hash
-    // excludes passwords/secrets (§7.3). The probe-start hash cannot be
-    // computed once and reused: at the start the Sent scope is unknown, so
-    // the post-probe comparison recomputes the start hash WITH the now-known
-    // scope to isolate account/sender changes from scope changes. See
-    // `probeStartRehashed` vs `probeEndContextHash` below.
+    // Config normalization + identity resolution happened in runCachedProbe
+    // (the cache key needs the pre-probe context hash, which needs both).
+    // The post-probe context re-check (§7.1 step 7) is recomputed below
+    // WITH the resolved Sent scope to isolate scope changes from account
+    // changes — see `probeStartRehashed` vs `probeEndContextHash`.
 
     // Step 5 — UID-scoped flag refresh (namespaced rows only). Legacy bare-UID
     // rows have no folder/UIDVALIDITY provenance — their flag side is
@@ -466,7 +749,7 @@ export class EmailReplyDetectionService {
       message,
       normalizedConfig,
       normalizedId,
-      identity.fromAddress
+      configuredSender
     );
 
     if (sentResult.kind === "replied") {
@@ -525,7 +808,7 @@ export class EmailReplyDetectionService {
     const freshNormalized = normalizeReceiveConnectionConfig(freshConfig);
     const probeEndContextHash = this.hashContext(
       freshNormalized,
-      identity.fromAddress,
+      configuredSender,
       sentResult.sentScope
     );
     // The probe-start hash used an empty sentScope (scope unknown until
@@ -534,7 +817,7 @@ export class EmailReplyDetectionService {
     // account/sender changes from scope changes.
     const probeStartRehashed = this.hashContext(
       normalizedConfig,
-      identity.fromAddress,
+      configuredSender,
       sentResult.sentScope
     );
     if (probeStartRehashed !== probeEndContextHash) {
@@ -775,6 +1058,25 @@ export class EmailReplyDetectionService {
       matchedMessageId,
       reasonCode: "already_replied",
       checkedAt: null,
+      fromCache: true,
+      coverage: "configured_imap",
+    };
+  }
+
+  /**
+   * Serve a complete negative from the in-memory cache. `checkedAt` retains
+   * the ORIGINAL observation time (§4.2: "a cached result retains its
+   * ORIGINAL observation time, not the cache-return time"); `fromCache: true`
+   * marks it as a cache hit (the probe path sets fromCache: false).
+   */
+  private notRepliedFromCache(checkedAt: string | null): ReplyDetectionNotReplied {
+    return {
+      state: "not_replied",
+      replied: false,
+      source: "sent_search",
+      matchedMessageId: null,
+      reasonCode: "no_reply_observed",
+      checkedAt,
       fromCache: true,
       coverage: "configured_imap",
     };
