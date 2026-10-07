@@ -20,6 +20,7 @@ import type {
   TaskEndCandidate,
 } from "@/entityTypes/aiTaskExecutionTypes";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
+import type { ToolRoundObservation } from "@/service/aiTaskExecution/TaskProgressTracker";
 
 /**
  * Runtime binding the loop needs to consult the controller and reserve a
@@ -49,6 +50,19 @@ export interface LoopTaskExecutionBinding {
    * Optional so tests and flag-off callers can omit it.
    */
   readonly recordDecision?: (decision: TaskCompletionDecision) => void;
+  /**
+   * FR-09 / §7.2 step 7 (GAP-S2 #2): observe one committed tool round so
+   * the tracker can maintain the budget's no-progress streak. The engine
+   * supplies this closure; it captures a `TaskProgressTracker` built from
+   * the coordinator's budget. The loop calls it once per committed round
+   * (after the permission-prompt early return). Optional so tests, flag-off
+   * callers, and the scheduled sink path (which consults at response_end
+   * without a loop binding) can omit it; when absent the streak stays 0
+   * and the controller's streak gate is a no-op (byte-identical legacy).
+   */
+  readonly recordToolRoundProgress?: (
+    observation: ToolRoundObservation
+  ) => void;
 }
 
 /**

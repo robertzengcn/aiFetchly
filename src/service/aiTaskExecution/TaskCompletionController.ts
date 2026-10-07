@@ -205,13 +205,23 @@ export class TaskCompletionController {
     //   incomplete, not another dispatch.
     // - `isContinuationBudgetExhausted` — reserve-level gate; the loop also
     //   re-checks `reserveContinuation` on the returned ID (dedup/atomicity).
+    // - `isNoProgressStreakExhausted` — FR-09/§7.2 step 9 (GAP-S2 #2): a
+    //   stalled run (same normalized tool request + unchanged result for
+    //   maxNoProgressStreak consecutive rounds, per TaskProgressTracker)
+    //   must end incomplete WITHIN the limits, not burn the whole
+    //   continuation allowance and finish CONTINUATION_LIMIT. Falls through
+    //   to `incompleteReasonCode`, which returns NO_PROGRESS for a
+    //   terminal-seen provider candidate at a non-cap boundary. A CHANGED
+    //   error resets the streak (FR-09) without replenishing the allowance —
+    //   the tracker never calls any reserve* method.
     if (
       budget &&
       unmet.length > 0 &&
       candidate.streamTerminalSeen &&
       candidate.boundary !== "budget_cap" &&
       candidate.provenance === "provider" &&
-      !budget.isContinuationBudgetExhausted()
+      !budget.isContinuationBudgetExhausted() &&
+      !budget.isNoProgressStreakExhausted()
     ) {
       return {
         type: "continue",
@@ -221,7 +231,7 @@ export class TaskCompletionController {
       };
     }
 
-    const reasonCode = this.incompleteReasonCode(candidate);
+    const reasonCode = this.incompleteReasonCode(candidate, budget);
     return {
       type: "finish",
       outcome: "incomplete",
@@ -323,13 +333,26 @@ export class TaskCompletionController {
     });
   }
 
-  private incompleteReasonCode(candidate: TaskEndCandidate): string {
+  private incompleteReasonCode(
+    candidate: TaskEndCandidate,
+    budget?: TaskRunBudget
+  ): string {
     // FR-16 provenance-aware reason codes. Precedence: a synthetic/missing-
     // terminal candidate wins over the boundary signal — the stream never
     // truly ended, so CONTINUATION_LIMIT would mislabel it. Reordering these
     // silently changes reason-code distribution downstream.
     if (candidate.provenance === "synthetic" || !candidate.streamTerminalSeen) {
       return "STREAM_INCOMPLETE";
+    }
+    // FR-09/§7.2 step 9 (GAP-S2 #2): a stalled run — terminal seen, provider
+    // provenance, no-progress streak at its bound — ends WITHIN the limits as
+    // NO_PROGRESS, not as the boundary-derived CONTINUATION_LIMIT. This must
+    // precede the boundary check below so a stalled round_cap/response_end
+    // candidate is not mislabeled. The streak is only meaningful with a live
+    // budget; shadow callers (no budget) fall through to the boundary code,
+    // preserving Slice 1 byte-identity (their streak stays 0).
+    if (budget && budget.isNoProgressStreakExhausted()) {
+      return "NO_PROGRESS";
     }
     if (candidate.boundary === "budget_cap" || candidate.boundary === "round_cap") {
       return "CONTINUATION_LIMIT";

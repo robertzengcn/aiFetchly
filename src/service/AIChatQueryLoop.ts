@@ -3301,6 +3301,20 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // FR-09 / §7.2 step 7 (GAP-S2 #2): observe the committed tool
+          // round for stall detection. This runs AFTER the permission-prompt
+          // early return above, so only rounds that actually committed a
+          // result feed the no-progress streak. The closure is a no-op when
+          // the binding is absent (flag off / shadow / scheduled sink path)
+          // — byte-identical legacy behavior. `effectiveArguments` is the
+          // post-hook-rewrite request; `toolPayload` is the normalized
+          // result. Discovery traffic (tool_catalog_search) is skipped
+          // inside the tracker, so it never seeds or compares a fingerprint.
+          input.taskExecutionBinding?.recordToolRoundProgress?.({
+            toolName: call.name,
+            arguments: effectiveArguments,
+            resultPayload: toolPayload,
+          });
           // Transient image handoff: if the tool returned prepared images
           // (attach_local_images), append a model-only role:user multimodal
           // message carrying them as image_url parts. This is NOT persisted as

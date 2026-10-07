@@ -123,6 +123,7 @@ import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceServi
 import { makeModuleBackedStore } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type {
   TaskCompletionDecision,
   TaskEndCandidate,
@@ -1413,6 +1414,15 @@ export class AIChatQueryEngine {
                   applyShadowDecisionCas: async () => false,
                 })
               );
+              // FR-09 / §7.2 step 7 (GAP-S2 #2): one tracker per execution,
+              // closing over the SAME budget the controller consults, so the
+              // streak the tracker increments is the streak the controller's
+              // continue-branch gate reads. Constructed once per enrollment
+              // (NOT at module top level — BaseModule TDZ). Holds no DB
+              // state; only mutates the budget's no-progress streak counter.
+              const progressTracker = new TaskProgressTracker({
+                budget: created.budget,
+              });
               taskExecutionBinding = {
                 executionId: created.executionId,
                 consult: (candidate) =>
@@ -1433,6 +1443,9 @@ export class AIChatQueryEngine {
                   created.budget.reserveContinuation(continuationId),
                 recordDecision: (decision) => {
                   recordedDecision = decision;
+                },
+                recordToolRoundProgress: (observation) => {
+                  progressTracker.recordToolRound(observation);
                 },
               };
             } else if (startResult.status === "reused") {
