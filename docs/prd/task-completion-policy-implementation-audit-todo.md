@@ -136,8 +136,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T06 — Give distinct candidates distinct continuation/reservation identities [P1, reproduced]
 
-- [ ] Generate an immutable identity for each distinct response/end candidate; retain it only when handling the same candidate again.
-- [ ] Deduplicate candidate handling as well as reservation; `AlreadyReserved` must not cause another dispatch of the same continuation.
+- [x] Generate an immutable identity for each distinct response/end candidate; retain it only when handling the same candidate again. *(commit f3e24cdc — `buildCandidateId` hashes the immutable candidate observation: executionId, boundary, bounded 2 KiB content, finishReason, pending flags, safetyRestriction. Replay of the same response (identical immutable state) retains the same ID; a genuinely different response gets a distinct ID and its own continuation allowance. Content is bounded to 2 KiB before hashing so a runaway stream cannot grow the ID unboundedly.)*
+- [x] Deduplicate candidate handling as well as reservation; `AlreadyReserved` must not cause another dispatch of the same continuation. *(commit f3e24cdc — `mapDecisionToOutcome` now maps `AlreadyReserved` to break with `CANDIDATE_REPLAYED` instead of re-dispatching. `Reserved` still dispatches; `Exhausted` still surfaces `CONTINUATION_LIMIT`. Three reservation results map to three distinct honest outcomes. The T06a candidateId fix also closes the checker-ID hole the audit flagged: `beginCheckerCandidate(candidateId)` is a no-op on a replayed candidate (same ID), so the per-candidate checker window is NOT reset — the same unchanged checker candidate never exceeds two actual attempts.)*
 
 **Evidence:** `TaskLoopConsult.ts:137` identifies candidates solely by execution and boundary. `TaskCompletionController.ts:228` derives `cont:${candidate.candidateId}`. Helper `:168–170` permits dispatch on AlreadyReserved. Loop round-cap handling `AIChatQueryLoop.ts:1632–1652` resets round counters on authorized continuation.
 
