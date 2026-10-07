@@ -566,26 +566,37 @@ describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () =>
     const path = await import("path");
     const fixture = fs.mkdtempSync(path.join(cwd, "git-shallow-src-"));
     fs.writeFileSync(path.join(fixture, "SKILL.md"), "---\nname: shallow\n---\nbody");
-    const git = (args: string[], expectOutput = false) =>
-      run("git", args, expectOutput);
-    const init = await git(["init", "-q", "."]);
+    // R3 (Windows CI regression): every fixture git command runs with -C
+    // <fixture> — the provider's cwd is the DESCRIBE-level scratch dir, and
+    // `git init .` there left the fixture a plain folder, so the clone
+    // failed with exit 128 on the first real Windows execution.
+    const gitIn = (
+      dir: string,
+      args: string[],
+      expectOutput = false
+    ) => run("git", ["-C", dir, ...args], expectOutput);
+    const init = await gitIn(fixture, ["init", "-q"]);
     expect(init.exitCode).toBe(0);
-    const add = await git(["add", "-A"]);
+    const add = await gitIn(fixture, ["add", "-A"]);
     expect(add.exitCode).toBe(0);
-    const commit = await git([
+    const commit = await gitIn(fixture, [
       "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init",
     ]);
     expect(commit.exitCode).toBe(0);
-    const head = await git(["rev-parse", "HEAD"], true);
+    const head = await gitIn(fixture, ["rev-parse", "HEAD"], true);
     expect(head.exitCode).toBe(0);
     const fixtureHead = head.stdout.trim();
     expect(fixtureHead.length).toBeGreaterThan(0);
 
     const target = path.join(cwd, "git-shallow-clone");
-    const clone = await git(["clone", "-q", "--depth", "1", fixture, target], true);
+    const clone = await run(
+      "git",
+      ["clone", "-q", "--depth", "1", fixture, target],
+      true
+    );
     expect(clone.exitCode).toBe(0);
     expect(fs.existsSync(path.join(target, "SKILL.md"))).toBe(true);
-    const cloned = await git(["-C", target, "rev-parse", "HEAD"], true);
+    const cloned = await gitIn(target, ["rev-parse", "HEAD"], true);
     expect(cloned.exitCode).toBe(0);
     // A shallow clone of the current HEAD reports the SAME commit.
     expect(cloned.stdout.trim()).toBe(fixtureHead);
