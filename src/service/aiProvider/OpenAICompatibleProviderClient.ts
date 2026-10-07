@@ -169,20 +169,31 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       abortTransport();
       return;
     }
-    // The listener lives for the response's lifetime. It is registered with
-    // { once: true } on the TURN-OWNED signal — short-lived by construction
-    // (dropped with the AbortController when the segment ends) — so not
-    // detaching on drain cannot accumulate listeners across requests.
     callerSignal.addEventListener("abort", abortTransport, { once: true });
+    const detach = (): void => {
+      callerSignal.removeEventListener("abort", abortTransport);
+    };
+    // Review F7: an N-round tool loop accumulates one listener per request
+    // on the TURN signal (Node warns past 10) and retains each round's
+    // controller/body closure until turn end. Detach as soon as the body
+    // reaches a terminal state: cancel, error, or full drain.
     const body = response.body;
     if (body) {
-      // Cancelling the body (early consumer close, parser cleanup) also
-      // aborts the transport so the server sees the connection drop.
       const originalCancel = body.cancel.bind(body);
       body.cancel = (reason?: unknown): Promise<void> => {
+        detach();
         abortTransport();
         return originalCancel(reason);
       };
+      // NOTE: no drain-watcher here — a second reader would steal the body
+      // lock from the parser (a ReadableStream allows one reader). The
+      // parser's finally cancels the body on EVERY terminal path (post-DONE
+      // included, TODO-04), which fires the cancel wrapper above and detaches.
+      // A consumer that neither drains nor cancels leaves the listener —
+      // bounded by the turn signal's lifetime as before.
+      void detach;
+    } else {
+      detach();
     }
   }
 

@@ -61,6 +61,8 @@ export function getQueueTurnDispatcher(): QueueTurnDispatcherHolder | null {
  */
 export interface RunOwnerResumeRouter {
   ownsConversation(conversationId: string): boolean;
+  /** Review F1 (FR-008/009): owner-routed Stop/deny for parked runs. */
+  cancelOwnedRun(conversationId: string): Promise<boolean>;
   resumeRun(input: {
     readonly conversationId: string;
     readonly runId?: string;

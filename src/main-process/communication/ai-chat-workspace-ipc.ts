@@ -181,6 +181,8 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
     setRunOwnerResumeRouter({
       ownsConversation: (conversationId) =>
         coordinatorInstance!.ownsConversation(conversationId),
+      cancelOwnedRun: (conversationId) =>
+        coordinatorInstance!.cancelOwnedRun(conversationId),
       resumeRun: (input) => coordinatorInstance!.resumeRun(input),
     });
   }

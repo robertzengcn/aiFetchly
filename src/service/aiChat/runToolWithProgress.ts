@@ -107,19 +107,50 @@ function applyProgressBudget<Progress extends MinimalProgressShape>(
 ): ToolProgressEnvelope<Progress> {
   let serializedLength = 0;
   try {
-    serializedLength = Buffer.byteLength(JSON.stringify(event), "utf8");
+    // Review F12: TextEncoder, not Buffer — works in main AND renderer
+    // processes (Buffer is a bare Node global the renderer guard can't see).
+    serializedLength = new TextEncoder().encode(
+      JSON.stringify(event)
+    ).length;
   } catch {
     serializedLength = Number.POSITIVE_INFINITY; // unserializable → minimal
   }
   if (serializedLength > TOOL_PROGRESS_MAX_SERIALIZED_BYTES) {
+    // Review F5: clamping the retained fields is what makes the budget real —
+    // copying whitelisted names verbatim from an already-oversized event let
+    // a multi-MB string field through untouched.
+    const clamp = (value: unknown, maxLen: number): unknown => {
+      if (typeof value === "string") {
+        return value.length > maxLen ? value.slice(0, maxLen) : value;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      return undefined; // objects/arrays/symbols are never bounded identity
+    };
     const minimal: Record<string, unknown> = {
       type: "tool_progress",
     };
-    for (const key of ["conversationId", "messageId", "toolCallId", "toolName", "phase", "progress", "partialCount", "expectedCount", "timestamp"]) {
-      const value = (event as unknown as Record<string, unknown>)[key];
+    // Bounded identity/phase/counts fields only, each clamped.
+    for (const key of ["conversationId", "messageId", "toolCallId", "toolName"]) {
+      const value = clamp((event as unknown as Record<string, unknown>)[key], 256);
       if (value !== undefined) {
         minimal[key] = value;
       }
+    }
+    const phase = clamp((event as unknown as Record<string, unknown>)["phase"], 32);
+    if (phase !== undefined) {
+      minimal["phase"] = phase;
+    }
+    for (const key of ["progress", "partialCount", "expectedCount"]) {
+      const value = (event as unknown as Record<string, unknown>)[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        minimal[key] = value;
+      }
+    }
+    const ts = (event as unknown as Record<string, unknown>)["timestamp"];
+    if (typeof ts === "number" && Number.isFinite(ts)) {
+      minimal["timestamp"] = ts;
     }
     toolProgressDiagnostics.oversizedReplaced += 1;
     return {

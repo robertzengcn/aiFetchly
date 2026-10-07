@@ -589,6 +589,11 @@ export class AIChatQueryEngine {
 
   /** Return main-process truth for a conversation's current turn. */
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
+    if (this.claimedPending.has(conversationId)) {
+      // Review F8: a claimed-but-not-yet-resumed action is still owned by
+      // this conversation — reporting idle admitted racing turns.
+      return "awaiting_permission";
+    }
     if (this.pendingPermissions.has(conversationId)) {
       return "awaiting_permission";
     }
@@ -2251,7 +2256,8 @@ export class AIChatQueryEngine {
       assistantMessageId: matchedByToolId.assistantMessageId,
       turnId: matchedByToolId.turnId,
       eventSink: denySink,
-      partialContent: "",
+      partialContent:
+        (matchedByToolId as { streamedPartial?: string }).streamedPartial ?? "",
     });
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(module, denySink);
@@ -2276,6 +2282,9 @@ export class AIChatQueryEngine {
         toolResult: deniedPayload,
         replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
       });
+      // Review F4 (FR-006): the denied result is a REQUIRED write — await
+      // it before any continuation, exactly like the approve path.
+      await this.flushEventSaves(eventSink);
 
       matchedByToolId.conversationMessages.push({
         role: "tool",
@@ -2330,8 +2339,10 @@ export class AIChatQueryEngine {
         ),
       };
 
-      void this.loop
-        .run(loopInput)
+      // Review F4 (FR-018): the deny continuation honors the run's pinned
+      // delivery mode instead of raw loop.run.
+      const denyMode = this.pinnedStreamMode(conversationId);
+      void this.runLoopSegment(this.loop, loopInput, denyMode)
         .then(async (result) => {
           await this.handleLoopResult(result, module, eventSink);
         })
@@ -2435,6 +2446,9 @@ export class AIChatQueryEngine {
     const pendingPlanQuestion = this.pendingPlanQuestions.get(conversationId);
     if (pendingPlanQuestion) {
       this.pendingPlanQuestions.delete(conversationId);
+      this.pendingSinks.delete(conversationId);
+      this.runStreamModes.delete(conversationId);
+      this.stopHooksDispatched.delete(conversationId);
       pendingPlanQuestion.abortController.abort();
       this.pendingSinks.get(conversationId)?.emit({
         type: "cancelled",
@@ -2606,7 +2620,8 @@ export class AIChatQueryEngine {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
       eventSink: baseSink,
-      partialContent: "",
+      partialContent:
+        (matchedByToolId as { streamedPartial?: string }).streamedPartial ?? "",
       ...(lifecycle ? { lifecycle } : {}),
     });
     // Stage A §3.2 (FR-021): the claimed resume starts executing now.
@@ -2782,6 +2797,11 @@ export class AIChatQueryEngine {
       );
       await this.handleLoopResult(result, module, eventSink, {
         ownerNotifiesTerminal: matchedByToolId.ownerNotifiesTerminal === true,
+        // Review F3 (FR-023): the durable-run gate applies to resumed
+        // segments too — side effects wait for the owner's run transition.
+        ...(options?.onSegmentDurable
+          ? { onSegmentDurable: options.onSegmentDurable }
+          : {}),
       });
       if (result.type === "paused_for_permission") {
         return {
@@ -2832,7 +2852,8 @@ export class AIChatQueryEngine {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
       eventSink: baseSink,
-      partialContent: "",
+      partialContent:
+        (pending as { streamedPartial?: string }).streamedPartial ?? "",
       ...(lifecycle ? { lifecycle } : {}),
     });
     this.notifyResumed(lifecycle, {
@@ -2944,6 +2965,9 @@ export class AIChatQueryEngine {
       );
       await this.handleLoopResult(result, module, eventSink, {
         ownerNotifiesTerminal: pending.ownerNotifiesTerminal === true,
+        ...(options?.onSegmentDurable
+          ? { onSegmentDurable: options.onSegmentDurable }
+          : {}),
       });
       if (result.type === "paused_for_permission") {
         return {
@@ -3268,6 +3292,7 @@ export class AIChatQueryEngine {
         // TODO-05: the explicit stop already fired the hook — exactly once.
         this.stopHooksDispatched.delete(conversationId);
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        this.forgetStreamMode(conversationId);
         this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
@@ -3364,6 +3389,11 @@ export class AIChatQueryEngine {
         );
         pausedPermissionEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
+        // Review F13: carry the streamed-so-far text onto the pending so a
+        // post-resume failure writes the FULL partial history, not just
+        // post-resume tokens.
+        (result.pending as { streamedPartial?: string }).streamedPartial =
+          pausedPermissionEntry?.partialContent ?? "";
         this.pendingPermissions.set(
           result.pending.conversationId,
           result.pending
@@ -3389,6 +3419,8 @@ export class AIChatQueryEngine {
         );
         pausedPlanEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
+        (result.pending as { streamedPartial?: string }).streamedPartial =
+          pausedPlanEntry?.partialContent ?? "";
         this.pendingPlanQuestions.set(
           result.pending.conversationId,
           result.pending

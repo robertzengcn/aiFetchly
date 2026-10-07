@@ -394,6 +394,20 @@ export class AIChatCoordinator {
   }
 
   /**
+   * Review F1 (FR-008/009): owner-routed Stop/deny for a run this
+   * coordinator owns (parked or live). Returns whether a run was
+   * cancelled. Deny of a parked permission is semantically the same
+   * cancellation under current policy (existing deny = stop).
+   */
+  async cancelOwnedRun(conversationId: string): Promise<boolean> {
+    if (!this.liveRuns.has(conversationId)) {
+      return false;
+    }
+    const result = await this.cancelRun({ conversationId });
+    return result.cancelled;
+  }
+
+  /**
    * Re-enter a paused run through its owner (FR-010/024): the pending action
    * is claimed immediately (idempotently), the run shows queued while it
    * waits for scheduler capacity, the lease is reacquired before any tool or
@@ -545,6 +559,10 @@ export class AIChatCoordinator {
 
     if (this.deps.scheduler.isActive(live.runId)) {
       live.cancelRequested = true;
+      // Review F2: a dispatched resume may hold an engine claim that
+      // stopActiveTurn cannot see (claimedPending is separate state) —
+      // invalidate it so the tool never executes post-Stop.
+      this.deps.engine.cancelClaimed(conversationId);
       this.deps.engine.stopActiveTurn(conversationId);
       return { cancelled: true };
     }
@@ -706,15 +724,27 @@ export class AIChatCoordinator {
               // failed run-row write must not swallow the terminal outcome —
               // executeDispatch retries the transition and records the error.
             });
-        if (resumeClaim) {
+        if (resumeClaim && !live.cancelRequested) {
           // Stage A §3.5 (FR-024): the claimed continuation runs inside the
           // dispatch — lease and capacity are already held at this point —
-          // and its outcome is observed, never fire-and-forget.
+          // and its outcome is observed, never fire-and-forget. Review F2:
+          // a Stop that landed between claim and resume must win here — the
+          // approved tool never starts.
           outcome = await this.deps.engine.resumeClaimed(resumeClaim, {
             eventSink,
             lifecycle,
             onSegmentDurable,
           });
+        } else if (resumeClaim && live.cancelRequested) {
+          // Review F2 (FR-024): claim invalidated by Stop before resume —
+          // cancel the engine claim and finalize cancelled; the approved
+          // tool never starts.
+          this.deps.engine.cancelClaimed(conversationId);
+          outcome = {
+            type: "cancelled",
+            conversationId,
+            assistantMessageId: resumeClaim.assistantMessageId,
+          };
         } else if (live.queueDispatch) {
           outcome = await this.deps.engine.submitPersistedUserMessage({
             eventSink,

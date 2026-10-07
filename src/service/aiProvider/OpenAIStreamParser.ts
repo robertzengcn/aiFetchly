@@ -159,9 +159,13 @@ export class OpenAIStreamParser {
         }
       }
     } finally {
-      if (!completedNaturally) {
-        // Early close / abort / failure: cancel the owned body so the
-        // request is not left streaming unobserved (design §7).
+      // Review F6 (TODO-04): [DONE] is protocol completion, not physical EOF
+      // — trailing unread bytes would hold the socket, so cancel there too.
+      // Only a fully-drained body (done === true with no DONE marker) leaves
+      // the reader unsettled.
+      if (!completedNaturally || sawDoneMarker) {
+        // Early close / abort / failure / post-DONE: cancel the owned body
+        // so the request is not left streaming unobserved (design §7).
         try {
           await reader.cancel().catch(() => undefined);
         } catch {

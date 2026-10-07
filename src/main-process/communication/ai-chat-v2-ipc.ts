@@ -1203,6 +1203,18 @@ function handleStop(data?: unknown): void {
   } else {
     registry.clearAll();
   }
+  // Review F1 (FR-008/024): route Stop through the run's owner when the
+  // coordinator owns the conversation — a raw engine stop leaves the parked
+  // run's terminal dropped outside any live dispatch (the run row wedges in
+  // awaiting_* and the busy queue never drains). Non-coordinator turns keep
+  // the engine-internal path.
+  if (
+    conversationId !== undefined &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    void getRunOwnerResumeRouter()!.cancelOwnedRun(conversationId);
+    return;
+  }
   getQueryEngine().stopActiveTurn(conversationId);
 }
 
@@ -1245,6 +1257,18 @@ export async function handleResumeToolAfterPermission(
   // the paused turn for this conversation + toolId, route the grant directly
   // to it instead of the interactive singleton engine. The scheduled engine
   // parked the turn and is the only one that can resume it.
+  // Review F1 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's cancel — the engine's deny wrapper re-executes outside the
+  // owner's lease/capacity and its continuation is unobserved.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+      conversationId
+    );
+    return ok({ ok: cancelled, handled: true });
+  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);

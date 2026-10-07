@@ -3298,6 +3298,8 @@ export class AiChatApi {
     let emittedPayloadCount = 0;
     /** TODO-04: the protocol said [DONE] — stop parsing ANY later bytes. */
     let sawDoneMarker = false;
+    /** Review F6: true only when the body reached physical EOF fully drained. */
+    let completedNaturally = false;
 
     /** Validate + normalize one payload; throws for error payloads. */
     const processPayload = (
@@ -3412,6 +3414,7 @@ export class AiChatApi {
         }
       }
 
+      completedNaturally = true;
       // Process any remaining data in buffer — but NEVER after the protocol
       // terminated with [DONE]: late buffered payload is not output (TODO-04).
       const trimmedBuffer = sawDoneMarker ? "" : buffer.trim();
@@ -3479,6 +3482,16 @@ export class AiChatApi {
         }
       }
     } finally {
+      // Review F6 (TODO-04 parity with the local parser): cancel the owned
+      // body on early close, failure, or post-[DONE] (protocol completion is
+      // not physical EOF; trailing bytes hold the socket).
+      if (!completedNaturally || sawDoneMarker) {
+        try {
+          await reader.cancel().catch(() => undefined);
+        } catch {
+          // releaseLock below still runs.
+        }
+      }
       reader.releaseLock();
     }
   }
