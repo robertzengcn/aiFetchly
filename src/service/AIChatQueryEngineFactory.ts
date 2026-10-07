@@ -95,6 +95,11 @@ export class AIChatQueryEngineFactory {
           completeChat: (request) =>
             new AiChatApi().openAIChatCompletion(request),
         }),
+      // Section capacity allocation (§8.3) must size against the real model
+      // window too, not just the dispatch preflight — otherwise a small-context
+      // model gets an oversized section packed for the 8,192-token fallback
+      // and the dispatch preflight rejects it, wasting a reduction attempt.
+      modelLimitResolver,
     });
     // §12 assembler with the compaction reader + archive access: reads the
     // active generation's composite boundary + bounded overview instead of

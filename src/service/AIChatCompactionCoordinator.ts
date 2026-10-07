@@ -34,7 +34,10 @@ import type {
 import { AIChatSummaryValidator } from "@/service/AIChatSummaryValidator";
 import { parseSummaryJson } from "@/service/AIChatSummaryJsonParse";
 import { AIChatCompactionPromptBuilder } from "@/service/AIChatCompactionPromptBuilder";
-import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import {
+  AIChatRequestBudgetService,
+  type ModelLimitResolver,
+} from "@/service/AIChatRequestBudgetService";
 import { encodeCursor, decodeCursor } from "@/service/AIChatArchiveCursorCodec";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import {
@@ -57,6 +60,14 @@ export interface AIChatCompactionCoordinatorDeps {
    * supplying a summarizer each time. Absent in tests / legacy wiring.
    */
   readonly summarize?: SummarizeFn;
+  /**
+   * Resolver for the real model context/output limits. When set, section
+   * capacity allocation (§8.3) uses the actual model window instead of the
+   * UNKNOWN_MODEL_FALLBACK_LIMITS (8,192/1,024), so small-context models
+   * don't get oversized sections rejected by the dispatch preflight and
+   * large-context models aren't undersized. Mirrors the dispatch wiring.
+   */
+  readonly modelLimitResolver?: ModelLimitResolver;
 }
 
 /** Input to requestCompaction. */
@@ -107,6 +118,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
   private readonly budgetService: AIChatRequestBudgetService;
   /** Bound provider-backed summarizer, when injected via deps. */
   private readonly summarizeFn?: SummarizeFn;
+  /** Injected model-limit resolver, when supplied via deps. */
+  private readonly modelLimitResolver?: ModelLimitResolver;
   /** In-process promise per conversation (§11.1 dedup). */
   private readonly inFlight = new Map<string, InFlightRun>();
 
@@ -119,6 +132,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
     this.promptBuilder = new AIChatCompactionPromptBuilder();
     this.budgetService = new AIChatRequestBudgetService();
     this.summarizeFn = deps?.summarize;
+    this.modelLimitResolver = deps?.modelLimitResolver;
   }
 
   /**
@@ -323,6 +337,9 @@ export class AIChatCompactionCoordinator extends BaseModule {
             rollingOverview
           ),
           stateInputCost: 0,
+          ...(this.modelLimitResolver
+            ? { modelLimitResolver: this.modelLimitResolver }
+            : {}),
         });
         if (preflight.errorCode) {
           throw new RecoverableHistoryError(

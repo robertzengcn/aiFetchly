@@ -351,6 +351,12 @@ function getCompactionCoordinator(): AIChatCompactionCoordinator {
   if (!compactionCoordinator) {
     compactionCoordinator = new AIChatCompactionCoordinator({
       summarize: providerSummarize,
+      // Wire the live model catalog resolver so section capacity allocation
+      // (§8.3) sizes against the real model window, matching the dispatch
+      // preflight. Without this, allocateSectionCapacity falls back to
+      // UNKNOWN_MODEL_FALLBACK_LIMITS (8,192/1,024) and small-context models
+      // get oversized sections rejected by the dispatch preflight.
+      modelLimitResolver: (model) => getCompactModelCatalog().resolveLimits(model),
     });
   }
   return compactionCoordinator;
