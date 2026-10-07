@@ -239,8 +239,10 @@ The pre-existing untracked `test/vitest/utilitycode/__snapshots__/` directory wa
 
 TODO-01 through TODO-11, TODO-14, and TODO-15 are implemented with regression
 coverage and recorded in `generator-streaming-operations.md` §4–5 and
-`generator-streaming-p0-inventory.md` §7–8. TODO-12's gates pass (main 6312,
-service 2726 serial, components 827, tsc 0; vitest ^4.1.11 aligned) — its
+`generator-streaming-p0-inventory.md` §7–8. TODO-12's gates pass (main 6316
+across 654 files, service 2730 serial, components 827, tsc 0 — all zero
+failures after root-causing the queue-suite DB flakes to two real test
+defects, not environment; vitest ^4.1.11 aligned) — its
 Electron E2E matrix items remain the shared release gate: the existing E2E
 suite is unchanged on this branch and the NEW failure/capacity/mode scenarios
 (failed required saves, capacity-limited resume, both delivery modes in

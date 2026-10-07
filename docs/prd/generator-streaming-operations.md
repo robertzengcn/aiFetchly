@@ -94,8 +94,10 @@ defect and requirement item has code + regression coverage:
 - **TODO-07/14** real progress bounds (whitelisted fields, UTF-8 bytes,
   unserializable-safe) + nested cleanup + count-only diagnostics; env value
   never echoed.
-- **TODO-12** gates: main 6312 passed / service 2726 passed (serial,
-  root-caused the queue-suite DB flake) / components 827 / tsc 0.
+- **TODO-12** gates: main 6316 passed (654 files) / service 2730 passed
+  (serial) / components 827 / tsc 0 — zero failures; the queue-suite flakes
+  were root-caused to two real test defects (a leaked busy re-drain chain
+  and a write racing lazy DB init) and fixed, not waived.
 - **TODO-13/15** perf fixtures measured (§4), conflict decisions + V2
   inventory recorded (P0 inventory §7–8).
 
