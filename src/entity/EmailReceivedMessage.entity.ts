@@ -135,4 +135,47 @@ export class EmailReceivedMessageEntity extends AuditableEntity {
   classificationVersion: string | null;
   @Column("datetime", { nullable: true })
   classifiedAt: Date | null;
+
+  // ---- Mailbox reply evidence (FR-030, technical design §5.1) ----
+  // These columns are the evidence/observation layer, separate from the
+  // `replyStatus` projection above. Sync owns provider flags/provenance;
+  // detection owns reply evidence/cache; send finalization owns delivery.
+  // A cleared provider flag or empty Sent search must NEVER reset a
+  // protected message (sticky positive — `replyDetectedAt` is never cleared).
+
+  /** Raw IMAP `\Answered` flag at last flag check (0 = not observed as answered). */
+  @Column("integer", { default: 0 })
+  isAnswered: number;
+
+  /** When the provider answered-flag was last observed (IMAP flag check time). */
+  @Column("datetime", { nullable: true })
+  answeredFlagCheckedAt: Date | null;
+
+  /** Sticky first positive detection time — never cleared by later zero/negative. */
+  @Column("datetime", { nullable: true })
+  replyDetectedAt: Date | null;
+
+  /** Which source produced the sticky positive: `mailbox_flag` or `sent_search`. */
+  @Column("varchar", { length: 20, nullable: true })
+  replyDetectionSource: string | null;
+
+  /** The Sent-folder message that matched (RFC Message-ID), for diagnostics only. */
+  @Column("varchar", { length: 998, nullable: true })
+  replyMatchedMessageId: string | null;
+
+  /** When the last complete negative observation was stored (cache freshness). */
+  @Column("datetime", { nullable: true })
+  replyNegativeCheckAt: Date | null;
+
+  /** Detector context hash the negative was observed under (invalidation key). */
+  @Column("varchar", { length: 64, nullable: true })
+  replyNegativeContextHash: string | null;
+
+  /** IMAP folder this message was synced from (UID provenance, §4.1). */
+  @Column("varchar", { length: 255, nullable: true })
+  providerFolder: string | null;
+
+  /** IMAP UIDVALIDITY of the source folder (lossless string; UID is only valid with this). */
+  @Column("varchar", { length: 64, nullable: true })
+  providerUidValidity: string | null;
 }

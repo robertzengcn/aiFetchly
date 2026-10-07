@@ -48,6 +48,13 @@ export interface ReceivedMessageListDto {
   classificationConfidence: number | null;
   replyStatus: EmailReplyStatus;
   processedAt: string | null;
+  // ---- Mailbox reply evidence (FR-030): renderer-safe observation fields ----
+  /** Raw provider `\Answered` flag at last check. */
+  isAnswered: boolean;
+  /** When the provider answered-flag was last observed. */
+  answeredFlagCheckedAt: string | null;
+  /** Sticky first positive detection time (never cleared). */
+  replyDetectedAt: string | null;
 }
 
 /** Detail DTO for one received message, including sanitized body. */
@@ -59,6 +66,17 @@ export interface ReceivedMessageDetailDto extends ReceivedMessageListDto {
   ccAddresses: string[];
   bodyText: string | null;
   bodyHtmlSanitized: string | null;
+  // ---- Full evidence set (diagnostic view, FR-030/FR-032) ----
+  /** Which source produced the sticky positive: `mailbox_flag` or `sent_search`. */
+  replyDetectionSource: string | null;
+  /** The Sent-folder message that matched (RFC Message-ID), diagnostics only. */
+  replyMatchedMessageId: string | null;
+  /** When the last complete negative observation was stored (cache freshness). */
+  replyNegativeCheckAt: string | null;
+  /** IMAP folder this message was synced from (UID provenance). */
+  providerFolder: string | null;
+  /** IMAP UIDVALIDITY of the source folder (lossless string). */
+  providerUidValidity: string | null;
 }
 
 /** Reply identity profile DTO (no secrets). */

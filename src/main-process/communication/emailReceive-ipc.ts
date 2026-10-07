@@ -605,6 +605,11 @@ function toMessageListDto(
     classificationConfidence: e.classificationConfidence,
     replyStatus: e.replyStatus,
     processedAt: iso(e.processedAt),
+    // FR-030: renderer-safe observation fields (no matched-message-id or
+    // context-hash in the list DTO — those are diagnostic-only).
+    isAnswered: normalizeStoredBoolean(e.isAnswered),
+    answeredFlagCheckedAt: iso(e.answeredFlagCheckedAt),
+    replyDetectedAt: iso(e.replyDetectedAt),
   };
 }
 
@@ -620,6 +625,12 @@ function toMessageDetailDto(
     ccAddresses: decodeAddresses(e.ccAddressesJson),
     bodyText: e.bodyText,
     bodyHtmlSanitized: e.bodyHtmlSanitized,
+    // FR-030: full evidence set for the diagnostic detail view.
+    replyDetectionSource: e.replyDetectionSource,
+    replyMatchedMessageId: e.replyMatchedMessageId,
+    replyNegativeCheckAt: iso(e.replyNegativeCheckAt),
+    providerFolder: e.providerFolder,
+    providerUidValidity: e.providerUidValidity,
   };
 }
 
