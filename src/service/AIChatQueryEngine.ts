@@ -1447,6 +1447,12 @@ export class AIChatQueryEngine {
                 recordToolRoundProgress: (observation) => {
                   progressTracker.recordToolRound(observation);
                 },
+                // T20b: text-only rounds (goalTextStop consults carry no
+                // committed tool round) feed the same tracker so repeated
+                // identical text counts as no-progress.
+                recordAssistantTextProgress: (content) => {
+                  progressTracker.recordAssistantTextRound(content);
+                },
               };
             } else if (startResult.status === "reused") {
               // Transport retry: the same (conversation, submission, hash)

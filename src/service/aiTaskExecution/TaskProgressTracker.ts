@@ -1,6 +1,7 @@
 /**
  * Results-based no-progress (stall) detection — FR-09 / technical-design
- * §7.2 step 7 + step 9, AC-05 (GAP-S2 #2, Slice 2).
+ * §7.2 step 7 + step 9, AC-05 (GAP-S2 #2, Slice 2); T20b extends detection
+ * to alternating work and text-only rounds.
  *
  * The budget already owns the streak COUNTERS (`recordNoProgress` /
  * `resetNoProgressStreak` / `maxNoProgressStreak`); this module is the
@@ -18,6 +19,22 @@
  *   continuation allowance — the tracker never calls any reserve* method,
  *   so that invariant holds structurally.
  *
+ * T20b (alternating work): the comparison is PER (toolName, arguments)
+ * request, not against the single previous round. A/B/A/B alternation
+ * (two distinct repeated calls interleaved, each always returning the
+ * same result) never resets the streak — each repeat of a seen request
+ * with an unchanged result increments it, even though no two CONSECUTIVE
+ * rounds are identical. A genuinely new (toolName, arguments) request is
+ * relevant new evidence and resets the streak.
+ *
+ * T20b (text-only rounds): the goalTextStop path consults without a
+ * committed tool round, so text-only work feeds the detector through
+ * {@link recordAssistantTextRound}. Repeated identical assistant text (a
+ * repeated promise, FR-09 exclusion "repeated text") increments the
+ * streak; changed text resets it. Text rounds and tool rounds share one
+ * streak but separate fingerprint state — a text repeat counts even when
+ * tool rounds sit in between.
+ *
  * Fingerprint exclusions (FR-09: "excluding timestamps alone, random IDs,
  * repeated text, and discovery traffic"): `executionTimeMs` and well-known
  * timestamp/ID key names are stripped from the result before hashing;
@@ -32,6 +49,8 @@
  *   over one tracker instance built from `created.budget`.
  * - The loop calls it once per COMMITTED tool round (after the
  *   permission-prompt early return, at the role:"tool" message push).
+ * - The goalTextStop site additionally calls the engine's
+ *   `recordAssistantTextProgress` closure once per consult there.
  * - The controller's §7.2 step 10 continue branch gates on
  *   `!budget.isNoProgressStreakExhausted()`, so a stalled candidate falls
  *   through to finish(incomplete) — with NO_PROGRESS (via
@@ -134,6 +153,32 @@ export function buildToolRoundFingerprint(params: {
 }
 
 /**
+ * T20b: stable MAP key for one normalized tool REQUEST — the (toolName,
+ * arguments) pair without the result. Pure function — exported for unit
+ * tests. Two rounds share a map key exactly when they repeat the same
+ * operation; comparing their RESULT fingerprints then decides stall vs
+ * progress.
+ */
+export function buildToolRequestKey(params: {
+  toolName: string;
+  arguments: Record<string, unknown>;
+}): string {
+  const canonical = stableStringify({
+    toolName: params.toolName,
+    arguments: params.arguments,
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * T20b: normalized fingerprint for one assistant text round. Pure
+ * function — exported for unit tests.
+ */
+export function buildAssistantTextFingerprint(content: string): string {
+  return createHash("sha256").update(stableStringify(content)).digest("hex");
+}
+
+/**
  * One committed tool round as observed by the loop. `arguments` is the
  * EFFECTIVE arguments (post hook-rewrite), `resultPayload` is the
  * normalized tool result payload (`normalizeToolResult(toolResult)`).
@@ -156,14 +201,23 @@ export interface TaskProgressTrackerDeps {
 }
 
 /**
- * Maintains the last committed work-round fingerprint and drives the
- * budget's no-progress streak. One instance per execution (the engine's
- * enrollment seam builds it from the coordinator's budget); carried
- * through loopInput and the resume paths alongside the binding.
+ * Maintains per-request result fingerprints and drives the budget's
+ * no-progress streak. One instance per execution (the engine's enrollment
+ * seam builds it from the coordinator's budget); carried through loopInput
+ * and the resume paths alongside the binding.
+ *
+ * T20b: tool fingerprint state is a MAP keyed by the normalized tool
+ * REQUEST (toolName + arguments) → last RESULT fingerprint for that
+ * request. Text rounds keep separate state so a text repeat counts even
+ * when tool rounds sit in between. A/B/A/B alternation between two
+ * repeated requests therefore increments the streak on every repeat
+ * instead of falsely resetting (the single-previous-round comparison
+ * would have reset it).
  */
 export class TaskProgressTracker {
   private readonly budget?: TaskRunBudget;
-  private lastWorkFingerprint: string | null = null;
+  private readonly toolResultFingerprints = new Map<string, string>();
+  private lastAssistantTextFingerprint: string | null = null;
 
   constructor(deps: TaskProgressTrackerDeps) {
     this.budget = deps.budget;
@@ -171,25 +225,61 @@ export class TaskProgressTracker {
 
   /**
    * Observe one committed tool round. Discovery traffic is skipped
-   * entirely (no seed, no compare — FR-09). A work round identical to the
-   * previous work round increments the streak; any change resets it.
+   * entirely (no seed, no compare — FR-09).
+   *
+   * T20b decision table, per (toolName, arguments) request key:
+   * - Repeat of a SEEN request with the SAME result → `recordNoProgress()`
+   *   (the §7.2 stall boundary, regardless of intervening rounds).
+   * - Repeat of a seen request with a CHANGED result → reset (new signal;
+   *   includes a changed error, which never replenishes allowance).
+   * - NEW request (first sighting) → reset (genuinely relevant new
+   *   evidence — T20b "genuinely relevant new evidence resets streak").
    */
   recordToolRound(observation: ToolRoundObservation): void {
     if (!this.budget) return;
     if (isDiscoveryToolCall(observation.toolName)) return;
+    const requestKey = buildToolRequestKey({
+      toolName: observation.toolName,
+      arguments: observation.arguments,
+    });
     const fingerprint = buildToolRoundFingerprint({
       toolName: observation.toolName,
       arguments: observation.arguments,
       resultPayload: observation.resultPayload,
     });
+    const previous = this.toolResultFingerprints.get(requestKey);
+    if (previous !== undefined && previous === fingerprint) {
+      this.budget.recordNoProgress();
+      return;
+    }
+    // New Map entry per observed request — never mutate an existing
+    // entry's value in place; Map.set on the same key replaces it, which
+    // is the intended "latest result wins" semantics for that request.
+    this.toolResultFingerprints.set(requestKey, fingerprint);
+    this.budget.resetNoProgressStreak();
+  }
+
+  /**
+   * T20b: observe one assistant text round from the goalTextStop path
+   * (a consult without a committed tool round). Repeated IDENTICAL text
+   * (a repeated promise — FR-09 exclusion "repeated text") increments
+   * the streak; changed text resets it. Unbounded-growth guard: the map
+   * above is keyed by distinct requests and the loop's round caps bound
+   * rounds per response, but text rounds arrive per consult — capped by
+   * the same MAX_GOAL_TEXT_STOP_CONTINUATIONS allowance, so state stays
+   * bounded per execution.
+   */
+  recordAssistantTextRound(content: string): void {
+    if (!this.budget) return;
+    const fingerprint = buildAssistantTextFingerprint(content);
     if (
-      this.lastWorkFingerprint !== null &&
-      this.lastWorkFingerprint === fingerprint
+      this.lastAssistantTextFingerprint !== null &&
+      this.lastAssistantTextFingerprint === fingerprint
     ) {
       this.budget.recordNoProgress();
       return;
     }
-    this.lastWorkFingerprint = fingerprint;
+    this.lastAssistantTextFingerprint = fingerprint;
     this.budget.resetNoProgressStreak();
   }
 }

@@ -63,6 +63,16 @@ export interface LoopTaskExecutionBinding {
   readonly recordToolRoundProgress?: (
     observation: ToolRoundObservation
   ) => void;
+  /**
+   * FR-09 / T20b: observe one assistant text round at the goalTextStop
+   * site (a consult with no committed tool round — text-only work). The
+   * engine supplies this closure; it captures the same
+   * `TaskProgressTracker` as `recordToolRoundProgress`. Repeated
+   * identical text counts as no-progress; changed text resets the
+   * streak. Optional so tests, flag-off callers, and sites that always
+   * carry tool rounds can omit it.
+   */
+  readonly recordAssistantTextProgress?: (content: string) => void;
 }
 
 /**

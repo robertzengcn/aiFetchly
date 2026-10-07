@@ -3,6 +3,8 @@ import {
   TaskProgressTracker,
   isDiscoveryToolCall,
   buildToolRoundFingerprint,
+  buildToolRequestKey,
+  buildAssistantTextFingerprint,
 } from "@/service/aiTaskExecution/TaskProgressTracker";
 import {
   TaskRunBudget,
@@ -142,6 +144,81 @@ describe("TaskProgressTracker fingerprints (FR-09, §7.2 step 7)", () => {
       resultPayload: { success: true, message: "no new results", page: 2 },
     });
     expect(fp1).not.toBe(fp2);
+  });
+});
+
+describe("T20b request keys (per-(toolName,args) comparison)", () => {
+  it("same toolName + arguments → same request key (result-independent)", () => {
+    const k1 = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+    });
+    const k2 = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+    });
+    expect(k1).toBe(k2);
+    // The key is stable even when the RESULT changes — the key identifies
+    // the request, the fingerprint identifies the (request, result) pair.
+    const k3 = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      // @ts-expect-error extra property on the narrowed input is ignored by
+      // the canonical form (result is not part of the request key)
+      resultPayload: { changed: true },
+    });
+    expect(k3).toBe(k1);
+  });
+
+  it("different toolName or arguments → different request key", () => {
+    const base = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+    });
+    expect(
+      buildToolRequestKey({
+        toolName: "scrape_website",
+        arguments: { query: "berlin" },
+      })
+    ).not.toBe(base);
+    expect(
+      buildToolRequestKey({
+        toolName: "search_contacts",
+        arguments: { query: "munich" },
+      })
+    ).not.toBe(base);
+  });
+
+  it("strips timestamp/ID noise from arguments in the request key", () => {
+    const k1 = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin", requestId: "req-1", timestamp: "t1" },
+    });
+    const k2 = buildToolRequestKey({
+      toolName: "search_contacts",
+      arguments: { query: "berlin", requestId: "req-2", timestamp: "t2" },
+    });
+    expect(k1).toBe(k2);
+  });
+});
+
+describe("T20b assistant text fingerprint (repeated text detection)", () => {
+  it("identical text → identical fingerprint", () => {
+    expect(buildAssistantTextFingerprint("Now at 54 records. Continuing.")).toBe(
+      buildAssistantTextFingerprint("Now at 54 records. Continuing.")
+    );
+  });
+
+  it("changed text → different fingerprint", () => {
+    expect(
+      buildAssistantTextFingerprint("Now at 54 records. Continuing.")
+    ).not.toBe(buildAssistantTextFingerprint("Now at 61 records. Continuing."));
+  });
+
+  it("whitespace-only differences still count as changed text (conservative)", () => {
+    expect(buildAssistantTextFingerprint("Working")).not.toBe(
+      buildAssistantTextFingerprint(" Working ")
+    );
   });
 });
 
@@ -298,6 +375,330 @@ describe("TaskProgressTracker.recordToolRound (FR-09, §7.2 step 7)", () => {
       resultPayload: { success: true, rows: [] },
     });
     expect(budget.getConsumed().noProgressStreak).toBe(0);
+  });
+});
+
+describe("TaskProgressTracker T20b: alternating work (A/B/A/B)", () => {
+  function makeBudget(): TaskRunBudget {
+    return new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+  }
+
+  it("A/B/A/B unchanged-results alternation → streak grows (not falsely reset)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const roundA = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    const roundB = {
+      toolName: "scrape_website",
+      arguments: { url: "https://example.com" },
+      resultPayload: { success: true, rows: [] },
+    };
+    // A B A B A — each repeat of a seen request with an unchanged result is
+    // a stall signal, even though no two CONSECUTIVE rounds are identical.
+    tracker.recordToolRound(roundA); // new request → seed, streak 0
+    tracker.recordToolRound(roundB); // new request → seed, streak 0
+    tracker.recordToolRound(roundA); // repeat A, unchanged → streak 1
+    tracker.recordToolRound(roundB); // repeat B, unchanged → streak 2
+    tracker.recordToolRound(roundA); // repeat A, unchanged → streak 3
+    expect(budget.getConsumed().noProgressStreak).toBe(3);
+  });
+
+  it("A/B alternation with one changed result resets and re-accumulates", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const roundA = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    const roundB = {
+      toolName: "scrape_website",
+      arguments: { url: "https://example.com" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(roundA);
+    tracker.recordToolRound(roundB);
+    tracker.recordToolRound(roundA); // streak 1
+    // B now returns NEW rows — relevant new evidence resets the streak.
+    tracker.recordToolRound({
+      ...roundB,
+      resultPayload: { success: true, rows: [{ id: "fresh" }] },
+    });
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+    // Streak re-accumulates from zero on subsequent repeats.
+    tracker.recordToolRound(roundA); // repeat A, unchanged → streak 1
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+  });
+
+  it("A/B/A/B with interleaved discovery still stalls (discovery skipped entirely)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const roundA = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    const roundB = {
+      toolName: "scrape_website",
+      arguments: { url: "https://example.com" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(roundA); // seed
+    tracker.recordToolRound(roundB); // seed
+    tracker.recordToolRound({
+      toolName: "tool_catalog_search",
+      arguments: { query: "tools" },
+      resultPayload: { success: true, tools: [] },
+    }); // discovery — skipped
+    tracker.recordToolRound(roundA); // repeat → streak 1
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+  });
+
+  it("new (toolName, arguments) request first sighting → reset (relevant new evidence)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const roundA = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(roundA);
+    tracker.recordToolRound(roundA); // streak 1
+    tracker.recordToolRound(roundA); // streak 2
+    // A genuinely new request (different query) is relevant new evidence.
+    tracker.recordToolRound({
+      ...roundA,
+      arguments: { query: "munich" },
+      resultPayload: { success: true, rows: [] },
+    });
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+  });
+
+  it("A/B/A/B at the streak bound trips the controller finish(incomplete, NO_PROGRESS)", async () => {
+    const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+    const tracker = new TaskProgressTracker({ budget });
+    const roundA = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    const roundB = {
+      toolName: "scrape_website",
+      arguments: { url: "https://example.com" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(roundA);
+    tracker.recordToolRound(roundB);
+    tracker.recordToolRound(roundA); // 1
+    tracker.recordToolRound(roundB); // 2
+    tracker.recordToolRound(roundA); // 3 = maxNoProgressStreak
+
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Alternating without progress..." }),
+      {
+        route: "task_verified",
+        contract: {
+          schemaVersion: 1,
+          contractId: "contract-1",
+          objective: "Collect contacts",
+          taskRoute: "task_verified",
+          requiredCriteria: [
+            {
+              criterionId: "rec-1",
+              adapter: "record_count",
+              required: true,
+              description: "at least 10 contacts",
+              threshold: { min: 10 },
+            },
+          ],
+        } as unknown as TaskCompletionContract,
+        requiredCriterionIds: ["rec-1"],
+        passedCriterionIds: [],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("NO_PROGRESS");
+    }
+  });
+});
+
+describe("TaskProgressTracker T20b: text-only rounds (goalTextStop path)", () => {
+  function makeBudget(): TaskRunBudget {
+    return new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
+  }
+
+  it("first text round seeds (no streak)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    tracker.recordAssistantTextRound("Now at 54 records. Let me continue...");
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+  });
+
+  it("repeated identical text-only rounds → streak grows (repeated promise is a stall)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const promise = "Now at 54 records. Let me continue building volume...";
+    tracker.recordAssistantTextRound(promise);
+    tracker.recordAssistantTextRound(promise);
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+    tracker.recordAssistantTextRound(promise);
+    expect(budget.getConsumed().noProgressStreak).toBe(2);
+  });
+
+  it("changed text → reset (genuinely new signal)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const promise = "Now at 54 records. Let me continue building volume...";
+    tracker.recordAssistantTextRound(promise);
+    tracker.recordAssistantTextRound(promise); // streak 1
+    tracker.recordAssistantTextRound("Now at 61 records. Almost there.");
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+  });
+
+  it("text repeat counts even when tool rounds sit in between (separate state)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const promise = "Still collecting, hang tight...";
+    tracker.recordAssistantTextRound(promise); // seed text state
+    tracker.recordToolRound({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    }); // seeds TOOL state + resets streak
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+    tracker.recordAssistantTextRound(promise); // repeat of the text → streak 1
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+  });
+
+  it("no binding budget → text rounds are a no-op (flag-off byte-identical)", () => {
+    const tracker = new TaskProgressTracker({ budget: undefined });
+    expect(() =>
+      tracker.recordAssistantTextRound("Working on it.")
+    ).not.toThrow();
+  });
+});
+
+describe("TaskProgressTracker T20b: streak persistence through resumes", () => {
+  // T20 audit regression: "persist it through resumes" + AC-06/27/29. The
+  // streak COUNTER persists in the ledger row; the resurrected budget
+  // carries it forward so a post-resume consult that lands BEFORE any fresh
+  // round is still gated by the pre-pause streak. The fingerprint MAP is
+  // detection state — it restarts empty (the ledger has no request-key
+  // history), so a repeat of a pre-pause request with the same result is a
+  // first sighting from the new tracker's view and resets the streak. That
+  // is the intended conservative semantics: the persisted counter is what
+  // survives, and it gates the consult at the resume boundary.
+
+  function resurrectedBudget(streak: number): TaskRunBudget {
+    return TaskRunBudget.resurrectFromLedger({
+      policy_limits_json: JSON.stringify({
+        maxContinuations: 3,
+        maxProviderAttempts: 60,
+        maxCheckerAttempts: 6,
+        maxToolExecutions: 50,
+        maxTokens: 128000,
+        maxActiveRuntimeMs: 600000,
+        maxWaitMs: 3600000,
+        maxNoProgressStreak: 3,
+      }),
+      consumed_continuations: 1,
+      consumed_provider_attempts: 4,
+      consumed_checker_attempts: 0,
+      consumed_tool_executions: 5,
+      consumed_tokens: 9000,
+      consumed_active_ms: 120000,
+      consumed_wait_ms: 0,
+      no_progress_streak: streak,
+    });
+  }
+
+  it("resurrectFromLedger restores the persisted streak counter", () => {
+    const budget = resurrectedBudget(2);
+    expect(budget.getConsumed().noProgressStreak).toBe(2);
+    // The restored streak is below the bound, so a consult that lands at
+    // the resume boundary (before any fresh round) is NOT exhausted.
+    expect(budget.isNoProgressStreakExhausted()).toBe(false);
+    // ...and at the bound it IS exhausted, gating the consult.
+    const atBound = resurrectedBudget(3);
+    expect(atBound.isNoProgressStreakExhausted()).toBe(true);
+  });
+
+  it("restored streak gates the immediate post-resume consult (controller honors persisted streak)", async () => {
+    // A run paused at streak 3 (the bound) resumes. Before any fresh round
+    // lands, the loop consults at the resume boundary. The controller's
+    // streak gate sees the RESTORED streak and finishes incomplete/NO_PROGRESS
+    // rather than authorizing another continuation.
+    const budget = resurrectedBudget(3);
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Resuming after pause..." }),
+      {
+        route: "task_verified",
+        contract: {
+          schemaVersion: 1,
+          contractId: "contract-1",
+          objective: "Collect contacts",
+          taskRoute: "task_verified",
+          requiredCriteria: [
+            {
+              criterionId: "rec-1",
+              adapter: "record_count",
+              required: true,
+              description: "at least 10 contacts",
+              threshold: { min: 10 },
+            },
+          ],
+        } as unknown as TaskCompletionContract,
+        requiredCriterionIds: ["rec-1"],
+        passedCriterionIds: [],
+        budget,
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("NO_PROGRESS");
+    }
+  });
+
+  it("first post-resume round is a fresh sighting → reset (detection state restarts, counter persists)", () => {
+    // The fingerprint MAP is empty after resume (ledger has no request-key
+    // history), so the first round observed is a first sighting — relevant
+    // new evidence resets the streak. The persisted counter's role is to
+    // gate consults BEFORE that round lands (above), not to fossilize the
+    // streak against genuinely observed work.
+    const budget = resurrectedBudget(2);
+    const tracker = new TaskProgressTracker({ budget });
+    tracker.recordToolRound({
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    });
+    expect(budget.getConsumed().noProgressStreak).toBe(0);
+  });
+
+  it("post-resume repeats re-accumulate: A then A again → streak grows from the reset baseline", () => {
+    const budget = resurrectedBudget(2);
+    const tracker = new TaskProgressTracker({ budget });
+    const round = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(round); // first sighting → reset to 0
+    tracker.recordToolRound(round); // repeat, unchanged → streak 1
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+    tracker.recordToolRound(round); // → streak 2
+    tracker.recordToolRound(round); // → streak 3 = exhausted
+    expect(budget.getConsumed().noProgressStreak).toBe(3);
+    expect(budget.isNoProgressStreakExhausted()).toBe(true);
   });
 });
 

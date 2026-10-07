@@ -2374,6 +2374,13 @@ export class AIChatQueryLoop {
           // the legacy branch does, so the persisted message keeps the text.
           // Flag-off/no binding → legacy goal-text nudge.
           if (goalTextStop) {
+            // T20b: the goalTextStop consult carries no committed tool
+            // round, so text-only work must feed the tracker here.
+            // Repeated identical text (a repeated promise) counts as
+            // no-progress; changed text resets the streak.
+            input.taskExecutionBinding?.recordAssistantTextProgress?.(
+              accumulator.state.fullContent || ""
+            );
             const policyGoalTextOutcome = await this.maybeConsultPolicy({
               input,
               boundary: "response_end",
