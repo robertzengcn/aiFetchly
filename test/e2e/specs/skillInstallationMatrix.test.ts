@@ -143,12 +143,16 @@ function makeAdversarialFixture(root: string): string {
 
 async function prepareToAwaitingApproval(
   app: LaunchedApp,
-  fixture: string
+  fixture: string,
+  /** Fixed id for specs whose duplicate prepares must RESUME the same
+   *  session — R4 binds sessions to conversations, so a fresh Date.now()
+   *  id per call intentionally mints a separate session now. */
+  conversationId?: string
 ): Promise<InstallSnapshot | null> {
   // Prepare via the AI-serving IPC (the model-equivalent entry; the
   // model-driven spec covers the chat-loop routing separately).
   return invoke<InstallSnapshot>(app, "skill-install:prepare", {
-    conversationId: `e2e-matrix-${Date.now()}`,
+    conversationId: conversationId ?? `e2e-matrix-${Date.now()}`,
     source: fixture,
   });
 }
@@ -519,8 +523,9 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     // invariant asserted here: ONE source yields ONE persisted session —
     // even a duplicate prepare (whatever retry pressure exists) RESUMES it,
     // so the replay path can never create a second session or checkout.
-    const first = await prepareToAwaitingApproval(app, fixture);
-    const second = await prepareToAwaitingApproval(app, fixture);
+    const conversationId = `e2e-matrix-fr28-case14-${Date.now()}`;
+    const first = await prepareToAwaitingApproval(app, fixture, conversationId);
+    const second = await prepareToAwaitingApproval(app, fixture, conversationId);
     expect(second?.sessionId).toBe(first?.sessionId);
 
     await assertCleanTeardown(app, {
