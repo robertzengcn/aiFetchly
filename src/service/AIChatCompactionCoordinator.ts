@@ -656,7 +656,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
       if (error instanceof RecoverableHistoryError) throw error;
       throw new RecoverableHistoryError(
         "COMPACTION_CONTEXT_REJECTED",
-        `compaction failed: ${(error as Error).message}`
+        `compaction failed: ${(error as Error).message}`,
+        { cause: error }
       );
     }
   }
@@ -1009,7 +1010,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
           ? err
           : new RecoverableHistoryError(
               "COMPACTION_CONTEXT_REJECTED",
-              `section summarize attempt ${attempts} failed: ${(err as Error).message}`
+              `section summarize attempt ${attempts} failed: ${(err as Error).message}`,
+              { cause: err }
             );
       }
 

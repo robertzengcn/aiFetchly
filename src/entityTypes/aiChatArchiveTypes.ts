@@ -179,8 +179,12 @@ export type RecoverableHistoryErrorCode =
 
 export class RecoverableHistoryError extends Error {
   readonly code: RecoverableHistoryErrorCode;
-  constructor(code: RecoverableHistoryErrorCode, message: string) {
-    super(message);
+  constructor(
+    code: RecoverableHistoryErrorCode,
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
     this.name = "RecoverableHistoryError";
     this.code = code;
   }
