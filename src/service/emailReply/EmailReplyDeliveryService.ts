@@ -27,6 +27,7 @@ import {
   validateSendBinding,
 } from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
+import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
 import {
   incrementReplyMetric,
   observeReplyDurationMs,
@@ -112,10 +113,21 @@ export class EmailReplyDeliveryService {
   private readonly policy = new EmailReplyPolicyOrchestrator();
   private readonly senderFactory: ReplySenderFactory;
   private readonly serviceLoader: (id: number) => Promise<BoundMailbox | null>;
+  private detectionService: EmailReplyDetectionService | null = null;
+  private readonly detectionServiceFactory:
+    | (() => EmailReplyDetectionService)
+    | null;
 
   constructor(options?: {
     senderFactory?: ReplySenderFactory;
     serviceLoader?: (id: number) => Promise<BoundMailbox | null>;
+    /**
+     * T04 step 8 (§9.2): forced mailbox detection before the atomic send
+     * claim. Production leaves this unset → the real default-ports detection
+     * service is constructed lazily on first use. Tests inject a fake to
+     * drive the replied/unknown/not_replied matrix.
+     */
+    readonly detectionServiceFactory?: () => EmailReplyDetectionService;
   }) {
     this.senderFactory =
       options?.senderFactory ??
@@ -124,6 +136,21 @@ export class EmailReplyDeliveryService {
       options?.serviceLoader ??
       ((id) =>
         this.serviceModule.getEmailService(id) as Promise<BoundMailbox | null>);
+    this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
+  }
+
+  /**
+   * T04/FR-031 §9.2: the reply-detection service for THIS send invocation.
+   * Lazily constructed (never at module top level — BaseModule TDZ under
+   * vi.mock). Tests inject a custom service via the constructor seam.
+   */
+  private detectionServiceForNow(): EmailReplyDetectionService {
+    if (!this.detectionService) {
+      this.detectionService = this.detectionServiceFactory
+        ? this.detectionServiceFactory()
+        : new EmailReplyDetectionService();
+    }
+    return this.detectionService;
   }
 
   async sendApprovedReply(
@@ -314,6 +341,17 @@ export class EmailReplyDeliveryService {
       );
     }
 
+    // 5b. T04 step 8 (FR-031 §9.2): forced mailbox detection with `forceRefresh:
+    //     true` so delivery NEVER trusts the 60s negative cache. A positive or
+    //     inconclusive reply state refuses the send with the typed detection
+    //     code BEFORE the atomic claim — no SMTP side effect. The ONE
+    //     `reply_skipped` audit (stage `pre_send`) is written here (one-audit-
+    //     owner rule §9.2/§10); the detection service returns decisions only.
+    //     `not_replied` proceeds to claim; the fresh observation timestamp
+    //     (`replyNegativeCheckAt`) is now ≤seconds old — the 5s forced-freshness
+    //     window (T05 step 11) enforces it inside the claim.
+    await this.runPreSendDetection(message, draft.id, requestCorrelationId);
+
     // 6. Atomic claim: draft approved -> sending, insert attempt, write pre-submit
     //    audit. SMTP is never contacted if this returns non-claimed.
     //    T08/FR-036: the claim transaction also runs the canonical-cluster
@@ -489,6 +527,146 @@ export class EmailReplyDeliveryService {
       stage: "pre_send",
       code: decision.code,
       policyVersion: decision.policyVersion,
+    });
+    await this.auditModule.create(log);
+  }
+
+  /**
+   * T04 step 8 (FR-031 §9.2): forced mailbox detection before the atomic send
+   * claim. `forceRefresh: true` skips the 60s negative cache (§7.3 — delivery
+   * never trusts a cached pre-invocation negative; sticky positives are still
+   * honored). `replied`/`unknown` → ONE `reply_skipped` audit (stage
+   * `pre_send`, code = already_replied or the typed detection unknown code)
+   * then throws {@link SendPolicyRejection} carrying the detection code so the
+   * B12 IPC envelope surfaces it machine-readably. NO SMTP, NO claim.
+   * `not_replied` → returns (proceeds to claim).
+   *
+   * The detection service owns evidence/cache writes; this outer service owns
+   * the refusal audit (one-audit-owner rule §9.2/§10). Audit persistence
+   * failure STOPS the work — an unrecorded send refusal must never be followed
+   * by proceeding to send.
+   *
+   * FR-039: telemetry carries only the low-cardinality detection state/code —
+   * never bodies, raw provider errors, or credentials.
+   */
+  private async runPreSendDetection(
+    message: { id: number; emailServiceId: number },
+    draftId: number,
+    requestCorrelationId: string
+  ): Promise<void> {
+    let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
+    try {
+      result = await this.detectionServiceForNow().detect({
+        messageId: message.id,
+        forceRefresh: true,
+      });
+    } catch (error) {
+      // Detection threw — treat as an inconclusive probe failure. The stable
+      // code `probe_failed` routes to discard_and_retry; the sanitized error
+      // text is included for the operator/AI without parsing English.
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const code: EmailReplyPolicyCode = "probe_failed";
+      incrementReplyMetric("detection_outcome", {
+        stage: "pre_send",
+        state: "unknown",
+        code,
+      });
+      try {
+        await this.writeDetectionRefusalAudit(
+          message,
+          draftId,
+          requestCorrelationId,
+          code,
+          `Detection probe threw: ${errMsg}`
+        );
+      } catch (auditError) {
+        const auditErrMsg =
+          auditError instanceof Error ? auditError.message : String(auditError);
+        throw new SendPolicyRejection(
+          `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
+          code
+        );
+      }
+      throw new SendPolicyRejection(
+        `Send rejected by reply detection: [${code}] Detection probe failed: ${errMsg}`,
+        code
+      );
+    }
+
+    if (result.state === "not_replied") {
+      incrementReplyMetric("detection_outcome", {
+        stage: "pre_send",
+        state: "not_replied",
+        code: "no_reply_observed",
+      });
+      return; // proceed to the atomic claim
+    }
+
+    // replied OR unknown → hard refusal. Map the detection outcome to the
+    // EmailReplyPolicyCode: replied → already_replied; unknown → the typed
+    // unknown code (probe_timeout / probe_failed / etc.).
+    const code: EmailReplyPolicyCode =
+      result.state === "replied" ? "already_replied" : result.reasonCode;
+    incrementReplyMetric("detection_outcome", {
+      stage: "pre_send",
+      state: result.state,
+      code,
+    });
+    const reason =
+      result.state === "replied"
+        ? "Reply detection found an existing reply before send"
+        : "Reply detection was inconclusive before send";
+    try {
+      await this.writeDetectionRefusalAudit(
+        message,
+        draftId,
+        requestCorrelationId,
+        code,
+        reason
+      );
+    } catch (auditError) {
+      const auditErrMsg =
+        auditError instanceof Error ? auditError.message : String(auditError);
+      throw new SendPolicyRejection(
+        `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
+        code
+      );
+    }
+    throw new SendPolicyRejection(
+      `Send rejected by reply detection: [${code}] ${reason}`,
+      code
+    );
+  }
+
+  /**
+   * Write the ONE `reply_skipped` audit row for a pre-send detection refusal.
+   * Stage `pre_send`, code = the detection outcome code. Bounded evidence —
+   * no bodies, no credentials, no raw provider errors.
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work (§9.2 —
+   * an unrecorded send refusal must never be followed by proceeding to send).
+   */
+  private async writeDetectionRefusalAudit(
+    message: { id: number; emailServiceId: number },
+    draftId: number,
+    requestCorrelationId: string,
+    code: EmailReplyPolicyCode,
+    reason: string
+  ): Promise<void> {
+    await this.auditModule.ensureConnection();
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = message.emailServiceId;
+    log.messageId = message.id;
+    log.draftId = draftId;
+    log.action = "reply_skipped";
+    log.actor = "system";
+    log.reason = `[${code}] ${reason}`;
+    log.metadataJson = JSON.stringify({
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(message.id),
+      stage: "pre_send",
+      code,
+      source: "reply_detection",
     });
     await this.auditModule.create(log);
   }

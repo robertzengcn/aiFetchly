@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
@@ -6,9 +6,11 @@ import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { SendPolicyRejection } from "@/service/emailReply/EmailReplySendBinding";
+import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
+import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 
 /**
  * P0.6: drive the delivery state machine through a fake SMTP transport to prove
@@ -92,6 +94,35 @@ async function seedValidApproval(): Promise<{
 
 type Behavior = "accept" | "reject" | "disconnect";
 
+/**
+ * Default detection outcome for the existing positive-path tests. The seeded
+ * `FAKE_MAILBOX` has no receive config, so a real detector would block every
+ * positive send path with `receive_unavailable` — the same landmine Step 7
+ * hit. Inject a default `not_replied` so the existing delivery state-machine
+ * tests run unaffected; Step 8 spec tests override `detectionResult`.
+ */
+const NOT_REPLIED_DETECTION: ReplyDetectionResult = {
+  state: "not_replied",
+  replied: false,
+  source: "sent_search",
+  matchedMessageId: null,
+  reasonCode: "no_reply_observed",
+  checkedAt: new Date().toISOString(),
+  fromCache: false,
+  coverage: "configured_imap",
+};
+
+/** Build a detection service factory returning the configured result. */
+function detectionFactory(
+  result: ReplyDetectionResult = NOT_REPLIED_DETECTION
+): () => EmailReplyDetectionService {
+  return () => {
+    const svc = new EmailReplyDetectionService();
+    vi.spyOn(svc, "detect").mockImplementation(async () => result);
+    return svc;
+  };
+}
+
 function buildDelivery(behavior: Behavior): EmailReplyDeliveryService {
   let calls = 0;
   const senderFactory = () => ({
@@ -121,6 +152,7 @@ function buildDelivery(behavior: Behavior): EmailReplyDeliveryService {
   return new EmailReplyDeliveryService({
     senderFactory: senderFactory as never,
     serviceLoader: async () => FAKE_MAILBOX,
+    detectionServiceFactory: detectionFactory(),
   });
 }
 
@@ -175,6 +207,7 @@ describe("P0.6 — delivery state machine via fake SMTP", () => {
         },
       })) as never,
       serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: detectionFactory(),
     });
     const [a, b] = await Promise.all([
       delivery.sendApprovedReply({ draftId, approvalToken: token }),
@@ -226,6 +259,7 @@ describe("sendApprovedReply refusal audits (FR-034 pre_send)", () => {
         },
       })) as never,
       serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: detectionFactory(),
     });
     await expect(
       delivery.sendApprovedReply({ draftId, approvalToken: token })
@@ -296,6 +330,7 @@ describe("sendApprovedReply recognizes exact same-approval replay before guard d
         },
       })) as never,
       serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: detectionFactory(),
     });
 
     // Start the first send — it claims the attempt, then blocks in SMTP.
@@ -380,6 +415,193 @@ describe("sendApprovedReply recognizes exact same-approval replay before guard d
     ).rejects.toBeInstanceOf(SendPolicyRejection);
     // Original attempt untouched.
     const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T04 step 8 (FR-031 §9.2): forced mailbox detection before the atomic send
+// claim. `forceRefresh: true` skips the 60s negative cache; sticky positives
+// are still honored. A positive or inconclusive reply state refuses the send
+// with the typed detection code BEFORE the atomic claim — no SMTP, no attempt
+// row. ONE `reply_skipped` audit (stage `pre_send`, source `reply_detection`)
+// is written by the outer delivery service (one-audit-owner rule §9.2/§10);
+// the detection service returns decisions only.
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function refusalAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  /**
+   * Build a delivery service whose detection service returns the configured
+   * result and whose SMTP sender records calls (must stay 0 on a refusal).
+   * Production leaves `detectionServiceFactory` unset; tests inject a fake
+   * service via the constructor seam (the lazy `detectionServiceForNow()`
+   * getter constructs it on first use).
+   */
+  function buildDeliveryWithDetection(
+    detectionResult: ReplyDetectionResult,
+    behavior: "accept" | "reject" = "accept"
+  ): { delivery: EmailReplyDeliveryService; smtpCalls: { count: number } } {
+    const smtpCalls = { count: 0 };
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        smtpCalls.count += 1;
+        if (behavior === "reject") {
+          return {
+            receiver: "prospect@example.com",
+            status: false,
+            title: "Re: Pricing",
+            content: CLEAN_BODY,
+            info: "Recipient rejected",
+          };
+        }
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-${smtpCalls.count}@x>`,
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi
+        .spyOn(svc, "detect")
+        .mockImplementation(async () => detectionResult);
+      return svc;
+    };
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+    return { delivery, smtpCalls };
+  }
+
+  it("detection `replied` -> no claim, no SMTP, ONE reply_skipped audit, code already_replied", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const replied: ReplyDetectionResult = {
+      state: "replied",
+      replied: true,
+      source: "sent_search",
+      matchedMessageId: "<prov-reply@x>",
+      reasonCode: "already_replied",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "configured_imap",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(replied);
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+
+    // The refusal happened BEFORE the atomic claim — no SMTP side effect.
+    expect(smtpCalls.count).toBe(0);
+
+    // Exactly ONE reply_skipped audit, stage pre_send, code already_replied,
+    // source reply_detection. No bodies, no credentials, no raw provider
+    // errors in the metadata (FR-039).
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[already_replied]");
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      source?: string;
+      correlationId?: string;
+    };
+    expect(meta.stage).toBe("pre_send");
+    expect(meta.code).toBe("already_replied");
+    expect(meta.source).toBe("reply_detection");
+    expect(meta.correlationId).toBeTruthy();
+
+    // The draft stays `approved` — never flipped to sending (no claim ran).
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("approved");
+  });
+
+  it("detection `unknown` (probe_timeout) -> no claim, no SMTP, code = detection-unknown", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const unknown: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_timeout",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(unknown);
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    // The typed unknown code flows through SendPolicyRejection so the B12 IPC
+    // envelope surfaces it machine-readably (§9.2).
+    expect(rejection?.code).toBe("probe_timeout");
+
+    expect(smtpCalls.count).toBe(0);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[probe_timeout]");
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      source?: string;
+    };
+    expect(meta.stage).toBe("pre_send");
+    expect(meta.code).toBe("probe_timeout");
+    expect(meta.source).toBe("reply_detection");
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("approved");
+  });
+
+  it("detection `not_replied` -> proceeds to claim, SMTP fires, draft -> sent", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const notReplied: ReplyDetectionResult = {
+      state: "not_replied",
+      replied: false,
+      source: "sent_search",
+      matchedMessageId: null,
+      reasonCode: "no_reply_observed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "configured_imap",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(notReplied, "accept");
+
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    // The not_replied outcome proceeds through the claim to SMTP exactly once.
+    expect(smtpCalls.count).toBe(1);
+    // No refusal audit on the happy path.
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
     expect(draft?.status).toBe("sent");
   });
 });
