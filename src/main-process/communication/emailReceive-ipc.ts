@@ -22,6 +22,7 @@ import {
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
 } from "@/config/channellist";
 import {
   emailReceiveSyncInputSchema,
@@ -44,6 +45,7 @@ import {
   emailReplyKnowledgeScopeUpdateInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
+  emailReplyCheckRepliedInputSchema,
 } from "@/schemas/ipc/emailReply";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
@@ -51,6 +53,7 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
@@ -285,6 +288,32 @@ export function registerEmailReceiveIpcHandlers(): void {
       const row = await module.readWithRelations(input.id);
       if (!row) throw new Error("emailreceive.audit_not_found");
       return toAutoReplyAuditDto(row);
+    }
+  );
+
+  // ---- Diagnostic reply check (FR-032) ----
+  // AI-gated at the boundary: `registerAiValidatedHandler` checks
+  // `user_ai_enabled` first and returns the existing `{ status: false, msg,
+  // data: null }` shape when disabled, before any handler work runs. The
+  // handler delegates to `EmailReplyDetectionModule.checkReply` (ordinary
+  // cache per §7.3, no forceRefresh) and returns the safe snake_case DTO.
+  // Read-only — no mailbox mutation, no SMTP, no audit row written here.
+  registerAiValidatedHandler(
+    EMAIL_REPLY_CHECK_REPLIED,
+    emailReplyCheckRepliedInputSchema,
+    async (input) => {
+      const detectionModule = new EmailReplyDetectionModule();
+      const outcome = await detectionModule.checkReply({
+        messageId: input.messageId,
+      });
+      if (!outcome.success || !outcome.result) {
+        // Persistence/detection failure — surface the bounded error string the
+        // service already produced. Throw so dispatchValidated's catch wraps it
+        // into the safe `{ status: false, msg, data: null }` envelope (no raw
+        // provider errors, no credentials).
+        throw new Error(outcome.error ?? "Reply detection failed");
+      }
+      return outcome.result;
     }
   );
 

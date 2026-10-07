@@ -14,6 +14,7 @@ import {
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
 } from "@/config/channellist";
 import type {
   ReplyIdentityProfileDto,
@@ -21,6 +22,7 @@ import type {
 } from "@/entityTypes/emailReceiveTypes";
 import type { AiEmailReplyDraftResult } from "@/entityTypes/emailReceiveAiTypes";
 import type { SendApprovedReplyOutcome } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { CheckEmailRepliedResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 
 // ---- Identity profile ----
 
@@ -199,4 +201,16 @@ export async function getAutoReplyAuditLog(
   id: number
 ): Promise<AutoReplyAuditDto> {
   return await windowInvoke(EMAIL_AUTO_REPLY_AUDIT_DETAIL, { id });
+}
+
+/**
+ * FR-032: diagnostic reply-check. Runs the shared §7.1 detection algorithm
+ * (ordinary cache, no forceRefresh) and returns the three-state typed DTO.
+ * Read-only — does not mutate the mailbox. AI must be enabled; the AI-gated
+ * IPC handler returns `{ status: false, msg, data: null }` when disabled.
+ */
+export async function checkEmailReplied(
+  messageId: number
+): Promise<CheckEmailRepliedResult> {
+  return await windowInvoke(EMAIL_REPLY_CHECK_REPLIED, { messageId });
 }

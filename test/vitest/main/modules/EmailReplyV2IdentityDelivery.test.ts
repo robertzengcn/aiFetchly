@@ -1,14 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import { materializeRevision2 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
+import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
+import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 
 /**
  * v2 reply-identity coverage for the approval + delivery path (§18.1/§18.2).
@@ -113,9 +115,27 @@ function buildAcceptDelivery(): EmailReplyDeliveryService {
       };
     },
   });
+  // §9.2: sendApprovedReply runs a forced pre-send detection before the claim.
+  // The seeded FAKE_MAILBOX has no receive config, so a real detector would
+  // block every positive send path with `receive_unavailable` — inject a
+  // default `not_replied` (same landmine the EmailReplyDeliveryFakeSmtp tests
+  // handle).
+  const notReplied: ReplyDetectionResult = {
+    state: "not_replied",
+    replied: false,
+    source: "sent_search",
+    matchedMessageId: null,
+    reasonCode: "no_reply_observed",
+    checkedAt: new Date().toISOString(),
+    fromCache: false,
+    coverage: "configured_imap",
+  };
+  const detectionService = new EmailReplyDetectionService();
+  vi.spyOn(detectionService, "detect").mockImplementation(async () => notReplied);
   return new EmailReplyDeliveryService({
     senderFactory: senderFactory as never,
     serviceLoader: async () => FAKE_MAILBOX,
+    detectionServiceFactory: () => detectionService,
   });
 }
 

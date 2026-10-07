@@ -104,6 +104,7 @@ export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
   "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
+export const EMAIL_REPLY_CHECK_REPLIED = "email:reply:check:replied";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
 export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
 export const SOCIALACCOUNTSAVE = "socialaccount:save";

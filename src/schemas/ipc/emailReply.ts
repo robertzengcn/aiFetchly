@@ -136,3 +136,16 @@ export const emailAutoReplyAuditDetailInputSchema = lazySchema(() =>
     id: z.number().int().positive("Audit log id is required"),
   })
 );
+
+/**
+ * FR-032: diagnostic reply-check IPC channel. Mirrors the
+ * `checkEmailRepliedSchema` AI-tool schema — a single `messageId` referencing a
+ * stored received message. The handler is AI-gated via `registerAiValidatedHandler`
+ * and delegates to `EmailReplyDetectionModule.checkReply` (ordinary cache, no
+ * forceRefresh per §7.3).
+ */
+export const emailReplyCheckRepliedInputSchema = lazySchema(() =>
+  z.strictObject({
+    messageId: z.number().int().positive("messageId is required"),
+  })
+);

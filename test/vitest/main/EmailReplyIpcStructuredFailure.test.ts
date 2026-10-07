@@ -258,3 +258,141 @@ describe("B12: structured fields are NOT recovered by parsing English", () => {
     expect(res.next_action).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T06 step 13: EMAIL_REPLY_CHECK_REPLIED channel (FR-032)
+// ---------------------------------------------------------------------------
+
+describe("EMAIL_REPLY_CHECK_REPLIED — AI-gated reply-check channel (T06 step 13)", () => {
+  // The real handler is in emailReceive-ipc.ts; these tests exercise the
+  // dispatchValidated wrapper behavior for the AI-gated reply-check pattern
+  // (registerAiValidatedHandler + a {messageId} schema + a DTO-returning
+  // body that throws on detection failure). The body mirrors the production
+  // handler: AI-gated, delegates to a checkReply-style function, returns the
+  // typed DTO on success, throws a bounded error string on failure.
+  const checkReplyStub = vi.fn();
+
+  function registerCheckRepliedHandler(): void {
+    const schema = lazySchema(() =>
+      z.strictObject({ messageId: z.number().int().positive() })
+    );
+    registerAiValidatedHandler(
+      "t06:reply:check:replied",
+      schema,
+      async (input) => {
+        const outcome = await checkReplyStub(input.messageId);
+        if (!outcome.success || !outcome.result) {
+          // Mirrors the production handler — bounded error string only.
+          throw new Error(outcome.error ?? "Reply detection failed");
+        }
+        return outcome.result;
+      }
+    );
+  }
+
+  beforeEach(() => {
+    checkReplyStub.mockReset();
+  });
+
+  it("returns the typed three-state DTO on a successful detection", async () => {
+    registerCheckRepliedHandler();
+    checkReplyStub.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 42,
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        reason_code: "already_replied",
+        matched_message_id: "<outgoing-42@svc.com>",
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: true,
+        coverage: "configured_imap",
+      },
+    });
+
+    const res = await invoke("t06:reply:check:replied", { messageId: 42 });
+    expect(res.status).toBe(true);
+    expect(res.data).toMatchObject({
+      message_id: 42,
+      state: "replied",
+      replied: true,
+      reason_code: "already_replied",
+      matched_message_id: "<outgoing-42@svc.com>",
+      from_cache: true,
+      coverage: "configured_imap",
+    });
+  });
+
+  it("returns the unknown-state DTO with replied=null on an inconclusive probe", async () => {
+    registerCheckRepliedHandler();
+    checkReplyStub.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 43,
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        reason_code: "sent_folder_unavailable",
+        matched_message_id: null,
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: false,
+        coverage: "partial",
+      },
+    });
+
+    const res = await invoke("t06:reply:check:replied", { messageId: 43 });
+    expect(res.status).toBe(true);
+    expect(res.data).toMatchObject({
+      state: "unknown",
+      replied: null,
+      reason_code: "sent_folder_unavailable",
+    });
+  });
+
+  it("AI-disabled returns the existing {status:false,msg,data:null} shape before any handler work", async () => {
+    tokenGetValue.mockImplementation(() => "false");
+    registerCheckRepliedHandler();
+
+    const res = await invoke("t06:reply:check:replied", { messageId: 1 });
+    expect(res.status).toBe(false);
+    expect(res.msg).toMatch(/not enabled/i);
+    expect(res.data).toBeNull();
+    // The AI-disabled gate is not a policy refusal — no typed code surfaces.
+    expect(res.code).toBeUndefined();
+    expect(res.next_action).toBeUndefined();
+    expect(checkReplyStub).not.toHaveBeenCalled();
+  });
+
+  it("schema-invalid input returns {status:false} with no typed code (validation, not a refusal)", async () => {
+    registerCheckRepliedHandler();
+
+    const res = await invoke("t06:reply:check:replied", {
+      messageId: "not-a-number",
+    });
+    expect(res.status).toBe(false);
+    expect(res.data).toBeNull();
+    expect(res.msg).toMatch(/type|number|expected/i);
+    expect(res.code).toBeUndefined();
+    expect(res.next_action).toBeUndefined();
+    expect(checkReplyStub).not.toHaveBeenCalled();
+  });
+
+  it("detection failure throws a bounded error string into the safe envelope (no raw provider errors)", async () => {
+    registerCheckRepliedHandler();
+    checkReplyStub.mockResolvedValue({
+      success: false,
+      error: "Reply detection failed",
+    });
+
+    const res = await invoke("t06:reply:check:replied", { messageId: 5 });
+    expect(res.status).toBe(false);
+    expect(res.msg).toBe("Reply detection failed");
+    expect(res.data).toBeNull();
+    // A persistence/detection failure carries no typed policy code.
+    expect(res.code).toBeUndefined();
+    expect(res.next_action).toBeUndefined();
+  });
+});
