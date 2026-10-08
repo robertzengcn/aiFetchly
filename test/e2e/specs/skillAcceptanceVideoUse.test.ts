@@ -278,6 +278,10 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
           {
             name: "video-use",
             kind: "prompt",
+            // Pin the R2 selection-contract fields over the wire: the card
+            // submits candidateId as selectedSkillIds (adversarial review).
+            candidateId: ".:prompt",
+            selected: true,
             description: "Edit and produce videos",
           },
         ]);

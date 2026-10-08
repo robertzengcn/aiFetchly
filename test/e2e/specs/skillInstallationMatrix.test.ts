@@ -520,9 +520,11 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     // see decideDeferredToolHydration and its unit tests in
     // test/vitest/main/SkillInstallPolicy.test.ts); the model never sees a
     // synthetic "deferred tool loaded; retry" failure. The end-to-end
-    // invariant asserted here: ONE source yields ONE persisted session —
-    // even a duplicate prepare (whatever retry pressure exists) RESUMES it,
-    // so the replay path can never create a second session or checkout.
+    // invariant asserted here (PER CONVERSATION — R4 binds sessions to
+    // conversations, so an identical request from another conversation
+    // intentionally gets its own session and checkout): one conversation's
+    // duplicate prepares RESUME the same session, so the replay path can
+    // never create a second session or checkout for it.
     const conversationId = `e2e-matrix-fr28-case14-${Date.now()}`;
     const first = await prepareToAwaitingApproval(app, fixture, conversationId);
     const second = await prepareToAwaitingApproval(app, fixture, conversationId);
