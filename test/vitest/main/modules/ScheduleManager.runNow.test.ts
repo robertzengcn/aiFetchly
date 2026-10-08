@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ScheduleStatus } from "@/entity/ScheduleTask.entity";
 
 const mocks = vi.hoisted(() => ({
   getScheduleById: vi.fn(),
@@ -78,6 +79,7 @@ const activeSchedule = {
   id: 4,
   name: "Daily outreach",
   is_active: true,
+  status: ScheduleStatus.ACTIVE,
   cron_expression: "0 6 * * *",
 };
 
@@ -145,5 +147,17 @@ describe("ScheduleManager.executeSchedule detach", () => {
     release();
     await pending;
     expect(settled).toBe(true);
+  });
+
+  it("skips a paused schedule without starting the task", async () => {
+    mocks.getScheduleById.mockResolvedValue({
+      ...activeSchedule,
+      status: ScheduleStatus.PAUSED,
+    });
+
+    await ScheduleManager.getInstance().executeSchedule(4);
+
+    expect(mocks.logExecution).not.toHaveBeenCalled();
+    expect(mocks.executeScheduledTask).not.toHaveBeenCalled();
   });
 });
