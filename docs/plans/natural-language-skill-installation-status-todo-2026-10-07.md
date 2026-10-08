@@ -1,5 +1,19 @@
 # Natural-language skill installation — status TODO
 
+**RESOLVED 2026-10-08 (commits `0d0216c2` → `e27e817f`, all pushed).**
+E1 (probe seam in the 3 affected tests — CI `test` green), E4 (§16.4
+shallow clone in the Windows matrix; first execution failed on a
+fixture-cwd bug, fixed in `707c017c` — `windows-shell-matrix` green),
+E5 (`SOURCE_AUTH_REQUIRED` + the PRD §23.1 kebab→shipped table), E6
+(deterministic RV7/RV8 tests), E2/E7 (Electron E2E green on
+`37696767208` after two stale specs were updated for R4 conversation
+scoping and R2 safePlan fields: videoUse `toMatchObject`, FR-15 case 7
+restart reuses the original conversation id, FR-28 case 14 prepares
+share one conversation id). Still open, both infra-not-branch: E3
+(ubuntu packaged-smoke runner eviction) and the repo-wide
+`Package smoke test` workflow failure (also red on master). The body
+below is the original 2026-10-07 audit, kept as the record.
+
 Checked 2026-10-07 against:
 
 - PRD: `docs/prd/natural-language-skill-installation-prd.md`
