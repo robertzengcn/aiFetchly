@@ -1201,6 +1201,14 @@ export default {
     style_notes: "Style Notes",
     forbidden_phrases: "Forbidden Phrases (comma-separated)",
     disclose_automation: "Disclose AI assistance",
+    // FR-033: machine-readable next-action labels (T10 surfaces these next to
+    // the reply-evidence chip in the audit detail view).
+    nextAction: {
+      approve_existing_draft: "Approve existing draft",
+      discard_and_retry: "Discard and retry",
+      await_human_review: "Await human review",
+      no_action: "No action needed",
+    },
     // FR-033: stable refusal-code labels for the future UI (T10 surfaces these
     // in the audit list / refusal banners). Model-facing tool descriptions stay
     // English; these are the user-facing translations keyed by policy code.
@@ -1248,6 +1256,9 @@ export default {
     confidence: "Confidence",
     requires_approval: "Approval",
     reason: "Reason",
+    reply_evidence: "Reply Evidence",
+    stage: "Stage",
+    recheck_failed: "Reply check failed. Please try again.",
     knowledge_query: "Knowledge Query",
     knowledge_source_count: "Knowledge Sources",
     generated_subject: "Generated Subject",

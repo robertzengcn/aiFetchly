@@ -1202,6 +1202,12 @@ export default {
     style_notes: "Notas de Estilo",
     forbidden_phrases: "Frases prohibidas (separadas por comas)",
     disclose_automation: "Divulgar asistencia IA",
+    nextAction: {
+      approve_existing_draft: "Aprobar borrador existente",
+      discard_and_retry: "Descartar y reintentar",
+      await_human_review: "Esperar revisión humana",
+      no_action: "Sin acción necesaria",
+    },
     policyCode: {
       already_replied: "Ya respondido",
       reply_in_progress: "Respuesta en curso",
@@ -1244,6 +1250,9 @@ export default {
     confidence: "Confianza",
     requires_approval: "Aprobación",
     reason: "Razón",
+    reply_evidence: "Evidencia de Respuesta",
+    stage: "Etapa",
+    recheck_failed: "La comprobación de respuesta falló. Inténtalo de nuevo.",
     knowledge_query: "Consulta de Conocimiento",
     knowledge_source_count: "Fuentes",
     generated_subject: "Asunto Generado",

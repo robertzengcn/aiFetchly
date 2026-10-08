@@ -114,6 +114,15 @@ export interface AutoReplyAuditDto {
   requiresUserApproval: boolean;
   approvedByUser: boolean;
   errorMessage: string | null;
+  /**
+   * T10 (FR-033): the typed stage/code extracted from the row's structured
+   * `metadataJson` (written by the services as proper JSON fields — this is
+   * structured-data extraction at the IPC boundary, NOT English-text parsing).
+   * Null when the row carries no typed metadata (legacy rows, non-refusal
+   * events).
+   */
+  metadataStage: string | null;
+  metadataCode: string | null;
   createdAt: string;
 }
 

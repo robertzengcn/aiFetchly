@@ -1191,6 +1191,12 @@ export default {
     style_notes: "Notes de Style",
     forbidden_phrases: "Phrases interdites (séparées par virgules)",
     disclose_automation: "Divulguer l'assistance IA",
+    nextAction: {
+      approve_existing_draft: "Approuver le brouillon existant",
+      discard_and_retry: "Abandonner et réessayer",
+      await_human_review: "Attendre l'examen humain",
+      no_action: "Aucune action requise",
+    },
     policyCode: {
       already_replied: "Déjà répondu",
       reply_in_progress: "Réponse en cours",
@@ -1233,6 +1239,9 @@ export default {
     confidence: "Confiance",
     requires_approval: "Approbation",
     reason: "Raison",
+    reply_evidence: "Preuve de Réponse",
+    stage: "Étape",
+    recheck_failed: "La vérification de réponse a échoué. Veuillez réessayer.",
     knowledge_query: "Requête de Connaissance",
     knowledge_source_count: "Sources",
     generated_subject: "Sujet Généré",

@@ -1152,6 +1152,12 @@ export default {
     style_notes: "风格备注",
     forbidden_phrases: "禁用词组（逗号分隔）",
     disclose_automation: "披露 AI 协助",
+    nextAction: {
+      approve_existing_draft: "批准现有草稿",
+      discard_and_retry: "放弃并重试",
+      await_human_review: "等待人工审核",
+      no_action: "无需操作",
+    },
     policyCode: {
       already_replied: "已回复",
       reply_in_progress: "回复进行中",
@@ -1194,6 +1200,9 @@ export default {
     confidence: "置信度",
     requires_approval: "审批",
     reason: "原因",
+    reply_evidence: "回复证据",
+    stage: "阶段",
+    recheck_failed: "回复检查失败，请重试。",
     knowledge_query: "知识检索",
     knowledge_source_count: "知识来源数",
     generated_subject: "生成的主题",

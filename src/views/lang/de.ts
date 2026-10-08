@@ -1199,6 +1199,12 @@ export default {
     style_notes: "Stilhinweise",
     forbidden_phrases: "Verbotene Phrasen (kommagetrennt)",
     disclose_automation: "KI-Hilfe offenlegen",
+    nextAction: {
+      approve_existing_draft: "Vorhandenen Entwurf freigeben",
+      discard_and_retry: "Verwerfen und wiederholen",
+      await_human_review: "Auf menschliche Prüfung warten",
+      no_action: "Keine Aktion erforderlich",
+    },
     policyCode: {
       already_replied: "Bereits geantwortet",
       reply_in_progress: "Antwort läuft",
@@ -1241,6 +1247,9 @@ export default {
     confidence: "Konfidenz",
     requires_approval: "Freigabe",
     reason: "Grund",
+    reply_evidence: "Antwortnachweis",
+    stage: "Phase",
+    recheck_failed: "Antwortprüfung fehlgeschlagen. Bitte erneut versuchen.",
     knowledge_query: "Wissensabfrage",
     knowledge_source_count: "Quellen",
     generated_subject: "Generierter Betreff",

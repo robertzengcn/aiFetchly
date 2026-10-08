@@ -1180,6 +1180,12 @@ export default {
     style_notes: "スタイルメモ",
     forbidden_phrases: "禁止フレーズ（カンマ区切り）",
     disclose_automation: "AI 援助を開示",
+    nextAction: {
+      approve_existing_draft: "既存の下書きを承認",
+      discard_and_retry: "破棄して再試行",
+      await_human_review: "人の確認を待つ",
+      no_action: "操作不要",
+    },
     policyCode: {
       already_replied: "返信済み",
       reply_in_progress: "返信処理中",
@@ -1222,6 +1228,9 @@ export default {
     confidence: "信頼度",
     requires_approval: "承認",
     reason: "理由",
+    reply_evidence: "返信エビデンス",
+    stage: "段階",
+    recheck_failed: "返信チェックに失敗しました。もう一度お試しください。",
     knowledge_query: "ナレッジ検索",
     knowledge_source_count: "ソース数",
     generated_subject: "生成された件名",

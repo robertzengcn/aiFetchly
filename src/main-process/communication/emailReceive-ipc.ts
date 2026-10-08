@@ -715,6 +715,7 @@ function toAutoReplyAuditDto(e: {
   requiresUserApproval: number;
   approvedByUser: number;
   errorMessage: string | null;
+  metadataJson?: string | null;
   createdAt?: Date | null;
 }): AutoReplyAuditDto {
   let knowledgeSourceCount = 0;
@@ -725,6 +726,30 @@ function toAutoReplyAuditDto(e: {
     if (Array.isArray(parsed)) knowledgeSourceCount = parsed.length;
   } catch {
     knowledgeSourceCount = 0;
+  }
+  // T10 (FR-033): extract the typed stage/code from the row's structured
+  // metadataJson (proper JSON fields written by the services). This is
+  // structured-data extraction, not English-text parsing (B12 allows deriving
+  // from the typed store; parsing `reason`'s [code] bracket is forbidden).
+  // Malformed/missing metadata → null fields, never a guessed code.
+  let metadataStage: string | null = null;
+  let metadataCode: string | null = null;
+  if (e.metadataJson) {
+    try {
+      const meta = JSON.parse(e.metadataJson) as unknown;
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        const stage = (meta as Record<string, unknown>).stage;
+        const code = (meta as Record<string, unknown>).code;
+        if (typeof stage === "string" && stage.length > 0) {
+          metadataStage = stage;
+        }
+        if (typeof code === "string" && code.length > 0) {
+          metadataCode = code;
+        }
+      }
+    } catch {
+      // Malformed metadata — leave both fields null.
+    }
   }
   return {
     id: e.id,
@@ -746,6 +771,8 @@ function toAutoReplyAuditDto(e: {
     requiresUserApproval: e.requiresUserApproval === 1,
     approvedByUser: e.approvedByUser === 1,
     errorMessage: e.errorMessage,
+    metadataStage,
+    metadataCode,
     createdAt: iso(e.createdAt),
   };
 }

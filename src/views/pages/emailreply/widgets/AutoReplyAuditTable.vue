@@ -54,6 +54,17 @@
           {{ t("emailAutoReplyAudit.status." + item.decisionStatus) || item.decisionStatus }}
         </v-chip>
       </template>
+      <template #item.replyEvidence="{ item }">
+        <v-chip
+          v-if="item.metadataCode"
+          :color="evidenceColor(item.metadataCode)"
+          size="small"
+          :title="evidenceTitle(item)"
+        >
+          {{ evidenceLabel(item.metadataCode) }}
+        </v-chip>
+        <span v-else>—</span>
+      </template>
       <template #item.createdAt="{ item }">
         {{ formatDate(item.createdAt) }}
       </template>
@@ -126,6 +137,7 @@ const headers = computed<Array<Header>>(() => [
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.classification")), key: "classification", sortable: false },
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.confidence")), key: "confidence", sortable: true },
   { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.requires_approval")), key: "requiresUserApproval", sortable: false },
+  { title: CapitalizeFirstLetter(t("emailAutoReplyAudit.reply_evidence")), key: "replyEvidence", sortable: false },
   { title: CapitalizeFirstLetter(t("common.actions")), key: "actions", sortable: false },
 ]);
 
@@ -193,5 +205,48 @@ function statusColor(status: string): string {
     default:
       return "default";
   }
+}
+
+/**
+ * T10 (FR-033): reply-evidence chip color from the typed refusal/detection
+ * code. Positive evidence is green; review-routed unknowns are amber; retriable
+ * probe failures are red; informational states are neutral.
+ */
+function evidenceColor(code: string): string {
+  switch (code) {
+    case "already_replied":
+    case "no_reply_observed":
+      return "success";
+    case "reply_in_progress":
+    case "generation_in_progress":
+      return "info";
+    case "needs_human_review":
+    case "delivery_unknown":
+    case "reply_state_unknown":
+    case "reply_state_conflict":
+    case "unsupported_protocol":
+    case "missing_message_id":
+    case "receive_unavailable":
+    case "sent_folder_unavailable":
+    case "ambiguous_match":
+    case "identity_conflict":
+      return "warning";
+    case "probe_timeout":
+    case "probe_limit_exceeded":
+    case "probe_failed":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
+/** User-facing label for the typed code (i18n key falls back to the code). */
+function evidenceLabel(code: string): string {
+  return t("emailReply.policyCode." + code) || code;
+}
+
+/** Chip tooltip: the human-readable reason text when present. */
+function evidenceTitle(item: AutoReplyAuditDto): string {
+  return item.reason || item.metadataCode || "";
 }
 </script>
