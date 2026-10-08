@@ -1017,32 +1017,42 @@ export class AIChatCoordinator {
     // classified error instead of silently leaving storage "running" while
     // memory says "parked".
     let transitionChain: Promise<void> = Promise.resolve();
+    // R02 (FR-021): the run-owned property must track the CURRENT chain —
+    // assigning only the initial promise meant awaiting it resolved while a
+    // later write was still pending. Every transition updates the property.
+    const setChain = (next: Promise<void>): void => {
+      transitionChain = next;
+      (live as { lifecycleTransitions?: Promise<void> }).lifecycleTransitions =
+        next;
+    };
     const transitionThenBroadcast = (
       status: ChatRunStatus,
       reason: ConversationSummaryEvent["reason"]
     ): void => {
-      transitionChain = transitionChain
-        .then(() => this.deps.runModule.transition(live.runId, status))
-        .then(() => {
-          void this.broadcastRunSummary(live.conversationId, reason);
-        })
-        .catch((err: unknown) => {
-          console.error(
-            "[ai-chat-workspace] lifecycle transition FAILED for run",
-            live.runId,
-            status,
-            err
-          );
-          // Failure is explicit, never silent: mark the in-memory state back
-          // to the last durably-known status so the next summary tells the
-          // truth (storage is the authority; restart reconciliation fixes
-          // the row).
-          live.status = "running";
-          void this.broadcastRunSummary(live.conversationId, "run_started");
-        });
+      setChain(
+        transitionChain
+          .then(() => this.deps.runModule.transition(live.runId, status))
+          .then(() => {
+            void this.broadcastRunSummary(live.conversationId, reason);
+          })
+          .catch((err: unknown) => {
+            console.error(
+              "[ai-chat-workspace] lifecycle transition FAILED for run",
+              live.runId,
+              status,
+              err
+            );
+            // Failure is explicit, never silent: mark the in-memory state
+            // back to the last durably-known status so the next summary
+            // tells the truth (storage is the authority; restart
+            // reconciliation fixes the row).
+            live.status = "running";
+            void this.broadcastRunSummary(live.conversationId, "run_started");
+          })
+      );
     };
     // Exposed for executeDispatch: the dispatch must not release capacity
-    // while a waiting/resumed transition is still in flight (TODO-06).
+    // while a waiting/resumed transition is still in flight (TODO-06/R02).
     (live as { lifecycleTransitions?: Promise<void> }).lifecycleTransitions =
       transitionChain;
     return {

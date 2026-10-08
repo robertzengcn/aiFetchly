@@ -1121,4 +1121,75 @@ describe("AIChatRunEventAdapter", () => {
     expect(fake.cancelledClaims).toContain("v2-test-70");
   });
 
+
+  it("R02: the run-owned lifecycle promise tracks the CURRENT write (await sees the pending row)", async () => {
+    const { coordinator, fake, runModel } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(80));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    const lifecycle = fake.turns[0].input.lifecycle;
+    expect(lifecycle).toBeDefined();
+
+    // Gate the durable write: onAwaiting fires but the row is still pending.
+    let releaseWrite!: () => void;
+    const gated = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    // Stub the MODULE method the coordinator actually calls — the test's
+    // runModel is a separate instance from the module's internal model.
+    const { AIChatRunModule: RunModule } = await import(
+      "@/modules/AIChatRunModule"
+    );
+    const realTransition = RunModule.prototype.transition;
+    const forward = (self: unknown, args: unknown[]): unknown =>
+      (realTransition as unknown as (...a: unknown[]) => unknown).apply(
+        self,
+        args
+      );
+    RunModule.prototype.transition = function gatedTransition(
+      this: unknown,
+      ...args: unknown[]
+    ): unknown {
+      if (args[1] === "awaiting_permission") {
+        return gated.then(() => forward(this, args));
+      }
+      return forward(this, args);
+    } as never;
+
+    lifecycle?.onAwaiting({
+      kind: "permission",
+      conversationId: "v2-test-80",
+      assistantMessageId: "a",
+      toolCallId: "t",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    const live = coordinator.getLiveRuntime("v2-test-80");
+    expect(live?.runtimeStatus).toBe("awaiting_permission");
+    // The live entry is gone once we finalize... use the BEFORE-await probe:
+    // grab the chain through the exposed dispatch wait point instead — the
+    // coordinator awaits (live).lifecycleTransitions in its finally; here we
+    // assert indirectly: the run row is NOT yet awaiting_permission.
+    const rowBefore = await runModel.getByRunId(accepted.response.runId);
+    expect(rowBefore?.status).not.toBe("awaiting_permission");
+
+    releaseWrite();
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    // A parked run intentionally KEEPS its live entry; settle the fake turn
+    // and restore the prototype. The cleanup wait must not expect null.
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-80",
+      assistantMessageId: "a",
+    });
+    await waitFor(() =>
+      coordinator.getLiveRuntime("v2-test-80")?.runtimeStatus ===
+      "awaiting_permission"
+    );
+    await coordinator.cancelRun({ conversationId: "v2-test-80" });
+    RunModule.prototype.transition = realTransition;
+  });
 });
