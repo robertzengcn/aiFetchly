@@ -1,4 +1,4 @@
-import type { DataSource } from "typeorm";
+import type { DataSource, QueryRunner } from "typeorm";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -122,12 +122,35 @@ const REQUIRED_EVIDENCE_COLUMNS: readonly {
   { name: "providerUidValidity", nullable: true },
 ];
 
+/**
+ * Allowlist of table names this module is permitted to query. Every name is a
+ * hardcoded `REQUIRED_TABLES` label or a literal in this file — no caller
+ * passes user input. The guard exists so a future caller cannot widen the
+ * `table` argument to an arbitrary string and silently interpolate it into
+ * `FROM "<table>"` (SQLite has no placeholder for identifiers).
+ */
+const REPLY_TABLE_ALLOWLIST: readonly string[] = REQUIRED_TABLES.map(
+  (r) => r.label
+).concat(["email_received_message", "email_reply_guard"]);
+
+function assertAllowedTable(table: string): void {
+  if (!REPLY_TABLE_ALLOWLIST.includes(table)) {
+    throw new Error(
+      `EmailReplyUpgradeValidation: untrusted table name "${table}" rejected by allowlist`
+    );
+  }
+}
+
 async function tableExists(
-  queryRunner: { query: (sql: string) => Promise<unknown> },
+  queryRunner: QueryRunner,
   table: string
 ): Promise<boolean> {
+  // Parameterized predicate — no string interpolation into SQL. The `table`
+  // argument is allowlisted by the caller, but the value still flows through a
+  // bind parameter so the SQL-safety pattern is correct regardless of source.
   const rows = (await queryRunner.query(
-    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'`
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [table]
   )) as SqliteIndexRow[];
   return rows.length > 0;
 }
@@ -265,6 +288,10 @@ export async function countTableRows(
   connection: DataSource,
   table: string
 ): Promise<number> {
+  // Allowlist gate before identifier interpolation. SQLite has no placeholder
+  // for table names, so the interpolation itself stays — but only after the
+  // name is confirmed to be one of the hardcoded reply-safety labels.
+  assertAllowedTable(table);
   const queryRunner = connection.createQueryRunner();
   try {
     if (!(await tableExists(queryRunner, table))) {
