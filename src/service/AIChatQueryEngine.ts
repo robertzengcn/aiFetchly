@@ -1026,6 +1026,7 @@ export class AIChatQueryEngine {
     let dedupShortCircuit:
       | { kind: "reused"; executionId: string; finalized: boolean }
       | { kind: "conflict"; executionId: string }
+      | { kind: "denied"; reasonCode: string }
       | undefined;
     /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
     let historySelectionAcceptedIds: readonly string[] = [];
@@ -1558,7 +1559,7 @@ export class AIChatQueryEngine {
               console.log(
                 `[ai-chat-v2] task execution reused (submissionId=${submissionId}) — transport retry, skipping dispatch`
               );
-            } else {
+            } else if (startResult.status === "conflict") {
               // T10: conflict — same submissionId, different requestHash.
               // Surface SUBMISSION_CONFLICT and skip dispatch entirely. Never
               // persist a second row, never run the maker.
@@ -1568,6 +1569,20 @@ export class AIChatQueryEngine {
               };
               console.error(
                 `[ai-chat-v2] task execution conflict (submissionId=${submissionId}) — SUBMISSION_CONFLICT, skipping dispatch`
+              );
+            } else {
+              // T08: `denied` — a Continue/retry successor's lineage ledger
+              // claim was rejected (dangling, released, or superseded). This
+              // path enrolls a fresh manual submission with no
+              // parentExecutionId/lineageLedgerId, so a denial is unreachable
+              // here; treat it as a hard enrollment failure so the turn
+              // surfaces the reason and never dispatches on a missing ledger.
+              dedupShortCircuit = {
+                kind: "denied",
+                reasonCode: startResult.reasonCode,
+              };
+              console.error(
+                `[ai-chat-v2] task execution denied (submissionId=${submissionId}) — ${startResult.reasonCode}, skipping dispatch`
               );
             }
           }
@@ -1840,6 +1855,17 @@ export class AIChatQueryEngine {
           conversationId,
           messageId: assistantMessageId,
           errorMessage: `SUBMISSION_CONFLICT: submissionId already accepted with different request content (executionId=${dedupShortCircuit.executionId})`,
+        });
+      } else if (dedupShortCircuit.kind === "denied") {
+        // T08 (FR-23/24, AC-29/32): a Continue/retry successor's lineage
+        // ledger claim was rejected (dangling, released, or superseded). No
+        // execution row was persisted, so surface the denial as a terminal
+        // error and never dispatch the maker on a missing/unauthorized ledger.
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          messageId: assistantMessageId,
+          errorMessage: `TASK_CONTINUE_DENIED: ${dedupShortCircuit.reasonCode}`,
         });
       } else {
         // Reused transport retry: the existing execution's status is

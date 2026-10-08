@@ -1059,6 +1059,31 @@ describe("AiTaskExecutionModule (Mocha)", function () {
   describe("startExecution lineage + contract freeze (FR-19/21/22, Unit 3)", () => {
     it("persists parent_execution_id, lineage_ledger_id, contract_snapshot_json, and contract_hash at creation", async () => {
       const mod = new AiTaskExecutionModule();
+      // T08: the parent must be a real finalized execution whose ledger is
+      // released, because `createExecution` now CAS-claims the shared ledger
+      // inside the transaction. A fake `parentExecutionId` would be rejected
+      // as LINEAGE_LEDGER_MISSING.
+      const parent = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-lineage-parent",
+        sourceUserMessageId: "msg-parent",
+        submissionId: "sub-lineage-parent",
+        requestHash: "sha256:lineage-parent",
+        origin: { type: "manual", submissionId: "sub-lineage-parent" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const finalized = await mod.finalizeExecution({
+        executionId: parent.executionId,
+        expectedVersion: 0,
+        outcome: "incomplete",
+        reasonCode: "CONTINUATION_LIMIT",
+        summary: "parent stopped",
+        evidenceIds: [],
+        remainingWork: ["step-2"],
+      });
+      expect(finalized.ok).to.equal(true);
+
       const contractJson = JSON.stringify({
         schemaVersion: 1,
         contractId: "contract-test-1",
@@ -1078,8 +1103,8 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         route: "task_verified",
         completionOwner: "standalone",
         budgetLimits: MANUAL_BUDGET_DEFAULTS,
-        parentExecutionId: "exec-parent",
-        lineageLedgerId: "ledger-lineage",
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
         contractSnapshotJson: contractJson,
         contractHash: "sha256:contract-hash-1",
       }));
@@ -1091,8 +1116,8 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         where: { execution_id: result.executionId },
       });
       // Lineage columns carry the caller-supplied values, not the defaults.
-      expect(exec?.parent_execution_id).to.equal("exec-parent");
-      expect(exec?.lineage_ledger_id).to.equal("ledger-lineage");
+      expect(exec?.parent_execution_id).to.equal(parent.executionId);
+      expect(exec?.lineage_ledger_id).to.equal(parent.ledgerId);
       // Contract snapshot + hash persisted (FR-19).
       expect(exec?.contract_hash).to.equal("sha256:contract-hash-1");
       expect(exec?.contract_snapshot_json).to.equal(contractJson);
@@ -1464,6 +1489,493 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         expect(String(e)).to.match(/worker/i);
       }
       expect(threw).to.equal(true);
+    });
+  });
+
+  // ----- T08 (FR-20/21/23/24, AC-25/27/29/32): Continue claims lineage ledger atomically -----
+  // The successor's create transaction CAS-claims the parent's shared lineage
+  // ledger: bumps owner_generation, repoints active_execution_id, and flips
+  // status released→active. The predicate requires status='released' +
+  // active_execution_id IS NULL, so a concurrent Continue that won leaves it
+  // active with a non-null active_execution_id and the loser's UPDATE affects
+  // zero rows → denied. A missing/dangling ledger fails closed. An active
+  // (non-finalized) or non-continuable parent is rejected before the CAS.
+  describe("startExecution Continue lineage claim (T08)", () => {
+    /**
+     * Create + finalize a parent execution with a continuable outcome, then
+     * return its snapshot so a Continue successor can share its ledger.
+     */
+    async function makeFinalizedParent(
+      mod: AiTaskExecutionModule,
+      opts: {
+        conversationId: string;
+        submissionId: string;
+        requestHash: string;
+        sourceUserMessageId: string;
+        outcome?: "incomplete" | "needs_user_input" | "blocked_by_policy" | "timeout" | "failed";
+      }
+    ): Promise<{ executionId: string; ledgerId: string }> {
+      const parent = unwrapCreated(await mod.startExecution({
+        conversationId: opts.conversationId,
+        sourceUserMessageId: opts.sourceUserMessageId,
+        submissionId: opts.submissionId,
+        requestHash: opts.requestHash,
+        origin: { type: "manual", submissionId: opts.submissionId },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const finalized = await mod.finalizeExecution({
+        executionId: parent.executionId,
+        expectedVersion: 0,
+        outcome: opts.outcome ?? "incomplete",
+        reasonCode: "CONTINUATION_LIMIT",
+        summary: "parent stopped",
+        evidenceIds: [],
+        remainingWork: ["step-2"],
+      });
+      expect(finalized.ok).to.equal(true);
+      return { executionId: parent.executionId, ledgerId: parent.ledgerId };
+    }
+
+    it("a Continue successor claims the shared ledger: bumps owner_generation + repoints active_execution_id + flips status to active", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = await makeFinalizedParent(mod, {
+        conversationId: "conv-t08-claim",
+        submissionId: "sub-t08-parent",
+        requestHash: "sha256:t08-parent",
+        sourceUserMessageId: "msg-t08-parent",
+      });
+
+      // Ledger is released after finalize.
+      const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionLedgerEntity
+      );
+      const before = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      expect(before?.status).to.equal("released");
+      expect(before?.active_execution_id).to.be.null;
+      expect(before?.owner_generation).to.equal(0);
+
+      const succ = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-claim",
+        sourceUserMessageId: "msg-t08-succ",
+        submissionId: "sub-t08-succ",
+        requestHash: "sha256:t08-succ",
+        origin: { type: "manual", submissionId: "sub-t08-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      }));
+
+      // The successor shares the parent's ledger id (FR-21).
+      expect(succ.ledgerId).to.equal(parent.ledgerId);
+
+      const after = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      // owner_generation bumped exactly once (the fenced lease token).
+      expect(after?.owner_generation).to.equal(1);
+      // active_execution_id repointed to the successor.
+      expect(after?.active_execution_id).to.equal(succ.executionId);
+      // status flipped released→active so the successor's spend CAS can fire.
+      expect(after?.status).to.equal("active");
+      // execution_state_version bumped (lets a re-read detect the claim).
+      expect(after?.execution_state_version).to.be.greaterThan(
+        before?.execution_state_version ?? 0
+      );
+    });
+
+    it("exhausted parent retains exhausted limits — the successor resurrects the parent's consumed counters, not a fresh budget", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = await makeFinalizedParent(mod, {
+        conversationId: "conv-t08-exhaust",
+        submissionId: "sub-t08-exhaust-parent",
+        requestHash: "sha256:t08-exhaust-parent",
+        sourceUserMessageId: "msg-t08-exhaust-parent",
+      });
+
+      // Simulate the parent having spent its full continuation allowance:
+      // persist a consumed_continuations count at the hard cap so the
+      // successor's resurrected budget mirror sees no remaining allowance.
+      const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionLedgerEntity
+      );
+      await ledgerRepo.update(
+        { ledger_id: parent.ledgerId },
+        { consumed_continuations: MANUAL_BUDGET_DEFAULTS.maxContinuations }
+      );
+
+      const succ = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-exhaust",
+        sourceUserMessageId: "msg-t08-exhaust-succ",
+        submissionId: "sub-t08-exhaust-succ",
+        requestHash: "sha256:t08-exhaust-succ",
+        origin: { type: "manual", submissionId: "sub-t08-exhaust-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      }));
+
+      // The successor's ledger row STILL carries the exhausted counter —
+      // the claim does NOT reset consumed counters (FR-21: shared budget).
+      const after = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      expect(after?.consumed_continuations).to.equal(
+        MANUAL_BUDGET_DEFAULTS.maxContinuations
+      );
+      // The successor is the active owner now.
+      expect(after?.active_execution_id).to.equal(succ.executionId);
+      expect(after?.owner_generation).to.equal(1);
+    });
+
+    it("missing ledger (dangling lineage_ledger_id) is denied — no parent row matches the lineage pointer", async () => {
+      const mod = new AiTaskExecutionModule();
+      // A Continue whose lineage_ledger_id points at a row that does not
+      // exist. The parent_execution_id also does not exist, so the
+      // eligibility read fails closed.
+      const result = await mod.startExecution({
+        conversationId: "conv-t08-dangling",
+        sourceUserMessageId: "msg-t08-dangling",
+        submissionId: "sub-t08-dangling",
+        requestHash: "sha256:t08-dangling",
+        origin: { type: "manual", submissionId: "sub-t08-dangling" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: "exec-does-not-exist",
+        lineageLedgerId: "ledger-does-not-exist",
+      });
+      expect(result.status).to.equal("denied");
+      if (result.status === "denied") {
+        expect(result.reasonCode).to.equal("LINEAGE_LEDGER_MISSING");
+      }
+    });
+
+    it("missing ledger with a real parent row but a mismatched lineage pointer is denied", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = await makeFinalizedParent(mod, {
+        conversationId: "conv-t08-mismatch",
+        submissionId: "sub-t08-mismatch-parent",
+        requestHash: "sha256:t08-mismatch-parent",
+        sourceUserMessageId: "msg-t08-mismatch-parent",
+      });
+      // Parent exists and is finalized, but the caller wired the WRONG
+      // lineage_ledger_id (does not match the parent's own lineage pointer).
+      const result = await mod.startExecution({
+        conversationId: "conv-t08-mismatch",
+        sourceUserMessageId: "msg-t08-mismatch-succ",
+        submissionId: "sub-t08-mismatch-succ",
+        requestHash: "sha256:t08-mismatch-succ",
+        origin: { type: "manual", submissionId: "sub-t08-mismatch-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: "ledger-wrong-pointer",
+      });
+      expect(result.status).to.equal("denied");
+      if (result.status === "denied") {
+        expect(result.reasonCode).to.equal("LINEAGE_LEDGER_MISSING");
+      }
+    });
+
+    it("an active (non-finalized) parent is denied — cannot continue a still-running execution", async () => {
+      const mod = new AiTaskExecutionModule();
+      // Parent created but NOT finalized — still running.
+      const parent = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-active-parent",
+        sourceUserMessageId: "msg-t08-active-parent",
+        submissionId: "sub-t08-active-parent",
+        requestHash: "sha256:t08-active-parent",
+        origin: { type: "manual", submissionId: "sub-t08-active-parent" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+
+      const result = await mod.startExecution({
+        conversationId: "conv-t08-active-parent",
+        sourceUserMessageId: "msg-t08-active-succ",
+        submissionId: "sub-t08-active-succ",
+        requestHash: "sha256:t08-active-succ",
+        origin: { type: "manual", submissionId: "sub-t08-active-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      });
+      expect(result.status).to.equal("denied");
+      if (result.status === "denied") {
+        expect(result.reasonCode).to.equal("LINEAGE_LEDGER_NOT_ACTIVE");
+      }
+
+      // The active parent's ledger is untouched — no claim happened.
+      const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionLedgerEntity
+      );
+      const ledger = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      expect(ledger?.status).to.equal("active");
+      expect(ledger?.active_execution_id).to.equal(parent.executionId);
+      expect(ledger?.owner_generation).to.equal(0);
+    });
+
+    it("a verified_complete parent is denied — immutable outcome, use Retry", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-verified-parent",
+        sourceUserMessageId: "msg-t08-verified-parent",
+        submissionId: "sub-t08-verified-parent",
+        requestHash: "sha256:t08-verified-parent",
+        origin: { type: "manual", submissionId: "sub-t08-verified-parent" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const finalized = await mod.finalizeExecution({
+        executionId: parent.executionId,
+        expectedVersion: 0,
+        outcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        summary: "done",
+        evidenceIds: [],
+        remainingWork: [],
+      });
+      expect(finalized.ok).to.equal(true);
+
+      const result = await mod.startExecution({
+        conversationId: "conv-t08-verified-parent",
+        sourceUserMessageId: "msg-t08-verified-succ",
+        submissionId: "sub-t08-verified-succ",
+        requestHash: "sha256:t08-verified-succ",
+        origin: { type: "manual", submissionId: "sub-t08-verified-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      });
+      expect(result.status).to.equal("denied");
+      if (result.status === "denied") {
+        expect(result.reasonCode).to.equal("LINEAGE_LEDGER_NOT_ACTIVE");
+      }
+    });
+
+    it("a cancelled parent is denied — use Retry to start a new request", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-cancelled-parent",
+        sourceUserMessageId: "msg-t08-cancelled-parent",
+        submissionId: "sub-t08-cancelled-parent",
+        requestHash: "sha256:t08-cancelled-parent",
+        origin: { type: "manual", submissionId: "sub-t08-cancelled-parent" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const finalized = await mod.finalizeExecution({
+        executionId: parent.executionId,
+        expectedVersion: 0,
+        outcome: "cancelled",
+        reasonCode: "USER_CANCELLED",
+        summary: "user stopped",
+        evidenceIds: [],
+        remainingWork: [],
+      });
+      expect(finalized.ok).to.equal(true);
+
+      const result = await mod.startExecution({
+        conversationId: "conv-t08-cancelled-parent",
+        sourceUserMessageId: "msg-t08-cancelled-succ",
+        submissionId: "sub-t08-cancelled-succ",
+        requestHash: "sha256:t08-cancelled-succ",
+        origin: { type: "manual", submissionId: "sub-t08-cancelled-succ" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      });
+      expect(result.status).to.equal("denied");
+      if (result.status === "denied") {
+        expect(result.reasonCode).to.equal("LINEAGE_LEDGER_NOT_ACTIVE");
+      }
+    });
+
+    it("distinct simultaneous Continue submissions — Promise.all race resolves to exactly one active successor + same ledger + generation increment (FR-23/24, AC-29/32)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = await makeFinalizedParent(mod, {
+        conversationId: "conv-t08-race",
+        submissionId: "sub-t08-race-parent",
+        requestHash: "sha256:t08-race-parent",
+        sourceUserMessageId: "msg-t08-race-parent",
+      });
+
+      // Two distinct Continue successors race on the same released parent
+      // ledger. The CAS predicate status='released' AND
+      // active_execution_id IS NULL means exactly one UPDATE affects a row;
+      // the loser gets affected=0 and the whole create transaction rolls
+      // back (no orphan execution/ledger rows). Promise.all dispatches both
+      // before either settles — this is the TRUE concurrent race, not a
+      // sequential simulation.
+      const [a, b] = await Promise.all([
+        mod.startExecution({
+          conversationId: "conv-t08-race",
+          sourceUserMessageId: "msg-t08-race-a",
+          submissionId: "sub-t08-race-a",
+          requestHash: "sha256:t08-race-a",
+          origin: { type: "manual", submissionId: "sub-t08-race-a" },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+          parentExecutionId: parent.executionId,
+          lineageLedgerId: parent.ledgerId,
+        }),
+        mod.startExecution({
+          conversationId: "conv-t08-race",
+          sourceUserMessageId: "msg-t08-race-b",
+          submissionId: "sub-t08-race-b",
+          requestHash: "sha256:t08-race-b",
+          origin: { type: "manual", submissionId: "sub-t08-race-b" },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+          parentExecutionId: parent.executionId,
+          lineageLedgerId: parent.ledgerId,
+        }),
+      ]);
+
+      // Exactly one created; the other denied.
+      const created = [a, b].filter((r) => r.status === "created");
+      const denied = [a, b].filter((r) => r.status === "denied");
+      expect(created.length).to.equal(1);
+      expect(denied.length).to.equal(1);
+      expect(denied[0].status).to.equal("denied");
+      if (denied[0].status === "denied") {
+        // The loser's transaction rolled back; the ledger was already
+        // claimed by the winner so the re-read sees a row and surfaces
+        // ALREADY_SUPERSEDED.
+        expect(denied[0].reasonCode).to.equal("LINEAGE_LEDGER_ALREADY_SUPERSEDED");
+      }
+
+      // The winner's ledger: same id, generation bumped exactly once.
+      const winner = created[0];
+      const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionLedgerEntity
+      );
+      const ledger = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      expect(ledger?.owner_generation).to.equal(1);
+      expect(ledger?.active_execution_id).to.equal(
+        winner.status === "created" ? winner.executionId : null
+      );
+      expect(ledger?.status).to.equal("active");
+
+      // No orphan successor execution row for the loser — its transaction
+      // rolled back. The only rows for this conversation are the parent +
+      // the winner.
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const rows = await execRepo.find({
+        where: { conversation_id: "conv-t08-race" },
+      });
+      // Parent + exactly one successor.
+      expect(rows.length).to.equal(2);
+      const finalizedCount = rows.filter((r) => r.finalized).length;
+      expect(finalizedCount).to.equal(1);
+    });
+
+    it("transport retry reuses the same successor — a re-submit of the same (conversation, submission) returns reused, not a second claim (AC-26/27)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const parent = await makeFinalizedParent(mod, {
+        conversationId: "conv-t08-retry",
+        submissionId: "sub-t08-retry-parent",
+        requestHash: "sha256:t08-retry-parent",
+        sourceUserMessageId: "msg-t08-retry-parent",
+      });
+
+      // First Continue submission.
+      const first = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-t08-retry",
+        sourceUserMessageId: "msg-t08-retry",
+        submissionId: "sub-t08-retry",
+        requestHash: "sha256:t08-retry",
+        origin: { type: "manual", submissionId: "sub-t08-retry" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      }));
+
+      // Transport retry: same (conversation, submission) + same request_hash.
+      const second = await mod.startExecution({
+        conversationId: "conv-t08-retry",
+        sourceUserMessageId: "msg-t08-retry",
+        submissionId: "sub-t08-retry",
+        requestHash: "sha256:t08-retry",
+        origin: { type: "manual", submissionId: "sub-t08-retry" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        parentExecutionId: parent.executionId,
+        lineageLedgerId: parent.ledgerId,
+      });
+      expect(second.status).to.equal("reused");
+
+      // Generation bumped exactly once — the retry did NOT claim again.
+      const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionLedgerEntity
+      );
+      const ledger = await ledgerRepo.findOne({
+        where: { ledger_id: parent.ledgerId },
+      });
+      expect(ledger?.owner_generation).to.equal(1);
+      expect(ledger?.active_execution_id).to.equal(first.executionId);
+    });
+
+    it("all continuable outcomes (incomplete/needs_user_input/blocked_by_policy/timeout/failed) are claimable", async () => {
+      const mod = new AiTaskExecutionModule();
+      const outcomes: Array<"incomplete" | "needs_user_input" | "blocked_by_policy" | "timeout" | "failed"> = [
+        "incomplete",
+        "needs_user_input",
+        "blocked_by_policy",
+        "timeout",
+        "failed",
+      ];
+      for (const outcome of outcomes) {
+        const parent = await makeFinalizedParent(mod, {
+          conversationId: `conv-t08-outcome-${outcome}`,
+          submissionId: `sub-t08-outcome-${outcome}`,
+          requestHash: `sha256:t08-outcome-${outcome}`,
+          sourceUserMessageId: `msg-t08-outcome-${outcome}`,
+          outcome,
+        });
+        const result = await mod.startExecution({
+          conversationId: `conv-t08-outcome-${outcome}`,
+          sourceUserMessageId: `msg-t08-succ-${outcome}`,
+          submissionId: `sub-t08-succ-${outcome}`,
+          requestHash: `sha256:t08-succ-${outcome}`,
+          origin: { type: "manual", submissionId: `sub-t08-succ-${outcome}` },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+          parentExecutionId: parent.executionId,
+          lineageLedgerId: parent.ledgerId,
+        });
+        expect(result.status).to.equal("created");
+      }
     });
   });
 });

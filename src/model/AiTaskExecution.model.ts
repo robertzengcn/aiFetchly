@@ -72,6 +72,42 @@ class LinkedRecordMismatchError extends Error {
 }
 
 /**
+ * T08 (FR-20/21/23/24, AC-25/27/29/32): the lineage ledger supplied to
+ * `createExecution` for a Continue successor cannot be claimed. Thrown
+ * inside the create transaction so the whole creation rolls back — no orphan
+ * execution row pointing at a ledger it does not own. The module layer
+ * translates it into a typed `denied` result so the caller surfaces a clear
+ * denial instead of a raw SQLite error.
+ *
+ * Reasons (any one fails the CAS WHERE predicate):
+ *  - the referenced ledger row does not exist (dangling `lineage_ledger_id`)
+ *  - `status != 'active'` (the parent was finalized → ledger released, or
+ *    was never activated)
+ *  - `active_execution_id` already points at a DIFFERENT non-null successor
+ *    (a concurrent Continue won the claim — one-active-successor fence)
+ *
+ * The claim is generation-checked: `owner_generation` is bumped atomically
+ * as part of the same UPDATE, so a stale ancestor's subsequent
+ * `persistBudgetConsumption`/`finalizeExecution` CAS affects zero rows.
+ */
+class LineageClaimError extends Error {
+  readonly reason:
+    | "LINEAGE_LEDGER_MISSING"
+    | "LINEAGE_LEDGER_NOT_ACTIVE"
+    | "LINEAGE_LEDGER_ALREADY_SUPERSEDED";
+  constructor(
+    reason:
+      | "LINEAGE_LEDGER_MISSING"
+      | "LINEAGE_LEDGER_NOT_ACTIVE"
+      | "LINEAGE_LEDGER_ALREADY_SUPERSEDED"
+  ) {
+    super(reason);
+    this.name = "LineageClaimError";
+    this.reason = reason;
+  }
+}
+
+/**
  * T20 (FR-03/09/24, §6.1): build the finalization checkpoint by MERGING the
  * finalization facts into the EXISTING `execution_state_json` object — never
  * replacing it. The previous form stringified a fresh
@@ -192,6 +228,13 @@ export interface LedgerSnapshot {
  *   but with a different `request_hash`. Same submission ID, different request
  *   payload — `SUBMISSION_CONFLICT`. The caller must surface the conflict and
  *   must not persist a second row.
+ * - `denied` (T08): a Continue successor's lineage ledger could not be
+ *   claimed. `reasonCode` distinguishes the failure mode — a dangling
+ *   `lineage_ledger_id` (LINEAGE_LEDGER_MISSING), a finalized/released parent
+ *   (LINEAGE_LEDGER_NOT_ACTIVE), or a concurrent Continue that already
+ *   superseded the lease (LINEAGE_LEDGER_ALREADY_SUPERSEDED). The caller must
+ *   surface the denial; NO execution row was persisted (the create
+ *   transaction rolled back).
  *
  * Note that `submission_id` is nullable: scheduled-origin executions carry
  * `null` and are exempt from this dedup (their lineage key is the
@@ -213,6 +256,14 @@ export type CreateExecutionResult =
       readonly status: "conflict";
       readonly reasonCode: "SUBMISSION_CONFLICT";
       readonly existing: ExistingExecutionSnapshot;
+    }
+  | {
+      readonly status: "denied";
+      readonly reasonCode:
+        | "LINEAGE_LEDGER_MISSING"
+        | "LINEAGE_LEDGER_NOT_ACTIVE"
+        | "LINEAGE_LEDGER_ALREADY_SUPERSEDED";
+      readonly existing?: never;
     };
 
 /**
@@ -358,13 +409,16 @@ export class AiTaskExecutionModel extends BaseDb {
   ): Promise<CreateExecutionResult> {
     assertNotWorker("createExecution");
 
-    // Serialize the dedup-lookup + insert. The mutex makes check-then-insert
-    // atomic relative to concurrent callers: a racing same-(conversation,
-    // submission) caller that reads null before the first inserts instead
-    // waits, then sees the committed row and resolves to reused/conflict.
-    // It also prevents two `connection.transaction()` bodies from overlapping
-    // on the shared better-sqlite3 connection (which would raise "cannot start
-    // a transaction within a transaction"). See {@link AsyncMutex}.
+    // Serialize the dedup-lookup + insert + (Continue) CAS claim. The mutex
+    // makes check-then-insert atomic relative to concurrent callers: a racing
+    // same-(conversation, submission) caller that reads null before the first
+    // inserts instead waits, then sees the committed row and resolves to
+    // reused/conflict. It also prevents two `createQueryRunner()` transaction
+    // bodies from overlapping on the shared better-sqlite3 connection (which
+    // would raise "cannot start a transaction within a transaction"). See
+    // {@link AsyncMutex}. The mutex is NOT re-entered inside
+    // `createExecutionInner` — the transaction body relies on this outer
+    // serialization, so `AsyncMutex`'s non-re-entrant semantics are safe.
     return executionCreateMutex.run(() => this.createExecutionInner(input));
   }
 
@@ -409,92 +463,245 @@ export class AiTaskExecutionModel extends BaseDb {
     }
 
     const executionId = `exec-${randomUUID()}`;
-    const ledgerId = `ledger-${randomUUID()}`;
-    // FR-21/22: a Continue successor shares the parent's lineage ledger so its
-    // budget mirror resurrects the parent's spent allowance. A fresh start
-    // points lineage at its own ledger (the column is non-nullable).
-    const lineageLedgerId = input.lineageLedgerId ?? ledgerId;
+    // T08 (FR-20/21/23/24, AC-25/27/29/32): a Continue successor SHARES the
+    // parent's lineage ledger — `ledger_id` points at the same row, so the
+    // successor's spent allowance IS the parent's persisted counters (the
+    // budget mirror resurrects them). A fresh start (manual/retry) mints a
+    // new ledger with zero counters. The shared ledger is claimed atomically
+    // inside the create transaction: the CAS UPDATE below bumps
+    // `owner_generation`, repoints `active_execution_id` to the successor,
+    // and flips `status` released→active (the parent finalize released it;
+    // the successor reactivates it so its own spend CAS, which requires
+    // status='active', can spend against it). The predicate requires the
+    // ledger be in `released` state with no active successor — a concurrent
+    // Continue that won the claim leaves it `active` with a non-null
+    // `active_execution_id`, so this UPDATE affects zero rows and the whole
+    // transaction rolls back, surfacing as a typed `denied` result. A
+    // missing/dangling ledger fails closed the same way.
+    // Loose-equality `!= null` covers both `null` and `undefined`: a fresh
+    // start omits `lineageLedgerId` entirely (it arrives as `undefined`), and
+    // `undefined !== null` is `true` — which would wrongly route fresh starts
+    // into the Continue branch and deny them. `!= null` is the deliberate
+    // exception to the project's `!==` default and is called out here so a
+    // future lint pass does not "fix" it back into the bug.
+    const isContinueSuccessor = input.lineageLedgerId != null;
+    const sharedLedgerId = input.lineageLedgerId ?? `ledger-${randomUUID()}`;
 
     // Both rows in one transaction so a crash between saves cannot leave an
-    // orphan ledger pointing at a nonexistent execution (B3, §6.2). The mutex
-    // guarantees no concurrent transaction overlaps this one on the shared
-    // connection, so the unique-constraint catch below is defense-in-depth.
+    // orphan ledger pointing at a nonexistent execution (B3, §6.2). The outer
+    // `createExecution` mutex guarantees no concurrent transaction overlaps
+    // this one on the shared connection, so the unique-constraint catch below
+    // is defense-in-depth.
+    //
+    // T08: we use `createQueryRunner()` + `startTransaction()` (matching
+    // `finalizeExecution`) rather than `connection.transaction(async (manager)
+    // => ...)` because the Continue branch must run a CAS UPDATE that reads
+    // `.affected`. `manager.query()` / `connection.query()` only forward
+    // `(sql, params)` to the driver — they drop any third argument — so the
+    // structured-result flag (`useStructuredResult=true`) that exposes
+    // `.affected` on better-sqlite3 must go through the driver QueryRunner
+    // directly (see the long note in `finalizeExecution`).
     try {
-      const saved = await this.sqliteDb.connection.transaction(async (manager) => {
-        const ledger = new AiTaskExecutionLedgerEntity();
-        ledger.ledger_id = ledgerId;
-        // GAP-S1: freeze the clamped budget limits into policy_limits_json so
-        // the persisted ledger never exceeds HARD_CAPS, even if the in-memory
-        // TaskRunBudget is later tampered with. Previously this wrote "{}",
-        // losing the budget entirely.
-        ledger.policy_limits_json = JSON.stringify(
-          clampToHardCaps(input.budgetLimits)
-        );
-        ledger.consumed_continuations = 0;
-        ledger.consumed_provider_attempts = 0;
-        ledger.consumed_tool_executions = 0;
-        ledger.consumed_checker_attempts = 0;
-        ledger.consumed_tokens = 0;
-        ledger.consumed_active_ms = 0;
-        ledger.consumed_wait_ms = 0;
-        ledger.no_progress_streak = 0;
-        ledger.active_execution_id = executionId;
-        ledger.owner_generation = 0;
-        ledger.status = "active";
-        await manager.getRepository(AiTaskExecutionLedgerEntity).save(ledger);
+      const saved = await (async () => {
+        const runner = this.sqliteDb.connection.createQueryRunner();
+        await runner.startTransaction();
+        try {
+          const manager = runner.manager;
+          if (isContinueSuccessor) {
+            // T08: validate parent eligibility inside the trusted model
+            // boundary (defense-in-depth alongside the IPC check). The
+            // parent execution must exist, be finalized, and have a
+            // continuable outcome. A missing parent (or a lineage_ledger_id
+            // that does not match the parent's own lineage pointer) means
+            // the caller wired the wrong ledger — fail closed. An active
+            // (non-finalized) parent must be stopped first. A
+            // verified_complete/cancelled parent is immutable — use Retry.
+            const parentExecutionId = input.parentExecutionId;
+            if (parentExecutionId === null) {
+              // Continue successor without a parent_execution_id is a
+              // wiring error (the coordinator always pairs them). Fail
+              // closed rather than persisting an orphan lineage pointer.
+              throw new LineageClaimError("LINEAGE_LEDGER_MISSING");
+            }
+            const parent = await manager.findOne(AiTaskExecutionEntity, {
+              where: { execution_id: parentExecutionId },
+            });
+            if (!parent || parent.lineage_ledger_id !== sharedLedgerId) {
+              throw new LineageClaimError("LINEAGE_LEDGER_MISSING");
+            }
+            if (!parent.finalized) {
+              // Parent still running — cannot continue an active execution.
+              throw new LineageClaimError("LINEAGE_LEDGER_NOT_ACTIVE");
+            }
+            const parentOutcome = parent.task_outcome;
+            const continuable =
+              parentOutcome === "incomplete" ||
+              parentOutcome === "needs_user_input" ||
+              parentOutcome === "blocked_by_policy" ||
+              parentOutcome === "timeout" ||
+              parentOutcome === "failed";
+            if (!continuable) {
+              // verified_complete (immutable) or cancelled (use Retry) —
+              // the parent's lineage is not continuable.
+              throw new LineageClaimError("LINEAGE_LEDGER_NOT_ACTIVE");
+            }
 
-        const exec = new AiTaskExecutionEntity();
-        exec.execution_id = executionId;
-        exec.conversation_id = input.conversationId;
-        exec.source_user_message_id = input.sourceUserMessageId;
-        exec.submission_id = input.submissionId;
-        exec.assistant_result_message_id = null;
-        exec.request_hash = input.requestHash;
-        exec.origin_type = input.origin.type;
-        exec.route = input.route;
-        exec.completion_owner = input.completionOwner;
-        exec.stage = "resolving";
-        exec.schedule_id =
-          input.origin.type === "scheduled" ? input.origin.taskId : null;
-        exec.run_id =
-          input.origin.type === "scheduled" ? input.origin.runId : null;
-        exec.occurrence_key =
-          input.origin.type === "scheduled" ? input.origin.occurrenceKey : null;
-        exec.ledger_id = ledgerId;
-        // Lineage points at the shared parent ledger on Continue, or this
-        // row's own ledger on a fresh start (FR-21/22).
-        exec.lineage_ledger_id = lineageLedgerId;
-        // parent_execution_id is set only on Continue/retry successors.
-        exec.parent_execution_id = input.parentExecutionId ?? null;
-        // FR-19: persist the frozen contract snapshot + canonical hash at
-        // creation so a crash between enrollment and finalization cannot
-        // lose the contract that authorized the work. Null when no contract
-        // was frozen (response_only / best_effort without criteria).
-        exec.contract_snapshot_json = input.contractSnapshotJson ?? null;
-        exec.contract_hash = input.contractHash ?? null;
-        exec.policy_snapshot_json = null;
-        exec.execution_state_json = null;
-        exec.execution_state_version = 0;
-        exec.finalized = false;
-        exec.finalized_at = null;
-        exec.task_outcome = null;
-        exec.outcome_reason_code = null;
-        exec.outcome_summary = null;
-        exec.final_event_identity = null;
-        exec.delivery_state = null;
-        const savedExec = await manager
-          .getRepository(AiTaskExecutionEntity)
-          .save(exec);
-        return savedExec;
-      });
+            // CAS-claim the shared lineage ledger. The SET flips
+            // status released→active: the successor reactivates the
+            // ledger so its persistBudgetConsumption CAS (which requires
+            // status='active') can spend against it. `owner_generation +
+            // 1` is the fenced lease token — the successor's binding reads
+            // it as leaseGeneration, so a stale ancestor's subsequent
+            // persistBudgetConsumption / finalizeExecution CAS (still
+            // keyed on the old generation) affects zero rows. The
+            // execution_state_version bump lets a re-read detect the
+            // concurrent claim.
+            //
+            // The WHERE predicate enforces one-active-successor +
+            // immutable parent outcome:
+            //  - `status = 'released'` — the parent finalized and its
+            //    finalize transaction released the ledger (T11 made the
+            //    outcome CAS + ledger release atomic, so finalized=true
+            //    implies status='released'). An active (non-finalized)
+            //    parent still holds status='active' and was rejected above.
+            //  - `active_execution_id IS NULL` — finalize set it to NULL
+            //    on release; a concurrent Continue that won the claim
+            //    leaves active_execution_id non-null and status='active',
+            //    so this UPDATE affects zero rows and throws
+            //    LineageClaimError, rolling the whole create back so only
+            //    one successor exists.
+            const claim = (await runner.query(
+              `UPDATE ai_task_execution_ledger
+                  SET active_execution_id = ?,
+                      owner_generation = owner_generation + 1,
+                      execution_state_version = execution_state_version + 1,
+                      status = 'active'
+                WHERE ledger_id = ?
+                  AND status = 'released'
+                  AND active_execution_id IS NULL`,
+              [executionId, sharedLedgerId],
+              true // useStructuredResult — exposes .affected on the driver
+            )) as { affected?: number };
+            if ((claim.affected ?? 0) !== 1) {
+              // The CAS failed despite the eligibility check passing. The
+              // mutex serializes creates, so no concurrent create
+              // interleaved between the parent read and this UPDATE. The
+              // only remaining causes are a dangling ledger row (the
+              // parent execution exists but its lineage ledger row does
+              // not) or a concurrent Continue that already claimed the
+              // ledger in a prior committed critical section. Re-read to
+              // distinguish.
+              const ledgerRow = await manager.findOne(
+                AiTaskExecutionLedgerEntity,
+                { where: { ledger_id: sharedLedgerId } }
+              );
+              if (!ledgerRow) {
+                throw new LineageClaimError("LINEAGE_LEDGER_MISSING");
+              }
+              throw new LineageClaimError("LINEAGE_LEDGER_ALREADY_SUPERSEDED");
+            }
+          } else {
+            // Fresh start: mint a new ledger with zero counters + the clamped
+            // budget limits frozen in (GAP-S1).
+            const ledger = new AiTaskExecutionLedgerEntity();
+            ledger.ledger_id = sharedLedgerId;
+            // GAP-S1: freeze the clamped budget limits into
+            // policy_limits_json so the persisted ledger never exceeds
+            // HARD_CAPS, even if the in-memory TaskRunBudget is later
+            // tampered with. Previously this wrote "{}", losing the budget
+            // entirely.
+            ledger.policy_limits_json = JSON.stringify(
+              clampToHardCaps(input.budgetLimits)
+            );
+            ledger.consumed_continuations = 0;
+            ledger.consumed_provider_attempts = 0;
+            ledger.consumed_tool_executions = 0;
+            ledger.consumed_checker_attempts = 0;
+            ledger.consumed_tokens = 0;
+            ledger.consumed_active_ms = 0;
+            ledger.consumed_wait_ms = 0;
+            ledger.no_progress_streak = 0;
+            ledger.active_execution_id = executionId;
+            ledger.owner_generation = 0;
+            ledger.status = "active";
+            await manager
+              .getRepository(AiTaskExecutionLedgerEntity)
+              .save(ledger);
+          }
+
+          const exec = new AiTaskExecutionEntity();
+          exec.execution_id = executionId;
+          exec.conversation_id = input.conversationId;
+          exec.source_user_message_id = input.sourceUserMessageId;
+          exec.submission_id = input.submissionId;
+          exec.assistant_result_message_id = null;
+          exec.request_hash = input.requestHash;
+          exec.origin_type = input.origin.type;
+          exec.route = input.route;
+          exec.completion_owner = input.completionOwner;
+          exec.stage = "resolving";
+          exec.schedule_id =
+            input.origin.type === "scheduled" ? input.origin.taskId : null;
+          exec.run_id =
+            input.origin.type === "scheduled" ? input.origin.runId : null;
+          exec.occurrence_key =
+            input.origin.type === "scheduled"
+              ? input.origin.occurrenceKey
+              : null;
+          // T08: on Continue the successor's own ledger_id IS the shared
+          // parent ledger; on a fresh start it's the new ledger just minted.
+          exec.ledger_id = sharedLedgerId;
+          // Lineage points at the shared parent ledger on Continue, or this
+          // row's own ledger on a fresh start (FR-21/22).
+          exec.lineage_ledger_id = sharedLedgerId;
+          // parent_execution_id is set only on Continue/retry successors.
+          exec.parent_execution_id = input.parentExecutionId ?? null;
+          // FR-19: persist the frozen contract snapshot + canonical hash at
+          // creation so a crash between enrollment and finalization cannot
+          // lose the contract that authorized the work. Null when no
+          // contract was frozen (response_only / best_effort without
+          // criteria).
+          exec.contract_snapshot_json = input.contractSnapshotJson ?? null;
+          exec.contract_hash = input.contractHash ?? null;
+          exec.policy_snapshot_json = null;
+          exec.execution_state_json = null;
+          exec.execution_state_version = 0;
+          exec.finalized = false;
+          exec.finalized_at = null;
+          exec.task_outcome = null;
+          exec.outcome_reason_code = null;
+          exec.outcome_summary = null;
+          exec.final_event_identity = null;
+          exec.delivery_state = null;
+          const savedExec = await manager
+            .getRepository(AiTaskExecutionEntity)
+            .save(exec);
+          await runner.commitTransaction();
+          return savedExec;
+        } catch (err) {
+          await runner.rollbackTransaction();
+          throw err;
+        } finally {
+          await runner.release();
+        }
+      })();
 
       return {
         status: "created",
         executionId,
-        ledgerId,
+        ledgerId: sharedLedgerId,
         executionRowId: saved.id,
       };
     } catch (error) {
+      // T08: a lineage claim failure must surface as a typed denial, not a
+      // raw throw. The transaction already rolled back, so no orphan
+      // execution/ledger rows exist.
+      if (error instanceof LineageClaimError) {
+        return {
+          status: "denied",
+          reasonCode: error.reason,
+        };
+      }
       // Defense-in-depth: the mutex serializes callers, so a unique-constraint
       // violation here means the row appeared between the lookup and the
       // insert within this same critical section (only possible if a separate

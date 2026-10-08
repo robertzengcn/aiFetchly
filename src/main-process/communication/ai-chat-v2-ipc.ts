@@ -2075,13 +2075,62 @@ async function handleTaskSuccessor(
   }
   const route = taskExecutionRouteSchema.parse(parent.route);
   const lineageLedgerId = parent.lineage_ledger_id || null;
-  // Continue REQUIRES a lineage ledger (shared budget); the parent row may
-  // predate ledger persistence (GAP-S2 #4) — deny with a clear message
-  // rather than silently minting a fresh one (that would be a Retry).
-  if (mode === "continue" && !lineageLedgerId) {
-    return denied(
-      "Parent execution has no lineage ledger to continue; use Retry instead."
-    );
+  // T08 (FR-20/21/23/24, AC-25/27/29/32): validate parent eligibility at the
+  // trusted IPC boundary. The model layer's generation-checked claim is the
+  // last line of defense, but failing there leaves no user-facing message
+  // (the create transaction rolls back to a denied result). Surface the
+  // eligibility rules here so the user gets a clear denial.
+  //
+  // Continue REQUIRES:
+  //  - a finalized parent with a continuable outcome (`incomplete`,
+  //    `needs_user_input`, `blocked_by_policy`, `timeout`, or `failed`) —
+  //    work that stopped short of verified completion and can carry its
+  //    remaining counters forward.
+  //  - a lineage ledger (shared budget).
+  // An ACTIVE (non-finalized) parent cannot be continued — the turn is still
+  // running; use Stop first. A `verified_complete` parent is immutable — use
+  // Retry for a fresh request. A `cancelled` parent requires an explicit new
+  // request (Retry), not a continuation of the cancelled lineage.
+  if (mode === "continue") {
+    if (!lineageLedgerId) {
+      return denied(
+        "Parent execution has no lineage ledger to continue; use Retry instead."
+      );
+    }
+    if (!parent.finalized) {
+      return denied(
+        "Parent execution is still active; stop it before continuing."
+      );
+    }
+    const outcome = parent.task_outcome;
+    const continuable =
+      outcome === "incomplete" ||
+      outcome === "needs_user_input" ||
+      outcome === "blocked_by_policy" ||
+      outcome === "timeout" ||
+      outcome === "failed";
+    if (!continuable) {
+      return denied(
+        outcome === "verified_complete"
+          ? "Parent execution already completed; use Retry for a fresh request."
+          : outcome === "cancelled"
+          ? "Parent execution was cancelled; use Retry to start a new request."
+          : `Parent execution outcome (${outcome ?? "unknown"}) is not continuable.`
+      );
+    }
+  } else {
+    // Retry: a fresh attempt with a new ledger + fresh budget. Allowed on
+    // any finalized parent (cancelled, failed, incomplete) OR an active
+    // parent the user wants to abandon. An active parent that is retried
+    // must first be stopped — but we do not enforce that here because a
+    // Retry mints a brand-new lineage (no shared ledger), so the active
+    // parent's lease is untouched. The renderer's Stop button handles
+    // abandonment; the IPC trusts the explicit user action.
+    if (!parent.finalized && parent.task_outcome !== null) {
+      return denied(
+        "Parent execution is in an inconsistent state; refresh and try again."
+      );
+    }
   }
   // Reuse the parent's frozen contract snapshot (see block docstring). The
   // renderer's optional `message` is for the next user turn, not for
@@ -2129,6 +2178,12 @@ async function handleTaskSuccessor(
     }
     if (result.status === "reused") {
       return ok({ executionId: null, status: "reused" });
+    }
+    if (result.status === "denied") {
+      // T08: the lineage-ledger claim failed at the model layer. Surface the
+      // specific reason so the user knows whether to Retry (missing/released
+      // parent) or refresh (concurrent Continue already superseded the lease).
+      return denied(`Task ${mode} denied: ${result.reasonCode}`);
     }
     return denied(`Task ${mode} conflict: SUBMISSION_CONFLICT`);
   } catch (err) {

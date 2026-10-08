@@ -68,6 +68,11 @@ export interface TaskExecutionBinding {
  * - `conflict`: same submission ID, different request_hash →
  *   `SUBMISSION_CONFLICT`. The caller surfaces the conflict and must not
  *   persist a second row.
+ * - `denied` (T08): a Continue successor's lineage ledger claim was rejected.
+ *   `reasonCode` distinguishes a dangling `lineage_ledger_id`, a
+ *   finalized/released parent, or a concurrent Continue that already
+ *   superseded the lease. No execution row was persisted (the create
+ *   transaction rolled back); the caller surfaces the denial.
  */
 export type StartBindingResult =
   | { readonly status: "created"; readonly binding: TaskExecutionBinding }
@@ -76,7 +81,31 @@ export type StartBindingResult =
       readonly status: "conflict";
       readonly reasonCode: "SUBMISSION_CONFLICT";
       readonly existing: ExistingExecutionSnapshot;
+    }
+  | {
+      readonly status: "denied";
+      readonly reasonCode:
+        | "LINEAGE_LEDGER_MISSING"
+        | "LINEAGE_LEDGER_NOT_ACTIVE"
+        | "LINEAGE_LEDGER_ALREADY_SUPERSEDED";
     };
+
+/**
+ * T08 (FR-21/23/24, AC-25/27/29/32): thrown by `resurrectOrFreshBudget` when
+ * the lineage ledger committed by the create transaction is no longer
+ * readable. The model's claim transaction should have left it active and
+ * bumped its generation; a missing row here means it vanished between the
+ * commit and this read (e.g. a concurrent finalize released it). Fail closed
+ * — surface as a typed denial rather than silently minting a fresh allowance.
+ */
+class LineageLedgerMissingError extends Error {
+  readonly lineageLedgerId: string;
+  constructor(lineageLedgerId: string) {
+    super("LINEAGE_LEDGER_MISSING");
+    this.name = "LineageLedgerMissingError";
+    this.lineageLedgerId = lineageLedgerId;
+  }
+}
 
 export interface StartManualInput {
   readonly conversationId: string;
@@ -438,6 +467,18 @@ export class TaskExecutionCoordinator {
         existing: started.existing,
       };
     }
+    // T08 (FR-20/21/23/24, AC-25/27/29/32): a Continue successor whose lineage
+    // ledger claim was denied (dangling/released/superseded) must NOT fall
+    // back to a fresh budget — that would silently mint a new allowance on a
+    // parent that should be immutable or already superseded. Propagate the
+    // typed denial; the caller surfaces it. No execution row was persisted
+    // (the create transaction rolled back), so there is nothing to finalize.
+    if (started.status === "denied") {
+      return {
+        status: "denied",
+        reasonCode: started.reasonCode,
+      };
+    }
 
     // FR-21/22: a Continue successor shares the parent's lineage ledger. Its
     // budget mirror must be resurrected from the persisted ledger counters so
@@ -445,6 +486,12 @@ export class TaskExecutionCoordinator {
     // the lineage caps. A fresh start mints a new budget from the input
     // limits. The ledger row is the authoritative source of truth (§9); the
     // in-memory mirror is never authoritative itself.
+    //
+    // T08: on Continue, `input.lineageLedgerId` IS the shared parent ledger
+    // (the model set `exec.ledger_id = sharedLedgerId` and bumped its
+    // `owner_generation`), so resurrecting from it reads the parent's
+    // persisted counters + the frozen policy limits. A dangling ledger
+    // cannot reach this branch — the model already denied it above.
     const budget = await this.resurrectOrFreshBudget(
       input.lineageLedgerId,
       input.budgetLimits
@@ -457,6 +504,11 @@ export class TaskExecutionCoordinator {
     // stale ancestor's consult/finalization CAS no longer matches and returns
     // STATE_CONFLICT. Read it from the ledger row so the in-memory binding
     // matches the persisted fence token.
+    //
+    // T08: `started.ledgerId` is the shared parent ledger on Continue, so this
+    // reads the bumped `owner_generation` (the successor's lease token), not a
+    // fresh zero. The parent's prior generation is now superseded and its CAS
+    // attempts will fail-closed.
     const leaseGeneration = await this.readLeaseGeneration(started.ledgerId);
 
     return {
@@ -480,10 +532,20 @@ export class TaskExecutionCoordinator {
 
   /**
    * Resurrect the budget from the lineage ledger on Continue, or mint a fresh
-   * one on a new execution. A missing lineage ledger (e.g. test stub without
-   * a seeded row) falls back to a fresh budget so enrollment never crashes on
-   * a coordinator-only test path — the authoritative counters come from the
-   * ledger when it exists.
+   * one on a new execution.
+   *
+   * T08 (FR-21/23/24, AC-25/27/29/32): a Continue successor that reaches this
+   * path has already had its lineage-ledger claim committed by the model
+   * (status=`created`), so the ledger row MUST exist and MUST be active. A
+   * missing ledger here is a genuine integrity violation (not a test-stub
+   * path) — fail closed by throwing rather than silently minting a fresh
+   * allowance. Minting a fresh budget on a claimed-but-missing ledger would
+   * hand the successor a full new cap and silently reset the lineage's spent
+   * counters, which is exactly the regression T08 prevents. The IPC layer
+   * surfaces the throw as a typed denial.
+   *
+   * A fresh start (`lineageLedgerId` is null) mints a new budget directly from
+   * `freshLimits` — no DB read needed.
    */
   private async resurrectOrFreshBudget(
     lineageLedgerId: string | null,
@@ -491,7 +553,14 @@ export class TaskExecutionCoordinator {
   ): Promise<TaskRunBudget> {
     if (!lineageLedgerId) return new TaskRunBudget(freshLimits);
     const ledger = await this.module.getLedgerById(lineageLedgerId);
-    if (!ledger) return new TaskRunBudget(freshLimits);
+    if (!ledger) {
+      // T08: fail closed. The model's claim transaction should have left the
+      // ledger active and bumped its generation; a missing row means the
+      // claim silently vanished (e.g. a concurrent finalize released it
+      // between the create commit and this read). Do NOT silently reset the
+      // lineage caps — surface the violation.
+      throw new LineageLedgerMissingError(lineageLedgerId);
+    }
     return TaskRunBudget.resurrectFromLedger({
       policy_limits_json: ledger.policyLimitsJson,
       consumed_continuations: ledger.consumedContinuations,

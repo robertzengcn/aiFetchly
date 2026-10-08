@@ -163,8 +163,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T08 — Make Continue share and atomically claim the authoritative lineage ledger [P1, confirmed]
 
-- [ ] Reuse the parent lineage ledger, remaining counters, baselines, progress and receipts; bump/fence its generation and permit one active successor.
-- [ ] Validate parent eligibility and ledger integrity in the trusted model/coordinator boundary.
+- [x] Reuse the parent lineage ledger, remaining counters, baselines, progress and receipts; bump/fence its generation and permit one active successor.
+- [x] Validate parent eligibility and ledger integrity in the trusted model/coordinator boundary.
 
 **Evidence:** `AiTaskExecution.model.ts:331–363` always creates a fresh active ledger with zero counters; `:382–385` merely stores the old ID as `lineage_ledger_id`. Coordinator `:449–460` obtains generation from the new ledger. The parent ledger is neither claimed nor fenced. Two distinct successor submissions can therefore create active descendants with separate ownership. IPC `ai-chat-v2-ipc.ts:2072–2084` checks existence/lineage string but not active/completed/cancelled eligibility. Coordinator `:493–494` falls back to a new budget if the referenced ledger is missing.
 
