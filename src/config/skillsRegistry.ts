@@ -1308,7 +1308,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: TOOL_RESULT_READ_TOOL_NAME,
     description:
       "Read the next page of a large saved tool result. " +
-      "When a receipt has preview_complete false, call this with the output_id in next.arguments. " +
+      "When a receipt has preview_complete false, call this with the output_id and cursor in next.arguments. " +
       "Then pass that page's next_cursor back to this tool until complete is true. " +
       "The receipt preview is only a sample. If you stop before complete is true, say the review is partial. " +
       "Use this to walk a list. Do not search for a token that appears on every row. " +

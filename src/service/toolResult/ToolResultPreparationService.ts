@@ -34,6 +34,7 @@ import {
   fitWrappedRetrievalResult,
   retrievalSerializedFits,
 } from "@/service/toolResult/retrievalInlineBound";
+import { encodeToolResultCursor } from "@/service/toolResult/ToolResultCursorCodec";
 
 /**
  * The single shared preparation boundary (technical design §9.1).
@@ -265,6 +266,18 @@ export class ToolResultPreparationService {
         outputRef.preservation === "complete" &&
         (outcome.sourceCompleteness ?? "complete") === "complete",
     });
+
+    // The first page the model can request. Without this, the receipt names
+    // tool_result_read but has no cursor, and the model invents one or spends
+    // a call just to learn the token.
+    if (outputRef && !preview.previewComplete) {
+      control.next_cursor = encodeToolResultCursor({
+        outputId: outputRef.outputId,
+        revision: outputRef.revision,
+        mode: "read",
+        position: 0,
+      });
+    }
 
     const receipt = this.buildReceipt({
       outcome,
@@ -597,8 +610,16 @@ export class ToolResultPreparationService {
         ? {
             next: {
               tool: "tool_result_read",
-              arguments: { output_id: first.outputId },
+              arguments: {
+                output_id: first.outputId,
+                ...(typeof receipt.control.next_cursor === "string"
+                  ? { cursor: receipt.control.next_cursor }
+                  : {}),
+              },
             },
+            ...(typeof receipt.control.next_cursor === "string"
+              ? { next_cursor: receipt.control.next_cursor }
+              : {}),
           }
         : {}),
       ...(receipt.storageErrorCode ? { storage_error: receipt.storageErrorCode } : {}),

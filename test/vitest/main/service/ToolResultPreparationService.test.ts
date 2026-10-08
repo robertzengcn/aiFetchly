@@ -14,6 +14,7 @@ import {
   retrievalSerializedFits,
 } from "@/service/toolResult/retrievalInlineBound";
 import {
+  decodeToolResultCursor,
   encodeToolResultCursor,
 } from "@/service/toolResult/ToolResultCursorCodec";
 import type { TrustedToolOutputContext } from "@/entityTypes/toolResultTypes";
@@ -288,6 +289,15 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
     const model = JSON.parse(prepared.modelContent);
     expect(model.next.tool).toBe("tool_result_read");
     expect(model.next.arguments.output_id).toBe(model.output.output_id);
+    const cursor = decodeToolResultCursor(model.next.arguments.cursor, {
+      outputId: model.output.output_id,
+      mode: "read",
+      revision: prepared.receipt?.outputs[0]?.revision,
+    });
+    expect(cursor.ok).toBe(true);
+    if (cursor.ok) expect(cursor.payload.position).toBe(0);
+    expect(model.next_cursor).toBe(model.next.arguments.cursor);
+    expect(prepared.receipt?.control.next_cursor).toBe(model.next.arguments.cursor);
     expect(model.retrieval).toBeUndefined();
     // A small sample must never read as a complete review.
     expect(model.preview_complete).toBe(false);

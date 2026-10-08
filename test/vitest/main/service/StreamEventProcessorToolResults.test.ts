@@ -221,12 +221,16 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
       operation_status?: string;
       output?: { output_id?: string; captured_bytes?: number } | null;
       preview?: string;
-      next?: { tool?: string; arguments?: { output_id?: string } };
+      next?: { tool?: string; arguments?: { output_id?: string; cursor?: string } };
+      next_cursor?: string;
     };
     expect(chunkContent.success).toBe(true);
     expect(chunkContent.output?.output_id).toBe(outputId);
     expect(chunkContent.next?.tool).toBe("tool_result_read");
     expect(chunkContent.next?.arguments?.output_id).toBe(outputId);
+    expect(chunkContent.next?.arguments?.cursor).toBe(chunkContent.next_cursor);
+    expect(typeof chunkContent.next?.arguments?.cursor).toBe("string");
+    expect((chunkContent.next?.arguments?.cursor ?? "").length).toBeGreaterThan(0);
     expect(chunkPayload.content).not.toContain("Biz 1199");
 
     // The chunk `toolResult` field is the bounded payload, not the raw body.
