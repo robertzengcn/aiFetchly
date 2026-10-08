@@ -81,7 +81,7 @@ function mountViewer(props: Record<string, unknown> = {}) {
           // single click fires the handler twice.
           emits: ["click"],
           template:
-            '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
+            '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
         },
         "v-text-field": {
           props: ["modelValue"],
@@ -212,6 +212,42 @@ describe("AiChatToolResultViewer — paging", () => {
 });
 
 describe("AiChatToolResultViewer — search honesty", () => {
+  it("searches the typed query and does not send the click as a cursor", async () => {
+    searchToolOutput.mockResolvedValue({
+      outputId: "out_0123456789abcdef0123456789abcdef",
+      matches: [
+        {
+          startByte: 4,
+          endByte: 10,
+          excerpt: "needle",
+          readCursor: "match-cursor",
+        },
+      ],
+      scanComplete: true,
+      nextCursor: null,
+      sourceCompleteness: "complete",
+    });
+    const wrapper = mountViewer();
+    await flushPromises();
+    const input = wrapper.find('[data-testid="viewer-search-input"] input');
+    await input.setValue("needle");
+    await wrapper.find('[data-testid="viewer-search-submit"]').trigger("click");
+    await flushPromises();
+
+    expect(searchToolOutput).toHaveBeenCalledTimes(1);
+    const request = searchToolOutput.mock.calls[0]?.[0] as {
+      query?: string;
+      cursor?: unknown;
+    };
+    expect(request.query).toBe("needle");
+    // The button click is a DOM event. Forwarding it as `cursor` makes the
+    // main process reject the request, which the viewer renders as
+    // "This saved output is not available".
+    expect(request.cursor).toBeUndefined();
+    expect(wrapper.find('[data-testid="viewer-error"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="viewer-match"]').exists()).toBe(true);
+  });
+
   it("reports a complete scan with no matches as a real 'no matches'", async () => {
     searchToolOutput.mockResolvedValue({
       outputId: "out_0123456789abcdef0123456789abcdef",
