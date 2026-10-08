@@ -35,11 +35,21 @@ const {
   classifyMock,
   startManualMock,
   freezeContractMock,
+  compileCriteriaMock,
+  compileCriteriaHolder,
 } = vi.hoisted(() => ({
   flagMock: vi.fn<() => boolean>(),
   classifyMock: vi.fn(),
   startManualMock: vi.fn(),
   freezeContractMock: vi.fn(),
+  compileCriteriaMock: vi.fn(),
+  // T01: holder for the REAL compileCriteria, assigned by the vi.mock
+  // factory below (factories run before top-level lets — a bare `let` here
+  // hits the TDZ, the module-top-level TDZ crash class).
+  compileCriteriaHolder: {
+    real:
+      undefined as unknown as typeof import("@/service/aiTaskExecution/TaskCriteriaResolver").compileCriteria,
+  },
 }));
 
 // --- Feature flag mock: each test sets the flag by configuring flagMock --
@@ -58,6 +68,23 @@ vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
     return { classify: classifyMock };
   }),
 }));
+
+// --- TaskCriteriaResolver mock: T01 compiler is configurable ------------
+// By default (mockReset in beforeEach) the mock delegates to the REAL
+// compiler so the 54/100 + conjunction tests exercise the real structural
+// parser. Tests that need failure injection override the implementation.
+// The real fn is captured into `compileCriteriaHolder` (vi.hoisted state).
+vi.mock("@/service/aiTaskExecution/TaskCriteriaResolver", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/service/aiTaskExecution/TaskCriteriaResolver")
+  >();
+  compileCriteriaHolder.real = actual.compileCriteria;
+  return {
+    ...actual,
+    compileCriteria: (...args: Parameters<typeof actual.compileCriteria>) =>
+      compileCriteriaMock(...args),
+  };
+});
 
 // --- TaskExecutionCoordinator mock: startManual + freezeContract --------
 vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", () => ({
@@ -252,6 +279,16 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     classifyMock.mockReturnValue("response_only");
     startManualMock.mockReset();
     freezeContractMock.mockReset();
+    // T01: default the compiler mock to the REAL implementation — most tests
+    // exercise the real structural parser. Tests that need failure injection
+    // override with mockImplementationOnce.
+    compileCriteriaMock.mockReset();
+    compileCriteriaMock.mockImplementation(
+      (input: Parameters<
+        NonNullable<typeof compileCriteriaHolder.real>
+      >[0]) =>
+        compileCriteriaHolder.real!(input)
+    );
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
@@ -466,5 +503,241 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     );
     expect(captured!.taskExecutionBinding).toBeDefined();
     expect(captured!.taskExecutionBinding!.executionId).toBe("exec-v");
+  });
+
+  // --- T01: compile usable contracts on ordinary manual submissions -------
+
+  it("T01 flag-on + task_best_effort: freezes a best_effort contract with REAL derived criteria before startManual (FR-19/01)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    freezeContractMock.mockImplementation((input: {
+      mode: string;
+      criteria: readonly { id: string; kind: string; required: boolean }[];
+    }) => ({
+      schemaVersion: 1 as const,
+      contractId: "contract-be",
+      contractHash: "hash-be",
+      objective: "objective",
+      sourceUserMessageId: "user-1",
+      approvedSourceMessageIds: ["user-1"],
+      mode: input.mode as "best_effort",
+      criteria: input.criteria,
+    }));
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-t01",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-t01",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 100 qualifying contacts to campaign camp-1"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    // T01: the best-effort route NOW freezes a contract (was skipped before)
+    // with real derived criteria — a record_count for "Save 100 contacts".
+    expect(freezeContractMock).toHaveBeenCalledTimes(1);
+    const freezeInput = freezeContractMock.mock.calls[0][0] as {
+      mode: string;
+      approvedSourceContents: Record<string, string>;
+      criteria: readonly {
+        kind: string;
+        minimum?: number;
+        required: boolean;
+      }[];
+    };
+    expect(freezeInput.mode).toBe("best_effort");
+    // Real compiler output: the record_count criterion for the 100-contact
+    // request, not `[]`.
+    const rc = freezeInput.criteria.find((c) => c.kind === "record_count");
+    expect(rc).toBeDefined();
+    expect(rc!.minimum).toBe(100);
+    expect(rc!.required).toBe(true);
+    // T17 offset-validation hook: approvedSourceContents carries the REAL
+    // message text keyed by the saved user message ID.
+    expect(freezeInput.approvedSourceContents["user-1"]).toBe(
+      "Save 100 qualifying contacts to campaign camp-1"
+    );
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    expect(captured!.taskExecutionBinding).toBeDefined();
+  });
+
+  it("T01 flag-on + contract compilation throws: startManual STILL called with contract=null (controlled non-success, not bypass)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    compileCriteriaMock.mockImplementationOnce(() => {
+      throw new Error("compiler invariant violated");
+    });
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-degraded",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-degraded",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 50 contacts"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    // Controlled non-success (NFR-12): enrollment is NOT bypassed —
+    // startManual still ran (identity registered, Stop available). The null
+    // contract means the controller can never verify (never
+    // verified_complete).
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    expect(startManualMock).toHaveBeenCalledWith(
+      expect.objectContaining({ contract: null })
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBeDefined();
+    expect(captured!.taskExecutionBinding!.executionId).toBe("exec-degraded");
+  });
+
+  it("T01 flag-on + freezeContract throws (offset violation): startManual STILL called with contract=null (controlled non-success)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    freezeContractMock.mockImplementation(() => {
+      throw new Error("criterion offset beyond approved content length");
+    });
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-degraded-2",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-degraded-2",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Extract 20 leads"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    // Same controlled non-success: compile succeeded but freeze rejected —
+    // enrollment proceeds with contract=null, never bypassed.
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    expect(startManualMock).toHaveBeenCalledWith(
+      expect.objectContaining({ contract: null })
+    );
+    expect(captured!.taskExecutionBinding).toBeDefined();
+  });
+
+  it("T01 conjunction regression: 'Find 20 leads, save them, and draft an email' freezes 3 criteria (AC-20)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    freezeContractMock.mockImplementation((input: {
+      mode: string;
+      criteria: readonly { id: string; kind: string }[];
+    }) => ({
+      schemaVersion: 1 as const,
+      contractId: "contract-conj",
+      contractHash: "hash-conj",
+      objective: "objective",
+      sourceUserMessageId: "user-1",
+      approvedSourceMessageIds: ["user-1"],
+      mode: input.mode as "best_effort",
+      criteria: input.criteria,
+    }));
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-conj",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-conj",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Find 20 leads, save them, and draft an email"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(freezeContractMock).toHaveBeenCalledTimes(1);
+    const freezeInput = freezeContractMock.mock.calls[0][0] as {
+      criteria: readonly { id: string; kind: string; required: boolean }[];
+    };
+    // AC-20: a multi-part request compiles a conjunction of criteria — one
+    // per clause, all required.
+    expect(freezeInput.criteria).toHaveLength(3);
+    const ids = freezeInput.criteria.map((c) => c.id);
+    expect(new Set(ids).size).toBe(3);
+    for (const c of freezeInput.criteria) {
+      expect(c.required).toBe(true);
+    }
+  });
+
+  it("T01 flag-off: compiler never runs (no freeze, no compile) — byte-identical legacy behavior", async () => {
+    flagMock.mockReturnValue(false);
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 100 contacts"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    // Flag-off: the whole enrollment block is skipped — compile and freeze
+    // are never invoked.
+    expect(compileCriteriaMock).not.toHaveBeenCalled();
+    expect(freezeContractMock).not.toHaveBeenCalled();
+    expect(startManualMock).not.toHaveBeenCalled();
+    expect(captured!.taskExecutionBinding).toBeUndefined();
   });
 });

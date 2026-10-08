@@ -119,6 +119,8 @@ import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
 import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
+import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
+import type { TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
 import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { makeModuleBackedStore } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
@@ -1347,26 +1349,64 @@ export class AIChatQueryEngine {
             const submissionId =
               request.submissionId ??
               `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            // Freeze a contract for verified routes (FR-19/04). Best-effort
-            // routes run without a contract — the controller treats them as
-            // degraded task_verified (criteria advisory; finish_response
-            // acceptable at response_end). Slice 2 ships best_effort without
-            // caller-supplied criteria; the contract service throws on zero
-            // required criteria for verified mode, so only freeze when we
-            // have a verified route with real criteria. A verified route
-            // without caller-supplied criteria is NOT enrolled for consult
-            // in Slice 2 — the contract service would throw, and enrolling
-            // best_effort without a contract yields no criteria to consult.
-            const shouldFreezeContract = route === "task_verified";
-            const contract = shouldFreezeContract
-              ? coordinator.freezeContract({
+            // T01 (FR-19): derive real criteria from the actual user message
+            // for BOTH best-effort and verified routes, then freeze a
+            // source-anchored contract before startManual dispatches (FR-01).
+            // The compiler is structural (no LLM, no authorization
+            // broadening); every criterion carries sourceRefs validated by
+            // freeze() against the approved content (T17's offset check).
+            // Best-effort with zero required criteria is a legal shape
+            // (FR-04), but the compiler always derives at least one criterion
+            // for actionable requests so the controller has unmet work to
+            // continue on (AC-02/18). Ambiguous scope emits a qualitative
+            // fallback criterion that can never pass without a checker —
+            // the request stays explicitly unverified (AC-21).
+            // T15: wire an approved-task-template signal here when the
+            // template entity lands; the compiler already handles
+            // `task_verified` via the same structural path.
+            const shouldFreezeContract =
+              route === "task_verified" || route === "task_best_effort";
+            let contract: TaskCompletionContract | null = null;
+            if (shouldFreezeContract) {
+              const mode: "verified" | "best_effort" =
+                route === "task_verified" ? "verified" : "best_effort";
+              try {
+                const compiled = compileCriteria({
+                  userMessage: request.message || "",
+                  sourceUserMessageId: savedUser.messageId,
+                  route,
+                  approvedSourceMessageIds: [savedUser.messageId],
+                });
+                contract = coordinator.freezeContract({
                   objective: request.message.slice(0, 20000) || "User task",
                   sourceUserMessageId: savedUser.messageId,
                   approvedSourceMessageIds: [savedUser.messageId],
-                  mode: "verified",
-                  criteria: [],
-                })
-              : null;
+                  approvedSourceContents: {
+                    [savedUser.messageId]: request.message || "",
+                  },
+                  mode,
+                  criteria: compiled.criteria,
+                });
+                if (compiled.ambiguityReason) {
+                  console.log(
+                    `[ai-chat-v2] task criteria ambiguous (execution scope unstructured): ${compiled.ambiguityReason}`
+                  );
+                }
+              } catch (compileErr) {
+                // T01 / NFR-12: contract-generation failure must not bypass
+                // enrollment. Fall through with contract=null — startManual
+                // still runs (identity registered, Stop available), but the
+                // null contract means the controller can never verify (no
+                // required criteria → allRequiredPass=false → never
+                // verified_complete). This is a controlled non-success, not
+                // a silent legacy fallback.
+                console.error(
+                  "[ai-chat-v2] task criteria compilation failed:",
+                  compileErr
+                );
+                contract = null;
+              }
+            }
             const startResult = await coordinator.startManual({
               conversationId,
               sourceUserMessageId: savedUser.messageId,
