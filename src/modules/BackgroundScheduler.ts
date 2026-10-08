@@ -441,19 +441,35 @@ export class BackgroundScheduler extends BaseDb {
   }
 
   /**
+   * Whether the global scheduler (ScheduleManager) is running. The top-chip
+   * Stop/Start on the schedule page only toggles ScheduleManager; this
+   * background poller has its own isRunning flag, so automatic paths must
+   * consult the global state or jobs keep auto-firing while the UI shows
+   * "Stopped". Manual Run Now paths intentionally bypass this check.
+   */
+  private isGlobalSchedulerRunning(): boolean {
+    try {
+      return this.scheduleManager.getSchedulerStatus().isRunning;
+    } catch (error) {
+      console.error("Failed to read global scheduler status:", error);
+      return true;
+    }
+  }
+
+  /**
    * Poll due interval-trigger scheduled loops, atomically claim each
    * occurrence, and execute it through the chat-bound runner (technical-design
    * §16). The transactional claim closes the double-poll race; overlapping or
    * pending runs are coalesced rather than duplicated.
    */
   private async processIntervalTasks(): Promise<void> {
-    if (!this.isRunning) return;
+    if (!this.isRunning || !this.isGlobalSchedulerRunning()) return;
     try {
       const now = new Date();
       const due =
         await this.getIntervalScheduleModel().findDueIntervalSchedules(now, 50);
       for (const schedule of due) {
-        if (!this.isRunning) break;
+        if (!this.isRunning || !this.isGlobalSchedulerRunning()) break;
         await this.processIntervalSchedule(schedule);
       }
     } catch (error) {
@@ -527,6 +543,7 @@ export class BackgroundScheduler extends BaseDb {
    * Process cron-based scheduled tasks
    */
   private async processScheduledTasks(): Promise<void> {
+    if (!this.isRunning || !this.isGlobalSchedulerRunning()) return;
     try {
       this.lastCheckTime = new Date();
 
@@ -535,7 +552,7 @@ export class BackgroundScheduler extends BaseDb {
         await this.scheduleTaskModel.getSchedulesReadyToExecute();
 
       for (const schedule of readySchedules) {
-        if (!this.isRunning) break;
+        if (!this.isRunning || !this.isGlobalSchedulerRunning()) break;
 
         // Add to execution queue
         this.addToExecutionQueue({
@@ -562,6 +579,7 @@ export class BackgroundScheduler extends BaseDb {
    * Process dependency-based schedules
    */
   private async processDependencyQueue(): Promise<void> {
+    if (!this.isRunning || !this.isGlobalSchedulerRunning()) return;
     try {
       // This is handled by the ScheduleManager
       // We just need to check for any dependency-triggered schedules
@@ -571,6 +589,7 @@ export class BackgroundScheduler extends BaseDb {
         );
 
       for (const schedule of dependencySchedules) {
+        if (!this.isRunning || !this.isGlobalSchedulerRunning()) break;
         if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE)
           continue;
 
@@ -600,6 +619,7 @@ export class BackgroundScheduler extends BaseDb {
   private async processExecutionQueue(): Promise<void> {
     if (
       !this.isRunning ||
+      !this.isGlobalSchedulerRunning() ||
       this.runningExecutions.size >= this.maxConcurrentExecutions
     ) {
       return;
@@ -619,6 +639,14 @@ export class BackgroundScheduler extends BaseDb {
     ) {
       const queueItem = this.executionQueue.shift();
       if (!queueItem) break;
+
+      // Stop draining automatic items once the global scheduler is stopped.
+      // Re-queue the item so it can run after the next Start. Manual Run Now
+      // bypasses this queue via ScheduleManager.executeSchedule.
+      if (!this.isRunning || !this.isGlobalSchedulerRunning()) {
+        this.executionQueue.unshift(queueItem);
+        return;
+      }
 
       // Check if schedule is still active
       const schedule = await this.scheduleTaskModel.getScheduleById(
