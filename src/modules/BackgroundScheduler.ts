@@ -451,8 +451,10 @@ export class BackgroundScheduler extends BaseDb {
     try {
       return this.scheduleManager.getSchedulerStatus().isRunning;
     } catch (error) {
+      // Fail closed: on unknown global state, automatic paths stop firing
+      // rather than running while the UI may show "Stopped".
       console.error("Failed to read global scheduler status:", error);
-      return true;
+      return false;
     }
   }
 
@@ -919,7 +921,10 @@ export class BackgroundScheduler extends BaseDb {
   }
 
   /**
-   * Manually trigger a schedule execution
+   * Queue a manual trigger for a schedule. Unlike
+   * ScheduleManager.executeSchedule (immediate), this goes through the
+   * automatic execution queue, so it waits until the global scheduler is
+   * running again when queued while stopped.
    */
   async triggerSchedule(scheduleId: number): Promise<void> {
     try {
