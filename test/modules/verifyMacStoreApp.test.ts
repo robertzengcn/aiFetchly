@@ -34,6 +34,8 @@ const MAIN_ENTITLEMENTS = {
   "com.apple.security.network.client": true,
   "com.apple.security.files.user-selected.read-write": true,
   "com.apple.security.files.bookmarks.app-scope": true,
+  "com.apple.application-identifier": "22RY733FNY.com.aifetchly.desktop",
+  "com.apple.developer.team-identifier": "22RY733FNY",
 };
 
 const CHILD_ENTITLEMENTS = {
@@ -131,7 +133,7 @@ describe("Mac App Store application verifier", (): void => {
 
   it("rejects a main application without App Sandbox", (): void => {
     const appPath = createApplicationFixture(tempDirectory);
-    const mainEntitlements: Record<string, boolean> = {
+    const mainEntitlements: Record<string, PlistValue> = {
       ...MAIN_ENTITLEMENTS,
     };
     delete mainEntitlements["com.apple.security.app-sandbox"];
@@ -146,7 +148,7 @@ describe("Mac App Store application verifier", (): void => {
 
   it("rejects a main application without outgoing network access", (): void => {
     const appPath = createApplicationFixture(tempDirectory);
-    const mainEntitlements: Record<string, boolean> = {
+    const mainEntitlements: Record<string, PlistValue> = {
       ...MAIN_ENTITLEMENTS,
     };
     delete mainEntitlements["com.apple.security.network.client"];
@@ -157,6 +159,36 @@ describe("Mac App Store application verifier", (): void => {
         createDependencies({ mainEntitlements })
       )
     ).to.throw("com.apple.security.network.client");
+  });
+
+  it("rejects a main application without its signed application identifier", (): void => {
+    const appPath = createApplicationFixture(tempDirectory);
+    const mainEntitlements: Record<string, PlistValue> = {
+      ...MAIN_ENTITLEMENTS,
+    };
+    delete mainEntitlements["com.apple.application-identifier"];
+
+    expect(() =>
+      verifier.verifyMacStoreApp(
+        appPath,
+        createDependencies({ mainEntitlements })
+      )
+    ).to.throw("com.apple.application-identifier");
+  });
+
+  it("rejects a main application without its signed team identifier", (): void => {
+    const appPath = createApplicationFixture(tempDirectory);
+    const mainEntitlements: Record<string, PlistValue> = {
+      ...MAIN_ENTITLEMENTS,
+    };
+    delete mainEntitlements["com.apple.developer.team-identifier"];
+
+    expect(() =>
+      verifier.verifyMacStoreApp(
+        appPath,
+        createDependencies({ mainEntitlements })
+      )
+    ).to.throw("com.apple.developer.team-identifier");
   });
 
   it("rejects a helper that does not inherit its sandbox", (): void => {
