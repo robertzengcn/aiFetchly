@@ -454,7 +454,12 @@ export class EmailReplyDraftGenerationService {
       now: new Date(),
       normalizedMessageId: message.normalizedMessageId,
     });
-    incrementReplyMetric("reservation_outcome", { outcome: reservation.status });
+    incrementReplyMetric(
+      "reservation_outcome",
+      reservation.status === "blocked"
+        ? { outcome: "blocked", code: reservation.code }
+        : { outcome: reservation.status }
+    );
     if (reservation.status !== "acquired") {
       if (reservation.status === "reusable") {
         // A sibling already holds an eligible draft (B08) — reuse it by ID
@@ -486,6 +491,7 @@ export class EmailReplyDraftGenerationService {
             );
           } catch (auditError) {
             // B09: audit persistence failure STOPS the work.
+            incrementReplyMetric("audit_failure", { stage: "reuse" });
             const auditErrMsg =
               auditError instanceof Error
                 ? auditError.message
@@ -613,6 +619,7 @@ export class EmailReplyDraftGenerationService {
       } catch (auditError) {
         // B09: audit persistence failure STOPS the work — do not return a
         // successful audited outcome. Surface the persistence error instead.
+        incrementReplyMetric("audit_failure", { stage: "reuse" });
         const auditErrMsg =
           auditError instanceof Error ? auditError.message : String(auditError);
         return {
@@ -966,6 +973,7 @@ export class EmailReplyDraftGenerationService {
           reusableNow
         );
       } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "reuse" });
         const auditErrMsg =
           auditError instanceof Error ? auditError.message : String(auditError);
         return {
@@ -1620,6 +1628,7 @@ export class EmailReplyDraftGenerationService {
           { stage: "pre_draft", code }
         );
       } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "pre_draft" });
         const auditErrMsg =
           auditError instanceof Error ? auditError.message : String(auditError);
         return {
@@ -1687,6 +1696,7 @@ export class EmailReplyDraftGenerationService {
         { stage: "pre_draft", code }
       );
     } catch (auditError) {
+      incrementReplyMetric("audit_failure", { stage: "pre_draft" });
       const auditErrMsg =
         auditError instanceof Error ? auditError.message : String(auditError);
       return {

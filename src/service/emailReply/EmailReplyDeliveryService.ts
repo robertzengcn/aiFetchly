@@ -435,6 +435,7 @@ export class EmailReplyDeliveryService {
             "Forced-freshness window exceeded twice; reply state could not be settled (§9.3)"
           );
         } catch (auditError) {
+          incrementReplyMetric("audit_failure", { stage: "pre_send" });
           const auditErrMsg =
             auditError instanceof Error ? auditError.message : String(auditError);
           throw new SendPolicyRejection(
@@ -649,6 +650,7 @@ export class EmailReplyDeliveryService {
           `Detection probe threw: ${errMsg}`
         );
       } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "pre_send" });
         const auditErrMsg =
           auditError instanceof Error ? auditError.message : String(auditError);
         throw new SendPolicyRejection(
@@ -694,6 +696,7 @@ export class EmailReplyDeliveryService {
         reason
       );
     } catch (auditError) {
+      incrementReplyMetric("audit_failure", { stage: "pre_send" });
       const auditErrMsg =
         auditError instanceof Error ? auditError.message : String(auditError);
       throw new SendPolicyRejection(

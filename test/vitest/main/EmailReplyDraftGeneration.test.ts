@@ -3350,7 +3350,11 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     expect(requests).toHaveLength(0);
 
     const counters = drainCountersForTest();
-    expect(counters.get("reservation_outcome{outcome=blocked}")).toBe(1);
+    // T12/FR-039: the blocked outcome carries the typed policy code so
+    // duplicate denials are distinguishable per code (already_replied here).
+    expect(
+      counters.get("reservation_outcome{code=already_replied,outcome=blocked}")
+    ).toBe(1);
     // No guard row was created for a blocked cluster.
     const guardRow = await guardModule.findByReplyKey(4252, `row:${messageId}`);
     expect(guardRow).toBeNull();
@@ -3471,7 +3475,10 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     const counters = drainCountersForTest();
     expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(1);
     expect(counters.get("reservation_outcome{outcome=reusable}")).toBe(1);
-    expect(counters.get("reservation_outcome{outcome=blocked}")).toBe(1);
+    // T12/FR-039: the blocked outcome carries the typed policy code.
+    expect(
+      counters.get("reservation_outcome{code=already_replied,outcome=blocked}")
+    ).toBe(1);
     expect(
       counters.get("reservation_outcome{outcome=generation_in_progress}")
     ).toBe(1);
