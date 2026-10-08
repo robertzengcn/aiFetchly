@@ -1026,6 +1026,26 @@ describe("ToolResultModule — retrieval-work allowance", () => {
     expect((await mod.reserveRetrievalCall(key)).ok).toBe(false);
   });
 
+  it("admits concurrent reads while the allowance still has room", async () => {
+    const mod = await makeModule();
+    const scope = await mod.ensureScope("prof-1", "suite-conv-40");
+    const key = {
+      profileId: "prof-1",
+      conversationId: "suite-conv-40",
+      outputEpoch: scope.outputEpoch,
+      agentId: "",
+      turnId: "turn-parallel",
+    };
+    // One model step can issue several tool_result_read calls together.
+    // A lost optimistic update must be retried, not reported as exhaustion.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => mod.reserveRetrievalCall(key))
+    );
+    expect(results.every((result) => result.ok)).toBe(true);
+    const usage = await mod.retrievalUsage(key);
+    expect(usage.calls).toBe(8);
+  });
+
   it("tracks remaining returned-token allowance", async () => {
     const mod = await makeModule();
     const scope = await mod.ensureScope("prof-1", "suite-conv-41");

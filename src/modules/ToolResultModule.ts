@@ -644,26 +644,54 @@ export class ToolResultModule extends BaseModule {
     row: AIToolOutputRetrievalBudgetEntity,
     maxCalls: number
   ): Promise<{ ok: true; row: AIToolOutputRetrievalBudgetEntity } | { ok: false }> {
-    // BOTH ceilings gate admission. Checking only the call count would let a
-    // turn spend up to maxCalls * readMaxTokens tokens - twice the documented
-    // per-turn allowance - and the token cap would never be enforced at all.
-    if (row.reservedCalls + row.settledCalls >= maxCalls) return { ok: false };
-    if (row.settledTokens >= TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn) {
-      return { ok: false };
+    // A lost version check is not an empty allowance. Parallel tool_result_read
+    // calls in one model step all observe the same row; only one update lands.
+    // The others must reload and try again, or a sibling read is refused with
+    // RETRIEVAL_BUDGET_EXHAUSTED while calls and tokens remain.
+    let current = row;
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      if (!this.retrievalAllowanceOpen(current, maxCalls)) return { ok: false };
+      const applied = await this.model.reserveRetrievalCalls({
+        profileId: current.profileId,
+        conversationId: current.conversationId,
+        outputEpoch: current.outputEpoch,
+        agentId: current.agentId,
+        turnId: current.turnId,
+        expectedVersion: current.version,
+        additionalCalls: 1,
+      });
+      if (applied) {
+        current.reservedCalls += 1;
+        current.version += 1;
+        return { ok: true, row: current };
+      }
+      const fresh = await this.model.findRetrievalBudget({
+        profileId: current.profileId,
+        conversationId: current.conversationId,
+        outputEpoch: current.outputEpoch,
+        agentId: current.agentId,
+        turnId: current.turnId,
+      });
+      if (!fresh) return { ok: false };
+      current = fresh;
     }
-    const applied = await this.model.reserveRetrievalCalls({
-      profileId: row.profileId,
-      conversationId: row.conversationId,
-      outputEpoch: row.outputEpoch,
-      agentId: row.agentId,
-      turnId: row.turnId,
-      expectedVersion: row.version,
-      additionalCalls: 1,
-    });
-    if (!applied) return { ok: false };
-    row.reservedCalls += 1;
-    row.version += 1;
-    return { ok: true, row };
+    return { ok: false };
+  }
+
+  /**
+   * BOTH ceilings gate admission. Checking only the call count would let a
+   * turn spend up to maxCalls * readMaxTokens tokens - twice the documented
+   * per-turn allowance - and the token cap would never be enforced at all.
+   */
+  private retrievalAllowanceOpen(
+    row: AIToolOutputRetrievalBudgetEntity,
+    maxCalls: number
+  ): boolean {
+    if (row.reservedCalls + row.settledCalls >= maxCalls) return false;
+    if (row.settledTokens >= TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn) {
+      return false;
+    }
+    return true;
   }
 
   /** Settle actual returned tokens after a reserved call completes. */
@@ -824,15 +852,8 @@ export class ToolResultModule extends BaseModule {
    * sees, keeping the Module's other methods out of the assembler's reach.
    */
   asLegacyProjectionLookup(): LegacyProjectionLookup {
-    const self = this;
     return {
-      async lookup(input: {
-        profileId: string;
-        sourceRowKeys: readonly string[];
-        outputEpoch?: string;
-      }): Promise<ReadonlyMap<string, LegacyProjection>> {
-        return self.findLegacyProjections(input);
-      },
+      lookup: (input) => this.findLegacyProjections(input),
     };
   }
 }
