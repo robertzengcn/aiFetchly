@@ -275,13 +275,23 @@ export class EmailReplyDetectionService {
       const source = (message.replyDetectionSource ?? "mailbox_flag") as
         | "mailbox_flag"
         | "sent_search";
+      incrementReplyMetric("detection_cache", {
+        hit: true,
+        kind: "persisted_positive",
+      });
       return this.repliedFromCache(source, message.replyMatchedMessageId);
     }
 
     // Step 3 — negative reuse (draft checks only; age 0–60s + matching hash).
     if (!forceRefresh) {
       const cached = this.readCachedNegative(message);
-      if (cached) return cached;
+      if (cached) {
+        incrementReplyMetric("detection_cache", {
+          hit: true,
+          kind: "persisted_negative",
+        });
+        return cached;
+      }
     }
 
     // Step 4 — POP3 / config-unavailable / missing inbound RFC ID → unknown.
@@ -391,6 +401,11 @@ export class EmailReplyDetectionService {
       }
     }
 
+    // Cold miss: no cache entry at all (fresh probe path). The hit-rate for
+    // the in-process layer is computable from the hit/expired counters above
+    // plus this miss counter.
+    incrementReplyMetric("detection_cache", { hit: false, kind: "miss" });
+
     // Single-flight (§7.3): join a live probe for the same context if one
     // exists. A forced send check MAY join a probe begun for the same
     // unchanged context during that send invocation; it must never join a
@@ -486,7 +501,7 @@ export class EmailReplyDetectionService {
       const result = await this.raceProbeAgainstDeadline(
         () =>
           timedReplyStage(
-            "database",
+            "detection",
             (): Promise<ReplyDetectionResult> =>
               this.probeMailbox(
                 message,
@@ -494,7 +509,7 @@ export class EmailReplyDetectionService {
                 normalizedId,
                 configuredSender
               ),
-            { message_id: message.id }
+            { state: "probe" }
           ),
         deadline
       );
