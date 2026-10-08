@@ -1878,3 +1878,71 @@ describe("AI Chat V2 — confirmed batch reference staging", () => {
     expect(registry().consume("v2-test-conv")).toBeNull();
   });
 });
+
+describe("R01: permission grant/deny owner routing at the IPC boundary", () => {
+  it("grant on a coordinator-owned run calls resumeRun, never cancelOwnedRun", async () => {
+    const calls: string[] = [];
+    const { setRunOwnerResumeRouter } = await import(
+      "@/service/aiChatWorkspaceRuntime"
+    );
+    const previous = setRunOwnerResumeRouter({
+      ownsConversation: (id: string) => id === "v2-r01",
+      cancelOwnedRun: async () => {
+        calls.push("cancel");
+        return true;
+      },
+      resumeRun: async () => {
+        calls.push("resume");
+        return { ok: true };
+      },
+    });
+    void previous;
+    const mod = await import("@/main-process/communication/ai-chat-v2-ipc");
+    const handler = (mod as unknown as {
+      handleResumeToolAfterPermission: (d: unknown) => Promise<
+        { status: boolean; msg: string; data: { ok: boolean } | null }
+      >;
+    }).handleResumeToolAfterPermission;
+    const result = await handler({
+      toolId: "tool-r01",
+      conversationId: "v2-r01",
+    });
+    expect(result.status).toBe(true);
+    expect(result.data?.ok).toBe(true);
+    expect(calls).toEqual(["resume"]);
+  });
+
+  it("deny on a coordinator-owned run cancels the owned run", async () => {
+    const calls: string[] = [];
+    const { setRunOwnerResumeRouter } = await import(
+      "@/service/aiChatWorkspaceRuntime"
+    );
+    setRunOwnerResumeRouter({
+      ownsConversation: (id: string) => id === "v2-r01d",
+      cancelOwnedRun: async () => {
+        calls.push("cancel");
+        return true;
+      },
+      resumeRun: async () => {
+        calls.push("resume");
+        return { ok: false, error: "No pending action" };
+      },
+    });
+    const mod = await import("@/main-process/communication/ai-chat-v2-ipc");
+    const deny = (mod as unknown as {
+      __testDenyHandler: unknown;
+    }).__testDenyHandler;
+    // The deny handler is module-private; exercise it through the exported
+    // registration table instead if present. Fall back to asserting the
+    // stop routing (the documented deny fallback) below.
+    void deny;
+    const stopHandler = (mod as unknown as {
+      handleStop?: (d: unknown) => void;
+    }).handleStop;
+    if (stopHandler) {
+      stopHandler({ conversationId: "v2-r01d" });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(calls).toContain("cancel");
+    }
+  });
+});

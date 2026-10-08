@@ -1260,15 +1260,6 @@ export async function handleResumeToolAfterPermission(
   // Review F1 (FR-009): interactive deny on a coordinator-owned run is the
   // owner's cancel — the engine's deny wrapper re-executes outside the
   // owner's lease/capacity and its continuation is unobserved.
-  if (
-    conversationId &&
-    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
-  ) {
-    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
-      conversationId
-    );
-    return ok({ ok: cancelled, handled: true });
-  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1343,6 +1334,33 @@ export async function handleDenyToolPermission(
       ? parsed.conversationId
       : undefined;
 
+  // R01 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's validated cancel — resumeRun's claim validation rejects a stale
+  // tool id, so deny first tries a matching pending action and falls back to
+  // cancellation (the documented deny policy) only when the run is owned.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const validated = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    if (validated.ok) {
+      // The action existed and a resume was queued — convert it to a deny:
+      // cancel the now-queued resume before the tool starts.
+      const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+        conversationId
+      );
+      return ok({ ok: cancelled, handled: true });
+    }
+    // Stale/duplicate deny on an owned run: cancel under the documented
+    // deny-equals-stop policy (idempotent when already terminal).
+    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+      conversationId
+    );
+    return ok({ ok: cancelled, handled: true });
+  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
