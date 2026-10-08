@@ -571,7 +571,8 @@ export class BackgroundScheduler extends BaseDb {
         );
 
       for (const schedule of dependencySchedules) {
-        if (!schedule.is_active) continue;
+        if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE)
+          continue;
 
         // Check if parent schedules have completed
         const parentSchedule = await this.scheduleTaskModel.getParentSchedule(
@@ -623,7 +624,11 @@ export class BackgroundScheduler extends BaseDb {
       const schedule = await this.scheduleTaskModel.getScheduleById(
         queueItem.scheduleId
       );
-      if (!schedule || !schedule.is_active) {
+      if (
+        !schedule ||
+        !schedule.is_active ||
+        schedule.status !== ScheduleStatus.ACTIVE
+      ) {
         continue;
       }
 
@@ -895,8 +900,10 @@ export class BackgroundScheduler extends BaseDb {
         throw new Error(`Schedule ${scheduleId} not found`);
       }
 
-      if (!schedule.is_active) {
-        throw new Error(`Schedule ${scheduleId} is not active`);
+      if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
+        throw new Error(
+          `Schedule ${scheduleId} is not active (status=${String(schedule.status)})`
+        );
       }
 
       this.addToExecutionQueue({

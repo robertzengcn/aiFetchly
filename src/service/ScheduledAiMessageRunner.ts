@@ -32,6 +32,7 @@ import {
   nextFutureOccurrence,
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
+import { ScheduleStatus } from "@/entity/ScheduleTask.entity";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
@@ -128,6 +129,21 @@ export class ScheduledAiMessageRunner {
         scheduleId,
         `AI message task ${taskId} is not active (status: ${task.status}).`
       );
+    }
+
+    if (scheduleId !== undefined) {
+      const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+      if (
+        !schedule ||
+        !schedule.is_active ||
+        schedule.status !== ScheduleStatus.ACTIVE
+      ) {
+        return this.failFast(
+          taskId,
+          scheduleId,
+          `Schedule ${scheduleId} is not active (status: ${String(schedule?.status)}), skipping execution.`
+        );
+      }
     }
 
     const conversationId = await this.ensureV2Conversation(task);
@@ -250,7 +266,7 @@ export class ScheduledAiMessageRunner {
     }
 
     // 4. Schedule must still be active.
-    if (!schedule.is_active) {
+    if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
       return this.finalizeChatRun({
         runId,
         taskId,
