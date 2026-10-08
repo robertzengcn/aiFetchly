@@ -811,3 +811,47 @@ describe("TODO-05: finalization serialization + side effects exactly once", () =
     expect(order.indexOf("assistant-save")).toBeLessThan(order.indexOf("on-turn-terminal"));
   });
 });
+
+describe("R03: durable finalization + Stop arbitration", () => {
+  it("a rejecting durable gate blocks post-terminal side effects (no notification)", async () => {
+    mockSaveAssistantMessage.mockResolvedValue({});
+    mockNotifyShow.mockClear();
+    const engine = createEngineWithFakeLoop(async (input) => ({
+      type: "completed",
+      conversationId: input.conversationId,
+      assistantMessageId: input.assistantMessageId,
+      fullContent: "x",
+      finishReason: "stop",
+    }));
+    let gateError: unknown = null;
+    const outcome = await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-R03a" },
+      eventSink: makeEventCollector().sink,
+      onSegmentDurable: async () => {
+        gateError = new Error("run-row write failed");
+        throw gateError;
+      },
+    });
+    expect(outcome.type).toBe("failed"); // the gate rejection is a safe failure
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockNotifyShow).not.toHaveBeenCalled(); // side effect blocked
+  });
+
+  it("a resolving gate lets post-terminal side effects run (control)", async () => {
+    mockSaveAssistantMessage.mockResolvedValue({});
+    mockNotifyShow.mockClear();
+    const engine = createEngineWithFakeLoop(async (input) => ({
+      type: "completed",
+      conversationId: input.conversationId,
+      assistantMessageId: input.assistantMessageId,
+      fullContent: "x",
+      finishReason: "stop",
+    }));
+    await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-R03b" },
+      eventSink: makeEventCollector().sink,
+      onSegmentDurable: async () => undefined,
+    });
+    await vi.waitFor(() => expect(mockNotifyShow).toHaveBeenCalledTimes(1));
+  });
+});

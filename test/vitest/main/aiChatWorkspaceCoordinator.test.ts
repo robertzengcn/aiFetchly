@@ -318,6 +318,15 @@ function runModel70(): AIChatRunModel {
   return new AIChatRunModel(tmpDir);
 }
 
+
+/** R03: simulate the user's Stop landing on a live (scheduler-active) run. */
+function liveCancel(
+  coordinator: AIChatCoordinator,
+  conversationId: string
+): void {
+  void coordinator.cancelRun({ conversationId });
+}
+
 function request(n: number): Parameters<AIChatCoordinator["startRun"]>[0] {
   return {
     conversationId: `v2-test-${n}`,
@@ -1191,5 +1200,31 @@ describe("AIChatRunEventAdapter", () => {
     );
     await coordinator.cancelRun({ conversationId: "v2-test-80" });
     RunModule.prototype.transition = realTransition;
+  });
+
+  it("R03: Stop during terminal durable writes wins over a completed outcome", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(9);
+    win.register(router);
+    router.select(9, "v2-test-81", 1);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(81));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+    // The user presses Stop while the turn is running.
+    liveCancel(coordinator, "v2-test-81");
+    // The engine then resolves completed (won the internal race).
+    turn.resolve({
+      type: "completed",
+      conversationId: "v2-test-81",
+      assistantMessageId: "a",
+    });
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "cancelled";
+    });
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.status).toBe("cancelled"); // Stop won — never completed
   });
 });

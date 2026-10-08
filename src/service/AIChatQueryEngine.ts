@@ -3299,16 +3299,12 @@ export class AIChatQueryEngine {
       case "failed": {
         const { conversationId, assistantMessageId } = result;
         void redirectToLoginOnAuthExpired(result.error);
-        // Reactive compaction (dev): a budget-preflight rejection means the
-        // context no longer fits — compact it through the SAME bounded
-        // coordinator (trigger "reactive-overflow"), never a secondary
-        // unbounded path. Fire-and-forget; the error below still surfaces.
-        if (
+        // R03: reactive compaction waits for the failure's durable writes
+        // (partial save + run-row gate below) — it previously started
+        // before them, violating the durable-before-effects ordering.
+        const needsReactiveCompaction =
           result.error instanceof RecoverableHistoryError &&
-          result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
-        ) {
-          this.requestReactiveCompaction(conversationId, result.model);
-        }
+          result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE";
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -3346,6 +3342,13 @@ export class AIChatQueryEngine {
         const durableGate = options?.onSegmentDurable ?? this.onSegmentDurableCb;
         if (durableGate) {
           await durableGate(conversationId, "failed");
+        }
+        // R03: reactive compaction (dev) — a budget-preflight rejection means
+        // the context no longer fits — compact through the SAME bounded
+        // coordinator (trigger "reactive-overflow"), never a secondary
+        // unbounded path. Runs AFTER the durable writes (fire-and-forget).
+        if (needsReactiveCompaction) {
+          this.requestReactiveCompaction(conversationId, result.model);
         }
         // Emergency auto-compact: when the turn failed because the context
         // window was exceeded, immediately run a full compact so the next

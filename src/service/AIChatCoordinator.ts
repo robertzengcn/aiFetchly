@@ -583,29 +583,39 @@ export class AIChatCoordinator {
       this.deps.engine.cancelClaimed(conversationId);
       live.resumeClaim = undefined;
       this.deps.engine.stopActiveTurn(conversationId);
+      let durableCancelled = true;
       try {
         await this.deps.runModule.transition(live.runId, "cancelled");
       } catch (err) {
-        console.warn(
-          "[ai-chat-workspace] parked-cancel transition failed for run",
+        durableCancelled = false;
+        console.error(
+          "[ai-chat-workspace] parked-cancel transition FAILED for run",
           live.runId,
           err
         );
+        // R03 (FR-007/017): the durable cancel did NOT commit. Report the
+        // failure honestly and KEEP ownership — the run stays awaiting_* so
+        // restart reconciliation is the authority; dropping ownership here
+        // would let the next send race a row still marked waiting.
+        void this.broadcastRunSummary(conversationId, "run_interrupted");
       }
-      this.finalizeAfterTerminal(conversationId, "cancelled");
-      this.deps.router.sendDetailEvent(
-        live.adapter.wrap({
-          eventType: "cancelled",
+      if (durableCancelled) {
+        this.finalizeAfterTerminal(conversationId, "cancelled");
+        this.deps.router.sendDetailEvent(
+          live.adapter.wrap({
+            eventType: "cancelled",
+            conversationId,
+            fullContent: "",
+          })
+        );
+        live.completion?.resolve({
+          type: "cancelled",
           conversationId,
-          fullContent: "",
-        })
-      );
-      live.completion?.resolve({
-        type: "cancelled",
-        conversationId,
-        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
-      });
-      return { cancelled: true };
+          assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+        });
+        return { cancelled: true };
+      }
+      return { cancelled: false };
     }
 
     return { cancelled: false };
@@ -714,15 +724,19 @@ export class AIChatCoordinator {
             .transition(runId, terminal, this.terminalPatchFor(live))
             .then(() => undefined)
             .catch((transitionErr: unknown) => {
-              console.warn(
-                "[ai-chat-workspace] durable-gate transition failed for run",
+              console.error(
+                "[ai-chat-workspace] durable-gate transition FAILED for run",
                 runId,
                 gatedConversationId,
                 transitionErr
               );
-              // The engine's message writes are the primary durability; a
-              // failed run-row write must not swallow the terminal outcome —
-              // executeDispatch retries the transition and records the error.
+              // R03 (FR-007/023): REJECT — the engine's post-terminal side
+              // effects (notification, dream, compaction, Stop hook) run only
+              // after the required run-row write committed. The engine's
+              // catch persists a safe failure; executeDispatch's final branch
+              // still attempts its own transition and records the error, and
+              // restart reconciliation remains the authority for the row.
+              throw transitionErr;
             });
         if (resumeClaim && !live.cancelRequested) {
           // Stage A §3.5 (FR-024): the claimed continuation runs inside the
@@ -843,6 +857,17 @@ export class AIChatCoordinator {
         return;
       }
 
+      // R03 (FR-008): Stop-vs-completion arbitration — a Stop accepted while
+      // the segment's durable writes were in flight wins over a completed
+      // outcome the engine already classified. After the final commit below,
+      // a later Stop is a no-op (terminal-immutability).
+      if (outcome.type === "completed" && live.cancelRequested) {
+        outcome = {
+          type: "cancelled",
+          conversationId,
+          assistantMessageId: outcome.assistantMessageId,
+        };
+      }
       const finalStatus = this.statusForOutcome(outcome);
       const terminal = live.terminalChunk;
       let errorSummary: string | null = null;
