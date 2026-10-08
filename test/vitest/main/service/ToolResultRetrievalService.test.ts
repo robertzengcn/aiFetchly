@@ -356,6 +356,46 @@ describe("ToolResultRetrievalService — literal search", () => {
     expect(outcome.page.matches).toHaveLength(1);
   });
 
+  it("folds dense repeated hits into separate windows and resumes after them", async () => {
+    const names = Array.from(
+      { length: 80 },
+      (_, i) => `file_${String(i).padStart(3, "0")}.csv`
+    ).join("\n");
+    const target = await storeText(names);
+    const outcome = await service.search({ target, query: "csv", maxMatches: 4 });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.matches.length).toBeGreaterThan(1);
+    expect(outcome.page.matches.length).toBeLessThanOrEqual(4);
+    expect(outcome.page.matches[0].matchCountInWindow).toBeGreaterThan(1);
+    const excerpts = outcome.page.matches.map((match) => match.excerpt);
+    expect(new Set(excerpts).size).toBe(excerpts.length);
+    for (const match of outcome.page.matches) {
+      const decoded = decodeToolResultCursor(match.readCursor, {
+        outputId: target.outputId,
+        mode: "read",
+        revision: target.revision,
+      });
+      expect(decoded.ok).toBe(true);
+      if (decoded.ok) expect(decoded.payload.position).toBe(match.startByte);
+    }
+    expect(outcome.page.nextCursor).not.toBeNull();
+    const second = await service.search({
+      target,
+      query: "csv",
+      maxMatches: 4,
+      cursor: outcome.page.nextCursor ?? undefined,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const firstStarts = new Set(outcome.page.matches.map((match) => match.startByte));
+    const lastStart = outcome.page.matches[outcome.page.matches.length - 1].startByte;
+    for (const match of second.page.matches) {
+      expect(firstStarts.has(match.startByte)).toBe(false);
+      expect(match.startByte).toBeGreaterThan(lastStart);
+    }
+  });
+
   it("rejects an over-long query before scanning", async () => {
     const target = await storeText("x");
     const outcome = await service.search({
@@ -770,6 +810,7 @@ describe("audit regression — T07: search continuation loses no match", () => {
   it("collects every occurrence exactly once while paging", async () => {
     const target = await storeText("hit ".repeat(500));
     const starts: number[] = [];
+    let counted = 0;
     let cursor: string | undefined;
     let complete = false;
 
@@ -782,16 +823,21 @@ describe("audit regression — T07: search continuation loses no match", () => {
       });
       expect(page.ok).toBe(true);
       if (!page.ok) return;
-      starts.push(...page.page.matches.map((m) => m.startByte));
+      for (const match of page.page.matches) {
+        starts.push(match.startByte);
+        counted += match.matchCountInWindow;
+      }
       complete = page.page.scanComplete;
       cursor = page.page.nextCursor ?? undefined;
       if (!cursor && !complete) break;
     }
 
     expect(complete).toBe(true);
-    // The overlap re-read is idempotent: no duplicates, and none lost.
+    // Windows do not repeat, and every raw hit is counted inside one window.
     expect(new Set(starts).size).toBe(starts.length);
-    expect(starts).toHaveLength(500);
+    expect(counted).toBe(500);
+    expect(starts.length).toBeGreaterThan(0);
+    expect(starts.length).toBeLessThan(500);
   });
 });
 

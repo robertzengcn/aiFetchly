@@ -12,6 +12,7 @@
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
@@ -82,20 +83,31 @@ export async function handleToolResultSearch(
   }
 
   const page = outcome.page;
-  const envelope = {
+  const fitted = fitWrappedRetrievalResult({
     success: true,
     output_id: page.outputId,
+    revision: target.target.revision,
     query: parsed.data.query,
     matches: page.matches.map((m) => ({
       start_byte: m.startByte,
       end_byte: m.endByte,
       excerpt: m.excerpt,
       read_cursor: m.readCursor,
+      match_count_in_window: m.matchCountInWindow,
     })),
     scan_complete: page.scanComplete,
     next_cursor: page.nextCursor,
     source_completeness: page.sourceCompleteness,
-  };
+  });
+  const envelope =
+    fitted !== null && typeof fitted === "object"
+      ? (fitted as Record<string, unknown>)
+      : {
+          success: false,
+          error: "RETRIEVAL_PAGE_TOO_LARGE",
+          analysis_complete: false,
+          output_id: page.outputId,
+        };
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
   toolResultMetrics.record("retrieval.search");
   return { success: true, result: envelope };

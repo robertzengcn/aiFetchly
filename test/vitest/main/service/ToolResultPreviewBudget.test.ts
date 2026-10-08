@@ -41,7 +41,8 @@ describe("ToolResultPreviewService", () => {
     expect(utf8ByteLength(result.text)).toBeLessThanOrEqual(
       TOOL_RESULT_CONFIG.previewMaxBytes + 200
     );
-    expect(result.text).toMatch(/saved output reference/i);
+    expect(result.text).toMatch(/output_id/);
+    expect(result.text).toMatch(/next_cursor/);
   });
 
   it("shows head and tail with an explicit omitted-region marker", () => {

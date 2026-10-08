@@ -203,6 +203,12 @@ export interface ToolResultSearchMatch {
   readonly endByte: number;
   readonly excerpt: string;
   readonly readCursor: string;
+  /**
+   * How many literal hits share this excerpt. Dense repeats (a file extension
+   * on every row) collapse into one window instead of one copy of the prefix
+   * per hit.
+   */
+  readonly matchCountInWindow: number;
 }
 
 /** A bounded search response. */

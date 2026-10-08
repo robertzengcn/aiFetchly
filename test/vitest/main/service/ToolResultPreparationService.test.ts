@@ -10,6 +10,12 @@ import { ToolResultPreparationService } from "@/service/toolResult/ToolResultPre
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { toolResultReceiptSchema } from "@/schemas/toolResult";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
+import {
+  retrievalSerializedFits,
+} from "@/service/toolResult/retrievalInlineBound";
+import {
+  encodeToolResultCursor,
+} from "@/service/toolResult/ToolResultCursorCodec";
 import type { TrustedToolOutputContext } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -280,8 +286,9 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
       deps()
     );
     const model = JSON.parse(prepared.modelContent);
-    expect(model.retrieval.read_tool).toBe("tool_result_read");
-    expect(model.retrieval.search_tool).toBe("tool_result_search");
+    expect(model.next.tool).toBe("tool_result_read");
+    expect(model.next.arguments.output_id).toBe(model.output.output_id);
+    expect(model.retrieval).toBeUndefined();
     // A small sample must never read as a complete review.
     expect(model.preview_complete).toBe(false);
     expect(model.output.output_id).toMatch(/^out_/);
@@ -295,6 +302,67 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
     expect(prepared.modelContent).not.toContain("tool_result_read");
     // The reference is still preserved locally for the user to inspect.
     expect(prepared.receipt?.outputs).toHaveLength(1);
+  });
+
+  it("keeps a tool_result_search page inline instead of saving another output", async () => {
+    const outputId = `out_${"ab".repeat(16)}`;
+    const matches = Array.from({ length: 40 }, (_, index) => ({
+      start_byte: index * 24,
+      end_byte: index * 24 + 3,
+      excerpt: `batch-${index}-` + "x".repeat(220),
+      read_cursor: encodeToolResultCursor({
+        outputId,
+        revision: 1,
+        mode: "read",
+        position: index * 24,
+      }),
+      match_count_in_window: 3,
+    }));
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: 20,
+        output: {
+          success: true,
+          output_id: outputId,
+          query: "csv",
+          matches,
+          scan_complete: true,
+          next_cursor: null,
+          source_completeness: "complete",
+        },
+      },
+      deps({ context: context({ toolName: "tool_result_search" }) })
+    );
+    expect(prepared.receipt).toBeUndefined();
+    expect(retrievalSerializedFits(prepared.modelContent)).toBe(true);
+    expect(prepared.modelContent).toContain(outputId);
+    expect(prepared.modelContent).not.toContain("RETRIEVAL_PAGE_TOO_LARGE");
+    const artifactsRoot = path.join(root, "tool-results");
+    expect(fs.existsSync(artifactsRoot) ? fs.readdirSync(artifactsRoot).length : 0).toBe(0);
+  });
+
+  it("keeps a small tool_result_read page inline with its text", async () => {
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: 4,
+        output: {
+          output_id: `out_${"cd".repeat(16)}`,
+          text: "batch150.csv",
+          start_byte: 0,
+          end_byte: 12,
+          total_bytes: 12,
+          complete: true,
+          next_cursor: null,
+          source_completeness: "complete",
+        },
+      },
+      deps({ context: context({ toolName: "tool_result_read" }) })
+    );
+    expect(prepared.receipt).toBeUndefined();
+    expect(prepared.modelContent).toContain("batch150.csv");
+    expect(prepared.modelContent).not.toContain("RETRIEVAL_PAGE_TOO_LARGE");
   });
 
   it("is idempotent for a repeated delivery of the same execution (AC-25)", async () => {

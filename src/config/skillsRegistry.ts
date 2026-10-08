@@ -1307,10 +1307,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: TOOL_RESULT_READ_TOOL_NAME,
     description:
-      "Read a bounded page of a large saved tool result by output_id (given in a tool result receipt). " +
-      "Returns a page of text plus a next_cursor; keep passing the cursor until complete is true. " +
-      "The receipt's preview is only a sample, so read before concluding a large result does not contain " +
-      "something. If you stop reading early, say so rather than claiming you reviewed the whole output. " +
+      "Read the next page of a large saved tool result. " +
+      "When a receipt has preview_complete false, call this with the output_id in next.arguments. " +
+      "Then pass that page's next_cursor back to this tool until complete is true. " +
+      "The receipt preview is only a sample. If you stop before complete is true, say the review is partial. " +
+      "Use this to walk a list. Do not search for a token that appears on every row. " +
       "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
     parameters: {
       type: "object",
@@ -1361,10 +1362,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: TOOL_RESULT_SEARCH_TOOL_NAME,
     description:
-      "Search a large saved tool result for a literal phrase (1-200 chars) by output_id. " +
-      "Returns bounded matches with read cursors. No-match is final only when scan_complete is true; " +
-      "otherwise resume with next_cursor. scan_complete refers to the saved bytes only - if " +
-      "source_completeness is 'partial', the producer itself truncated and absence cannot be concluded. " +
+      "Search a saved tool result for one specific literal phrase that is not already in the preview. " +
+      "Page through a list with tool_result_read instead of searching for a token on every row, " +
+      "such as a file extension or a repeated field name. " +
+      "Returns bounded windows with read cursors and match_count_in_window. " +
+      "No-match is final only when scan_complete is true; otherwise resume with next_cursor. " +
+      "scan_complete refers to the saved bytes only - if source_completeness is 'partial', " +
+      "the producer itself truncated and absence cannot be concluded. " +
       "The query is literal text, never a regular expression.",
     parameters: {
       type: "object",
