@@ -855,3 +855,45 @@ describe("R03: durable finalization + Stop arbitration", () => {
     await vi.waitFor(() => expect(mockNotifyShow).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("R06: stopping a paused question emits the compatibility terminal", () => {
+  it("the pending sink receives exactly one cancelled event on Stop", async () => {
+    const listener = makeLifecycleListener();
+    const engine = createEngineWithFakeLoop((input) =>
+      Promise.resolve({
+        type: "paused_for_plan_question",
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-q6",
+          questionId: "q6",
+          planId: "p6",
+          eventSink: { emit: () => undefined },
+          lifecycle: listener,
+        },
+      })
+    );
+    const compatEvents: AIChatQueryEvent[] = [];
+    const compatSink = { emit: (e: AIChatQueryEvent) => { compatEvents.push(e); } };
+    const outcome = await engine.runTurn({
+      request: { message: "plan", conversationId: "v2-R06", mode: "plan" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(outcome.type).toBe("paused_for_plan_question");
+    // The engine side-mapped the ORIGINAL submission sink; simulate that by
+    // registering the compat sink as the pending destination.
+    (engine as unknown as {
+      pendingSinks: Map<string, { emit: (e: AIChatQueryEvent) => void }>;
+    }).pendingSinks.set("v2-R06", compatSink);
+
+    engine.stopActiveTurn("v2-R06");
+    const cancelled = compatEvents.filter((e) => e.type === "cancelled");
+    expect(cancelled).toHaveLength(1);
+    expect(engine.getConversationRuntimeStatus("v2-R06")).toBe("idle");
+  });
+});

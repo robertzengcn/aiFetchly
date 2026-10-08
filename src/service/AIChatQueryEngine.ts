@@ -2445,12 +2445,17 @@ export class AIChatQueryEngine {
     }
     const pendingPlanQuestion = this.pendingPlanQuestions.get(conversationId);
     if (pendingPlanQuestion) {
+      // R06 (FR-013/015): capture the sink BEFORE deleting the map entry —
+      // delete-then-read emitted nothing, so compatibility callers waiting
+      // on the pending sink never received the cancelled terminal.
+      const questionSink =
+        this.pendingSinks.get(conversationId) ?? pendingPlanQuestion.eventSink;
       this.pendingPlanQuestions.delete(conversationId);
       this.pendingSinks.delete(conversationId);
       this.runStreamModes.delete(conversationId);
       this.stopHooksDispatched.delete(conversationId);
       pendingPlanQuestion.abortController.abort();
-      this.pendingSinks.get(conversationId)?.emit({
+      questionSink?.emit({
         type: "cancelled",
         conversationId: pendingPlanQuestion.conversationId,
         messageId: pendingPlanQuestion.assistantMessageId,
@@ -2520,6 +2525,8 @@ export class AIChatQueryEngine {
     const claimed = this.claimedPending.get(conversationId);
     if (!claimed) return false;
     this.claimedPending.delete(conversationId);
+    this.runStreamModes.delete(conversationId);
+    this.stopHooksDispatched.delete(conversationId);
     claimed.pending.abortController.abort();
     const sink = this.takePendingSink(conversationId);
     sink.emit({
