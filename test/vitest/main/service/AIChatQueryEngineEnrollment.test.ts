@@ -132,6 +132,9 @@ vi.mock("@/modules/OutboundEmailIntentModule", () => ({
 const mockSaveUserMessage = vi
   .fn()
   .mockResolvedValue({ messageId: "user-1" });
+const mockSaveUserMessageIfAbsent = vi
+  .fn()
+  .mockResolvedValue({ messageId: "scheduled-user-1-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
 const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
@@ -144,6 +147,10 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
       saveUserMessage: mockSaveUserMessage,
+      // T02: the scheduled path uses saveUserMessageIfAbsent (stable id +
+      // insert-if-absent) so a crash-retry does not duplicate the
+      // transcript row. The interactive path still uses saveUserMessage.
+      saveUserMessageIfAbsent: mockSaveUserMessageIfAbsent,
       getConversationMessages: mockGetConversationMessages,
       getRecentMessages: mockGetRecentMessages,
       saveAssistantMessage: mockSaveAssistantMessage,
@@ -739,5 +746,130 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     expect(freezeContractMock).not.toHaveBeenCalled();
     expect(startManualMock).not.toHaveBeenCalled();
     expect(captured!.taskExecutionBinding).toBeUndefined();
+  });
+
+  // --- T02 (Option A): caller-supplied scheduled binding ------------------
+
+  it("T02 flag-on + scheduledContext + taskExecutionBinding: engine uses caller's binding (no startManual), threads it into loopInput", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    // The scheduled runner builds the binding via enrollScheduledExecution
+    // (with executionKind: "scheduled") and passes it into submitMessage.
+    // The engine adopts it (the scheduled init block at the top of
+    // submitMessage) and does NOT call startManual — no double-enrollment.
+    const callerBinding: LoopTaskExecutionBinding = {
+      executionId: "exec-scheduled-engine",
+      executionKind: "scheduled",
+      policyAccepted: true,
+      consult: vi.fn().mockResolvedValue({
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode: "NO_PROGRESS",
+        evidenceIds: [],
+        summary: "partial",
+        remainingWork: [],
+      }),
+      reserveContinuation: vi.fn(),
+      reserveProviderAttempt: vi.fn(),
+      reserveToolExecution: vi.fn(),
+      reconcileTokens: vi.fn(),
+      addActiveRuntime: vi.fn(),
+      persistBudget: vi.fn(),
+      recordDecision: vi.fn(),
+      recordToolRoundProgress: vi.fn(),
+      recordAssistantTextProgress: vi.fn(),
+    } as unknown as LoopTaskExecutionBinding;
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 100 qualifying contacts to campaign camp-1"),
+      eventSink: { emit: vi.fn() } as never,
+      scheduledContext: {
+        source: "scheduled_loop",
+        taskId: 1,
+        scheduleId: 1,
+        runId: 1,
+        occurrence: 1,
+        scheduledFor: "2026-10-05T10:00:00.000Z",
+        catchUp: false,
+        userMessageId: "scheduled-user-1-1",
+        assistantMessageId: "scheduled-assistant-1-1",
+      },
+      taskExecutionBinding: callerBinding,
+    } as never);
+    // The engine adopted the caller's binding — no internal startManual.
+    expect(startManualMock).not.toHaveBeenCalled();
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBe(callerBinding);
+    expect(captured!.taskExecutionBinding!.executionId).toBe(
+      "exec-scheduled-engine"
+    );
+    // D2: the binding carries executionKind "scheduled" so the
+    // completed-case gate no-ops (finalization owned by the runner's
+    // finalizeScheduledPolicyRun).
+    expect(captured!.taskExecutionBinding!.executionKind).toBe("scheduled");
+  });
+
+  it("T02 scheduled binding: completed-case gate does NOT finalize (D2 — runner owns scheduled finalization, no double-finalize)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    const callerBinding: LoopTaskExecutionBinding = {
+      executionId: "exec-scheduled-gate",
+      executionKind: "scheduled",
+      policyAccepted: true,
+      consult: vi.fn().mockResolvedValue({
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode: "NO_PROGRESS",
+        evidenceIds: [],
+        summary: "partial",
+        remainingWork: [],
+      }),
+      reserveContinuation: vi.fn(),
+      reserveProviderAttempt: vi.fn(),
+      reserveToolExecution: vi.fn(),
+      reconcileTokens: vi.fn(),
+      addActiveRuntime: vi.fn(),
+      persistBudget: vi.fn(),
+      recordDecision: vi.fn(),
+      recordToolRoundProgress: vi.fn(),
+      recordAssistantTextProgress: vi.fn(),
+    } as unknown as LoopTaskExecutionBinding;
+    const emit = vi.fn();
+    const { engine } = createEngineCapturingInput(() => {
+      /* capture not needed — assert on emit */
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 100 contacts"),
+      eventSink: { emit } as never,
+      scheduledContext: {
+        source: "scheduled_loop",
+        taskId: 1,
+        scheduleId: 1,
+        runId: 1,
+        occurrence: 1,
+        scheduledFor: "2026-10-05T10:00:00.000Z",
+        catchUp: false,
+        userMessageId: "scheduled-user-1-1",
+        assistantMessageId: "scheduled-assistant-1-1",
+      },
+      taskExecutionBinding: callerBinding,
+    } as never);
+    // The completed-case gate no-ops for scheduled kind → the complete
+    // event carries NO taskOutcome/taskExecutionId/taskReasonCode (the sink
+    // owns the scheduled outcome). A manual-kind binding would have hit
+    // finalizeManualAtCompleteGate; the coordinator mock here returns only
+    // {startManual, freezeContract} (no finalizeManual), so a manual kind
+    // would surface as FINALIZE_THREW — scheduled kind avoids that path
+    // entirely.
+    const completeEvent = emit.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    expect(completeEvent.taskOutcome).toBeUndefined();
+    expect(completeEvent.taskExecutionId).toBeUndefined();
+    expect(completeEvent.taskReasonCode).toBeUndefined();
   });
 });

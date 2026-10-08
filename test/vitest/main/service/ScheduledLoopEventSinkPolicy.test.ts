@@ -40,7 +40,13 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
 });
 
 // --- Controller mock -------------------------------------------------------
-type DecideFn = (candidate: unknown) => Promise<TaskCompletionDecision>;
+// The sink's fallback consult calls controller.decide(candidate, context)
+// with a two-arg signature; typing the mock's second arg as unknown lets
+// the T02 evidence-fallback test assert on the context object.
+type DecideFn = (
+  candidate: unknown,
+  context?: unknown
+) => Promise<TaskCompletionDecision>;
 const decideMock = vi.hoisted(() => vi.fn<DecideFn>());
 
 // --- Binding helper --------------------------------------------------------
@@ -48,7 +54,13 @@ const decideMock = vi.hoisted(() => vi.fn<DecideFn>());
 // carries just that member; cast through unknown because the production
 // TaskCompletionController type has more surface than the stub exercises.
 function makeBinding(
-  overrides?: { decide?: DecideFn; policyAccepted?: boolean }
+  overrides?: {
+    decide?: DecideFn;
+    policyAccepted?: boolean;
+    getDecision?: () => TaskCompletionDecision | null;
+    evidenceService?: { checkCandidate: () => Promise<unknown> };
+    evidenceContext?: { content: string; source: string; sourceRevision: string };
+  }
 ): ScheduledLoopPolicyBinding {
   return {
     executionId: "exec-sink-1",
@@ -62,6 +74,15 @@ function makeBinding(
     // `policyAccepted: false` (or omit the binding) to exercise the blind
     // legacy mapping.
     policyAccepted: overrides?.policyAccepted ?? true,
+    // T02 (D3): slot-first consult + evidence-backed fallback. When
+    // getDecision returns a decision, the sink commits it WITHOUT calling
+    // controller.decide (no double-consult). When it returns null, the
+    // sink falls back to controller.decide WITH evidenceService +
+    // evidenceContext in DecideContext.
+    getDecision: overrides?.getDecision,
+    evidenceService:
+      overrides?.evidenceService as unknown as ScheduledLoopPolicyBinding["evidenceService"],
+    evidenceContext: overrides?.evidenceContext,
   };
 }
 
@@ -219,6 +240,124 @@ describe("ScheduledLoopEventSink — policy DI consult", () => {
     sink.emit(completeEvent());
     const outcome = await sink.waitForTerminalOutcome();
     expect(outcome.kind).toBe("incomplete");
+  });
+
+  // --- T02 (D3): slot-first consult + evidence-backed fallback -------------
+
+  it("T02 slot-first: getDecision returns verified_complete → commits completed WITHOUT calling controller.decide (no double-consult)", async () => {
+    flagMock.mockReturnValue(true);
+    // The loop's in-loop consult already recorded a verified_complete
+    // decision into the shared slot. The sink's complete-event consult
+    // reads the slot first → commits completed → never calls decide (which
+    // could disagree and overwrite a verified_complete with incomplete).
+    const verified = {
+      type: "finish" as const,
+      outcome: "verified_complete" as const,
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: [],
+      summary: "100/100 contacts saved",
+      remainingWork: [],
+    };
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ getDecision: () => verified })
+    );
+    sink.emit(completeEvent());
+    // Slot-first commit is synchronous (no consult promise to await).
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("completed");
+    expect(decideMock).not.toHaveBeenCalled();
+  });
+
+  it("T02 slot-first: getDecision returns a finish(incomplete) decision → commits incomplete WITHOUT calling controller.decide", () => {
+    flagMock.mockReturnValue(true);
+    const incomplete = {
+      type: "finish" as const,
+      outcome: "incomplete" as const,
+      reasonCode: "CONTINUATION_LIMIT",
+      evidenceIds: [],
+      summary: "partial",
+      remainingWork: ["crit-record_count-0"],
+    };
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ getDecision: () => incomplete })
+    );
+    sink.emit(completeEvent());
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).toBe("CONTINUATION_LIMIT");
+      expect(outcome.remainingWork).toContain("crit-record_count-0");
+    }
+    expect(decideMock).not.toHaveBeenCalled();
+  });
+
+  it("T02 fallback: getDecision returns null → calls controller.decide WITH evidenceService + evidenceContext in DecideContext (mirrors finalizeManualAtCompleteGate)", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "done",
+      remainingWork: [],
+    });
+    const evidenceService = { checkCandidate: vi.fn().mockResolvedValue({}) };
+    const evidenceContext = {
+      content: "I saved 100 contacts.",
+      source: "scheduled_sink_consult",
+      sourceRevision: "slice2-t02-scheduled",
+    };
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ getDecision: () => null, evidenceService, evidenceContext })
+    );
+    sink.emit(completeEvent("I saved 100 contacts."));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    // The fallback consult called controller.decide with the
+    // evidenceService + evidenceContext the runner wired, so a
+    // verified_complete is real (not a blind guess).
+    expect(decideMock).toHaveBeenCalledTimes(1);
+    const context = decideMock.mock.calls[0][1] as {
+      evidenceService?: unknown;
+      evidenceContext?: { content: string; source: string; sourceRevision: string };
+      route?: string;
+    };
+    expect(context.evidenceService).toBe(evidenceService);
+    expect(context.evidenceContext).toBeDefined();
+    expect(context.evidenceContext!.source).toBe("scheduled_sink_consult");
+    expect(context.evidenceContext!.content).toBe("I saved 100 contacts.");
+    expect(sink.getOutcome()?.kind).toBe("completed");
+  });
+
+  it("T02 fallback continue: getDecision null + decide returns continue → incomplete NO_PROGRESS with remainingWork = unmetCriterionIds (loop is gone)", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "continue",
+      continuationId: "cont:cand-1",
+      prompt: "Continue the task.",
+      unmetCriterionIds: ["crit-record_count-0"],
+    });
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ getDecision: () => null })
+    );
+    sink.emit(completeEvent());
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    // The loop already exited (response_end); a continuation cannot be
+    // dispatched from the sink → honest outcome is incomplete NO_PROGRESS,
+    // never a success.
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).toBe("NO_PROGRESS");
+      expect(outcome.remainingWork).toContain("crit-record_count-0");
+    }
   });
 });
 

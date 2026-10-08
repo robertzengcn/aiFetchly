@@ -41,7 +41,8 @@ import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
 import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { FinalizeScheduledInput } from "@/model/AiTaskExecution.model";
 import { buildScheduledBudgetLimits } from "@/service/aiTaskExecution/budgetDefaults";
-import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { enrollScheduledExecution } from "@/service/aiTaskExecution/ScheduledExecutionEnroller";
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -279,18 +280,18 @@ export class ScheduledAiMessageRunner {
       started_at: startedAt,
     });
 
-    // Unit 6 (GAP-S2 #8/#9): enroll this occurrence into the completion
-    // policy BEFORE the engine runs. The enrollment creates the durable
-    // execution row (single owner via the claim's idempotency key), so Stop
-    // and finalization work from the very first provider token. Fail-closed:
-    // any enrollment error leaves policyBinding undefined and the run
-    // proceeds with the legacy blind mapping (no consult, no missing-outcome
-    // rejection) — the scheduled turn itself must never crash on policy
-    // plumbing. Flag-off: skipped entirely.
+    // Unit 6 (GAP-S2 #8/#9) + T02: enroll this occurrence into the completion
+    // policy BEFORE the engine runs, through the SAME trusted decision
+    // boundary as manual runs (resolver → criteria compile → contract freeze
+    // → startScheduled, see ScheduledExecutionEnroller). The enrollment
+    // creates the durable execution row (single owner via the claim's
+    // idempotency key) and builds the loop binding the engine consults with
+    // at round_cap/response_end (same-occurrence continuation, FR-05/07).
+    // Fail-closed: any enrollment error leaves policyBinding undefined and
+    // the run proceeds with the legacy blind mapping (no consult, no
+    // missing-outcome rejection) — the scheduled turn itself must never crash
+    // on policy plumbing. Flag-off: skipped entirely.
     let policyBinding: ScheduledLoopPolicyBinding | undefined;
-    // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
-    // execution row after the turn ends. Fresh scheduled executions start at
-    // execution_state_version = 0 and nothing bumps it in the scheduled path.
     // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
     // execution row after the turn ends. Fresh scheduled executions start at
     // execution_state_version = 0 and nothing bumps it in the scheduled path.
@@ -299,16 +300,20 @@ export class ScheduledAiMessageRunner {
       readonly expectedVersion: number;
       readonly idempotencyKey: string;
     } | null = null;
+    // T02 (D1): the loop binding built by the enroller, passed into
+    // submitMessage so the loop's maybeConsultPolicy consults for scheduled
+    // turns identically to manual ones.
+    let loopBinding: LoopTaskExecutionBinding | undefined;
     if (isAiTaskCompletionPolicyV1Enabled()) {
       try {
-        const execCoordinator = new TaskExecutionCoordinator();
-        const startResult = await execCoordinator.startScheduled({
+        const enrollResult = await enrollScheduledExecution({
           conversationId,
           sourceUserMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
-          requestHash: hashUserAuthoredText(task.message || ""),
-          route: "task_best_effort",
+          taskMessage: task.message || "",
           taskId,
           runId,
+          scheduleId,
+          occurrence,
           occurrenceKey:
             input.idempotencyKey ??
             `scheduled-loop:${scheduleId}:${occurrence}`,
@@ -318,34 +323,11 @@ export class ScheduledAiMessageRunner {
             maxRuntimeMs: task.max_runtime_ms,
           }),
         });
-        if (startResult.status === "created") {
-          const binding = startResult.binding;
-          policyBinding = {
-            executionId: binding.executionId,
-            controller: binding.controller,
-            budget: binding.budget,
-            // task_best_effort runs without a frozen contract (degraded
-            // verified — criteria advisory). Contract freeze for scheduled
-            // verified routes lands with criteria authoring (Slice 3).
-            contract: null,
-            route: binding.route,
-            expectedVersion: binding.leaseGeneration,
-            // T16: freeze the flag-at-enrollment value so the sink's consult
-            // and failOutstanding paths do not re-check the mutable runtime
-            // flag. A scheduled turn enrolled while the flag was on stays
-            // accepted even if the flag is turned off midstream — never
-            // convert accepted unfinished work to unchecked success
-            // (NFR-12, AC-12/32).
-            policyAccepted: true,
-          };
-          policyExecution = {
-            executionId: binding.executionId,
-            expectedVersion: 0,
-            idempotencyKey:
-              input.idempotencyKey ??
-              `scheduled-loop:${scheduleId}:${occurrence}`,
-          };
-        } else if (startResult.status === "reused") {
+        if (enrollResult.status === "created") {
+          policyBinding = enrollResult.policyBinding;
+          policyExecution = enrollResult.policyExecution ?? null;
+          loopBinding = enrollResult.loopBinding;
+        } else if (enrollResult.status === "reused") {
           // Crash-retry of the same occurrence: the execution row already
           // exists (same occurrence key). No fresh binding — the existing
           // row's status is authoritative and its finalization already
@@ -363,6 +345,14 @@ export class ScheduledAiMessageRunner {
             errorCode: "OCCURRENCE_ALREADY_ENROLLED",
             conversationId,
           });
+        } else if (enrollResult.status === "skipped") {
+          // T02 (D5): the resolver classified the task message as not
+          // actionable (response_only/preparation). No execution row, no
+          // consult — run the turn with the legacy blind mapping and record
+          // the honest reason on the run row.
+          console.log(
+            `[scheduled-loop] occurrence not actionable (route=${enrollResult.skipReason}, runId=${runId}) — skipping enrollment`
+          );
         } else {
           console.error(
             `[scheduled-loop] occurrence enrollment conflict (runId=${runId}) — skipping consult`
@@ -611,6 +601,11 @@ export class ScheduledAiMessageRunner {
           userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
+        // T02 (D1): the loop binding from the enroller — the engine consults
+        // at round_cap/response_end for scheduled turns (same-occurrence
+        // continuation). Undefined when the flag is off, enrollment failed,
+        // or the route skipped enrollment (legacy blind mapping).
+        taskExecutionBinding: loopBinding,
         outboundSendPreAuthorized,
       });
       // `submitMessage` resolves on a permission pause (the engine parks the

@@ -283,6 +283,23 @@ export interface AIChatQuerySubmitInput {
    * renderer cannot forge `scheduledContext`, so this flag is unreachable there.
    */
   outboundSendPreAuthorized?: boolean;
+  /**
+   * T02 (FR-02/05/07/20, AC-01-05/17/30/32): caller-supplied loop binding for
+   * scheduled turns. The scheduled runner builds it (frozen contract + real
+   * evidence + budget + consult closure mirroring the manual seam) BEFORE
+   * calling `submitMessage`, so the engine's loop consults at
+   * round_cap/response_end for scheduled turns — same-occurrence continuation
+   * via the §7.3 prompt (54/100 → continue → 100/100). Without this field
+   * scheduled turns never get a binding (the engine's internal manual
+   * enrollment skips scheduledContext turns), so the loop never consults and
+   * only the sink's post-stream consult fires — too late to continue.
+   *
+   * Main-process-only trusted signal: `scheduledContext` is trusted
+   * main-process metadata the renderer cannot forge (technical-design
+   * §14.1), so this field is unreachable from renderer input. Ignored unless
+   * `scheduledContext` is present.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -1007,8 +1024,12 @@ export class AIChatQueryEngine {
     let sourceUserMessageId: string | undefined;
     /**
      * Slice 2 completion-policy binding for this turn (technical-design §5/§7).
-     * Constructed by the enrollment seam below from the coordinator's binding
-     * when the policy flag is on; undefined otherwise (byte-identical legacy
+     * Two sources: (a) scheduled turns — initialized inside the try block
+     * from the caller-supplied `input.taskExecutionBinding` (the scheduled
+     * runner enrolled via `enrollScheduledExecution` BEFORE submitMessage, so
+     * the binding already exists — T02); (b) manual turns — constructed by
+     * the enrollment seam below from the coordinator's binding when the
+     * policy flag is on. Undefined otherwise (byte-identical legacy
      * behavior). Carried through loopInput and the three resume paths so
      * budget persists across pause/resume.
      */
@@ -1041,6 +1062,32 @@ export class AIChatQueryEngine {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
+      // T02: scheduled turns arrive with a caller-supplied binding (the
+      // runner enrolled this occurrence via startScheduled + built the loop
+      // binding before submitMessage). Adopt it here so the loop's
+      // maybeConsultPolicy consults at round_cap/response_end for scheduled
+      // turns too (same-occurrence continuation, FR-05/07). The
+      // manual-enrollment seam below already excludes scheduledContext turns
+      // (its guard is `isAiTaskCompletionPolicyV1Enabled() &&
+      // !scheduledContext`), so no double-enrollment. The map/slot mirrors
+      // below are keyed by the scheduled binding's executionId so
+      // Stop-cancel and the finalization gate can find this execution
+      // exactly as they do for manual ones.
+      if (scheduledContext && input.taskExecutionBinding) {
+        taskExecutionBinding = input.taskExecutionBinding;
+        this.taskExecutionBindings.set(
+          conversationId,
+          input.taskExecutionBinding.executionId
+        );
+        this.policyAcceptedConversations.add(conversationId);
+        let recordedDecision: TaskCompletionDecision | null = null;
+        this.taskDecisionSlots.set(input.taskExecutionBinding.executionId, {
+          get: () => recordedDecision,
+          set: (d: TaskCompletionDecision | null) => {
+            recordedDecision = d;
+          },
+        });
+      }
       // Generate the turn id once, at accept time (technical-design §4.3).
       // Scheduled turns reuse the stable scheduled id so a crash-retry stamps
       // the same turn association on replayed rows (§14.2).
@@ -2833,14 +2880,24 @@ export class AIChatQueryEngine {
         let taskExecutionId: string | undefined;
         let taskReasonCode: string | undefined;
         if (taskExecutionBinding) {
-          const carried = await this.finalizeManualAtCompleteGate(
-            result,
-            taskExecutionBinding
-          );
-          if (carried) {
-            taskOutcome = carried.outcome;
-            taskExecutionId = taskExecutionBinding.executionId;
-            taskReasonCode = carried.reasonCode;
+          // T02 (D2): scheduled bindings are finalized by the runner's
+          // `finalizeScheduledPolicyRun` (pass-through, enrollment-snapshot
+          // expectedVersion, no retry) AFTER the sink captures the outcome.
+          // Running the manual gate here would double-finalize (CAS on a row
+          // the runner also finalizes) and carry a taskOutcome the sink
+          // already owns — so skip the gate for scheduled kind. The map/set
+          // cleanup below still runs: the turn is done, Stop-cancel is no
+          // longer needed.
+          if (taskExecutionBinding.executionKind !== "scheduled") {
+            const carried = await this.finalizeManualAtCompleteGate(
+              result,
+              taskExecutionBinding
+            );
+            if (carried) {
+              taskOutcome = carried.outcome;
+              taskExecutionId = taskExecutionBinding.executionId;
+              taskReasonCode = carried.reasonCode;
+            }
           }
           // Unit 7: the row is finalized (or the gate logged the failure) —
           // drop the conversation binding so a later Stop click never
@@ -2981,16 +3038,23 @@ export class AIChatQueryEngine {
         let cancelledTaskExecutionId: string | undefined;
         let cancelledTaskReasonCode: string | undefined;
         if (taskExecutionBinding) {
-          const carried = await this.finalizeManualAtTerminalFailure(
-            taskExecutionBinding,
-            "cancelled",
-            "USER_CANCELLED",
-            result.partialContent
-          );
-          if (carried) {
-            cancelledTaskOutcome = carried.outcome;
-            cancelledTaskExecutionId = taskExecutionBinding.executionId;
-            cancelledTaskReasonCode = carried.reasonCode;
+          // T02 (D2): scheduled bindings are finalized by the runner's
+          // `finalizeScheduledPolicyRun` after the sink captures the outcome
+          // (pass-through, enrollment-snapshot expectedVersion). Running the
+          // manual CAS gate here would double-finalize, so skip it for
+          // scheduled kind. The sink's `cancelled` commit owns the outcome.
+          if (taskExecutionBinding.executionKind !== "scheduled") {
+            const carried = await this.finalizeManualAtTerminalFailure(
+              taskExecutionBinding,
+              "cancelled",
+              "USER_CANCELLED",
+              result.partialContent
+            );
+            if (carried) {
+              cancelledTaskOutcome = carried.outcome;
+              cancelledTaskExecutionId = taskExecutionBinding.executionId;
+              cancelledTaskReasonCode = carried.reasonCode;
+            }
           }
           this.taskExecutionBindings.delete(conversationId);
           this.policyAcceptedConversations.delete(conversationId);
@@ -3051,16 +3115,23 @@ export class AIChatQueryEngine {
         let failedTaskExecutionId: string | undefined;
         let failedTaskReasonCode: string | undefined;
         if (taskExecutionBinding) {
-          const carried = await this.finalizeManualAtTerminalFailure(
-            taskExecutionBinding,
-            "failed",
-            "MODEL_FAILURE",
-            result.partialContent
-          );
-          if (carried) {
-            failedTaskOutcome = carried.outcome;
-            failedTaskExecutionId = taskExecutionBinding.executionId;
-            failedTaskReasonCode = carried.reasonCode;
+          // T02 (D2): scheduled bindings are finalized by the runner's
+          // `finalizeScheduledPolicyRun` after the sink captures the outcome
+          // (pass-through, enrollment-snapshot expectedVersion). Running the
+          // manual CAS gate here would double-finalize, so skip it for
+          // scheduled kind. The sink's `error` commit owns the outcome.
+          if (taskExecutionBinding.executionKind !== "scheduled") {
+            const carried = await this.finalizeManualAtTerminalFailure(
+              taskExecutionBinding,
+              "failed",
+              "MODEL_FAILURE",
+              result.partialContent
+            );
+            if (carried) {
+              failedTaskOutcome = carried.outcome;
+              failedTaskExecutionId = taskExecutionBinding.executionId;
+              failedTaskReasonCode = carried.reasonCode;
+            }
           }
           this.taskExecutionBindings.delete(conversationId);
           this.policyAcceptedConversations.delete(conversationId);
@@ -3569,16 +3640,22 @@ export class AIChatQueryEngine {
     let failureTaskExecutionId: string | undefined;
     let failureTaskReasonCode: string | undefined;
     if (taskExecutionBinding) {
-      failureTaskExecutionId = taskExecutionBinding.executionId;
-      const carried = await this.finalizeManualAtTerminalFailure(
-        taskExecutionBinding,
-        "failed",
-        "MODEL_FAILURE",
-        userSafeError(err)
-      );
-      if (carried) {
-        failureTaskOutcome = carried.outcome;
-        failureTaskReasonCode = carried.reasonCode;
+      // T02 (D2): scheduled bindings are finalized by the runner's
+      // `finalizeScheduledPolicyRun` after the sink captures the outcome
+      // (the sink's `error` commit or `failOutstanding`). Running the manual
+      // CAS gate here would double-finalize, so skip it for scheduled kind.
+      if (taskExecutionBinding.executionKind !== "scheduled") {
+        failureTaskExecutionId = taskExecutionBinding.executionId;
+        const carried = await this.finalizeManualAtTerminalFailure(
+          taskExecutionBinding,
+          "failed",
+          "MODEL_FAILURE",
+          userSafeError(err)
+        );
+        if (carried) {
+          failureTaskOutcome = carried.outcome;
+          failureTaskReasonCode = carried.reasonCode;
+        }
       }
       this.taskExecutionBindings.delete(conversationId);
       this.policyAcceptedConversations.delete(conversationId);

@@ -149,6 +149,18 @@ export interface LoopTaskExecutionBinding {
    */
   readonly policyAccepted?: boolean;
   /**
+   * T02 (FR-02/05/07/20, AC-01-05/17/30/32): which enrollment seam owns the
+   * binding's finalization. `"manual"` (default) — the engine's completed-case
+   * gate runs `finalizeManualAtCompleteGate` (CAS-retry, reads current
+   * version). `"scheduled"` — the scheduled runner's `finalizeScheduledPolicyRun`
+   * owns finalization (pass-through, enrollment-snapshot `expectedVersion`,
+   * no retry); the engine's manual gate MUST no-op to prevent
+   * double-finalization. Optional so manual callers, tests, and flag-off
+   * callers can omit it; when absent the engine treats the binding as
+   * `"manual"` (byte-identical to legacy behavior).
+   */
+  readonly executionKind?: "manual" | "scheduled";
+  /**
    * Records the controller's decision for this turn so the engine's
    * finalization gate (Slice 2 Unit 5) can tell "the loop already
    * consulted" apart from "no consult ran" and only fall back to its

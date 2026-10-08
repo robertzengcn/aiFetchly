@@ -168,6 +168,12 @@ export interface StartScheduledInput {
   readonly runId: number;
   readonly occurrenceKey: string;
   readonly budgetLimits: BudgetLimitsInput;
+  /**
+   * Frozen source-anchored contract for the scheduled occurrence (T02,
+   * FR-02/19). When omitted, falls back to `null` (legacy/shadow behavior —
+   * the controller can never verify, same as Slice 1).
+   */
+  readonly contract?: TaskCompletionContract | null;
 }
 
 /**
@@ -231,7 +237,7 @@ export class TaskExecutionCoordinator {
       origin,
       budgetLimits: input.budgetLimits,
       submissionId: null,
-      contract: null,
+      contract: input.contract ?? null,
       parentExecutionId: null,
       lineageLedgerId: null,
     });

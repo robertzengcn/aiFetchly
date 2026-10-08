@@ -2,6 +2,7 @@ import type {
   TaskCompletionController,
   DecideContext,
 } from "@/service/aiTaskExecution/TaskCompletionController";
+import type { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
 import type {
   TaskCompletionDecision,
@@ -82,6 +83,42 @@ export interface ScheduledLoopPolicyBinding {
    * binding as not-accepted (blind legacy mapping, byte-identical).
    */
   readonly policyAccepted?: boolean;
+  /**
+   * T02 (FR-05/07, AC-17/30): read the decision the loop's in-loop consult
+   * already recorded. With Option A the scheduled runner builds a
+   * `LoopTaskExecutionBinding` and the engine's loop consults at
+   * round_cap/response_end, recording the decision via `recordDecision`.
+   * This closure reads the same slot, so the sink's `complete`-event consult
+   * does NOT re-consult the controller (which could disagree — the blind
+   * fallback below has no evidence and would overwrite a `verified_complete`
+   * with `incomplete`). When the slot is empty (the loop exited without
+   * consulting), the sink falls back to its own evidence-backed consult.
+   * Optional so flag-off callers, tests, and the legacy Slice 1 path (no
+   * loop binding → no slot) can omit it; when absent the sink always
+   * fallback-consults (byte-identical to pre-T02 behavior).
+   */
+  readonly getDecision?: () => TaskCompletionDecision | null;
+  /**
+   * T02 (FR-02/05): evidence service for the sink's fallback consult. When
+   * `getDecision` returns null the sink consults the controller WITH evidence
+   * (mirroring the engine's `finalizeManualAtCompleteGate` fallback) so a
+   * `verified_complete` decision is real, not a blind guess. Optional so
+   * flag-off callers and tests can omit it; when absent the fallback consult
+   * has no evidence (byte-identical to pre-T02 behavior).
+   */
+  readonly evidenceService?: TaskEvidenceService;
+  /**
+   * T02 (FR-05): evidence context for the fallback consult. Carries the
+   * final assistant content + a `loop_consult`-style source tag so the
+   * controller's evidence evaluation has the same inputs as the engine's
+   * manual-gate fallback. Optional so flag-off callers and tests can omit
+   * it; when absent the fallback consult has no evidence context.
+   */
+  readonly evidenceContext?: {
+    readonly content: string;
+    readonly source: string;
+    readonly sourceRevision: string;
+  };
 }
 
 /**
@@ -193,8 +230,15 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
 
   /**
    * Consult the completion controller on the `complete` event (FR-05, AC-17).
-   * Forms a response_end candidate from the final assistant message and maps
-   * the decision onto a ScheduledTurnOutcome:
+   *
+   * T02 (D3): with Option A the loop's in-loop consult already recorded a
+   * decision via `recordDecision`. Read that slot FIRST (no double-consult —
+   * the blind fallback below has no evidence and could disagree, overwriting
+   * a `verified_complete` with `incomplete`). Only when the slot is empty
+   * (the loop exited without consulting) does the sink fall back to its own
+   * consult, now WITH evidence so a `verified_complete` is real.
+   *
+   * Maps the decision onto a ScheduledTurnOutcome:
    *   - verified_complete → kind "completed" (§6.1 mapping)
    *   - incomplete → kind "incomplete" (reasonCode + remainingWork)
    *   - failed / timeout → kind "failed"
@@ -221,6 +265,35 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
         reasonCode: "MISSING_TASK_OUTCOME",
       });
     };
+    const commitFromDecision = (decision: TaskCompletionDecision): void => {
+      const outcome = mapDecisionToOutcome(decision, assistantMessageId);
+      if (!outcome) {
+        commitMissing();
+        return;
+      }
+      this.commitOutcome(outcome);
+    };
+
+    // T02 D3: read the slot the loop's in-loop consult populated. If set,
+    // honor it — the loop already evaluated evidence; re-consulting here
+    // (without evidence in the blind pre-T02 path) could overwrite a real
+    // verified_complete with incomplete.
+    const slotDecision = binding.getDecision?.() ?? null;
+    if (slotDecision) {
+      try {
+        commitFromDecision(slotDecision);
+      } catch {
+        commitMissing();
+      }
+      return;
+    }
+
+    // Fallback: the loop exited without consulting (e.g. a flag-off
+    // midstream left the binding accepted but the loop never reached a
+    // consult site, or the stream died right at response_end before the
+    // round_cap consult). Consult WITH evidence now (mirrors the engine's
+    // `finalizeManualAtCompleteGate` fallback, lines 3151-3181) so a
+    // verified_complete decision is real, not a blind guess.
     try {
       const candidate: TaskEndCandidate = {
         candidateId: `cand:${binding.executionId}:response_end`,
@@ -239,6 +312,14 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
         route: binding.route,
         budget: binding.budget,
         contract: binding.contract ?? undefined,
+        evidenceService: binding.evidenceService,
+        evidenceContext: binding.evidenceContext
+          ? {
+              content: binding.evidenceContext.content,
+              source: binding.evidenceContext.source,
+              sourceRevision: binding.evidenceContext.sourceRevision,
+            }
+          : undefined,
       };
       // Promise.resolve() wraps the decide result so a controller that
       // returns undefined (or throws synchronously) fails closed via the
@@ -249,12 +330,7 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
             commitMissing();
             return;
           }
-          const outcome = mapDecisionToOutcome(decision, assistantMessageId);
-          if (!outcome) {
-            commitMissing();
-            return;
-          }
-          this.commitOutcome(outcome);
+          commitFromDecision(decision);
         })
         .catch(() => commitMissing());
     } catch {

@@ -85,8 +85,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T02 — Put scheduled recovery inside the shared running loop [P1, confirmed]
 
-- [ ] Freeze scheduled contracts and pass the trusted execution/budget/evidence binding into the maker loop.
-- [ ] Defer sink terminal delivery until loop recovery and durable finalization are complete.
+- [x] Freeze scheduled contracts and pass the trusted execution/budget/evidence binding into the maker loop.
+- [x] Defer sink terminal delivery until loop recovery and durable finalization are complete.
 
 **Evidence:** `ScheduledAiMessageRunner.ts:305–330` hardcodes `task_best_effort` and `contract:null`; `TaskExecutionCoordinator.ts:187–205` has no scheduled contract input. The binding goes to `ScheduledLoopEventSink`, whose consult has no evidence service/criteria. Its `:193–195` explicitly maps `continue` to incomplete because the loop has already gone. This makes successful and unfinished scheduled tasks unverified/incomplete rather than recovering them.
 
