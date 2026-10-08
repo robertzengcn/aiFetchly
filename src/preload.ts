@@ -484,10 +484,12 @@ import {
   OUTBOUND_EMAIL_BATCH_DISCARD,
   OUTBOUND_EMAIL_BATCH_STATUS,
   OUTBOUND_EMAIL_BATCH_PROGRESS,
-  // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
+  // E2E test-support channels — no handler exists outside AIFETCHLY_E2E=1, so
   // a production/dev invoke always fails with "No handler registered" (see
   // src/main-process/e2e/E2ESeedIpc.ts).
   E2E_SEED_EMAIL_SERVICE,
+  E2E_SEED_RECEIVED_MESSAGE,
+  E2E_SEED_AUTO_REPLY_AUDIT,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -1218,6 +1220,8 @@ contextBridge.exposeInMainWorld("api", {
       // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
       // elsewhere this invoke fails with "No handler registered".
       E2E_SEED_EMAIL_SERVICE,
+      E2E_SEED_RECEIVED_MESSAGE,
+      E2E_SEED_AUTO_REPLY_AUDIT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

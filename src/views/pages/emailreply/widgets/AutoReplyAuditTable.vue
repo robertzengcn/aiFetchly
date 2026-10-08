@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div data-testid="email-auto-reply-audit-list">
     <div class="d-flex align-center mb-4 ml-2 mr-2">
       <h2>{{ t("emailAutoReplyAudit.title") }}</h2>
     </div>
@@ -80,7 +80,11 @@
         </v-icon>
       </template>
       <template #item.actions="{ item }">
-        <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
+        <v-icon
+          size="small"
+          data-testid="audit-row-open"
+          @click="openDetail(item.id)"
+        >mdi-eye</v-icon>
       </template>
     </v-data-table-server>
   </div>

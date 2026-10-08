@@ -745,6 +745,8 @@ export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
 // test harness needs a direct, gated seeding path. They never exist in a
 // production or development run.
 export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
+export const E2E_SEED_RECEIVED_MESSAGE = "e2e:seed-received-message";
+export const E2E_SEED_AUTO_REPLY_AUDIT = "e2e:seed-auto-reply-audit";
 
 // ---------------------------------------------------------------------------
 // Recoverable large tool results (AI Chat V2).

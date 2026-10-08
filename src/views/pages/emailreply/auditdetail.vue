@@ -26,7 +26,11 @@
             <div v-if="audit.metadataCode" class="mt-2">
               <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.reply_evidence") }}</div>
               <div class="d-flex align-center flex-wrap">
-                <v-chip :color="evidenceColor(audit.metadataCode)" size="small">
+                <v-chip
+                  :color="evidenceColor(audit.metadataCode)"
+                  size="small"
+                  data-testid="audit-detail-evidence-chip"
+                >
                   {{ evidenceLabel(audit.metadataCode) }}
                 </v-chip>
                 <v-chip
@@ -38,7 +42,11 @@
                   {{ t("emailReply.nextAction." + nextAction) }}
                 </v-chip>
               </div>
-              <div v-if="audit.metadataStage" class="mt-1 text-caption text-medium-emphasis">
+              <div
+                v-if="audit.metadataStage"
+                class="mt-1 text-caption text-medium-emphasis"
+                data-testid="audit-detail-stage"
+              >
                 {{ t("emailAutoReplyAudit.stage") }}: {{ audit.metadataStage }}
               </div>
             </div>
