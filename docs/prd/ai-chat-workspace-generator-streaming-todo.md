@@ -1,5 +1,7 @@
 # Generator streaming implementation audit and TODO
 
+> **Superseded assessment:** see the [2026-10-08 re-audit and open TODOs](./ai-chat-workspace-generator-streaming-audit-todo-2026-10-08.md), reviewed at `3057264b`. Historical checked items below do not establish current correctness or release readiness.
+
 Audit date: 2026-10-04  
 Implementation reviewed: `generator-streaming`, commit `fcb734fa`  
 Scope: the two user-supplied documents, compared with this worktree's implementation and focused tests.
