@@ -1550,7 +1550,9 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
   it("audit persistence failure on initial reuse propagates as success:false (not swallowed)", async () => {
     // B09 acceptance: "Audit failure must not return a successful audited
     // outcome." Stub the audit module to throw on create and assert the reuse
-    // result is a failure carrying the persistence error.
+    // result is a failure carrying the persistence error. T12/FR-039: the
+    // catch also emits audit_failure{stage=reuse} so the unrecorded work is
+    // measurable.
     const messageId = await seedMessage();
     await seedDraftWithWarnings(messageId, "draft", ["w1"]);
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
@@ -1562,12 +1564,67 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
     svc["replyAuditModule"].create = async () => {
       throw new Error("audit DB write failed (simulated)");
     };
+    drainCountersForTest();
     try {
       const result = await svc.createDraft({ messageId });
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(result.error).toContain("Reuse audit persistence failed");
       expect(result.error).toContain("audit DB write failed (simulated)");
+      // T12/FR-039: the unrecorded reuse surfaces as an audit_failure counter
+      // keyed by stage so operators can alert on audit-write regressions.
+      const counters = drainCountersForTest();
+      expect(counters.get("audit_failure{stage=reuse}")).toBe(1);
+    } finally {
+      svc["replyAuditModule"].create = original;
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // T12/FR-039 — pre_draft audit-failure coverage. The runPreDraftDetection
+  // catch(auditError) site emits audit_failure{stage=pre_draft} when the
+  // `reply_skipped` audit row for a detection refusal cannot persist (§9.2 —
+  // an unrecorded draft refusal must never be followed by proceeding to
+  // draft). The detection outcome itself is faked via buildService's
+  // detectionResult override; the audit module's create is monkey-patched to
+  // throw, mirroring the reuse test above.
+  // ---------------------------------------------------------------------------
+  it("pre_draft audit persistence failure emits audit_failure{stage=pre_draft} + success:false (Detection audit persistence failed)", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = buildService({
+      apiFactory: factory,
+      detectionResult: {
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        matchedMessageId: "sent-123@example.com",
+        reasonCode: "already_replied",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "configured_imap",
+      },
+    });
+    const original = svc["replyAuditModule"].create.bind(
+      svc["replyAuditModule"]
+    );
+    svc["replyAuditModule"].create = async () => {
+      throw new Error("pre-draft audit DB write failed (simulated)");
+    };
+    drainCountersForTest();
+    try {
+      const result = await svc.createDraft({ messageId });
+      // The audit failure STOPS the work — the refusal is returned as a
+      // success:false carrying the persistence error (no code/next_action —
+      // the typed refusal never reached the return path).
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain("Detection audit persistence failed");
+      expect(result.error).toContain(
+        "pre-draft audit DB write failed (simulated)"
+      );
+      const counters = drainCountersForTest();
+      expect(counters.get("audit_failure{stage=pre_draft}")).toBe(1);
     } finally {
       svc["replyAuditModule"].create = original;
     }

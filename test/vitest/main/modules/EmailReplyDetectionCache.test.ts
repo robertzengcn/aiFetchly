@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock electron + Logger BEFORE the import so the lazy default-port getters
 // never reach the real ipcMain / BaseModule (TDZ under vi.mock). Pattern
@@ -22,6 +22,8 @@ import type {
   ReplyHeaderCandidate,
   SentFolder,
 } from "@/service/emailReceive/EmailReceiveClient";
+import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
+import { log } from "@/modules/Logger";
 import {
   EmailReplyDetectionService,
   type ReplyDetectionMessagePort,
@@ -593,5 +595,128 @@ describe("EmailReplyDetection cache (T05 step 10, §7.3)", () => {
     expect(r2.state).toBe("not_replied");
     expect(r2.fromCache).toBe(false);
     expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+});
+
+// ===========================================================================
+// T12/FR-039 — detection-side telemetry coverage. The cache counters
+// (detection_cache{hit,kind|expired}) and the probe-latency emission
+// (email_reply_detection_duration_ms) are observable here because this suite
+// already mocks @/modules/Logger (so `log.info` is a vi.fn spy) and uses a
+// manual clock for deterministic cache transitions.
+// ===========================================================================
+describe("EmailReplyDetection cache telemetry (T12/FR-039)", () => {
+  beforeEach(() => {
+    drainCountersForTest();
+    vi.mocked(log.info).mockClear();
+  });
+
+  it("cold miss — fresh kit emits detection_cache{hit=false,kind=miss} exactly once", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+
+    const counters = drainCountersForTest();
+    // A fresh kit has no in-memory cache entry, so the first call is a cold
+    // miss → exactly one cold-miss counter (the probe then settles not_replied
+    // and caches a negative for the next call, but that next call never runs
+    // in this test).
+    expect(counters.get("detection_cache{hit=false,kind=miss}")).toBe(1);
+    // No cache-hit/expired counters on a cold miss.
+    expect(counters.get("detection_cache{hit=true,kind=negative}")).toBeUndefined();
+    expect(counters.get("detection_cache{hit=false,expired=true}")).toBeUndefined();
+  });
+
+  it("persisted sticky-positive reuse emits detection_cache{hit=true,kind=persisted_positive}, no probe", async () => {
+    const clock = manualClock();
+    // A message whose persisted evidence already records a positive — the
+    // detector must short-circuit on it WITHOUT a mailbox probe.
+    const message = messageFixture({
+      replyDetectedAt: new Date(1_000_000 - 60_000),
+      replyDetectionSource: "sent_search",
+      replyMatchedMessageId: "<sent-501@example.com>",
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("replied");
+    expect(r.fromCache).toBe(true);
+
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_positive}")
+    ).toBe(1);
+    // No mailbox round trip — the persisted positive short-circuits.
+    expect(kit.imapPort.discoverCalls).toBe(0);
+    expect(kit.imapPort.refreshCalls).toHaveLength(0);
+  });
+
+  it("persisted negative reuse emits detection_cache{hit=true,kind=persisted_negative}, no probe", async () => {
+    const clock = manualClock();
+    // A message whose persisted negative evidence is 30s old (within the 60s
+    // TTL, observed before `now` so age >= 0). The detector must reuse it
+    // WITHOUT a mailbox probe.
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: "some-context-hash",
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("not_replied");
+    expect(r.fromCache).toBe(true);
+
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_negative}")
+    ).toBe(1);
+    expect(kit.imapPort.discoverCalls).toBe(0);
+    expect(kit.imapPort.refreshCalls).toHaveLength(0);
+  });
+
+  it("probe path emits email_reply_detection_duration_ms via the logger (p95-able latency signal)", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+
+    // The probe timer (timedReplyStage("detection", ..., { state: "probe" }))
+    // emits its duration ONLY to log.info as a `[metrics]` JSONL line — it is
+    // not tracked by the counters map. Assert the spy received such a line.
+    const calls = vi.mocked(log.info).mock.calls;
+    const metricsCalls = calls.filter(([line]) =>
+      typeof line === "string" && line.startsWith("[metrics]")
+    );
+    expect(metricsCalls.length).toBeGreaterThan(0);
+    const detectionDurationCalls = metricsCalls.filter(([line]) => {
+      if (typeof line !== "string") return false;
+      return line.includes("email_reply_detection_duration_ms");
+    });
+    expect(detectionDurationCalls.length).toBeGreaterThan(0);
+    // Privacy/§25: the latency line carries only the `state` label, never a
+    // message id, address, or body.
+    const firstLine = detectionDurationCalls[0][0] as string;
+    expect(firstLine).not.toContain(message.messageId);
+    expect(firstLine).not.toContain(SENDER);
+    expect(firstLine).toContain('"state":"probe"');
   });
 });
