@@ -26,14 +26,17 @@
 // Mocks: TaskExecutionCoordinator (constructor returns {startScheduled +
 // freezeContract}; startScheduled returns a fake binding so the helper builds
 // real bindings on top of it) + AiTaskExecutionModule (BaseModule TDZ —
-// required; getExecution → null, persistBudgetConsumption → void). Everything
-// else is the REAL implementation: TaskRequestResolver (structural classify),
+// required; getExecution/applyShadowDecisionCas configurable per-test) +
+// AiTaskOperationModule/SearchModule/ContactInfo/AiChatApi (the T03 factory
+// constructs these for the authoritative providers). Everything else is the
+// REAL implementation: TaskRequestResolver (structural classify),
 // compileCriteria (real structural compiler — exercised via the delegating
-// mock pattern), hashUserAuthoredText (pure SHA-256), TaskEvidenceService +
-// makeModuleBackedStore (real, no-op store), TaskProgressTracker (real),
-// TaskRunBudget (real, with buildScheduledBudgetLimits), and the controller
-// handed back by the coordinator mock (so the loopBinding's consult closure
-// calls a real TaskCompletionController.decide against the frozen contract).
+// mock pattern), hashUserAuthoredText (pure SHA-256), EvidenceProviderFactory
+// (real — module-backed store + provider-backed adapters + bounded checker),
+// TaskProgressTracker (real), TaskRunBudget (real, with
+// buildScheduledBudgetLimits), and the controller handed back by the
+// coordinator mock (so the loopBinding's consult closure calls a real
+// TaskCompletionController.decide against the frozen contract).
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { enrollScheduledExecution } from "@/service/aiTaskExecution/ScheduledExecutionEnroller";
 import type { TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
@@ -90,15 +93,75 @@ vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", () => ({
 // --- AiTaskExecutionModule mock (helper constructs it for the store) -----
 // BaseModule TDZ — required. The helper constructs `new AiTaskExecutionModule()`
 // inside enrollScheduledExecution so the evidence store can read execution
-// state. Mocking the module keeps the test off the DB.
+// state. Mocking the module keeps the test off the DB. getExecution +
+// applyShadowDecisionCas are hoisted fns so the T03 tests can configure them
+// per-test (the factory-backed evidence service + persistence assertions).
+const { getExecutionMock, mergeEvidenceCasMock } = vi.hoisted(() => ({
+  getExecutionMock: vi.fn(),
+  mergeEvidenceCasMock: vi.fn(),
+}));
 vi.mock("@/modules/AiTaskExecutionModule", () => ({
   AiTaskExecutionModule: vi.fn().mockImplementation(function () {
     return {
-      getExecution: vi.fn().mockResolvedValue(null),
-      applyShadowDecisionCas: vi.fn().mockResolvedValue(false),
+      getExecution: getExecutionMock,
+      // The factory's module-backed store calls mergeExecutionStateEvidence
+      // (T03) — the CAS passthrough under the "evidence" key. This is the
+      // method the persistence assertions read.
+      mergeExecutionStateEvidence: mergeEvidenceCasMock,
       persistBudgetConsumption: vi.fn().mockResolvedValue(undefined),
     };
   }),
+}));
+
+// --- AiTaskOperationModule / SearchModule / ContactInfo mocks (T03) -------
+// The helper now builds the factory-backed evidence stack, which constructs
+// these modules for the authoritative providers. Mocked so the tests stay
+// off the DB and can drive 54/100 counts + operation receipts per-test.
+const {
+  getOperationMock,
+  countSearchResultMock,
+  getStatisticsMock,
+} = vi.hoisted(() => ({
+  getOperationMock: vi.fn(),
+  countSearchResultMock: vi.fn(),
+  getStatisticsMock: vi.fn(),
+}));
+vi.mock("@/modules/AiTaskOperationModule", () => ({
+  AiTaskOperationModule: vi.fn().mockImplementation(function () {
+    return { getOperation: getOperationMock };
+  }),
+}));
+vi.mock("@/modules/SearchModule", () => ({
+  SearchModule: vi.fn().mockImplementation(function () {
+    return { countSearchResult: countSearchResultMock };
+  }),
+}));
+vi.mock("@/model/ContactInfo.model", () => ({
+  contactInfoRepository: { getStatistics: getStatisticsMock },
+  ContactInfoRepository: vi.fn(),
+}));
+
+// --- AiChatApi mock (T03): the factory's checkerDispatch calls
+// openAIChatCompletion. Mocked so no real AI call leaves the test.
+const { openAIChatCompletionMock } = vi.hoisted(() => ({
+  openAIChatCompletionMock: vi.fn(),
+}));
+vi.mock("@/api/aiChatApi", () => ({
+  AiChatApi: vi.fn().mockImplementation(function () {
+    return { openAIChatCompletion: openAIChatCompletionMock };
+  }),
+  openAIContentToString: (content: unknown): string => {
+    if (content == null) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((part: { text?: string; type?: string }) =>
+          part && typeof part === "object" && part.type === "text" ? part.text ?? "" : ""
+        )
+        .join("\n");
+    }
+    return String(content);
+  },
 }));
 
 // --- Feature flag mock: the helper itself does NOT check the flag (the
@@ -146,7 +209,8 @@ function makeFakeBinding(
     contractHash: overrides?.contract ? "hash-scheduled" : null,
     // Real controller + real budget so the loopBinding's consult closure
     // exercises a real decide() against the frozen contract (fail-closed:
-    // RecordCountAdapter has no provider → "unknown" → never verified).
+    // with the default zero-count provider mocks, record_count evaluates
+    // 0 < minimum → fail → unmet → never verified).
     controller: new TaskCompletionController(),
     budget: new TaskRunBudget({
       maxContinuations: 3,
@@ -184,6 +248,29 @@ function makeInput(overrides?: { taskMessage?: string }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // T03: default execution-row mock — version 3 (non-zero proves the factory
+  // reads the real row, not a hardcoded 0), not finalized, task linkage 1.
+  getExecutionMock.mockResolvedValue({
+    executionId: "exec-scheduled-1",
+    execution_state_json: null,
+    execution_state_version: 3,
+    finalized: false,
+    schedule_id: 1,
+    createdAt: new Date("2026-10-01T00:00:00Z"),
+  });
+  mergeEvidenceCasMock.mockResolvedValue(true);
+  getOperationMock.mockResolvedValue(null);
+  countSearchResultMock.mockResolvedValue(0);
+  getStatisticsMock.mockResolvedValue({
+    total: 0,
+    completed: 0,
+    failed: 0,
+    pending: 0,
+    analyzing: 0,
+  });
+  openAIChatCompletionMock.mockResolvedValue({
+    choices: [{ message: { content: "UNKNOWN" } }],
+  });
   // Default: freezeContract is a real-ish pass-through that returns the
   // criteria it was given (the helper builds the contract via the
   // coordinator, so the test asserts the FROZEN contract structure, not a
@@ -566,5 +653,183 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     const result = await enrollScheduledExecution(makeInput());
     expect(result.status).toBe("denied");
     expect(result.loopBinding).toBeUndefined();
+  });
+
+  // ----- T03 (FR-03/04/24, AC-03/04/32): authoritative evidence wiring -----
+  // The enroller now builds a factory-backed evidence stack. These tests lock
+  // the T03 wiring: the policy binding carries resolveExpectedStateVersion
+  // (fresh CAS token, NOT a hardcoded 0), and consulting the loopBinding
+  // against a contract-carrying binding persists evidence rows via the
+  // module-backed store with the fresh version. The enrollment snapshot
+  // expectedVersion stays 0 by design (the runner re-reads fresh at
+  // finalizeScheduledPolicyRun).
+
+  it("T03: policyBinding.evidenceContext.resolveExpectedStateVersion reads the fresh version from the execution row (not hardcoded 0)", async () => {
+    const fakeBinding = makeFakeBinding();
+    startScheduledMock.mockResolvedValue({
+      status: "created",
+      binding: fakeBinding,
+    });
+
+    const result = await enrollScheduledExecution(makeInput());
+    expect(result.status).toBe("created");
+
+    // resolveExpectedStateVersion is the closure the runner's
+    // finalizeScheduledPolicyRun reads at finalization (T03). It re-reads
+    // execution_state_version fresh — the mocked row returns 3, proving the
+    // factory reads the real row, not a hardcoded 0.
+    expect(result.policyBinding).toBeDefined();
+    expect(result.policyBinding!.evidenceContext).toBeDefined();
+    expect(
+      typeof result.policyBinding!.evidenceContext!.resolveExpectedStateVersion
+    ).toBe("function");
+    const freshVersion =
+      await result.policyBinding!.evidenceContext!.resolveExpectedStateVersion!();
+    expect(freshVersion).toBe(3);
+
+    // The enrollment snapshot is 0 by design (the runner re-reads before
+    // finalizing). Do NOT change this assertion — see the comment in
+    // ScheduledExecutionEnroller.ts:expectedVersion.
+    expect(result.policyExecution!.expectedVersion).toBe(0);
+  });
+
+  it("T03: consulting the loopBinding with a contract-carrying binding persists evidence rows via mergeEvidenceCas with the fresh expectedVersion (AC-32)", async () => {
+    // The real coordinator threads input.contract onto binding.contract; the
+    // mock echoes it so the loopBinding's consult closure sees the frozen
+    // contract (without it, maybeEvaluateEvidence returns undefined and no
+    // evidence persists — hiding the T03 wiring).
+    startScheduledMock.mockImplementation(async (input: {
+      contract: TaskCompletionContract | null;
+    }) => ({
+      status: "created",
+      binding: makeFakeBinding({ contract: input.contract }),
+    }));
+
+    const result = await enrollScheduledExecution(makeInput());
+    expect(result.status).toBe("created");
+
+    // 100/100: getStatistics returns total 100 → record_count (scope
+    // "execution" → ContactInfo total) passes. All required criteria pass,
+    // but route is task_best_effort (not task_verified) so canVerify is true
+    // yet the outcome is finish(incomplete) with empty remainingWork — NOT
+    // verified_complete (that needs task_verified, wired by T15) and NOT
+    // continue (unmet is empty). Evidence still persists: persistEvidence
+    // runs inside checkCandidate BEFORE the controller decides.
+    getStatisticsMock.mockResolvedValue({
+      total: 100,
+      completed: 0,
+      failed: 0,
+      pending: 0,
+      analyzing: 0,
+    });
+
+    const candidate = {
+      candidateId: "cand:exec-scheduled-1:response_end",
+      executionId: "exec-scheduled-1",
+      content: "I saved 100 of 100 contacts.",
+      finishReason: "stop",
+      provenance: "provider" as const,
+      streamTerminalSeen: true,
+      boundary: "response_end" as const,
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    };
+    const decision = await result.loopBinding!.consult!(candidate);
+
+    // route task_best_effort + all required pass → finish(incomplete) via
+    // incompleteReasonCode (NO_PROGRESS for a terminal-seen provider
+    // candidate at a non-cap boundary). remainingWork is empty (nothing
+    // unmet). Never verified_complete — that needs task_verified (T15).
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("NO_PROGRESS");
+      expect(decision.remainingWork).toEqual([]);
+      // Evidence row identities are returned (AC-32 reload resolves them).
+      expect(decision.evidenceIds.length).toBeGreaterThan(0);
+    }
+
+    // AC-32: evidence rows persisted via the module-backed store's CAS
+    // merge, with the FRESH expectedVersion (3 from the execution row), not
+    // the enrollment snapshot 0. A frozen 0 would mismatch the moment any
+    // consult persisted evidence → STATE_CONFLICT.
+    expect(mergeEvidenceCasMock).toHaveBeenCalledTimes(1);
+    const casInput = mergeEvidenceCasMock.mock.calls[0][0] as {
+      executionId: string;
+      expectedVersion: number;
+      mergedStateJson: string;
+    };
+    expect(casInput.executionId).toBe("exec-scheduled-1");
+    expect(casInput.expectedVersion).toBe(3);
+    // The merged state JSON carries the evidence array with at least one
+    // row for the record_count criterion (state "pass", contractHash
+    // "hash-scheduled", sourceRevision "slice2-t03-scheduled").
+    const merged = JSON.parse(casInput.mergedStateJson) as {
+      evidence?: Array<{
+        criterionId: string;
+        state: string;
+        contractHash: string;
+        sourceRevision: string;
+        executionId: string;
+      }>;
+    };
+    expect(Array.isArray(merged.evidence)).toBe(true);
+    expect(merged.evidence!.length).toBeGreaterThan(0);
+    const rcRow = merged.evidence!.find(
+      (row) => row.criterionId === "crit-record_count-0"
+    );
+    expect(rcRow).toBeDefined();
+    expect(rcRow!.state).toBe("pass");
+    expect(rcRow!.contractHash).toBe("hash-scheduled");
+    expect(rcRow!.sourceRevision).toBe("slice2-t03-scheduled");
+    expect(rcRow!.executionId).toBe("exec-scheduled-1");
+  });
+
+  it("T03: 0/100 contacts with the factory-backed provider → record_count unmet → continue (live recovery, same-occurrence)", async () => {
+    // The default getStatisticsMock returns total 0 (beforeEach). With the
+    // factory-backed recordCountProvider, scope "execution" → ContactInfo
+    // total = 0 < minimum 100 → fail → unmet → the live continue branch
+    // fires (FR-07). This is the T03 upgrade of the T02 fail-closed test:
+    // the count is now authoritative (ContactInfo total via the provider),
+    // not an unknown stub.
+    startScheduledMock.mockImplementation(async (input: {
+      contract: TaskCompletionContract | null;
+    }) => ({
+      status: "created",
+      binding: makeFakeBinding({ contract: input.contract }),
+    }));
+
+    const result = await enrollScheduledExecution(makeInput());
+    expect(result.status).toBe("created");
+
+    const candidate = {
+      candidateId: "cand:exec-scheduled-1:response_end",
+      executionId: "exec-scheduled-1",
+      content: "I saved 0 of 100 contacts.",
+      finishReason: "stop",
+      provenance: "provider" as const,
+      streamTerminalSeen: true,
+      boundary: "response_end" as const,
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    };
+    const decision = await result.loopBinding!.consult!(candidate);
+    // 0 < 100 → unmet → live budget + provider provenance + true terminal +
+    // non-cap boundary → continue with the record_count criterion in
+    // unmetCriterionIds (FR-07 same-occurrence recovery).
+    expect(decision.type).toBe("continue");
+    if (decision.type === "continue") {
+      expect(decision.unmetCriterionIds).toContain("crit-record_count-0");
+    }
+    // Evidence still persisted (the fail row) with the fresh version.
+    expect(mergeEvidenceCasMock).toHaveBeenCalledTimes(1);
+    const casInput = mergeEvidenceCasMock.mock.calls[0][0] as {
+      expectedVersion: number;
+    };
+    expect(casInput.expectedVersion).toBe(3);
   });
 });

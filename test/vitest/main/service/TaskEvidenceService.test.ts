@@ -493,3 +493,345 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     expect(result.evidenceIds).toHaveLength(5);
   });
 });
+
+// ----- T03 (FR-03/04/24, AC-03/04/32): authoritative provider-backed evidence -----
+//
+// The Slice 2 release gate requires evidence to come from task-specific
+// Models/Modules or validated read-only filesystem adapters, not maker prose
+// or criterion IDs. These tests lock the provider-backed path: a fabricated
+// observation probe fails, count 54 fails 100, operation receipts from the
+// authoritative store pass, artifact filesystem checks pass/fail honestly,
+// and persisted evidence rows survive a reload (every evidence ID resolves).
+
+describe("TaskEvidenceService.checkCandidate — T03 provider-backed evidence (FR-03/04/24, AC-03/04/32)", () => {
+  it("observation provider: fabricated 'I will check production later' probe fails (no fresh observation → unknown → unmet)", async () => {
+    // The probe that the audit letter calls out: maker prose containing the
+    // target word must NOT pass when a provider is wired. The provider is the
+    // authority; it returns null (no fresh record) → unknown → unmet.
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([observationCriterion("rec-1", "production")]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "I will check production later." }),
+      contract,
+      {
+        content: "I will check production later.",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        observationProvider: async () => null,
+      }
+    );
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("observation provider: returns a fresh observation receipt → pass", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([observationCriterion("rec-1", "production")]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "" }),
+      contract,
+      {
+        content: "",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        observationProvider: async () => ({
+          observedAt: "2026-10-05T00:00:00.000Z",
+          referenceId: "search-result:42",
+        }),
+      }
+    );
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+    expect(result.unmetCriterionIds).toEqual([]);
+  });
+
+  it("observation provider throws → unknown (fail-closed, never a false pass)", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([observationCriterion("rec-1", "production")]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "production looks good" }),
+      contract,
+      {
+        content: "production looks good",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        observationProvider: async () => {
+          throw new Error("module unavailable");
+        },
+      }
+    );
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("record_count provider: 54 < minimum 100 → fail (unmet); 100 >= 100 → pass; null → unknown (unmet)", async () => {
+    const registry = buildDefaultRegistry({
+      recordCountProvider: async (targetId: string): Promise<number | null> => {
+        if (targetId === "fifty-four") return 54;
+        if (targetId === "hundred") return 100;
+        return null;
+      },
+    });
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store, registry);
+    const contract = makeContract([
+      recordCountCriterion("rec-1", "fifty-four", 100),
+      recordCountCriterion("rec-2", "hundred", 100),
+      recordCountCriterion("rec-3", "unknown-target", 100),
+    ]);
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      contract,
+      { content: "", source: "provider", sourceRevision: "slice2-t03", expectedStateVersion: 0 }
+    );
+    // rec-1: 54 < 100 → fail (unmet). rec-2: 100 >= 100 → pass.
+    // rec-3: provider null → unknown (unmet).
+    expect(result.passedCriterionIds).toEqual(["rec-2"]);
+    expect(result.unmetCriterionIds).toContain("rec-1");
+    expect(result.unmetCriterionIds).toContain("rec-3");
+  });
+
+  it("operation_receipt provider: completed meets accepted → pass; pending below completed → fail; absent → unknown", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([
+      operationCriterion("rec-1", "op-done", "accepted"),
+      operationCriterion("rec-2", "op-stuck", "completed"),
+      operationCriterion("rec-3", "op-missing", "accepted"),
+    ]);
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      contract,
+      {
+        content: "",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        operationReceiptProvider: async (targetId: string) => {
+          if (targetId === "op-done") return { state: "completed" };
+          if (targetId === "op-stuck") return { state: "pending" };
+          return null;
+        },
+      }
+    );
+    // rec-1: completed >= accepted → pass. rec-2: pending < completed → fail.
+    // rec-3: absent → unknown. All unmet except rec-1.
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+    expect(result.unmetCriterionIds).toContain("rec-2");
+    expect(result.unmetCriterionIds).toContain("rec-3");
+  });
+
+  it("operation_receipt provider throws → unknown (fail-closed)", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([operationCriterion("rec-1", "op-broken", "accepted")]);
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      contract,
+      {
+        content: "",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        operationReceiptProvider: async () => {
+          throw new Error("operation store offline");
+        },
+      }
+    );
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("artifact adapter: file exists → pass; missing file → unknown; path traversal → unknown (containment, AC-32/NFR-08)", async () => {
+    // Real filesystem check against a temp base dir. The adapter is read-only
+    // and canonicalizes the root before the prefix check (the macOS symlink
+    // containment bug class).
+    const os = await import("node:os");
+    const fs = await import("node:fs");
+    const pathMod = await import("node:path");
+    const tmp = fs.mkdtempSync(pathMod.join(os.tmpdir(), "t03-artifact-"));
+    try {
+      fs.writeFileSync(pathMod.join(tmp, "report.txt"), "Summary: 100 contacts saved\n");
+      const { store } = memoryStore();
+      const service = new TaskEvidenceService(store);
+      const existsContract = makeContract([
+        {
+          id: "rec-1",
+          required: true,
+          kind: "artifact",
+          description: "report",
+          relativePath: "report.txt",
+          expectation: "exists",
+          requiredContentChecks: [],
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ]);
+      const existsResult = await service.checkCandidate(
+        baseCandidate(),
+        existsContract,
+        {
+          content: "",
+          source: "provider",
+          sourceRevision: "slice2-t03",
+          expectedStateVersion: 0,
+          artifactBaseDir: tmp,
+        }
+      );
+      expect(existsResult.passedCriterionIds).toEqual(["rec-1"]);
+
+      // Missing file → unknown (absent, not fail — it may appear later).
+      const missingContract = makeContract([
+        {
+          id: "rec-2",
+          required: true,
+          kind: "artifact",
+          description: "missing",
+          relativePath: "nope.txt",
+          expectation: "exists",
+          requiredContentChecks: [],
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ]);
+      const missingResult = await service.checkCandidate(
+        baseCandidate(),
+        missingContract,
+        {
+          content: "",
+          source: "provider",
+          sourceRevision: "slice2-t03",
+          expectedStateVersion: 0,
+          artifactBaseDir: tmp,
+        }
+      );
+      expect(missingResult.passedCriterionIds).toEqual([]);
+      expect(missingResult.unmetCriterionIds).toEqual(["rec-2"]);
+
+      // Path traversal: a relative path that escapes the base dir must NOT
+      // read outside it. Canonical containment → unknown (unmet).
+      const traversalContract = makeContract([
+        {
+          id: "rec-3",
+          required: true,
+          kind: "artifact",
+          description: "escape",
+          relativePath: "../../../etc/passwd",
+          expectation: "exists",
+          requiredContentChecks: [],
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ]);
+      const traversalResult = await service.checkCandidate(
+        baseCandidate(),
+        traversalContract,
+        {
+          content: "",
+          source: "provider",
+          sourceRevision: "slice2-t03",
+          expectedStateVersion: 0,
+          artifactBaseDir: tmp,
+        }
+      );
+      expect(traversalResult.passedCriterionIds).toEqual([]);
+      expect(traversalResult.unmetCriterionIds).toEqual(["rec-3"]);
+
+      // Content check: a substring that IS present → pass; one that is NOT → fail.
+      const contentContract = makeContract([
+        {
+          id: "rec-4",
+          required: true,
+          kind: "artifact",
+          description: "content",
+          relativePath: "report.txt",
+          expectation: "exists",
+          requiredContentChecks: ["100 contacts"],
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ]);
+      const contentResult = await service.checkCandidate(
+        baseCandidate(),
+        contentContract,
+        {
+          content: "",
+          source: "provider",
+          sourceRevision: "slice2-t03",
+          expectedStateVersion: 0,
+          artifactBaseDir: tmp,
+        }
+      );
+      expect(contentResult.passedCriterionIds).toEqual(["rec-4"]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("artifact adapter: no base dir wired → unknown (fail-closed)", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([artifactCriterion("rec-1")]);
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      contract,
+      { content: "", source: "provider", sourceRevision: "slice2-t03", expectedStateVersion: 0 }
+    );
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("AC-32: persisted evidence rows survive a reload — re-reading execution_state_json.evidence resolves every returned evidence ID", async () => {
+    // The reload guarantee: after persistEvidence writes rows under the
+    // `evidence` key, a fresh read of the state JSON must contain every
+    // evidenceId the CheckResult returned. This is the audit/provenance
+    // contract — finalization stores IDs, but the rows themselves must be
+    // reloadable.
+    const state = { stateJson: null as string | null, version: 0, finalized: false };
+    const writes: { executionId: string; expectedVersion: number; mergedStateJson: string }[] = [];
+    const snapshot: EvidenceStoreSnapshot = {
+      get stateJson() { return state.stateJson; },
+      get version() { return state.version; },
+      get finalized() { return state.finalized; },
+    };
+    const store: EvidenceStore = {
+      getExecutionState: async () => snapshot,
+      mergeEvidenceCas: async (input) => {
+        writes.push(input);
+        // Simulate the model write: the merged JSON becomes the new state,
+        // version bumps (the CAS token a fresh consult would read).
+        state.stateJson = input.mergedStateJson;
+        state.version += 1;
+        return true;
+      },
+    };
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([
+      observationCriterion("rec-1", "100 contacts"),
+      qualitativeCriterion("rec-2", "polite"),
+    ]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "Saved 100 contacts. Hello, I hope you are well." }),
+      contract,
+      {
+        content: "Saved 100 contacts. Hello, I hope you are well.",
+        source: "provider",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: 0,
+        checkerDispatch: async () => "PASS",
+        budgetReserveChecker: () => BudgetReservationResult.Reserved,
+      }
+    );
+    expect(writes).toHaveLength(1);
+    // Reload: parse the persisted state JSON and verify every evidenceId the
+    // service returned is present in the evidence array.
+    const reloaded = JSON.parse(state.stateJson as string) as { evidence: { evidenceId: string }[] };
+    expect(Array.isArray(reloaded.evidence)).toBe(true);
+    const reloadedIds = new Set(reloaded.evidence.map((row) => row.evidenceId));
+    for (const id of result.evidenceIds) {
+      expect(reloadedIds.has(id)).toBe(true);
+    }
+    expect(reloaded.evidence).toHaveLength(result.evidenceIds.length);
+  });
+});
