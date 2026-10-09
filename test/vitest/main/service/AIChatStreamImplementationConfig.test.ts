@@ -516,3 +516,43 @@ describe("TODO-08: acceptance-time mode capture (AC-14)", () => {
     expect(outcome).toMatchObject({ type: "completed" });
   });
 });
+
+describe("R04: mode flip during engine preparation keeps the accepted mode", () => {
+  it("a provider change while saveUserMessage is pending does not flip the run's delivery mode", async () => {
+    const provider = createMutableStreamImplementationConfig("callback");
+    let releasePrep!: () => void;
+    mockSaveUserMessage.mockImplementation(
+      () =>
+        new Promise<{ messageId: string }>((resolve) => {
+          releasePrep = () => resolve({ messageId: "user-r04" });
+        })
+    );
+    const loopCalls: string[] = [];
+    const loop = {
+      run: vi.fn(async (): Promise<never> => {
+        loopCalls.push("callback");
+        throw new Error("unused");
+      }),
+      async *iterate(): AsyncGenerator<never, never, void> {
+        loopCalls.push("generator");
+        return undefined as never;
+      },
+    };
+    const engine = new AIChatQueryEngine(loop as never, {
+      streamImplementation: provider,
+    });
+    const outcomePromise = engine.runTurn({
+      request: { message: "hi", conversationId: "v2-R04" },
+      eventSink: makeEventCollector().sink,
+    });
+    // Engine is awaiting the (deferred) user-message save — preparation in
+    // flight. Flip the provider NOW; the accepted pin must hold callback.
+    await vi.waitFor(() => expect(releasePrep).toBeTypeOf("function"));
+    provider.setMode("generator");
+    releasePrep();
+    const outcome = await outcomePromise;
+    // The loop threw (unused) → failed outcome is fine; assert the SEAM.
+    expect(["failed", "completed"]).toContain(outcome.type);
+    expect(loopCalls).toEqual(["callback"]); // pinned at acceptance, not generator
+  });
+});

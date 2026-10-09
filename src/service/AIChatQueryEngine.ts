@@ -1926,7 +1926,10 @@ export class AIChatQueryEngine {
     };
 
     try {
-      const streamMode = this.captureStreamMode(conversationId);
+      // R04 (FR-018/AC-14): READ the acceptance-time pin — recapturing here
+      // (after async preparation) let a provider change mid-preparation flip
+      // an already-accepted run's delivery mode.
+      const streamMode = this.pinnedStreamMode(conversationId);
       const result = await this.runLoopSegment(
         this.loop,
         loopInput,
