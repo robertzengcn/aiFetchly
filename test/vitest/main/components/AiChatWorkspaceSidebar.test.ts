@@ -54,12 +54,31 @@ beforeEach(() => {
 
 function mountSidebar() {
   return mount(AiChatWorkspaceSidebar, {
-    props: { redesignDefault: false },
-    global: { plugins: [i18n] },
+    global: {
+      plugins: [i18n],
+      stubs: {
+        AccountMenu: {
+          template: '<div data-testid="account-menu-stub" />',
+        },
+      },
+    },
   });
 }
 
 describe("AiChatWorkspaceSidebar global nav", () => {
+  it("renders the account menu in the footer instead of a mode toggle", () => {
+    const wrapper = mountSidebar();
+    expect(wrapper.find('[data-testid="account-menu-stub"]').exists()).toBe(
+      true
+    );
+    expect(wrapper.find('[data-testid="workspace-mode-default"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.find('[data-testid="workspace-mode-classic"]').exists()).toBe(
+      false
+    );
+  });
+
   it("renders the Insights, Knowledge Library, and Plugins nav links", () => {
     const wrapper = mountSidebar();
     expect(wrapper.get('[data-testid="workspace-insights"]').text()).toContain(
