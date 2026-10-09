@@ -817,9 +817,23 @@ const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
 /**
  * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
  * discards the response body, so only the numeric status is observable).
+ *
+ * Uses duck-typing in addition to `instanceof` so mirrored test doubles
+ * (same `name`/`status` shape, different class identity after module
+ * mocking) are still recognized as 404s.
  */
 function isHttpNotFoundError(err: unknown): boolean {
-  return err instanceof HttpResponseError && err.status === 404;
+  if (err instanceof HttpResponseError && err.status === 404) {
+    return true;
+  }
+  if (typeof err === "object" && err !== null) {
+    const status = (err as { status?: unknown }).status;
+    const name = (err as { name?: unknown }).name;
+    if (status === 404 && name === "HttpResponseError") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export class AiChatApi {

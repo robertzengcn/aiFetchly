@@ -1,9 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { AiChatApi } from "@/api/aiChatApi";
-import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
-// Import the modules to be mocked
-import { Token } from "@/modules/token";
+const mockTokenGetValue = vi.hoisted(() =>
+  vi.fn<(key: string) => string>((key: string) => {
+    if (key === "user_ai_enabled") return "true";
+    return "";
+  })
+);
+
+function defaultTokenGetValue(key: string): string {
+  if (key === "user_ai_enabled") return "true";
+  return "";
+}
 
 /**
  * Test-only typed view of AiChatApi private helpers. Casting through
@@ -19,33 +27,48 @@ interface AiChatApiInternals {
 const mockPostJsonShared = vi.fn();
 const mockGetShared = vi.fn();
 const mockPostStreamShared = vi.fn();
-vi.mock("@/modules/lib/httpclient", () => ({
-  HttpClient: vi.fn().mockImplementation(() => ({
-    postJson: mockPostJsonShared,
-    get: mockGetShared,
-    postStream: mockPostStreamShared,
-  })),
-}));
+vi.mock("@/modules/lib/httpclient", () => {
+  // Mirror of the real HttpResponseError so `instanceof` checks in the
+  // module under test evaluate instead of throwing.
+  class HttpResponseError extends Error {
+    readonly status: number;
+    readonly statusText: string;
+    constructor(status: number, statusText: string) {
+      super(statusText || `HTTP ${status}`);
+      this.name = "HttpResponseError";
+      this.status = status;
+      this.statusText = statusText;
+    }
+  }
+  return {
+    // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+    HttpClient: class {
+      constructor() {
+        return {
+          postJson: mockPostJsonShared,
+          get: mockGetShared,
+          postStream: mockPostStreamShared,
+        };
+      }
+    },
+    HttpResponseError,
+  };
+});
 
 // Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
 // USER_AI_ENABLED constant from @/config/usersetting is 'user_ai_enabled'
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => {
-    const storeMock = {
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    store = {
       setValue: vi.fn(),
       getValue: vi.fn(),
       deleteValue: vi.fn(),
       clearStore: vi.fn(),
     };
-    return {
-      store: storeMock as unknown as ElectronStoreService,
-      setValue: vi.fn(),
-      getValue: vi.fn((key: string) => {
-        if (key === "user_ai_enabled") return "true";
-        return "";
-      }),
-    };
-  }),
+    setValue = vi.fn();
+    getValue = mockTokenGetValue;
+  },
 }));
 
 describe("AiChatApi - Validation", () => {
@@ -54,6 +77,7 @@ describe("AiChatApi - Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     // Create API instance with custom validation config for testing
     api = new AiChatApi({
       maxPageSize: 10 * 1024, // 10KB for testing
@@ -521,25 +545,12 @@ describe("AiChatApi - Validation", () => {
 
   describe("ensureAIEnabled", () => {
     it("should throw when AI is not enabled (main process)", async () => {
-      // Mock AI as disabled
-      const MockedToken = vi.mocked(Token);
-      const storeMock = {
-        setValue: vi.fn(),
-        getValue: vi.fn(),
-        deleteValue: vi.fn(),
-        clearStore: vi.fn(),
-      } as unknown as ElectronStoreService;
-      MockedToken.mockImplementation(
-        () =>
-          ({
-            store: storeMock,
-            setValue: vi.fn(),
-            getValue: vi.fn((key: string) => {
-              if (key === "USER_AI_ENABLED") return "false";
-              return "";
-            }),
-          } as unknown as Token)
-      );
+      mockTokenGetValue.mockImplementation((key: string) => {
+        if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
+          return "false";
+        }
+        return "";
+      });
 
       const disabledApi = new AiChatApi();
 
@@ -555,6 +566,7 @@ describe("AiChatApi - Error Sanitization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi({
       maxErrorLength: 1000,
     });
@@ -637,6 +649,7 @@ describe("AiChatApi - Screenshot Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi();
   });
 
@@ -696,6 +709,7 @@ describe("AiChatApi - Page Size Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi({
       maxPageSize: 50 * 1024, // 50KB default
     });
@@ -740,26 +754,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    const MockedToken = vi.mocked(Token);
-    const storeMock = {
-      setValue: vi.fn(),
-      getValue: vi.fn(),
-      deleteValue: vi.fn(),
-      clearStore: vi.fn(),
-    } as unknown as ElectronStoreService;
-    MockedToken.mockImplementation(
-      () =>
-        ({
-          store: storeMock,
-          setValue: vi.fn(),
-          getValue: vi.fn((key: string) => {
-            if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
-              return "true";
-            }
-            return "";
-          }),
-        } as unknown as Token)
-    );
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi();
   });
 
@@ -1627,6 +1622,7 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
     mockPostStreamShared.mockReset();
     mockPostJsonShared.mockReset();
     mockGetShared.mockReset();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
   });
 
   it("retries a network failure then succeeds and emits retry + recovery_status", async () => {

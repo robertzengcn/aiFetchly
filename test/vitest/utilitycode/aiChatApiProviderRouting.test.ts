@@ -59,6 +59,15 @@ vi.mock("@/modules/lib/httpclient", () => ({
   HttpResponseError: MockHttpResponseError,
 }));
 
+// Production imports HttpResponseError from "@/modules/lib/httpResponseError"
+// (not via httpclient), so mirror the mock there too — otherwise
+// `instanceof` in isHttpNotFoundError never matches the test double.
+vi.mock("@/modules/lib/httpResponseError", () => ({
+  HttpResponseError: MockHttpResponseError,
+  MAX_RESPONSE_BODY_BYTES: 16 * 1024,
+  MAX_RETRY_AFTER_MS: 60_000,
+}));
+
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
 
 /** Read the first argument of the first call to a mocked fetch. */
@@ -94,7 +103,11 @@ describe("AiChatApi provider routing", () => {
 
   beforeEach(() => {
     tokenStore.clear();
-    vi.clearAllMocks();
+    // Reset (not just clear) so mockRejectedValueOnce/mockResolvedValueOnce
+    // queues from a prior test cannot leak into the next one.
+    mockGet.mockReset();
+    mockPostJson.mockReset();
+    mockPostStream.mockReset();
     api = new AiChatApi();
   });
 

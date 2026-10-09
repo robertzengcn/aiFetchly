@@ -178,19 +178,44 @@ describe("AgentToolPolicyService — mandatory infrastructure tools", () => {
    * Registry invariant: every active built-in agent with a non-empty
    * allowlist exposes the polling tools via the filter. This is the
    * structural replacement for declaring them per-agent.
+   * Tool-less agents (e.g. agent-generated-image-editor with
+   * allowedTools: []) intentionally stay at zero — "explicit zero means
+   * zero" — so they are excluded here and covered by the empty-allowlist
+   * test above.
    */
   describe("registry: every built-in agent can poll async jobs", () => {
-    AgentDefinitionRegistry.listBuiltIns().forEach((agent) => {
-      it(`${agent.id} exposes infrastructure tools via filter`, () => {
-        const svc = new AgentToolPolicyService();
+    AgentDefinitionRegistry.listBuiltIns()
+      .filter((agent) => agent.allowedTools.length > 0)
+      .forEach((agent) => {
+        it(`${agent.id} exposes infrastructure tools via filter`, () => {
+          const svc = new AgentToolPolicyService();
+          const exposed = svc.filterExposedToolNames({
+            allowedTools: agent.allowedTools,
+            availableToolNames: [...agent.allowedTools, ...INFRA_TOOLS],
+          });
+          for (const infra of INFRA_TOOLS) {
+            expect(exposed, `${agent.id} must expose ${infra}`).toContain(
+              infra
+            );
+          }
+        });
+      });
+
+    it("tool-less built-in agents stay at zero (explicit zero means zero)", () => {
+      const toolLess = AgentDefinitionRegistry.listBuiltIns().filter(
+        (agent) => agent.allowedTools.length === 0
+      );
+      // Guard: this test documents the exclusion above — if no tool-less
+      // built-in exists, the filter is vacuous and should be revisited.
+      expect(toolLess.length).toBeGreaterThan(0);
+      const svc = new AgentToolPolicyService();
+      for (const agent of toolLess) {
         const exposed = svc.filterExposedToolNames({
           allowedTools: agent.allowedTools,
-          availableToolNames: [...agent.allowedTools, ...INFRA_TOOLS],
+          availableToolNames: INFRA_TOOLS,
         });
-        for (const infra of INFRA_TOOLS) {
-          expect(exposed, `${agent.id} must expose ${infra}`).toContain(infra);
-        }
-      });
+        expect(exposed, `${agent.id} must stay tool-less`).toEqual([]);
+      }
     });
   });
 });

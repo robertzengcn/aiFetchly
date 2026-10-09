@@ -173,8 +173,8 @@ function review(codeStr: string, re: RegExp, message: string): CompiledPattern {
 export function normalizeForValidation(text: string): string {
   return (
     text
-      // eslint-disable-next-line no-misleading-character-class -- intentional: stripping zero-width joiner + BOM is the purpose
-      .replace(/[-\u200d\ufeff]/g, "") // zero-width chars (ZWJ, BOM)
+      // eslint-disable-next-line no-misleading-character-class -- intentional: stripping zero-width chars + BOM is the purpose
+      .replace(/[-\u200b\u200c\u200d\ufeff]/g, "") // zero-width chars (ZWSP, ZWNJ, ZWJ, BOM)
       .replace(/[4@]/g, "a")
       .replace(/[3]/g, "e")
       .replace(/[1!|]/g, "i")
