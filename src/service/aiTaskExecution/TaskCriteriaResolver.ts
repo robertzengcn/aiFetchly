@@ -121,18 +121,78 @@ const POLITE_PREFIXES = [
 ] as const;
 
 /**
+ * CJK (Chinese/Japanese) polite-request prefixes — mirrors
+ * `TaskRequestResolver.CJK_POLITE_PREFIXES` so the compiler and router agree
+ * on the CJK imperative lead. "请保存100个联系人" strips to
+ * "保存100个联系人" so the CJK count pattern matches (T18, FR-17).
+ */
+const CJK_POLITE_PREFIXES = [
+  "请",
+  "麻烦你",
+  "麻烦",
+  "请帮我",
+  "请你",
+  "帮我",
+] as const;
+
+/**
+ * CJK collection verbs (Chinese simplified + Japanese kanji forms) — mirrors
+ * `TaskRequestResolver.CJK_ACTION_VERBS` for the count pattern. Aligned so
+ * the compiler and router agree on CJK collection verbs (T18, FR-19).
+ */
+const CJK_COLLECTION_VERBS = [
+  "保存",
+  "收集",
+  "采集",
+  "抓取",
+  "提取",
+  "导入",
+  "导出",
+  "查找",
+  "搜索",
+  "获取",
+  "寻找",
+] as const;
+
+/**
+ * CJK operation verbs (Chinese simplified + Japanese kanji forms) — mirrors
+ * `TaskRequestResolver.CJK_ACTION_VERBS` for the operation pattern.
+ * "发送5封邮件" → `operation_receipt` requiring completed state (T18, FR-19).
+ */
+const CJK_OPERATION_VERBS = [
+  "发送",
+  "发布",
+  "部署",
+  "启动",
+  "完成",
+] as const;
+
+/**
+ * CJK measure words that follow a number ("<N>个/件/名/条/位/家/封") — the
+ * CJK count pattern's noun anchor. CJK has no word spaces, so the count is
+ * "<N><measure><noun>" with no separators (T18, FR-19).
+ */
+const CJK_MEASURE_WORDS = "个|件|名|条|只|位|家|封" as const;
+
+/**
  * Strip leading politeness prefixes from a clause for verb matching. Returns
  * the stripped text — the clause's sourceRef offsets stay anchored to the
  * full clause (including the prefix), so the span still slices back to real
- * content that contains the matched verb.
+ * content that contains the matched verb. T18: also strips CJK polite
+ * prefixes ("请保存100个联系人" → "保存100个联系人").
  */
 function stripPolitePrefix(text: string): string {
   let stripped = text.trimStart();
   for (let i = 0; i < 2; i++) {
     const lower = stripped.toLowerCase();
     const prefix = POLITE_PREFIXES.find((p) => lower.startsWith(p));
-    if (!prefix) break;
-    stripped = stripped.slice(prefix.length).trimStart();
+    if (prefix) {
+      stripped = stripped.slice(prefix.length).trimStart();
+      continue;
+    }
+    const cjkPrefix = CJK_POLITE_PREFIXES.find((p) => stripped.startsWith(p));
+    if (!cjkPrefix) break;
+    stripped = stripped.slice(cjkPrefix.length).trimStart();
   }
   return stripped;
 }
@@ -143,15 +203,17 @@ const ID_PREFIX = "crit";
  * Split a message into clauses on `,` and ` and `, preserving each clause's
  * trimmed start/end offsets in the original message. "Find 20 leads, save
  * them, and draft an email" → 3 clauses. A single-clause message returns one
- * clause spanning the trimmed message.
+ * clause spanning the trimmed message. T18: the CJK conjunction 和
+ * ("保存100个联系人和发送5封邮件") also splits — CJK has no spaces, so 和
+ * appears unspaced between clauses.
  */
 function splitClauses(message: string): readonly Clause[] {
   const clauses: Clause[] = [];
   // Order matters: ", and " must be tried before ", " and " and " so it
   // consumes the conjunction in one match instead of leaving a dangling
   // "and ..." clause. "Find 20 leads, save them, and draft an email" → 3
-  // clauses, not "and draft an email".
-  const delimiter = /\s*(?:,\s*and\s+|,\s*|\s+and\s+)/gi;
+  // clauses, not "and draft an email". The CJK 和 alternative is unspaced.
+  const delimiter = /\s*(?:,\s*and\s+|,\s*|\s+and\s+|和)/g;
   let lastEnd = 0;
   let match: RegExpExecArray | null;
   while ((match = delimiter.exec(message)) !== null) {
@@ -189,12 +251,15 @@ function pushTrimmed(
 /**
  * Derive a stable target identifier slug from a noun phrase, capped to the
  * schema max (200). Lowercase, alphanumeric+dash only. Never invents content
- * — falls back to "target" if the phrase is empty.
+ * — falls back to "target" if the phrase is empty. T18: CJK characters are
+ * preserved as-is (the [a-z0-9] strip would otherwise reduce a CJK noun like
+ * "合格联系人" to the generic "target"); CJK identifiers are stable in the
+ * schema's 200-char cap.
  */
 function slugifyTarget(phrase: string): string {
   const slug = phrase
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-z0-9一-鿿぀-ヿ]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 200);
   return slug.length > 0 ? slug : "target";
@@ -228,6 +293,37 @@ function matchClause(
   // slices back to real content containing the matched verb.
   const stripped = stripPolitePrefix(text);
   const lower = stripped.toLowerCase();
+
+  // 0. CJK count/target: "<CJK collection verb><N><measure><noun>" — CJK has
+  // no word spaces, so the count/noun are unspaced ("保存100个联系人").
+  // Mirrors the English count pattern's record_count output (T18, FR-19).
+  for (const verb of CJK_COLLECTION_VERBS) {
+    if (!stripped.startsWith(verb)) continue;
+    const cjkCountRe = new RegExp(
+      `^${verb}\\s*(\\d+)\\s*(?:${CJK_MEASURE_WORDS})\\s*([^，。,.\\s]+)`,
+      "i"
+    );
+    const m = cjkCountRe.exec(stripped);
+    if (m) {
+      const minimum = parseInt(m[1], 10);
+      const noun = m[2];
+      const id = nextId(indexByKind, "record_count");
+      return {
+        criterion: {
+          id,
+          required: true,
+          kind: "record_count",
+          description: `${verb}至少${minimum}个${noun}`.slice(0, 2000),
+          adapterKey: "record_count",
+          targetId: slugifyTarget(noun),
+          scope: "execution",
+          minimum,
+          sourceRefs: [makeSourceRef(clause, messageId)],
+        },
+        ambiguous: false,
+      };
+    }
+  }
 
   // 1. Count/target: "<collection verb> <N> <things> [to <target>]"
   for (const verb of COLLECTION_VERBS) {
@@ -314,6 +410,35 @@ function matchClause(
           required: true,
           kind: "operation_receipt",
           description: `${verb} ${opTarget} completed`.slice(0, 2000),
+          adapterKey: "operation_receipt",
+          targetId: slugifyTarget(opTarget || verb),
+          requiredState: "completed",
+          sourceRefs: [makeSourceRef(clause, messageId)],
+        },
+        ambiguous: false,
+      };
+    }
+  }
+
+  // 4b. CJK operation/send: "<CJK operation verb><N?><measure><noun>" —
+  // mirrors the English operation pattern (T18, FR-19). "发送5封邮件"
+  // requires "completed" state.
+  for (const verb of CJK_OPERATION_VERBS) {
+    if (!stripped.startsWith(verb)) continue;
+    const cjkOpRe = new RegExp(
+      `^${verb}\\s*(\\d+)?\\s*(?:${CJK_MEASURE_WORDS})?\\s*([^，。,.\\s]*)`,
+      "i"
+    );
+    const m = cjkOpRe.exec(stripped);
+    if (m) {
+      const opTarget = (m[2] ?? "").trim();
+      const id = nextId(indexByKind, "operation_receipt");
+      return {
+        criterion: {
+          id,
+          required: true,
+          kind: "operation_receipt",
+          description: `${verb}${opTarget}完成`.slice(0, 2000),
           adapterKey: "operation_receipt",
           targetId: slugifyTarget(opTarget || verb),
           requiredState: "completed",
