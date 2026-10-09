@@ -98,9 +98,9 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T03 — Use authoritative evidence, implement the missing data/artifact/checker connections [P1, confirmed]
 
-- [ ] Replace target-word matching with trusted fresh observation evidence and a separately verified report.
-- [ ] Wire record-count queries, artifact content/hash/baselines, real operation receipts and a bounded tool-free checker into production bindings.
-- [ ] Persist actual evidence rows, source revisions and scope before terminal delivery.
+- [x] Replace target-word matching with trusted fresh observation evidence and a separately verified report.
+- [x] Wire record-count queries, artifact content/hash/baselines, real operation receipts and a bounded tool-free checker into production bindings.
+- [x] Persist actual evidence rows, source revisions and scope before terminal delivery.
 
 **Evidence:** `criteriaAdapters.ts:95–105` passes an observation if its target appears in assistant prose. Probe: “I will check production later” passes the required observation for target `production` with no retrieval. `RecordCountAdapter` at `:154–174` has no provider in the default production registry; `ArtifactAdapter` at `:235–243` is a stub. Engine evidence context at `AIChatQueryEngine.ts:1435–1439` provides only assistant content plus constant revision `slice2-unit4`; no trusted catalog/count/checker/abort wiring. The evidence store adapter at `:1403` always returns false, and no expected version is supplied, so evidence persistence is skipped. Finalization stores IDs, not those missing evidence rows.
 
