@@ -46,7 +46,21 @@ export const GENERATION_INVOCATION_BUDGET_MS = 5 * 60_000;
  */
 export const REPLY_MAX_TOKENS_DEFAULT = 1500;
 
-/** A started, read-only deadline for one generation invocation. */
+/**
+ * Output budget for the safety-classifier call (FR-027 sibling). The
+ * constrained-JSON answer ("safe"/"needs_review"/"human_review" + confidence)
+ * fits well under 60 tokens; a small budget keeps a runaway classifier
+ * response from eating the invocation budget.
+ */
+export const CLASSIFIER_MAX_TOKENS = 60;
+
+/**
+ * Bounded length for the persisted {@link EmailReplyDraftEntity.modelName}
+ * column (varchar(100)). Truncation is deliberate — provider-returned model
+ * ids can exceed the column width, and the T09 fix stores the honest
+ * returnedModel value rather than the pre-T09 literal.
+ */
+export const MODEL_NAME_MAX_CHARS = 100;
 export interface GenerationDeadline {
   /** Remaining budget in ms, clamped to 0 once elapsed. */
   remainingMs(): number;

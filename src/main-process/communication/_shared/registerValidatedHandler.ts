@@ -103,9 +103,7 @@ function extractStructuredFailure(err: unknown): {
     name?: unknown;
     code?: unknown;
     existing_draft_id?: unknown;
-    existingDraftId?: unknown;
     next_action?: unknown;
-    nextAction?: unknown;
     requestCorrelationId?: unknown;
   };
   // Gate on the typed-error class name so plain Errors, Node system errors,
@@ -123,15 +121,9 @@ function extractStructuredFailure(err: unknown): {
   const existingDraftId =
     typeof e.existing_draft_id === "number"
       ? e.existing_draft_id
-      : typeof e.existingDraftId === "number"
-      ? e.existingDraftId
       : undefined;
   const nextAction =
-    typeof e.next_action === "string"
-      ? e.next_action
-      : typeof e.nextAction === "string"
-      ? e.nextAction
-      : undefined;
+    typeof e.next_action === "string" ? e.next_action : undefined;
   const requestCorrelationId =
     typeof e.requestCorrelationId === "string" ? e.requestCorrelationId : undefined;
   // Each field is surfaced independently — a StructuredIpcError for an

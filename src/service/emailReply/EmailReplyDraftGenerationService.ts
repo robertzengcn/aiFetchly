@@ -60,6 +60,8 @@ import {
   MODEL_CALL_CAP_MS,
   REPLY_MAX_TOKENS_DEFAULT,
   GENERATION_INVOCATION_BUDGET_MS,
+  CLASSIFIER_MAX_TOKENS,
+  MODEL_NAME_MAX_CHARS,
   type GenerationDeadline,
 } from "@/service/emailReply/EmailReplyGenerationBudget";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
@@ -565,8 +567,7 @@ export class EmailReplyDraftGenerationService {
     //     has a reply in the mailbox (or in local state), so we never pay for
     //     a model call — or persist a draft — for a message that has already
     //     been answered. `forceRefresh: false` consumes the 60s negative cache
-    //     (§7.3); without the cache (T05 step 10 lands later) every call is a
-    //     fresh probe, still correct.
+    //     (§7.3, landed with the T05 cache layer).
     //
     //     A `replied` OR `unknown` outcome is a hard refusal: write exactly ONE
     //     `reply_skipped` audit row (stage `pre_draft`, code = the detection
@@ -1071,7 +1072,7 @@ export class EmailReplyDraftGenerationService {
     // null when the provider omitted it — never the pre-T09 "openai-compatible"
     // literal, which lied about which model ran. Bounded to the column width.
     draft.modelName = winningRaw.returnedModel?.trim()
-      ? winningRaw.returnedModel.slice(0, 100)
+      ? winningRaw.returnedModel.slice(0, MODEL_NAME_MAX_CHARS)
       : null;
     draft.finishReason = winningRaw.finishReason ?? null;
     draft.promptTokens = winningRaw.usage?.prompt_tokens ?? null;
@@ -1539,19 +1540,6 @@ export class EmailReplyDraftGenerationService {
   }
 
   /**
-   * Record a generation-path refusal (FR-027/FR-034). A generation failure is
-   * NOT a send failure — no SMTP submission was attempted — so the audit action
-   * is `reply_skipped`, not `send_failed`. The `send_failed` action is reserved
-   * for the delivery service path where an actual SMTP submission failed.
-   *
-   * The optional metadata carries the structured `stage` + `code` so the audit
-   * row is machine-queryable without parsing the `reason` text (FR-034).
-   *
-   * Intentionally NOT caught: audit persistence failure STOPS the work — an
-   * unrecorded refusal must never be followed by a silent success return. The
-   * caller surfaces the persistence failure instead.
-   */
-  /**
    * T07: the guard module for THIS invocation. Lazily constructed on first
    * use (never at module top level — BaseModule TDZ crash under vi.mock).
    */
@@ -1744,6 +1732,19 @@ export class EmailReplyDraftGenerationService {
     }
   }
 
+  /**
+   * Record a generation-path refusal (FR-027/FR-034). A generation failure is
+   * NOT a send failure — no SMTP submission was attempted — so the audit action
+   * is `reply_skipped`, not `send_failed`. The `send_failed` action is reserved
+   * for the delivery service path where an actual SMTP submission failed.
+   *
+   * The optional metadata carries the structured `stage` + `code` so the audit
+   * row is machine-queryable without parsing the `reason` text (FR-034).
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work — an
+   * unrecorded refusal must never be followed by a silent success return. The
+   * caller surfaces the persistence failure instead.
+   */
   private async recordFailure(
     emailServiceId: number,
     messageId: number,
@@ -2012,7 +2013,7 @@ function buildLlmClassifier(
         { role: "user", content: buildClassificationPrompt(input) },
       ],
       temperature: 0,
-      max_tokens: 60,
+      max_tokens: CLASSIFIER_MAX_TOKENS,
       ...(Number.isNaN(callBudgetMs)
         ? {}
         : { callBudgetMs: Math.max(0, callBudgetMs) }),

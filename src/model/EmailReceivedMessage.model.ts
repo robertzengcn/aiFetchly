@@ -68,22 +68,29 @@ export class EmailReceivedMessageModel extends BaseDb {
         stripped.isAnswered === 1 ? "sent" : undefined,
         existing.replyStatus
       );
+      // Merge the written fields over the already-loaded row instead of a
+      // second findOne round trip — the update applied exactly these values
+      // (or threw); nothing else writes these columns inside this call. The
+      // merge goes through repository.merge so TypeORM BaseEntity methods
+      // (hasId/reload) stay intact on the returned entity.
       if (promote) {
+        const processedAt = new Date();
         await this.repository.update(
           { id: existing.id },
           {
             ...providerPatch,
             replyStatus: "sent",
-            processedAt: new Date(),
+            processedAt,
           }
         );
-      } else {
-        await this.repository.update({ id: existing.id }, providerPatch);
+        return this.repository.merge(
+          existing,
+          providerPatch,
+          { replyStatus: "sent", processedAt } as Partial<EmailReceivedMessageEntity>
+        );
       }
-      const refreshed = await this.repository.findOne({
-        where: { id: existing.id },
-      });
-      return refreshed ?? existing;
+      await this.repository.update({ id: existing.id }, providerPatch);
+      return this.repository.merge(existing, providerPatch);
     }
 
     const created = this.repository.create(stripped);

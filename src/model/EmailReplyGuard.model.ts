@@ -378,9 +378,8 @@ export class EmailReplyGuardModel extends BaseDb {
 
       const evidence = await readClusterEvidence(manager, {
         emailServiceId: row.emailServiceId,
-        normalizedMessageId: null, // we have the replyKey directly
+        normalizedMessageId: null, // resolved from the seed row
         seedMessageId: row.messageId,
-        replyKey: row.replyKey,
       });
 
       // §5.2 precedence ladder shared with the send-claim sibling check

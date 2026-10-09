@@ -38,9 +38,8 @@ export interface ClusterEvidence {
  * a singleton cluster (the `row:` replyKey fallback).
  *
  * When `normalizedMessageId` is supplied it overrides the seed row's own value
- * (the acquire path passes the caller-resolved id); `replyKey` is accepted for
- * provenance/logging symmetry with the guard row and is not used to resolve
- * the cluster — the (emailServiceId, normalizedMessageId) join is authoritative.
+ * (the acquire path passes the caller-resolved id). The
+ * (emailServiceId, normalizedMessageId) join is authoritative.
  */
 export async function readClusterEvidence(
   manager: EntityManager,
@@ -48,7 +47,6 @@ export async function readClusterEvidence(
     emailServiceId: number;
     normalizedMessageId: string | null;
     seedMessageId: number;
-    replyKey?: string;
   }
 ): Promise<ClusterEvidence> {
   const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
