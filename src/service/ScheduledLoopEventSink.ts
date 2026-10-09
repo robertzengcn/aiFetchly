@@ -130,10 +130,11 @@ export interface ScheduledLoopPolicyBinding {
     readonly content: string;
     readonly source: string;
     readonly sourceRevision: string;
-    readonly checkerDispatch?: (prompt: string) => Promise<string>;
+    readonly checkerDispatch?: (prompt: string, signal?: AbortSignal) => Promise<string>;
     readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
     readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
     readonly artifactBaseDir?: string;
+    readonly abortSignal?: AbortSignal;
     readonly resolveExpectedStateVersion?: () => Promise<number | undefined>;
   };
 }
@@ -355,6 +356,9 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
             observationProvider: baseContext.observationProvider,
             operationReceiptProvider: baseContext.operationReceiptProvider,
             artifactBaseDir: baseContext.artifactBaseDir,
+            // T04: thread the run-scoped abort signal into the fallback
+            // checker dispatch (Stop / run-cancel → unknown, AC-24).
+            abortSignal: baseContext.abortSignal,
             expectedStateVersion,
           },
         };

@@ -280,6 +280,24 @@ export class ScheduledAiMessageRunner {
       started_at: startedAt,
     });
 
+    // 5. Acquire the conversation turn lease (FR-7) + register the abort handle.
+    //
+    // T04 (NFR-02/04, AC-24): the run-scoped `abortController` is created
+    // BEFORE enrollment so the enroller can capture `() => abortController.signal`
+    // and thread it into the consult closure (Stop / run-cancel propagates to
+    // the checker dispatch; §9 line 445: a hanging request cannot hold the
+    // gate). Previously created at the lease step (after enrollment), the
+    // controller now precedes both — the lease acquisition below still reads
+    // `abortController.signal` exactly as before.
+    const coordinator = AIChatConversationTurnCoordinator.getInstance();
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(
+      () => abortController.abort(),
+      SCHEDULED_LOOP_RUN_TIMEOUT_MS
+    );
+    this.runRegistry.register(runId, abortController);
+    let lease: ConversationTurnLease | null = null;
+
     // Unit 6 (GAP-S2 #8/#9) + T02: enroll this occurrence into the completion
     // policy BEFORE the engine runs, through the SAME trusted decision
     // boundary as manual runs (resolver → criteria compile → contract freeze
@@ -294,7 +312,8 @@ export class ScheduledAiMessageRunner {
     let policyBinding: ScheduledLoopPolicyBinding | undefined;
     // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
     // execution row after the turn ends. Fresh scheduled executions start at
-    // execution_state_version = 0 and nothing bumps it in the scheduled path.
+    // execution_state_version = 0; T03 evidence writes bump it during the run,
+    // so finalizeScheduledPolicyRun re-reads the version before finalizing.
     let policyExecution: {
       readonly executionId: string;
       readonly expectedVersion: number;
@@ -322,6 +341,9 @@ export class ScheduledAiMessageRunner {
             maxToolCalls: task.max_tool_calls,
             maxRuntimeMs: task.max_runtime_ms,
           }),
+          // T04: thread the run-scoped abort signal into the consult closure
+          // so the checker dispatch races Stop / run-cancel + a deadline.
+          getAbortSignal: () => abortController.signal,
         });
         if (enrollResult.status === "created") {
           policyBinding = enrollResult.policyBinding;
@@ -363,16 +385,6 @@ export class ScheduledAiMessageRunner {
         policyBinding = undefined;
       }
     }
-
-    // 5. Acquire the conversation turn lease (FR-7) + register the abort handle.
-    const coordinator = AIChatConversationTurnCoordinator.getInstance();
-    const abortController = new AbortController();
-    const timeoutHandle = setTimeout(
-      () => abortController.abort(),
-      SCHEDULED_LOOP_RUN_TIMEOUT_MS
-    );
-    this.runRegistry.register(runId, abortController);
-    let lease: ConversationTurnLease | null = null;
 
     const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
     let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;

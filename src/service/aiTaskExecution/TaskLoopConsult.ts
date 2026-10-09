@@ -161,6 +161,18 @@ export interface LoopTaskExecutionBinding {
    */
   readonly executionKind?: "manual" | "scheduled";
   /**
+   * T04 (NFR-02/04, AC-24): the per-consult abort source. The consult closure
+   * reads this fresh per consult so the checker dispatch can race the signal +
+   * a deadline (a Stop or a hanging provider stall cannot hold the gate, §9
+   * line 445). Manual seam: `() => this.activeTurns.get(conversationId)?.
+   * abortController.signal` (the per-turn controller). Scheduled seam: the
+   * runner's run-scoped controller. Optional so flag-off callers and tests can
+   * omit it; when absent the checker dispatch gets no parent signal (only its
+   * own deadline timer) — fail-closed at the deadline, not byte-identical to
+   * legacy, but the legacy path had no checker dispatch wired at all.
+   */
+  readonly getAbortSignal?: () => AbortSignal | undefined;
+  /**
    * Records the controller's decision for this turn so the engine's
    * finalization gate (Slice 2 Unit 5) can tell "the loop already
    * consulted" apart from "no consult ran" and only fall back to its

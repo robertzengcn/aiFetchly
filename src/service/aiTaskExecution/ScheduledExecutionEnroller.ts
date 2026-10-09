@@ -74,6 +74,14 @@ export interface EnrollScheduledInput {
   readonly occurrenceKey: string;
   readonly idempotencyKey?: string;
   readonly budgetLimits: BudgetLimitsInput;
+  /**
+   * T04 (NFR-02/04, AC-24): the run-scoped abort signal source. The runner
+   * creates its `abortController` BEFORE enrollment and passes
+   * `() => abortController.signal` here so the consult closure can thread the
+   * signal into the checker dispatch (Stop / run-cancel propagates to the
+   * transport; §9 line 445: a hanging request cannot hold the gate).
+   */
+  readonly getAbortSignal?: () => AbortSignal | undefined;
 }
 
 /**
@@ -266,6 +274,10 @@ export async function enrollScheduledExecution(
     executionId: created.executionId,
     executionKind: "scheduled",
     policyAccepted: true,
+    // T04 (NFR-02/04, AC-24): the run-scoped abort signal — the consult
+    // closure reads it fresh so the checker dispatch races Stop / run-cancel
+    // + a deadline (§9: a hanging request cannot hold the gate).
+    getAbortSignal: input.getAbortSignal,
     consult: async (candidate) => {
       // T03: read the CAS token fresh per consult so evidence writes persist
       // (AC-32). A frozen version would mismatch the moment any prior consult
@@ -284,6 +296,8 @@ export async function enrollScheduledExecution(
           observationProvider,
           operationReceiptProvider,
           artifactBaseDir: artifactBaseDir ?? undefined,
+          // T04: thread the run-scoped abort signal into the checker dispatch.
+          abortSignal: input.getAbortSignal?.(),
           expectedStateVersion,
         },
         budget: created.budget,
@@ -350,6 +364,9 @@ export async function enrollScheduledExecution(
       observationProvider,
       operationReceiptProvider,
       artifactBaseDir: artifactBaseDir ?? undefined,
+      // T04: the run-scoped abort signal — read fresh at consult time so the
+      // fallback checker dispatch races Stop / run-cancel + a deadline.
+      abortSignal: input.getAbortSignal?.(),
       resolveExpectedStateVersion: async () => {
         try {
           const exec = await execModule.getExecution(created.executionId);

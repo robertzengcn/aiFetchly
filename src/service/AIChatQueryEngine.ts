@@ -1557,6 +1557,13 @@ export class AIChatQueryEngine {
                 // enrollment cannot convert accepted unfinished work to
                 // unchecked success (NFR-12, AC-12/32).
                 policyAccepted: true,
+                // T04 (NFR-02/04, AC-24): the per-turn abort controller is
+                // created AFTER this enrollment block runs (at the turn-state
+                // registration). Read it fresh per consult so the checker
+                // dispatch races the CURRENT turn's Stop signal + a deadline
+                // (§9: a hanging request cannot hold the gate).
+                getAbortSignal: () =>
+                  this.activeTurns.get(conversationId)?.abortController.signal,
                 consult: async (candidate) => {
                   // T03: read the CAS token fresh per consult so evidence
                   // writes persist (AC-32). A frozen version would mismatch
@@ -1575,6 +1582,11 @@ export class AIChatQueryEngine {
                       observationProvider,
                       operationReceiptProvider,
                       artifactBaseDir: artifactBaseDir ?? undefined,
+                      // T04: thread the per-turn abort signal into the
+                      // checker dispatch (read fresh — the turn may have
+                      // changed between consults).
+                      abortSignal: this.activeTurns.get(conversationId)
+                        ?.abortController.signal,
                       expectedStateVersion,
                     },
                     budget: created.budget,
