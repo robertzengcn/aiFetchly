@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import { shallowMount } from "@vue/test-utils";
 import AuthenticatedLayoutBoundary from "@/views/layout/AuthenticatedLayoutBoundary.vue";
@@ -37,5 +37,12 @@ describe("AuthenticatedLayoutBoundary shell rollback round-trip", () => {
     ).toBe(true);
     expect(wrapper.find("layout-stub").exists()).toBe(false);
     wrapper.unmount();
+  });
+
+  it("defaults the shell flag to on for first run", async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const mod = await import("@/views/composables/useInnerPageShellFlag");
+    expect(mod.useInnerPageShellFlag().shellEnabled.value).toBe(true);
   });
 });

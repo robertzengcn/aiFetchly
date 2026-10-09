@@ -135,7 +135,7 @@ async function onToggleMode(): Promise<void> {
     await setWorkspaceRedesignEnabled(next);
     redesignDefault.value = next;
     // The layout BOUNDARY selects the shell through the localStorage
-    // `aifetchly.innerPageShellV2` flag — the durable redesign preference
+    // `aifetchly.innerPageShellV3` flag — the durable redesign preference
     // alone never remounts the classic layout. Write BOTH so the toggle
     // actually switches the active shell (review: rollback-path fix).
     innerPageShell.setShellEnabled(next);
