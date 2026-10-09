@@ -256,8 +256,15 @@ export class EmailReplyDraftGenerationService {
   private messageModule = new EmailReceivedMessageModule();
   private draftModule = new EmailReplyDraftModule();
   private profileModule = new EmailReplyIdentityProfileModule();
-  private replyAuditModule = new EmailReplyAuditLogModule();
-  private autoAuditModule = new EmailAutoReplyAuditLogModule();
+  /**
+   * D7.1: audit modules resolved through injectable factories so tests can
+   * substitute in-memory stubs (capture payloads / drive write failure) without
+   * a real DB. Lazily memoized on first use, never at module top level.
+   */
+  private replyAuditModule: EmailReplyAuditLogModule | null = null;
+  private autoAuditModule: EmailAutoReplyAuditLogModule | null = null;
+  private readonly replyAuditModuleFactory: () => EmailReplyAuditLogModule;
+  private readonly autoAuditModuleFactory: () => EmailAutoReplyAuditLogModule;
   private readonly apiFactory: AiChatApiFactory;
   /**
    * FR-035 slice / B13: injectable generation-budget options. Tests pass a
@@ -270,6 +277,15 @@ export class EmailReplyDraftGenerationService {
         readonly now?: () => number;
         readonly budgetMs?: number;
       };
+  /**
+   * D7.2: injectable clock for audit-row / reservation / lease / commit
+   * timestamps. Distinct from `budgetOptions.now` (which only feeds the
+   * aggregate model-call deadline). Defaults to `Date.now`. Every site that
+   * previously called `new Date()` or `Date.now()` for a persisted timestamp
+   * routes through {@link nowForInvocation} so tests can advance a synthetic
+   * clock and assert exact observation times.
+   */
+  private readonly now: () => number;
   /**
    * T09: output budget for each reply-generation model call (FR-027).
    * Defaults to {@link REPLY_MAX_TOKENS_DEFAULT} (1500) — no longer a
@@ -324,6 +340,20 @@ export class EmailReplyDraftGenerationService {
        * undefined → the lazy getter constructs the real default service.
        */
       readonly detectionServiceFactory?: () => EmailReplyDetectionService;
+      /**
+       * D7.1: injectable audit-module factories (test seam). Tests substitute
+       * in-memory stubs to capture audit payloads or drive write failure
+       * without a real DB. Production leaves them undefined → the real
+       * modules are constructed lazily on first use.
+       */
+      readonly replyAuditModuleFactory?: () => EmailReplyAuditLogModule;
+      readonly autoAuditModuleFactory?: () => EmailAutoReplyAuditLogModule;
+      /**
+       * D7.2: injectable clock for audit-row / reservation / lease timestamps
+       * (test seam). Distinct from `budget.now`, which only feeds the
+       * aggregate model-call deadline. Defaults to `Date.now`.
+       */
+      readonly now?: () => number;
     }
   ) {
     this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
@@ -335,6 +365,11 @@ export class EmailReplyDraftGenerationService {
     this.guardModuleFactory =
       options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
+    this.replyAuditModuleFactory =
+      options?.replyAuditModuleFactory ?? (() => new EmailReplyAuditLogModule());
+    this.autoAuditModuleFactory =
+      options?.autoAuditModuleFactory ?? (() => new EmailAutoReplyAuditLogModule());
+    this.now = options?.now ?? ((): number => Date.now());
   }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
@@ -445,8 +480,10 @@ export class EmailReplyDraftGenerationService {
       rowId: message.id,
     });
     const ownerToken = randomBytes(64).toString("hex");
+    // D7.2: route through the injectable clock so tests can control lease
+    // expiry deterministically (previously bare Date.now()/new Date()).
     const leaseExpiresAt = new Date(
-      Date.now() + GENERATION_INVOCATION_BUDGET_MS
+      this.nowForInvocation() + GENERATION_INVOCATION_BUDGET_MS
     );
     const reservation = await this.guardModuleForNow().acquireReservation({
       emailServiceId: message.emailServiceId,
@@ -454,7 +491,7 @@ export class EmailReplyDraftGenerationService {
       messageId: message.id,
       ownerToken,
       leaseExpiresAt,
-      now: new Date(),
+      now: new Date(this.nowForInvocation()),
       normalizedMessageId: message.normalizedMessageId,
     });
     incrementReplyMetric(
@@ -1152,7 +1189,8 @@ export class EmailReplyDraftGenerationService {
         recipientAddress,
         generationMetadataJson,
         requestCorrelationId,
-        now: new Date(),
+        // D7.2: injectable clock for the persisted commit timestamp.
+        now: new Date(this.nowForInvocation()),
       });
       if (commitResult.status === "fenced") {
         // Late output: an expired/replaced owner cannot commit (§8.2).
@@ -1534,7 +1572,7 @@ export class EmailReplyDraftGenerationService {
       log.approvedByUser = 0;
       log.reason =
         args.warnings.length > 0 ? args.warnings.join("; ") : "draft created";
-      await this.autoAuditModule.create(log);
+      await this.autoAuditModuleForNow().create(log);
     } catch (e) {
       console.error("Failed to write auto-reply draft audit:", e);
     }
@@ -1568,6 +1606,41 @@ export class EmailReplyDraftGenerationService {
         : getSharedEmailReplyDetectionService();
     }
     return this.detectionService;
+  }
+
+  /**
+   * D7.1: the reply-audit module for THIS invocation. Lazily constructed
+   * through the injectable factory (never at module top level — BaseModule
+   * TDZ under vi.mock). Tests substitute an in-memory stub.
+   */
+  private replyAuditModuleForNow(): EmailReplyAuditLogModule {
+    if (!this.replyAuditModule) {
+      this.replyAuditModule = this.replyAuditModuleFactory();
+    }
+    return this.replyAuditModule;
+  }
+
+  /**
+   * D7.1: the auto-reply-audit module for THIS invocation. Lazily constructed
+   * through the injectable factory. Tests substitute an in-memory stub.
+   */
+  private autoAuditModuleForNow(): EmailAutoReplyAuditLogModule {
+    if (!this.autoAuditModule) {
+      this.autoAuditModule = this.autoAuditModuleFactory();
+    }
+    return this.autoAuditModule;
+  }
+
+  /**
+   * D7.2: the injectable clock for persisted timestamps (audit rows,
+   * reservation acquire/release, lease expiry, commit). Every site that
+   * previously called `new Date()` or `Date.now()` for a timestamp that ends
+   * up in a persisted row routes through here so tests can advance a
+   * synthetic clock and assert exact observation times. Distinct from
+   * `budgetOptions.now` (which only feeds the aggregate model-call deadline).
+   */
+  private nowForInvocation(): number {
+    return this.now();
   }
 
   /**
@@ -1727,7 +1800,8 @@ export class EmailReplyDraftGenerationService {
       await this.guardModuleForNow().releaseReservation({
         guardId: reservation.guardId,
         ownerToken: reservation.ownerToken,
-        now: new Date(),
+        // D7.2: injectable clock for the persisted release timestamp.
+        now: new Date(this.nowForInvocation()),
       });
     } catch (error) {
       console.error(
@@ -1768,7 +1842,7 @@ export class EmailReplyDraftGenerationService {
       messageCorrelationId: correlationIdForMessage(messageId),
       ...(metadata ?? {}),
     });
-    await this.replyAuditModule.create(log);
+    await this.replyAuditModuleForNow().create(log);
   }
 
   /**
@@ -1807,7 +1881,7 @@ export class EmailReplyDraftGenerationService {
       policyVersion: decision.policyVersion,
       ruleId: decision.ruleId,
     });
-    await this.replyAuditModule.create(log);
+    await this.replyAuditModuleForNow().create(log);
   }
 
   /**
@@ -1864,7 +1938,7 @@ export class EmailReplyDraftGenerationService {
       reusedDraftStatus: draft.status,
       knowledgeAuditCount,
     });
-    await this.replyAuditModule.create(log);
+    await this.replyAuditModuleForNow().create(log);
   }
 }
 

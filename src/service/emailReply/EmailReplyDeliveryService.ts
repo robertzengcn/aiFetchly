@@ -48,6 +48,7 @@ import type {
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import type { EmailReplyStatus } from "@/entityTypes/emailReceiveTypes";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
+import { FRESHNESS_STALE } from "@/model/EmailReplyDraft.model";
 
 /**
  * Sender interface the delivery service uses for the SMTP handoff. The default
@@ -112,7 +113,12 @@ export class EmailReplyDeliveryService {
   private readonly guardModule = new EmailReplyGuardModule();
   private readonly messageModule = new EmailReceivedMessageModule();
   private readonly serviceModule = new EmailServiceModule();
-  private readonly auditModule = new EmailReplyAuditLogModule();
+  /**
+   * D7.1: audit module resolved through an injectable factory (test seam).
+   * Lazily memoized on first use, never at module top level.
+   */
+  private auditModule: EmailReplyAuditLogModule | null = null;
+  private readonly auditModuleFactory: () => EmailReplyAuditLogModule;
   private readonly policy = new EmailReplyPolicyOrchestrator();
   private readonly senderFactory: ReplySenderFactory;
   private readonly serviceLoader: (id: number) => Promise<BoundMailbox | null>;
@@ -120,6 +126,11 @@ export class EmailReplyDeliveryService {
   private readonly detectionServiceFactory:
     | (() => EmailReplyDetectionService)
     | null;
+  /**
+   * D7.2: injectable clock for SMTP/attempt/audit timestamps (test seam).
+   * Defaults to `Date.now`.
+   */
+  private readonly now: () => number;
 
   constructor(options?: {
     senderFactory?: ReplySenderFactory;
@@ -131,6 +142,18 @@ export class EmailReplyDeliveryService {
      * drive the replied/unknown/not_replied matrix.
      */
     readonly detectionServiceFactory?: () => EmailReplyDetectionService;
+    /**
+     * D7.1: injectable audit-module factory (test seam). Tests substitute an
+     * in-memory stub to capture audit payloads or drive write failure without a
+     * real DB. Production leaves it undefined → the real module is constructed
+     * lazily on first use.
+     */
+    readonly auditModuleFactory?: () => EmailReplyAuditLogModule;
+    /**
+     * D7.2: injectable clock (test seam) for the persisted SMTP/attempt/audit
+     * timestamps. Defaults to `Date.now`.
+     */
+    readonly now?: () => number;
   }) {
     this.senderFactory =
       options?.senderFactory ??
@@ -140,6 +163,9 @@ export class EmailReplyDeliveryService {
       ((id) =>
         this.serviceModule.getEmailService(id) as Promise<BoundMailbox | null>);
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
+    this.auditModuleFactory =
+      options?.auditModuleFactory ?? (() => new EmailReplyAuditLogModule());
+    this.now = options?.now ?? ((): number => Date.now());
   }
 
   /**
@@ -158,6 +184,28 @@ export class EmailReplyDeliveryService {
         : getSharedEmailReplyDetectionService();
     }
     return this.detectionService;
+  }
+
+  /**
+   * D7.1: the audit module for THIS send invocation. Lazily constructed
+   * through the injectable factory (never at module top level — BaseModule
+   * TDZ under vi.mock). Tests substitute an in-memory stub.
+   */
+  private auditModuleForNow(): EmailReplyAuditLogModule {
+    if (!this.auditModule) {
+      this.auditModule = this.auditModuleFactory();
+    }
+    return this.auditModule;
+  }
+
+  /**
+   * D7.2: the injectable clock for persisted timestamps (attempt submission,
+   * sent-at). Wall-clock telemetry measurements (SMTP elapsed time) stay on
+   * `Date.now()` directly — they measure real elapsed wall time, not a
+   * logical timestamp a test should control.
+   */
+  private nowForInvocation(): number {
+    return this.now();
   }
 
   async sendApprovedReply(
@@ -403,9 +451,11 @@ export class EmailReplyDeliveryService {
     // §9.3: one delayed refresh. The fence wrote nothing, so re-claiming with
     // the same idempotency key is safe. The rerun is OUTSIDE the transaction
     // (retains nothing) and forceRefresh: true (never the 60s negative cache).
+    // D7.3: compare against the exported constant, not the bare literal — a
+    // typo in either site would silently break the §9.3 retry path.
     if (
       claim.status === "precondition_failed" &&
-      claim.reason === "freshness_stale"
+      claim.reason === FRESHNESS_STALE
     ) {
       incrementReplyMetric("send_claim", {
         outcome: "freshness_stale_retry",
@@ -419,7 +469,7 @@ export class EmailReplyDeliveryService {
       claim = await this.draftModule.claimApprovedRevisionForSend(claimInput);
       if (
         claim.status === "precondition_failed" &&
-        claim.reason === "freshness_stale"
+        claim.reason === FRESHNESS_STALE
       ) {
         // Second stale → the mailbox is too slow to keep up; refuse with no
         // SMTP. The code is detection-unknown (`probe_timeout` conveys "the
@@ -474,7 +524,7 @@ export class EmailReplyDeliveryService {
 
     // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
     //    crash here is recoverable to delivery_unknown rather than left claimed.
-    await this.attemptModule.markSubmitted(attemptId, new Date());
+    await this.attemptModule.markSubmitted(attemptId, new Date(this.nowForInvocation()));
 
     // 8. SMTP submission. classifySubmissionResult turns the raw result into a
     //    certainty; unknown outcomes become delivery_unknown (never retried).
@@ -556,7 +606,8 @@ export class EmailReplyDeliveryService {
       return {
         status: "sent",
         attemptId,
-        sentAt: new Date().toISOString(),
+        // D7.2: injectable clock for the persisted sentAt timestamp.
+        sentAt: new Date(this.nowForInvocation()).toISOString(),
         requestCorrelationId,
       };
     }
@@ -590,7 +641,7 @@ export class EmailReplyDeliveryService {
       readonly policyVersion: string;
     }
   ): Promise<void> {
-    await this.auditModule.ensureConnection();
+    await this.auditModuleForNow().ensureConnection();
     const log = new EmailReplyAuditLogEntity();
     log.emailServiceId = message.emailServiceId;
     log.messageId = message.id;
@@ -605,7 +656,7 @@ export class EmailReplyDeliveryService {
       code: decision.code,
       policyVersion: decision.policyVersion,
     });
-    await this.auditModule.create(log);
+    await this.auditModuleForNow().create(log);
   }
 
   /**
@@ -732,7 +783,7 @@ export class EmailReplyDeliveryService {
     code: EmailReplyPolicyCode,
     reason: string
   ): Promise<void> {
-    await this.auditModule.ensureConnection();
+    await this.auditModuleForNow().ensureConnection();
     const log = new EmailReplyAuditLogEntity();
     log.emailServiceId = message.emailServiceId;
     log.messageId = message.id;
@@ -747,7 +798,7 @@ export class EmailReplyDeliveryService {
       code,
       source: "reply_detection",
     });
-    await this.auditModule.create(log);
+    await this.auditModuleForNow().create(log);
   }
 }
 

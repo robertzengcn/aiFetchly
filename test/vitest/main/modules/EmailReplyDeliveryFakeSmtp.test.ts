@@ -864,22 +864,35 @@ describe("sendApprovedReply forced-freshness window (T05 step 11, §9.3)", () =>
 // `reply_skipped` audit row for a detection refusal cannot persist (§9.2 —
 // an unrecorded send refusal must never be followed by proceeding to send).
 // The detection outcome is faked via the detectionServiceFactory seam; the
-// audit module's create is monkey-patched to throw (the field is private
-// readonly but accessible via bracket indexing, mirroring the generation
-// suite's reuse-audit-failure test). The counter map records regardless of
-// emit success, so no Logger mock is needed.
+// failing audit module is injected via the auditModuleFactory seam (D7.1).
+// The counter map records regardless of emit success, so no Logger mock is
+// needed.
 // ---------------------------------------------------------------------------
 describe("sendApprovedReply pre_send audit-failure telemetry (T12/FR-039)", () => {
-  /**
-   * Build a delivery service whose detection service returns the configured
-   * result (here a `replied` refusal so the pre_send audit write runs) and
-   * whose SMTP sender records calls (must stay 0 on a refusal). Mirrors the
-   * buildDeliveryWithDetection helper in the T04-step-8 describe above but
-   * inlined here so this describe is self-contained.
-   */
-  function buildRefusalDelivery(
-    detectionResult: ReplyDetectionResult
-  ): { delivery: EmailReplyDeliveryService; smtpCalls: { count: number } } {
+  it("audit persistence failure on a pre_send refusal emits audit_failure{stage=pre_send} + SendPolicyRejection", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    void messageId;
+    const replied: ReplyDetectionResult = {
+      state: "replied",
+      replied: true,
+      source: "sent_search",
+      matchedMessageId: "<prov-reply@x>",
+      reasonCode: "already_replied",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "configured_imap",
+    };
+    // D7.1: inject a failing audit module through the auditModuleFactory seam
+    // instead of monkey-patching the (now-lazy) instance field `auditModule`,
+    // which stays null until `auditModuleForNow()` runs. The refusal audit is
+    // written by writeDetectionRefusalAudit → auditModule.create; a throw
+    // there is caught by runPreSendDetection's catch(auditError) and surfaces
+    // as SendPolicyRejection("Send rejected: detection audit persistence
+    // failed: ...") with the typed detection code.
+    const failingAuditModule = new EmailReplyAuditLogModule();
+    vi.spyOn(failingAuditModule, "create").mockImplementation(async () => {
+      throw new Error("pre-send audit DB write failed (simulated)");
+    });
     const smtpCalls = { count: 0 };
     const senderFactory = () => ({
       sendReplyEmail: async (): Promise<EmailSendResult> => {
@@ -895,44 +908,15 @@ describe("sendApprovedReply pre_send audit-failure telemetry (T12/FR-039)", () =
     });
     const detectionServiceFactory = () => {
       const svc = new EmailReplyDetectionService();
-      vi
-        .spyOn(svc, "detect")
-        .mockImplementation(async () => detectionResult);
+      vi.spyOn(svc, "detect").mockImplementation(async () => replied);
       return svc;
     };
     const delivery = new EmailReplyDeliveryService({
       senderFactory: senderFactory as never,
       serviceLoader: async () => FAKE_MAILBOX,
       detectionServiceFactory,
+      auditModuleFactory: () => failingAuditModule,
     });
-    return { delivery, smtpCalls };
-  }
-
-  it("audit persistence failure on a pre_send refusal emits audit_failure{stage=pre_send} + SendPolicyRejection", async () => {
-    const { draftId, token, messageId } = await seedValidApproval();
-    void messageId;
-    const replied: ReplyDetectionResult = {
-      state: "replied",
-      replied: true,
-      source: "sent_search",
-      matchedMessageId: "<prov-reply@x>",
-      reasonCode: "already_replied",
-      checkedAt: new Date().toISOString(),
-      fromCache: false,
-      coverage: "configured_imap",
-    };
-    const { delivery, smtpCalls } = buildRefusalDelivery(replied);
-    // Monkey-patch the audit module's create to throw — mirrors the
-    // generation suite's reuse-audit-failure test. The refusal audit is
-    // written by writeDetectionRefusalAudit → auditModule.create; a throw
-    // there is caught by runPreSendDetection's catch(auditError) and surfaces
-    // as SendPolicyRejection("Send rejected: detection audit persistence
-    // failed: ...") with the typed detection code.
-    const auditModule = delivery["auditModule"] as EmailReplyAuditLogModule;
-    const original = auditModule.create.bind(auditModule);
-    auditModule.create = async () => {
-      throw new Error("pre-send audit DB write failed (simulated)");
-    };
     drainCountersForTest();
     let rejection: SendPolicyRejection | null = null;
     try {
@@ -940,23 +924,19 @@ describe("sendApprovedReply pre_send audit-failure telemetry (T12/FR-039)", () =
     } catch (error) {
       if (error instanceof SendPolicyRejection) rejection = error;
     }
-    try {
-      expect(rejection).toBeInstanceOf(SendPolicyRejection);
-      // The typed detection code (already_replied) is retained on the
-      // rejection so the B12 IPC envelope surfaces it machine-readably.
-      expect(rejection?.code).toBe("already_replied");
-      expect(rejection?.message).toContain(
-        "Send rejected: detection audit persistence failed"
-      );
-      expect(rejection?.message).toContain(
-        "pre-send audit DB write failed (simulated)"
-      );
-      // No SMTP side effect — the refusal happens BEFORE the atomic claim.
-      expect(smtpCalls.count).toBe(0);
-      const counters = drainCountersForTest();
-      expect(counters.get("audit_failure{stage=pre_send}")).toBe(1);
-    } finally {
-      auditModule.create = original;
-    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    // The typed detection code (already_replied) is retained on the
+    // rejection so the B12 IPC envelope surfaces it machine-readably.
+    expect(rejection?.code).toBe("already_replied");
+    expect(rejection?.message).toContain(
+      "Send rejected: detection audit persistence failed"
+    );
+    expect(rejection?.message).toContain(
+      "pre-send audit DB write failed (simulated)"
+    );
+    // No SMTP side effect — the refusal happens BEFORE the atomic claim.
+    expect(smtpCalls.count).toBe(0);
+    const counters = drainCountersForTest();
+    expect(counters.get("audit_failure{stage=pre_send}")).toBe(1);
   });
 });

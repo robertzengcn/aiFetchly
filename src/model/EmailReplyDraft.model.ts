@@ -53,6 +53,15 @@ import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabi
  */
 export const FORCED_FRESHNESS_WINDOW_MS = 5_000;
 
+/**
+ * The `precondition_failed` reason returned by the §9.3 forced-freshness
+ * fence. Exported so the delivery service's retry path compares against a
+ * single source of truth instead of a bare string literal that could be
+ * typo'd silently (D7.3). Any code that switches on this reason MUST import
+ * the constant rather than re-literalizing it.
+ */
+export const FRESHNESS_STALE = "freshness_stale";
+
 export interface ReplyDraftListInput {
   emailServiceId?: number;
   messageId?: number;
@@ -603,7 +612,7 @@ export class EmailReplyDraftModel extends BaseDb {
         // the cluster on; refuse rather than claim against a missing seed.
         return {
           status: "precondition_failed",
-          reason: "freshness_stale",
+          reason: FRESHNESS_STALE,
         };
       }
       const observedAt =
@@ -612,14 +621,14 @@ export class EmailReplyDraftModel extends BaseDb {
         // Fail-closed: missing observation → force the delayed refresh.
         return {
           status: "precondition_failed",
-          reason: "freshness_stale",
+          reason: FRESHNESS_STALE,
         };
       }
       const ageMs = Date.now() - observedAt.getTime();
       if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
         return {
           status: "precondition_failed",
-          reason: "freshness_stale",
+          reason: FRESHNESS_STALE,
         };
       }
 

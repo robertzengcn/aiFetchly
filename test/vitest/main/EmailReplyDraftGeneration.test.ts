@@ -148,6 +148,8 @@ function buildService(
       coverage: "configured_imap",
     };
   // Strip the test-only override before forwarding to the real constructor.
+  // replyAuditModuleFactory / autoAuditModuleFactory / now flow through the
+  // spread (D7.1/D7.2 seams) — only detectionServiceFactory is overridden.
   const forwarded: ConstructorParameters<
     typeof EmailReplyDraftGenerationService
   >[0] = options;
@@ -161,6 +163,31 @@ function buildService(
       return Object.assign(svc, { detectSpy: spy });
     },
   });
+}
+
+/**
+ * D7.1: buildService threads replyAuditModuleFactory through to the service.
+ * Tests that drive audit-write failure inject a failing audit module through
+ * the factory seam instead of monkey-patching the (now-lazy) instance field
+ * `replyAuditModule`, which stays null until `replyAuditModuleForNow()` runs.
+ * The fake captures every create() entity and throws a configurable error so
+ * the service's audit-persistence-failure path is exercised deterministically.
+ */
+function makeFailingReplyAuditModule(
+  errorMessage: string
+): {
+  module: EmailReplyAuditLogModule;
+  createCalls: EmailReplyAuditLogEntity[];
+} {
+  const createCalls: EmailReplyAuditLogEntity[] = [];
+  const module = new EmailReplyAuditLogModule();
+  vi.spyOn(module, "create").mockImplementation(
+    async (entity: EmailReplyAuditLogEntity): Promise<number> => {
+      createCalls.push(entity);
+      throw new Error(errorMessage);
+    }
+  );
+  return { module, createCalls };
 }
 
 describe("validateLlmRawResult (FR-027)", () => {
@@ -1549,35 +1576,30 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
 
   it("audit persistence failure on initial reuse propagates as success:false (not swallowed)", async () => {
     // B09 acceptance: "Audit failure must not return a successful audited
-    // outcome." Stub the audit module to throw on create and assert the reuse
-    // result is a failure carrying the persistence error. T12/FR-039: the
-    // catch also emits audit_failure{stage=reuse} so the unrecorded work is
-    // measurable.
+    // outcome." Inject a failing reply-audit module through the D7.1
+    // replyAuditModuleFactory seam and assert the reuse result is a failure
+    // carrying the persistence error. T12/FR-039: the catch also emits
+    // audit_failure{stage=reuse} so the unrecorded work is measurable.
     const messageId = await seedMessage();
     await seedDraftWithWarnings(messageId, "draft", ["w1"]);
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const svc = buildService({ apiFactory: factory });
-    // Force the audit write to throw by monkey-patching the module method.
-    const original = svc["replyAuditModule"].create.bind(
-      svc["replyAuditModule"]
+    const { module } = makeFailingReplyAuditModule(
+      "audit DB write failed (simulated)"
     );
-    svc["replyAuditModule"].create = async () => {
-      throw new Error("audit DB write failed (simulated)");
-    };
+    const svc = buildService({
+      apiFactory: factory,
+      replyAuditModuleFactory: () => module,
+    });
     drainCountersForTest();
-    try {
-      const result = await svc.createDraft({ messageId });
-      expect(result.success).toBe(false);
-      if (result.success) return;
-      expect(result.error).toContain("Reuse audit persistence failed");
-      expect(result.error).toContain("audit DB write failed (simulated)");
-      // T12/FR-039: the unrecorded reuse surfaces as an audit_failure counter
-      // keyed by stage so operators can alert on audit-write regressions.
-      const counters = drainCountersForTest();
-      expect(counters.get("audit_failure{stage=reuse}")).toBe(1);
-    } finally {
-      svc["replyAuditModule"].create = original;
-    }
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("Reuse audit persistence failed");
+    expect(result.error).toContain("audit DB write failed (simulated)");
+    // T12/FR-039: the unrecorded reuse surfaces as an audit_failure counter
+    // keyed by stage so operators can alert on audit-write regressions.
+    const counters = drainCountersForTest();
+    expect(counters.get("audit_failure{stage=reuse}")).toBe(1);
   });
 
   // ---------------------------------------------------------------------------
@@ -1592,8 +1614,12 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
   it("pre_draft audit persistence failure emits audit_failure{stage=pre_draft} + success:false (Detection audit persistence failed)", async () => {
     const messageId = await seedMessage();
     const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const { module } = makeFailingReplyAuditModule(
+      "pre-draft audit DB write failed (simulated)"
+    );
     const svc = buildService({
       apiFactory: factory,
+      replyAuditModuleFactory: () => module,
       detectionResult: {
         state: "replied",
         replied: true,
@@ -1605,29 +1631,19 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
         coverage: "configured_imap",
       },
     });
-    const original = svc["replyAuditModule"].create.bind(
-      svc["replyAuditModule"]
-    );
-    svc["replyAuditModule"].create = async () => {
-      throw new Error("pre-draft audit DB write failed (simulated)");
-    };
     drainCountersForTest();
-    try {
-      const result = await svc.createDraft({ messageId });
-      // The audit failure STOPS the work — the refusal is returned as a
-      // success:false carrying the persistence error (no code/next_action —
-      // the typed refusal never reached the return path).
-      expect(result.success).toBe(false);
-      if (result.success) return;
-      expect(result.error).toContain("Detection audit persistence failed");
-      expect(result.error).toContain(
-        "pre-draft audit DB write failed (simulated)"
-      );
-      const counters = drainCountersForTest();
-      expect(counters.get("audit_failure{stage=pre_draft}")).toBe(1);
-    } finally {
-      svc["replyAuditModule"].create = original;
-    }
+    const result = await svc.createDraft({ messageId });
+    // The audit failure STOPS the work — the refusal is returned as a
+    // success:false carrying the persistence error (no code/next_action —
+    // the typed refusal never reached the return path).
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("Detection audit persistence failed");
+    expect(result.error).toContain(
+      "pre-draft audit DB write failed (simulated)"
+    );
+    const counters = drainCountersForTest();
+    expect(counters.get("audit_failure{stage=pre_draft}")).toBe(1);
   });
 });
 
@@ -1759,33 +1775,27 @@ describe("createDraft failure-audit separation (B10)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = buildService({ apiFactory: factory });
-    const createCalls: EmailReplyAuditLogEntity[] = [];
-    const originalCreate = svc["replyAuditModule"].create.bind(
-      svc["replyAuditModule"]
+    const { module, createCalls } = makeFailingReplyAuditModule(
+      "audit DB write failed (simulated permanent)"
     );
-    svc["replyAuditModule"].create = async (entity: EmailReplyAuditLogEntity) => {
-      createCalls.push(entity);
-      throw new Error("audit DB write failed (simulated permanent)");
-    };
-    try {
-      // The persistence error now PROPAGATES (rejects) instead of being
-      // swallowed and re-classified as a provider_error. This is the B10
-      // contract: "persistence failure propagated."
-      await expect(
-        svc.createDraft({ messageId, useKnowledgeLibrary: false })
-      ).rejects.toThrow("audit DB write failed (simulated permanent)");
-      // The recordFailure path was attempted exactly ONCE — no second attempt
-      // from a re-caught transport-error handler (the pre-B10 bug).
-      expect(createCalls).toHaveLength(1);
-      // The intended classification was needs_human_review, NOT a fabricated
-      // provider_error (the pre-B10 bug reclassified on the second catch).
-      expect(createCalls[0].reason).toContain("[needs_human_review]");
-      // And NO audit row actually landed (the write threw).
-      expect(await auditWriteCount(messageId)).toBe(0);
-    } finally {
-      svc["replyAuditModule"].create = originalCreate;
-    }
+    const svc = buildService({
+      apiFactory: factory,
+      replyAuditModuleFactory: () => module,
+    });
+    // The persistence error now PROPAGATES (rejects) instead of being
+    // swallowed and re-classified as a provider_error. This is the B10
+    // contract: "persistence failure propagated."
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toThrow("audit DB write failed (simulated permanent)");
+    // The recordFailure path was attempted exactly ONCE — no second attempt
+    // from a re-caught transport-error handler (the pre-B10 bug).
+    expect(createCalls).toHaveLength(1);
+    // The intended classification was needs_human_review, NOT a fabricated
+    // provider_error (the pre-B10 bug reclassified on the second catch).
+    expect(createCalls[0].reason).toContain("[needs_human_review]");
+    // And NO audit row actually landed (the write threw).
+    expect(await auditWriteCount(messageId)).toBe(0);
   });
 
   it("a reject-once audit stub still surfaces the persistence error and writes no second audit", async () => {
@@ -1799,31 +1809,25 @@ describe("createDraft failure-audit separation (B10)", () => {
       completionResponse("{not json", "stop"),
       completionResponse("{also not json", "stop"),
     ]);
-    const svc = buildService({ apiFactory: factory });
-    const createCalls: EmailReplyAuditLogEntity[] = [];
-    const originalCreate = svc["replyAuditModule"].create.bind(
-      svc["replyAuditModule"]
+    const { module, createCalls } = makeFailingReplyAuditModule(
+      "audit write rejected once (simulated)"
     );
-    svc["replyAuditModule"].create = async (entity: EmailReplyAuditLogEntity) => {
-      createCalls.push(entity);
-      throw new Error("audit write rejected once (simulated)");
-    };
-    try {
-      await expect(
-        svc.createDraft({ messageId, useKnowledgeLibrary: false })
-      ).rejects.toThrow("audit write rejected once (simulated)");
-      // Exactly ONE create() call — no retry, no second attempt from a
-      // re-caught transport-error handler.
-      expect(createCalls).toHaveLength(1);
-      // The intended stage/code was needs_human_review (the persistence error
-      // surfaced BEFORE the audit row could land, so the reason on the
-      // attempted entity is the validation-failure classification, not a
-      // fabricated provider_error).
-      expect(createCalls[0].reason).toContain("[needs_human_review]");
-      expect(await auditWriteCount(messageId)).toBe(0);
-    } finally {
-      svc["replyAuditModule"].create = originalCreate;
-    }
+    const svc = buildService({
+      apiFactory: factory,
+      replyAuditModuleFactory: () => module,
+    });
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toThrow("audit write rejected once (simulated)");
+    // Exactly ONE create() call — no retry, no second attempt from a
+    // re-caught transport-error handler.
+    expect(createCalls).toHaveLength(1);
+    // The intended stage/code was needs_human_review (the persistence error
+    // surfaced BEFORE the audit row could land, so the reason on the
+    // attempted entity is the validation-failure classification, not a
+    // fabricated provider_error).
+    expect(createCalls[0].reason).toContain("[needs_human_review]");
+    expect(await auditWriteCount(messageId)).toBe(0);
   });
 
   it("transport_error writes exactly ONE provider_error audit and does not count a validation strike", async () => {
