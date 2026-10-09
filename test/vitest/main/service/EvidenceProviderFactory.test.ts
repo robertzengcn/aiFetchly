@@ -285,9 +285,16 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     expect(result2.unmetCriterionIds).toEqual(["rec-1"]);
   });
 
-  it("checkerDispatch: calls openAIChatCompletion with max_tokens 16 temperature 0; PASS → qualitative pass", async () => {
+  it("checkerDispatch: calls openAIChatCompletion with max_tokens 256 temperature 0; §8.2 JSON → qualitative pass (T04)", async () => {
+    // T04: the §8.2 JSON contract needs more room than a one-word verdict;
+    // CHECKER_MAX_TOKENS is 256 (a single criterion result: verdict + evidence
+    // ids + a short reason). The mock returns the JSON the parser accepts.
     openAIChatCompletionMock.mockResolvedValue({
-      choices: [{ message: { content: "PASS" } }],
+      choices: [{ message: { content: JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite" },
+        ],
+      }) } }],
     });
     const providers = buildEvidenceService({
       executionId: "exec-factory-1",
@@ -298,14 +305,18 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     // The dispatch is a closure the factory returns; call it directly.
     const verdict = await providers.checkerDispatch("Is this polite?");
-    expect(verdict).toBe("PASS");
+    expect(verdict).toBe(JSON.stringify({
+      criteria: [
+        { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite" },
+      ],
+    }));
     expect(openAIChatCompletionMock).toHaveBeenCalledTimes(1);
     const call = openAIChatCompletionMock.mock.calls[0][0] as {
       messages: { role: string; content: string }[];
       max_tokens: number;
       temperature: number;
     };
-    expect(call.max_tokens).toBe(16);
+    expect(call.max_tokens).toBe(256);
     expect(call.temperature).toBe(0);
     expect(call.messages[0].role).toBe("user");
     expect(call.messages[0].content).toBe("Is this polite?");
@@ -329,13 +340,43 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
       {
         content: "Hello, I hope you are well.",
         source: "factory-test",
-        sourceRevision: "slice2-t03",
+        sourceRevision: "slice2-t04",
         expectedStateVersion: EXEC_VERSION,
         checkerDispatch: providers.checkerDispatch,
         budgetReserveChecker: () => BudgetReservationResult.Reserved,
       }
     );
     expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("checkerDispatch: forwards the per-dispatch abort signal to openAIChatCompletion (T04, NFR-02/04, AC-24)", async () => {
+    // T04: the QualitativeEvaluator creates a per-dispatch AbortController and
+    // passes its signal to checkerDispatch(prompt, signal); the factory closure
+    // must forward that signal to openAIChatCompletion so a Stop or deadline
+    // aborts the in-flight fetch (catching an eventual AbortError does not
+    // itself abort the request — the signal must reach the transport).
+    openAIChatCompletionMock.mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "ok" },
+        ],
+      }) } }],
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-signal",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const controller = new AbortController();
+    await providers.checkerDispatch("verify", controller.signal);
+    expect(openAIChatCompletionMock).toHaveBeenCalledTimes(1);
+    const optionsArg = openAIChatCompletionMock.mock.calls[0][1] as
+      | { signal?: AbortSignal }
+      | undefined;
+    expect(optionsArg).toBeDefined();
+    expect(optionsArg?.signal).toBe(controller.signal);
   });
 
   it("checkerDispatch: AI-enable gate off → openAIChatCompletion rejects → dispatch returns the rejected promise (QualitativeEvaluator catches → unknown)", async () => {

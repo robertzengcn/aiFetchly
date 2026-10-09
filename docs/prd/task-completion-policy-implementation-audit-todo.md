@@ -112,8 +112,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T04 — Validate qualitative checker output and make checking abortable [P1, confirmed]
 
-- [ ] Replace single-word/prefix parsing with the design's schema-validated per-criterion results and actual evidence references.
-- [ ] Bound checker time, propagate abort, recheck AI entitlement, reserve each actual attempt, and enforce at most one permitted retry.
+- [x] Replace single-word/prefix parsing with the design's schema-validated per-criterion results and actual evidence references.
+- [x] Bound checker time, propagate abort, recheck AI entitlement, reserve each actual attempt, and enforce at most one permitted retry.
 
 **Evidence:** `criteriaAdapters.ts:282–299` asks for one word and accepts `startsWith("PASS")`; `:215` manufactures `referenceIds:[criterion.id]`. Probe: `PASS but this report is incomplete` passes content `not a report`. Supplied source-selector/evidence membership is not validated. `checkerDispatch(prompt)` has no abort parameter; the context signal is not used to cancel/wait-bound the dispatch. Catching an eventual AbortError does not itself abort a hanging request.
 
