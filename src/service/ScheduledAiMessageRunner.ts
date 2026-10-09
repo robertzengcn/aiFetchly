@@ -81,6 +81,29 @@ export interface ScheduledAiMessageRunResult {
  * through the task-scoped policy, and persists results.
  */
 export class ScheduledAiMessageRunner {
+  /**
+   * R07 (FR-007/023): the scheduled owner's durable-run gate — the engine
+   * awaits this between its durable message writes and its post-terminal
+   * side effects. Maps the segment terminal onto the scheduled run row via
+   * the existing module methods; the rich finalizeChatRun data follows the
+   * segment with the sink's captured outcome.
+   */
+  private async persistSegmentTerminal(
+    runId: number,
+    terminal: "completed" | "cancelled" | "failed"
+  ): Promise<void> {
+    if (terminal === "completed") {
+      // completeRun requires the rich params — the durable gate writes the
+      // narrow status (idempotent) and finalizeChatRun completes the row
+      // with the captured outcome after the segment settles.
+      await this.runModule.updateRunStatus(runId, "completed");
+    } else if (terminal === "failed") {
+      await this.runModule.failRun(runId, "ENGINE_SEGMENT_FAILED");
+    } else {
+      await this.runModule.updateRunStatus(runId, "cancelled");
+    }
+  }
+
   private readonly taskModule: AiMessageTaskModule;
   private readonly runModule: AiMessageTaskRunModule;
   // Lazy-initialized deps for the chat-bound path (kept out of the legacy
@@ -555,6 +578,8 @@ export class ScheduledAiMessageRunner {
             assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
           },
           outboundSendPreAuthorized,
+          onSegmentDurable: (_convId, terminal) =>
+            this.persistSegmentTerminal(runId, terminal).then(() => undefined),
         })
         .catch((runErr: unknown): import("@/service/AIChatQueryEvents").AIChatSegmentOutcome => {
           log.error("[scheduled-runner] engine segment threw:", runErr);

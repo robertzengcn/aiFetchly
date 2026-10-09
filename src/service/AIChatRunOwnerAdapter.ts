@@ -108,11 +108,13 @@ export async function createOwnerAdapterSink(
           if (status === "queued") transition("running");
           break;
         case "ask_user_question":
-        case "plan_submitted":
           if (status === "running" || status === "queued") {
             transition("awaiting_user");
           }
           break;
+        // R07 (FR-025): plan_submitted must NOT pause the run —
+        // SubmitPlanForApproval records the plan and the turn continues; only
+        // a real question pauses execution. No transition here.
         case "complete":
           if (status !== "completed") transition("completed");
           break;
