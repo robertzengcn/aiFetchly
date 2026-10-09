@@ -2100,11 +2100,22 @@ export class AiChatApi {
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
+   * T04 (NFR-02/04, AC-24): `options.signal` is the caller's abort handle.
+   * The checker dispatch (QualitativeEvaluator) threads a per-dispatch
+   * AbortController linked to the turn/run signal + a checker deadline
+   * through this param so a Stop or a hanging provider stall cannot hold the
+   * verification gate. The signal propagates to the local provider's
+   * `fetchWithResponseTimeout` (caller-abort preserved) and to the hosted
+   * `postJson` fetch. Entitlement is re-checked at the start of every call
+   * (including retries) via `resolveForChat()` / `ensureAIEnabled()` (NFR-04).
+   *
    * @param request - Chat completion request with messages and optional parameters
+   * @param options - Optional abort signal for cancellation/deadline propagation
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2113,13 +2124,14 @@ export class AiChatApi {
       }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).complete(
-          request
+          request,
+          { signal: options?.signal }
         );
       }
-      return this.openAIChatCompletionHosted(request);
+      return this.openAIChatCompletionHosted(request, options);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request);
+    return this.openAIChatCompletionHosted(request, options);
   }
 
   /**
@@ -2141,9 +2153,14 @@ export class AiChatApi {
     };
   }
 
-  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  /**
+   * Hosted aiFetchly non-streaming completion. T04: `options.signal`
+   * propagates to both `postJson` calls (initial + small-model 404 retry)
+   * so a caller abort (Stop / checker deadline) cancels the in-flight fetch.
+   */
   private async openAIChatCompletionHosted(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2175,7 +2192,8 @@ export class AiChatApi {
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
-        data
+        data,
+        { signal: options?.signal }
       );
     } catch (err) {
       // The hosted server resolves the virtual "small" alias only when a
@@ -2184,7 +2202,8 @@ export class AiChatApi {
       // body). Retry exactly once with the caller-supplied fallback model, or
       // with no model (server default) when absent, so background
       // consolidation still runs on backends without a small row. Any other
-      // error — including a 404 for a literal model id — propagates unchanged.
+      // error — including a 404 for a literal model id, or an abort —
+      // propagates unchanged.
       if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
         throw err;
       }
@@ -2203,7 +2222,8 @@ export class AiChatApi {
       );
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
-        retry
+        retry,
+        { signal: options?.signal }
       );
     }
   }

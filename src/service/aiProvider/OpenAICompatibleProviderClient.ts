@@ -7,6 +7,7 @@ import type {
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type {
   ChatProviderClient,
+  OpenAIChatCompletionOptions,
   OpenAIChatCompletionStreamOptions,
 } from "./ChatProviderClient";
 import {
@@ -178,7 +179,8 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   }
 
   async complete(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: OpenAIChatCompletionOptions
   ): Promise<OpenAIChatCompletionResponse> {
     const payload = buildNonStreamingPayload({
       ...request,
@@ -193,7 +195,8 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
           headers: this.jsonHeaders("application/json"),
           body: JSON.stringify(payload),
         },
-        this.responseTimeoutMs
+        this.responseTimeoutMs,
+        options?.signal
       );
     } catch (err) {
       throw toNetworkProviderError(err);
