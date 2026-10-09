@@ -97,6 +97,12 @@
         @submit="onPlanAnswer"
       />
     </template>
+    <AiChatV2StreamStatus
+      v-if="streamStatus === 'error' && errorMessage"
+      status="error"
+      :error-message="errorMessage"
+      data-testid="workspace-transcript-error"
+    />
   </div>
 </template>
 
@@ -109,6 +115,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
 import AiChatV2PendingMessage from "@/views/components/aiChatV2/AiChatV2PendingMessage.vue";
+import AiChatV2StreamStatus from "@/views/components/aiChatV2/AiChatV2StreamStatus.vue";
 import AiChatExecutionGroup from "@/views/components/aiChatWorkspace/AiChatExecutionGroup.vue";
 import AiChatOutboundBatchReviewCard from "@/views/components/aiChatWorkspace/AiChatOutboundBatchReviewCard.vue";
 import AiChatExecutionRow from "@/views/components/aiChatWorkspace/AiChatExecutionRow.vue";

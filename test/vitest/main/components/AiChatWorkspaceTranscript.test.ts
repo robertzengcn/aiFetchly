@@ -581,6 +581,41 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(flow.exists()).toBe(true);
     expect(flow.props("submitError")).toBe("Submission failed");
   });
+
+  it("AI-disabled start-run rejection surfaces the subscription notice instead of silence", async () => {
+    const subscriptionMessage =
+      "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat.";
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "error",
+        errorMessage: subscriptionMessage,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const banner = wrapper.find('[data-testid="workspace-transcript-error"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain("subscription");
+  });
+
+  it("no error banner when idle without an error message", async () => {
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="workspace-transcript-error"]').exists()
+    ).toBe(false);
+  });
 });
 
 describe("AiChatWorkspaceTranscript generated-image reference forwarding", () => {
