@@ -265,11 +265,13 @@ describe("runToolWithProgress (FR-016, AC-09)", () => {
     expect(after.done).toBe(true);
   });
 
-  it("suppresses progress emitted after abort", async () => {
+  it("suppresses progress emitted after abort (R05: pre-abort never starts the tool)", async () => {
     const controller = new AbortController();
     controller.abort();
+    let started = false;
     const wrapper = runToolWithProgress<string, TestProgress>(
       (emit) => {
+        started = true;
         emit(progress(1, "should be suppressed"));
         return Promise.resolve("done");
       },
@@ -277,7 +279,11 @@ describe("runToolWithProgress (FR-016, AC-09)", () => {
     );
     const final = await wrapper.next();
     expect(final.done).toBe(true);
-    expect(final.value).toBe("done");
+    // R05 admission safety: a pre-aborted signal admits nothing — the tool
+    // never starts (the old eager wrapper invoked start exactly once and
+    // returned its successful result).
+    expect(started).toBe(false);
+    expect(final.value).toBeUndefined();
   });
 });
 
@@ -365,5 +371,45 @@ describe("TODO-07/14: progress bounds + cleanup diagnostics", () => {
     slot.close();
     slot.set(9);
     expect(slot.take()).toBeUndefined(); // closed: nothing retained
+  });
+});
+
+describe("R05: progress helper lazy + abort-wake contract", () => {
+  it("start is not invoked before the first next() (lazy admission)", async () => {
+    let started = false;
+    const wrapper = runToolWithProgress<string, TestProgress>(
+      () => {
+        started = true;
+        return Promise.resolve("ok");
+      },
+      new AbortController().signal
+    );
+    await new Promise((r) => setTimeout(r, 25));
+    expect(started).toBe(false);
+    const final = await wrapper.next();
+    expect(final.done).toBe(true);
+    expect(final.value).toBe("ok");
+    expect(started).toBe(true);
+  });
+
+  it("abort wakes a pending read; the tool's own abort handling settles the outcome", async () => {
+    const controller = new AbortController();
+    let releaseTool!: (v: string) => void;
+    const wrapper = runToolWithProgress<string, TestProgress>(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseTool = resolve;
+        }),
+      controller.signal
+    );
+    const first = wrapper.next();
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    // The abort wakes the pending race; the tool promise is still open, so
+    // the generator now WAITS on the tool. Resolving it completes the read.
+    releaseTool("settled-after-abort");
+    const step = await first;
+    expect(step.done).toBe(true);
+    expect(step.value).toBe("settled-after-abort");
   });
 });

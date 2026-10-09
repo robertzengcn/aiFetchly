@@ -60,22 +60,54 @@ export function runToolWithProgress<ToolResult, Progress extends MinimalProgress
     if (signal.aborted) return;
     slot.set(applyProgressBudget(event));
   };
-  const toolPromise = (async () => {
-    try {
-      return { kind: "done" as const, value: await start(emit) };
-    } catch (error: unknown) {
-      return { kind: "error" as const, error };
+  /**
+   * R05: LAZY start — the tool begins on the first `.next()`, never at
+   * construction (the old eager call started work — and with a pre-aborted
+   * signal, admitted it exactly once — before any consumer advanced).
+   */
+  type ToolOutcome =
+    | { kind: "done"; value: ToolResult }
+    | { kind: "error"; error: unknown };
+  let settled: Promise<ToolOutcome> | null = null;
+  const begin = (): Promise<ToolOutcome> => {
+    if (settled === null) {
+      settled = (async () => {
+        try {
+          return { kind: "done" as const, value: await start(emit) };
+        } catch (error: unknown) {
+          return { kind: "error" as const, error };
+        }
+      })();
     }
-  })();
-  const settled = toolPromise;
+    return settled;
+  };
+  // R05: wake a pending read on abort without failing the tool promise —
+  // the race participant resolves cancelled; the tool's own abort handling
+  // (or its completion) settles the real outcome. Detached on every exit.
+  let wakePending: (() => void) | null = null;
+  const onAbort = (): void => {
+    wakePending?.();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  const detachedAbort = new Promise<undefined>((resolve) => {
+    wakePending = () => resolve(undefined);
+  });
   return (async function* (): AsyncGenerator<
     ToolProgressEnvelope<Progress>,
     ToolResult,
     void
   > {
     try {
+      if (signal.aborted) {
+        // Pre-abort admission check (R05): never start the tool.
+        return undefined as ToolResult;
+      }
       for (;;) {
-        const next = await Promise.race([settled, slot.changed()]);
+        const next = await Promise.race([
+          begin(),
+          slot.changed(),
+          detachedAbort,
+        ]);
         const latest = slot.take();
         if (latest) {
           yield latest;
@@ -86,9 +118,20 @@ export function runToolWithProgress<ToolResult, Progress extends MinimalProgress
           }
           return next.value;
         }
+        if (signal.aborted) {
+          // Abort woke the read; do not spin — wait for the tool's own
+          // abort handling to settle the outcome.
+          const outcome = await begin();
+          if (outcome.kind === "error") {
+            throw outcome.error;
+          }
+          return outcome.value;
+        }
       }
     } finally {
       slot.close();
+      signal.removeEventListener("abort", onAbort);
+      wakePending = null;
     }
   })();
 }
