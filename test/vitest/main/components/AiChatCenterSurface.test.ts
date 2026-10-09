@@ -356,6 +356,35 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(selected.messages).toEqual([]);
   });
 
+  it("creates and selects a chat when sending from the empty state", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "fresh-chat",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    // Empty state: no conversation selected — the composer is still mounted.
+    expect(
+      wrapper.find('[data-testid="workspace-empty-state"]').exists()
+    ).toBe(true);
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "hello from empty state", []);
+    await flushPromises();
+
+    // The send must ensure a conversation first (legacy-dock parity):
+    // a fresh chat is created + selected and the run starts against it.
+    expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
+    expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "fresh-chat",
+      message: "hello from empty state",
+    });
+  });
+
   it("renders the approved workspace through the shared composable", async () => {
     getWorkspaceMock.mockResolvedValue({
       id: 7,

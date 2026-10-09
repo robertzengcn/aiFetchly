@@ -1117,6 +1117,16 @@ async function onComposerSend(
       "Too many referenced images for one request.";
     return;
   }
+  // Empty-state send (no conversation selected): create + select a chat
+  // first (legacy-dock parity via ensureWorkspaceConversationId) so the
+  // typed pending draft has a conversation to send into. Without this the
+  // store's sendMessage silently returns false and both Send + Enter die
+  // with no feedback. After the over-limit guard so a rejected send never
+  // mints an empty chat; refs were captured above under the pending key.
+  if (!conversationId.value) {
+    await onNewChat();
+    if (!conversationId.value) return;
+  }
   // Reference-only sends still need a message for the model (legacy parity).
   const messageText =
     generatedImageReferences.length > 0 && text.trim().length === 0
