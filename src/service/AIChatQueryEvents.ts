@@ -29,7 +29,10 @@ import type {
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 // T12: TaskOutcome carried on the complete event so terminal delivery is
 // bound to a durable finalization decision, not to a generic stream-end.
-import type { TaskOutcome } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  TaskExecutionRoute,
+  TaskOutcome,
+} from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -441,6 +444,14 @@ export interface PendingPermissionTurn {
    * main-process reference, never serialized.
    */
   taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * Carried across the permission pause so the resumed loop's
+   * `goalAutoContinue` consult still knows whether this is goal-scoped
+   * task work (task/preparation) or an ordinary response_only turn. An
+   * unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -474,6 +485,14 @@ export interface PendingPlanQuestionTurn {
    * persists across the pause. Undefined when the policy flag is off.
    */
   taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * Carried across the plan-question pause so the resumed loop's
+   * `goalAutoContinue` consult still knows whether this is goal-scoped
+   * task work (task/preparation) or an ordinary response_only turn. An
+   * unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
 
 /** Plan context carried through the loop. */
@@ -663,9 +682,17 @@ export interface AIChatQueryLoopInput {
    * pause/resume paths so budget persists across pending states.
    */
   taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * The engine computes this once before the flag-gated enrollment block so
+   * it is available regardless of whether the policy flag enrolled a binding.
+   * Threaded into `paused_for_permission` / `paused_for_plan_question` pending
+   * state so the resumed loop's `goalAutoContinue` consult still knows whether
+   * this is goal-scoped task work (task/preparation) or a response_only turn —
+   * an unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
-
-/** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {
   toolId: string;
   conversationId?: string;

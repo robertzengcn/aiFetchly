@@ -120,7 +120,10 @@ import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutio
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
-import type { TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  TaskCompletionContract,
+  TaskExecutionRoute,
+} from "@/entityTypes/aiTaskExecutionTypes";
 import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
@@ -507,27 +510,27 @@ export class AIChatQueryEngine {
    * Lookup failures must not fail the turn.
    *
    * T15 (FR-20, NFR-11): goal auto-continue fires only when THIS turn is
-   * real enrolled task work — i.e. it carries a policy-accepted task
-   * execution binding. A response_only turn (ordinary question) never
-   * enrolls, so `taskExecutionBinding` is undefined and auto-continue is
-   * false even when an active conversation goal exists. This closes the
-   * audit regression: "unrelated active goal + ordinary question → normal
-   * single answer" (the legacy takeover that let any active goal seize the
-   * turn). The binding is the route signal — the engine enrolls only
-   * task/preparation routes, so `policyAccepted === true` is the proxy for
-   * "this turn is goal-scoped task work."
+   * goal-scoped task work — i.e. the route is NOT response_only. A
+   * response_only turn (ordinary question) must not be seized by an
+   * unrelated active conversation goal. This closes the audit regression:
+   * "unrelated active goal + ordinary question → normal single answer"
+   * (the legacy takeover that let any active goal seize the turn). The
+   * route is the semantic signal — task/preparation turns are goal-scoped
+   * work, response_only turns are not. The route is computed once before
+   * the flag-gated enrollment block so it is available regardless of
+   * whether the policy flag enrolled a binding.
    */
   private async shouldAutoContinueGoal(
     conversationId: string,
     isPlanMode: boolean,
-    taskExecutionBinding?: LoopTaskExecutionBinding
+    taskRoute?: TaskExecutionRoute
   ): Promise<boolean> {
     if (isPlanMode || !conversationId) {
       return false;
     }
-    // T15: no accepted task binding → not goal-scoped work → do NOT let an
+    // T15: a response_only turn is not goal-scoped work → do NOT let an
     // unrelated active goal seize an ordinary question turn.
-    if (!taskExecutionBinding?.policyAccepted) {
+    if (taskRoute === "response_only") {
       return false;
     }
     try {
@@ -1054,6 +1057,20 @@ export class AIChatQueryEngine {
      */
     let taskExecutionBinding: LoopTaskExecutionBinding | undefined;
     /**
+     * T15 (FR-20, NFR-11): the request route for THIS turn, computed inside
+     * the flag gate and assigned to this outer scope so it is available at
+     * all four `shouldAutoContinueGoal` consult sites. When the flag is off
+     * (or the turn is scheduled), `taskRoute` stays `undefined` and the
+     * consult falls through to the goal lookup — preserving the legacy
+     * goal-auto-continue behavior the existing chat-mode-with-active-goal
+     * test pins (NFR-12 byte-identical). When the flag is on, the route is
+     * the semantic signal that gates goal takeover: `response_only`
+     * (ordinary question) is NOT goal-scoped work and must not be seized by
+     * an unrelated active goal, while `task_*` / `preparation` turns are
+     * goal-scoped. See `shouldAutoContinueGoal`.
+     */
+    let taskRoute: TaskExecutionRoute | undefined;
+    /**
      * T10 (FR-17/21, AC-26): accepted-submission dedup short-circuit. Set by
      * the enrollment seam when `startManual` returns `reused` (transport retry
      * of the same accepted submission) or `conflict` (same submissionId,
@@ -1379,37 +1396,76 @@ export class AIChatQueryEngine {
       }
 
       // ------------------------------------------------------------------
+      // T15c (FR-20/21, AC-31): resolve the request route ONCE into the
+      // outer `taskRoute` (declared above) so it is in scope at all four
+      // `shouldAutoContinueGoal` consult sites below (live turn + the three
+      // resume paths). The route is the semantic signal that gates goal
+      // takeover: `response_only` (ordinary question) must NOT be seized by
+      // an unrelated active goal, while `task_*` / `preparation` turns ARE
+      // goal-scoped work. NFR-12: the flag gates request resolution, so the
+      // classify call sits inside the flag gate — flag-off leaves
+      // `taskRoute` undefined and the consult falls through to the legacy
+      // goal lookup (byte-identical legacy goalAutoContinue). An approved
+      // plan = approved task template (task_verified); a plan awaiting
+      // approval or a turn awaiting permission = preparation. The previous
+      // `hasApprovedTaskTemplate: false` hardcode meant every task was
+      // best_effort and every preparation was misrouted — the classifier's
+      // preparation branch was unreachable, so plan-draft Stop never waited
+      // on actual approved scope. `planState` was resolved above (step 1);
+      // `pendingPermissions` is the runtime map of conversations
+      // mid-permission-prompt.
+      // ------------------------------------------------------------------
+      if (isAiTaskCompletionPolicyV1Enabled() && !scheduledContext) {
+        const pendingPlanApproval = planState?.status === "awaiting_approval";
+        const pendingPermission = this.pendingPermissions.has(conversationId);
+        const hasApprovedTaskTemplate = planState?.status === "approved";
+        taskRoute = new TaskRequestResolver().classify({
+          userMessage: request.message || "",
+          hasApprovedTaskTemplate,
+          pendingPlanApproval,
+          pendingPermission,
+        });
+      }
+
+      // ------------------------------------------------------------------
       // Slice 2 Unit 4 — Enroll this turn into the completion policy
       // (technical-design §5/§7, FR-01/02/03/04/19, AC-01/02/03/26).
       //
-      // When the policy flag is on, resolve the request route, freeze a
-      // contract for verified tasks, call `coordinator.startManual`, and
-      // build the LoopTaskExecutionBinding the loop consults at its four
-      // terminal-stop sites. The binding carries closures (not the runtime
-      // controller/budget) so the loop never imports those types. Fail-closed:
-      // any enrollment error leaves `taskExecutionBinding` undefined and the
-      // turn proceeds with byte-identical legacy behavior (no consult). A
-      // `reused` result is a transport retry (no fresh effects); a `conflict`
-      // is a submissionId collision with different text — both skip consult.
-      // Flag-off: the whole block is skipped, `taskExecutionBinding` stays
-      // undefined, and the loop's consult guards no-op.
+      // When the policy flag is on, freeze a contract for verified tasks,
+      // call `coordinator.startManual`, and build the LoopTaskExecutionBinding
+      // the loop consults at its four terminal-stop sites. The binding
+      // carries closures (not the runtime controller/budget) so the loop
+      // never imports those types. Fail-closed: any enrollment error leaves
+      // `taskExecutionBinding` undefined and the turn proceeds with
+      // byte-identical legacy behavior (no consult). A `reused` result is a
+      // transport retry (no fresh effects); a `conflict` is a submissionId
+      // collision with different text — both skip consult. Flag-off: the
+      // whole block is skipped, `taskExecutionBinding` stays undefined, and
+      // the loop's consult guards no-op.
       // ------------------------------------------------------------------
       if (isAiTaskCompletionPolicyV1Enabled() && !scheduledContext) {
         try {
-          const route = new TaskRequestResolver().classify({
-            userMessage: request.message || "",
-            hasApprovedTaskTemplate: false,
-          });
-          // Only enroll routes that can do work. response_only turns end
-          // naturally and never need a completion consult (FR-02);
-          // preparation turns wait on plan/permission and enroll when the
-          // user re-sends after approval.
+          // Only enroll routes that can do work OR wait on preparation.
+          // response_only turns end naturally and never need a completion
+          // consult (FR-02). T15c: preparation NOW enrolls (was skipped) so
+          // a plan-draft / approval-wait / permission-wait turn has a
+          // ledger row + Stop available, with a NULL contract — the
+          // controller can never verify (no required criteria → never
+          // verified_complete), and a Stop finalizes incomplete /
+          // PREPARATION_REQUIRED (never a verified outcome). One execution
+          // spans preparation → approval → execution (FR-21).
           // Unit 6 seam guard (GAP-S2 #8): scheduled turns are enrolled by
           // ScheduledAiMessageRunner via startScheduled (with the claim's
           // occurrence key). This manual-enrollment seam must not
           // double-enroll them as manual executions — scheduledContext is
           // trusted main-process metadata the renderer cannot forge.
-          if (route !== "response_only" && route !== "preparation") {
+          if (taskRoute && taskRoute !== "response_only") {
+            // `taskRoute` is narrowed to a non-response_only route here; the
+            // outer scope declares it as `| undefined` only because the
+            // flag-off / scheduled paths never compute it. Capture a narrowed
+            // local so the compiler, startManual, and freeze path see a
+            // definite TaskExecutionRoute.
+            const route: TaskExecutionRoute = taskRoute;
             const coordinator = new TaskExecutionCoordinator();
             const requestHash = hashUserAuthoredText(request.message || "");
             const submissionId =
@@ -1983,13 +2039,17 @@ export class AIChatQueryEngine {
       goalAutoContinue: await this.shouldAutoContinueGoal(
         conversationId,
         isPlanMode,
-        taskExecutionBinding
+        taskRoute
       ),
       relieveBudgetPressure: async () => {
         await this.compactBeforeDispatch(conversationId, request.model);
         return reassembleMessages ? reassembleMessages() : null;
       },
       taskExecutionBinding,
+      // T15: thread the route into the loopInput so the loop's
+      // paused_for_permission / paused_for_plan_question pending state
+      // carries it across the pause for the resumed goalAutoContinue consult.
+      taskRoute,
     };
 
     // T10 (FR-17/21, AC-26): accepted-submission dedup short-circuit. On a
@@ -2516,9 +2576,10 @@ export class AIChatQueryEngine {
         goalAutoContinue: await this.shouldAutoContinueGoal(
           matchedByToolId.conversationId,
           Boolean(matchedByToolId.planContext),
-          matchedByToolId.taskExecutionBinding
+          matchedByToolId.taskRoute
         ),
         taskExecutionBinding: matchedByToolId.taskExecutionBinding,
+        taskRoute: matchedByToolId.taskRoute,
       };
 
       void this.loop
@@ -2678,9 +2739,10 @@ export class AIChatQueryEngine {
         goalAutoContinue: await this.shouldAutoContinueGoal(
           conversationId,
           Boolean(matchedByToolId.planContext),
-          matchedByToolId.taskExecutionBinding
+          matchedByToolId.taskRoute
         ),
         taskExecutionBinding: matchedByToolId.taskExecutionBinding,
+        taskRoute: matchedByToolId.taskRoute,
       };
 
       void this.loop
@@ -2846,9 +2908,10 @@ export class AIChatQueryEngine {
       goalAutoContinue: await this.shouldAutoContinueGoal(
         pending.conversationId,
         Boolean(planContext),
-        pending.taskExecutionBinding
+        pending.taskRoute
       ),
       taskExecutionBinding: pending.taskExecutionBinding,
+      taskRoute: pending.taskRoute,
     };
 
     const module = new AIChatV2Module();

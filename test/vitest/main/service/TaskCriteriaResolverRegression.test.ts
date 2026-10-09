@@ -294,7 +294,22 @@ describe("T01 regression — resolver → compiler → freeze → evidence → c
       expect(qual.required).toBe(true);
     }
 
-    const checker = vi.fn(async () => "PASS");
+    // T04 §8.2 contract: the checker must return a JSON object with exactly
+    // one criterion entry whose criterionId matches, verdict in enum, and
+    // non-empty admissible evidenceIds on pass. Raw "PASS" text is invalid
+    // (parseCheckerVerdict → invalid → retry → fail-closed unknown).
+    const checker = vi.fn(async () =>
+      JSON.stringify({
+        criteria: [
+          {
+            criterionId: qual!.id,
+            verdict: "pass",
+            evidenceIds: [qual!.id],
+            reason: "The delivered text is the requested blog post about the launch.",
+          },
+        ],
+      })
+    );
     const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
     const done = baseCandidate({
       content: "Here is the blog post about our launch...",

@@ -3440,6 +3440,11 @@ export class AIChatQueryLoop {
                 // same controller/budget (budget persists across pause).
                 // Undefined when the flag is off — byte-identical legacy.
                 taskExecutionBinding: input.taskExecutionBinding,
+                // T15: carry the route through the permission pause so the
+                // resumed loop's goalAutoContinue consult still gates goal
+                // takeover on the actual route (response_only resumes are
+                // not goal-scoped work).
+                taskRoute: input.taskRoute,
               },
             };
           }
@@ -3764,6 +3769,10 @@ export class AIChatQueryLoop {
         // pause so the resumed loop still consults the same
         // controller/budget. Undefined when the flag is off.
         taskExecutionBinding: input.taskExecutionBinding,
+        // T15: carry the route through the plan-question pause so the
+        // resumed loop's goalAutoContinue consult still gates goal takeover
+        // on the actual route.
+        taskRoute: input.taskRoute,
       },
     };
   }
