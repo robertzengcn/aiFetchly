@@ -71,8 +71,13 @@ export function deriveOperationKey(executionId: string, targetId: string): strin
   return `op:${executionId}:${targetId}`;
 }
 
-/** Maximum tokens for the one-word checker verdict (bounded, NFR-02). */
-const CHECKER_MAX_TOKENS = 16;
+/**
+ * Maximum tokens for the checker verdict (bounded, NFR-02). T04: the §8.2 JSON
+ * contract needs more room than a one-word verdict; 256 caps a single
+ * criterion result (verdict + evidence ids + a short reason) without giving
+ * the checker room to prose around the schema.
+ */
+const CHECKER_MAX_TOKENS = 256;
 const CHECKER_TEMPERATURE = 0;
 
 /**

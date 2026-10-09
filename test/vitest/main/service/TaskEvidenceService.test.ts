@@ -223,7 +223,7 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     expect(result.unmetCriterionIds).toEqual(["rec-1"]);
   });
 
-  it("qualitative criterion: checker LLM returns PASS → pass; FAIL → fail; budget exhausted → unknown (fail-closed, AC-09/10)", async () => {
+  it("qualitative criterion: checker LLM returns pass/fail/unknown via §8.2 JSON → matching state; budget exhausted → unknown (fail-closed, AC-09/10)", async () => {
     const { store } = memoryStore();
     const service = new TaskEvidenceService(store);
     const contract = makeContract([
@@ -234,9 +234,42 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     let calls = 0;
     const dispatch = async (prompt: string): Promise<string> => {
       calls += 1;
-      if (prompt.includes("polite")) return "PASS";
-      if (prompt.includes("rude")) return "FAIL";
-      return "UNKNOWN";
+      // T04: the §8.2 JSON contract. The checker cites the admissible evidence
+      // id (the criterion id) on pass; fail/unknown carry no citation.
+      if (prompt.includes("polite")) {
+        return JSON.stringify({
+          criteria: [
+            {
+              criterionId: "rec-1",
+              verdict: "pass",
+              evidenceIds: ["rec-1"],
+              reason: "polite",
+            },
+          ],
+        });
+      }
+      if (prompt.includes("rude")) {
+        return JSON.stringify({
+          criteria: [
+            {
+              criterionId: "rec-2",
+              verdict: "fail",
+              evidenceIds: [],
+              reason: "rude",
+            },
+          ],
+        });
+      }
+      return JSON.stringify({
+        criteria: [
+          {
+            criterionId: "rec-3",
+            verdict: "unknown",
+            evidenceIds: [],
+            reason: "no weather",
+          },
+        ],
+      });
     };
     // Budget: first two reservations succeed, third exhausted.
     let checkerCalls = 0;
@@ -256,7 +289,7 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
         budgetReserveChecker: reserveChecker,
       }
     );
-    // rec-1 (polite) PASS → pass; rec-2 (rude) FAIL → fail (unmet);
+    // rec-1 (polite) pass → pass; rec-2 (rude) fail → fail (unmet);
     // rec-3 (weather) budget exhausted → unknown (unmet, fail-closed).
     expect(result.passedCriterionIds).toEqual(["rec-1"]);
     expect(result.unmetCriterionIds).toContain("rec-2");
@@ -481,12 +514,21 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
         sourceRevision: "rev-1",
         expectedStateVersion: 0,
         toolCatalogState: { "op-send": { state: "completed" } },
-        checkerDispatch: async () => "PASS",
+        checkerDispatch: async (prompt: string): Promise<string> => {
+          // T04: return the §8.2 JSON for the criterion id in the prompt.
+          const m = prompt.match(/Criterion \(([^\)]+)\):/);
+          const cid = m ? m[1] : "rec-4";
+          return JSON.stringify({
+            criteria: [
+              { criterionId: cid, verdict: "pass", evidenceIds: [cid], reason: "ok" },
+            ],
+          });
+        },
         budgetReserveChecker: () => BudgetReservationResult.Reserved,
       }
     );
     // rec-1 (observation found) → pass; rec-2 (op completed) → pass;
-    // rec-3 (count 10 >= 5) → pass; rec-4 (qualitative PASS) → pass;
+    // rec-3 (count 10 >= 5) → pass; rec-4 (qualitative pass) → pass;
     // rec-5 (artifact stub) → unknown (unmet).
     expect(result.passedCriterionIds).toEqual(["rec-1", "rec-2", "rec-3", "rec-4"]);
     expect(result.unmetCriterionIds).toEqual(["rec-5"]);
@@ -819,7 +861,15 @@ describe("TaskEvidenceService.checkCandidate — T03 provider-backed evidence (F
         source: "provider",
         sourceRevision: "slice2-t03",
         expectedStateVersion: 0,
-        checkerDispatch: async () => "PASS",
+        checkerDispatch: async (prompt: string): Promise<string> => {
+          const m = prompt.match(/Criterion \(([^\)]+)\):/);
+          const cid = m ? m[1] : "rec-2";
+          return JSON.stringify({
+            criteria: [
+              { criterionId: cid, verdict: "pass", evidenceIds: [cid], reason: "ok" },
+            ],
+          });
+        },
         budgetReserveChecker: () => BudgetReservationResult.Reserved,
       }
     );

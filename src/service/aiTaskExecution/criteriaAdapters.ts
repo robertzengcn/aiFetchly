@@ -19,6 +19,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { readFileSync, statSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import type { Stats } from "node:fs";
+import { z } from "zod/v4";
 import type {
   TaskCriterion,
 } from "@/entityTypes/aiTaskExecutionTypes";
@@ -262,14 +263,34 @@ export class RecordCountAdapter implements CriterionEvaluator {
   }
 }
 
-// ----- Qualitative evaluator (checker LLM, budget-guarded) -----
+// ----- Qualitative evaluator (checker LLM, schema-validated, abortable) -----
 
 /**
  * Qualitative criteria use a checker LLM to judge whether the content
- * satisfies the criterion description. The checker dispatch is budget-guarded
- * via `budgetReserveChecker` (§9: 6/run, 2/candidate, 1 retry). When the
- * budget is exhausted, the state is `"unknown"` (fail-closed → incomplete).
- * AbortError (user cancel during checking) → `"unknown"` (Unit 7 AC-24).
+ * satisfies the criterion description.
+ *
+ * T04 (FR-04/06/08/22; NFR-02/04/08; AC-11/21/24; §8.2):
+ * - **Schema-validated output.** The dispatch returns the §8.2 JSON for the
+ *   single criterion. `parseCheckerVerdict` validates parseable JSON, the Zod
+ *   schema, `criterionId === criterion.id`, `evidenceIds ⊆ admissible`, and
+ *   non-empty `evidenceIds` on `pass`. Malformed `PASS ...` prefix, prompt
+ *   injection, invented/absent references → `"unknown"` (never pass).
+ * - **Abort + deadline race.** Each dispatch gets a per-dispatch
+ *   `AbortController` linked to `context.abortSignal` (turn/run Stop) plus a
+ *   `CHECKER_DEADLINE_MS` timer. A hanging request cannot hold the gate (§9:
+ *   "Deadline expiry aborts maker/checker/tool awaits"). Abort → unknown
+ *   (AC-24: no late verified result).
+ * - **One retry on invalid/transient output.** §8.2: "One checker retry per
+ *   unchanged candidate is allowed for transient/invalid output, using the
+ *   same evidence." The retry is bounded by the 2-per-candidate budget cap
+ *   (`reserveCheckerAttempt` returns `Exhausted` on the second reserve). A
+ *   valid `pass`/`fail`/`unknown` verdict is final — the checker cannot
+ *   override a deterministic fail.
+ * - **Entitlement.** Re-checked inside `openAIChatCompletion` at the start of
+ *   every dispatch (including retries) — NFR-04. Not duplicated here.
+ *
+ * Fail-closed default: budget exhausted, dispatch error, abort, or invalid
+ * output after retry → `"unknown"` (AC-21: no false Completed).
  */
 export class QualitativeEvaluator implements CriterionEvaluator {
   async evaluate(
@@ -282,33 +303,103 @@ export class QualitativeEvaluator implements CriterionEvaluator {
     if (!context.checkerDispatch) {
       return unknown(criterion.id, "no checker dispatch wired");
     }
-    // Budget gate: reserve a checker attempt before dispatching.
-    if (context.budgetReserveChecker) {
-      const reservation = context.budgetReserveChecker();
-      if (reservation === BudgetReservationResult.Exhausted) {
-        return unknown(criterion.id, "checker budget exhausted (qualitative skipped, fail-closed)");
-      }
-      // AlreadyReserved is fine — the caller dedups by request ID; we still
-      // dispatch this candidate's check (the budget counts the attempt once).
+    const prompt = buildCheckerPrompt(criterion, context.content);
+    // The guard above narrowed context.checkerDispatch to non-undefined; bind
+    // it to a local so dispatchOnce has a stable non-optional reference.
+    const dispatch = context.checkerDispatch;
+
+    // First attempt (already reserved by the controller's budgetReserveChecker
+    // closure before this evaluate() is called — but guard anyway for direct
+    // callers). Exhausted → unknown fail-closed.
+    const firstReservation = context.budgetReserveChecker
+      ? context.budgetReserveChecker()
+      : BudgetReservationResult.Reserved;
+    if (firstReservation === BudgetReservationResult.Exhausted) {
+      return unknown(criterion.id, "checker budget exhausted (qualitative skipped, fail-closed)");
     }
-    const prompt = buildCheckerPrompt(criterion.description, context.content);
+
+    const firstResult = await this.dispatchOnce(criterion, prompt, context, dispatch);
+    if (firstResult.kind === "verdict") {
+      return summarizeVerdict(criterion, firstResult, false);
+    }
+    // Abort (Stop / deadline) is TERMINAL — no retry (AC-24: no late
+    // verified result). A Stop mid-check cannot be retried into a pass.
+    if (firstResult.kind === "aborted") {
+      return unknown(criterion.id, firstResult.reason);
+    }
+    // First attempt produced invalid/transient output → one retry within
+    // budget (§8.2: "One checker retry per unchanged candidate is allowed for
+    // transient/invalid output, using the same evidence"). The retry uses a
+    // distinct request id (`:retry`) so the budget dedup does not collapse it
+    // onto the first reserve. Exhausted / AlreadyReserved → unknown fail-closed
+    // (no third dispatch — the 2-per-candidate cap is enforced by the budget).
+    const retryReservation = context.budgetReserveChecker
+      ? context.budgetReserveChecker()
+      : BudgetReservationResult.Reserved;
+    if (retryReservation !== BudgetReservationResult.Reserved) {
+      return unknown(
+        criterion.id,
+        `checker invalid on first attempt (${firstResult.reason}); no retry budget (fail-closed)`
+      );
+    }
+    const retryResult = await this.dispatchOnce(criterion, prompt, context, dispatch);
+    if (retryResult.kind === "verdict") {
+      return summarizeVerdict(criterion, retryResult, true);
+    }
+    return unknown(
+      criterion.id,
+      `checker invalid after retry (first=${firstResult.reason}, retry=${retryResult.reason})`
+    );
+  }
+
+  /**
+   * One dispatch + parse, wrapped in the abort/deadline race. Returns either a
+   * valid verdict (pass/fail/unknown — schema-valid, criterion-id match,
+   * admissible evidence) or an invalid outcome (transient error / invalid
+   * JSON / schema mismatch / invented references). Abort (turn or deadline) →
+   * invalid-but-not-retried: the caller treats abort as terminal fail-closed,
+   * not a transient retry, per AC-24 ("no late verified result").
+   */
+  private async dispatchOnce(
+    criterion: TaskCriterion,
+    prompt: string,
+    context: AdapterContext,
+    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
+  ): Promise<DispatchOutcome> {
+    const dispatchController = new AbortController();
+    const cleanup = linkAbortSignals(dispatchController, context.abortSignal);
+    const timer = setTimeout(
+      () => dispatchController.abort(),
+      CHECKER_DEADLINE_MS
+    );
     try {
-      const response = await context.checkerDispatch(prompt);
-      const state = parseCheckerResponse(response);
-      return {
-        state,
-        referenceIds: [criterion.id],
-        summary: truncate(`${state}: qualitative "${criterion.description.slice(0, 80)}" checker response: ${response.slice(0, 200)}`),
-      };
+      const response = await dispatch(prompt, dispatchController.signal);
+      return parseCheckerVerdict(response, criterion);
     } catch (error) {
       if (isAbortError(error)) {
-        // AC-24: user cancelled during checking → unknown (never verified).
-        return unknown(criterion.id, "checker LLM aborted (user cancel)");
+        // AC-24: Stop or deadline-aborted mid-dispatch → terminal unknown, no
+        // retry (no late verified result). Signal this via a distinct outcome.
+        return { kind: "aborted", reason: "checker LLM aborted (Stop or deadline)" };
       }
-      return unknown(criterion.id, `checker LLM error: ${errorMessage(error)}`);
+      // Transient error (network/timeout/entitlement throw) → retryable.
+      return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
+    } finally {
+      clearTimeout(timer);
+      cleanup();
     }
   }
 }
+
+/** Outcome of one dispatch attempt. */
+type DispatchOutcome =
+  | {
+      readonly kind: "verdict";
+      readonly verdict: CriterionState;
+      readonly evidenceIds: readonly string[];
+      readonly reason: string;
+    }
+  | { readonly kind: "invalid"; readonly reason: string }
+  | { readonly kind: "aborted"; readonly reason: string };
 
 // ----- Artifact evaluator (validated read-only filesystem) -----
 
@@ -433,24 +524,174 @@ function meetsOperationThreshold(actual: string, required: string): boolean {
   return actualIdx >= requiredIdx;
 }
 
-function buildCheckerPrompt(description: string, content: string): string {
-  // §8.2: the checker judges whether the content satisfies the criterion.
-  // The prompt asks for a yes/no/unknown verdict.
-  return `You are a task completion verifier. Determine whether the following criterion is satisfied by the assistant's response.
+function buildCheckerPrompt(criterion: TaskCriterion, content: string): string {
+  // §8.2: the checker judges whether the content satisfies the criterion and
+  // returns a per-criterion JSON result. The prompt enumerates the admissible
+  // evidence IDs (the criterion id — the checker cannot see prior evidence
+  // rows; the evaluator is the boundary) so the checker knows what it may
+  // cite. A pass REQUIRES admissible supporting evidence (§8.2: "Every pass
+  // cites admissible supporting evidence"). Output is parsed strictly — no
+  // provider JSON-mode reliance (§8.2).
+  return `You are a task completion verifier. Determine whether the following criterion is satisfied by the assistant's response. Reply ONLY with a single JSON object, no prose, no code fences.
 
-Criterion: ${description}
-
-Assistant response:
-${content.slice(0, 8000)}
-
-Reply with exactly one word: PASS, FAIL, or UNKNOWN. PASS only if the response clearly satisfies the criterion. UNKNOWN if you cannot determine it.`;
+JSON schema (exactly one entry in "criteria"):
+{
+  "criteria": [
+    {
+      "criterionId": "${criterion.id}",
+      "verdict": "pass" | "fail" | "unknown",
+      "evidenceIds": ["${criterion.id}"],
+      "reason": "one short sentence"
+    }
+  ]
 }
 
-function parseCheckerResponse(response: string): CriterionState {
-  const trimmed = response.trim().toUpperCase();
-  if (trimmed.startsWith("PASS")) return "pass";
-  if (trimmed.startsWith("FAIL")) return "fail";
-  return "unknown";
+Rules:
+- "verdict": "pass" REQUIRES at least one evidenceId drawn from the admissible set below.
+- "verdict": "fail" means the response clearly does NOT satisfy the criterion.
+- "verdict": "unknown" means you cannot determine it.
+- Do NOT cite evidence ids outside the admissible set.
+- Output ONLY the JSON object. No text before or after.
+
+Criterion (${criterion.id}): ${criterion.description}
+
+Admissible evidence ids: ["${criterion.id}"]
+
+Assistant response:
+${content.slice(0, 8000)}`;
+}
+
+/** Deadline for one checker dispatch (NFR-02; §9 line 445). A hanging request cannot hold the gate. */
+const CHECKER_DEADLINE_MS = 30_000;
+/** Length bound on the checker's `reason` field (NFR-08). */
+const MAX_CHECKER_REASON = 500;
+
+/**
+ * Zod schema for the §8.2 checker JSON contract. Strict: exactly one
+ * criterion result, enum verdict, string evidence ids, bounded reason.
+ */
+const checkerResultSchema = z.object({
+  criteria: z
+    .array(
+      z.object({
+        criterionId: z.string().min(1),
+        verdict: z.enum(["pass", "fail", "unknown"]),
+        evidenceIds: z.array(z.string()),
+        reason: z.string(),
+      })
+    )
+    .length(1),
+});
+
+/**
+ * Extract a JSON object from raw LLM output (tolerates code fences / stray
+ * text). Mirrors the emailReply helper without importing cross-domain.
+ */
+function extractJsonObject(raw: string): string | null {
+  const fenced = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const start = fenced.indexOf("{");
+  const end = fenced.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  return fenced.slice(start, end + 1);
+}
+
+/**
+ * Parse + validate the checker's response against the §8.2 contract.
+ * Returns a `verdict` outcome only when the output is schema-valid AND the
+ * cross-checks pass (criterionId match, evidenceIds ⊆ admissible, non-empty
+ * on pass). Any violation → `invalid` (the caller retries once within budget,
+ * then fails closed). Malformed `PASS ...` prefix and prompt-injection text
+ * never yield a verdict here — they are not valid JSON (AC-11/21).
+ */
+function parseCheckerVerdict(
+  response: string,
+  criterion: TaskCriterion
+): DispatchOutcome {
+  const jsonText = extractJsonObject(response);
+  if (!jsonText) {
+    return { kind: "invalid", reason: "no JSON object in checker response" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return { kind: "invalid", reason: "checker response is not valid JSON" };
+  }
+  const result = checkerResultSchema.safeParse(parsed);
+  if (!result.success) {
+    return {
+      kind: "invalid",
+      reason: `checker JSON failed schema validation: ${result.error.message.slice(0, 200)}`,
+    };
+  }
+  const entry = result.data.criteria[0];
+  if (entry.criterionId !== criterion.id) {
+    return {
+      kind: "invalid",
+      reason: `checker criterionId mismatch: got "${entry.criterionId}" expected "${criterion.id}"`,
+    };
+  }
+  // Admissible evidence set: the criterion id (the evaluator is the boundary;
+  // the checker cannot cite external evidence ids).
+  const admissible = new Set<string>([criterion.id]);
+  const allAdmissible = entry.evidenceIds.every((id) => admissible.has(id));
+  if (!allAdmissible) {
+    return {
+      kind: "invalid",
+      reason: `checker cited non-admissible evidence ids: ${JSON.stringify(entry.evidenceIds)}`,
+    };
+  }
+  // §8.2: "Every pass cites admissible supporting evidence." Empty evidence on
+  // pass → invalid (invented/absent references cannot satisfy a pass).
+  if (entry.verdict === "pass" && entry.evidenceIds.length === 0) {
+    return {
+      kind: "invalid",
+      reason: "checker verdict pass with no evidence ids (citations required)",
+    };
+  }
+  return {
+    kind: "verdict",
+    verdict: entry.verdict,
+    evidenceIds: entry.evidenceIds,
+    reason: entry.reason.slice(0, MAX_CHECKER_REASON),
+  };
+}
+
+/**
+ * Link a parent abort signal (turn/run Stop) to a per-dispatch controller so
+ * a parent abort triggers the per-dispatch abort. Returns a cleanup fn that
+ * removes the listener (no leak). If the parent is already aborted, the
+ * per-dispatch controller is aborted immediately.
+ */
+function linkAbortSignals(
+  controller: AbortController,
+  parent?: AbortSignal
+): () => void {
+  if (!parent) return () => undefined;
+  const onParentAbort = (): void => controller.abort();
+  if (parent.aborted) {
+    controller.abort();
+    return () => undefined;
+  }
+  parent.addEventListener("abort", onParentAbort, { once: true });
+  return () => parent.removeEventListener("abort", onParentAbort);
+}
+
+/** Build the CriterionEvalResult summary for a valid verdict. */
+function summarizeVerdict(
+  criterion: TaskCriterion,
+  result: { readonly verdict: CriterionState; readonly evidenceIds: readonly string[]; readonly reason: string },
+  retried: boolean
+): CriterionEvalResult {
+  return {
+    state: result.verdict,
+    // The validated evidence ids the checker cited + the structural criterion
+    // anchor. The service persists both as evidence rows.
+    referenceIds: [...result.evidenceIds, criterion.id],
+    summary: truncate(
+      `${result.verdict}: qualitative "${criterion.description.slice(0, 80)}"${retried ? " (after retry)" : ""} reason: ${result.reason}`
+    ),
+  };
 }
 
 function isAbortError(error: unknown): boolean {
