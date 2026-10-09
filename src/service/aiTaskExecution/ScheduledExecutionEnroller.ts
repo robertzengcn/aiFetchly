@@ -51,11 +51,15 @@ import {
   TaskEvidenceService,
   makeModuleBackedStore,
 } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import type { ScheduledLoopPolicyBinding } from "@/service/ScheduledLoopEventSink";
 import type { BudgetLimitsInput } from "@/service/aiTaskExecution/budgetDefaults";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
+import { SearchModule } from "@/modules/SearchModule";
+import { contactInfoRepository } from "@/model/ContactInfo.model";
 import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 
 /** Input to {@link enrollScheduledExecution}. Mirrors `StartScheduledInput`. */
@@ -223,27 +227,30 @@ export async function enrollScheduledExecution(
   const created = startResult.binding;
   const slot = createDecisionSlot();
 
-  // Evidence service: evaluate criteria against assistant content so the
-  // controller's verified_complete vs. incomplete decision is real (not
-  // caller-supplied). Built on a module-backed store; expectedStateVersion
-  // left undefined so persistEvidence is skipped (the runner's
-  // finalizeScheduledPolicyRun owns the version token for finalization).
-  // Constructed lazily here (BaseModule TDZ — never at module top level).
+  // Evidence service (T03, FR-03/04/24, AC-03/04/32): build the
+  // authoritative evidence stack — module-backed store whose
+  // `mergeEvidenceCas` calls `AiTaskExecutionModel.
+  // applyShadowDecisionCas`, provider-backed observation /
+  // operation-receipt / record-count lookups, and a bounded tool-free
+  // checker dispatch — via the shared factory (same construction as the
+  // manual seam in AIChatQueryEngine). The consult closures read
+  // `expectedStateVersion` fresh per consult so evidence writes persist
+  // (AC-32). Constructed lazily here (BaseModule TDZ — never at module
+  // top level).
   const execModule = new AiTaskExecutionModule();
-  const evidenceService = new TaskEvidenceService(
-    makeModuleBackedStore({
-      getExecutionState: async (executionId) => {
-        const exec = await execModule.getExecution(executionId);
-        if (!exec) return null;
-        return {
-          stateJson: exec.execution_state_json,
-          version: exec.execution_state_version,
-          finalized: exec.finalized,
-        };
-      },
-      applyShadowDecisionCas: async () => false,
-    })
-  );
+  const {
+    evidenceService,
+    checkerDispatch,
+    observationProvider,
+    operationReceiptProvider,
+    artifactBaseDir,
+  } = buildEvidenceService({
+    executionId: created.executionId,
+    execModule,
+    operationModule: new AiTaskOperationModule(),
+    searchModule: new SearchModule(),
+    contactInfoRepository,
+  });
 
   // FR-09 / §7.2 step 7: one tracker per execution, closing over the SAME
   // budget the controller consults, so the streak the tracker increments is
@@ -259,18 +266,29 @@ export async function enrollScheduledExecution(
     executionId: created.executionId,
     executionKind: "scheduled",
     policyAccepted: true,
-    consult: (candidate) =>
-      created.controller.decide(candidate, {
+    consult: async (candidate) => {
+      // T03: read the CAS token fresh per consult so evidence writes persist
+      // (AC-32). A frozen version would mismatch the moment any prior consult
+      // bumped the row.
+      const exec = await execModule.getExecution(created.executionId);
+      const expectedStateVersion = exec?.execution_state_version;
+      return created.controller.decide(candidate, {
         route: created.route,
         contract: created.contract ?? undefined,
         evidenceService,
         evidenceContext: {
           content: candidate.content,
           source: "loop_consult",
-          sourceRevision: "slice2-t02-scheduled",
+          sourceRevision: "slice2-t03-scheduled",
+          checkerDispatch,
+          observationProvider,
+          operationReceiptProvider,
+          artifactBaseDir: artifactBaseDir ?? undefined,
+          expectedStateVersion,
         },
         budget: created.budget,
-      }),
+      });
+    },
     reserveContinuation: (continuationId) =>
       created.budget.reserveContinuation(continuationId),
     reserveProviderAttempt: (requestId) =>
@@ -304,6 +322,12 @@ export async function enrollScheduledExecution(
   // evidenceContext so the sink's complete-event consult reads the slot the
   // loop's in-loop consult populated (no double-consult), and falls back with
   // evidence only when the loop exited without consulting.
+  //
+  // T03: the evidenceContext carries the authoritative providers + a
+  // `resolveExpectedStateVersion` closure so the sink's fallback consult
+  // reads the CAS token fresh (AC-32). The `expectedVersion` field below
+  // is the enrollment snapshot; the runner's finalizeScheduledPolicyRun
+  // re-reads the version before finalizing (evidence writes bump it).
   const policyBinding: ScheduledLoopPolicyBinding = {
     executionId: created.executionId,
     controller: created.controller,
@@ -321,15 +345,31 @@ export async function enrollScheduledExecution(
       // this is the fallback provenance tag.
       content: "",
       source: "scheduled_sink_consult",
-      sourceRevision: "slice2-t02-scheduled",
+      sourceRevision: "slice2-t03-scheduled",
+      checkerDispatch,
+      observationProvider,
+      operationReceiptProvider,
+      artifactBaseDir: artifactBaseDir ?? undefined,
+      resolveExpectedStateVersion: async () => {
+        try {
+          const exec = await execModule.getExecution(created.executionId);
+          return exec?.execution_state_version;
+        } catch {
+          return undefined;
+        }
+      },
     },
   };
 
   const policyExecution = {
     executionId: created.executionId,
-    // Fresh scheduled executions start at execution_state_version = 0 and
-    // nothing bumps it in the scheduled path (mirror the runner's pre-T02
-    // snapshot).
+    // T03: the enrollment snapshot version. The runner's
+    // finalizeScheduledPolicyRun re-reads the version before finalizing
+    // because evidence writes (loop consult + sink fallback consult) bump
+    // execution_state_version during the run. A frozen 0 here would mismatch
+    // the moment any consult persisted evidence → STATE_CONFLICT → the
+    // scheduled finalization fails (and finalizeScheduled has no CAS retry,
+    // unlike finalizeManual).
     expectedVersion: 0,
     idempotencyKey: input.idempotencyKey ?? input.occurrenceKey,
   };

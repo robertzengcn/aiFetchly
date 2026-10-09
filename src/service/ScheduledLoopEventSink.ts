@@ -3,6 +3,10 @@ import type {
   DecideContext,
 } from "@/service/aiTaskExecution/TaskCompletionController";
 import type { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
+import type {
+  ObservationReceipt,
+  OperationReceipt,
+} from "@/service/aiTaskExecution/criteriaAdapters";
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
 import type {
   TaskCompletionDecision,
@@ -113,11 +117,24 @@ export interface ScheduledLoopPolicyBinding {
    * controller's evidence evaluation has the same inputs as the engine's
    * manual-gate fallback. Optional so flag-off callers and tests can omit
    * it; when absent the fallback consult has no evidence context.
+   *
+   * T03 (FR-03/04/24, AC-32): the context also carries the authoritative
+   * providers (observation / operation-receipt / checker dispatch / artifact
+   * base dir) and a `resolveExpectedStateVersion` closure that reads the
+   * CAS token fresh at consult time (evidence writes bump the version, so a
+   * frozen token would mismatch). The sink threads these into the
+   * `DecideContext.evidenceContext` it builds for the fallback consult so
+   * evidence rows persist before terminal delivery.
    */
   readonly evidenceContext?: {
     readonly content: string;
     readonly source: string;
     readonly sourceRevision: string;
+    readonly checkerDispatch?: (prompt: string) => Promise<string>;
+    readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
+    readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
+    readonly artifactBaseDir?: string;
+    readonly resolveExpectedStateVersion?: () => Promise<number | undefined>;
   };
 }
 
@@ -308,23 +325,44 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
         pendingPlanApproval: false,
         safetyRestriction: false,
       };
-      const context: DecideContext = {
-        route: binding.route,
-        budget: binding.budget,
-        contract: binding.contract ?? undefined,
-        evidenceService: binding.evidenceService,
-        evidenceContext: binding.evidenceContext
-          ? {
-              content: binding.evidenceContext.content,
-              source: binding.evidenceContext.source,
-              sourceRevision: binding.evidenceContext.sourceRevision,
-            }
-          : undefined,
+      // T03: thread the authoritative providers + read `expectedStateVersion`
+      // fresh at consult time so evidence writes persist (AC-32). The
+      // providers are captured from the binding's evidenceContext; the
+      // version is resolved via `resolveExpectedStateVersion` (the enroller
+      // wires this to `execModule.getExecution`).
+      const buildContext = async (): Promise<DecideContext> => {
+        const baseContext = binding.evidenceContext;
+        if (!baseContext) {
+          return {
+            route: binding.route,
+            budget: binding.budget,
+            contract: binding.contract ?? undefined,
+            evidenceService: binding.evidenceService,
+            evidenceContext: undefined,
+          };
+        }
+        const expectedStateVersion = await baseContext.resolveExpectedStateVersion?.();
+        return {
+          route: binding.route,
+          budget: binding.budget,
+          contract: binding.contract ?? undefined,
+          evidenceService: binding.evidenceService,
+          evidenceContext: {
+            content: baseContext.content,
+            source: baseContext.source,
+            sourceRevision: baseContext.sourceRevision,
+            checkerDispatch: baseContext.checkerDispatch,
+            observationProvider: baseContext.observationProvider,
+            operationReceiptProvider: baseContext.operationReceiptProvider,
+            artifactBaseDir: baseContext.artifactBaseDir,
+            expectedStateVersion,
+          },
+        };
       };
-      // Promise.resolve() wraps the decide result so a controller that
-      // returns undefined (or throws synchronously) fails closed via the
-      // guards below instead of throwing `.then`-on-undefined out of emit().
-      void Promise.resolve(binding.controller.decide(candidate, context))
+      void Promise.resolve(buildContext())
+        .then((context) =>
+          Promise.resolve(binding.controller.decide(candidate, context))
+        )
         .then((decision: TaskCompletionDecision) => {
           if (!decision) {
             commitMissing();

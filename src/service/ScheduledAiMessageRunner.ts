@@ -634,6 +634,7 @@ export class ScheduledAiMessageRunner {
       outcome,
       conversationId,
       policyExecution,
+      policyBinding,
     });
   }
 
@@ -664,6 +665,7 @@ export class ScheduledAiMessageRunner {
       readonly expectedVersion: number;
       readonly idempotencyKey: string;
     } | null;
+    policyBinding?: ScheduledLoopPolicyBinding | undefined;
   }): Promise<ScheduledAiMessageRunResult> {
     const {
       runId,
@@ -675,6 +677,7 @@ export class ScheduledAiMessageRunner {
       errorCode,
       pauseSchedule,
       policyExecution,
+      policyBinding,
     } = input;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
@@ -694,6 +697,7 @@ export class ScheduledAiMessageRunner {
         outcome,
         conversationId,
         policyExecution,
+        policyBinding,
       });
     }
 
@@ -873,12 +877,28 @@ export class ScheduledAiMessageRunner {
       readonly expectedVersion: number;
       readonly idempotencyKey: string;
     };
+    policyBinding?: ScheduledLoopPolicyBinding | undefined;
   }): Promise<ScheduledAiMessageRunResult> {
     const { runId, taskId, scheduleId, startedAt, outcome, conversationId } =
       input;
     const policyExecution = input.policyExecution;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    // T03 (FR-24, AC-32): read the CAS token fresh before finalizing.
+    // Evidence writes (loop consult + sink fallback consult) bump
+    // execution_state_version during the run, so the enrollment snapshot
+    // (policyExecution.expectedVersion) is stale by finalize time. The
+    // binding's `resolveExpectedStateVersion` reads the authoritative row
+    // version; if it returns undefined (binding missing or read failed) we
+    // fall back to the snapshot — `finalizeScheduled` has no CAS retry, so a
+    // stale token surfaces STATE_CONFLICT rather than silently double-
+    // finalizing, and the runner maps that to missing_outcome (never
+    // success, AC-15/17).
+    const freshVersion = await input.policyBinding?.evidenceContext
+      ?.resolveExpectedStateVersion?.()
+      .catch(() => undefined);
+    const expectedVersion = freshVersion ?? policyExecution.expectedVersion;
 
     // Compute the next occurrence + terminal state from the schedule row —
     // same derivation as the legacy block so the transaction's schedule
@@ -909,7 +929,7 @@ export class ScheduledAiMessageRunner {
       consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES;
     const finalizeInput: FinalizeScheduledInput = {
       executionId: policyExecution.executionId,
-      expectedVersion: policyExecution.expectedVersion,
+      expectedVersion,
       runId,
       scheduleId,
       taskOutcome: mapping.taskOutcome,

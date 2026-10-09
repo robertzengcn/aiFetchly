@@ -121,9 +121,11 @@ import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutio
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type { TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
-import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
-import { makeModuleBackedStore } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
+import { SearchModule } from "@/modules/SearchModule";
+import { contactInfoRepository } from "@/model/ContactInfo.model";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type {
@@ -1512,29 +1514,31 @@ export class AIChatQueryEngine {
                   recordedDecision = d;
                 },
               });
-              // Evidence service: evaluate criteria against assistant content
-              // / tool catalog so the controller's verified_complete vs.
-              // incomplete decision is real (not caller-supplied). Built on a
-              // no-op store: `expectedStateVersion` is left undefined so
-              // `persistEvidence` is skipped — the controller still gets the
-              // in-memory CheckResult for its decision. Evidence-row
-              // persistence lands in Unit 5's finalization gate (which holds
-              // the version token). Constructed lazily here (BaseModule TDZ).
+              // Evidence service (T03, FR-03/04/24, AC-03/04/32): build the
+              // authoritative evidence stack — module-backed store whose
+              // `mergeEvidenceCas` calls `AiTaskExecutionModel.
+              // applyShadowDecisionCas`, provider-backed observation /
+              // operation-receipt / record-count lookups, and a bounded
+              // tool-free checker dispatch — via the shared factory. The
+              // `expectedStateVersion` is read FRESH per consult (evidence
+              // writes bump the version, so a frozen token would mismatch)
+              // so `persistEvidence` writes rows before terminal delivery
+              // (AC-32 reload resolves every evidence ID). Constructed
+              // lazily here (BaseModule TDZ — never at module top level).
               const execModule = new AiTaskExecutionModule();
-              const evidenceService = new TaskEvidenceService(
-                makeModuleBackedStore({
-                  getExecutionState: async (executionId) => {
-                    const exec = await execModule.getExecution(executionId);
-                    if (!exec) return null;
-                    return {
-                      stateJson: exec.execution_state_json,
-                      version: exec.execution_state_version,
-                      finalized: exec.finalized,
-                    };
-                  },
-                  applyShadowDecisionCas: async () => false,
-                })
-              );
+              const {
+                evidenceService,
+                checkerDispatch,
+                observationProvider,
+                operationReceiptProvider,
+                artifactBaseDir,
+              } = buildEvidenceService({
+                executionId: created.executionId,
+                execModule,
+                operationModule: new AiTaskOperationModule(),
+                searchModule: new SearchModule(),
+                contactInfoRepository,
+              });
               // FR-09 / §7.2 step 7 (GAP-S2 #2): one tracker per execution,
               // closing over the SAME budget the controller consults, so the
               // streak the tracker increments is the streak the controller's
@@ -1553,20 +1557,29 @@ export class AIChatQueryEngine {
                 // enrollment cannot convert accepted unfinished work to
                 // unchecked success (NFR-12, AC-12/32).
                 policyAccepted: true,
-                consult: (candidate) =>
-                  created.controller.decide(candidate, {
+                consult: async (candidate) => {
+                  // T03: read the CAS token fresh per consult so evidence
+                  // writes persist (AC-32). A frozen version would mismatch
+                  // the moment any prior consult bumped the row.
+                  const exec = await execModule.getExecution(created.executionId);
+                  const expectedStateVersion = exec?.execution_state_version;
+                  return created.controller.decide(candidate, {
                     route: created.route,
                     contract: created.contract ?? undefined,
                     evidenceService,
-                    // expectedStateVersion omitted → persistEvidence skipped
-                    // (Unit 5 finalization gate owns persistence).
                     evidenceContext: {
                       content: candidate.content,
                       source: "loop_consult",
-                      sourceRevision: "slice2-unit4",
+                      sourceRevision: "slice2-t03-manual",
+                      checkerDispatch,
+                      observationProvider,
+                      operationReceiptProvider,
+                      artifactBaseDir: artifactBaseDir ?? undefined,
+                      expectedStateVersion,
                     },
                     budget: created.budget,
-                  }),
+                  });
+                },
                 reserveContinuation: (continuationId) =>
                   created.budget.reserveContinuation(continuationId),
                 // T05 (FR-08/10/23, AC-06/08/22/27/29): provider-attempt gate.
