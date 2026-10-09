@@ -23,6 +23,15 @@ export interface EmailReceiveConnectionConfig {
   readonly username: string;
   readonly password: string;
   readonly folder: string;
+  /**
+   * D8 (security): whether TLS certificate validation is enforced on SSL
+   * connections. Defaults to true (cert validation ON). Only set to false to
+   * allow self-signed certs on a user-acknowledged insecure mailbox — never
+   * the default, never silently applied. POP3 previously hardcoded
+   * `rejectUnauthorized: false`, disabling cert validation for every SSL
+   * connection (MITM risk).
+   */
+  readonly tlsRejectUnauthorized?: boolean;
 }
 
 /** Bounded fetch options for a receive sync. */

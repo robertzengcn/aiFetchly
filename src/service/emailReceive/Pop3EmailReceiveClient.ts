@@ -22,6 +22,35 @@ const POP3_PORT = 110;
 const POP3_SSL_PORT = 995;
 
 /**
+ * D8 (security): maximum bytes accumulated for a single POP3 multi-line
+ * response (RETR). A malicious or buggy server streaming without the `.`
+ * terminator previously caused unbounded buffer growth. Capped at 50 MB —
+ * well above any legitimate email, well below memory-exhaustion territory.
+ */
+export const POP3_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * D8 (security): strip control characters from a header value (subject).
+ * Control chars (NUL, BEL, CR, LF, other C0 controls) break log lines,
+ * storage, and downstream rendering, and are a known log-injection vector.
+ * Collapses embedded CR/LF runs to a single space; strips other control
+ * chars; preserves printable ASCII + tab. Mirrors the model's 998-char
+ * subject cap.
+ */
+export function sanitizeHeaderValue(value: string): string {
+  // Replace any CR/LF (or CR+LF) run with a single space, then strip any
+  // remaining control chars (< 0x20) except tab (0x09). NUL is also stripped.
+  // The control-char class is intentional — this is the security filter that
+  // removes log-injection / control-char vectors from header values.
+  /* eslint-disable no-control-regex -- stripping control chars is the purpose */
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
+    .slice(0, 998);
+  /* eslint-enable no-control-regex */
+}
+
+/**
  * POP3 receive client implementation using Node.js built-in `net` and `tls`
  * modules with the standard POP3 protocol (RFC 1939).
  *
@@ -36,7 +65,8 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       config.port,
       config.ssl,
       config.username,
-      config.password
+      config.password,
+      config.tlsRejectUnauthorized ?? true
     );
     try {
       await client.connect();
@@ -57,7 +87,8 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       config.port,
       config.ssl,
       config.username,
-      config.password
+      config.password,
+      config.tlsRejectUnauthorized ?? true
     );
 
     try {
@@ -100,7 +131,9 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       (parsed.text && parsed.text.length > 0 ? parsed.text : null) ??
       (rawHtml ? htmlToPlainText(rawHtml) : null);
 
-    const subject = (parsed.subject ?? "(no subject)").slice(0, 998);
+    const subject = sanitizeHeaderValue(
+      parsed.subject ?? "(no subject)"
+    );
     const messageId = parsed.messageId ? parsed.messageId.trim() : null;
     const inReplyTo = parsed.inReplyTo ? String(parsed.inReplyTo).trim() : null;
     const referencesHeader = parsed.references
@@ -164,7 +197,8 @@ class Pop3Connection {
     private readonly port: number,
     private readonly ssl: boolean,
     private readonly username: string,
-    private readonly password: string
+    private readonly password: string,
+    private readonly tlsRejectUnauthorized: boolean
   ) {}
 
   async connect(): Promise<void> {
@@ -172,10 +206,13 @@ class Pop3Connection {
     const tls = await import("tls");
 
     return new Promise<void>((resolve, reject) => {
+      // D8 (security): TLS certificate validation is ON by default
+      // (rejectUnauthorized: true). Only disabled when the caller explicitly
+      // opts out via tlsRejectUnauthorized: false — never silently.
       const connectOpts = {
         host: this.host,
         port: this.port || (this.ssl ? POP3_SSL_PORT : POP3_PORT),
-        rejectUnauthorized: false,
+        rejectUnauthorized: this.tlsRejectUnauthorized,
       };
 
       const socket = this.ssl
@@ -315,6 +352,18 @@ class Pop3Connection {
         }
         const endMarkerIndex = this.buffer.indexOf("\r\n.\r\n");
         if (endMarkerIndex === -1) {
+          // D8 (security): cap the response buffer to prevent a malicious or
+          // buggy server from streaming without the terminator and exhausting
+          // memory. Reject once the cap is exceeded — well above any
+          // legitimate email, well below memory-exhaustion territory.
+          if (Buffer.byteLength(this.buffer, "utf-8") > POP3_MAX_RESPONSE_BYTES) {
+            reject(
+              new Error(
+                `POP3 response exceeded ${POP3_MAX_RESPONSE_BYTES} bytes without terminator`
+              )
+            );
+            return;
+          }
           setTimeout(checkBuffer, 200);
           return;
         }
