@@ -704,6 +704,7 @@ export default {
     copy_failed: "Failed to copy URL to clipboard. Please copy manually.",
     language_updated_successfully: "Language updated successfully",
     upgrade_plan: "Mettre à niveau",
+    try_new_shell: "Nouvelle navigation",
     pricing_url_missing: "L'URL de la page des tarifs n'est pas configurée",
   },
   subscriptionEntitlement: {

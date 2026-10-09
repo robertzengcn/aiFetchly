@@ -702,6 +702,7 @@ export default {
     copy_failed: "Failed to copy URL to clipboard. Please copy manually.",
     language_updated_successfully: "Language updated successfully",
     upgrade_plan: "Upgrade",
+    try_new_shell: "New navigation",
     pricing_url_missing: "Pricing page URL is not configured",
   },
   subscriptionEntitlement: {

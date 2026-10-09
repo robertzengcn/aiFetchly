@@ -46,6 +46,11 @@ v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length
 target="_blank" href="https://docs.aifetchly.com"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
+                    <v-list-item
+prepend-icon="mdi-chat-processing-outline" class="mx-1"
+                    :title="t('layout.try_new_shell') || 'New navigation'"
+                    data-testid="layout-restore-shell"
+                    @click="restoreNewShell"></v-list-item>
             </v-list>
             <v-list nav class="mx-2 navigation_account">
                 <v-menu :location="location">
@@ -408,6 +413,13 @@ const gotoSystemsetting=()=>{
 }
 const gotodashborad=()=>{
     router.push('/dashboard/home')
+}
+const restoreNewShell=()=>{
+    // Rollback escape hatch: the shell toggle lives in the new shell's
+    // sidebar, so legacy mode has no other path back. Re-enable the
+    // converged shell and land on the chat workspace.
+    innerShell.setShellEnabled(true)
+    router.push({ name: 'AI_Chat_Workspace' })
 }
 const openPricingPlan = async (): Promise<void> => {
     // Route through the main process so it records pricingOpenedAt and starts

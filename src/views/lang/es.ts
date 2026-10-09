@@ -709,6 +709,7 @@ export default {
       "Error al copiar URL al portapapeles. Por favor, copie manualmente.",
     language_updated_successfully: "Idioma actualizado correctamente",
     upgrade_plan: "Actualizar",
+    try_new_shell: "Navegación nueva",
     pricing_url_missing: "La URL de la página de precios no está configurada",
   },
   subscriptionEntitlement: {

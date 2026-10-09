@@ -706,6 +706,7 @@ export default {
     copy_failed: "URL konnte nicht kopiert werden. Bitte manuell kopieren.",
     language_updated_successfully: "Sprache erfolgreich aktualisiert",
     upgrade_plan: "Upgrade",
+    try_new_shell: "Neue Navigation",
     pricing_url_missing: "Die URL der Preisseite ist nicht konfiguriert",
   },
   subscriptionEntitlement: {

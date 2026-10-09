@@ -672,6 +672,7 @@ export default {
     copy_failed: "无法复制链接到剪贴板，请手动复制。",
     language_updated_successfully: "语言更新成功",
     upgrade_plan: "升级",
+    try_new_shell: "新版导航",
     pricing_url_missing: "未配置价格页面 URL",
   },
   subscriptionEntitlement: {

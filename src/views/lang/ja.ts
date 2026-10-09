@@ -695,6 +695,7 @@ export default {
     copy_failed: "URLをコピーできませんでした。手動でコピーしてください。",
     language_updated_successfully: "言語の更新に成功しました",
     upgrade_plan: "アップグレード",
+    try_new_shell: "新しいナビゲーション",
     pricing_url_missing: "料金ページのURLが設定されていません",
   },
   subscriptionEntitlement: {
