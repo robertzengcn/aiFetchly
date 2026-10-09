@@ -17,8 +17,76 @@
       @delete="onDelete"
     />
 
-    <!-- Conversation workspace chooser (design §9.2): directly below the
-         header, above the run strip and transcript, inside the center. -->
+    <AiChatRunStrip
+      :runtime-status="selectedStore.runtimeStatus"
+      :recovering="recovering"
+      :goal-objective="activeGoalObjective"
+      :loop-status="activeLoopStatus"
+      @stop="onStopFromStrip"
+      @open-details="workspaceStore.openInspector('activity')"
+    />
+
+    <div class="chat-center__messages">
+      <p v-if="selectedStore.loading" class="center-state">
+        {{ t("common.loading") || "Loading…" }}
+      </p>
+      <p v-else-if="selectedStore.loadError" class="center-state error" role="alert">
+        {{ selectedStore.loadError }}
+      </p>
+      <div
+        v-else-if="!conversationId"
+        class="center-state empty"
+        data-testid="workspace-empty-state"
+      >
+        <v-icon icon="mdi-chat-outline" size="40" aria-hidden="true" />
+        <p>
+          {{
+            t("workspaceChat.empty.title") ||
+            "Ask anything, or pick a conversation on the left."
+          }}
+        </p>
+        <v-btn color="primary" data-testid="workspace-empty-new-chat" @click="onNewChat">
+          {{ t("workspaceChat.newChat") || "New chat" }}
+        </v-btn>
+      </div>
+      <AiChatWorkspaceTranscript
+        v-else
+        :messages="[...selectedStore.messages]"
+        :active-assistant-message-id="selectedStore.activeAssistantMessageId"
+        :stream-status="streamStatusForMessages"
+        :error-message="selectedStore.errorMessage ?? undefined"
+        :show-reasoning="true"
+        :plan-submit-error="planSubmitError"
+        @approve-plan="onLegacyPlanAction('approve-plan')"
+        @request-plan-changes="onRequestPlanChangesWithFeedback"
+        @submit-plan-answers="onPlanAnswers"
+        @discard="onLegacyPlanAction('reject-plan')"
+        @open-activity="workspaceStore.openInspector('activity')"
+        @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
+        @grant-permission="onGrantPermission"
+        @deny-permission="onDenyPermission"
+        :pending-messages="pendingRows"
+        @use-generated-image="onUseGeneratedImage"
+        @edit-generated-image="onEditGeneratedImage"
+        @steer-pending="onSteerPending"
+        @cancel-pending="onCancelPending"
+        @resume-pending="onResumePending"
+      />
+      <button
+        v-if="selectedStore.hasOlder && conversationId"
+        type="button"
+        class="load-older"
+        :disabled="selectedStore.loadingOlder"
+        data-testid="workspace-load-older"
+        @click="selectedStore.loadOlder()"
+      >
+        {{ t("workspaceChat.loadOlder") || "Load older messages" }}
+      </button>
+    </div>
+
+    <!-- Conversation workspace chooser (design §9.2): directly above the
+         composer input, below the transcript, inside the center — the
+         workspace applies to the message being composed. -->
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
       <template v-if="conversationId">
         <AIConversationReportButton
@@ -99,73 +167,6 @@
           @dismissed="conversationWorkspace.trustDismissed()"
         />
       </template>
-    </div>
-
-    <AiChatRunStrip
-      :runtime-status="selectedStore.runtimeStatus"
-      :recovering="recovering"
-      :goal-objective="activeGoalObjective"
-      :loop-status="activeLoopStatus"
-      @stop="onStopFromStrip"
-      @open-details="workspaceStore.openInspector('activity')"
-    />
-
-    <div class="chat-center__messages">
-      <p v-if="selectedStore.loading" class="center-state">
-        {{ t("common.loading") || "Loading…" }}
-      </p>
-      <p v-else-if="selectedStore.loadError" class="center-state error" role="alert">
-        {{ selectedStore.loadError }}
-      </p>
-      <div
-        v-else-if="!conversationId"
-        class="center-state empty"
-        data-testid="workspace-empty-state"
-      >
-        <v-icon icon="mdi-chat-outline" size="40" aria-hidden="true" />
-        <p>
-          {{
-            t("workspaceChat.empty.title") ||
-            "Ask anything, or pick a conversation on the left."
-          }}
-        </p>
-        <v-btn color="primary" data-testid="workspace-empty-new-chat" @click="onNewChat">
-          {{ t("workspaceChat.newChat") || "New chat" }}
-        </v-btn>
-      </div>
-      <AiChatWorkspaceTranscript
-        v-else
-        :messages="[...selectedStore.messages]"
-        :active-assistant-message-id="selectedStore.activeAssistantMessageId"
-        :stream-status="streamStatusForMessages"
-        :error-message="selectedStore.errorMessage ?? undefined"
-        :show-reasoning="true"
-        :plan-submit-error="planSubmitError"
-        @approve-plan="onLegacyPlanAction('approve-plan')"
-        @request-plan-changes="onRequestPlanChangesWithFeedback"
-        @submit-plan-answers="onPlanAnswers"
-        @discard="onLegacyPlanAction('reject-plan')"
-        @open-activity="workspaceStore.openInspector('activity')"
-        @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
-        @grant-permission="onGrantPermission"
-        @deny-permission="onDenyPermission"
-        :pending-messages="pendingRows"
-        @use-generated-image="onUseGeneratedImage"
-        @edit-generated-image="onEditGeneratedImage"
-        @steer-pending="onSteerPending"
-        @cancel-pending="onCancelPending"
-        @resume-pending="onResumePending"
-      />
-      <button
-        v-if="selectedStore.hasOlder && conversationId"
-        type="button"
-        class="load-older"
-        :disabled="selectedStore.loadingOlder"
-        data-testid="workspace-load-older"
-        @click="selectedStore.loadOlder()"
-      >
-        {{ t("workspaceChat.loadOlder") || "Load older messages" }}
-      </button>
     </div>
 
     <!-- Composer with next-message controls BELOW the textarea (design §10):
@@ -1450,7 +1451,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px 0;
+  padding: 0 12px 6px;
   flex-shrink: 0;
 }
 

@@ -313,22 +313,21 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     ).toBe(false);
   });
 
-  it("places the workspace strip below the header and above the transcript", async () => {
+  it("places the workspace strip above the composer and below the transcript", async () => {
     const wrapper = mountSurface();
     const chatWorkspace = useChatWorkspaceStore();
     chatWorkspace.setSelected("conv-1");
     await flushPromises();
 
-    const header = wrapper.get(
-      '[data-testid="conversation-header-stub"]'
-    ).element;
     const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
     const transcript = wrapper.get('[data-testid="transcript-stub"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
     expect(
-      header.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING
+      transcript.compareDocumentPosition(strip) &
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      strip.compareDocumentPosition(transcript) &
+      strip.compareDocumentPosition(composer) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
