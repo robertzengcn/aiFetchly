@@ -32,7 +32,7 @@ vi.mock("@/modules/ScheduleManager", () => ({
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       handleAppShutdown: vi.fn(async () => undefined),
-      getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
+      getSchedulerStatus: () => ({ isRunning: true, activeSchedules: 0, totalSchedules: 0 }),
       cleanupInactiveDependencies: mockCleanupInactiveDependencies,
     })),
   },
@@ -138,7 +138,7 @@ beforeEach(() => {
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
     handleAppShutdown: vi.fn(async () => undefined),
-    getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
+    getSchedulerStatus: () => ({ isRunning: true, activeSchedules: 0, totalSchedules: 0 }),
     cleanupInactiveDependencies: mockCleanupInactiveDependencies,
   }));
   mockFindDue.mockResolvedValue([]);
@@ -230,6 +230,28 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
     await scheduler.processIntervalTasks();
 
     expect(mockFindDue).not.toHaveBeenCalled();
+  });
+
+  it("skips work when the global scheduler is stopped", async () => {
+    mockScheduleManagerGet.mockImplementation(() => ({
+      initializeSchedules: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      handleAppShutdown: vi.fn(async () => undefined),
+      getSchedulerStatus: () => ({ isRunning: false, activeSchedules: 0, totalSchedules: 0 }),
+      cleanupInactiveDependencies: mockCleanupInactiveDependencies,
+    }));
+    mockFindDue.mockResolvedValue([SCHED]);
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
+    scheduler.isRunning = true;
+
+    await scheduler.processIntervalTasks();
+
+    expect(mockFindDue).not.toHaveBeenCalled();
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockRunChatLoop).not.toHaveBeenCalled();
   });
 });
 
