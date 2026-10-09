@@ -43,7 +43,11 @@ import {
  */
 export interface EvidenceProviders {
   readonly evidenceService: TaskEvidenceService;
-  readonly checkerDispatch: (prompt: string) => Promise<string>;
+  /** T04: the second arg is the per-dispatch abort signal (turn/run + deadline). */
+  readonly checkerDispatch: (
+    prompt: string,
+    signal?: AbortSignal
+  ) => Promise<string>;
   readonly observationProvider: (targetId: string) => Promise<ObservationReceipt | null>;
   readonly operationReceiptProvider: (targetId: string) => Promise<OperationReceipt | null>;
   readonly artifactBaseDir: string | null;
@@ -198,13 +202,25 @@ export function buildEvidenceService(deps: {
 
   // ----- checkerDispatch: bounded tool-free AI verdict (NFR-02) -----
 
-  const checkerDispatch = async (prompt: string): Promise<string> => {
+  // T04 (NFR-02/04, AC-24): the dispatch takes a per-dispatch abort signal
+  // (the QualitativeEvaluator creates a controller linked to the turn/run
+  // signal + a checker deadline) and forwards it to openAIChatCompletion so
+  // a Stop or a hanging provider stall aborts the in-flight fetch. The
+  // entitlement gate runs inside openAIChatCompletion at the start of every
+  // call (including retries) — NFR-04 — so this closure does NOT duplicate it.
+  const checkerDispatch = async (
+    prompt: string,
+    signal?: AbortSignal
+  ): Promise<string> => {
     const api = new AiChatApi();
-    const response = await api.openAIChatCompletion({
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: CHECKER_MAX_TOKENS,
-      temperature: CHECKER_TEMPERATURE,
-    });
+    const response = await api.openAIChatCompletion(
+      {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: CHECKER_MAX_TOKENS,
+        temperature: CHECKER_TEMPERATURE,
+      },
+      { signal }
+    );
     return openAIContentToString(response.choices[0]?.message?.content);
   };
 

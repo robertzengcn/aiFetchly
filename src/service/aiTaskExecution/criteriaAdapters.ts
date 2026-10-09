@@ -59,7 +59,19 @@ export interface AdapterContext {
   readonly content: string;
   readonly toolCatalogState?: Readonly<Record<string, unknown>>;
   readonly abortSignal?: AbortSignal;
-  readonly checkerDispatch?: (prompt: string) => Promise<string>;
+  /**
+   * The checker-LLM dispatch. T04 (NFR-02/04, AC-24): the second arg is the
+   * per-dispatch abort signal — the QualitativeEvaluator creates a
+   * per-dispatch AbortController linked to `abortSignal` (the turn/run
+   * signal) plus a `CHECKER_DEADLINE_MS` timer, and passes that controller's
+   * signal here so a Stop or a hanging provider stall cannot hold the
+   * verification gate. Catching an eventual AbortError does not itself abort
+   * the in-flight fetch — the signal must propagate to the transport.
+   */
+  readonly checkerDispatch?: (
+    prompt: string,
+    signal?: AbortSignal
+  ) => Promise<string>;
   readonly budgetReserveChecker?: () => BudgetReservationResult;
   readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
   readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
