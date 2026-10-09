@@ -1,10 +1,11 @@
 <template>
   <!--
     Workspace chooser badge (FR-WS-002/003, design §9.2): name, icon-plus-text
-    approval state, shortened path, and a Change/Choose action. Status is never
-    conveyed by color alone (icon + text). While a run is active the
-    Choose/Change action is disabled with a visible, localized reason
-    (FR-WS-007 / acceptance criterion 13).
+    approval state, clickable shortened path, and a Choose action when unset.
+    When a workspace is set, the path itself is the chooser action (no
+    separate Change/Choose button). Status is never conveyed by color alone
+    (icon + text). While a run is active the Choose/path action is disabled
+    with a visible, localized reason (FR-WS-007 / acceptance criterion 13).
   -->
   <div
     v-if="loading"
@@ -32,18 +33,17 @@
       <v-icon size="x-small">{{ statusIcon }}</v-icon>
       <span>{{ statusText }}</span>
     </span>
-    <span class="workspace-badge__path">{{ displayPath }}</span>
     <button
       type="button"
-      class="workspace-badge__change"
+      class="workspace-badge__path workspace-badge__path--button"
       :title="busy ? busyReasonText : changeFolderText"
       :aria-label="busy ? busyReasonText : changeFolderText"
       :disabled="busy"
-      data-testid="workspace-badge-change"
+      data-testid="workspace-badge-path"
       @click.stop="requestSetWorkspace"
     >
-      <v-icon size="small" start>mdi-folder-swap-outline</v-icon>
-      <span>{{ changeFolderText }}</span>
+      <v-icon size="x-small">mdi-folder-swap-outline</v-icon>
+      <span>{{ displayPath }}</span>
     </button>
     <span
       v-if="busy"
@@ -243,7 +243,34 @@ function requestOpenMemory(): void {
   white-space: nowrap;
   opacity: 0.8;
 }
-.workspace-badge__change,
+button.workspace-badge__path--button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 6px;
+  /* PRD §16.4: interaction targets at least 40x40 (badge stays one row). */
+  min-height: 40px;
+  min-width: 40px;
+  max-width: 280px;
+}
+button.workspace-badge__path--button:hover:not(:disabled) {
+  background: rgba(var(--v-theme-primary), 0.12);
+  opacity: 1;
+}
+button.workspace-badge__path--button:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+button.workspace-badge__path--button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .workspace-badge__choose,
 .workspace-badge__memory {
   display: inline-flex;
@@ -261,18 +288,15 @@ function requestOpenMemory(): void {
   cursor: pointer;
   border-radius: 0;
 }
-.workspace-badge__change:hover:not(:disabled),
 .workspace-badge__choose:hover:not(:disabled),
 .workspace-badge__memory:hover {
   background: rgba(var(--v-theme-primary), 0.12);
 }
-.workspace-badge__change:focus-visible,
 .workspace-badge__choose:focus-visible,
 .workspace-badge__memory:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 1px;
 }
-.workspace-badge__change:disabled,
 .workspace-badge__choose:disabled {
   opacity: 0.5;
   cursor: default;

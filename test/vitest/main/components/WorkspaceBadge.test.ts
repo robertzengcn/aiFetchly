@@ -74,7 +74,7 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
       wrapper.find('[data-testid="workspace-badge-choose"]').exists()
     ).toBe(false);
     expect(
-      wrapper.find('[data-testid="workspace-badge-change"]').exists()
+      wrapper.find('[data-testid="workspace-badge-path"]').exists()
     ).toBe(false);
   });
 
@@ -94,7 +94,7 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
   });
 
-  it("renders name, icon-plus-text Approved status, and a shortened path", () => {
+  it("renders name, icon-plus-text Approved status, and a clickable shortened path without a separate Change/Choose button", () => {
     const wrapper = mountBadge({
       workspace: workspace({ label: "project" }),
     });
@@ -108,6 +108,14 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     const path = wrapper.get(".workspace-badge__path").text();
     expect(path).toContain("...");
     expect(path).not.toBe(workspace().rootPath);
+    // When a workspace is set, the path itself is the chooser action:
+    // no separate Choose/Change button is rendered.
+    expect(
+      wrapper.find('[data-testid="workspace-badge-choose"]').exists()
+    ).toBe(false);
+    const pathButton = wrapper.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.element.tagName).toBe("BUTTON");
+    expect(pathButton.attributes("aria-label")).toBe("Change folder");
   });
 
   it("falls back to the path's final segment when the workspace has no label", () => {
@@ -136,14 +144,14 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(status.text()).toContain("Access revoked");
   });
 
-  it("forwards the Change action and Memory action for an approved workspace", async () => {
+  it("forwards the clickable path action and Memory action for an approved workspace", async () => {
     const wrapper = mountBadge({
       workspace: workspace(),
       memoryCount: 3,
     });
-    const change = wrapper.get('[data-testid="workspace-badge-change"]');
-    expect(change.text()).toContain("Change folder");
-    await change.trigger("click");
+    const pathButton = wrapper.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.text()).toContain("...");
+    await pathButton.trigger("click");
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
 
     expect(wrapper.get(".workspace-badge__memory-count").text()).toBe("3");
@@ -151,7 +159,7 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(wrapper.emitted("request-open-memory")).toHaveLength(1);
   });
 
-  it("blocks Choose/Change while a run is active with a visible reason (FR-WS-007)", async () => {
+  it("blocks Choose/path while a run is active with a visible reason (FR-WS-007)", async () => {
     const noWorkspace = mountBadge({ workspace: null, busy: true });
     const choose = noWorkspace.get('[data-testid="workspace-badge-choose"]');
     expect(choose.attributes("disabled")).toBeDefined();
@@ -163,16 +171,16 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(noWorkspace.emitted("request-set-workspace")).toBeUndefined();
 
     const approved = mountBadge({ workspace: workspace(), busy: true });
-    const change = approved.get('[data-testid="workspace-badge-change"]');
-    expect(change.attributes("disabled")).toBeDefined();
+    const pathButton = approved.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.attributes("disabled")).toBeDefined();
     expect(approved.text()).toContain("Available after current run");
-    await change.trigger("click");
+    await pathButton.trigger("click");
     expect(approved.emitted("request-set-workspace")).toBeUndefined();
   });
 
   it("allows the safe transition again once no run is active", async () => {
     const wrapper = mountBadge({ workspace: workspace(), busy: false });
-    await wrapper.get('[data-testid="workspace-badge-change"]').trigger("click");
+    await wrapper.get('[data-testid="workspace-badge-path"]').trigger("click");
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
     expect(
       wrapper.find('[data-testid="workspace-badge-busy-reason"]').exists()
