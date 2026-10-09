@@ -134,7 +134,7 @@ const chooseActionText = computed(
 const chooseHintText = computed(
   () =>
     t("workspace.chooseHint") ||
-    "Pick a folder so AI file tools can read and write files."
+    "Pick a folder for this conversation's workspace."
 );
 const memoryLabel = computed(
   () => t("workspaceMemory.memoryAction") || "Memory"

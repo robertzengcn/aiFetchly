@@ -3335,7 +3335,7 @@ export default {
       cancel: "Cancel",
     },
     chooseAction: "Choose workspace",
-    chooseHint: "Pick a folder so AI file tools can read and write files.",
+    chooseHint: "Pick a folder for this conversation's workspace.",
     loading: "Loading workspace…",
     statusApproved: "Approved",
     statusPending: "Pending approval",

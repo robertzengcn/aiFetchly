@@ -3171,7 +3171,7 @@ export default {
       cancel: "取消",
     },
     chooseAction: "选择工作区",
-    chooseHint: "选择一个文件夹，AI 文件工具才能读写文件。",
+    chooseHint: "为此对话的工作区选择一个文件夹。",
     loading: "正在加载工作区…",
     statusApproved: "已批准",
     statusPending: "等待批准",

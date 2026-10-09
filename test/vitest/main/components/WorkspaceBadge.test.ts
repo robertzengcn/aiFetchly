@@ -23,7 +23,7 @@ const i18n = createI18n({
         notSet: "No workspace set",
         changeFolder: "Change folder",
         chooseAction: "Choose workspace",
-        chooseHint: "Pick a folder so AI file tools can read and write files.",
+        chooseHint: "Pick a folder for this conversation's workspace.",
         loading: "Loading workspace…",
         statusApproved: "Approved",
         statusPending: "Pending approval",
@@ -85,7 +85,7 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     ).toBe(true);
     expect(wrapper.text()).toContain("No workspace set");
     expect(wrapper.text()).toContain(
-      "Pick a folder so AI file tools can read and write files."
+      "Pick a folder for this conversation's workspace."
     );
     const choose = wrapper.get('[data-testid="workspace-badge-choose"]');
     expect(choose.text()).toContain("Choose workspace");

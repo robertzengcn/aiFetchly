@@ -384,6 +384,36 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  it("shows the workspace chooser above the composer with no conversation selected", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    // Empty state — the badge (unset → Choose action) still renders and the
+    // strip sits above the composer input, never hidden.
+    expect(wrapper.findComponent({ name: "WorkspaceBadge" }).exists()).toBe(
+      true
+    );
+    const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
+    expect(
+      strip.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("creates a chat when choosing a workspace with no conversation selected", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "WorkspaceBadge" })
+      .vm.$emit("request-set-workspace");
+    await flushPromises();
+
+    expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
+    expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
+  });
+
   it("renders the approved workspace through the shared composable", async () => {
     getWorkspaceMock.mockResolvedValue({
       id: 7,

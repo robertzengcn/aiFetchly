@@ -88,6 +88,17 @@
          composer input, below the transcript, inside the center — the
          workspace applies to the message being composed. -->
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
+      <!-- The workspace badge is always visible above the composer: with no
+           conversation selected it renders its unset state (Choose action),
+           which creates a chat on demand via onRequestWorkspaceSetup. -->
+      <WorkspaceBadge
+        :workspace="conversationWorkspace.workspace.value"
+        :memory-count="conversationWorkspace.memoryCount.value"
+        :loading="conversationWorkspace.loading.value"
+        :busy="workspaceChangesBlocked"
+        @request-set-workspace="onRequestWorkspaceSetup"
+        @request-open-memory="openWorkspaceMemory"
+      />
       <template v-if="conversationId">
         <AIConversationReportButton
           :enabled="conversationReportEnabled"
@@ -95,14 +106,6 @@
           :disabled-reason="conversationReportDisabledReason"
           compact
           @open="onOpenConversationReport"
-        />
-        <WorkspaceBadge
-          :workspace="conversationWorkspace.workspace.value"
-          :memory-count="conversationWorkspace.memoryCount.value"
-          :loading="conversationWorkspace.loading.value"
-          :busy="workspaceChangesBlocked"
-          @request-set-workspace="onRequestWorkspaceSetup"
-          @request-open-memory="openWorkspaceMemory"
         />
         <!-- Refresh failure: sanitized localized message + retry (FR-WS-002
              error state). The raw exception never reaches the DOM. -->
