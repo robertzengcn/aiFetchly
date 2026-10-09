@@ -135,6 +135,7 @@ import { SearchModule } from "@/modules/SearchModule";
 import { contactInfoRepository } from "@/model/ContactInfo.model";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
+import { deriveCandidateDiagnostics } from "@/service/aiTaskExecution/candidateDiagnostics";
 import type {
   TaskCompletionDecision,
   TaskEndCandidate,
@@ -3395,18 +3396,30 @@ export class AIChatQueryEngine {
     if (!decision) {
       // Fallback consult: the loop ended naturally without hitting any
       // consult site. Form the candidate from the final assistant content.
+      // T21a: derive provenance/streamTerminalSeen/safetyRestriction from the
+      // actual finishReason + content — do NOT hardcode "provider terminal,
+      // no restriction". A `length`/`error`/`null` finishReason or a
+      // content_filter refusal surfaces honestly. The loop's completed variant
+      // carries `finishReason` as a required string, but a missing value still
+      // degrades to "unknown" provenance via the helper (missing-terminal
+      // STREAM_INCOMPLETE downstream).
+      const finishReason = result.finishReason ?? null;
+      const diagnostics = deriveCandidateDiagnostics({
+        finishReason,
+        content: result.fullContent,
+      });
       const candidate: TaskEndCandidate = {
         candidateId: `cand:${binding.executionId}:response_end`,
         executionId: binding.executionId,
         content: result.fullContent,
-        finishReason: result.finishReason ?? null,
-        provenance: "provider",
-        streamTerminalSeen: true,
+        finishReason,
+        provenance: diagnostics.provenance,
+        streamTerminalSeen: diagnostics.streamTerminalSeen,
         boundary: "response_end",
         pendingPermission: false,
         pendingQuestion: false,
         pendingPlanApproval: false,
-        safetyRestriction: false,
+        safetyRestriction: diagnostics.safetyRestriction,
       };
       try {
         decision = await binding.consult(candidate);

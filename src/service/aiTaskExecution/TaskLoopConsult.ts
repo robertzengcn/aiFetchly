@@ -22,6 +22,7 @@ import type {
 } from "@/entityTypes/aiTaskExecutionTypes";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import type { ToolRoundObservation } from "@/service/aiTaskExecution/TaskProgressTracker";
+import { deriveCandidateDiagnostics } from "@/service/aiTaskExecution/candidateDiagnostics";
 
 /**
  * Runtime binding the loop needs to consult the controller and reserve a
@@ -321,18 +322,31 @@ function buildCandidateId(input: ConsultLoopEndCandidateInput): string {
 export async function consultLoopEndCandidate(
   input: ConsultLoopEndCandidateInput
 ): Promise<ConsultOutcome> {
+  // T21a: derive provenance/streamTerminalSeen/safetyRestriction from the
+  // actual finishReason + content. The four in-loop consult sites only
+  // consult after a true terminal stop, so `streamTerminalSeen` is defensibly
+  // true for recognized terminals — but a `length`/`error`/`null` finishReason
+  // or a content_filter refusal now surfaces honestly instead of being
+  // stamped "provider terminal, no restriction" regardless of input. The
+  // caller's `safetyRestriction` is preserved as a floor (a content scan that
+  // flagged a restriction still wins); the helper adds content_filter/refusal
+  // detection on top.
+  const diagnostics = deriveCandidateDiagnostics({
+    finishReason: input.finishReason,
+    content: input.content,
+  });
   const candidate: TaskEndCandidate = {
     candidateId: buildCandidateId(input),
     executionId: input.binding.executionId,
     content: input.content,
     finishReason: input.finishReason,
-    provenance: "provider",
-    streamTerminalSeen: true,
+    provenance: diagnostics.provenance,
+    streamTerminalSeen: diagnostics.streamTerminalSeen,
     boundary: input.boundary,
     pendingPermission: input.pendingPermission,
     pendingQuestion: input.pendingQuestion,
     pendingPlanApproval: input.pendingPlanApproval,
-    safetyRestriction: input.safetyRestriction,
+    safetyRestriction: input.safetyRestriction || diagnostics.safetyRestriction,
   };
 
   const decision = await input.binding.consult(candidate);

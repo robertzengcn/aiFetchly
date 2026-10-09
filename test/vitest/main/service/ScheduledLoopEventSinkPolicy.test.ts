@@ -462,3 +462,281 @@ describe("ScheduledLoopEventSink — legacy behavior (no binding)", () => {
     expect(sink.getOutcome()?.kind).toBe("completed");
   });
 });
+
+// --- T21b: error event holds for a controller decision when policyAccepted ---
+// Audit (line 312): "Scheduled sink `:146–150` first-wins error finalization
+// remains separate from a recovery decision." When the policy binding is
+// accepted, a transport error must NOT blind-commit `failed` — the controller
+// decides, mapping permanent recovery reasons (auth/quota/non_recoverable) to
+// distinct reason codes and holding recoverable reasons as a controller-decided
+// incomplete. Flag-off / no binding keeps the blind `failed` byte-identical.
+describe("ScheduledLoopEventSink — T21b error-hold consult", () => {
+  function errorEvent(errorMessage = "boom"): AIChatQueryEvent {
+    return {
+      type: "error",
+      conversationId: "v2-conv",
+      messageId: "a1",
+      errorMessage,
+    } as unknown as AIChatQueryEvent;
+  }
+
+  function recoveryStatusEvent(reason: string): AIChatQueryEvent {
+    return {
+      type: "recovery_status",
+      conversationId: "v2-conv",
+      messageId: "a1",
+      layer: "transport",
+      reason,
+      attempt: 1,
+    } as unknown as AIChatQueryEvent;
+  }
+
+  it("flag-off + no binding: blind error→failed unchanged", () => {
+    flagMock.mockReturnValue(false);
+    const sink = new ScheduledLoopEventSink();
+    sink.emit(errorEvent());
+    expect(sink.getOutcome()?.kind).toBe("failed");
+    expect(decideMock).not.toHaveBeenCalled();
+  });
+
+  it("flag-off midstream + policyAccepted=true binding: consult still runs (no blind failed)", async () => {
+    flagMock.mockReturnValue(false);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "transport died",
+      remainingWork: [],
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding({ policyAccepted: true }));
+    sink.emit(errorEvent());
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    expect(decideMock).toHaveBeenCalledTimes(1);
+    // The controller's verdict won: incomplete, not the blind failed.
+    expect(sink.getOutcome()?.kind).toBe("incomplete");
+  });
+
+  it("policyAccepted: transport error → consults controller with unknown provenance + streamTerminalSeen false", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(errorEvent("network unreachable"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    expect(decideMock).toHaveBeenCalledTimes(1);
+    const candidate = decideMock.mock.calls[0][0] as Record<string, unknown>;
+    // T21a: a transport error means the stream did NOT reach a provider
+    // terminal → unknown provenance + streamTerminalSeen false (NOT a
+    // hardcoded "provider terminal, no restriction").
+    expect(candidate.provenance).toBe("unknown");
+    expect(candidate.streamTerminalSeen).toBe(false);
+    expect(candidate.safetyRestriction).toBe(false);
+  });
+
+  it("policyAccepted + recovery_status auth: consult threads recoveryReason → controller maps AUTH_FAILURE", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockImplementation(async (_c, ctx) => {
+      const recoveryReason = (ctx as { recoveryReason?: string }).recoveryReason;
+      return {
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode: recoveryReason === "auth" ? "AUTH_FAILURE" : "NO_PROGRESS",
+        evidenceIds: [],
+        summary: "",
+        remainingWork: [],
+      };
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(recoveryStatusEvent("auth"));
+    sink.emit(errorEvent("401 unauthorized"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const ctx = decideMock.mock.calls[0][1] as { recoveryReason?: string };
+    expect(ctx.recoveryReason).toBe("auth");
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).toBe("AUTH_FAILURE");
+    }
+  });
+
+  it("policyAccepted + recovery_status quota: consult threads recoveryReason → controller maps QUOTA_EXHAUSTED", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockImplementation(async (_c, ctx) => {
+      const recoveryReason = (ctx as { recoveryReason?: string }).recoveryReason;
+      return {
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode: recoveryReason === "quota" ? "QUOTA_EXHAUSTED" : "NO_PROGRESS",
+        evidenceIds: [],
+        summary: "",
+        remainingWork: [],
+      };
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(recoveryStatusEvent("quota"));
+    sink.emit(errorEvent("429 quota exceeded"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const ctx = decideMock.mock.calls[0][1] as { recoveryReason?: string };
+    expect(ctx.recoveryReason).toBe("quota");
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).toBe("QUOTA_EXHAUSTED");
+    }
+  });
+
+  it("policyAccepted + recovery_status network (recoverable): → incomplete, NOT AUTH_FAILURE/QUOTA_EXHAUSTED/NON_RECOVERABLE", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockImplementation(async (_c, ctx) => {
+      const recoveryReason = (ctx as { recoveryReason?: string }).recoveryReason;
+      // The controller's real incompleteReasonCode would return STREAM_INCOMPLETE
+      // for unknown provenance + !streamTerminalSeen. Recoverable reasons do NOT
+      // become permanent codes — they fall through.
+      const permanent = ["auth", "quota", "non_recoverable"];
+      return {
+        type: "finish",
+        outcome: "incomplete",
+        reasonCode:
+          recoveryReason && permanent.includes(recoveryReason)
+            ? "PERMANENT"
+            : "STREAM_INCOMPLETE",
+        evidenceIds: [],
+        summary: "",
+        remainingWork: [],
+      };
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(recoveryStatusEvent("network"));
+    sink.emit(errorEvent("connection reset"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const ctx = decideMock.mock.calls[0][1] as { recoveryReason?: string };
+    expect(ctx.recoveryReason).toBe("network");
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).not.toBe("AUTH_FAILURE");
+      expect(outcome.reasonCode).not.toBe("QUOTA_EXHAUSTED");
+      expect(outcome.reasonCode).not.toBe("NON_RECOVERABLE");
+      expect(outcome.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
+  });
+
+  it("policyAccepted + no recovery_status fired: recoveryReason undefined (not fabricated)", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(errorEvent("died with no recovery"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const ctx = decideMock.mock.calls[0][1] as { recoveryReason?: string };
+    // No recovery_status event fired → the sink must NOT fabricate a reason.
+    expect(ctx.recoveryReason).toBeUndefined();
+  });
+
+  it("policyAccepted: consult error → missing_outcome (never success)", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockRejectedValue(new Error("db gone"));
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(errorEvent());
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("missing_outcome");
+  });
+
+  it("policyAccepted + controller failed decision: preserves transport errorMessage on the failed outcome", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "failed",
+      reasonCode: "MODEL_FAILURE",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(errorEvent("the provider hung up"));
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("failed");
+    if (outcome?.kind === "failed") {
+      // T21b: the transport error message is preserved so the renderer can
+      // surface WHY the turn died, even though the controller decided the
+      // outcome kind.
+      expect(outcome.errorMessage).toBe("the provider hung up");
+    }
+  });
+
+  it("policyAccepted + slot-first decision: honors the loop's recorded decision WITHOUT re-consulting", () => {
+    flagMock.mockReturnValue(true);
+    const incomplete = {
+      type: "finish" as const,
+      outcome: "incomplete" as const,
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "loop already decided",
+      remainingWork: [],
+    };
+    const sink = new ScheduledLoopEventSink(
+      undefined,
+      makeBinding({ getDecision: () => incomplete })
+    );
+    sink.emit(errorEvent());
+    const outcome = sink.getOutcome();
+    expect(outcome?.kind).toBe("incomplete");
+    if (outcome?.kind === "incomplete") {
+      expect(outcome.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
+    expect(decideMock).not.toHaveBeenCalled();
+  });
+
+  it("exactly one terminal event: error consult does not double-commit on a late complete", async () => {
+    flagMock.mockReturnValue(true);
+    decideMock.mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    });
+    const sink = new ScheduledLoopEventSink(undefined, makeBinding());
+    sink.emit(errorEvent());
+    await vi.waitFor(() => {
+      expect(sink.getOutcome()).not.toBeNull();
+    });
+    const firstOutcome = sink.getOutcome();
+    // A late `complete` arrives after the error consult already committed —
+    // first-wins guard must hold (exactly one post-durability terminal event).
+    sink.emit(completeEvent("late"));
+    expect(sink.getOutcome()).toBe(firstOutcome);
+  });
+});

@@ -46,6 +46,7 @@ import type {
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import { buildContinuationPrompt } from "@/service/aiTaskExecution/TaskLoopConsult";
+import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
@@ -74,6 +75,15 @@ export interface DecideContext {
    * shadow mode — no budget consult, byte-identical behavior.
    */
   readonly budget?: TaskRunBudget;
+  /**
+   * T21b: classified recovery reason from the engine's failed path, when the
+   * consult follows a transport error or a non-recoverable failure. The
+   * controller maps non-retryable reasons (auth/quota/non_recoverable) to
+   * distinct permanent-error reason codes; recoverable reasons stay a
+   * controller-decided incomplete (held for decision, never blind-failed).
+   * Absent on clean-terminal consults.
+   */
+  readonly recoveryReason?: AIChatRecoveryReason;
 }
 
 export class TaskCompletionController {
@@ -88,7 +98,15 @@ export class TaskCompletionController {
     context: DecideContext
   ): Promise<TaskCompletionDecision> {
     // §7.2 step 3: safety restriction wins over verification; no bypass.
-    if (candidate.safetyRestriction) {
+    // T21b: the controller independently maps finishReason content_filter to
+    // blocked_by_policy — it does NOT rely solely on the manually supplied
+    // `candidate.safetyRestriction` boolean (a unit test's hand-set boolean
+    // is not proof of actual stream provenance, audit T21 evidence). The
+    // consult sites derive safetyRestriction from real diagnostics via
+    // `deriveCandidateDiagnostics`; this gate is the defense-in-depth so a
+    // candidate stamped safetyRestriction=false but carrying a real
+    // content_filter finishReason still blocks.
+    if (candidate.safetyRestriction || candidate.finishReason === "content_filter") {
       return {
         type: "finish",
         outcome: "blocked_by_policy",
@@ -254,7 +272,7 @@ export class TaskCompletionController {
       };
     }
 
-    const reasonCode = this.incompleteReasonCode(candidate, budget);
+    const reasonCode = this.incompleteReasonCode(candidate, budget, context.recoveryReason);
     return {
       type: "finish",
       outcome: "incomplete",
@@ -358,7 +376,8 @@ export class TaskCompletionController {
 
   private incompleteReasonCode(
     candidate: TaskEndCandidate,
-    budget?: TaskRunBudget
+    budget?: TaskRunBudget,
+    recoveryReason?: AIChatRecoveryReason
   ): string {
     // FR-16 provenance-aware reason codes. Precedence: a synthetic/missing-
     // terminal candidate wins over the boundary signal — the stream never
@@ -382,6 +401,34 @@ export class TaskCompletionController {
     }
     if (candidate.provenance === "unknown") {
       return "EVIDENCE_UNAVAILABLE";
+    }
+    // T21b: distinct finishReason/recovery mapping (FR-05/06/16, AC-12/30).
+    // The candidate reached a provider terminal at response_end (no cap), so
+    // the reason is now distinguishable by WHAT the provider/recovery layer
+    // reported. Precedence: permanent recovery reason > finishReason >
+    // fallthrough. These MUST follow the provenance/boundary/streak branches
+    // above so a synthetic stream or a budget cap still wins.
+    if (recoveryReason === "auth") {
+      return "AUTH_FAILURE";
+    }
+    if (recoveryReason === "quota") {
+      return "QUOTA_EXHAUSTED";
+    }
+    if (recoveryReason === "non_recoverable") {
+      return "NON_RECOVERABLE";
+    }
+    // `length` = output truncation (the model hit max output tokens before
+    // completing its answer). Distinct from CONTINUATION_LIMIT (a budget cap)
+    // and from NO_PROGRESS (the model finished cleanly but did no work).
+    if (candidate.finishReason === "length") {
+      return "OUTPUT_TRUNCATED";
+    }
+    // `error` = the provider reported a transient server-side failure. The
+    // loop throws on `finish_reason=error` + empty content (handled upstream),
+    // but a non-empty error response falls through to consult — map it
+    // distinctly from truncation and generic no-progress.
+    if (candidate.finishReason === "error") {
+      return "PROVIDER_ERROR";
     }
     return "NO_PROGRESS";
   }

@@ -588,4 +588,136 @@ describe("consultLoopEndCandidate T06b — AlreadyReserved breaks, no re-dispatc
       expect(exhausted.reason).toBe("CONTINUATION_LIMIT");
     }
   });
+
+  // ----- T21a: candidate diagnostics derived from actual finishReason/content -----
+  // The consult sites used to hardcode `provenance: "provider",
+  // streamTerminalSeen: true, safetyRestriction: false` regardless of input.
+  // T21a: these must now be DERIVED from the actual finishReason + content
+  // via `deriveCandidateDiagnostics`. A `content_filter` finishReason or a
+  // refusal opener surfaces `safetyRestriction: true`; a missing/unrecognized
+  // terminal degrades to `unknown` provenance + `streamTerminalSeen: false`.
+  // The caller-supplied `safetyRestriction` (loop content-scan floor) is
+  // preserved via OR — a real restriction from either source wins.
+  it("T21a: stop finishReason → provider + streamTerminalSeen (preserved behavior)", async () => {
+    const captured: TaskEndCandidate[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    };
+    await consultLoopEndCandidate({
+      binding: makeBinding({ decision, capture: (c) => captured.push(c) }),
+      boundary: "response_end",
+      content: "Done.",
+      finishReason: "stop",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    });
+    expect(captured[0].provenance).toBe("provider");
+    expect(captured[0].streamTerminalSeen).toBe(true);
+    expect(captured[0].safetyRestriction).toBe(false);
+  });
+
+  it("T21a: content_filter finishReason → safetyRestriction true (derived, not hardcoded false)", async () => {
+    const captured: TaskEndCandidate[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "blocked_by_policy",
+      reasonCode: "CONTENT_RESTRICTED",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    };
+    await consultLoopEndCandidate({
+      binding: makeBinding({ decision, capture: (c) => captured.push(c) }),
+      boundary: "response_end",
+      content: "I can",
+      finishReason: "content_filter",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    });
+    expect(captured[0].safetyRestriction).toBe(true);
+    expect(captured[0].provenance).toBe("provider");
+    expect(captured[0].streamTerminalSeen).toBe(true);
+  });
+
+  it("T21a: refusal opener content → safetyRestriction true (belt-and-suspenders)", async () => {
+    const captured: TaskEndCandidate[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "blocked_by_policy",
+      reasonCode: "CONTENT_RESTRICTED",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    };
+    await consultLoopEndCandidate({
+      binding: makeBinding({ decision, capture: (c) => captured.push(c) }),
+      boundary: "response_end",
+      content: "I cannot help with that request.",
+      finishReason: "stop",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    });
+    expect(captured[0].safetyRestriction).toBe(true);
+  });
+
+  it("T21a: missing terminal (finishReason null) → unknown + streamTerminalSeen false", async () => {
+    const captured: TaskEndCandidate[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "STREAM_INCOMPLETE",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    };
+    await consultLoopEndCandidate({
+      binding: makeBinding({ decision, capture: (c) => captured.push(c) }),
+      boundary: "response_end",
+      content: "Some text",
+      finishReason: null,
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+    });
+    expect(captured[0].provenance).toBe("unknown");
+    expect(captured[0].streamTerminalSeen).toBe(false);
+  });
+
+  it("T21a: caller safetyRestriction floor OR'd with derived content_filter", async () => {
+    // A loop content-scan that flagged a restriction (caller passes true) must
+    // win even when the finishReason is "stop". OR semantics: either source
+    // flags the restriction.
+    const captured: TaskEndCandidate[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "blocked_by_policy",
+      reasonCode: "CONTENT_RESTRICTED",
+      evidenceIds: [],
+      summary: "",
+      remainingWork: [],
+    };
+    await consultLoopEndCandidate({
+      binding: makeBinding({ decision, capture: (c) => captured.push(c) }),
+      boundary: "response_end",
+      content: "Some text",
+      finishReason: "stop",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: true,
+    });
+    expect(captured[0].safetyRestriction).toBe(true);
+  });
 });

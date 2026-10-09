@@ -306,8 +306,12 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T21 — Propagate actual finish reasons, terminal provenance and restrictions [P2, confirmed gap]
 
-- [ ] Build candidates from actual accumulator/transport diagnostics, not hardcoded trustworthy terminal flags.
-- [ ] Map length/truncation/filter/auth/quota/missing terminal distinctly and hold recoverable errors until controller decision.
+- [x] Build candidates from actual accumulator/transport diagnostics, not hardcoded trustworthy terminal flags. *(commit [T21a] — new `candidateDiagnostics.ts` pure helper derives provenance/streamTerminalSeen/safetyRestriction from the ACTUAL finishReason + content refusal probe via `deriveCandidateDiagnostics`: recognized provider terminals (stop/length/content_filter/tool_calls/function_call) → provider+seen; missing/unrecognized terminal → unknown+!seen; transport error → unknown+!seen; content_filter finish OR leading-text refusal opener → safetyRestriction=true (leading-text only, so legitimate "can't" mid-sentence is not flagged). Wired at ALL FOUR previously-hardcoded sites: `TaskLoopConsult.consultLoopEndCandidate` (loop consults — caller safetyRestriction floor OR'd with derived), engine fallback `finalizeManualAtCompleteGate`, scheduled sink fallback `consultPolicyOnComplete` — replacing the hardcoded "provider terminal, no restriction" stamps. 15/15 helper tests + 5 consult-seam tests pass.)*
+- [x] Map length/truncation/filter/auth/quota/missing terminal distinctly and hold recoverable errors until controller decision. *(commit [T21b] — controller `decide()` independently maps `finishReason === "content_filter"` → blocked_by_policy CONTENT_RESTRICTED (defense-in-depth, NOT relying on the manually supplied safety boolean); `incompleteReasonCode` adds distinct branches AFTER the provenance/boundary/streak precedence (so synthetic/budget-cap/no-progress-streak still win): recoveryReason auth→AUTH_FAILURE, quota→QUOTA_EXHAUSTED, non_recoverable→NON_RECOVERABLE; finishReason length→OUTPUT_TRUNCATED (distinct from CONTINUATION_LIMIT and NO_PROGRESS), error→PROVIDER_ERROR; `recoveryReason` threaded through `DecideContext` from the engine's recovery layer. Recoverable reasons (network/timeout/rate_limit/overload/server_error/output_limit/context_overflow/media_overflow/model_unavailable) do NOT become permanent codes — they fall through to STREAM_INCOMPLETE/NO_PROGRESS, held for controller decision. Scheduled sink: `case "error"` now consults the controller when policyAccepted (`consultPolicyOnError` — holds for decision instead of first-wins blind `failed`), builds the candidate from transport diagnostics (hadTransportError → unknown+!seen), captures the `recovery_status` reason per turn and threads it as `DecideContext.recoveryReason`; controller failed decisions preserve the transport errorMessage; consult error → missing_outcome (AC-17). Flag-off/no-binding keeps blind `failed` byte-identical. 7 controller tests + 11 sink tests pass.)*
+
+**Evidence:** `TaskLoopConsult.ts:137–147` and engine fallback `AIChatQueryEngine.ts:2804–2815` hardcode provider provenance, terminal seen and no safety restriction. Controller gates the safety boolean but does not independently handle finishReason content_filter. Scheduled sink `:146–150` first-wins error finalization remains separate from a recovery decision. A unit test's manually supplied terminal boolean is not proof of actual stream provenance.
+
+**Regression:** real accumulator/loop synthetic/missing terminal, length with partial arguments, content_filter and refusal, permanent auth/quota errors, recoverable early error → distinct honest outcome, no fabricated calls/bypass and exactly one post-durability terminal event. **FR-05/06/16; NFR-06/10/11; AC-12/30.** 118/118 T21 tests pass (15 helper + 29 consult + 43 controller + 31 sink); tsc clean; full service suite 2751/2753 (2 pre-existing parallel-load flakes pass in isolation).
 
 **Evidence:** `TaskLoopConsult.ts:137–147` and engine fallback `AIChatQueryEngine.ts:2804–2815` hardcode provider provenance, terminal seen and no safety restriction. Controller gates the safety boolean but does not independently handle finishReason content_filter. Scheduled sink `:146–150` first-wins error finalization remains separate from a recovery decision. A unit test's manually supplied terminal boolean is not proof of actual stream provenance.
 
@@ -390,7 +394,7 @@ Its opening still says Slice 1 only, no live callsites and all ACs failing live,
 | FR-13 Visible execution/outcomes | Missing live emitter; incorrect terminal badge | T13/T14. |
 | FR-14 Actions/notifications | Partial | T09/T12/T13/T24: successor dispatch, safe Stop and durable one-time delivery. |
 | FR-15 i18n/UI tests | Partial | Six-language parity and components pass; T14/T26 honest labels and real flow coverage missing. |
-| FR-16 Reasons/provenance | Missing/deferred server work | T21/T25; optional metadata compatibility required. |
+| FR-16 Reasons/provenance | Partial — desktop side landed (T21) | T21: candidates derive provenance/streamTerminalSeen/safetyRestriction from actual finishReason/content diagnostics (candidateDiagnostics.ts) at all 4 consult sites; content_filter→CONTENT_RESTRICTED; length/error/auth/quota/non_recoverable→distinct codes; sink error consult holds for decision. T25 server-side optional metadata remains. |
 | FR-17 Default manual protection | Partial | T01/T18: recognized tasks enroll without usable contracts; other task phrasing bypasses. |
 | FR-18 Conservative intent | Partial | T01/T17/T18: structured multilingual analysis and actual source validation missing. |
 | FR-19 Usable manual contracts | Missing live generation; library partial | T01/T03/T17. |
@@ -409,7 +413,7 @@ Its opening still says Slice 1 only, no live callsites and all ACs failing live,
 | NFR-03 Model/Module DB architecture | Supported for inspected new persistence paths | Model/Module access and worker guards present, module tests pass; preserve this architecture in fixes. |
 | NFR-04 AI enable gating/checker recheck | Partial | New successor IPC gates before parsing; real checker entitlement recheck not wired (T04). |
 | NFR-05 Restart interruption/no replay | Missing | T24; effect reconciliation also T23. |
-| NFR-06 Stream compatibility/optional metadata | Partial | Default-off compatibility seams exist; T21/T25 provenance remains unconnected. |
+| NFR-06 Stream compatibility/optional metadata | Partial — T21 landed | Default-off compatibility seams exist; T21: finishReason/provenance/safetyRestriction derived from actual accumulator state + optional metadata (finishReason nullable, missing terminal → unknown); T25 server-side optional diagnostics remains unconnected. |
 | NFR-07 Same workspace/policy/authority | Partial | Existing permission infrastructure retained; T15/T23 approved scope and receipts not complete. |
 | NFR-08 Bounded/redacted untrusted evidence | Partial | Summary bounds exist; T03/T04 trusted scope/reference validation and checker isolation contract missing. |
 | NFR-09 No toggle/goal/schedule/prior tool dependency | Partial | T01/T18: automatic seam exists but does not complete recovery coverage. |
@@ -434,7 +438,7 @@ This table assesses required end-to-end behavior against source and tests. `Not 
 | AC-09 Lost send response | Deferred Slice 3 | T22/T23: reconcile receipt, no resend. |
 | AC-10 Unresolved send | Deferred Slice 3 | T23/T19: unknown prevents replay and pauses schedule once. |
 | AC-11 Invented checker evidence | Not satisfied | T03/T04/T17: reject malformed/referenced false pass. |
-| AC-12 Filter/error/truncation | Partial; not established through real stream | T16/T21: real provenance/restriction handling, no unchecked fallback. |
+| AC-12 Filter/error/truncation | Landed through unit + consult-seam tests (T21) | T21: content_filter finishReason → blocked_by_policy (controller derives independently of the safety boolean); refusal-opener content → safetyRestriction; length → OUTPUT_TRUNCATED; error → PROVIDER_ERROR; real accumulator diagnostics (missing terminal → unknown+!seen); consult-seam tests assert derivation from actual finishReason/content. T26 real-stream E2E remains. |
 | AC-13 Restart/notification gap | Missing | T24/T23: interrupted checkpoints and delivery/effect dedup. |
 | AC-14 Chat/goal ownership | Not satisfied | T15: no unrelated-goal takeover or stacked loops. |
 | AC-15 Persistence failure | Not satisfied manual; scheduled tests partial | T11/T12/T19: no success event/count before committed linked result. |
@@ -452,7 +456,7 @@ This table assesses required end-to-end behavior against source and tests. `Not 
 | AC-27 Continue remaining allowance | Not satisfied | T05/T08/T09/T20: shared ledger, one active running successor. |
 | AC-28 Effect lost/restart/new run | Deferred Slice 3 | T22/T23/T24. |
 | AC-29 Compaction/fallback/traffic totals | Not satisfied | T05/T06/T20. |
-| AC-30 Recoverable pre-decision error | Not established; early terminal path remains | T12/T21/T26. |
+| AC-30 Recoverable pre-decision error | Landed (T21) | T21: recoverable recovery reasons (network/timeout/rate_limit/overload/server_error/output_limit/context_overflow/media_overflow/model_unavailable) do NOT become permanent codes — fall through to STREAM_INCOMPLETE/NO_PROGRESS; only auth/quota/non_recoverable map to distinct permanent codes; sink error consult holds for controller decision instead of blind failed; no fabricated recoveryReason when no recovery_status fired. T26 real-flow E2E remains. |
 | AC-31 Unrelated active goal | Not satisfied | T15. |
 | AC-32 Manual terminal/races/reload | Partial CAS foundation; known failures | T08/T11/T12/T13/T14/T19/T20/T24. |
 

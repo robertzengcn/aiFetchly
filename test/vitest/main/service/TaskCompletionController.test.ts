@@ -316,6 +316,177 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     }
   });
 
+  // ----- T21b: distinct finishReason/recovery mapping (FR-05/06/16, AC-12/30) -----
+  // The controller used to gate safety ONLY via the candidate.safetyRestriction
+  // boolean and map every non-verified outcome through incompleteReasonCode's
+  // provenance/boundary branches — finishReason content_filter/length/error
+  // and auth/quota recovery reasons were indistinct. These tests lock the
+  // distinct mapping: content_filter → blocked_by_policy without relying on
+  // the manually supplied safety boolean; length → OUTPUT_TRUNCATED; error →
+  // PROVIDER_ERROR; auth/quota/non_recoverable → distinct permanent codes.
+  // A recoverable recovery reason does NOT become a permanent code — it stays
+  // a controller-decided incomplete (held for decision, not blind-failed).
+
+  it("T21b: content_filter finishReason → blocked_by_policy CONTENT_RESTRICTED (independent of safetyRestriction boolean)", async () => {
+    const ctrl = new TaskCompletionController();
+    // safetyRestriction boolean is FALSE here — the controller must derive
+    // the restriction from finishReason itself, not trust a manual flag.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "content_filter",
+        safetyRestriction: false,
+        content: "I can",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("blocked_by_policy");
+      expect(decision.reasonCode).toBe("CONTENT_RESTRICTED");
+    }
+  });
+
+  it("T21b: length finishReason with partial content → incomplete OUTPUT_TRUNCATED (distinct from CONTINUATION_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    // response_end + length + partial content → truncation, NOT a budget cap
+    // and NOT generic NO_PROGRESS.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "length",
+        content: "Partial answer that ran",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("OUTPUT_TRUNCATED");
+    }
+  });
+
+  it("T21b: error finishReason → incomplete PROVIDER_ERROR (distinct from truncation)", async () => {
+    const ctrl = new TaskCompletionController();
+    // error finishReason means the provider reported a transient server-side
+    // failure; the controller maps it distinctly from length truncation.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "error",
+        content: "Some partial",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("PROVIDER_ERROR");
+    }
+  });
+
+  it("T21b: auth recovery reason → incomplete AUTH_FAILURE (permanent, distinct from quota)", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+        content: "Partial",
+      }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        recoveryReason: "auth",
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("AUTH_FAILURE");
+    }
+  });
+
+  it("T21b: quota recovery reason → incomplete QUOTA_EXHAUSTED (distinct from auth)", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+        content: "Partial",
+      }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        recoveryReason: "quota",
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("QUOTA_EXHAUSTED");
+    }
+  });
+
+  it("T21b: non_recoverable recovery reason → incomplete NON_RECOVERABLE", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+        content: "Partial",
+      }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        recoveryReason: "non_recoverable",
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("NON_RECOVERABLE");
+    }
+  });
+
+  it("T21b: recoverable recovery reason (network) → NOT a permanent code (held for controller decision)", async () => {
+    const ctrl = new TaskCompletionController();
+    // A recoverable reason must NOT become AUTH_FAILURE/QUOTA_EXHAUSTED. The
+    // controller holds it for decision — it surfaces as a recoverable
+    // incomplete (STREAM_INCOMPLETE / NO_PROGRESS), not a permanent error.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+        content: "Some text",
+      }),
+      {
+        route: "task_verified",
+        requiredCriterionIds: ["rec-1"],
+        recoveryReason: "network",
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).not.toBe("AUTH_FAILURE");
+      expect(decision.reasonCode).not.toBe("QUOTA_EXHAUSTED");
+      expect(decision.reasonCode).not.toBe("NON_RECOVERABLE");
+    }
+  });
+
   // ----- Slice 2: evidence service injection (FR-05/06/16, AC-12/13) -----
   // When the caller injects an evidence service + contract + context, the
   // controller calls checkCandidate itself and populates evidenceIds from

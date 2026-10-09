@@ -3,6 +3,7 @@ import type {
   DecideContext,
 } from "@/service/aiTaskExecution/TaskCompletionController";
 import type { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { deriveCandidateDiagnostics } from "@/service/aiTaskExecution/candidateDiagnostics";
 import type {
   ObservationReceipt,
   OperationReceipt,
@@ -16,9 +17,11 @@ import type {
 } from "@/entityTypes/aiTaskExecutionTypes";
 import type {
   AIChatQueryCompleteEvent,
+  AIChatQueryErrorEvent,
   AIChatQueryEvent,
   AIChatQueryEventSink,
 } from "@/service/AIChatQueryEvents";
+import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 
 /** Terminal outcome the runner derives from the engine event stream. */
 export type ScheduledTurnOutcome =
@@ -151,6 +154,20 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
   private readonly forwarder?: (event: AIChatQueryEvent) => void;
   private readonly policyBinding?: ScheduledLoopPolicyBinding;
   /**
+   * T21b (FR-05/06/16, AC-12/30): the classified recovery reason from the
+   * most recent `recovery_status` event for this turn. The engine's recovery
+   * layer classifies transport failures (network/timeout/rate_limit/overload/
+   * server_error/output_limit/context_overflow/media_overflow/model_unavailable
+   * are recoverable; auth/quota/cancelled/non_recoverable are permanent). The
+   * sink does NOT itself classify — it captures the recovery layer's verdict
+   * so the error-event consult can thread it as `DecideContext.recoveryReason`
+   * for the controller to map distinctly (auth→AUTH_FAILURE, quota→
+   * QUOTA_EXHAUSTED, non_recoverable→NON_RECOVERABLE; recoverable reasons
+   * stay a controller-decided incomplete). Absent when no recovery_status fired
+   * (the error was unrecoverable from the start, or recovery gave up silently).
+   */
+  private lastRecoveryReason: AIChatRecoveryReason | null = null;
+  /**
    * Resolves when a terminal outcome is captured (or the run is force-failed
    * via {@link failOutstanding}). Stays pending across a permission pause so
    * the runner can await it instead of treating the pause-resolved
@@ -211,6 +228,21 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
         });
         break;
       case "error":
+        // T21b (FR-05/06/16, AC-12/30, audit line 312): when the policy
+        // binding is present and accepted, a transport error is NOT a blind
+        // `failed` — the controller must decide. The engine's recovery layer
+        // already classified the reason (network/timeout/rate_limit/overload/
+        // server_error/output_limit/context_overflow/media_overflow/
+        // model_unavailable are RECOVERABLE and stay a controller-decided
+        // incomplete; auth/quota/cancelled/non_recoverable are permanent and
+        // map to distinct reason codes). Hold the error for that decision
+        // instead of first-wins committing `failed` — the controller's
+        // verdict wins over the transport failure. Flag-off / no binding
+        // keeps the blind `failed` byte-identical to Slice 1.
+        if (this.policyBinding?.policyAccepted) {
+          this.consultPolicyOnError(event);
+          return;
+        }
         this.commitOutcome({
           kind: "failed",
           assistantMessageId: event.messageId,
@@ -238,10 +270,17 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
           reason: "BLOCKED_BY_POLICY",
         });
         break;
+      case "recovery_status":
+        // T21b (FR-05/06/16, AC-12/30): capture the recovery layer's
+        // classified reason so the error-event consult (if the loop
+        // ultimately fails) can thread it as `DecideContext.recoveryReason`
+        // for distinct mapping. Non-terminal — does not commit an outcome.
+        this.lastRecoveryReason = event.reason;
+        break;
       default:
         // Non-terminal events (token, tool_call, tool_progress, usage_update,
-        // recovery_status, plan_state, retry_connect) are ignored — no
-        // renderer to stream to in the scheduled path.
+        // plan_state, retry_connect) are ignored — no renderer to stream to
+        // in the scheduled path.
         break;
     }
   }
@@ -313,18 +352,29 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
     // `finalizeManualAtCompleteGate` fallback, lines 3151-3181) so a
     // verified_complete decision is real, not a blind guess.
     try {
+      // T21a: derive provenance/streamTerminalSeen/safetyRestriction from the
+      // actual finishReason + content — do NOT hardcode "provider terminal,
+      // no restriction". The complete event's finishReason is optional/
+      // nullable (null/missing → real missing-terminal case → STREAM_INCOMPLETE
+      // downstream, not a stamped "provider terminal").
+      const finishReason =
+        (event as { finishReason?: string | null }).finishReason ?? null;
+      const diagnostics = deriveCandidateDiagnostics({
+        finishReason,
+        content: event.fullContent ?? "",
+      });
       const candidate: TaskEndCandidate = {
         candidateId: `cand:${binding.executionId}:response_end`,
         executionId: binding.executionId,
         content: event.fullContent ?? "",
-        finishReason: (event as { finishReason?: string | null }).finishReason ?? null,
-        provenance: "provider",
-        streamTerminalSeen: true,
+        finishReason,
+        provenance: diagnostics.provenance,
+        streamTerminalSeen: diagnostics.streamTerminalSeen,
         boundary: "response_end",
         pendingPermission: false,
         pendingQuestion: false,
         pendingPlanApproval: false,
-        safetyRestriction: false,
+        safetyRestriction: diagnostics.safetyRestriction,
       };
       // T03: thread the authoritative providers + read `expectedStateVersion`
       // fresh at consult time so evidence writes persist (AC-32). The
@@ -378,6 +428,141 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
     } catch {
       commitMissing();
     }
+  }
+
+  /**
+   * Consult the completion controller on the `error` event (T21b, FR-05/06/16,
+   * AC-12/30). The audit (line 312) flagged the sink's first-wins blind
+   * `failed` commit as separate from a recovery decision — when the policy
+   * is accepted, the controller must decide the outcome instead.
+   *
+   * The candidate is built from transport diagnostics: a transport error
+   * means the stream did NOT reach a provider terminal, so
+   * `deriveCandidateDiagnostics({ hadTransportError: true })` yields
+   * `provenance: "unknown", streamTerminalSeen: false` (a missing-terminal
+   * case → STREAM_INCOMPLETE downstream). The captured `recovery_status`
+   * reason is threaded as `DecideContext.recoveryReason` so the controller
+   * maps auth/quota/non_recoverable to distinct permanent reason codes
+   * (AUTH_FAILURE / QUOTA_EXHAUSTED / NON_RECOVERABLE); recoverable reasons
+   * (network, timeout, rate_limit, overload, server_error, output_limit,
+   * context_overflow, media_overflow, model_unavailable) fall through to a
+   * controller-decided incomplete — held for a real decision, never a blind
+   * success. On consult error → `missing_outcome` (fail-closed, AC-17).
+   */
+  private consultPolicyOnError(event: AIChatQueryErrorEvent): void {
+    const binding = this.policyBinding;
+    if (!binding) return;
+    // AIChatQueryErrorEvent.messageId is optional (a turn that died before the
+    // assistant message was allocated has no id); mapDecisionToOutcome takes a
+    // required string. Coerce to the binding's executionId fallback so the
+    // outcome always carries a non-empty identifier.
+    const assistantMessageId = event.messageId ?? binding.executionId;
+    const commitMissing = (): void => {
+      this.commitOutcome({
+        kind: "missing_outcome",
+        assistantMessageId,
+        reasonCode: "MISSING_TASK_OUTCOME",
+      });
+    };
+    // If the loop already recorded a decision (slot-first, T02), honor it —
+    // the loop's consult evaluated the failure with full evidence.
+    const slotDecision = binding.getDecision?.() ?? null;
+    if (slotDecision) {
+      const mapped = mapDecisionToOutcome(slotDecision, assistantMessageId);
+      if (mapped) {
+        this.commitOutcome(mapped);
+      } else {
+        commitMissing();
+      }
+      return;
+    }
+    // Build the transport-error candidate from real diagnostics. The error
+    // event carries no finishReason (the stream failed, not ended), so the
+    // diagnostics helper sees `hadTransportError: true` → unknown provenance
+    // + streamTerminalSeen=false. A content_filter/refusal cannot surface
+    // here (no content reached), so safetyRestriction is false. The partial
+    // content (if any) is preserved in the candidate for the summary.
+    const partialContent = "";
+    const diagnostics = deriveCandidateDiagnostics({
+      finishReason: null,
+      content: partialContent,
+      hadTransportError: true,
+    });
+    const candidate: TaskEndCandidate = {
+      candidateId: `cand:${binding.executionId}:transport_error`,
+      executionId: binding.executionId,
+      content: partialContent,
+      finishReason: null,
+      provenance: diagnostics.provenance,
+      streamTerminalSeen: diagnostics.streamTerminalSeen,
+      boundary: "response_end",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: diagnostics.safetyRestriction,
+    };
+    const buildContext = async (): Promise<DecideContext> => {
+      const baseContext = binding.evidenceContext;
+      const expectedStateVersion =
+        await baseContext?.resolveExpectedStateVersion?.();
+      if (!baseContext) {
+        return {
+          route: binding.route,
+          budget: binding.budget,
+          contract: binding.contract ?? undefined,
+          evidenceService: binding.evidenceService,
+          evidenceContext: undefined,
+          // T21b: thread the recovery layer's classified reason so the
+          // controller maps permanent vs recoverable distinctly.
+          recoveryReason: this.lastRecoveryReason ?? undefined,
+        };
+      }
+      return {
+        route: binding.route,
+        budget: binding.budget,
+        contract: binding.contract ?? undefined,
+        evidenceService: binding.evidenceService,
+        evidenceContext: {
+          content: baseContext.content,
+          source: baseContext.source,
+          sourceRevision: baseContext.sourceRevision,
+          checkerDispatch: baseContext.checkerDispatch,
+          observationProvider: baseContext.observationProvider,
+          operationReceiptProvider: baseContext.operationReceiptProvider,
+          artifactBaseDir: baseContext.artifactBaseDir,
+          abortSignal: baseContext.abortSignal,
+          expectedStateVersion,
+        },
+        recoveryReason: this.lastRecoveryReason ?? undefined,
+      };
+    };
+    void Promise.resolve(buildContext())
+      .then((context) =>
+        Promise.resolve(binding.controller.decide(candidate, context))
+      )
+      .then((decision: TaskCompletionDecision) => {
+        if (!decision) {
+          commitMissing();
+          return;
+        }
+        const mapped = mapDecisionToOutcome(decision, assistantMessageId);
+        if (!mapped) {
+          commitMissing();
+          return;
+        }
+        // T21b: preserve the transport error message on the failed outcome
+        // so the renderer can surface why the turn died (the controller's
+        // decision maps the OUTCOME kind; the message is the transport's).
+        if (mapped.kind === "failed" && event.errorMessage) {
+          this.commitOutcome({
+            ...mapped,
+            errorMessage: event.errorMessage,
+          });
+          return;
+        }
+        this.commitOutcome(mapped);
+      })
+      .catch(() => commitMissing());
   }
 
   /**
