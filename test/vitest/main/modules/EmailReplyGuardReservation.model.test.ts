@@ -501,4 +501,27 @@ describe("EmailReplyGuardModel reservation (T07) — DB integration", () => {
     );
     expect(again).toEqual({ status: "acquired", guardId: first.guardId });
   });
+
+  // ---------------------------------------------------------------------------
+  // D2 (review): the conditional-acquire INSERT path's bare `catch {}` was a
+  // silent swallow. The catch now binds the error and routes it through
+  // console.error (the swallow stays — the reread below is the recovery). The
+  // race window between `findOne` and `save` is not reliably reproducible in a
+  // single-process test (the second acquire finds the row on the first reread
+  // and never enters the INSERT path), so this is a source-contract guard that
+  // fails at test time if the catch is reverted to a bare silent swallow —
+  // mirrors EmailReplyD7Seams / EmailReplyPreDraftPolicy's structural gates.
+  // ---------------------------------------------------------------------------
+  it("conditional-acquire INSERT catch binds the error and logs (D2 source contract)", async () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../../../src/model/EmailReplyGuard.model.ts"),
+      "utf8"
+    );
+    // The catch must bind the error (no bare `catch {}`) and route it through
+    // console.error — the swallow is no longer silent.
+    expect(src).toMatch(/catch\s*\(\s*error\s*\)\s*\{/);
+    expect(src).toMatch(/console\.error/);
+    // The recovery comment is preserved so the swallow's intent stays documented.
+    expect(src).toMatch(/Reread and fall through/);
+  });
 });

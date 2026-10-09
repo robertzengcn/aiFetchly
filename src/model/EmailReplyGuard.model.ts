@@ -142,9 +142,14 @@ export class EmailReplyGuardModel extends BaseDb {
         try {
           const saved = await manager.getRepository(EmailReplyGuardEntity).save(guard);
           return { status: "acquired", guardId: saved.id };
-        } catch {
+        } catch (error) {
           // Unique constraint collision — a concurrent invoker inserted first.
-          // Reread and fall through to the existing-row path below.
+          // Reread and fall through to the existing-row path below. The error
+          // is logged but the swallow stays: the reread below is the recovery.
+          console.error(
+            "EmailReplyGuard conditional-acquire insert failed (likely unique collision); rereading:",
+            error
+          );
         }
       }
 
