@@ -591,21 +591,16 @@ export class TaskExecutionCoordinator {
   }
 
   /**
-   * Single-owner lease guard (FR-20). Every consult/finalization must verify
-   * the caller's `leaseGeneration` matches the binding's expected value; a
-   * mismatch means a stale ancestor (a Continue successor has since taken
-   * ownership of the lineage ledger) is attempting to act, and the operation
-   * must be rejected with `STATE_CONFLICT` rather than overwriting a newer
-   * owner's state.
+   * Instance-method facade over the exported {@link assertOwnership}
+   * standalone (T15b). Retained for backward compatibility with existing
+   * call sites and tests; new consult/finalize sites in the engine call the
+   * standalone directly to avoid constructing a coordinator.
    */
   assertOwnership(
     holder: { readonly leaseGeneration: number },
     expected: number
   ): { readonly ok: true } | { readonly ok: false; readonly reasonCode: "STATE_CONFLICT" } {
-    if (holder.leaseGeneration !== expected) {
-      return { ok: false, reasonCode: "STATE_CONFLICT" };
-    }
-    return { ok: true };
+    return assertOwnership(holder, expected);
   }
 
   /** Serialize the binding for persistence; excludes runtime objects. */
@@ -622,4 +617,43 @@ export class TaskExecutionCoordinator {
       contractHash: binding.contractHash,
     };
   }
+}
+
+/**
+ * Single-owner lease guard (FR-20, NFR-01/07, T15b). Every consult site and
+ * the finalization gate verify the caller's `leaseGeneration` matches the
+ * ledger's current `owner_generation`; a mismatch means a stale ancestor (a
+ * Continue successor has since bumped `owner_generation` and taken ownership
+ * of the shared lineage ledger) is attempting to act, and the operation must
+ * be rejected with `STATE_CONFLICT` rather than overwriting a newer owner's
+ * state or releasing its ledger.
+ *
+ * Exported as a standalone (not just an instance method) so the engine's
+ * consult closure and finalization gate can call it without constructing a
+ * coordinator (which would re-mock in test files and re-instantiate the
+ * module). The engine reads the ledger fresh per consult/finalize, then
+ * calls this against the binding's frozen `leaseGeneration`.
+ */
+export function assertOwnership(
+  holder: { readonly leaseGeneration: number },
+  expected: number
+): { readonly ok: true } | { readonly ok: false; readonly reasonCode: "STATE_CONFLICT" } {
+  if (holder.leaseGeneration !== expected) {
+    return { ok: false, reasonCode: "STATE_CONFLICT" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Read the current `owner_generation` for a ledger, returning `null` when the
+ * ledger is missing (so callers fail-closed rather than treating a vanished
+ * ledger as generation 0). The engine consult/finalize sites call this fresh
+ * per operation so a Continue successor's claim is observed.
+ */
+export async function readCurrentLeaseGeneration(
+  getLedgerById: (ledgerId: string) => Promise<{ readonly ownerGeneration: number } | null>,
+  ledgerId: string
+): Promise<number | null> {
+  const ledger = await getLedgerById(ledgerId);
+  return ledger ? ledger.ownerGeneration : null;
 }

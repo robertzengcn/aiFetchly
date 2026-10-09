@@ -116,7 +116,11 @@ import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundRelia
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
-import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import {
+  TaskExecutionCoordinator,
+  assertOwnership,
+  readCurrentLeaseGeneration,
+} from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
@@ -1667,6 +1671,40 @@ export class AIChatQueryEngine {
                   // the moment any prior consult bumped the row.
                   const exec = await execModule.getExecution(created.executionId);
                   const expectedStateVersion = exec?.execution_state_version;
+                  // T15b (FR-20, NFR-01/07, AC-22/31): single-owner lease
+                  // guard. A Continue successor has bumped owner_generation
+                  // on the shared lineage ledger; this binding still carries
+                  // the parent's frozen generation. Re-read the ledger fresh
+                  // and reject the consult on mismatch — a stale ancestor
+                  // must not drive the loop or emit decisions for a lineage
+                  // it no longer owns. Fail-closed: a missing ledger (null)
+                  // also rejects. The loop maps yield_owner to
+                  // MAKER_ITERATION_ENDED (break, no dispatch). Skipped when
+                  // the binding carries no lease (legacy/test bindings with
+                  // no lineage ledger — nothing to guard).
+                  if (
+                    created.ledgerId !== undefined &&
+                    created.leaseGeneration !== undefined
+                  ) {
+                    const currentGen = await readCurrentLeaseGeneration(
+                      (id) => execModule.getLedgerById(id),
+                      created.ledgerId as string
+                    );
+                    const ownership = assertOwnership(
+                      { leaseGeneration: created.leaseGeneration },
+                      currentGen ?? -1
+                    );
+                    if (!ownership.ok) {
+                      console.error(
+                        `[ai-chat-v2] consult rejected — stale lease (executionId=${created.executionId}, bindingGen=${created.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
+                      );
+                      return {
+                        type: "yield_owner" as const,
+                        owner: "goal" as const,
+                        result: "maker_iteration_ended" as const,
+                      };
+                    }
+                  }
                   return created.controller.decide(candidate, {
                     route: created.route,
                     contract: created.contract ?? undefined,
@@ -3408,6 +3446,32 @@ export class AIChatQueryEngine {
       outcome: finalizeInput.outcome,
       reasonCode: finalizeInput.reasonCode,
     };
+    // T15b (FR-20, NFR-01/07, AC-22/31): single-owner lease guard at the
+    // finalization gate. The manual finalize transaction releases the shared
+    // lineage ledger unconditionally (`WHERE ledger_id = ?`), so a stale
+    // ancestor finalizing after a Continue successor claimed the ledger would
+    // free the successor's lease. Re-read owner_generation fresh and skip
+    // finalization on mismatch — the row stays running for the successor's
+    // own finalize (the successor holds the lease and will finalize on its
+    // own completion). The carried outcome still returns so the renderer
+    // badges this turn honestly; only the durable write is suppressed.
+    if (binding.ledgerId && binding.leaseGeneration !== undefined) {
+      const execModule = new AiTaskExecutionModule();
+      const currentGen = await readCurrentLeaseGeneration(
+        (id) => execModule.getLedgerById(id),
+        binding.ledgerId
+      );
+      const ownership = assertOwnership(
+        { leaseGeneration: binding.leaseGeneration },
+        currentGen ?? -1
+      );
+      if (!ownership.ok) {
+        console.error(
+          `[ai-chat-v2] finalize skipped — stale lease (executionId=${binding.executionId}, bindingGen=${binding.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
+        );
+        return null;
+      }
+    }
     try {
       const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
         finalizeInput

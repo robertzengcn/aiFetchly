@@ -71,15 +71,22 @@ vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
 }));
 
 // --- TaskExecutionCoordinator mock: startManual + finalizeManual --------
-vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", () => ({
-  TaskExecutionCoordinator: vi.fn().mockImplementation(function () {
-    return {
-      startManual: startManualMock,
-      freezeContract: freezeContractMock,
-      finalizeManual: finalizeManualMock,
-    };
-  }),
-}));
+// T15b: re-export the real `assertOwnership` + `readCurrentLeaseGeneration`
+// standalones (the engine imports them directly); only the class is mocked.
+vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskExecutionCoordinator")>();
+  return {
+    ...actual,
+    TaskExecutionCoordinator: vi.fn().mockImplementation(function () {
+      return {
+        startManual: startManualMock,
+        freezeContract: freezeContractMock,
+        finalizeManual: finalizeManualMock,
+      };
+    }),
+  };
+});
 
 // --- TaskEvidenceService + makeModuleBackedStore: no-op store -----------
 vi.mock("@/service/aiTaskExecution/TaskEvidenceService", () => ({
@@ -93,10 +100,14 @@ vi.mock("@/service/aiTaskExecution/TaskEvidenceService", () => ({
 }));
 
 // --- AiTaskExecutionModule mock (engine constructs it for the store) ----
+// T15b: getLedgerById is configurable per-test (default null = no ledger).
+const mockGetLedgerById = vi.fn().mockResolvedValue(null);
+const mockGetExecutionForModule = vi.fn().mockResolvedValue(null);
 vi.mock("@/modules/AiTaskExecutionModule", () => ({
   AiTaskExecutionModule: vi.fn().mockImplementation(function () {
     return {
-      getExecution: vi.fn().mockResolvedValue(null),
+      getExecution: mockGetExecutionForModule,
+      getLedgerById: mockGetLedgerById,
       applyShadowDecisionCas: vi.fn().mockResolvedValue(undefined),
     };
   }),
@@ -235,6 +246,8 @@ type DecideFn = (
 /** Binding returned by startManualMock's created branch. */
 function makeCreatedBinding(overrides?: {
   decide?: DecideFn;
+  ledgerId?: string;
+  leaseGeneration?: number;
 }): {
   executionId: string;
   controller: { decide: DecideFn };
@@ -242,8 +255,19 @@ function makeCreatedBinding(overrides?: {
   route: "task_best_effort";
   contract: null;
   contractHash: null;
+  ledgerId?: string;
+  leaseGeneration?: number;
 } {
-  return {
+  const binding: {
+    executionId: string;
+    controller: { decide: DecideFn };
+    budget: { reserveContinuation: () => string };
+    route: "task_best_effort";
+    contract: null;
+    contractHash: null;
+    ledgerId?: string;
+    leaseGeneration?: number;
+  } = {
     executionId: EXEC_ID,
     controller: { decide: overrides?.decide ?? vi.fn() },
     budget: { reserveContinuation: vi.fn().mockReturnValue("reserved") },
@@ -251,6 +275,13 @@ function makeCreatedBinding(overrides?: {
     contract: null,
     contractHash: null,
   };
+  if (overrides?.ledgerId !== undefined) {
+    binding.ledgerId = overrides.ledgerId;
+  }
+  if (overrides?.leaseGeneration !== undefined) {
+    binding.leaseGeneration = overrides.leaseGeneration;
+  }
+  return binding;
 }
 
 interface EmitRecord {
@@ -339,6 +370,10 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     freezeContractMock.mockReset();
     finalizeManualMock.mockReset();
     finalizeManualMock.mockResolvedValue({ ok: true });
+    mockGetLedgerById.mockReset();
+    mockGetLedgerById.mockResolvedValue(null);
+    mockGetExecutionForModule.mockReset();
+    mockGetExecutionForModule.mockResolvedValue(null);
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
@@ -879,5 +914,133 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
       taskExecutionId: EXEC_ID,
       taskReasonCode: "FINALIZE_THREW",
     });
+  });
+
+  // ------------------------------------------------------------------------
+  // T15b — Single-owner lease guard at the finalization gate (FR-20,
+  // NFR-01/07, AC-22/31). A Continue successor has bumped
+  // `owner_generation` on the shared lineage ledger; the parent binding
+  // still carries the OLD frozen `leaseGeneration`. The finalize gate must
+  // skip `finalizeManual` (the model releases the ledger unconditionally,
+  // so a stale ancestor finalizing would free the successor's lease) and
+  // still emit `complete` so the renderer does not hang. The row stays
+  // running for the successor's own finalize on its completion.
+  // ------------------------------------------------------------------------
+  it("T15b: stale lease (successor bumped owner_generation) → finalizeManual skipped, complete still emitted", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2, // parent's frozen generation
+      }),
+    });
+    // Ledger is now at generation 3 (successor claimed it).
+    mockGetLedgerById.mockResolvedValue({ ownerGeneration: 3 });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("stale ancestor finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    // The guard rejected → finalizeManual must NOT have been called (no
+    // unconditional ledger release on a stale ancestor).
+    expect(finalizeManualMock).not.toHaveBeenCalled();
+    // Complete still emits so the renderer badges honestly and does not hang.
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+  });
+
+  it("T15b: matching lease (no successor) → finalizeManual called (normal path)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2,
+      }),
+    });
+    // Ledger is still at generation 2 — this binding is the current owner.
+    mockGetLedgerById.mockResolvedValue({ ownerGeneration: 2 });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("fresh finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+  });
+
+  it("T15b: missing ledger (null) → fail-closed skip, finalizeManual not called", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2,
+      }),
+    });
+    // Ledger vanished — readCurrentLeaseGeneration returns null →
+    // expected -1 → STATE_CONFLICT → skip finalize.
+    mockGetLedgerById.mockResolvedValue(null);
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("missing ledger finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).not.toHaveBeenCalled();
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+  });
+
+  it("T15b: binding with no lease (legacy shape) → guard skipped, finalize proceeds", async () => {
+    // A binding carrying no ledgerId/leaseGeneration (the legacy/test
+    // shape, e.g. makeCreatedBinding with no lease overrides) must skip
+    // the guard entirely — nothing to check, no false rejection.
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding(), // no ledgerId / leaseGeneration
+    });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("legacy binding finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
   });
 });
