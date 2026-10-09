@@ -144,6 +144,17 @@ export class EmailReplyDraftModel extends BaseDb {
     });
   }
 
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplyDraftEntity[]> {
+    if (messageIds.length === 0) return [];
+    return await this.repository.find({
+      where: { messageId: In(messageIds) },
+      order: { id: "DESC" },
+    });
+  }
+
   async list(input: ReplyDraftListInput): Promise<EmailReplyDraftEntity[]> {
     let qb = this.repository.createQueryBuilder("draft");
     if (input.emailServiceId) {

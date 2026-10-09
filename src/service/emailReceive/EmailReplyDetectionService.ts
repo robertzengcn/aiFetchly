@@ -26,8 +26,9 @@
  *      since the probe began; if it changed, return `identity_conflict` and do
  *      not persist. Close the IMAP connection in `finally`.
  *
- * Cache, single-flight, and the 15s probe deadline land in step 10 (T05); the
- * call sites from step 7/8 are identical with or without that layer.
+ * In-memory cache, single-flight per message/context, one probe per mailbox,
+ * and the 15s probe deadline are implemented in this class (§7.3): negative
+ * entries expire at {@link NEGATIVE_CACHE_TTL_MS}; positive entries are sticky.
  */
 import { createHash } from "node:crypto";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
@@ -67,6 +68,11 @@ import type {
   ReplyDetectionUnknown,
 } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import { toCheckEmailRepliedDto } from "@/service/emailReceive/EmailReplyDetectionTypes";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { ImapEmailReceiveClient } from "@/service/emailReceive/ImapEmailReceiveClient";
 
 // Re-export the result union + guards so callers (Module, tests, future wire-up
 // in generation/delivery services) can import them from a single entry point.
@@ -126,12 +132,12 @@ export interface ReplyDetectionMessagePort {
 
 /** Draft lifecycle reads (cluster inspection) the detector needs. */
 export interface ReplyDetectionDraftPort {
-  listByMessage(messageId: number): Promise<EmailReplyDraftEntity[]>;
+  listByMessages(messageIds: number[]): Promise<EmailReplyDraftEntity[]>;
 }
 
 /** Send-attempt ledger reads (cluster inspection) the detector needs. */
 export interface ReplyDetectionAttemptPort {
-  listByMessage(messageId: number): Promise<EmailReplySendAttemptEntity[]>;
+  listByMessages(messageIds: number[]): Promise<EmailReplySendAttemptEntity[]>;
 }
 
 /** Receive-config + identity reads the detector needs from the service store. */
@@ -182,13 +188,13 @@ interface CachedDetection {
   readonly result: ReplyDetectionResult;
   readonly observedAt: number;
   readonly contextHash: string;
-  readonly mailboxId: number;
 }
 
 /**
- * Shared mailbox reply-detection service. One instance per process is fine
- * (the cache layer in step 10 will make it stateful); the generation and
- * delivery services construct it lazily through a factory getter.
+ * Shared mailbox reply-detection service. The class is stateful (in-memory
+ * cache + single-flight + per-mailbox probe serialization), so a single
+ * instance per process preserves its guarantees; the generation and delivery
+ * services construct it lazily through a factory getter.
  */
 export class EmailReplyDetectionService {
   private readonly messagePort: ReplyDetectionMessagePort;
@@ -395,9 +401,12 @@ export class EmailReplyDetectionService {
         return this.notRepliedFromCache(cached.result.checkedAt);
       }
       if (!isPositive && !negativeLive) {
-        // Expired negative — drop the stale entry.
+        // Expired negative — drop the stale entry. This is an expired-entry
+        // fall-through, not a cold miss; the `expired` counter already
+        // distinguishes it.
         this.cache.delete(cacheKey);
         incrementReplyMetric("detection_cache", { hit: false, expired: true });
+        return this.runFreshProbe(message, cacheKey, contextHash, normalizedConfig, normalizedId, identity.fromAddress);
       }
     }
 
@@ -405,24 +414,32 @@ export class EmailReplyDetectionService {
     // the in-process layer is computable from the hit/expired counters above
     // plus this miss counter.
     incrementReplyMetric("detection_cache", { hit: false, kind: "miss" });
+    return this.runFreshProbe(message, cacheKey, contextHash, normalizedConfig, normalizedId, identity.fromAddress);
+  }
 
-    // Single-flight (§7.3): join a live probe for the same context if one
-    // exists. A forced send check MAY join a probe begun for the same
-    // unchanged context during that send invocation; it must never join a
-    // cached pre-invocation negative (forceRefresh already skipped the
-    // negative cache above, so a join here is a join on a LIVE probe).
+  /**
+   * Fresh probe path shared by the cold-miss and expired-negative branches
+   * (§7.3): join a live probe for the same `(messageId, contextHash)` if one
+   * is in flight; a forced send check MAY join a probe begun for the same
+   * unchanged context during that send invocation, but never a cached
+   * pre-invocation negative. Otherwise start the 15s deadline (before
+   * acquiring, so queue wait is included) and run the probe under the
+   * mailbox-level single-flight lock.
+   */
+  private async runFreshProbe(
+    message: EmailReceivedMessageEntity,
+    cacheKey: string,
+    contextHash: string,
+    normalizedConfig: EmailReceiveConnectionConfig,
+    normalizedId: string,
+    configuredSender: string
+  ): Promise<ReplyDetectionResult> {
     const live = this.inFlight.get(cacheKey);
     if (live) {
       incrementReplyMetric("detection_cache", { hit: true, kind: "inflight" });
       return live;
     }
 
-    // One active IMAP probe per mailbox (§7.3): a second probe for the same
-    // mailbox WAITS for the prior to finish (queued behind the deadline, not
-    // concurrently opening a second connection). A probe for a different
-    // mailbox proceeds without waiting. The mailbox lock is held for the
-    // duration of the probe; the deadline is started BEFORE acquiring so
-    // queue wait is included (§7.3: "15s overall deadline, incl. queue wait").
     const deadline = startGenerationDeadline({
       now: this.now,
       budgetMs: PROBE_DEADLINE_MS,
@@ -430,18 +447,16 @@ export class EmailReplyDetectionService {
 
     const probe = this.runProbeUnderMailboxLock(
       cacheKey,
+      contextHash,
       message,
       normalizedConfig,
       normalizedId,
-      identity.fromAddress,
+      configuredSender,
       deadline
     );
     this.inFlight.set(cacheKey, probe);
     try {
       const result = await probe;
-      // Late results (probe resolved after the deadline) are discarded —
-      // the caller already received probe_timeout. This branch runs only
-      // when the probe resolved before the deadline check below.
       return result;
     } finally {
       this.inFlight.delete(cacheKey);
@@ -457,6 +472,7 @@ export class EmailReplyDetectionService {
    */
   private async runProbeUnderMailboxLock(
     cacheKey: string,
+    contextHash: string,
     message: EmailReceivedMessageEntity,
     normalizedConfig: EmailReceiveConnectionConfig,
     normalizedId: string,
@@ -526,8 +542,7 @@ export class EmailReplyDetectionService {
         this.cache.set(cacheKey, {
           result,
           observedAt: this.now(),
-          contextHash: cacheKey.split(":").slice(1).join(":"),
-          mailboxId,
+          contextHash,
         });
       }
       return result;
@@ -615,12 +630,13 @@ export class EmailReplyDetectionService {
     const clusterRows = await this.messagePort.findCanonicalEquivalents(seed);
     const rowIds = clusterRows.map((r) => r.id);
 
-    const [draftsPerRow, attemptsPerRow] = await Promise.all([
-      Promise.all(rowIds.map((id) => this.draftPort.listByMessage(id))),
-      Promise.all(rowIds.map((id) => this.attemptPort.listByMessage(id))),
+    // One batched query per table for the whole cluster (not one query per
+    // row) — the cluster sweep runs on every gate pass (pre-draft, post-gen
+    // recheck, pre-send).
+    const [drafts, attempts] = await Promise.all([
+      this.draftPort.listByMessages(rowIds),
+      this.attemptPort.listByMessages(rowIds),
     ]);
-    const drafts = draftsPerRow.flat();
-    const attempts = attemptsPerRow.flat();
 
     const liveDrafts = drafts.filter((d) =>
       isLiveDraftStatus(d.status)
@@ -1262,13 +1278,18 @@ function hasNamespaceConflict(
   return folderHashes.size > 1 || uidValidities.size > 1;
 }
 
+/** Upper bound for sanitized error text persisted to audit/metadata (FR-039). */
+const MAX_DETECTION_ERROR_CHARS = 240;
+
 /** Reduce an unknown error to a short, safe string (no stack traces leaked). */
 function sanitizeDetectionError(error: unknown): string {
   if (error instanceof Error) {
     const msg = error.message || error.name;
-    return msg.length > 240 ? msg.slice(0, 240) + "…" : msg;
+    return msg.length > MAX_DETECTION_ERROR_CHARS
+      ? msg.slice(0, MAX_DETECTION_ERROR_CHARS) + "…"
+      : msg;
   }
-  return String(error).slice(0, 240);
+  return String(error).slice(0, MAX_DETECTION_ERROR_CHARS);
 }
 
 /** sha256 hex digest (passwords/secrets never enter this hash — §7.3). */
@@ -1282,12 +1303,6 @@ function sha256Hex(value: string): string {
 // under vi.mock. Each wraps the real Module/Client, which structurally
 // satisfies its port interface.
 // ---------------------------------------------------------------------------
-
-import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
-import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
-import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
-import { EmailServiceModule } from "@/modules/emailServiceModule";
-import { ImapEmailReceiveClient } from "@/service/emailReceive/ImapEmailReceiveClient";
 
 class DefaultMessagePort implements ReplyDetectionMessagePort {
   private readonly module = new EmailReceivedMessageModule();
@@ -1315,15 +1330,15 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
 
 class DefaultDraftPort implements ReplyDetectionDraftPort {
   private readonly module = new EmailReplyDraftModule();
-  listByMessage(messageId: number): Promise<EmailReplyDraftEntity[]> {
-    return this.module.listByMessage(messageId);
+  listByMessages(messageIds: number[]): Promise<EmailReplyDraftEntity[]> {
+    return this.module.listByMessageIds(messageIds);
   }
 }
 
 class DefaultAttemptPort implements ReplyDetectionAttemptPort {
   private readonly module = new EmailReplySendAttemptModule();
-  listByMessage(messageId: number): Promise<EmailReplySendAttemptEntity[]> {
-    return this.module.listByMessage(messageId);
+  listByMessages(messageIds: number[]): Promise<EmailReplySendAttemptEntity[]> {
+    return this.module.listByMessageIds(messageIds);
   }
 }
 

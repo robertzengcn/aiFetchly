@@ -199,12 +199,12 @@ function buildMatrixKit(input: {
     },
   };
   const draftPort: ReplyDetectionDraftPort = {
-    async listByMessage() {
+    async listByMessages() {
       return [];
     },
   };
   const attemptPort: ReplyDetectionAttemptPort = {
-    async listByMessage() {
+    async listByMessages() {
       return [];
     },
   };

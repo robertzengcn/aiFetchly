@@ -90,6 +90,19 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplyDraftEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.listByMessageIds(messageIds);
+    } catch (error) {
+      console.error("Error listing drafts by message ids:", error);
+      throw error;
+    }
+  }
+
   async list(
     input: ReplyDraftListInput
   ): Promise<{ records: EmailReplyDraftEntity[]; total: number }> {

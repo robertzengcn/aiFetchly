@@ -135,16 +135,16 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
 
 function fakeDraftPort(draftsByMessage: Map<number, EmailReplyDraftEntity[]>): ReplyDetectionDraftPort {
   return {
-    async listByMessage(messageId: number) {
-      return draftsByMessage.get(messageId) ?? [];
+    async listByMessages(messageIds: number[]) {
+      return messageIds.flatMap((id) => draftsByMessage.get(id) ?? []);
     },
   };
 }
 
 function fakeAttemptPort(attemptsByMessage: Map<number, EmailReplySendAttemptEntity[]>): ReplyDetectionAttemptPort {
   return {
-    async listByMessage(messageId: number) {
-      return attemptsByMessage.get(messageId) ?? [];
+    async listByMessages(messageIds: number[]) {
+      return messageIds.flatMap((id) => attemptsByMessage.get(id) ?? []);
     },
   };
 }

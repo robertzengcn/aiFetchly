@@ -150,12 +150,12 @@ function buildKit(opts: {
     updateCalls,
   };
   const draftPort: ReplyDetectionDraftPort = {
-    async listByMessage() {
+    async listByMessages() {
       return [];
     },
   };
   const attemptPort: ReplyDetectionAttemptPort = {
-    async listByMessage() {
+    async listByMessages() {
       return [];
     },
   };

@@ -81,6 +81,24 @@ export class EmailReplySendAttemptModule extends BaseModule {
     }
   }
 
+  /**
+   * Batched {@link listByMessage} for a cluster of message ids (one query).
+   */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.attemptModel.listByMessageIds(messageIds);
+    } catch (error) {
+      console.error(
+        "Error listing reply send attempts for message ids:",
+        error
+      );
+      throw error;
+    }
+  }
+
   /** Stale in-flight attempts older than {@link threshold} (recovery input). */
   async listStaleInFlight(
     threshold: Date

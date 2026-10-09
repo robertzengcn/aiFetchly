@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplySendAttemptWriteSchema } from "@/schemas/entity/emailReplySendAttempt";
@@ -58,6 +58,17 @@ export class EmailReplySendAttemptModel extends BaseDb {
   ): Promise<EmailReplySendAttemptEntity[]> {
     return await this.repository.find({
       where: { messageId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    if (messageIds.length === 0) return [];
+    return await this.repository.find({
+      where: { messageId: In(messageIds) },
       order: { id: "DESC" },
     });
   }

@@ -163,23 +163,20 @@ export class EmailReplyPolicyOrchestrator {
     const clusterRows = await this.messageModule.findCanonicalEquivalents(seed);
     const clusterRowIds = clusterRows.map((r) => r.id);
 
-    const draftsPerRow = await Promise.all(
-      clusterRowIds.map((id) => this.draftModule.listByMessage(id))
-    );
-    const drafts = draftsPerRow.flat();
+    // One batched query per table for the whole cluster (not one per row).
+    const [drafts, attempts] = await Promise.all([
+      this.draftModule.listByMessageIds(clusterRowIds),
+      this.attemptModule.listByMessageIds(clusterRowIds),
+    ]);
     const liveDrafts = drafts.filter((d) => isLiveDraftStatus(d.status));
     const sentDrafts = drafts.filter((d) => d.status === "sent");
     const sendingDrafts = drafts.filter((d) => d.status === "sending");
     const unknownDrafts = drafts.filter((d) => d.status === "delivery_unknown");
 
-    // B02: authoritative delivery ledger. Read every attempt for every row in
-    // the cluster (including orphan rows whose linked draft was deleted, and
-    // stale rows left behind by a mid-flip crash). The attempt status is
-    // append-only and overrides stale draft/message projections.
-    const attemptsPerRow = await Promise.all(
-      clusterRowIds.map((id) => this.attemptModule.listByMessage(id))
-    );
-    const attempts = attemptsPerRow.flat();
+    // B02: authoritative delivery ledger (batched above — includes orphan rows
+    // whose linked draft was deleted, and stale rows left behind by a
+    // mid-flip crash). The attempt status is append-only and overrides stale
+    // draft/message projections.
     const sentAttempts = attempts.filter((a) => a.status === "sent");
     const unknownAttempts = attempts.filter(
       (a) => a.status === "delivery_unknown"
