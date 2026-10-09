@@ -3330,7 +3330,7 @@ export default {
     description: "AI file tools only operate inside the approved workspace.",
     required: {
       title: "Choose a workspace folder",
-      body: "Pick a folder where AI file tools can read and write. Nothing outside this folder will be touched.",
+      body: "Pick a folder for this conversation's workspace.",
       pick: "Pick folder",
       cancel: "Cancel",
     },

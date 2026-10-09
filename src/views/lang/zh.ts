@@ -3166,7 +3166,7 @@ export default {
     description: "AI 文件工具仅在被批准的工作区内运行。",
     required: {
       title: "请选择工作区文件夹",
-      body: "选择一个文件夹用于 AI 文件工具的读写操作。此文件夹之外的内容不会被访问。",
+      body: "为此对话的工作区选择一个文件夹。",
       pick: "选择文件夹",
       cancel: "取消",
     },

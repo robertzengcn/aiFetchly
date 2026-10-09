@@ -3337,7 +3337,7 @@ export default {
       "Les outils fichiers IA ne fonctionnent que dans l'espace approuvé.",
     required: {
       title: "Choisissez un dossier de travail",
-      body: "Choisissez un dossier où les outils IA peuvent lire et écrire. Rien en dehors de ce dossier ne sera touché.",
+      body: "Choisissez un dossier pour l'espace de travail de cette conversation.",
       pick: "Choisir un dossier",
       cancel: "Annuler",
     },

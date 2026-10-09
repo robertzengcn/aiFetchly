@@ -3356,7 +3356,7 @@ export default {
       "Las herramientas de archivos de IA solo operan dentro del espacio aprobado.",
     required: {
       title: "Elige una carpeta de trabajo",
-      body: "Elige una carpeta donde las herramientas de IA puedan leer y escribir. Nada fuera de esta carpeta será afectado.",
+      body: "Elige una carpeta para el espacio de trabajo de esta conversación.",
       pick: "Elegir carpeta",
       cancel: "Cancelar",
     },

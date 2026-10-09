@@ -3350,7 +3350,7 @@ export default {
       "AI-Dateiwerkzeuge arbeiten nur innerhalb des genehmigten Arbeitsbereichs.",
     required: {
       title: "Wählen Sie einen Arbeitsordner",
-      body: "Wählen Sie einen Ordner, in dem AI-Dateiwerkzeuge lesen und schreiben können. Außerhalb dieses Ordners wird nichts berührt.",
+      body: "Wählen Sie einen Ordner für den Arbeitsbereich dieser Unterhaltung.",
       pick: "Ordner wählen",
       cancel: "Abbrechen",
     },
