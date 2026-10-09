@@ -505,12 +505,29 @@ export class AIChatQueryEngine {
    * /goal execution should keep calling the model past the per-cycle tool
    * cap. Plan-mode turns still pause (AskUserQuestion must not be skipped).
    * Lookup failures must not fail the turn.
+   *
+   * T15 (FR-20, NFR-11): goal auto-continue fires only when THIS turn is
+   * real enrolled task work — i.e. it carries a policy-accepted task
+   * execution binding. A response_only turn (ordinary question) never
+   * enrolls, so `taskExecutionBinding` is undefined and auto-continue is
+   * false even when an active conversation goal exists. This closes the
+   * audit regression: "unrelated active goal + ordinary question → normal
+   * single answer" (the legacy takeover that let any active goal seize the
+   * turn). The binding is the route signal — the engine enrolls only
+   * task/preparation routes, so `policyAccepted === true` is the proxy for
+   * "this turn is goal-scoped task work."
    */
   private async shouldAutoContinueGoal(
     conversationId: string,
-    isPlanMode: boolean
+    isPlanMode: boolean,
+    taskExecutionBinding?: LoopTaskExecutionBinding
   ): Promise<boolean> {
     if (isPlanMode || !conversationId) {
+      return false;
+    }
+    // T15: no accepted task binding → not goal-scoped work → do NOT let an
+    // unrelated active goal seize an ordinary question turn.
+    if (!taskExecutionBinding?.policyAccepted) {
       return false;
     }
     try {
@@ -1456,13 +1473,37 @@ export class AIChatQueryEngine {
                 contract = null;
               }
             }
+            // T15 (FR-20, one semantic owner): resolve which completion
+            // owner enrolls this execution. When an active conversation goal
+            // owns the work, the goal controller is the sole semantic owner
+            // of completion decisions for this turn — the standalone
+            // controller must not add its own nudges or claim goal
+            // completion (§3 of the design). Lookup failures fall back to
+            // "standalone" (fail-closed: never crash enrollment over an
+            // ownership ambiguity). The goal lookup is bounded to this
+            // conversation, so an unrelated conversation's goal can never
+            // take ownership.
+            let completionOwner: "standalone" | "goal" = "standalone";
+            try {
+              const owningGoal = await new AIChatGoalModule().getActiveGoal(
+                conversationId
+              );
+              if (owningGoal) {
+                completionOwner = "goal";
+              }
+            } catch (ownerErr) {
+              console.warn(
+                "[ai-chat-v2] goal ownership lookup at enrollment failed:",
+                ownerErr
+              );
+            }
             const startResult = await coordinator.startManual({
               conversationId,
               sourceUserMessageId: savedUser.messageId,
               submissionId,
               requestHash,
               route,
-              completionOwner: "standalone",
+              completionOwner,
               contract,
             });
             if (startResult.status === "created") {
@@ -1941,7 +1982,8 @@ export class AIChatQueryEngine {
       outboundSendPreAuthorized,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         conversationId,
-        isPlanMode
+        isPlanMode,
+        taskExecutionBinding
       ),
       relieveBudgetPressure: async () => {
         await this.compactBeforeDispatch(conversationId, request.model);
@@ -2473,7 +2515,8 @@ export class AIChatQueryEngine {
         outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           matchedByToolId.conversationId,
-          Boolean(matchedByToolId.planContext)
+          Boolean(matchedByToolId.planContext),
+          matchedByToolId.taskExecutionBinding
         ),
         taskExecutionBinding: matchedByToolId.taskExecutionBinding,
       };
@@ -2634,7 +2677,8 @@ export class AIChatQueryEngine {
         outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           conversationId,
-          Boolean(matchedByToolId.planContext)
+          Boolean(matchedByToolId.planContext),
+          matchedByToolId.taskExecutionBinding
         ),
         taskExecutionBinding: matchedByToolId.taskExecutionBinding,
       };
@@ -2801,7 +2845,8 @@ export class AIChatQueryEngine {
       turnId: pending.turnId,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         pending.conversationId,
-        Boolean(planContext)
+        Boolean(planContext),
+        pending.taskExecutionBinding
       ),
       taskExecutionBinding: pending.taskExecutionBinding,
     };

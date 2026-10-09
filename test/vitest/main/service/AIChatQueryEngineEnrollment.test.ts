@@ -873,3 +873,248 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     expect(completeEvent.taskReasonCode).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T15 — Goal ownership + preparation/approval lifecycle (FR-01/10/20/21/22,
+// NFR-01/07, AC-06/07/14/22-25/31).
+//
+// Audit gap (verbatim): engine always enrolls `completionOwner:"standalone"` at
+// enrollment, while `goalAutoContinue` still uses ANY active conversation goal.
+// Response-only routes bypass policy entirely, allowing unrelated goals to
+// retain legacy takeover. Existing lease-generation/assertOwnership library
+// functions are not consulted by the engine/loop completion closures.
+//
+// Regression: (1) unrelated active goal + ordinary question → normal single
+// answer; (2) real goal iteration has exactly one semantic owner; (3) plan
+// draft stop waits, never verifies executable work; (4) approved plan freezes
+// against linked actual messages; (5) permission/question/approval retains
+// execution, policy, evidence, denied authority and remaining limits.
+// ---------------------------------------------------------------------------
+describe("AIChatQueryEngine.submitMessage — T15 goal ownership + preparation lifecycle", () => {
+  /** Active goal view returned by mockGetActiveGoal when a test wants one. */
+  const ACTIVE_GOAL = {
+    goalId: "goal-1",
+    conversationId: "v2-test-conv",
+    objective: "Build a 100-contact lead list",
+    criteria: [],
+    status: "active",
+    iterationCount: 0,
+    createdAt: "2026-10-05T00:00:00.000Z",
+    updatedAt: "2026-10-05T00:00:00.000Z",
+  };
+
+  // NOTE: this sibling describe does NOT inherit the first describe's
+  // beforeEach, so reset every mock the enrollment seam touches here.
+  // Without this, startManualMock retains the implementation from the last
+  // test in the first describe and call counts drift (2-3 calls/test).
+  beforeEach(() => {
+    vi.clearAllMocks();
+    flagMock.mockReturnValue(false);
+    classifyMock.mockReturnValue("response_only");
+    startManualMock.mockReset();
+    freezeContractMock.mockReset();
+    compileCriteriaMock.mockReset();
+    compileCriteriaMock.mockImplementation(
+      (input: Parameters<
+        NonNullable<typeof compileCriteriaHolder.real>
+      >[0]) =>
+        compileCriteriaHolder.real!(input)
+    );
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
+    mockSaveUserMessage.mockResolvedValue({ messageId: "user-1" });
+    mockGetActiveGoal.mockResolvedValue(null);
+    HookRegistry.unregisterSource("plugin:test-hooks");
+  });
+
+  it("T15a: task route + NO active goal → completionOwner: 'standalone' (FR-20)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    mockGetActiveGoal.mockResolvedValue(null);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-sa",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-sa",
+        leaseGeneration: 0,
+      } as never,
+    });
+    const { engine } = createEngineCapturingInput(() => undefined);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const call = startManualMock.mock.calls[0]?.[0] as {
+      completionOwner: string;
+    };
+    expect(call.completionOwner).toBe("standalone");
+  });
+
+  it("T15a: task route + active conversation goal → completionOwner: 'goal' (FR-20, one semantic owner)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    mockGetActiveGoal.mockResolvedValue(ACTIVE_GOAL);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-goal",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-goal",
+        leaseGeneration: 1,
+      } as never,
+    });
+    const { engine } = createEngineCapturingInput(() => undefined);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const call = startManualMock.mock.calls[0]?.[0] as {
+      completionOwner: string;
+    };
+    // The goal owns the work — the standalone controller does not add its own
+    // nudges or claim goal completion (§3 of the design).
+    expect(call.completionOwner).toBe("goal");
+  });
+
+  it("T15a: response_only route + active unrelated goal → NO goal takeover, single answer (FR-20, NFR-11)", async () => {
+    // The audit regression: "unrelated active goal + ordinary question →
+    // normal single answer". An ordinary question classifies response_only
+    // and must NOT be seized by the goal's auto-continue. The turn ends as a
+    // normal response with no task enrollment and no goalAutoContinue nudge.
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("response_only");
+    mockGetActiveGoal.mockResolvedValue(ACTIVE_GOAL);
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("What does ROI mean?"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(startManualMock).not.toHaveBeenCalled();
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBeUndefined();
+    // goalAutoContinue MUST be false even though an active goal exists — a
+    // response_only turn is not goal work. The goal's auto-continue must not
+    // seize an ordinary question (the legacy takeover the audit flags).
+    expect(captured!.goalAutoContinue).toBe(false);
+  });
+
+  it("T15a: task route + active goal → goalAutoContinue true (goal iteration continues)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    mockGetActiveGoal.mockResolvedValue(ACTIVE_GOAL);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-goal-2",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-goal-2",
+        leaseGeneration: 1,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(captured).toBeDefined();
+    // A genuine goal task turn keeps auto-continue: the goal controller
+    // remains the sole semantic-continuation owner.
+    expect(captured!.goalAutoContinue).toBe(true);
+  });
+
+  it("T15c: preparation route → enrolls with completionOwner and a null contract, never verifies executable work (FR-21, AC-31)", async () => {
+    // Audit gap: "Preparation is skipped; the comment says it enrolls when
+    // the user re-sends after approval, which contradicts same-execution
+    // preparation." A plan-draft / approval-wait turn must enroll (so Stop is
+    // available and the row exists) but with a NULL contract — the controller
+    // can never verify (no required criteria → never verified_complete). A
+    // Stop on a preparation turn finalizes incomplete/PREPARATION_REQUIRED,
+    // never a verified outcome.
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("preparation");
+    mockGetActiveGoal.mockResolvedValue(null);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-prep",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "preparation",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-prep",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Draft a plan to extract contacts."),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    // Preparation NOW enrolls (was: skipped). One execution across the
+    // preparation → approval → execution lifecycle (FR-21).
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const call = startManualMock.mock.calls[0]?.[0] as {
+      completionOwner: string;
+      route: string;
+      contract: unknown;
+    };
+    expect(call.route).toBe("preparation");
+    expect(call.completionOwner).toBe("standalone");
+    // The executable contract is NOT frozen at preparation — only after
+    // actual approved scope. null contract → controller can never verify.
+    expect(call.contract).toBeNull();
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBeDefined();
+    expect(captured!.taskExecutionBinding!.executionId).toBe("exec-prep");
+  });
+});
