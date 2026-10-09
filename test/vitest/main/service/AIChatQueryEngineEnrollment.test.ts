@@ -1117,4 +1117,187 @@ describe("AIChatQueryEngine.submitMessage — T15 goal ownership + preparation l
     expect(captured!.taskExecutionBinding).toBeDefined();
     expect(captured!.taskExecutionBinding!.executionId).toBe("exec-prep");
   });
+
+  // ------------------------------------------------------------------------
+  // T15d — Approved plan freezes against linked actual messages (FR-21/22,
+  // AC-23/31). The audit regression: "approved plan freezes against linked
+  // actual messages". When `planState.status === "approved"`, the engine
+  // passes `hasApprovedTaskTemplate: true` to the resolver → `task_verified`
+  // route → `mode: "verified"` freeze with the real approved source content.
+  // The contract is frozen against the actual user message, not a draft.
+  // ------------------------------------------------------------------------
+  it("T15d: approved plan → hasApprovedTaskTemplate:true → task_verified + mode:verified freeze (FR-21/22, AC-23)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_verified");
+    mockGetPlanState.mockResolvedValue({
+      status: "approved",
+      planId: "plan-1",
+      conversationId: "v2-test-conv",
+    });
+    mockGetActiveGoal.mockResolvedValue(null);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-verified",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_verified",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-verified",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Save 100 contacts to campaign camp-1"),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+
+    // The route is task_verified (approved template) and the freeze is
+    // mode:"verified" against the real approved source content.
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const startCall = startManualMock.mock.calls[0]?.[0] as {
+      route: string;
+    };
+    expect(startCall.route).toBe("task_verified");
+    expect(freezeContractMock).toHaveBeenCalledTimes(1);
+    const freezeInput = freezeContractMock.mock.calls[0][0] as {
+      mode: string;
+      approvedSourceContents: Record<string, string>;
+    };
+    expect(freezeInput.mode).toBe("verified");
+    // The freeze links to the ACTUAL user message content (T17 offset hook).
+    expect(freezeInput.approvedSourceContents["user-1"]).toBe(
+      "Save 100 contacts to campaign camp-1"
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBeDefined();
+    expect(captured!.taskExecutionBinding!.executionId).toBe("exec-verified");
+  });
+
+  // ------------------------------------------------------------------------
+  // T15d — pendingPlanApproval → preparation route (FR-21, AC-22/31). The
+  // audit regression: "permission/question/approval retains execution,
+  // policy, evidence, denied authority and remaining limits". A turn with a
+  // plan awaiting approval must route to `preparation` (not task_best_effort)
+  // so the executable contract is NOT frozen until actual approved scope.
+  // ------------------------------------------------------------------------
+  it("T15d: pendingPlanApproval → preparation route, no verified contract frozen (FR-21, AC-22)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("preparation");
+    mockGetPlanState.mockResolvedValue({
+      status: "awaiting_approval",
+      planId: "plan-2",
+      conversationId: "v2-test-conv",
+    });
+    mockGetActiveGoal.mockResolvedValue(null);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-approval-wait",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "preparation",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-approval-wait",
+        leaseGeneration: 0,
+      } as never,
+    });
+    let captured: AIChatQueryLoopInput | undefined;
+    const { engine } = createEngineCapturingInput((input) => {
+      captured = input;
+    });
+    await engine.submitMessage({
+      request: makeRequest("Run the extraction plan."),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+
+    // Awaiting-approval plan → preparation route (the executable contract
+    // is NOT frozen until the plan is approved). The execution row exists
+    // (FR-21: one execution across the lifecycle), so Stop/policy is
+    // available, but the contract stays null.
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const startCall = startManualMock.mock.calls[0]?.[0] as {
+      route: string;
+      contract: unknown;
+    };
+    expect(startCall.route).toBe("preparation");
+    expect(startCall.contract).toBeNull();
+    // No verified freeze happens on a preparation turn.
+    expect(freezeContractMock).not.toHaveBeenCalled();
+    expect(captured).toBeDefined();
+    expect(captured!.taskExecutionBinding).toBeDefined();
+    expect(captured!.taskExecutionBinding!.executionId).toBe(
+      "exec-approval-wait"
+    );
+  });
+
+  // ------------------------------------------------------------------------
+  // T15d — pendingPermission → preparation route (FR-21, AC-22). A
+  // conversation mid-permission-prompt routes to preparation, retaining
+  // the execution/policy state without freezing a verified contract.
+  //
+  // The engine's pendingPermissions map is private and populated by
+  // tool-execution internals (not reachable from a mocked loop), so this
+  // test locks the routing decision the resolver's pendingPermission:true
+  // branch produces: classify=preparation → enroll with route:preparation,
+  // contract:null. The full permission-prompt→preparation integration runs
+  // in the AgentRuntime.permission test (real loop).
+  // ------------------------------------------------------------------------
+  it("T15d: pendingPermission → preparation route, contract null (FR-21, AC-22)", async () => {
+    flagMock.mockReturnValue(true);
+    mockGetPlanState.mockResolvedValue(null);
+    mockGetActiveGoal.mockResolvedValue(null);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-perm-wait",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "preparation",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-perm-wait",
+        leaseGeneration: 0,
+      } as never,
+    });
+    const { engine } = createEngineCapturingInput(() => undefined);
+    classifyMock.mockReturnValue("preparation");
+    await engine.submitMessage({
+      request: makeRequest("Approve the tool."),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const startCall = startManualMock.mock.calls[0]?.[0] as {
+      route: string;
+      contract: unknown;
+    };
+    expect(startCall.route).toBe("preparation");
+    expect(startCall.contract).toBeNull();
+    expect(freezeContractMock).not.toHaveBeenCalled();
+  });
 });

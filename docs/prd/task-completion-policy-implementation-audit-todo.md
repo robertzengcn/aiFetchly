@@ -248,8 +248,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T15 — Enforce goal ownership and preparation/approval lifecycle [P1, confirmed gap]
 
-- [ ] Freeze actual goal vs standalone owner and validate it at live decisions/finalization.
-- [ ] Enroll preparation stages and freeze executable contract only after actual approved scope, keeping one execution and spent limits.
+- [x] Freeze actual goal vs standalone owner and validate it at live decisions/finalization. *(commit e116fbed — enrollment detects active conversation goal → `completionOwner:"goal"` vs `"standalone"` (one semantic owner); commit 43cd896f — exported `assertOwnership` + `readCurrentLeaseGeneration` standalones wired into the engine consult closure (stale lease → `yield_owner` → loop break, no dispatch) and the finalization gate (stale lease → skip finalizeManual, no unconditional ledger release); missing ledger → fail-closed reject.)*
+- [x] Enroll preparation stages and freeze executable contract only after actual approved scope, keeping one execution and spent limits. *(commit 6624bc78 — preparation route enrolls (completionOwner + null contract, never verifies executable work); `hasApprovedTaskTemplate = planState?.status === "approved"` threaded into the resolver so an approved plan → `task_verified` route → `mode:"verified"` freeze against linked actual messages; `awaiting_approval`/`pendingPermission` → preparation route with contract null.)*
 
 **Evidence:** engine always enrolls `completionOwner:"standalone"` at `:1346`, while `goalAutoContinue` at `:1708` still uses any active conversation goal (`:483–484`). Response-only routes bypass policy entirely, allowing unrelated goals to retain legacy takeover. Preparation is skipped at `:1314`; the comment says it enrolls when the user re-sends after approval, which contradicts same-execution preparation. Existing lease-generation/assertOwnership library functions are not consulted by the engine/loop completion closures. Resume paths carry a binding but do not establish the missing contract/owner/approval state.
 
