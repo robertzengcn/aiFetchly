@@ -2068,6 +2068,9 @@ export default {
     cron_desc_on_weekdays: " on weekdays",
     cron_desc_on_weekends: " on weekends",
     cron_desc_on_weekday: " on weekday {weekday}",
+    empty_title: "Aucune planification pour le moment",
+    empty_body:
+      "Commencez par créer votre première planification pour automatiser les tâches.",
   },
   websiteAnalysis: {
     analyze_button: "AI Analyze",

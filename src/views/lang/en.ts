@@ -2091,6 +2091,9 @@ export default {
     ai_message_task_run_blocked_tools: "Blocked Tool Calls",
     ai_message_task_run_result: "AI Response",
     ai_message_task_run_error: "Error",
+    empty_title: "No schedules yet",
+    empty_body:
+      "Get started by creating your first schedule to automate tasks.",
   },
   websiteAnalysis: {
     analyze_button: "AI Analyze",

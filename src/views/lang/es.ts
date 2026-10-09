@@ -2086,6 +2086,9 @@ export default {
     ai_message_task_run_blocked_tools: "Llamadas Bloqueadas",
     ai_message_task_run_result: "Respuesta IA",
     ai_message_task_run_error: "Error",
+    empty_title: "Aún no hay programaciones",
+    empty_body:
+      "Comienza creando tu primera programación para automatizar tareas.",
   },
   websiteAnalysis: {
     analyze_button: "Analizar con IA",

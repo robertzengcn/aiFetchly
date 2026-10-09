@@ -2041,6 +2041,9 @@ export default {
     ai_message_task_run_blocked_tools: "ブロックされたツール呼び出し",
     ai_message_task_run_result: "AI応答",
     ai_message_task_run_error: "エラー",
+    empty_title: "まだスケジュールがありません",
+    empty_body:
+      "最初のスケジュールを作成してタスクの自動化を始めましょう。",
   },
   websiteAnalysis: {
     analyze_button: "AI分析",

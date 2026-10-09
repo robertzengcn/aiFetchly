@@ -1981,6 +1981,8 @@ export default {
     ai_message_task_run_blocked_tools: "被阻止的工具调用",
     ai_message_task_run_result: "AI响应",
     ai_message_task_run_error: "错误",
+    empty_title: "还没有计划",
+    empty_body: "创建您的第一个计划以开始自动执行任务。",
   },
   websiteAnalysis: {
     analyze_button: "AI分析",

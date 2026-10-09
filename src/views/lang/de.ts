@@ -2076,6 +2076,9 @@ export default {
     ai_message_task_run_blocked_tools: "Blockierte Werkzeugaufrufe",
     ai_message_task_run_result: "KI-Antwort",
     ai_message_task_run_error: "Fehler",
+    empty_title: "Noch keine Planungen",
+    empty_body:
+      "Erstelle deine erste Planung, um Aufgaben zu automatisieren.",
   },
   websiteAnalysis: {
     analyze_button: "KI-Analyse",
