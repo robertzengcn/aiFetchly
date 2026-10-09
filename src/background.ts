@@ -2343,7 +2343,7 @@ async function handleDeepLink(url: string) {
       return;
     }
 
-    // Success — the pipeline navigates to Dashboard via completeDesktopLogin.
+    // Success — the pipeline navigates to AI_Chat_Workspace via completeDesktopLogin.
   } catch (error) {
     log.error("Failed to handle deep link:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);

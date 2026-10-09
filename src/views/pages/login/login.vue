@@ -126,7 +126,7 @@ const redirectToLogin = async () => {
                 // actually completed (e.g. the main-process window reference
                 // went stale mid-login). Probe the main process before
                 // showing a false "timeout": if a user email is persisted,
-                // treat this as success and navigate to the Dashboard.
+                // treat this as success and navigate to the AI chat workspace.
                 try {
                     const loginDone = await checkLoginSucceeded();
                     if (loginDone) {
