@@ -119,7 +119,23 @@ function detectionFactory(
 ): () => EmailReplyDetectionService {
   return () => {
     const svc = new EmailReplyDetectionService();
-    vi.spyOn(svc, "detect").mockImplementation(async () => result);
+    vi.spyOn(svc, "detect").mockImplementation(async (input) => {
+      // Mirror production persistNegative (D1b): a decisive `not_replied` is
+      // only returned after the observation persists. The claim-side freshness
+      // fence (D1a) fail-closes on a null replyNegativeCheckAt, so a fake that
+      // skips the persist would refuse every positive send path with
+      // probe_timeout instead of reaching the SMTP state machine under test.
+      if (result.state === "not_replied") {
+        await new EmailReceivedMessageModule().updateReplyEvidence({
+          id: input.messageId,
+          replyNegativeCheckAt: new Date(),
+          replyNegativeContextHash: "test-context-hash",
+          isAnswered: 0,
+          answeredFlagCheckedAt: new Date(),
+        });
+      }
+      return result;
+    });
     return svc;
   };
 }
@@ -447,6 +463,10 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
    * Production leaves `detectionServiceFactory` unset; tests inject a fake
    * service via the constructor seam (the lazy `detectionServiceForNow()`
    * getter constructs it on first use).
+   *
+   * D1b: a `not_replied` result persists its observation (mirrors production
+   * persistNegative) so the claim-side freshness fence (D1a) sees a timestamp
+   * instead of failing closed with probe_timeout.
    */
   function buildDeliveryWithDetection(
     detectionResult: ReplyDetectionResult,
@@ -476,9 +496,21 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
     });
     const detectionServiceFactory = () => {
       const svc = new EmailReplyDetectionService();
-      vi
-        .spyOn(svc, "detect")
-        .mockImplementation(async () => detectionResult);
+      vi.spyOn(svc, "detect").mockImplementation(async (input) => {
+        // Mirror production persistNegative (D1b): a decisive not_replied is
+        // only returned after the observation persists, so the freshness
+        // fence (D1a) sees a timestamp instead of failing closed.
+        if (detectionResult.state === "not_replied") {
+          await new EmailReceivedMessageModule().updateReplyEvidence({
+            id: input.messageId,
+            replyNegativeCheckAt: new Date(),
+            replyNegativeContextHash: "test-context-hash",
+            isAnswered: 0,
+            answeredFlagCheckedAt: new Date(),
+          });
+        }
+        return detectionResult;
+      });
       return svc;
     };
     const delivery = new EmailReplyDeliveryService({

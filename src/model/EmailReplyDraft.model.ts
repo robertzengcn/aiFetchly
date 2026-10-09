@@ -583,22 +583,44 @@ export class EmailReplyDraftModel extends BaseDb {
       // upstream by runPreSendDetection). Returns freshness_stale with NO
       // write so the delivery service can rerun detection OUTSIDE the
       // transaction and re-claim once.
+      //
+      // FAIL-CLOSED (D1a, adversarial finding #1): a null observation is NOT a
+      // green light. The delivery path runs detection (step 5b) before the
+      // claim, so by the time the transaction opens the timestamp MUST be
+      // populated. A null replyNegativeCheckAt/replyDetectedAt means either the
+      // detection never ran or its persistence failed silently (D1b) — in both
+      // cases the send must NOT proceed on a missing observation. Treat null as
+      // stale → freshness_stale → the delivery service reruns detection outside
+      // the transaction and re-claims once (§9.3). This closes the fail-open
+      // hole where a swallowed persist error produced a decisive not_replied
+      // with zero persisted evidence, skipped the fence, and sent anyway.
       const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
       const seedMessage = await messageRepo.findOne({
         where: { id: input.messageId },
       });
-      if (seedMessage) {
-        const observedAt =
-          seedMessage.replyNegativeCheckAt ?? seedMessage.replyDetectedAt;
-        if (observedAt !== null) {
-          const ageMs = Date.now() - observedAt.getTime();
-          if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
-            return {
-              status: "precondition_failed",
-              reason: "freshness_stale",
-            };
-          }
-        }
+      if (!seedMessage) {
+        // No seed row — a sibling check below would also find nothing to bind
+        // the cluster on; refuse rather than claim against a missing seed.
+        return {
+          status: "precondition_failed",
+          reason: "freshness_stale",
+        };
+      }
+      const observedAt =
+        seedMessage.replyNegativeCheckAt ?? seedMessage.replyDetectedAt;
+      if (observedAt === null) {
+        // Fail-closed: missing observation → force the delayed refresh.
+        return {
+          status: "precondition_failed",
+          reason: "freshness_stale",
+        };
+      }
+      const ageMs = Date.now() - observedAt.getTime();
+      if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
+        return {
+          status: "precondition_failed",
+          reason: "freshness_stale",
+        };
       }
 
       // 1. Canonical-cluster sibling check (§8.2) — before ANY write. The

@@ -131,7 +131,20 @@ function buildAcceptDelivery(): EmailReplyDeliveryService {
     coverage: "configured_imap",
   };
   const detectionService = new EmailReplyDetectionService();
-  vi.spyOn(detectionService, "detect").mockImplementation(async () => notReplied);
+  vi.spyOn(detectionService, "detect").mockImplementation(async (input) => {
+    // Mirror production persistNegative (D1b): a decisive not_replied is only
+    // returned after the observation persists, so the claim-side freshness
+    // fence (D1a) sees a timestamp instead of failing closed with
+    // probe_timeout.
+    await new EmailReceivedMessageModule().updateReplyEvidence({
+      id: input.messageId,
+      replyNegativeCheckAt: new Date(),
+      replyNegativeContextHash: "test-context-hash",
+      isAnswered: 0,
+      answeredFlagCheckedAt: new Date(),
+    });
+    return notReplied;
+  });
   return new EmailReplyDeliveryService({
     senderFactory: senderFactory as never,
     serviceLoader: async () => FAKE_MAILBOX,

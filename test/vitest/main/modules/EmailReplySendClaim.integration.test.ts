@@ -158,15 +158,51 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
     }
   });
 
+  const SERVICE_ID = 7;
+
+  /**
+   * Seed a real received-message row. Required by the D1a freshness fence
+   * (claimApprovedRevisionForSend reads the seed row's replyNegativeCheckAt/
+   * replyDetectedAt before any write; a missing row yields freshness_stale).
+   * Tests in this block previously used a literal messageId=100 with no row;
+   * the fail-closed fence now refuses that, so each test seeds a real row and
+   * writes a fresh observation to reach the claim/sibling/finalize paths.
+   */
+  async function seedMessage(): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = SERVICE_ID;
+    message.providerUid = `uid-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    message.normalizedMessageId = null;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  /** Write a fresh replyNegativeCheckAt so the fence passes (≤5s old). */
+  async function writeObservation(messageId: number): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+  }
+
   it("a single claim transitions draft -> sending and inserts a claimed attempt", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const result = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
       approvedHash: seed.contentHash,
       idempotencyKey: seed.idempotencyKey,
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -184,14 +220,19 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("two concurrent claims for the same approved revision yield exactly one SMTP submission", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const claimInput = {
       draftId: seed.draftId,
       revisionId: seed.revisionId,
       approvedHash: seed.contentHash,
       idempotencyKey: seed.idempotencyKey,
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -215,14 +256,19 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("a hash mismatch blocks the claim without inserting an attempt", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const result = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
       approvedHash: "0".repeat(64), // wrong hash
       idempotencyKey: seed.idempotencyKey,
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -239,14 +285,19 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("finalizeSendOutcome(sent) advances attempt+draft and consumes the approval", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const claim = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
       approvedHash: seed.contentHash,
       idempotencyKey: seed.idempotencyKey,
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -260,7 +311,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       draftId: seed.draftId,
       approvalId: seed.approvalId,
       emailServiceId: seed.emailServiceId,
-      messageId: 100,
+      messageId: msg.id,
       outcome: "sent",
       providerMessageId: "<prov-123@x>",
     });
@@ -276,14 +327,19 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("finalizeSendOutcome(delivery_unknown) is terminal and consumes approval", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const claim = await draftModel.claimApprovedRevisionForSend({
       draftId: seed.draftId,
       revisionId: seed.revisionId,
       approvedHash: seed.contentHash,
       idempotencyKey: seed.idempotencyKey,
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -297,7 +353,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       draftId: seed.draftId,
       approvalId: seed.approvalId,
       emailServiceId: seed.emailServiceId,
-      messageId: 100,
+      messageId: msg.id,
       outcome: "delivery_unknown",
       sanitizedError: "SMTP disconnect after possible acceptance",
     });
@@ -309,7 +365,12 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   });
 
   it("appending a revision (edit) invalidates the active approval and resets to draft", async () => {
-    const seed = await seedApprovedDraft({ draftModel, approvalModel });
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
     const before = await approvalModel.read(seed.approvalId);
     expect(before?.invalidatedAt).toBeNull();
 
@@ -356,7 +417,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
         seed.approvalId
       ),
       approvalId: seed.approvalId,
-      messageId: 100,
+      messageId: msg.id,
       conversationId: null,
       emailServiceId: seed.emailServiceId,
       senderAddress: `owner@service${seed.emailServiceId}.com`,
@@ -427,6 +488,18 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
       .save(message);
   }
 
+  /**
+   * Write a fresh replyNegativeCheckAt so the D1a freshness fence passes
+   * (≤5s old). The fence runs inside claimApprovedRevisionForSend BEFORE the
+   * sibling check; without a fresh observation the claim returns
+   * freshness_stale and never reaches the guard-binding code under test.
+   */
+  async function writeObservation(messageId: number): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+  }
+
   /** Seed an idle guard row for a message's replyKey. */
   async function seedIdleGuard(
     message: EmailReceivedMessageEntity
@@ -480,6 +553,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     const msg = await seedMessage(null); // row: replyKey — singleton cluster
     const guard = await seedIdleGuard(msg);
     const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    await writeObservation(msg.id);
 
     const result = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -499,6 +573,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     // Two approved sibling drafts on the same cluster row.
     const first = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
     const second = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    await writeObservation(msg.id);
 
     const firstClaim = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(first, msg.id, guard.id)
@@ -553,6 +628,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     attempt.status = "sent";
     attempt.claimedAt = new Date();
     await attemptModel.create(attempt);
+    await writeObservation(msg.id);
 
     const result = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -574,6 +650,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
       phase: "sending",
       activeAttemptId: 999999,
     });
+    await writeObservation(msg.id);
 
     const result = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -597,6 +674,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
       ownerToken: "owner-generation",
       leaseExpiresAt: new Date(Date.now() + 60_000),
     });
+    await writeObservation(msg.id);
 
     const result = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -623,6 +701,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     // Guard is terminal (`sent`) — the sibling check cannot see it (guard
     // rows are not cluster evidence), but the bind fence must.
     await updateGuard(guard.id, { phase: "sent" });
+    await writeObservation(msg.id);
 
     const result = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -639,6 +718,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     const msg = await seedMessage(null);
     const guard = await seedIdleGuard(msg);
     const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    await writeObservation(msg.id);
 
     const claim = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -665,6 +745,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     const msg = await seedMessage(null);
     const guard = await seedIdleGuard(msg);
     const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    await writeObservation(msg.id);
 
     const claim = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -692,6 +773,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
     const msg = await seedMessage(null);
     const guard = await seedIdleGuard(msg);
     const seed = await seedApprovedDraft({ draftModel, approvalModel }, { messageId: msg.id });
+    await writeObservation(msg.id);
 
     const claim = await draftModel.claimApprovedRevisionForSend(
       claimInputFor(seed, msg.id, guard.id)
@@ -877,11 +959,19 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
     expect(attempts).toHaveLength(0);
   });
 
-  it("no observation on the seed message -> fence skipped, claim proceeds (back-compat)", async () => {
-    // A legacy message row with no replyNegativeCheckAt/replyDetectedAt (e.g.
-    // populated from before T03) must not be blocked by the fence — the fence
-    // only fires when an observation EXISTS and is stale. This preserves the
-    // claim's authority for messages that have not yet been through detection.
+  it("no observation on the seed message -> fence fail-closed to freshness_stale (D1a)", async () => {
+    // D1a (adversarial finding #1): a null observation is NOT a green light.
+    // The pre-send detection (step 5b) MUST have written a fresh observation
+    // before the claim; a null replyNegativeCheckAt means either the detection
+    // never ran or its persistence failed silently. Treating that as "fresh"
+    // (the old fail-open skip) lets a send proceed with zero persisted reply
+    // evidence — defeating the branch's core no-duplicate-reply guarantee.
+    // Fail-closed: return freshness_stale with NO write so the delivery service
+    // reruns detection OUTSIDE the transaction and re-claims once (§9.3). A
+    // legacy pre-T03 row with no detection columns is handled upstream — the
+    // delivery service runs detection before the claim, so by the time the
+    // claim opens the timestamp is populated; if it is not, that is itself a
+    // defect signal, not a pass condition.
     const msg = await seedMessage();
     const seed = await seedApprovedDraft(
       { draftModel, approvalModel },
@@ -893,7 +983,15 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
       claimInputFor(seed, msg.id)
     );
 
-    expect(result.status).toBe("claimed");
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.reason).toBe("freshness_stale");
+    }
+    // NO write: the draft stays approved, and no attempt row was inserted.
+    const draft = await draftModel.readAggregate(seed.draftId);
+    expect(draft?.status).toBe("approved");
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
   });
 
   it("a sticky positive (replyDetectedAt) within the window -> claim proceeds", async () => {

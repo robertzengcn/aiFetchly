@@ -752,12 +752,17 @@ export class EmailReplyDetectionService {
           answeredCheckedAt = flags.checkedAt;
           if (isAnswered) {
             // A positive `\Answered` flag settles replied (§7.1 step 5).
-            await this.persistPositive(message, {
+            const persisted = await this.persistPositive(message, {
               source: "mailbox_flag",
               matchedMessageId: null,
               isAnswered: 1,
               answeredCheckedAt,
             });
+            if (!persisted) {
+              // D1b: evidence write failed — do NOT return a replied that the
+              // upstream send gate would trust past the pre-send check.
+              return this.unknown("probe_failed");
+            }
             return this.repliedFresh(
               "mailbox_flag",
               null,
@@ -786,12 +791,16 @@ export class EmailReplyDetectionService {
     if (sentResult.kind === "replied") {
       // A verified direct match settles replied even if the flag side or other
       // folders were unavailable (§7.1 step 6).
-      await this.persistPositive(message, {
+      const persisted = await this.persistPositive(message, {
         source: "sent_search",
         matchedMessageId: sentResult.matchedMessageId,
         isAnswered: isAnswered ? 1 : 0,
         answeredCheckedAt,
       });
+      if (!persisted) {
+        // D1b: evidence write failed — surface unknown so the send gate refuses.
+        return this.unknown("probe_failed");
+      }
       return this.repliedFresh(
         "sent_search",
         sentResult.matchedMessageId,
@@ -857,10 +866,18 @@ export class EmailReplyDetectionService {
       return this.unknown("identity_conflict");
     }
 
-    await this.persistNegative(message, probeEndContextHash, {
+    const persisted = await this.persistNegative(message, probeEndContextHash, {
       isAnswered: isAnswered ? 1 : 0,
       answeredCheckedAt,
     });
+    if (!persisted) {
+      // D1b: a decisive not_replied whose evidence write failed leaves
+      // replyNegativeCheckAt null, which the claim-side fence (D1a) treat as
+      // stale and fail-closes. Surface unknown(probe_failed) so the upstream
+      // pre-send gate refuses BEFORE the claim, rather than letting the send
+      // proceed to the claim only to hit the fence's delayed-refresh path.
+      return this.unknown("probe_failed");
+    }
 
     const negative: ReplyDetectionNotReplied = {
       state: "not_replied",
@@ -1000,6 +1017,18 @@ export class EmailReplyDetectionService {
     return negative;
   }
 
+  /**
+   * Persist a positive observation. Returns true on success, false on failure.
+   *
+   * D1b (adversarial finding #2): a verified-positive observation whose
+   * persistence threw MUST NOT produce a `replied` result that lacks persisted
+   * evidence. The claim-side freshness fence reads `replyDetectedAt`; if the
+   * persist failed, that column is null, the fence fail-closes (D1a), and the
+   * send is refused — but the probe must also surface `unknown(probe_failed)`
+   * so the upstream pre-send gate refuses before the claim even opens. A
+   * swallowed persist error that returns `replied` defeats the no-duplicate-
+   * reply guarantee (the upstream gate trusts the probe's state).
+   */
   private async persistPositive(
     message: EmailReceivedMessageEntity,
     evidence: {
@@ -1008,7 +1037,7 @@ export class EmailReplyDetectionService {
       isAnswered: number;
       answeredCheckedAt: Date | null;
     }
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.messagePort.updateReplyEvidence({
         id: message.id,
@@ -1018,21 +1047,38 @@ export class EmailReplyDetectionService {
         isAnswered: evidence.isAnswered,
         answeredFlagCheckedAt: evidence.answeredCheckedAt,
       });
+      return true;
     } catch (error) {
       // Persistence failure does not downgrade a verified-positive observation
-      // (§5.1: a sticky positive protects the next probe). Log and proceed.
+      // (§5.1: a sticky positive protects the next probe), but it DOES surface
+      // as unknown(probe_failed) so the upstream send gate refuses — a `replied`
+      // result here would skip the pre-send probe (§8.1/§9.2) entirely.
       incrementReplyMetric("detection_persist_failure", {
         kind: "positive",
       });
-      void error;
+      console.error(
+        `[EmailReplyDetection] persistPositive failed for message ${message.id}:`,
+        error
+      );
+      return false;
     }
   }
 
+  /**
+   * Persist a negative observation. Returns true on success, false on failure.
+   *
+   * D1b: a decisive `not_replied` returned while the evidence write silently
+   * failed leaves `replyNegativeCheckAt` null — the claim-side fence (D1a)
+   * fail-closes, but the probe must NOT report `not_replied` (the upstream
+   * pre-send gate trusts the probe's state and would let the send proceed to
+   * the claim, where the fence then triggers the delayed-refresh path). Surface
+   * `unknown(probe_failed)` instead so the gate refuses before the claim.
+   */
   private async persistNegative(
     message: EmailReceivedMessageEntity,
     contextHash: string,
     flags: { isAnswered: number; answeredCheckedAt: Date | null }
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.messagePort.updateReplyEvidence({
         id: message.id,
@@ -1041,11 +1087,16 @@ export class EmailReplyDetectionService {
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
+      return true;
     } catch (error) {
       incrementReplyMetric("detection_persist_failure", {
         kind: "negative",
       });
-      void error;
+      console.error(
+        `[EmailReplyDetection] persistNegative failed for message ${message.id}:`,
+        error
+      );
+      return false;
     }
   }
 

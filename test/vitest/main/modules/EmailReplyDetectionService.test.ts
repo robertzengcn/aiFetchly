@@ -112,6 +112,8 @@ interface FakeMessagePortOptions {
   message: EmailReceivedMessageEntity;
   cluster?: EmailReceivedMessageEntity[];
   updateCalls: Array<Record<string, unknown>>;
+  /** When set, updateReplyEvidence throws this Error (simulates persistence failure). */
+  updateThrows?: Error;
 }
 
 function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePort & {
@@ -127,6 +129,7 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
     },
     async updateReplyEvidence(input) {
       updateCalls.push(input);
+      if (opts.updateThrows) throw opts.updateThrows;
       return true;
     },
     updateCalls,
@@ -231,6 +234,7 @@ function buildServiceKit(input: {
   attemptsByMessage?: Map<number, EmailReplySendAttemptEntity[]>;
   emailServiceOptions: FakeEmailServicePortOptions;
   imapOptions?: FakeImapPortOptions;
+  updateThrows?: Error;
 }): ServiceKit {
   const updateCalls: Array<Record<string, unknown>> = [];
   const nowMs = { value: 1_000_000 };
@@ -238,6 +242,7 @@ function buildServiceKit(input: {
     message: input.message,
     cluster: input.cluster,
     updateCalls,
+    updateThrows: input.updateThrows,
   });
   const draftPort = fakeDraftPort(input.draftsByMessage ?? new Map());
   const attemptPort = fakeAttemptPort(input.attemptsByMessage ?? new Map());
@@ -866,6 +871,70 @@ describe("EmailReplyDetectionService — Sent-search matching (§7.1 step 6, §7
     if (result.state !== "unknown") throw new Error("expected unknown");
     expect(result.reasonCode).toBe("probe_limit_exceeded");
     expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+
+  // D1b (adversarial finding #2): a decisive not_replied MUST NOT be returned
+  // when the evidence persistence write threw — otherwise the claim-side
+  // freshness fence sees a null replyNegativeCheckAt, skips, and a duplicate
+  // send proceeds with zero persisted evidence. The probe must surface
+  // unknown(probe_failed) instead of not_replied when persistNegative fails.
+  it("returns unknown(probe_failed) — not not_replied — when persistNegative throws (D1b)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+      updateThrows: new Error("disk full — evidence write failed"),
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown, got " + result.state);
+    expect(result.reasonCode).toBe("probe_failed");
+    // The write was attempted (the call reached persistNegative) but failed.
+    expect(kit.messagePort.updateCalls.length).toBe(1);
+  });
+
+  // D1b mirror: persistPositive failure must NOT return a replied that lacks
+  // persisted evidence (the claim-side fence reads replyDetectedAt). A verified
+  // positive observation whose persistence threw stays positive in the result
+  // (the observation is real) BUT the fence will catch the missing persisted
+  // timestamp and refuse the send — so the probe result itself must carry
+  // unknown so the upstream pre-send gate refuses. Verified-positive with a
+  // failed persist therefore surfaces as unknown(probe_failed), not replied.
+  it("returns unknown(probe_failed) — not replied — when persistPositive throws (D1b)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        // A verified direct Sent match settles replied(sent_search).
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([
+          ["Sent", [candidateFixture({ inReplyTo: "<orig-77@example.com>", from: "me@example.com" })]],
+        ]),
+      },
+      updateThrows: new Error("disk full — evidence write failed"),
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown, got " + result.state);
+    expect(result.reasonCode).toBe("probe_failed");
+    expect(kit.messagePort.updateCalls.length).toBe(1);
   });
 });
 

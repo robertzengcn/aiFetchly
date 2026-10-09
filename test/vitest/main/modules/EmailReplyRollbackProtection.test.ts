@@ -86,6 +86,16 @@ describe("T11 §5.3 — rollback cannot remove mandatory local duplicate protect
       .save(message);
   }
 
+  /**
+   * Write a fresh replyNegativeCheckAt so the D1a freshness fence inside
+   * claimApprovedRevisionForSend passes (≤5s old, fail-closed on null).
+   */
+  async function writeObservation(messageId: number): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+  }
+
   async function seedIdleGuard(
     message: EmailReceivedMessageEntity
   ): Promise<EmailReplyGuardEntity> {
@@ -232,6 +242,7 @@ describe("T11 §5.3 — rollback cannot remove mandatory local duplicate protect
     const guard = await seedIdleGuard(msg);
     const first = await seedApprovedDraft(msg.id);
     const second = await seedApprovedDraft(msg.id);
+    await writeObservation(msg.id);
 
     // First claim succeeds — the cluster is clean.
     const firstClaim = await draftModel.claimApprovedRevisionForSend(
