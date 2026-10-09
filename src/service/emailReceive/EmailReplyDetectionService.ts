@@ -288,18 +288,6 @@ export class EmailReplyDetectionService {
       return this.repliedFromCache(source, message.replyMatchedMessageId);
     }
 
-    // Step 3 — negative reuse (draft checks only; age 0–60s + matching hash).
-    if (!forceRefresh) {
-      const cached = this.readCachedNegative(message);
-      if (cached) {
-        incrementReplyMetric("detection_cache", {
-          hit: true,
-          kind: "persisted_negative",
-        });
-        return cached;
-      }
-    }
-
     // Step 4 — POP3 / config-unavailable / missing inbound RFC ID → unknown.
     // The stored column is a persistence boundary — re-normalize rather than
     // trust it, so a legacy/bracketed value cannot silently break token
@@ -323,11 +311,38 @@ export class EmailReplyDetectionService {
       return this.unknown("unsupported_protocol");
     }
 
+    // Step 3 — negative reuse (draft checks only; age 0–60s + matching hash).
+    // Runs AFTER the config + identity resolution so the stored context hash
+    // can be recomputed from the CURRENT account context and compared (D5):
+    // a presence-only check served a stale negative for up to 60s after the
+    // account was reconfigured (new endpoint/username/sender/detector
+    // version), enabling a duplicate reply. Both reads are local (config +
+    // identity rows), never a mailbox round trip, so the cache still avoids
+    // the network probe it exists for.
+    const normalizedConfig = normalizeReceiveConnectionConfig(config);
+    const identity = await this.emailServicePort.readIdentity(
+      message.emailServiceId
+    );
+    if (!forceRefresh) {
+      const cached = this.readCachedNegative(
+        message,
+        normalizedConfig,
+        identity?.fromAddress ?? null
+      );
+      if (cached) {
+        incrementReplyMetric("detection_cache", {
+          hit: true,
+          kind: "persisted_negative",
+        });
+        return cached;
+      }
+    }
+
     // Steps 5–7 — bounded mailbox probe, routed through the in-memory cache
     // + single-flight + 15s deadline layer (§7.3). The persisted negative
     // cache (Step 3 above) covers cross-process/cross-restart reuse; the
     // in-memory layer coalesces concurrent calls within this process.
-    return this.runCachedProbe(message, config, normalizedId, forceRefresh);
+    return this.runCachedProbe(message, normalizedConfig, normalizedId, forceRefresh, identity);
   }
 
   /**
@@ -342,20 +357,22 @@ export class EmailReplyDetectionService {
    */
   private async runCachedProbe(
     message: EmailReceivedMessageEntity,
-    rawConfig: EmailReceiveConnectionConfig,
+    normalizedConfig: EmailReceiveConnectionConfig,
     normalizedId: string,
-    forceRefresh: boolean
+    forceRefresh: boolean,
+    identity: {
+      smtpUsername: string;
+      fromAddress: string;
+      replyToAddress: string | null;
+      receiveUsername: string;
+    } | null
   ): Promise<ReplyDetectionResult> {
-    const normalizedConfig = normalizeReceiveConnectionConfig(rawConfig);
     const validationError =
       validateReceiveEndpointConfig(normalizedConfig);
     if (validationError) {
       return this.unknown("receive_unavailable");
     }
 
-    const identity = await this.emailServicePort.readIdentity(
-      message.emailServiceId
-    );
     if (!identity) {
       return this.unknown("receive_unavailable");
     }
@@ -365,7 +382,9 @@ export class EmailReplyDetectionService {
     // stable across calls under the same account/identity/detector-version,
     // and changes when any of those change (invalidating the entry). The
     // post-probe re-check inside `probeMailbox` recomputes WITH the resolved
-    // scope to isolate scope changes from account changes.
+    // scope to isolate scope changes from account changes. `persistNegative`
+    // stores this SAME empty-scope pre-probe hash so `readCachedNegative` can
+    // recompute it cheaply (config + identity only) and compare exactly (D5).
     const contextHash = this.hashContext(
       normalizedConfig,
       identity.fromAddress,
@@ -523,7 +542,8 @@ export class EmailReplyDetectionService {
                 message,
                 normalizedConfig,
                 normalizedId,
-                configuredSender
+                configuredSender,
+                contextHash
               ),
             { state: "probe" }
           ),
@@ -712,13 +732,17 @@ export class EmailReplyDetectionService {
     message: EmailReceivedMessageEntity,
     normalizedConfig: EmailReceiveConnectionConfig,
     normalizedId: string,
-    configuredSender: string
+    configuredSender: string,
+    preProbeContextHash: string
   ): Promise<ReplyDetectionResult> {
     // Config normalization + identity resolution happened in runCachedProbe
     // (the cache key needs the pre-probe context hash, which needs both).
     // The post-probe context re-check (§7.1 step 7) is recomputed below
     // WITH the resolved Sent scope to isolate scope changes from account
     // changes — see `probeStartRehashed` vs `probeEndContextHash`.
+    // `preProbeContextHash` is the EMPTY-scope hash `runCachedProbe` keyed
+    // the cache on; `persistNegative` stores it so `readCachedNegative` can
+    // recompute + compare against the CURRENT context (D5).
 
     // Step 5 — UID-scoped flag refresh (namespaced rows only). Legacy bare-UID
     // rows have no folder/UIDVALIDITY provenance — their flag side is
@@ -836,8 +860,6 @@ export class EmailReplyDetectionService {
     // unchanged since the probe began (§7.1 step 7). A context change means
     // the configured sender / scope the probe reasoned under may no longer be
     // current; the safe outcome is `identity_conflict` (review, not negative).
-    // The persisted hash incorporates the resolved Sent scope so future cache
-    // hits invalidate when the scope changes too.
     const freshConfig = await this.emailServicePort.getEmailServiceReceiveConfig(
       normalizedConfig.emailServiceId
     );
@@ -866,7 +888,12 @@ export class EmailReplyDetectionService {
       return this.unknown("identity_conflict");
     }
 
-    const persisted = await this.persistNegative(message, probeEndContextHash, {
+    // Persist the PRE-PROBE (empty-scope) context hash, not the probe-end
+    // hash: `readCachedNegative` runs before any mailbox I/O and cannot know
+    // the resolved Sent scope, so it recomputes this exact empty-scope hash
+    // from config + identity and compares (D5). The mid-probe conflict check
+    // above keeps its own scope-resolved comparison and is unaffected.
+    const persisted = await this.persistNegative(message, preProbeContextHash, {
       isAnswered: isAnswered ? 1 : 0,
       answeredCheckedAt,
     });
@@ -985,9 +1012,18 @@ export class EmailReplyDetectionService {
   // Cache + persistence helpers.
   // -------------------------------------------------------------------------
 
-  /** Step 3 — read a reusable cached negative (age 0–60s + matching hash). */
+  /**
+   * Step 3 — read a reusable cached negative (age 0–60s + matching context
+   * hash). D5: the stored hash is recomputed from the CURRENT account context
+   * (config + configured sender, empty pre-probe Sent scope) and compared —
+   * presence-only checking served a stale negative for up to 60s after an
+   * account reconfiguration. A mismatch falls through to a fresh probe under
+   * the new context, which persists a new hash (the write is the cleanup).
+   */
   private readCachedNegative(
-    message: EmailReceivedMessageEntity
+    message: EmailReceivedMessageEntity,
+    normalizedConfig: EmailReceiveConnectionConfig,
+    configuredSender: string | null
   ): ReplyDetectionNotReplied | null {
     if (!message.replyNegativeCheckAt || !message.replyNegativeContextHash) {
       return null;
@@ -997,13 +1033,33 @@ export class EmailReplyDetectionService {
     const ageMs = this.now() - observedAt;
     if (ageMs < 0 || ageMs > NEGATIVE_CACHE_TTL_MS) return null;
 
-    // A cached negative is only reusable when the detector version + account
-    // context match. We cannot recompute the full hash without re-reading the
-    // config (which would defeat the cache), so the persisted hash IS the
-    // validity token: it was computed under the same DETECTOR_VERSION and
-    // context that produced the negative. A config/identity/sender change will
-    // have produced a different hash at the next probe and overwritten this
-    // entry — until then the cached negative is authoritative.
+    // Recompute the pre-probe context hash under the CURRENT config +
+    // identity. `persistNegative` stores this same empty-scope pre-probe
+    // hash, so the comparison is exact. Without an identity the context is
+    // unresolvable — never reuse the cached negative on an incomplete read.
+    if (!configuredSender) {
+      incrementReplyMetric("detection_cache", {
+        hit: false,
+        context_mismatch: true,
+      });
+      return null;
+    }
+    const currentHash = this.hashContext(
+      normalizedConfig,
+      configuredSender,
+      "" // pre-probe: Sent scope unknown — same scope persisted
+    );
+    if (currentHash !== message.replyNegativeContextHash) {
+      // Account reconfigured (endpoint/username/sender) or the detector
+      // version changed since the observation — the negative is not
+      // attributable to the current context. Do NOT serve it.
+      incrementReplyMetric("detection_cache", {
+        hit: false,
+        context_mismatch: true,
+      });
+      return null;
+    }
+
     const negative: ReplyDetectionNotReplied = {
       state: "not_replied",
       replied: false,

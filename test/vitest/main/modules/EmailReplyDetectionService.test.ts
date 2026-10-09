@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 // The detection service imports the real default ports (Modules + Client) at
 // construction time. The Modules extend BaseModule which touches Token / Db
@@ -77,7 +78,9 @@ function attemptEntity(id: number, messageId: number, status: string): EmailRepl
   } as EmailReplySendAttemptEntity;
 }
 
-function imapConfig(): EmailReceiveConnectionConfig {
+function imapConfig(
+  overrides: Partial<EmailReceiveConnectionConfig> = {}
+): EmailReceiveConnectionConfig {
   return {
     emailServiceId: 5,
     protocol: "imap",
@@ -87,7 +90,29 @@ function imapConfig(): EmailReceiveConnectionConfig {
     username: "me@example.com",
     password: "secret-pw",
     folder: "INBOX",
+    ...overrides,
   };
+}
+
+/**
+ * Reproduce the production pre-probe context hash (empty Sent scope) for a
+ * config + configured-sender pair, so D5 tests can seed the exact hash a
+ * real probe under that context would persist. Material order mirrors
+ * hashContext: endpoint|protocol|username|scope|sender|detector-version.
+ */
+function preProbeContextHash(
+  config: EmailReceiveConnectionConfig,
+  configuredSender: string
+): string {
+  const material = [
+    `${config.host}:${config.port}`,
+    config.protocol,
+    config.username,
+    "",
+    configuredSender.toLowerCase(),
+    REPLY_DETECTOR_VERSION,
+  ].join("|");
+  return createHash("sha256").update(material, "utf8").digest("hex");
 }
 
 function candidateFixture(overrides: Partial<ReplyHeaderCandidate> = {}): ReplyHeaderCandidate {
@@ -416,13 +441,21 @@ describe("EmailReplyDetectionService — sticky positive reuse (§7.1 step 2)", 
 
 describe("EmailReplyDetectionService — negative reuse (§7.1 step 3)", () => {
   it("returns not_replied from cache when observation is 30s old and hash present", async () => {
-    // nowMs starts at 1_000_000; observation 30s ago.
+    // nowMs starts at 1_000_000; observation 30s ago. The stored hash is the
+    // real pre-probe hash for THIS config + sender so the D5 read-side
+    // recompute compares equal.
     const message = messageFixture({
       replyStatus: "not_started",
       replyNegativeCheckAt: new Date(1_000_000 - 30_000),
-      replyNegativeContextHash: "some-hash",
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), "me@example.com"),
     });
-    const kit = buildServiceKit({ message, emailServiceOptions: { config: imapConfig(), identity: null } });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+    });
 
     const result = await kit.service.detect({ messageId: 100 });
 
@@ -512,6 +545,75 @@ describe("EmailReplyDetectionService — negative reuse (§7.1 step 3)", () => {
 
     expect(kit.imapPort.refreshCalls.length).toBe(1);
     expect(result.state).toBe("not_replied");
+  });
+
+  // D5 (review finding): the stored context hash was never compared against
+  // the CURRENT account context — the read was presence-only, so within 60s
+  // of reconfiguring the mailbox (new host/username/sender/detector version)
+  // a stale negative was served and a duplicate reply could be sent.
+  it("D5: does NOT reuse a cached negative after the account config changed", async () => {
+    // A negative persisted 30s ago under the ORIGINAL config's context hash.
+    // Compute the hash the production pre-probe path produces for that
+    // original context (empty Sent scope — scope is unknown at read time).
+    // Material order mirrors hashContext: endpoint|protocol|username|scope|sender|version.
+    const originalConfig = imapConfig();
+    const staleHash = preProbeContextHash(originalConfig, "me@example.com");
+
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: staleHash,
+    });
+    // The account was RECONFIGURED between the probe and this read: new host.
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig({ host: "imap.reconfigured.example.com" }),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    // The stale negative must NOT be served — detection re-probes under the
+    // new context instead of trusting the old account's observation.
+    expect(result.fromCache).toBe(false);
+    expect(kit.imapPort.refreshCalls.length).toBe(1);
+    expect(kit.imapPort.searchCalls.length).toBe(1);
+  });
+
+  it("D5: recomputes and honors the cached negative when the account config is UNCHANGED", async () => {
+    // Same setup as the mismatch test, but the config matches the hash's
+    // context → the negative IS reused (no mailbox round trip).
+    const originalConfig = imapConfig();
+    const staleHash = preProbeContextHash(originalConfig, "me@example.com");
+
+    const message = messageFixture({
+      replyStatus: "not_started",
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: staleHash,
+    });
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: { config: originalConfig, identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" } },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("not_replied");
+    expect(result.fromCache).toBe(true);
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+    expect(kit.imapPort.searchCalls.length).toBe(0);
   });
 });
 

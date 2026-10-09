@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHash } from "node:crypto";
 
 // Mock electron + Logger BEFORE the import so the lazy default-port getters
 // never reach the real ipcMain / BaseModule (TDZ under vi.mock). Pattern
@@ -26,6 +27,7 @@ import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
 import { log } from "@/modules/Logger";
 import {
   EmailReplyDetectionService,
+  REPLY_DETECTOR_VERSION,
   type ReplyDetectionMessagePort,
   type ReplyDetectionDraftPort,
   type ReplyDetectionAttemptPort,
@@ -97,6 +99,28 @@ function defaultIdentity() {
     replyToAddress: null,
     receiveUsername: SENDER,
   };
+}
+
+/**
+ * Reproduce the production pre-probe context hash (empty Sent scope) for a
+ * config + configured-sender pair, so persisted-negative tests can seed the
+ * exact hash a real probe under that context would persist (D5 read-side
+ * recompute compares against it). Material order mirrors hashContext:
+ * endpoint|protocol|username|scope|sender|detector-version.
+ */
+function preProbeContextHash(
+  config: EmailReceiveConnectionConfig,
+  configuredSender: string
+): string {
+  const material = [
+    `${config.host}:${config.port}`,
+    config.protocol,
+    config.username,
+    "",
+    configuredSender.toLowerCase(),
+    REPLY_DETECTOR_VERSION,
+  ].join("|");
+  return createHash("sha256").update(material, "utf8").digest("hex");
 }
 
 interface FakeImapOptions {
@@ -664,11 +688,12 @@ describe("EmailReplyDetection cache telemetry (T12/FR-039)", () => {
   it("persisted negative reuse emits detection_cache{hit=true,kind=persisted_negative}, no probe", async () => {
     const clock = manualClock();
     // A message whose persisted negative evidence is 30s old (within the 60s
-    // TTL, observed before `now` so age >= 0). The detector must reuse it
-    // WITHOUT a mailbox probe.
+    // TTL, observed before `now` so age >= 0). The stored hash is the real
+    // pre-probe hash for this kit's config + sender, so the D5 read-side
+    // recompute compares equal and the negative is reused WITHOUT a probe.
     const message = messageFixture({
       replyNegativeCheckAt: new Date(1_000_000 - 30_000),
-      replyNegativeContextHash: "some-context-hash",
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
     });
     const kit = buildKit({
       message,
