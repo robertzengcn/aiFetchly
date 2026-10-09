@@ -178,4 +178,33 @@ export class AiTaskExecutionModule extends BaseModule {
       mergedStateJson: JSON.stringify(merged),
     });
   }
+
+  /**
+   * T03 (FR-03/24, AC-32): persist authoritative evidence rows into
+   * `execution_state_json.evidence` via the same atomic CAS primitive used
+   * by {@link recordShadowDecision}. The caller ({@link TaskEvidenceService.
+   * persistEvidence}) already reads the snapshot, checks finalized (B8.1),
+   * and merges new rows into the existing evidence array (B8.3 append-only
+   * dedup by evidenceId); this method is the thin CAS passthrough that
+   * ensures the DB connection and commits the merged JSON atomically.
+   *
+   * The `applyShadowDecisionCas` WHERE clause (`finalized = 0` AND
+   * `execution_state_version = :expectedVersion`) is the defense-in-depth
+   * against a finalizer committing between the snapshot read and this
+   * UPDATE: a finalized row yields affected = 0 (the terminal outcome
+   * wins), and a version mismatch yields affected = 0 (a concurrent
+   * evidence write won). Returns true only when the row was applied.
+   */
+  async mergeExecutionStateEvidence(input: {
+    executionId: string;
+    expectedVersion: number;
+    mergedStateJson: string;
+  }): Promise<boolean> {
+    await this.ensureConnection();
+    return this.model.applyShadowDecisionCas({
+      executionId: input.executionId,
+      expectedVersion: input.expectedVersion,
+      mergedStateJson: input.mergedStateJson,
+    });
+  }
 }

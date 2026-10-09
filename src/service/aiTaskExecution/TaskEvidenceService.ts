@@ -32,6 +32,8 @@ import {
   CriteriaAdapterRegistry,
   CriterionEvalResult,
   CriterionState,
+  OperationReceipt,
+  ObservationReceipt,
   QualitativeEvaluator,
   newEvidenceId,
 } from "@/service/aiTaskExecution/criteriaAdapters";
@@ -60,6 +62,16 @@ export interface EvidenceContext {
   readonly abortSignal?: AbortSignal;
   readonly checkerDispatch?: (prompt: string) => Promise<string>;
   readonly budgetReserveChecker?: () => BudgetReservationResult;
+  /**
+   * T03 (FR-03/04): authoritative external evidence providers threaded
+   * into the adapter context per evaluation. The observation provider
+   * resolves a targetId to a trusted fresh observation; the operation
+   * receipt provider resolves a targetId to a real operation receipt;
+   * `artifactBaseDir` roots validated read-only filesystem artifact checks.
+   */
+  readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
+  readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
+  readonly artifactBaseDir?: string;
   /** Provenance stamped onto each evidence row (FR-16). */
   readonly source: string;
   readonly sourceRevision: string;
@@ -152,6 +164,9 @@ export class TaskEvidenceService implements EvidenceChecker {
       abortSignal: context.abortSignal,
       checkerDispatch: context.checkerDispatch,
       budgetReserveChecker: context.budgetReserveChecker,
+      observationProvider: context.observationProvider,
+      operationReceiptProvider: context.operationReceiptProvider,
+      artifactBaseDir: context.artifactBaseDir,
     };
     try {
       switch (criterion.kind) {
