@@ -31,6 +31,7 @@ import {
 import {
   buildSnippet,
   extractThreadKey,
+  sanitizeHeaderValue,
 } from "@/service/emailReceive/EmailMessageParser";
 import {
   buildNamespacedProviderUid,
@@ -451,7 +452,10 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       (parsed.text && parsed.text.length > 0 ? parsed.text : null) ??
       (rawHtml ? htmlToPlainText(rawHtml) : null);
 
-    const subject = (parsed.subject ?? "(no subject)").slice(0, 998);
+    // D8.3 (security): strip control chars (CR/LF/NUL/C0) from the subject —
+    // the same log-injection / control-char vector D8.3 closed for POP3. IMAP
+    // is the default receive path, so this is the higher-traffic site.
+    const subject = sanitizeHeaderValue(parsed.subject ?? "(no subject)");
     const messageId = parsed.messageId ? parsed.messageId.trim() : null;
     const inReplyTo = parsed.inReplyTo ? String(parsed.inReplyTo).trim() : null;
     const referencesHeader = parsed.references

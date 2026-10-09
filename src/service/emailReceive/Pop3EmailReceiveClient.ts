@@ -16,7 +16,11 @@ import {
 import {
   buildSnippet,
   extractThreadKey,
+  sanitizeHeaderValue,
 } from "@/service/emailReceive/EmailMessageParser";
+
+// Re-export for tests that import the helper from the POP3 module path.
+export { sanitizeHeaderValue } from "@/service/emailReceive/EmailMessageParser";
 
 const POP3_PORT = 110;
 const POP3_SSL_PORT = 995;
@@ -28,27 +32,6 @@ const POP3_SSL_PORT = 995;
  * well above any legitimate email, well below memory-exhaustion territory.
  */
 export const POP3_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
-
-/**
- * D8 (security): strip control characters from a header value (subject).
- * Control chars (NUL, BEL, CR, LF, other C0 controls) break log lines,
- * storage, and downstream rendering, and are a known log-injection vector.
- * Collapses embedded CR/LF runs to a single space; strips other control
- * chars; preserves printable ASCII + tab. Mirrors the model's 998-char
- * subject cap.
- */
-export function sanitizeHeaderValue(value: string): string {
-  // Replace any CR/LF (or CR+LF) run with a single space, then strip any
-  // remaining control chars (< 0x20) except tab (0x09). NUL is also stripped.
-  // The control-char class is intentional — this is the security filter that
-  // removes log-injection / control-char vectors from header values.
-  /* eslint-disable no-control-regex -- stripping control chars is the purpose */
-  return value
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
-    .slice(0, 998);
-  /* eslint-enable no-control-regex */
-}
 
 /**
  * POP3 receive client implementation using Node.js built-in `net` and `tls`

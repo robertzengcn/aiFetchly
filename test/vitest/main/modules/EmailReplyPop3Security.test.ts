@@ -119,4 +119,45 @@ describe("D8 — POP3 security fixes", () => {
       expect(src).toMatch(/exceeded.*bytes without terminator|response exceeded.*POP3_MAX_RESPONSE_BYTES/);
     });
   });
+
+  // ----- D8.3 cross-client: IMAP subject sanitization (same bug class) -----
+
+  describe("IMAP subject sanitization (D8.3 cross-client)", () => {
+    // Cycle-2 re-review found the POP3 fix missed the identical vulnerable
+    // line in the IMAP client (the default receive path). The helper now
+    // lives in EmailMessageParser and both clients import + use it.
+    const IMAP_SRC = path.resolve(
+      __dirname,
+      "../../../../src/service/emailReceive/ImapEmailReceiveClient.ts"
+    );
+    const PARSER_SRC = path.resolve(
+      __dirname,
+      "../../../../src/service/emailReceive/EmailMessageParser.ts"
+    );
+
+    it("the helper lives in the shared EmailMessageParser (not the POP3 client)", () => {
+      const parser = fs.readFileSync(PARSER_SRC, "utf8");
+      expect(parser).toMatch(/export function sanitizeHeaderValue/);
+    });
+
+    it("IMAP client imports + uses sanitizeHeaderValue at the subject site", () => {
+      const imap = fs.readFileSync(IMAP_SRC, "utf8");
+      expect(imap).toMatch(/sanitizeHeaderValue/);
+      expect(imap).toMatch(
+        /from "@\/service\/emailReceive\/EmailMessageParser"/
+      );
+      // The vulnerable bare `.slice(0, 998)` on the subject is gone.
+      expect(imap).not.toMatch(/subject.*\.slice\(0,\s*998\)/);
+    });
+
+    it("POP3 client imports the helper from the shared parser (no local definition)", () => {
+      const pop3 = readSrc();
+      expect(pop3).toMatch(
+        /from "@\/service\/emailReceive\/EmailMessageParser"/
+      );
+      // No local function definition remains in the POP3 client — the helper
+      // was moved to the shared parser.
+      expect(pop3).not.toMatch(/export function sanitizeHeaderValue/);
+    });
+  });
 });
