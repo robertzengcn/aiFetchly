@@ -68,6 +68,7 @@ import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
 import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import {
   EmailReplyDetectionService,
+  getSharedEmailReplyDetectionService,
   type ReplyDetectionResult,
 } from "@/service/emailReceive/EmailReplyDetectionService";
 import { randomBytes } from "node:crypto";
@@ -1558,9 +1559,13 @@ export class EmailReplyDraftGenerationService {
    */
   private detectionServiceForNow(): EmailReplyDetectionService {
     if (!this.detectionService) {
+      // D6: route the production fallback through the process-wide shared
+      // singleton so the in-memory cache/single-flight/mailbox-lock state
+      // survives across per-request outer-service instances. Injected test
+      // factories keep precedence.
       this.detectionService = this.detectionServiceFactory
         ? this.detectionServiceFactory()
-        : new EmailReplyDetectionService();
+        : getSharedEmailReplyDetectionService();
     }
     return this.detectionService;
   }

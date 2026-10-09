@@ -27,7 +27,10 @@ import {
   validateSendBinding,
 } from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
-import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
+import {
+  EmailReplyDetectionService,
+  getSharedEmailReplyDetectionService,
+} from "@/service/emailReceive/EmailReplyDetectionService";
 import {
   incrementReplyMetric,
   observeReplyDurationMs,
@@ -146,9 +149,13 @@ export class EmailReplyDeliveryService {
    */
   private detectionServiceForNow(): EmailReplyDetectionService {
     if (!this.detectionService) {
+      // D6: route the production fallback through the process-wide shared
+      // singleton so the in-memory cache/single-flight/mailbox-lock state
+      // survives across per-request outer-service instances. Injected test
+      // factories keep precedence.
       this.detectionService = this.detectionServiceFactory
         ? this.detectionServiceFactory()
-        : new EmailReplyDetectionService();
+        : getSharedEmailReplyDetectionService();
     }
     return this.detectionService;
   }

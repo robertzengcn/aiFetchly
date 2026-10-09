@@ -1490,3 +1490,50 @@ class DefaultImapPort implements ReplyDetectionImapPort {
     return this.client.searchReplyHeaders(input);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Process-wide shared singleton (D6). The in-memory cache, single-flight,
+// and per-mailbox probe lock are INSTANCE state. The three production call
+// sites (generation §8.1, delivery §9.2, detection module) previously each
+// constructed a fresh service per outer-service instance, and the outer
+// services are constructed per request — so the cache layer could never hit
+// across requests. ONE memoized instance shares that state process-wide.
+//
+// Construction stays lazy (this getter is called at runtime, never at module
+// eval time) to avoid the BaseModule TDZ landmine under `vi.mock` of
+// `BaseDb`/`Token`: the Default*Port classes construct their Modules inside
+// the constructor body, which runs the first time this getter is invoked —
+// not when the module is imported. Injected test seams (`detectionServiceFactory`
+// in delivery/generation, `{service}` in the Module constructor) keep
+// precedence so existing detection-exercising tests are not polluted by this
+// singleton. `resetSharedEmailReplyDetectionService` exists ONLY as a test
+// hook to drop the memo between isolated suites; production never calls it.
+// ---------------------------------------------------------------------------
+
+let sharedEmailReplyDetectionService: EmailReplyDetectionService | null = null;
+
+/**
+ * Resolve the process-wide shared {@link EmailReplyDetectionService} (D6).
+ * Memoized on first call. Production fallbacks in delivery, generation, and
+ * the detection Module route through this getter instead of `new`-ing a
+ * per-request service, so the in-memory cache/single-flight/mailbox-lock
+ * state survives across requests.
+ */
+export function getSharedEmailReplyDetectionService(): EmailReplyDetectionService {
+  if (!sharedEmailReplyDetectionService) {
+    sharedEmailReplyDetectionService = new EmailReplyDetectionService();
+  }
+  return sharedEmailReplyDetectionService;
+}
+
+/**
+ * Test-only hook (D6): drop the memoized shared instance, optionally seeding a
+ * replacement (e.g. a fake-ports service). Production code MUST NOT call this
+ * — the shared singleton is meant to live for the process lifetime. Tests use
+ * it to keep the singleton's instance state from leaking across suites.
+ */
+export function resetSharedEmailReplyDetectionService(
+  next?: EmailReplyDetectionService | null
+): void {
+  sharedEmailReplyDetectionService = next ?? null;
+}
