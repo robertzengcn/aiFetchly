@@ -1,37 +1,17 @@
-// test/vitest/main/service/streamingDeliveryBenchmark.ts
+// test/vitest/main/service/streamingDeliveryBenchmark.test.ts
 //
-// TODO-13 (PRD §5 / design §18): scripted comparative performance fixtures.
-// Measures PRESENTER-INTAKE latency (workspaceStreamPresenter.applyEvent
-// entry → return) for scripted token streams through both delivery paths'
-// engine-side event shape, plus total run duration and peak buffered-delta
-// count. Deterministic fixtures; no live model. Run:
+// R08 (PRD §5 / design §18): comparative delivery benchmark, rebuilt.
+// Valid ChatRunDetailEvent envelopes (chunk fields inside event.payload), a
+// correctly-registering flush scheduler, presenter-intake timing per event,
+// output assertions (messages + buffered deltas applied), a cancellation
+// fixture, and application-owned buffer accounting. 5 warmups + 30 measured
+// runs per fixture. Run:
 //   node node_modules/vitest/vitest.mjs --config vitest.service.config.mjs \
-//     run test/vitest/main/service/streamingDeliveryBenchmark.ts
-import { describe, it } from "vitest";
+//     run test/vitest/main/service/streamingDeliveryBenchmark.test.ts
+import { describe, expect, it } from "vitest";
 import { createWorkspaceStreamPresenter } from "@/views/utils/workspaceStreamPresenter";
-
-/** Manual flush scheduler mirroring the 50ms batching window. */
-function manualScheduler(): {
-  options: { scheduleFlush: (fn: () => void, ms: number) => () => void };
-  elapse(): void;
-} {
-  let queued: (() => void) | null = null;
-  return {
-    options: {
-      scheduleFlush: (fn: () => void) => () => {
-        queued = fn;
-        return () => {
-          queued = null;
-        };
-      },
-    },
-    elapse(): void {
-      const fn = queued;
-      queued = null;
-      fn?.();
-    },
-  };
-}
+import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
 
 interface FixtureSpec {
   readonly name: string;
@@ -51,60 +31,145 @@ const FIXTURES: readonly FixtureSpec[] = [
 const WARMUP_RUNS = 5;
 const MEASURED_RUNS = 30;
 
-/** Build the engine-side event sequence for a fixture. */
-function buildEvents(spec: FixtureSpec, runId: string): Array<Parameters<ReturnType<typeof createWorkspaceStreamPresenter>["applyEvent"]>[0]["payload"] & { eventType: string; sequence: number }> {
-  const events: Array<{ eventType: string; sequence: number; payload: Record<string, unknown> } & { eventType: string; sequence: number }> = [];
-  let seq = 0;
-  const push = (eventType: string, payload: Record<string, unknown>): void => {
-    seq += 1;
-    events.push({ eventType, sequence: seq, payload });
+/** Flush scheduler that registers the callback IMMEDIATELY (R08 fix). */
+function registeringScheduler(): {
+  options: { scheduleFlush: (fn: () => void, ms: number) => () => void };
+  elapse(): void;
+} {
+  let queued: (() => void) | null = null;
+  return {
+    options: {
+      scheduleFlush: (fn: () => void) => {
+        queued = fn; // registered now, not on cancel
+        return () => {
+          if (queued === fn) queued = null;
+        };
+      },
+    },
+    elapse(): void {
+      const fn = queued;
+      queued = null;
+      fn?.();
+    },
   };
-  push("start", { messageId: "a1" });
-  for (let i = 0; i < spec.tokenCount; i += 1) {
-    if (spec.reasoningEvery > 0 && i % spec.reasoningEvery === 0) {
-      push("reasoning_delta", { messageId: "a1", reasoningDelta: "think " });
-    }
-    push("token", { messageId: "a1", contentDelta: "word " });
-  }
-  for (let t = 0; t < spec.toolCalls; t += 1) {
-    push("tool_call", { toolCallId: `tc-${t}`, toolName: "search", toolArguments: {} });
-    for (let p = 0; p < spec.progressBursts; p += 1) {
-      push("tool_progress", {
-        toolCallId: `tc-${t}`, toolName: "search", phase: "running",
-        progressMessage: "working", progressFraction: 0.5,
-        partialCount: p, expectedCount: spec.progressBursts, progressTimestamp: Date.now(),
-      });
-    }
-    push("tool_result", { toolCallId: `tc-${t}`, toolName: "search", fullContent: "ok", toolResult: { success: true } });
-  }
-  push("complete", { messageId: "a1", fullContent: "done", finishReason: "stop" });
-  // adapt to the detail-event envelope
-  return events.map((e) => ({
-    ...e.payload,
-    eventType: e.eventType,
-    sequence: e.sequence,
-    conversationId: `v2-bench-${runId}`,
-    runId,
-    emittedAt: new Date().toISOString(),
-  })) as never;
 }
 
-function runOnce(spec: FixtureSpec, runId: string): { intakeNs: bigint; applied: number } {
-  const scheduler = manualScheduler();
-  const presenter = createWorkspaceStreamPresenter(scheduler.options);
-  const events = buildEvents(spec, runId) as unknown as Parameters<
-    typeof presenter.applyEvent
-  >[0][];
-  const state = presenter.getState();
-  const t0 = process.hrtime.bigint();
-  let applied = 0;
-  for (const event of events) {
-    if (presenter.applyEvent(event)) applied += 1;
-    scheduler.elapse();
+/** Valid detail events: engine chunk wrapped in payload with the run envelope. */
+function buildDetailEvents(
+  spec: FixtureSpec,
+  runId: string
+): ChatRunDetailEvent[] {
+  const conversationId = `v2-bench-${runId}`;
+  const events: ChatRunDetailEvent[] = [];
+  let seq = 0;
+  const push = (chunk: ChatV2StreamChunk): void => {
+    seq += 1;
+    events.push({
+      conversationId,
+      runId,
+      sequence: seq,
+      emittedAt: new Date().toISOString(),
+      eventType: chunk.eventType,
+      payload: chunk as unknown as Record<string, unknown>,
+    });
+  };
+  push({ eventType: "start", conversationId, messageId: "a1" });
+  for (let i = 0; i < spec.tokenCount; i += 1) {
+    if (spec.reasoningEvery > 0 && i % spec.reasoningEvery === 0) {
+      push({
+        eventType: "reasoning_delta",
+        conversationId,
+        messageId: "a1",
+        reasoningDelta: "think ",
+      });
+    }
+    push({
+      eventType: "token",
+      conversationId,
+      messageId: "a1",
+      contentDelta: "word ",
+    });
   }
-  void state;
-  const t1 = process.hrtime.bigint();
-  return { intakeNs: t1 - t0, applied };
+  for (let t = 0; t < spec.toolCalls; t += 1) {
+    push({
+      eventType: "tool_call",
+      conversationId,
+      messageId: "a1",
+      toolCallId: `tc-${t}`,
+      toolName: "search",
+      toolArguments: {},
+    });
+    for (let p = 0; p < spec.progressBursts; p += 1) {
+      push({
+        eventType: "tool_progress",
+        conversationId,
+        messageId: "a1",
+        toolCallId: `tc-${t}`,
+        toolName: "search",
+        phase: "running",
+        progressMessage: "working",
+        progressFraction: 0.5,
+        partialCount: p,
+        expectedCount: spec.progressBursts,
+        progressTimestamp: Date.now(),
+      });
+    }
+    push({
+      eventType: "tool_result",
+      conversationId,
+      messageId: "a1",
+      toolCallId: `tc-${t}`,
+      toolName: "search",
+      fullContent: "ok",
+      toolResult: { success: true },
+    });
+  }
+  push({
+    eventType: "complete",
+    conversationId,
+    messageId: "a1",
+    fullContent: "done",
+    finishReason: "stop",
+  });
+  return events;
+}
+
+interface RunResult {
+  readonly intakePerEventNs: readonly bigint[];
+  readonly appliedEvents: number;
+  readonly finalContentLen: number;
+  readonly messageCount: number;
+  readonly peakBufferedDeltas: number;
+}
+
+function runOnce(spec: FixtureSpec, runId: string): RunResult {
+  const scheduler = registeringScheduler();
+  const presenter = createWorkspaceStreamPresenter(scheduler.options);
+  const events = buildDetailEvents(spec, runId);
+  const intakePerEventNs: bigint[] = [];
+  let appliedEvents = 0;
+  let peakBufferedDeltas = 0;
+  for (const event of events) {
+    const t0 = process.hrtime.bigint();
+    const applied = presenter.applyEvent(event);
+    const t1 = process.hrtime.bigint();
+    intakePerEventNs.push(t1 - t0);
+    if (applied) appliedEvents += 1;
+    peakBufferedDeltas = Math.max(
+      peakBufferedDeltas,
+      presenter.getState().unflushedDeltaCount
+    );
+    scheduler.elapse(); // drain the 50ms-equivalent batch window per event
+  }
+  scheduler.elapse();
+  const state = presenter.getState();
+  return {
+    intakePerEventNs,
+    appliedEvents,
+    finalContentLen: state.messages[0]?.content.length ?? 0,
+    messageCount: state.messages.length,
+    peakBufferedDeltas,
+  };
 }
 
 function p95(values: readonly number[]): number {
@@ -113,30 +178,83 @@ function p95(values: readonly number[]): number {
   return sorted[Math.max(0, idx)];
 }
 
-describe("TODO-13 streaming delivery benchmark (scripted fixtures)", () => {
+describe("R08 streaming delivery benchmark (valid envelopes, asserted output)", () => {
   for (const spec of FIXTURES) {
-    it(`${spec.name}: ${MEASURED_RUNS} runs — records presenter-intake p95 + throughput`, () => {
-      for (let i = 0; i < WARMUP_RUNS; i += 1) {
-        runOnce(spec, `warm-${i}`);
-      }
+    it(`${spec.name}: content applies, latency recorded (${MEASURED_RUNS} runs)`, () => {
+      // Validity gate FIRST: the presenter must actually apply content.
+      // The terminal complete event REPLACES the assistant message content
+      // with its fullContent ("done"), so the final length is the terminal's
+      // — the streamed tokens are proven applied via the buffered-delta peak
+      // and the applied-event count.
+      const probe = runOnce(spec, `probe-${spec.name}`);
+      expect(probe.messageCount).toBeGreaterThanOrEqual(1); // assistant message exists
+      expect(probe.finalContentLen).toBe("done".length); // terminal content
+      expect(probe.appliedEvents).toBeGreaterThan(0);
+      expect(probe.peakBufferedDeltas).toBeGreaterThan(0); // tokens buffered
+
+      for (let i = 0; i < WARMUP_RUNS; i += 1) runOnce(spec, `warm-${i}`);
       const perEventNs: number[] = [];
+      let peakDeltas = 0;
       let totalApplied = 0;
       const start = Date.now();
       for (let i = 0; i < MEASURED_RUNS; i += 1) {
-        const { intakeNs, applied } = runOnce(spec, `m-${i}`);
-        perEventNs.push(Number(intakeNs / BigInt(buildEvents(spec, "x").length)));
-        totalApplied += applied;
+        const r = runOnce(spec, `m-${i}`);
+        perEventNs.push(...r.intakePerEventNs.map(Number));
+        peakDeltas = Math.max(peakDeltas, r.peakBufferedDeltas);
+        totalApplied += r.appliedEvents;
       }
-      const durationMs = Date.now() - start;
+      const wallMs = Date.now() - start;
       const p95ns = p95(perEventNs);
-      // Machine-readable result line: paste into the ops table §4.
       console.log(
         `[bench] fixture=${spec.name} runs=${MEASURED_RUNS} ` +
-          `events_per_run=${buildEvents(spec, "x").length} ` +
-          `p95_presenter_intake_per_event_ns=${p95ns} ` +
-          `p95_presenter_intake_per_event_ms=${(p95ns / 1e6).toFixed(4)} ` +
-          `applied=${totalApplied} total_wall_ms=${durationMs}`
+          `events_per_run=${buildDetailEvents(spec, "x").length} ` +
+          `p95_presenter_intake_per_event_ms=${(p95ns / 1e6).toFixed(5)} ` +
+          `mean_applied_per_run=${(totalApplied / MEASURED_RUNS).toFixed(0)} ` +
+          `peak_buffered_deltas=${peakDeltas} total_wall_ms=${wallMs}`
       );
+      // Performance guard (budget: ≤20ms p95 per event — a regression trip-
+      // wire, not a tight pass/fail of the µs figures).
+      expect(p95ns / 1e6).toBeLessThan(20);
     });
   }
+
+  it("cancellation fixture: terminal cancelled flushes state promptly", () => {
+    const scheduler = registeringScheduler();
+    const presenter = createWorkspaceStreamPresenter(scheduler.options);
+    const events = buildDetailEvents(
+      {
+        name: "cancel",
+        tokenCount: 10,
+        reasoningEvery: 0,
+        toolCalls: 0,
+        progressBursts: 0,
+      },
+      "cancel-run"
+    );
+    // Apply everything except the terminal, then cancel.
+    for (const event of events.slice(0, -1)) {
+      presenter.applyEvent(event);
+      scheduler.elapse();
+    }
+    presenter.applyEvent({
+      conversationId: "v2-bench-cancel-run",
+      runId: "cancel-run",
+      sequence: events.length,
+      emittedAt: new Date().toISOString(),
+      eventType: "cancelled",
+      payload: {
+        eventType: "cancelled",
+        conversationId: "v2-bench-cancel-run",
+        fullContent: "partial",
+      },
+    });
+    scheduler.elapse();
+    const state = presenter.getState();
+    // The presenter's terminal status IS "cancelled" (runtimeStatus resets to
+    // idle, streamStatus holds the terminal). Both are prompt — no batching
+    // delay on control events.
+    expect(state.streamStatus).toBe("cancelled");
+    expect(state.runtimeStatus).toBe("idle");
+    expect(state.messages.length).toBeGreaterThanOrEqual(1);
+  });
 });
