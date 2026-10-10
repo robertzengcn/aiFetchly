@@ -580,6 +580,11 @@ export class EmailReplyDraftModel extends BaseDb {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      // Review D9.1: single injected clock source for the §9.3 freshness
+      // fence below. Production passes no `now` → wall clock; tests pin it so
+      // the age comparison is deterministic and a slow CI clock cannot let a
+      // stale negative through the 5s window.
+      const now = input.now ?? new Date();
 
       // 0. Forced-freshness fence (FR-031 §9.3) — BEFORE the sibling check.
       // The pre-send detection (step 8) wrote a fresh observation just before
@@ -624,7 +629,7 @@ export class EmailReplyDraftModel extends BaseDb {
           reason: FRESHNESS_STALE,
         };
       }
-      const ageMs = Date.now() - observedAt.getTime();
+      const ageMs = now.getTime() - observedAt.getTime();
       if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
         return {
           status: "precondition_failed",
@@ -1245,6 +1250,14 @@ export interface ClaimSendInput {
    * conditional draft UPDATE + sibling check remain the authority.
    */
   guardId?: number | null;
+  /**
+   * Injected clock source for the §9.3 forced-freshness fence (review D9.1).
+   * Production callers leave this undefined → `new Date()` at the top of the
+   * claim; tests pin it so the fence's age comparison is deterministic. Use
+   * this instead of `Date.now()` so a slow CI clock or real skew cannot let a
+   * stale negative through the 5s window.
+   */
+  now?: Date;
 }
 
 export type ClaimSendResult =

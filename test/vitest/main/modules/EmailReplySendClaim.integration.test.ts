@@ -960,7 +960,6 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
   });
 
   it("no observation on the seed message -> fence fail-closed to freshness_stale (D1a)", async () => {
-    // D1a (adversarial finding #1): a null observation is NOT a green light.
     // The pre-send detection (step 5b) MUST have written a fresh observation
     // before the claim; a null replyNegativeCheckAt means either the detection
     // never ran or its persistence failed silently. Treating that as "fresh"
@@ -992,6 +991,50 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
     expect(draft?.status).toBe("approved");
     const attempts = await attemptModel.listByDraft(seed.draftId);
     expect(attempts).toHaveLength(0);
+  });
+
+  it("injected `now` controls the fence deterministically (review D9.1)", async () => {
+    // The fence must read the injected clock, not Date.now(). Pin `now` to a
+    // fixed instant and an observation 4s before it (inside the 5s window) —
+    // the claim MUST proceed even if real wall-clock time has advanced past
+    // the window (CI slowness / clock skew must not flip the fence). Then
+    // pin `now` 6s past the same observation and assert freshness_stale.
+    // Both directions prove the comparison is `now - observedAt`, never the
+    // ambient wall clock.
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    const observedAt = new Date("2026-01-15T12:00:00.000Z");
+    await writeObservation(msg.id, observedAt);
+
+    // 4s after observation → inside the 5s window → claim proceeds.
+    const freshNow = new Date("2026-01-15T12:00:04.000Z");
+    const freshResult = await draftModel.claimApprovedRevisionForSend({
+      ...claimInputFor(seed, msg.id),
+      now: freshNow,
+    });
+    expect(freshResult.status).toBe("claimed");
+
+    // 6s after the SAME observation → outside the window → freshness_stale,
+    // proving the comparison used freshNow (not the wall clock, which by now
+    // is months past 2026-01-15 and would otherwise always be stale).
+    const staleNow = new Date("2026-01-15T12:00:06.000Z");
+    const msg2 = await seedMessage();
+    const seed2 = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg2.id }
+    );
+    await writeObservation(msg2.id, observedAt);
+    const staleResult = await draftModel.claimApprovedRevisionForSend({
+      ...claimInputFor(seed2, msg2.id),
+      now: staleNow,
+    });
+    expect(staleResult.status).toBe("precondition_failed");
+    if (staleResult.status === "precondition_failed") {
+      expect(staleResult.reason).toBe("freshness_stale");
+    }
   });
 
   it("a sticky positive (replyDetectedAt) within the window -> claim proceeds", async () => {
