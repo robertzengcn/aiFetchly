@@ -49,6 +49,21 @@ export interface AcquireReservationInput {
 }
 
 /**
+ * Detect a unique-constraint collision from a failed guard INSERT.
+ *
+ * better-sqlite3 surfaces SQLite `SQLITE_CONSTRAINT` violations as an `Error`
+ * whose message begins `UNIQUE constraint failed: ...`. TypeORM may wrap it in
+ * a `QueryFailedError` carrying the same message and a `code` field. We match
+ * the project's established convention (`EmailServiceTagRelation.model.ts`):
+ * message-regex on `Error` instances. This is the ONLY insert error class for
+ * which the conditional-acquire recovery path is safe — every other failure
+ * (disk full, DB-locked, connection, schema) must propagate.
+ */
+function isUniqueConstraintInsertError(error: unknown): boolean {
+  return error instanceof Error && /unique constraint/i.test(error.message);
+}
+
+/**
  * Persisted message-level generation/send guard (T07/FR-035, T08/FR-036,
  * technical design §5.2/§8.1/§8.2).
  *
@@ -143,11 +158,18 @@ export class EmailReplyGuardModel extends BaseDb {
           const saved = await manager.getRepository(EmailReplyGuardEntity).save(guard);
           return { status: "acquired", guardId: saved.id };
         } catch (error) {
-          // Unique constraint collision — a concurrent invoker inserted first.
-          // Reread and fall through to the existing-row path below. The error
-          // is logged but the swallow stays: the reread below is the recovery.
+          // Only a unique-constraint collision is recoverable here (a
+          // concurrent invoker inserted first → reread and fall through to
+          // the existing-row path below). Any OTHER insert failure — disk
+          // full, DB-locked, connection error, schema mismatch — must
+          // propagate so the caller surfaces the real failure; swallowing it
+          // would mask a persistent DB error as a transient "another owner is
+          // generating" retry signal (review R-2, adversarial conf 7.0).
+          if (!isUniqueConstraintInsertError(error)) {
+            throw error;
+          }
           console.error(
-            "EmailReplyGuard conditional-acquire insert failed (likely unique collision); rereading:",
+            "EmailReplyGuard conditional-acquire insert collided (unique constraint); rereading:",
             error
           );
         }
