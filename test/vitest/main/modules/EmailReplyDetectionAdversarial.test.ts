@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
 import type {
@@ -653,5 +653,57 @@ describe("EmailReplyDetection adversarial matrix (T04 step 9, §12) — full cha
     expect(result.state).toBe("replied");
     expect(result.source).toBe("mailbox_flag");
   });
+
+  it("deadline abort tears down the in-flight IMAP socket (review D9.2)", async () => {
+    // The Sent-folder `mailboxOpen` hangs forever (a hung/slow IMAP server).
+    // The 15s probe deadline elapses mid-operation; the racer aborts the
+    // AbortController, the ImapEmailReceiveClient's abort listener calls
+    // `client.close()` DURING the in-flight mailboxOpen (not just between
+    // operations), and the probe resolves `probe_timeout`. Without the
+    // listener, the checkpoint-only abortIfSignaled would never fire because
+    // mailboxOpen never returns — the socket would linger until the server
+    // responded. Fake timers drive the 15s deadline deterministically.
+    vi.useFakeTimers();
+    try {
+      const message = messageFixture();
+      const fixture: FakeImapFlowFixture = {
+        folders: [
+          inboxFolder([inboxMessage(["\\Seen"])]), // not answered → flag side incomplete
+          // Sent-folder mailboxOpen hangs forever → deadline fires mid-open.
+          sentFolder([]),
+        ],
+        hangOnMailboxOpen: "Sent",
+      };
+      const kit = buildMatrixKit({ message, fixture });
+
+      const probeP = kit.service.detect({ messageId: message.id });
+      // Drain microtasks so the probe enters flight + the racer arms its
+      // setTimeout + the abort listener is attached to the in-flight
+      // connection.
+      await vi.advanceTimersByTimeAsync(0);
+      // Advance past the 15s deadline — the racer aborts the controller, the
+      // listener fires `client.close()` on the hung connection, and the racer
+      // resolves with probe_timeout.
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      const r = await probeP;
+      expect(r.state).toBe("unknown");
+      expect(r.reasonCode).toBe("probe_timeout");
+
+      // The abort listener MUST have called `close()` on the in-flight
+      // connection — that is the whole point of D9.2: tearing down the
+      // socket the instant the deadline elapses, not waiting for the hung
+      // operation to return. The checkpoint-only abortIfSignaled would NOT
+      // have fired here because mailboxOpen never resolved.
+      const conn = kit.imapPort.lastConnection as unknown as {
+        calls: Array<{ method: string }>;
+      } | null;
+      expect(conn).not.toBeNull();
+      const closes = conn!.calls.filter((c) => c.method === "close");
+      expect(closes.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
 });
 

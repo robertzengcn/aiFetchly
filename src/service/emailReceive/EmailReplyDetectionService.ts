@@ -160,15 +160,24 @@ export interface ReplyDetectionImapPort {
     folder: string;
     uidValidity: string;
     uid: string;
+    /**
+     * Review D9.2: when the probe deadline elapses, the caller aborts this
+     * signal; the implementation tears down the in-flight IMAP socket
+     * (`client.close()`) instead of letting it linger until the server
+     * responds.
+     */
+    signal?: AbortSignal;
   }): Promise<RefreshedFlags | null>;
   discoverSentFolders(
-    config: EmailReceiveConnectionConfig
+    config: EmailReceiveConnectionConfig,
+    signal?: AbortSignal
   ): Promise<SentFolder[]>;
   searchReplyHeaders(input: {
     config: EmailReceiveConnectionConfig;
     folder: string;
     originalMessageId: string;
     cap: number;
+    signal?: AbortSignal;
   }): Promise<ReplyHeaderCandidate[] | false>;
 }
 
@@ -532,9 +541,12 @@ export class EmailReplyDetectionService {
       // Race the probe against the deadline. The probe resolves with a
       // result; the deadline-racer resolves with `null` when the budget
       // is exhausted. whichever resolves first wins; the other is
-      // discarded.
+      // discarded. Review D9.2: the racer owns an AbortController and
+      // aborts the signal on timeout so the in-flight IMAP socket is torn
+      // down (`client.close()`) instead of lingering until the server
+      // responds.
       const result = await this.raceProbeAgainstDeadline(
-        () =>
+        (signal) =>
           timedReplyStage(
             "detection",
             (): Promise<ReplyDetectionResult> =>
@@ -543,7 +555,8 @@ export class EmailReplyDetectionService {
                 normalizedConfig,
                 normalizedId,
                 configuredSender,
-                contextHash
+                contextHash,
+                signal
               ),
             { state: "probe" }
           ),
@@ -585,26 +598,43 @@ export class EmailReplyDetectionService {
 
   /**
    * Race a probe promise against the deadline. If the probe resolves first,
-   * return its result. If the deadline elapses first, return `probe_timeout`
-   * and let the probe continue in the background (its eventual resolution is
-   * discarded by the caller — never cached).
+   * return its result. If the deadline elapses first, return `probe_timeout`.
+   *
+   * Review D9.2: on timeout the racer aborts the AbortController, which the
+   * probe passed into every IMAP port call. The port's `abortIfSignaled`
+   * helper calls `client.close()` (immediate socket tear-down) so the
+   * in-flight `mailboxOpen`/`search`/`fetchOne` rejects promptly instead of
+   * lingering until the server responds. The probe's eventual resolution is
+   * discarded by `Promise.race` and never cached. If the probe wins, the
+   * controller is never aborted (the `finally` clears the timer and the
+   * controller is GC'd once the probe settles).
    */
   private async raceProbeAgainstDeadline(
-    probe: () => Promise<ReplyDetectionResult>,
+    probe: (signal: AbortSignal) => Promise<ReplyDetectionResult>,
     deadline: GenerationDeadline
   ): Promise<ReplyDetectionResult> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
     const timeout = new Promise<ReplyDetectionResult>((resolve) => {
       const remaining = deadline.remainingMs();
       // setTimeout clamps to 1ms minimum; a 0 remaining still fires the
       // timeout on the next tick, giving the probe one microtask to win.
-      timeoutId = setTimeout(
-        () => resolve(this.unknown("probe_timeout")),
-        Math.max(1, remaining)
-      );
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        resolve(this.unknown("probe_timeout"));
+      }, Math.max(1, remaining));
     });
+    const probePromise = probe(controller.signal);
+    // Review D9.2: the racer aborts the signal on timeout, the IMAP port's
+    // abort listener calls `client.close()`, and the in-flight IMAP operation
+    // rejects shortly after. By then `Promise.race` has already resolved with
+    // `probe_timeout`; without this no-op catch that late rejection would
+    // surface as an unhandled promise rejection. If the probe WINS the race
+    // (resolves or rejects before the timeout), this catch is inert — the
+    // probe's own resolution flows through `Promise.race` unchanged.
+    probePromise.catch(() => {});
     try {
-      return await Promise.race([probe(), timeout]);
+      return await Promise.race([probePromise, timeout]);
     } finally {
       if (timeoutId !== undefined) {
         clearTimeout(timeoutId);
@@ -733,7 +763,14 @@ export class EmailReplyDetectionService {
     normalizedConfig: EmailReceiveConnectionConfig,
     normalizedId: string,
     configuredSender: string,
-    preProbeContextHash: string
+    preProbeContextHash: string,
+    /**
+     * Review D9.2: abort signal from the deadline racer. When the 15s budget
+     * elapses, the racer aborts this signal; the IMAP port tears down the
+     * in-flight socket (`client.close()`) instead of lingering. Passed to
+     * every port call so an abort between sub-steps also short-circuits.
+     */
+    signal?: AbortSignal
   ): Promise<ReplyDetectionResult> {
     // Config normalization + identity resolution happened in runCachedProbe
     // (the cache key needs the pre-probe context hash, which needs both).
@@ -769,6 +806,7 @@ export class EmailReplyDetectionService {
           folder,
           uidValidity,
           uid,
+          signal,
         });
         if (flags) {
           flagSideComplete = true;
@@ -809,7 +847,8 @@ export class EmailReplyDetectionService {
       message,
       normalizedConfig,
       normalizedId,
-      configuredSender
+      configuredSender,
+      signal
     );
 
     if (sentResult.kind === "replied") {
@@ -927,7 +966,8 @@ export class EmailReplyDetectionService {
     message: EmailReceivedMessageEntity,
     config: EmailReceiveConnectionConfig,
     originalMessageId: string,
-    configuredSender: string
+    configuredSender: string,
+    signal?: AbortSignal
   ): Promise<
     | { kind: "replied"; matchedMessageId: string | null }
     | { kind: "ambiguous" }
@@ -938,7 +978,7 @@ export class EmailReplyDetectionService {
   > {
     let folders: SentFolder[];
     try {
-      folders = await this.imapPort.discoverSentFolders(config);
+      folders = await this.imapPort.discoverSentFolders(config, signal);
     } catch {
       // Auth/permission/connection failures during LIST must NOT collapse to
       // folder absence (§7.2) — propagate as probe_failed (unknown upstream).
@@ -970,6 +1010,7 @@ export class EmailReplyDetectionService {
           folder: f.folder,
           originalMessageId,
           cap: fetchesRemaining,
+          signal,
         });
         if (result === false) {
           // A failed/incomplete search does not collapse to no-matches (§7.2).
@@ -1473,19 +1514,22 @@ class DefaultImapPort implements ReplyDetectionImapPort {
     folder: string;
     uidValidity: string;
     uid: string;
+    signal?: AbortSignal;
   }): Promise<RefreshedFlags | null> {
     return this.client.refreshMessageFlags(input);
   }
   discoverSentFolders(
-    config: EmailReceiveConnectionConfig
+    config: EmailReceiveConnectionConfig,
+    signal?: AbortSignal
   ): Promise<SentFolder[]> {
-    return this.client.discoverSentFolders(config);
+    return this.client.discoverSentFolders(config, signal);
   }
   searchReplyHeaders(input: {
     config: EmailReceiveConnectionConfig;
     folder: string;
     originalMessageId: string;
     cap: number;
+    signal?: AbortSignal;
   }): Promise<ReplyHeaderCandidate[] | false> {
     return this.client.searchReplyHeaders(input);
   }

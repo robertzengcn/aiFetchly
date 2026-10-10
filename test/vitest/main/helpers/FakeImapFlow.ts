@@ -64,6 +64,12 @@ export interface FakeImapFlowFixture {
   readonly listThrows?: Error;
   /** Delay ms for every `fetchOne` (slow fake for deadline tests). */
   readonly fetchDelayMs?: number;
+  /**
+   * Path of a folder whose `mailboxOpen` hangs forever (never resolves) — for
+   * deadline-abort tests. The probe's abort listener must call `close()` to
+   * tear down the in-flight socket; the test asserts `close` was recorded.
+   */
+  readonly hangOnMailboxOpen?: string;
 }
 
 /** Recorded call for assertion in tests. */
@@ -129,6 +135,16 @@ export function fakeImapFlow(
       const folder = fixture.folders.find((f) => f.path === folderPath);
       if (!folder) {
         throw new Error(`FakeImapFlow: folder not found: ${folderPath}`);
+      }
+      if (
+        fixture.hangOnMailboxOpen &&
+        folderPath === fixture.hangOnMailboxOpen
+      ) {
+        // Hang forever — simulates a hung/slow IMAP server. The deadline
+        // racer aborts; the probe's abort listener calls `close()` to tear
+        // down the socket. This await NEVER resolves on its own; the test
+        // releases control via the racer's timeout winning Promise.race.
+        await new Promise<MailboxObject>(() => {});
       }
       return {
         path: folder.path,

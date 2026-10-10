@@ -178,15 +178,20 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     folder: string;
     uidValidity: string;
     uid: string;
+    signal?: AbortSignal;
   }): Promise<RefreshedFlags | null> {
     let client = this.createClient(input.config);
+    let detachAbort: (() => void) | undefined;
     try {
       await client.connect();
+      if (abortIfSignaled(client, input.signal)) return null;
+      detachAbort = attachAbortListener(client, input.signal);
       return await this.refreshFlagsFromConnectedClient(
         client,
         input.folder,
         input.uid,
-        input.uidValidity
+        input.uidValidity,
+        input.signal
       );
     } catch (error) {
       if (!shouldRetryWithImplicitTls(error, input.config)) {
@@ -195,13 +200,18 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       await closeClient(client);
       client = this.createClient(input.config, "implicitTls");
       await client.connect();
+      if (abortIfSignaled(client, input.signal)) return null;
+      detachAbort?.();
+      detachAbort = attachAbortListener(client, input.signal);
       return await this.refreshFlagsFromConnectedClient(
         client,
         input.folder,
         input.uid,
-        input.uidValidity
+        input.uidValidity,
+        input.signal
       );
     } finally {
+      detachAbort?.();
       await closeClient(client);
     }
   }
@@ -220,21 +230,33 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
    * `unknown`, not to folder absence).
    */
   async discoverSentFolders(
-    config: EmailReceiveConnectionConfig
+    config: EmailReceiveConnectionConfig,
+    signal?: AbortSignal
   ): Promise<SentFolder[]> {
     const client = this.createClient(config);
+    let detachAbort: (() => void) | undefined;
     try {
       await client.connect();
-      return await this.discoverSentFoldersFromConnectedClient(client);
+      if (abortIfSignaled(client, signal)) return [];
+      detachAbort = attachAbortListener(client, signal);
+      return await this.discoverSentFoldersFromConnectedClient(client, signal);
     } finally {
+      detachAbort?.();
       await closeClient(client);
     }
   }
 
   private async discoverSentFoldersFromConnectedClient(
-    client: ImapFlowConnection
+    client: ImapFlowConnection,
+    signal?: AbortSignal
   ): Promise<SentFolder[]> {
     const listing = await client.list();
+    // Review D9.2: if the deadline elapsed during `list()`, the abort
+    // listener already tore down the socket; the listing (if it resolved at
+    // all) is stale and must not be trusted as the folder scope. Bail out
+    // here so the caller maps to `sent_folder_unavailable` → unknown, never a
+    // negative built on a partial folder list.
+    if (abortIfSignaled(client, signal)) return [];
 
     const advertised = listing.filter(
       (f) => (f.specialUse ?? "").toLowerCase() === "\\sent"
@@ -272,17 +294,23 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     folder: string;
     originalMessageId: string;
     cap: number;
+    signal?: AbortSignal;
   }): Promise<ReplyHeaderCandidate[] | false> {
     const client = this.createClient(input.config);
+    let detachAbort: (() => void) | undefined;
     try {
       await client.connect();
+      if (abortIfSignaled(client, input.signal)) return false;
+      detachAbort = attachAbortListener(client, input.signal);
       return await this.searchReplyHeadersFromConnectedClient(
         client,
         input.folder,
         input.originalMessageId,
-        input.cap
+        input.cap,
+        input.signal
       );
     } finally {
+      detachAbort?.();
       await closeClient(client);
     }
   }
@@ -291,7 +319,8 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     client: ImapFlowConnection,
     folder: string,
     originalMessageId: string,
-    cap: number
+    cap: number,
+    signal?: AbortSignal
   ): Promise<ReplyHeaderCandidate[] | false> {
     // Open the Sent folder before searching — imapflow requires a selected
     // mailbox before `search`/`fetchOne` (omitting `mailboxOpen` runs the
@@ -301,6 +330,10 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     // via UID longevity — so a UIDVALIDITY change on the Sent folder cannot
     // produce a false positive (§7.2).
     await client.mailboxOpen(folder);
+    // Review D9.2: abort before the search if the deadline elapsed during
+    // mailboxOpen. Returning false (search incomplete) keeps the outcome
+    // unknown — never collapses to no-matches (§7.3).
+    if (abortIfSignaled(client, signal)) return false;
     // substring search on both threading headers — exact equality is
     // validated locally from the fetched header block (§7.2).
     const uids = await client.search(
@@ -317,6 +350,11 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     const bounded = uids.slice(0, Math.max(0, cap));
     const candidates: ReplyHeaderCandidate[] = [];
     for (const uid of bounded) {
+      // Review D9.2: check the deadline between candidate fetches — a 200-
+      // candidate probe can take long enough that the deadline elapses mid-
+      // loop. Aborting here tears down the socket instead of fetching the
+      // remaining headers pointlessly.
+      if (abortIfSignaled(client, signal)) return false;
       // Header-only fetch, PEEK semantics — no body, no flag writes.
       const msg = await client.fetchOne(
         uid,
@@ -345,7 +383,8 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     client: ImapFlowConnection,
     folder: string,
     uid: string,
-    expectedUidValidity: string
+    expectedUidValidity: string,
+    signal?: AbortSignal
   ): Promise<RefreshedFlags | null> {
     const mailbox = await client.mailboxOpen(folder);
     // UIDVALIDITY guard (§5.1): a UID is only valid within its namespace. If
@@ -358,6 +397,9 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     ) {
       return null;
     }
+    // Review D9.2: abort before the fetch if the probe deadline elapsed during
+    // mailboxOpen. The client is already closed by abortIfSignaled.
+    if (abortIfSignaled(client, signal)) return null;
 
     const msg = await client.fetchOne(
       Number(uid),
@@ -529,6 +571,69 @@ async function closeClient(client: ImapFlowConnection): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * If the probe's deadline has elapsed, immediately tear down the IMAP socket
+ * (review D9.2). `close()` is the abort path — it destroys the streamer and
+ * clears tracked throttle/await timers, so an in-flight `mailboxOpen`/
+ * `search`/`fetchOne` rejects promptly instead of lingering until the server
+ * responds. `logout()` (used by {@link closeClient}) is the GRACEFUL close
+ * path; on deadline abort we want the immediate one. Closing an already-closed
+ * client is a safe no-op. Returns true when the caller should bail out and
+ * surface an incomplete result (the detector maps it to `probe_timeout`).
+ */
+function abortIfSignaled(
+  client: ImapFlowConnection,
+  signal?: AbortSignal
+): boolean {
+  if (!signal?.aborted) return false;
+  try {
+    client.close();
+  } catch {
+    /* already closing — the finally's closeClient is a no-op on a closed socket */
+  }
+  return true;
+}
+
+/**
+ * Attach an abort listener that tears down the IMAP socket the INSTANT the
+ * deadline racer aborts (review D9.2). {@link abortIfSignaled} checkpoints fire
+ * BETWEEN operations (after `connect`, after `mailboxOpen`, between fetches);
+ * this listener fires DURING an in-flight `mailboxOpen`/`search`/`fetchOne`,
+ * so a slow or hung server cannot keep the probe's socket alive past the
+ * deadline. `client.close()` destroys the streamer and clears tracked timers,
+ * causing the in-flight operation's promise to reject promptly.
+ *
+ * Returns a detach function (call in `finally` to release the closure holding
+ * `client`); `undefined` when there is no signal to watch. If the signal is
+ * already aborted, closes immediately and returns `undefined` — the caller's
+ * checkpoint will surface the incomplete result.
+ */
+function attachAbortListener(
+  client: ImapFlowConnection,
+  signal?: AbortSignal
+): (() => void) | undefined {
+  if (!signal) return undefined;
+  if (signal.aborted) {
+    try {
+      client.close();
+    } catch {
+      /* already closing */
+    }
+    return undefined;
+  }
+  const onClose = (): void => {
+    try {
+      client.close();
+    } catch {
+      /* already closing — the finally's closeClient is a no-op on a closed socket */
+    }
+  };
+  signal.addEventListener("abort", onClose, { once: true });
+  return (): void => {
+    signal.removeEventListener("abort", onClose);
+  };
 }
 
 export function buildImapFlowOptions(
