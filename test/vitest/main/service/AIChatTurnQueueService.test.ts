@@ -29,7 +29,7 @@ import {
   AIChatTurnQueueError,
   createSteeringPromoter,
   type AIChatTurnQueueEngine,
-  type AIChatQueueLease,
+  type AIChatQueueTurnDispatch,
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import {
@@ -80,26 +80,6 @@ function makeEngineStub() {
   const engine: AIChatTurnQueueEngine = {
     getConversationRuntimeStatus: (id: string) =>
       (statuses.get(id) as never) ?? "idle",
-    submitPersistedUserMessage: vi.fn(
-      async (
-        input: Parameters<
-          AIChatTurnQueueEngine["submitPersistedUserMessage"]
-        >[0]
-      ) => {
-        submitted.push({
-          conversationId: input.savedUser.conversationId,
-          modelContent: input.modelContent,
-        });
-        if (nextSubmit) {
-          return await nextSubmit.promise;
-        }
-        return {
-          type: "completed",
-          conversationId: input.savedUser.conversationId,
-          assistantMessageId: "a1",
-        } as AIChatTurnTerminalEvent;
-      }
-    ),
     reserveSteering: vi.fn(() => reserveResult as never),
     cancelSteeringReservation: vi.fn(),
     commitSteering: vi.fn(() => commitResult),
@@ -128,27 +108,39 @@ function makeService(
   Object.assign(stub, engineOverrides ?? {});
   const module = new AIChatPendingMessageModule(fakePrep());
   const events: AIChatPendingMessageEvent[] = [];
-  let leaseEnabled = true;
+  // Stage A §3.4: drained rows dispatch through the execution owner seam.
+  // The dispatcher shares the engine stub's submitted/nextSubmit handles so
+  // existing drain tests keep driving turn outcomes through setNextSubmit.
+  let nextSubmit: Deferred<AIChatTurnTerminalEvent> | null = null;
+  const dispatchQueuedTurn = async (
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatTurnTerminalEvent> => {
+    stub.submitted.push({
+      conversationId: input.savedUser.conversationId,
+      modelContent: input.modelContent,
+    });
+    if (nextSubmit) {
+      return await nextSubmit.promise;
+    }
+    return {
+      type: "completed",
+      conversationId: input.savedUser.conversationId,
+      assistantMessageId: input.assistantMessageId,
+    } as AIChatTurnTerminalEvent;
+  };
+  stub.setNextSubmit = (d: Deferred<AIChatTurnTerminalEvent> | null) => {
+    nextSubmit = d;
+  };
   const service = new AIChatTurnQueueService({
     engine: stub.engine,
     pendingModule: module,
     eventSink: { emit: (e) => events.push(e) },
-    streamSinkFactory: () => ({ emit: () => undefined }),
-    tryAcquireLease: ((): AIChatQueueLease | null =>
-      leaseEnabled ? { release: () => undefined } : null) as never,
+    dispatchQueuedTurn,
     isAiEnabled: () => true,
     isQueueEnabled: () => true,
     isSteeringEnabled: () => true,
   });
-  return {
-    service,
-    module,
-    events,
-    stub,
-    setLeaseEnabled(value: boolean) {
-      leaseEnabled = value;
-    },
-  };
+  return { service, module, events, stub };
 }
 
 beforeEach(async () => {
@@ -165,6 +157,12 @@ beforeEach(async () => {
       }
     }
   }
+  // NOTE: do NOT re-seed/re-init here. Vitest runs multiple files per fork
+  // worker; destroy+re-init churn leaks a destroyed instance window into
+  // sibling DB files in the same worker (cross-file "No metadata" /
+  // "database is locked" flakes in the main gate). The destroy-only hook is
+  // the dev-proven behavior; the serial-service flake it occasionally shows
+  // is shared-DB contention, not a suite defect.
 });
 
 describe("AIChatTurnQueueService submit + drain", () => {
@@ -393,29 +391,73 @@ describe("AIChatTurnQueueService submit + drain", () => {
     expect(stub.submitted[0].modelContent).toBe("B");
   });
 
-  it("lease busy releases the claim back to queued without dispatching", async () => {
-    const { service, stub, setLeaseEnabled } = makeService();
-    setLeaseEnabled(false);
-    await service.submit({
+  it("execution-owner busy (race) releases the claim back to queued without dispatching", async () => {
+    const { service, module, stub } = makeService();
+    const statuses = stub.statuses;
+    void statuses;
+    void module;
+    // Simulate the admission race: the owner reports conversation_busy for
+    // the drained row (another turn claimed the conversation first).
+    const originalSubmit = service.submit.bind(service);
+    void originalSubmit;
+    const { AIChatTurnQueueService: Svc } = await import(
+      "@/service/AIChatTurnQueueService"
+    );
+    const busyService = new Svc({
+      engine: stub.engine,
+      pendingModule: new AIChatPendingMessageModule(fakePrep()),
+      eventSink: { emit: () => undefined },
+      dispatchQueuedTurn: () =>
+        Promise.resolve({
+          type: "conversation_busy",
+          conversationId: "v2-lease",
+        } as AIChatTurnTerminalEvent),
+      isAiEnabled: () => true,
+      isQueueEnabled: () => true,
+      isSteeringEnabled: () => true,
+    });
+    await busyService.submit({
       clientRequestId: "cr-lease",
       request: { message: "A", conversationId: "v2-lease" },
     });
     await vi.waitFor(async () => {
-      const views = await service.list("v2-lease");
+      const views = await busyService.list("v2-lease");
       return views[0]?.status === "queued";
     });
     expect(stub.submitted.length).toBe(0);
+    // Quiesce the busy→release→re-drain chain this test triggers: the row
+    // is released back to queued, the drain re-fires, re-gets busy, and so
+    // on. Wait until a full drain attempt settles with the row STILL queued
+    // (no DB writes in flight) so the next test inherits no chain.
+    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(async () => {
+      const before = await busyService.list("v2-lease");
+      await new Promise((r2) => setTimeout(r2, 30));
+      const after = await busyService.list("v2-lease");
+      return (
+        before[0]?.status === "queued" &&
+        after[0]?.status === "queued" &&
+        before[0]?.updatedAt === after[0]?.updatedAt
+      );
+    });
   });
 
   it("AI-disabled drain holds the queue durably", async () => {
     const { service } = makeService();
-    await service.submit({
+    // forceQueue: no drain fires at submission (the scenario under test is
+    // the DISABLED drain path, so triggering a healthy one only invites
+    // interference from prior tests' leaked chains).
+    const submitted = service.submit({
       clientRequestId: "cr-hold",
       request: { message: "A", conversationId: "v2-hold" },
+      forceQueue: true,
     });
-    // Force a paused-ish state by disabling AI then submitting again:
-    // simpler — directly pause via model like resume test, then verify
-    // resume with AI disabled keeps rows paused.
+    // Force lazy DataSource init with a read (destroy-only beforeEach
+    // leaves initialization to the first model call; a write racing that
+    // lazy init is what produced "No metadata" / "database is locked" in
+    // the main-config fork). Then pause — the durable hold under test.
+    await service.list("v2-hold");
+    await submitted;
     await service["deps"]["pendingModule"]
       .getModel()
       .pauseConversationQueued("v2-hold", "user_stopped");
@@ -696,8 +738,12 @@ describe("AIChatTurnQueueService gating", () => {
       engine: makeEngineStub().engine,
       pendingModule: module,
       eventSink: { emit: () => undefined },
-      streamSinkFactory: () => ({ emit: () => undefined }),
-      tryAcquireLease: () => null,
+      dispatchQueuedTurn: () =>
+        Promise.resolve({
+          type: "completed",
+          conversationId: "v2-off",
+          assistantMessageId: "a1",
+        } as AIChatTurnTerminalEvent),
       isAiEnabled: () => true,
       isQueueEnabled: () => false,
       isSteeringEnabled: () => true,

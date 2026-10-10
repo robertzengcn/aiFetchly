@@ -6,7 +6,6 @@ import {
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
-import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import {
   AI_CHAT_MESSAGE_QUEUE_ENABLED,
   AI_CHAT_MESSAGE_STEERING_ENABLED,
@@ -77,8 +76,10 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
-import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import {
+  getQueueTurnDispatcher,
+  getRunOwnerResumeRouter,
+} from "@/service/aiChatWorkspaceRuntime";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -197,6 +198,15 @@ export function createQueryLoop(): AIChatQueryLoop {
     // budget-checked immediately before streamChatCompletion (FR-04/FR-08,
     // AC-11/AC-16). Never omit this service on a production path.
     requestBudgetService: new AIChatRequestBudgetService(),
+    // Stage B §5.1: native provider iteration is the loop's preferred seam;
+    // the callback form remains as the compatibility facade.
+    streamEvents: (request, options) => {
+      const api = new AiChatApi();
+      return api.openAIChatCompletionStreamEvents(
+        applyLocalToolPolicy(request),
+        options
+      );
+    },
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
       return api.openAIChatCompletionStream(
@@ -551,36 +561,15 @@ function isSteeringFeatureEnabled(): boolean {
  * sequence stays monotonic within one turn; the synthetic runId is stable
  * for the turn (the presenter binds runs by opening "start" events).
  */
-let pendingTurnSinkCounter = 0;
-function createBroadcastEventSink(): AIChatQueryEventSink {
-  const broadcaster = AIChatV2EventBroadcaster.getInstance();
-  pendingTurnSinkCounter += 1;
-  const adapter = new AIChatRunEventAdapter(
-    `pending-queue-${pendingTurnSinkCounter}`,
-    "" // per-chunk: the envelope id is overridden below (chunks carry it)
-  );
-  const routeDetail = (chunk: ChatV2StreamChunk): void => {
-    if (!chunk.conversationId) return;
-    // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
-    // the chunk's real conversation here — the router only delivers events
-    // whose conversation matches the window's selection.
-    sharedWorkspaceEventRouter.sendDetailEvent({
-      ...adapter.wrap(chunk),
-      conversationId: chunk.conversationId,
-    });
-  };
-  return createChatV2StreamSink({
-    sendChunk: (chunk) => {
-      broadcaster.emitStreamChunk(chunk);
-      routeDetail(chunk);
-    },
-    sendComplete: (chunk) => {
-      broadcaster.emitStreamComplete(chunk);
-      routeDetail(chunk);
-    },
-  });
-}
-
+/**
+ * Stage A §3.4 (generator-streaming PRD FR-004/005): queue-drained turns no
+ * longer stream through a broadcast sink with synthetic `pending-queue-N`
+ * run IDs — the coordinator executes them as durable runs (run identity,
+ * scheduler, lease, monotonic sequence, waiting/terminal accuracy identical
+ * to a direct send). The coordinator is registered in the shared runtime
+ * holder by the workspace IPC layer; this file cannot import that module
+ * without a static cycle.
+ */
 export function getQueueService(): AIChatTurnQueueService {
   if (!queueService) {
     const pendingModule = new AIChatPendingMessageModule();
@@ -591,13 +580,20 @@ export function getQueueService(): AIChatTurnQueueService {
         emit: (event) =>
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
       },
-      streamSinkFactory: () => createBroadcastEventSink(),
-      tryAcquireLease: ({ conversationId }) =>
-        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
-          conversationId,
-          owner: "interactive",
-          ownerId: "pending-queue",
-        }),
+      dispatchQueuedTurn: (input) => {
+        const dispatcher = getQueueTurnDispatcher();
+        if (!dispatcher) {
+          log.error(
+            "[ai-chat-queue] no execution owner registered — failing drained turn honestly"
+          );
+          return Promise.resolve({
+            type: "failed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+          });
+        }
+        return dispatcher.dispatchQueuedTurn(input);
+      },
       isAiEnabled: () => canUseChat().ok,
       isQueueEnabled: isQueueFeatureEnabled,
       isSteeringEnabled: isSteeringFeatureEnabled,
@@ -1239,6 +1235,18 @@ function handleStop(data?: unknown): void {
   } else {
     registry.clearAll();
   }
+  // Review F1 (FR-008/024): route Stop through the run's owner when the
+  // coordinator owns the conversation — a raw engine stop leaves the parked
+  // run's terminal dropped outside any live dispatch (the run row wedges in
+  // awaiting_* and the busy queue never drains). Non-coordinator turns keep
+  // the engine-internal path.
+  if (
+    conversationId !== undefined &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    void getRunOwnerResumeRouter()!.cancelOwnedRun(conversationId);
+    return;
+  }
   getQueryEngine().stopActiveTurn(conversationId);
 }
 
@@ -1281,6 +1289,9 @@ export async function handleResumeToolAfterPermission(
   // the paused turn for this conversation + toolId, route the grant directly
   // to it instead of the interactive singleton engine. The scheduled engine
   // parked the turn and is the only one that can resume it.
+  // Review F1 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's cancel — the engine's deny wrapper re-executes outside the
+  // owner's lease/capacity and its continuation is unobserved.
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1295,6 +1306,20 @@ export async function handleResumeToolAfterPermission(
     }
   }
 
+  // Stage A §3.5 (FR-024): permission resume re-enters through the run's
+  // owner (claim → queued → scheduler capacity → lease → observed outcome)
+  // when the workspace coordinator owns the conversation. Non-coordinator
+  // turns (legacy V2 send, scheduled) keep the engine-internal path.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
@@ -1341,6 +1366,33 @@ export async function handleDenyToolPermission(
       ? parsed.conversationId
       : undefined;
 
+  // R01 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's validated cancel — resumeRun's claim validation rejects a stale
+  // tool id, so deny first tries a matching pending action and falls back to
+  // cancellation (the documented deny policy) only when the run is owned.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const validated = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    if (validated.ok) {
+      // The action existed and a resume was queued — convert it to a deny:
+      // cancel the now-queued resume before the tool starts.
+      const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+        conversationId
+      );
+      return ok({ ok: cancelled, handled: true });
+    }
+    // Stale/duplicate deny on an owned run: cancel under the documented
+    // deny-equals-stop policy (idempotent when already terminal).
+    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+      conversationId
+    );
+    return ok({ ok: cancelled, handled: true });
+  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1667,6 +1719,18 @@ async function handleAnswerQuestion(
     return denied("answers payload is invalid");
   }
 
+  // Stage A §3.5 (FR-024): plan answers re-enter through the run's owner.
+  if (getRunOwnerResumeRouter()?.ownsConversation(parsed.conversationId) === true) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId: parsed.conversationId,
+      action: {
+        kind: "answer",
+        questionId: parsed.questionId,
+        answers: parsed.answers,
+      },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,

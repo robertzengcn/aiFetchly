@@ -58,6 +58,12 @@ export interface ToolExecutionView {
    * the just-approved output must stay visible.
    */
   readonly permissionResumed?: boolean;
+  /**
+   * Stage A §3.3 (FR-006): a REQUIRED persistence write failed for this tool
+   * call — the card renders the localized "not run: could not be saved" /
+   * "result not saved" failure and never shows running or success.
+   */
+  readonly persistFailure?: "tool_call_persist_failed" | "tool_result_persist_failed";
 }
 
 export interface ToolExecutionGroupView {
@@ -182,16 +188,21 @@ export function buildToolExecutionGroups(
     if (message.messageType === MessageType.TOOL_CALL) {
       const toolCallId = metadata?.toolCallId?.trim() || null;
       const owner = assistantOwnerFor(messages, i);
+      const persistFailure = metadata?.toolPersistFailure;
       const view: ToolExecutionView = {
         key: toolCallId ? `exec-${toolCallId}` : `legacy-call-${message.id}`,
         assistantMessageId: owner,
         toolCallId,
         toolName: metadata?.toolName ?? "",
-        status: "running",
+        // Stage A §3.3 (FR-006): a required-persistence failure marks the
+        // card failed — the tool never ran (call failed) or its result was
+        // never stored; it must never show running or success.
+        status: persistFailure ? "failed" : "running",
         argumentsPreview: boundedArguments(metadata?.toolArguments),
-        outputKind: "summary",
-        isError: false,
+        outputKind: persistFailure ? "error" : "summary",
+        isError: persistFailure !== undefined,
         isLegacyUnpaired: !toolCallId,
+        ...(persistFailure ? { persistFailure } : {}),
         // FR-042: read persisted toolProgress metadata (applied by the
         // presenter from live tool_progress events) so the evolving row
         // shows progress without a separate liveEvents overlay.

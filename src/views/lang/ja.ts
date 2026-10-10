@@ -3696,6 +3696,10 @@ export default {
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
+      toolPersistFailure: {
+        toolCallNotSaved: "ツールは実行されませんでした：保存に失敗しました。",
+        toolResultNotSaved: "ツールは実行されましたが、結果を保存できませんでした。",
+      },
     },
     plan: {
       version: "バージョン",

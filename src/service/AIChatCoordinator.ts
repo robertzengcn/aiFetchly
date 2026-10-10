@@ -2,9 +2,21 @@ import { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+import { userSafeError } from "@/service/AIChatErrorMapper";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
-import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
-import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import type {
+  AIChatPendingClaim,
+  AIChatQuerySubmitInput,
+} from "@/service/AIChatQueryEngine";
+import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  AIChatQueryEventSink,
+  AIChatSegmentOutcome,
+  AIChatTurnLifecycleListener,
+} from "@/service/AIChatQueryEvents";
+import type { AIChatQueueTurnDispatch } from "@/service/AIChatTurnQueueService";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
@@ -25,7 +37,49 @@ import type {
 
 /** Structural engine view the coordinator depends on (DI-friendly). */
 export interface CoordinatorEngine {
-  submitMessage(input: AIChatQuerySubmitInput): Promise<void>;
+  /** Outcome-returning entry (generator-streaming PRD FR-022, Stage A1). */
+  runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome>;
+  /** Queue-drained turns execute through the same owner (Stage A §3.4). */
+  submitPersistedUserMessage(input: {
+    readonly eventSink: AIChatQueryEventSink;
+    readonly request: ChatV2StreamRequest;
+    readonly savedUser: {
+      readonly messageId: string;
+      readonly conversationId: string;
+    };
+    readonly modelContent: string;
+    readonly contentParts?: unknown;
+    readonly assistantMessageId?: string;
+    readonly lifecycle?: AIChatTurnLifecycleListener;
+    readonly ownerNotifiesTerminal?: boolean;
+    /** TODO-05: durable-run gate (see AIChatQuerySubmitInput). */
+    readonly onSegmentDurable?: (
+      conversationId: string,
+      outcome: "completed" | "cancelled" | "failed"
+    ) => Promise<void>;
+  }): Promise<AIChatSegmentOutcome>;
+  /** Stage A §3.5 (FR-010/024): owner-driven resume seam. */
+  claimPendingPermission(
+    conversationId: string,
+    toolId: string
+  ): AIChatPendingClaim;
+  claimPendingQuestion(
+    conversationId: string,
+    questionId: string
+  ): AIChatPendingClaim;
+  cancelClaimed(conversationId: string): boolean;
+  resumeClaimed(
+    claim: Extract<AIChatPendingClaim, { status: "claimed" }>,
+    options?: {
+      readonly eventSink?: AIChatQueryEventSink;
+      readonly lifecycle?: AIChatTurnLifecycleListener;
+      /** TODO-05: durable-run gate (see AIChatQuerySubmitInput). */
+      readonly onSegmentDurable?: (
+        conversationId: string,
+        outcome: "completed" | "cancelled" | "failed"
+      ) => Promise<void>;
+    }
+  ): Promise<AIChatSegmentOutcome>;
   stopActiveTurn(conversationId?: string): void;
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
 }
@@ -75,6 +129,37 @@ interface LiveRunState {
    * settleDetachedTerminal instead of the held terminalChunk slot.
    */
   dispatchSettled: boolean;
+  /**
+   * Diagnostic captured when the engine segment ended WITHOUT a classified
+   * outcome (FR-022 / AC-17): the run is finalized failed with
+   * errorCode "unclassified_segment_exit" instead of defaulting to completed.
+   */
+  unclassifiedExitSummary: string | null;
+  /**
+   * Stage A §3.5 (FR-005): the run's event adapter lives in run context (not
+   * a per-dispatch local), so resumed segments continue the SAME monotonic
+   * sequence instead of restarting at 1.
+   */
+  adapter: AIChatRunEventAdapter;
+  /**
+   * Stage A §3.4 (FR-004): queue-drained turn input. Present only when this
+   * run executes a durable pending row via dispatchQueuedTurn.
+   */
+  queueDispatch?: AIChatQueueTurnDispatch;
+  /**
+   * Stage A §3.4: resolves dispatchQueuedTurn's returned promise exactly once
+   * when the segment settles (terminal or parked outcome).
+   */
+  completion?: {
+    resolved: boolean;
+    resolve(outcome: AIChatSegmentOutcome): void;
+  };
+  /**
+   * Stage A §3.5 (FR-024): a claimed permission/plan-question resume waiting
+   * for (or holding) scheduler capacity. Its continuation runs inside
+   * executeDispatch, observed by this owner.
+   */
+  resumeClaim?: Extract<AIChatPendingClaim, { status: "claimed" }>;
 }
 
 const CLIENT_REQUEST_CACHE_MAX = 200;
@@ -178,6 +263,8 @@ export class AIChatCoordinator {
       cancelRequested: false,
       terminalChunk: null,
       dispatchSettled: false,
+      unclassifiedExitSummary: null,
+      adapter: new AIChatRunEventAdapter(run.runId, request.conversationId),
     });
     this.runIndex.set(run.runId, request.conversationId);
     this.startRequests.set(run.runId, {
@@ -225,9 +312,194 @@ export class AIChatCoordinator {
   }
 
   // -------------------------------------------------------------------------
-  // Cancel
+  // Queue-drained turns (Stage A §3.4)
   // -------------------------------------------------------------------------
 
+  /**
+   * Execute one drained pending row as a coordinator-owned run (FR-004/005):
+   * the drained turn gets a durable run identity, the same scheduler, lease,
+   * run context/adapter, and finalization path as a direct send. The queue
+   * keeps FIFO/steering/hold policy only and receives the segment outcome
+   * through the returned promise — no synthetic run IDs ever reach the
+   * workspace detail stream.
+   */
+  async dispatchQueuedTurn(
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatSegmentOutcome> {
+    // A live run or engine turn already owns the conversation (drain raced a
+    // direct send): report busy so the queue re-claims the row.
+    const engineBusy =
+      this.deps.engine.getConversationRuntimeStatus(input.conversationId) !==
+      "idle";
+    if (this.liveRuns.has(input.conversationId) || engineBusy) {
+      return {
+        type: "conversation_busy",
+        conversationId: input.conversationId,
+      };
+    }
+
+    const context = await this.resolveConversationContext(
+      input.conversationId
+    );
+    const run = await this.deps.runModule.createRun({
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    const completion: NonNullable<LiveRunState["completion"]> = {
+      resolved: false,
+      resolve: () => undefined,
+    };
+    const settled = new Promise<AIChatSegmentOutcome>((resolve) => {
+      completion.resolve = (outcome) => {
+        if (completion.resolved) return;
+        completion.resolved = true;
+        resolve(outcome);
+      };
+    });
+    this.liveRuns.set(input.conversationId, {
+      runId: run.runId,
+      conversationId: input.conversationId,
+      status: "queued",
+      workspaceKey: context.workspaceKey,
+      cancelRequested: false,
+      terminalChunk: null,
+      dispatchSettled: false,
+      unclassifiedExitSummary: null,
+      adapter: new AIChatRunEventAdapter(run.runId, input.conversationId),
+      queueDispatch: input,
+      completion,
+    });
+    this.runIndex.set(run.runId, input.conversationId);
+    this.liveUnread.set(input.conversationId, context.unread);
+
+    this.deps.scheduler.submit({
+      runId: run.runId,
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    void this.broadcastRunSummary(input.conversationId, "run_queued");
+    this.pump();
+    return settled;
+  }
+
+  // -------------------------------------------------------------------------
+  // Resume through the run owner (Stage A §3.5)
+  // -------------------------------------------------------------------------
+
+  /** Whether this coordinator owns a live run for the conversation. */
+  ownsConversation(conversationId: string): boolean {
+    return this.liveRuns.has(conversationId);
+  }
+
+  /**
+   * Review F1 (FR-008/009): owner-routed Stop/deny for a run this
+   * coordinator owns (parked or live). Returns whether a run was
+   * cancelled. Deny of a parked permission is semantically the same
+   * cancellation under current policy (existing deny = stop).
+   */
+  async cancelOwnedRun(conversationId: string): Promise<boolean> {
+    if (!this.liveRuns.has(conversationId)) {
+      return false;
+    }
+    const result = await this.cancelRun({ conversationId });
+    return result.cancelled;
+  }
+
+  /**
+   * Re-enter a paused run through its owner (FR-010/024): the pending action
+   * is claimed immediately (idempotently), the run shows queued while it
+   * waits for scheduler capacity, the lease is reacquired before any tool or
+   * model work, and the continuation's outcome is observed like any other
+   * segment — including another pause. Stop while queued for capacity cancels
+   * the claim and finalizes cancelled without starting the approved tool.
+   */
+  async resumeRun(input: {
+    readonly conversationId: string;
+    readonly runId?: string;
+    readonly action:
+      | { readonly kind: "permission"; readonly toolId: string }
+      | {
+          readonly kind: "answer";
+          readonly questionId: string;
+          readonly answers: AskUserQuestionAnswer[];
+        };
+  }): Promise<{ ok: boolean; error?: string }> {
+    const live = this.liveRuns.get(input.conversationId);
+    if (!live) {
+      return {
+        ok: false,
+        error: "No live run owns this conversation.",
+      };
+    }
+    if (input.runId && live.runId !== input.runId) {
+      return { ok: false, error: "Run mismatch for the pending action." };
+    }
+
+    // Persist the plan answer BEFORE claiming (existing semantics): a failed
+    // answer write leaves the pending action intact for a retry.
+    if (input.action.kind === "answer") {
+      try {
+        await new AIChatPlanModule().answerQuestion({
+          conversationId: input.conversationId,
+          questionId: input.action.questionId,
+          answers: input.action.answers,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    const claim =
+      input.action.kind === "permission"
+        ? this.deps.engine.claimPendingPermission(
+            input.conversationId,
+            input.action.toolId
+          )
+        : this.deps.engine.claimPendingQuestion(
+            input.conversationId,
+            input.action.questionId
+          );
+    if (claim.status === "already_claimed") {
+      return { ok: true }; // idempotent duplicate approval
+    }
+    if (claim.status === "not_found") {
+      return {
+        ok: false,
+        error: "No pending action for this run (stale or already consumed).",
+      };
+    }
+
+    live.status = "queued";
+    live.resumeClaim = claim;
+    live.cancelRequested = false;
+    try {
+      await this.deps.runModule.transition(live.runId, "queued");
+    } catch (err) {
+      console.warn(
+        "[ai-chat-workspace] resume queued transition failed for run",
+        live.runId,
+        err
+      );
+    }
+    this.deps.scheduler.submit({
+      runId: live.runId,
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    void this.broadcastRunSummary(input.conversationId, "run_queued");
+    this.pump();
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Cancel
+  // -------------------------------------------------------------------------
   /**
    * Cancel one queued or active run. Idempotent: cancelling a terminal run
    * is a no-op. Queued cancellation removes the entry without starting work;
@@ -262,23 +534,45 @@ export class AIChatCoordinator {
 
     if (this.deps.scheduler.isQueued(live.runId)) {
       this.deps.scheduler.cancelQueued(live.runId);
+      // A claimed resume waiting for capacity is cancelled with its slot:
+      // the approved tool never starts (FR-024).
+      this.deps.engine.cancelClaimed(conversationId);
+      live.resumeClaim = undefined;
       await this.deps.runModule.transition(live.runId, "cancelled");
       this.finalizeAfterTerminal(conversationId, "cancelled");
+      this.deps.router.sendDetailEvent(
+        live.adapter.wrap({
+          eventType: "cancelled",
+          conversationId,
+          fullContent: "",
+        })
+      );
+      // A cancelled queue-drained turn never dispatched: settle its outcome
+      // so the queue stops waiting and holds its rows (FR-023).
+      live.completion?.resolve({
+        type: "cancelled",
+        conversationId,
+        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+      });
       return { cancelled: true };
     }
 
     if (this.deps.scheduler.isActive(live.runId)) {
       live.cancelRequested = true;
+      // Review F2: a dispatched resume may hold an engine claim that
+      // stopActiveTurn cannot see (claimedPending is separate state) —
+      // invalidate it so the tool never executes post-Stop.
+      this.deps.engine.cancelClaimed(conversationId);
       this.deps.engine.stopActiveTurn(conversationId);
       return { cancelled: true };
     }
 
     // Parked (paused) run: dispatch already returned, so the scheduler no
-    // longer tracks it. Ask the engine for the truth — it reports
-    // awaiting_permission/awaiting_user while a turn is parked on a
-    // permission card or plan question. stopActiveTurn emits `cancelled`
-    // through the parked sink, which settleDetachedTerminal settles durably
-    // (this is the deny-a-permission-prompt path).
+    // longer tracks it. The engine reports awaiting_permission/awaiting_user
+    // while a turn is parked on a permission card or plan question. This is
+    // the deny-a-permission-prompt / skip-a-question path: the owner
+    // finalizes cancelled directly (Stage A §3.5) — a claimed-but-undispatched
+    // resume is cancelled without ever starting the approved tool.
     const engineStatus =
       this.deps.engine.getConversationRuntimeStatus(conversationId);
     if (
@@ -286,20 +580,42 @@ export class AIChatCoordinator {
       engineStatus === "awaiting_user"
     ) {
       live.cancelRequested = true;
+      this.deps.engine.cancelClaimed(conversationId);
+      live.resumeClaim = undefined;
       this.deps.engine.stopActiveTurn(conversationId);
-      return { cancelled: true };
-    }
-
-    // Detached RUNNING turn (review fix): a permission grant / question
-    // answer resumed the engine turn AFTER executeDispatch returned, so the
-    // scheduler entry is already released — the isActive check above misses
-    // it and the resumed tool/model would be uncancellable. Route it through
-    // the same detached path; the engine's `cancelled` terminal settles via
-    // settleDetachedTerminal.
-    if (engineStatus === "running" && live.dispatchSettled) {
-      live.cancelRequested = true;
-      this.deps.engine.stopActiveTurn(conversationId);
-      return { cancelled: true };
+      let durableCancelled = true;
+      try {
+        await this.deps.runModule.transition(live.runId, "cancelled");
+      } catch (err) {
+        durableCancelled = false;
+        console.error(
+          "[ai-chat-workspace] parked-cancel transition FAILED for run",
+          live.runId,
+          err
+        );
+        // R03 (FR-007/017): the durable cancel did NOT commit. Report the
+        // failure honestly and KEEP ownership — the run stays awaiting_* so
+        // restart reconciliation is the authority; dropping ownership here
+        // would let the next send race a row still marked waiting.
+        void this.broadcastRunSummary(conversationId, "run_interrupted");
+      }
+      if (durableCancelled) {
+        this.finalizeAfterTerminal(conversationId, "cancelled");
+        this.deps.router.sendDetailEvent(
+          live.adapter.wrap({
+            eventType: "cancelled",
+            conversationId,
+            fullContent: "",
+          })
+        );
+        live.completion?.resolve({
+          type: "cancelled",
+          conversationId,
+          assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+        });
+        return { cancelled: true };
+      }
+      return { cancelled: false };
     }
 
     return { cancelled: false };
@@ -349,7 +665,11 @@ export class AIChatCoordinator {
   ): Promise<void> {
     const live = this.liveRuns.get(conversationId);
     if (!live || live.runId !== runId) {
-      // Stale dispatch target (e.g. cancelled between pump and execute).
+      // Stale dispatch target (e.g. cancelled between pump and execute, or a
+      // claimed resume whose run was finalized by a racing Stop): cancel any
+      // orphaned engine claim so a later duplicate approval is rejected
+      // instead of silently acknowledged ("already claimed") without running.
+      this.deps.engine.cancelClaimed(conversationId);
       this.startRequests.delete(runId);
       this.runIndex.delete(runId);
       this.deps.scheduler.complete(runId);
@@ -371,30 +691,146 @@ export class AIChatCoordinator {
       return;
     }
 
+    // Visible to try AND catch (Stage A §3.4 queue-turn completion).
+    const completion = live.completion;
+    // Reset per-segment state: a resumed segment reuses this live entry, so
+    // the previous park's settled/diagnostic flags must not leak into it.
+    live.dispatchSettled = false;
+    live.terminalChunk = null;
+    live.unclassifiedExitSummary = null;
     try {
       await this.deps.runModule.transition(runId, "running");
       live.status = "running";
       void this.broadcastRunSummary(conversationId, "run_started");
 
-      const adapter = new AIChatRunEventAdapter(runId, conversationId);
-      await this.deps.engine.submitMessage({
-        request: this.buildEngineRequest(live),
-        eventSink: this.createRunSink(live, adapter),
-      });
+      // Stage A §3.5 (FR-005): the adapter lives in run context so resumed
+      // segments continue the same monotonic sequence.
+      const adapter = live.adapter;
+      const resumeClaim = live.resumeClaim;
+      live.resumeClaim = undefined;
+      let outcome: AIChatSegmentOutcome;
+      try {
+        const lifecycle = this.createLifecycleListener(live);
+        const eventSink = this.createRunSink(live, adapter);
+        // TODO-05 (FR-023): the durable-run gate the engine awaits between
+        // its durable message writes and its post-terminal side effects.
+        // Terminal→terminal transitions are no-ops under the model's EXPECTED
+        // guards, so executeDispatch's own final transition stays safe.
+        const onSegmentDurable = (
+          gatedConversationId: string,
+          terminal: "completed" | "cancelled" | "failed"
+        ): Promise<void> =>
+          this.deps.runModule
+            .transition(runId, terminal, this.terminalPatchFor(live))
+            .then(() => undefined)
+            .catch((transitionErr: unknown) => {
+              console.error(
+                "[ai-chat-workspace] durable-gate transition FAILED for run",
+                runId,
+                gatedConversationId,
+                transitionErr
+              );
+              // R03 (FR-007/023): REJECT — the engine's post-terminal side
+              // effects (notification, dream, compaction, Stop hook) run only
+              // after the required run-row write committed. The engine's
+              // catch persists a safe failure; executeDispatch's final branch
+              // still attempts its own transition and records the error, and
+              // restart reconciliation remains the authority for the row.
+              throw transitionErr;
+            });
+        if (resumeClaim && !live.cancelRequested) {
+          // Stage A §3.5 (FR-024): the claimed continuation runs inside the
+          // dispatch — lease and capacity are already held at this point —
+          // and its outcome is observed, never fire-and-forget. Review F2:
+          // a Stop that landed between claim and resume must win here — the
+          // approved tool never starts.
+          outcome = await this.deps.engine.resumeClaimed(resumeClaim, {
+            eventSink,
+            lifecycle,
+            onSegmentDurable,
+          });
+        } else if (resumeClaim && live.cancelRequested) {
+          // Review F2 (FR-024): claim invalidated by Stop before resume —
+          // cancel the engine claim and finalize cancelled; the approved
+          // tool never starts.
+          this.deps.engine.cancelClaimed(conversationId);
+          outcome = {
+            type: "cancelled",
+            conversationId,
+            assistantMessageId: resumeClaim.assistantMessageId,
+          };
+        } else if (live.queueDispatch) {
+          outcome = await this.deps.engine.submitPersistedUserMessage({
+            eventSink,
+            request: live.queueDispatch.request,
+            savedUser: live.queueDispatch.savedUser,
+            modelContent: live.queueDispatch.modelContent,
+            ...(live.queueDispatch.contentParts !== undefined
+              ? { contentParts: live.queueDispatch.contentParts }
+              : {}),
+            assistantMessageId: live.queueDispatch.assistantMessageId,
+            lifecycle,
+            ownerNotifiesTerminal: true,
+            onSegmentDurable,
+          });
+        } else {
+          outcome = await this.deps.engine.runTurn({
+            request: this.buildEngineRequest(live),
+            eventSink,
+            lifecycle,
+            ownerNotifiesTerminal: true,
+            onSegmentDurable,
+          });
+        }
+      } catch (err) {
+        // FR-022 / AC-17: a segment that ends without a classified outcome
+        // (engine threw) is recorded as failed with a diagnostic — never
+        // completed. The renderer still learns via a synthesized error event.
+        const message = err instanceof Error ? err.message : String(err);
+        outcome = {
+          type: "failed",
+          conversationId,
+          assistantMessageId: "",
+        };
+        if (!live.terminalChunk) {
+          live.terminalChunk = {
+            eventType: "error",
+            conversationId,
+            // Renderer-safe text: engine-thrown messages may wrap provider
+            // output; every other error path sanitizes via userSafeError.
+            errorMessage: userSafeError(err),
+          };
+        }
+        live.unclassifiedExitSummary = message.slice(0, 500);
+      }
 
-      const terminal = live.terminalChunk;
-      if (!terminal) {
-        // The engine parks a permission/question turn AFTER its last sink
-        // event (the park is engine state, not a chunk), so the in-flight
-        // sampler can miss it. Sampling once more after submitMessage
-        // resolves is race-free: the park happens inside submitMessage's
-        // awaited loop handler.
-        const parked = mapEngineStatus(
-          this.deps.engine.getConversationRuntimeStatus(conversationId)
-        );
-        if (parked === "awaiting_permission" || parked === "awaiting_user") {
-          live.status = parked;
-          live.dispatchSettled = true;
+      // Paused outcomes park the run (FR-009): waiting state comes from the
+      // explicit segment outcome, not from a sampled engine status and not
+      // from the absence of a terminal event. The lifecycle listener's
+      // onAwaiting (FR-021) usually transitioned already — this branch is
+      // the safety net for engines that park without a listener.
+      if (
+        outcome.type === "paused_for_permission" ||
+        outcome.type === "paused_for_plan_question"
+      ) {
+        const parked: ChatRunStatus =
+          outcome.type === "paused_for_permission"
+            ? "awaiting_permission"
+            : "awaiting_user";
+        // The lifecycle listener may have transitioned already (FR-021);
+        // defeat TS's assignment-based narrowing — the listener runs async
+        // relative to this branch.
+        // TODO-06: wait for any in-flight lifecycle write before this
+        // branch's own transition so durable order matches memory order.
+        await (
+          (live as { lifecycleTransitions?: Promise<void> })
+            .lifecycleTransitions ?? Promise.resolve()
+        ).catch(() => undefined);
+        const alreadyParked =
+          (live.status as ChatRunStatus) === parked;
+        live.status = parked;
+        live.dispatchSettled = true;
+        if (!alreadyParked) {
           try {
             await this.deps.runModule.transition(runId, parked);
           } catch (err) {
@@ -410,29 +846,48 @@ export class AIChatCoordinator {
               ? "permission_required"
               : "user_input_required"
           );
-          // Keep the live entry: the parked turn's eventual terminal
-          // (permission-grant resume or deny-stop cancel) routes through
-          // settleDetachedTerminal. The finally block below still releases
-          // the lease and scheduler capacity — the run is parked, not
-          // executing.
-          return;
         }
+        // Keep the live entry: the parked turn's eventual terminal
+        // (permission-grant resume or deny-stop cancel) routes through
+        // settleDetachedTerminal. The finally block below still releases
+        // the lease and scheduler capacity — the run is parked, not
+        // executing. The queue learns the paused outcome now so it holds
+        // its remaining rows (FR-009).
+        completion?.resolve(outcome);
+        return;
       }
-      let finalStatus: ChatRunStatus = live.cancelRequested
-        ? "cancelled"
-        : "completed";
+
+      // R03 (FR-008): Stop-vs-completion arbitration — a Stop accepted while
+      // the segment's durable writes were in flight wins over a completed
+      // outcome the engine already classified. After the final commit below,
+      // a later Stop is a no-op (terminal-immutability).
+      if (outcome.type === "completed" && live.cancelRequested) {
+        outcome = {
+          type: "cancelled",
+          conversationId,
+          assistantMessageId: outcome.assistantMessageId,
+        };
+      }
+      const finalStatus = this.statusForOutcome(outcome);
+      const terminal = live.terminalChunk;
       let errorSummary: string | null = null;
-      if (terminal) {
-        const hint = AIChatRunEventAdapter.statusHintFor(terminal.eventType);
-        if (hint) finalStatus = hint;
-        if (terminal.eventType === "error" && terminal.errorMessage) {
-          errorSummary = terminal.errorMessage.slice(0, 500);
-        }
+      let errorCode: string | undefined;
+      if (outcome.type === "failed" && live.unclassifiedExitSummary) {
+        errorSummary = live.unclassifiedExitSummary;
+        errorCode = "unclassified_segment_exit";
+      } else if (outcome.type === "conversation_busy") {
+        errorSummary = "Conversation became busy before this run dispatched.";
+      } else if (
+        terminal?.eventType === "error" &&
+        terminal.errorMessage
+      ) {
+        errorSummary = terminal.errorMessage.slice(0, 500);
       }
       // Persist terminal state BEFORE routing the terminal detail event or
       // the summary hint (design §5.3 persistence-precedes-terminal-hints).
       await this.deps.runModule.transition(runId, finalStatus, {
         errorSummary,
+        ...(errorCode ? { errorCode } : {}),
       });
       if (
         (finalStatus === "completed" || finalStatus === "cancelled") &&
@@ -449,6 +904,8 @@ export class AIChatCoordinator {
         this.deps.router.sendDetailEvent(adapter.wrap(terminal));
       }
       this.finalizeAfterTerminal(conversationId, finalStatus);
+      // The queue re-drains/holds only after durable finalization (FR-023).
+      completion?.resolve(outcome);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       try {
@@ -464,38 +921,104 @@ export class AIChatCoordinator {
         );
       }
       this.finalizeAfterTerminal(conversationId, "failed");
+      completion?.resolve({
+        type: "failed",
+        conversationId,
+        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+      });
     } finally {
-      lease.release();
-      this.deps.scheduler.complete(runId);
-      this.pump();
+      // TODO-06: the dispatch holds its lease until the last lifecycle-state
+      // write settles — memory and storage agree before capacity frees.
+      const pending = (live as { lifecycleTransitions?: Promise<void> })
+        .lifecycleTransitions;
+      const releaseCapacity = (): void => {
+        lease.release();
+        this.deps.scheduler.complete(runId);
+        this.pump();
+      };
+      if (pending) {
+        void pending.catch(() => undefined).then(releaseCapacity);
+      } else {
+        releaseCapacity();
+      }
+    }
+  }
+
+  /**
+   * Derive the durable run status from the explicit segment outcome only
+   * (generator-streaming PRD FR-022). Completion is never inferred from the
+   * absence of a terminal event; an unexpected busy outcome (admission race)
+   * fails the run honestly rather than reporting success.
+   */
+  /** Error summary for the durable terminal write (shared with final branch). */
+  private terminalPatchFor(live: LiveRunState): {
+    errorSummary: string | null;
+  } {
+    const terminal = live.terminalChunk;
+    if (terminal?.eventType === "error" && terminal.errorMessage) {
+      return { errorSummary: terminal.errorMessage.slice(0, 500) };
+    }
+    return { errorSummary: null };
+  }
+
+  private statusForOutcome(outcome: AIChatSegmentOutcome): ChatRunStatus {
+    switch (outcome.type) {
+      case "completed":
+      case "cancelled":
+      case "failed":
+        return outcome.type;
+      case "paused_for_permission":
+        return "awaiting_permission";
+      case "paused_for_plan_question":
+        return "awaiting_user";
+      case "conversation_busy":
+        // The coordinator admitted this run; an engine-side busy outcome
+        // means the admission raced another owner's turn — never success.
+        return "failed";
     }
   }
 
   /**
    * Run-owned sink: maps engine events to chunks, wraps them with run
-   * identity, routes detail events, and samples engine runtime status on
-   * non-token chunks to observe permission/question pauses (which the engine
-   * exposes as state, not sink events).
+   * identity, routes detail events, and holds terminal chunks until the
+   * durable terminal transition commits. Waiting/resume transitions arrive
+   * through the lifecycle listener (Stage A §3.2, FR-021) — not by sampling
+   * engine status on chunks.
    */
   private createRunSink(
     live: LiveRunState,
     adapter: AIChatRunEventAdapter
   ): AIChatQueryEventSink {
+    // Stage A §3.4: queue-drained turns keep their legacy V2-broadcaster
+    // emissions (other surfaces still subscribe there) — forwarded from the
+    // run sink alongside the workspace detail stream.
+    const legacyBroadcaster = live.queueDispatch
+      ? AIChatV2EventBroadcaster.getInstance()
+      : null;
     const handleChunk = (chunk: ChatV2StreamChunk): void => {
+      if (legacyBroadcaster) {
+        if (isTerminalChunk(chunk)) {
+          legacyBroadcaster.emitStreamComplete(chunk);
+        } else {
+          legacyBroadcaster.emitStreamChunk(chunk);
+        }
+      }
       if (isTerminalChunk(chunk)) {
+        // Stage A §3.5: every resume continuation runs INSIDE a dispatch, so
+        // a terminal arriving while no dispatch is live is a late straggler
+        // (e.g. the engine's deny-stop emit racing an owner-finalized
+        // cancellation). Drop it with a diagnostic — never apply it.
         if (live.dispatchSettled) {
-          // Parked-turn terminal: dispatch already returned (the run paused
-          // on a permission card / plan question), so settle it detached —
-          // this is the permission-grant resume completing, or the deny-stop
-          // cancel.
-          void this.settleDetachedTerminal(live, adapter, chunk);
+          console.warn(
+            "[ai-chat-workspace] dropping terminal chunk outside a live dispatch",
+            { conversationId: live.conversationId, runId: live.runId }
+          );
           return;
         }
         live.terminalChunk = chunk; // routed after the durable transition
         return;
       }
       this.deps.router.sendDetailEvent(adapter.wrap(chunk));
-      this.sampleEngineStatus(live);
     };
     return createChatV2StreamSink({
       sendChunk: handleChunk,
@@ -504,76 +1027,81 @@ export class AIChatCoordinator {
   }
 
   /**
-   * Settle a terminal chunk that arrived after executeDispatch returned —
-   * the paused-turn follow-up (resume completion or deny-stop cancel).
-   * Mirrors executeDispatch's terminal handling: durable transition first,
-   * then the terminal detail event, then finalize/broadcast.
+   * Stage A §3.2 (FR-021): explicit lifecycle notifications replace sampled
+   * engine status. The engine calls onAwaiting exactly once when it parks
+   * the turn and onResumed exactly once when a claimed resume starts
+   * executing. Synchronous, non-throwing: persist the durable run
+   * transition FIRST, then broadcast the summary hint (FR-023).
    */
-  private async settleDetachedTerminal(
-    live: LiveRunState,
-    adapter: AIChatRunEventAdapter,
-    chunk: ChatV2StreamChunk
-  ): Promise<void> {
-    // Guard against stragglers after the run already finalized (the live
-    // entry is removed there, so identity comparison detects it).
-    if (this.liveRuns.get(live.conversationId) !== live) return;
-    try {
-      const hint = AIChatRunEventAdapter.statusHintFor(chunk.eventType);
-      const finalStatus: ChatRunStatus =
-        hint ?? (live.cancelRequested ? "cancelled" : "completed");
-      const errorSummary =
-        chunk.eventType === "error" && chunk.errorMessage
-          ? chunk.errorMessage.slice(0, 500)
-          : null;
-      await this.deps.runModule.transition(live.runId, finalStatus, {
-        errorSummary,
-      });
-      if (
-        (finalStatus === "completed" || finalStatus === "cancelled") &&
-        chunk.fullContent
-      ) {
-        await this.deps.conversationModule.recordMessagePersisted({
-          conversationId: live.conversationId,
-          isResult: finalStatus === "completed",
-          previewText: chunk.fullContent,
-          timestamp: new Date(),
-        });
-      }
-      this.deps.router.sendDetailEvent(adapter.wrap(chunk));
-      this.finalizeAfterTerminal(live.conversationId, finalStatus);
-    } catch (err) {
-      console.error(
-        "[ai-chat-workspace] detached terminal settle failed for run",
-        live.runId,
-        err
+  private createLifecycleListener(
+    live: LiveRunState
+  ): AIChatTurnLifecycleListener {
+    // TODO-06 (FR-021): run-owned transition serialization — every waiting/
+    // resumed write chains onto the previous one, so a fast pause→resume
+    // sequence cannot interleave durable rows, and a failed write surfaces a
+    // classified error instead of silently leaving storage "running" while
+    // memory says "parked".
+    let transitionChain: Promise<void> = Promise.resolve();
+    // R02 (FR-021): the run-owned property must track the CURRENT chain —
+    // assigning only the initial promise meant awaiting it resolved while a
+    // later write was still pending. Every transition updates the property.
+    const setChain = (next: Promise<void>): void => {
+      transitionChain = next;
+      (live as { lifecycleTransitions?: Promise<void> }).lifecycleTransitions =
+        next;
+    };
+    const transitionThenBroadcast = (
+      status: ChatRunStatus,
+      reason: ConversationSummaryEvent["reason"]
+    ): void => {
+      setChain(
+        transitionChain
+          .then(() => this.deps.runModule.transition(live.runId, status))
+          .then(() => {
+            void this.broadcastRunSummary(live.conversationId, reason);
+          })
+          .catch((err: unknown) => {
+            console.error(
+              "[ai-chat-workspace] lifecycle transition FAILED for run",
+              live.runId,
+              status,
+              err
+            );
+            // Failure is explicit, never silent: mark the in-memory state
+            // back to the last durably-known status so the next summary
+            // tells the truth (storage is the authority; restart
+            // reconciliation fixes the row).
+            live.status = "running";
+            void this.broadcastRunSummary(live.conversationId, "run_started");
+          })
       );
-      this.finalizeAfterTerminal(live.conversationId, "failed");
-    }
-  }
-
-  /** Detect awaiting/resume transitions the engine exposes as state. */
-  private sampleEngineStatus(live: LiveRunState): void {
-    const mapped = mapEngineStatus(
-      this.deps.engine.getConversationRuntimeStatus(live.conversationId)
-    );
-    if (!mapped || mapped === live.status) return;
-    live.status = mapped;
-    const reason: ConversationSummaryEvent["reason"] =
-      mapped === "awaiting_permission"
-        ? "permission_required"
-        : mapped === "awaiting_user"
-        ? "user_input_required"
-        : "run_started";
-    // FR-023/037: serialize the durable transition BEFORE broadcasting
-    // the summary hint — persistence must precede terminal hints.
-    void this.deps.runModule
-      .transition(live.runId, mapped)
-      .then(() => {
-        void this.broadcastRunSummary(live.conversationId, reason);
-      })
-      .catch((err) =>
-        console.warn("[ai-chat-workspace] waiting transition failed:", err)
-      );
+    };
+    // Exposed for executeDispatch: the dispatch must not release capacity
+    // while a waiting/resumed transition is still in flight (TODO-06/R02).
+    (live as { lifecycleTransitions?: Promise<void> }).lifecycleTransitions =
+      transitionChain;
+    return {
+      onAwaiting: (event) => {
+        const parked: ChatRunStatus =
+          event.kind === "permission"
+            ? "awaiting_permission"
+            : "awaiting_user";
+        if (live.status === parked) return;
+        live.status = parked;
+        transitionThenBroadcast(
+          parked,
+          event.kind === "permission"
+            ? "permission_required"
+            : "user_input_required"
+        );
+      },
+      onResumed: (event) => {
+        void event;
+        if (live.status === "running") return;
+        live.status = "running";
+        transitionThenBroadcast("running", "run_started");
+      },
+    };
   }
 
   private buildEngineRequest(live: LiveRunState): ChatV2StreamRequest {
@@ -717,17 +1245,4 @@ function isTerminalChunk(chunk: ChatV2StreamChunk): boolean {
     chunk.eventType === "error" ||
     chunk.eventType === "cancelled"
   );
-}
-
-function mapEngineStatus(status: ChatV2RuntimeStatus): ChatRunStatus | null {
-  switch (status) {
-    case "running":
-      return "running";
-    case "awaiting_permission":
-      return "awaiting_permission";
-    case "awaiting_user":
-      return "awaiting_user";
-    default:
-      return null;
-  }
 }

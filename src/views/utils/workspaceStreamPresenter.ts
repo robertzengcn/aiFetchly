@@ -583,6 +583,25 @@ export function createWorkspaceStreamPresenter(
         streamStatus = "error";
         runtimeStatus = "idle";
         errorMessage = str(chunk.errorMessage) ?? "Unknown error";
+        // Stage A §3.3 (FR-006): a required-persistence failure names the
+        // affected tool call — mark its card failed ("not run" / "result
+        // not saved") instead of leaving it running or completed.
+        const persistCode = str(chunk.errorCode);
+        const persistToolCallId = str(chunk.toolCallId);
+        if (
+          (persistCode === "tool_call_persist_failed" ||
+            persistCode === "tool_result_persist_failed") &&
+          persistToolCallId
+        ) {
+          updateMessage(`tool-call-${persistToolCallId}`, (m) => ({
+            ...m,
+            metadata: {
+              ...(m.metadata ?? { source: "chat-v2" as const }),
+              toolPersistFailure: persistCode,
+              toolResultStatus: "error",
+            },
+          }));
+        }
         break;
       }
       case "cancelled": {

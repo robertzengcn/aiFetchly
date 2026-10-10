@@ -353,4 +353,75 @@ describe("workspaceStreamPresenter", () => {
     );
     expect(presenter.getState().streamStatus).toBe("cancelled");
   });
+
+  it("marks the tool card failed when a required-persistence error names the tool call (FR-006)", () => {
+    const scheduler = manualScheduler();
+    const presenter = createWorkspaceStreamPresenter(scheduler.options);
+
+    presenter.applyEvent(
+      event("v2-c", "run-1", { eventType: "start", messageId: "a1" })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "tool_call",
+        messageId: "a1",
+        toolCallId: "tc-persist-1",
+        toolName: "send_email",
+        toolArguments: { to: "x" },
+      })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "error",
+        messageId: "a1",
+        errorMessage: "Required persistence failed (tool_call_persist_failed)",
+        errorCode: "tool_call_persist_failed",
+        toolCallId: "tc-persist-1",
+      })
+    );
+
+    const state = presenter.getState();
+    expect(state.streamStatus).toBe("error");
+    const toolRow = state.messages.find(
+      (m) => m.id === "tool-call-tc-persist-1"
+    );
+    expect(toolRow?.metadata?.toolPersistFailure).toBe(
+      "tool_call_persist_failed"
+    );
+    expect(toolRow?.metadata?.toolResultStatus).toBe("error");
+  });
+
+  it("marks the tool card result-not-saved on tool_result_persist_failed (FR-006)", () => {
+    const scheduler = manualScheduler();
+    const presenter = createWorkspaceStreamPresenter(scheduler.options);
+
+    presenter.applyEvent(
+      event("v2-c", "run-1", { eventType: "start", messageId: "a1" })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "tool_call",
+        messageId: "a1",
+        toolCallId: "tc-persist-2",
+        toolName: "send_email",
+        toolArguments: {},
+      })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "error",
+        messageId: "a1",
+        errorMessage: "Required persistence failed (tool_result_persist_failed)",
+        errorCode: "tool_result_persist_failed",
+        toolCallId: "tc-persist-2",
+      })
+    );
+
+    const toolRow = presenter
+      .getState()
+      .messages.find((m) => m.id === "tool-call-tc-persist-2");
+    expect(toolRow?.metadata?.toolPersistFailure).toBe(
+      "tool_result_persist_failed"
+    );
+  });
 });

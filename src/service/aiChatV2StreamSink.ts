@@ -195,6 +195,9 @@ export function createChatV2StreamSink(
             images: e.images,
             model: e.model,
             finishReason: e.finishReason,
+            ...(e.reasoningContent !== undefined
+              ? { reasoningContent: e.reasoningContent }
+              : {}),
             promptTokens: e.promptTokens,
             completionTokens: e.completionTokens,
             totalTokens: e.totalTokens,
@@ -215,6 +218,11 @@ export function createChatV2StreamSink(
             conversationId: e.conversationId,
             messageId: e.messageId,
             errorMessage: e.errorMessage,
+            // Stage A §3.3 (FR-006): persistence-failure codes + the affected
+            // tool call ride the chunk so the workspace can mark the tool
+            // card "not run / result not saved".
+            ...(e.errorCode !== undefined ? { errorCode: e.errorCode } : {}),
+            ...(e.toolCallId !== undefined ? { toolCallId: e.toolCallId } : {}),
           });
           break;
       }
