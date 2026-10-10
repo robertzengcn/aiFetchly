@@ -184,6 +184,41 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
     expect(wrapper.text()).toContain("Approve existing draft");
   });
 
+  // Review R-5: the inline nextAction copy had drifted from the canonical
+  // nextActionForCode in two ways. After delegating to the service function,
+  // the chip must match the service + AI tool exactly. These two cases pin the
+  // previously-broken mappings so the duplication cannot silently return.
+
+  it("routes already_replied (no draft) to await_human_review, not no_action (review R-5)", async () => {
+    // The inline copy returned no_action here, hiding a confirmed-replied
+    // message with no reusable draft. The service routes to await_human_review
+    // so the operator can locate the existing reply (review R-3 / Fix 2).
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({
+        metadataCode: "already_replied",
+        draftId: null,
+      })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Already replied");
+    expect(wrapper.text()).toContain("Await human review");
+    expect(wrapper.text()).not.toContain("No action needed");
+  });
+
+  it("routes provider_error to discard_and_retry, not no_action (review R-5)", async () => {
+    // The inline copy omitted provider_error from the discard list, so the
+    // chip showed no_action where the service + AI tool say discard_and_retry.
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({
+        metadataCode: "provider_error",
+      })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Discard and retry");
+  });
+
   it("hides the evidence block when the row carries no typed code", async () => {
     const wrapper = mountDetail();
     await flushPromises();

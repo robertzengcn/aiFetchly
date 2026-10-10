@@ -153,6 +153,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { getAutoReplyAuditLog, checkEmailReplied } from "@/views/api/emailreply";
+import { nextActionForCode } from "@/service/emailReply/EmailReplyNextAction";
 import type { AutoReplyAuditDto } from "@/entityTypes/emailReceiveTypes";
 import type { CheckEmailRepliedResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
@@ -208,32 +209,17 @@ const statusColor = computed(() => {
 /**
  * T10 (FR-033): the typed metadata code is the trusted source for the
  * next-action chip (B12 — derive from the typed store, never parse the
- * English reason text).
+ * English reason text). Delegate to the canonical `nextActionForCode` so
+ * the detail page stays in lockstep with the service-layer mapping and
+ * the AI tool's next-action hint — never duplicate the code→action table
+ * here (review R-5: the inline copy had drifted, omitting `provider_error`
+ * from the discard list and `already_replied` (no draft) from the
+ * await_human_review list, so the chip showed `no_action` where the
+ * service says `discard_and_retry` / `await_human_review`).
  */
-const nextAction = computed(() => {
-  const code = audit.value?.metadataCode;
-  const draftId = audit.value?.draftId ?? undefined;
-  if (!code) return "no_action";
-  if (code === "already_replied" && draftId) return "approve_existing_draft";
-  if (
-    code === "needs_human_review" ||
-    code === "delivery_unknown" ||
-    code === "reply_state_unknown" ||
-    code === "reply_state_conflict" ||
-    code === "unsupported_protocol" ||
-    code === "missing_message_id" ||
-    code === "receive_unavailable" ||
-    code === "sent_folder_unavailable" ||
-    code === "ambiguous_match" ||
-    code === "identity_conflict"
-  ) {
-    return "await_human_review";
-  }
-  if (code === "probe_timeout" || code === "probe_limit_exceeded" || code === "probe_failed") {
-    return "discard_and_retry";
-  }
-  return "no_action";
-});
+const nextAction = computed(() =>
+  nextActionForCode(audit.value?.metadataCode, audit.value?.draftId ?? undefined)
+);
 
 function evidenceColor(code: string): string {
   switch (code) {
