@@ -26,6 +26,27 @@ function okResponse(content: string): OpenAIChatCompletionResponse {
   } as OpenAIChatCompletionResponse;
 }
 
+/** Response whose content was cut mid-generation by the model's output cap. */
+function lengthTruncatedResponse(content: string): OpenAIChatCompletionResponse {
+  return {
+    id: "resp-trunc",
+    object: "chat.completion",
+    created: 0,
+    model: "tiny-model",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content },
+        // Provider signals the output cap stopped generation before a complete
+        // token — exactly the failure mode that produces "Unterminated string
+        // in JSON at position 2571" in the production log.
+        finish_reason: "length",
+      },
+    ],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  } as OpenAIChatCompletionResponse;
+}
+
 function baseInput(
   overrides?: Partial<SectionSummarizeDispatchInput>
 ): SectionSummarizeDispatchInput {
@@ -87,5 +108,58 @@ describe("AIChatSummarizeDispatch", () => {
       )
     ).resolves.toBe("{}");
     expect(completeChat).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: a section summary whose JSON was truncated mid-string by the
+  // model's output cap produced "Unterminated string in JSON at position 2571"
+  // and the coordinator wasted all 4 bounded attempts asking for "valid JSON"
+  // (schema repair) instead of recognizing length truncation. The provider
+  // signals this case with finish_reason === "length"; the dispatch MUST surface
+  // it as a distinct recoverable error so the coordinator can act on the real
+  // cause (output cap) rather than a phantom schema problem.
+  it("surfaces COMPACTION_OUTPUT_TRUNCATED when the provider signals finish_reason=length", async () => {
+    const completeChat = vi.fn(async () =>
+      lengthTruncatedResponse('{"version":1,"synopsis":"truncated mid-string...')
+    );
+    await expect(
+      dispatchSectionSummarize(baseInput({ completeChat }))
+    ).rejects.toMatchObject({
+      code: "COMPACTION_OUTPUT_TRUNCATED",
+    });
+  });
+
+  it("does not treat a normal stop completion as truncation", async () => {
+    // finish_reason === "stop" with valid JSON must resolve normally even
+    // though the content is short — truncation detection keys off the
+    // provider's finish signal, not the content length.
+    const completeChat = vi.fn(async () => okResponse('{"version":1}'));
+    await expect(
+      dispatchSectionSummarize(baseInput({ completeChat }))
+    ).resolves.toBe('{"version":1}');
+  });
+
+  it("uses the injected model-limit resolver to cap max_tokens (not the 1024 fallback)", async () => {
+    // The production bug: call sites omitted modelLimitResolver, so the budget
+    // service used UNKNOWN_MODEL_FALLBACK_LIMITS (outputLimit 1,024) and capped
+    // the 1,500-token section reserve to 1,024 — too small for CJK-dense
+    // summaries. With a real resolver reporting a 16,384 output limit, the
+    // cap is the 1,500-token reserve itself.
+    const requests: OpenAIChatCompletionRequest[] = [];
+    const completeChat = vi.fn(async (request: OpenAIChatCompletionRequest) => {
+      requests.push(request);
+      return okResponse("{}");
+    });
+    await dispatchSectionSummarize(
+      baseInput({
+        completeChat,
+        modelLimitResolver: () => ({
+          contextLimit: 128_000,
+          outputLimit: 16_384,
+          limitSource: "provider",
+        }),
+      })
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0].max_tokens).toBe(1_500);
   });
 });

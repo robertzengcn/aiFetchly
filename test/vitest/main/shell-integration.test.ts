@@ -5,9 +5,36 @@
  * - T029: grant → execute → tool_result → stream continue
  * - T030: deny → structured error → no process spawned
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { SkillRegistry } from "@/config/skillsRegistry";
+
+// Shell and file tools share one conversation filesystem scope and fail
+// closed without an approved workspace (design §6), so give the integration
+// conversation an approved workspace rooted at a temp directory.
+const WORKSPACE_ROOT = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("node:path") as typeof import("node:path");
+  return fs.mkdtempSync(path.join(os.tmpdir(), "shell-int-ws-"));
+});
+
+vi.mock("@/modules/WorkspaceModule", () => {
+  const getActiveWorkspace = vi.fn().mockResolvedValue({
+    id: 43,
+    conversationId: "test-integration-conv",
+    rootPath: WORKSPACE_ROOT,
+    approvalState: "approved",
+  });
+  return {
+    WorkspaceModule: vi.fn().mockImplementation(() => ({
+      getActiveWorkspace,
+    })),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

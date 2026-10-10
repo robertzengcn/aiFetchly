@@ -105,6 +105,14 @@
               {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
             </button>
           </div>
+          <!-- Skill installation progress card (PRD §22.1): one stable card
+               per installer tool result instead of raw tool JSON. -->
+          <SkillInstallCard
+            v-if="isSkillInstallResult"
+            :snapshot="installSnapshot"
+            :conversation-id="message.conversationId"
+            @updated="(s: import('@/entityTypes/skillInstallationTypes').InstallSnapshot) => (localInstallSnapshot = s)"
+          />
           <AiArtifactCard
             v-if="message.metadata?.artifact"
             :artifact="message.metadata.artifact"
@@ -139,6 +147,64 @@
           </div>
           <div v-if="message.metadata?.summary" class="v2-message__content">
             {{ message.metadata.summary }}
+          </div>
+          <!--
+            Preserved-output state (recoverable large tool results). A storage
+            failure is shown as a preservation state, NEVER as "the tool
+            failed": the command ran, only its output was not kept.
+          -->
+          <div
+            v-if="preservedOutput"
+            class="v2-message__tool-output"
+            data-testid="tool-output-card"
+          >
+            <div class="v2-message__tool-output-state" data-testid="tool-output-state">
+              {{ preservedOutput.stateLabel }}
+            </div>
+            <div class="v2-message__tool-output-meta" data-testid="tool-output-meta">
+              {{ preservedOutput.sizeLabel }}
+            </div>
+            <!--
+              The preview is explicitly labelled as a preview so a small sample
+              is never read as a complete review of the output.
+            -->
+            <div
+              v-if="preservedOutput.preview"
+              class="v2-message__tool-output-preview"
+              data-testid="tool-output-preview"
+            >
+              <div class="v2-message__tool-output-preview-label">
+                {{
+                  t("aiChatV2.toolOutput.preview_label") ||
+                  "Preview only — not the whole result"
+                }}
+              </div>
+              <pre>{{ preservedOutput.preview }}</pre>
+            </div>
+            <div class="v2-message__tool-output-actions">
+              <v-btn
+                size="small"
+                variant="text"
+                data-testid="tool-output-view"
+                @click="onToggleViewer"
+              >
+                {{ t("aiChatV2.toolOutput.view") || "View full result" }}
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="text"
+                data-testid="tool-output-export"
+                @click="onExportPreserved"
+              >
+                {{ t("aiChatV2.toolOutput.export") || "Export result" }}
+              </v-btn>
+            </div>
+            <AiChatToolResultViewer
+              v-if="viewerOpen && preservedOutput.outputId"
+              :conversation-id="String(message.conversationId)"
+              :output-id="preservedOutput.outputId"
+              @close="viewerOpen = false"
+            />
           </div>
           <div
             v-if="batchProgressView"
@@ -490,6 +556,8 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import SkillInstallCard from "./SkillInstallCard.vue";
+import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
 import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
 import {
@@ -497,6 +565,7 @@ import {
   type OutboundBatchCardModel,
 } from "@/views/components/outboundEmail/outboundBatchCardModel";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AiChatToolResultViewer from "./AiChatToolResultViewer.vue";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
@@ -640,6 +709,15 @@ async function onCopy(): Promise<void> {
     copyResetTimer = null;
   }, 2000);
 }
+
+// Clear the pending copy-reset timer when the message bubble unmounts so the
+// callback never touches reactive state of a destroyed component.
+onBeforeUnmount(() => {
+  if (copyResetTimer) {
+    clearTimeout(copyResetTimer);
+    copyResetTimer = null;
+  }
+});
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -816,6 +894,155 @@ function openGeneratedImageFile(image: RenderableGeneratedImage): void {
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
+
+// Skill installation card (PRD §22.1): installer tool results carry an
+// InstallSnapshot. A local override shadows the persisted metadata after
+// in-card actions (approve/secret/cancel) so the card reflects the latest
+// state without rewriting history rows.
+const localInstallSnapshot = ref<InstallSnapshot | null>(null);
+const isSkillInstallResult = computed(
+  () =>
+    String(props.message.metadata?.toolName || "").startsWith(
+      "skill_install_"
+    ) && typeof toolResult.value.sessionId === "string"
+);
+const installSnapshot = computed<InstallSnapshot>(() => {
+  if (localInstallSnapshot.value) return localInstallSnapshot.value;
+  const raw = toolResult.value as unknown as Partial<InstallSnapshot>;
+  return {
+    sessionId: String(raw.sessionId ?? ""),
+    installationId:
+      raw.installationId === null || raw.installationId === undefined
+        ? null
+        : String(raw.installationId),
+    state: (raw.state ?? "requested") as InstallSnapshot["state"],
+    nextAction: (raw.nextAction ?? "resume") as InstallSnapshot["nextAction"],
+    planRevision:
+      raw.planRevision === null || raw.planRevision === undefined
+        ? null
+        : String(raw.planRevision),
+    safeSummary: String(raw.safeSummary ?? ""),
+    recoverable: raw.recoverable !== false,
+    ...(raw.errorCode ? { errorCode: String(raw.errorCode) } : {}),
+  };
+});
+// ---------------------------------------------------------------------------
+// Preserved tool output (recoverable large tool results).
+//
+// The four states the design requires to stay DISTINCT are surfaced separately:
+// what the operation did, what we managed to preserve, whether the producer
+// itself truncated, and whether the preview is complete. A storage failure is
+// reported as an unavailable output while the tool status stays successful,
+// because "the command ran but its output was not saved" is a different fact
+// from "the command failed".
+// ---------------------------------------------------------------------------
+const viewerOpen = ref(false);
+
+interface PreservedOutputView {
+  readonly outputId: string;
+  readonly stateLabel: string;
+  readonly sizeLabel: string;
+  readonly preview: string;
+}
+
+const preservedOutput = computed<PreservedOutputView | null>(() => {
+  const meta = props.message.metadata;
+  if (!meta) return null;
+  const outputs = Array.isArray(meta.toolOutputRefs)
+    ? (meta.toolOutputRefs as Array<Record<string, unknown>>)
+    : [];
+  const preservation = String(meta.toolOutputPreservation ?? "");
+  const hasOutput = outputs.length > 0;
+  // Only surface the card when the result was actually externalized, or when
+  // preservation was attempted and failed (which is worth telling the user).
+  if (!hasOutput && preservation !== "unavailable" && preservation !== "partial") {
+    return null;
+  }
+
+  const first = outputs[0] ?? {};
+  const outputId = typeof first.outputId === "string" ? first.outputId : "";
+  const capturedBytes =
+    typeof first.capturedBytes === "number" ? first.capturedBytes : 0;
+  // Only report the PRODUCER's truncation when an actual descriptor says so.
+  // With no descriptor at all we know nothing about the producer, and claiming
+  // "the tool stopped early" there would invent a fact.
+  const sourceCompleteness =
+    typeof first.sourceCompleteness === "string"
+      ? first.sourceCompleteness
+      : "complete";
+
+  let stateLabel: string;
+  if (!hasOutput) {
+    stateLabel =
+      t("aiChatV2.toolOutput.unavailable") ||
+      "The full output could not be saved";
+  } else if (preservation === "partial") {
+    stateLabel =
+      t("aiChatV2.toolOutput.partial") || "Part of the output was saved";
+  } else {
+    stateLabel = t("aiChatV2.toolOutput.saved") || "Full output saved";
+  }
+  if (hasOutput && sourceCompleteness !== "complete") {
+    stateLabel +=
+      " · " +
+      (t("aiChatV2.toolOutput.source_incomplete") ||
+        "The tool itself stopped early, so this output may be missing content");
+  }
+
+  const sizeLabel = hasOutput
+    ? `${t("aiChatV2.toolOutput.size") || "Saved size"}: ${formatBytes(capturedBytes)}`
+    : "";
+
+  const preview =
+    typeof meta.toolOutputPreview === "string" ? meta.toolOutputPreview : "";
+
+  return { outputId, stateLabel, sizeLabel, preview };
+});
+
+/**
+ * Open the paged viewer, honouring the `ui` rollout flag.
+ *
+ * The flag is resolved by the MAIN process and reported on the descriptor, not
+ * read from the renderer: the renderer has no Token-store access and must not be
+ * the thing enforcing a rollout gate. When the flag is off the button does
+ * nothing rather than opening a viewer the operator disabled - and the old
+ * bounded content plus export are unaffected.
+ */
+async function onToggleViewer(): Promise<void> {
+  const target = preservedOutput.value;
+  if (!target?.outputId) return;
+  if (viewerOpen.value) {
+    viewerOpen.value = false;
+    return;
+  }
+  try {
+    const { getToolOutput } = await import("@/views/api/aiToolResult");
+    const descriptor = await getToolOutput(
+      String(props.message.conversationId),
+      target.outputId
+    );
+    // A missing descriptor means the output is gone or unauthorized; do not
+    // open an empty viewer.
+    if (!descriptor?.viewerEnabled) return;
+    viewerOpen.value = true;
+  } catch {
+    // Descriptor lookup failed: leave the viewer closed rather than showing an
+    // error state in a button that is only supposed to open a panel.
+  }
+}
+
+
+async function onExportPreserved(): Promise<void> {
+  const target = preservedOutput.value;
+  if (!target?.outputId) return;
+  const { exportToolOutput } = await import("@/views/api/aiToolResult");
+  try {
+    await exportToolOutput(String(props.message.conversationId), target.outputId);
+  } catch {
+    // Export failure is reported by the viewer's own error surface; the card
+    // itself must not claim the export succeeded.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Outbound-email batch summary (§18). When the draft_outbound_email_batch tool

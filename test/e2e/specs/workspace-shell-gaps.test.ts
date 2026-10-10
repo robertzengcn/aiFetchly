@@ -85,7 +85,7 @@ test.describe("workspace chooser (acceptance criteria 9/10/12, FR-WS-004)", () =
           /approved/i,
           { timeout: 15_000 }
         );
-        await expect(page.getByTestId("workspace-badge-change")).toBeVisible();
+        await expect(page.getByTestId("workspace-badge-path")).toBeVisible();
       } finally {
         await closeApp(app);
       }

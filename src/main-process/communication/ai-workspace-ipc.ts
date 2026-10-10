@@ -1,8 +1,6 @@
 import { BrowserWindow } from "electron";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
 import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_WORKSPACE_SET,
@@ -13,7 +11,7 @@ import {
   DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { byIdInputSchema, noInputSchema } from "@/schemas/ipc/_shared/common";
 
 // WS-1 R1.5: input schemas (replacing the manual safeParse + typeof checks).
@@ -37,12 +35,15 @@ export function _resetAIWorkspaceSingletonsForTesting(): void {
 }
 
 export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
-  // All handlers are AI-gated + Zod-validated via registerAiValidatedHandler,
-  // which also emits the {status,msg,data} envelope and converts thrown errors
-  // to {status:false,msg}. The renderer reads result.status / result.data —
-  // unchanged from the previous ok()/denied() shape.
+  // Workspace choosing is intentionally NOT AI-gated: picking/listing a
+  // local folder and its DB records involves no hosted-AI call, and users
+  // may point the workspace at their own AI host. The AI file tools that
+  // operate inside the workspace stay gated at their own IPC handlers.
+  // All handlers are Zod-validated via registerValidatedHandler, which
+  // emits the {status,msg,data} envelope and converts thrown errors to
+  // {status:false,msg}. The renderer reads result.status / result.data.
 
-  registerAiValidatedHandler(AI_WORKSPACE_SET, workspaceSetSchema, async (payload) => {
+  registerValidatedHandler(AI_WORKSPACE_SET, workspaceSetSchema, async (payload) => {
     const module = new WorkspaceModule();
     return await module.setWorkspace({
       conversationId: payload.conversationId,
@@ -51,28 +52,28 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
     });
   });
 
-  registerAiValidatedHandler(AI_WORKSPACE_GET, conversationIdSchema, async (payload) => {
+  registerValidatedHandler(AI_WORKSPACE_GET, conversationIdSchema, async (payload) => {
     const module = new WorkspaceModule();
     return await module.getActiveWorkspace(payload.conversationId);
   });
 
-  registerAiValidatedHandler(AI_WORKSPACE_APPROVE, byIdInputSchema, async (payload) => {
+  registerValidatedHandler(AI_WORKSPACE_APPROVE, byIdInputSchema, async (payload) => {
     const module = new WorkspaceModule();
     return await module.approveWorkspace(payload.id);
   });
 
-  registerAiValidatedHandler(AI_WORKSPACE_REVOKE, byIdInputSchema, async (payload) => {
+  registerValidatedHandler(AI_WORKSPACE_REVOKE, byIdInputSchema, async (payload) => {
     const module = new WorkspaceModule();
     return await module.revokeWorkspace(payload.id);
   });
 
-  registerAiValidatedHandler(AI_WORKSPACE_LIST, conversationIdSchema, async (payload) => {
+  registerValidatedHandler(AI_WORKSPACE_LIST, conversationIdSchema, async (payload) => {
     const module = new WorkspaceModule();
     return await module.listWorkspaces(payload.conversationId);
   });
 
-  // Folder picker dialog. Gated on AI enablement per CLAUDE.md.
-  registerAiValidatedHandler(DIALOG_PICK_FOLDER, noInputSchema, async () => {
+  // Folder picker dialog. Local OS dialog — no AI enablement needed.
+  registerValidatedHandler(DIALOG_PICK_FOLDER, noInputSchema, async () => {
     const dialogService = await getNativeDialogService();
     const result = await dialogService.showOpenDialog({
       properties: ["openDirectory"],

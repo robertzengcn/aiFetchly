@@ -16,8 +16,17 @@ export const E2E_ENV = {
   AI_BASE_URL: "AIFETCHLY_E2E_AI_BASE_URL",
   ALLOWED_ORIGINS: "AIFETCHLY_E2E_ALLOWED_ORIGINS",
   USER_DATA_PATH: "ELECTRON_USER_DATA_PATH",
+  /** Tool-output root override (mirror src/service/toolResult/toolResultRoot.ts). */
+  TOOL_OUTPUT_ROOT: "AIFETCHLY_TOOL_OUTPUT_ROOT",
   IS_TEST: "IS_TEST",
   NODE_ENV: "NODE_ENV",
+  // Skill-installation isolation overrides (natural-language-skill-installation):
+  // redirect ~/.aifetchly + staging into the per-run temp root and enable the
+  // installer so E2E never touches real user config or installed skills.
+  SKILL_INSTALL_ENABLED: "AIFETCHLY_SKILL_INSTALL_ENABLED",
+  CONFIG_HOME: "AIFETCHLY_CONFIG_HOME",
+  SKILL_STAGING_ROOT: "AIFETCHLY_SKILL_STAGING_ROOT",
+  SKILL_CREDENTIAL_STORE: "AIFETCHLY_SKILL_CREDENTIAL_STORE",
 } as const;
 
 /** Shared run-root segment the bootstrap requires (mirror E2EEnvironment.ts). */
@@ -31,6 +40,8 @@ export interface E2ETestRoot {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /** Per-test root for preserved tool-output artifacts (mirror of E2EEnvironment). */
+  readonly toolOutputRootPath: string;
   readonly stateFilePath: string;
   readonly networkViolationsPath: string;
   /** Recursively remove the root only after containment validation passes. */

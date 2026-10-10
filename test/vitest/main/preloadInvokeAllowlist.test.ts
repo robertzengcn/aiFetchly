@@ -44,6 +44,17 @@ describe("preload invoke allowlist", () => {
     expect(src).toContain("USER_OPEN_PRICING_PLAN");
   });
 
+  it("allows the preserved tool-result viewer channels", () => {
+    // Same bug class: these handlers are registered in tool-result-ipc.ts and
+    // invoked by AiChatToolResultViewer.vue, but a missing allowlist entry makes
+    // windowInvoke silently return undefined and the viewer show nothing.
+    const src = preloadInvokeWhitelistSource();
+    expect(src).toContain("AI_TOOL_RESULT_GET");
+    expect(src).toContain("AI_TOOL_RESULT_READ");
+    expect(src).toContain("AI_TOOL_RESULT_SEARCH");
+    expect(src).toContain("AI_TOOL_RESULT_EXPORT");
+  });
+
   it("allows UNIFIED_EMAIL_SEND_LOG (unified send-log view reads via invoke)", () => {
     // The unified send-log channel was registered in buckEmail-ipc.ts and
     // invoked by UnifiedEmailSendLogTable via windowInvoke, but was missing

@@ -1,5 +1,6 @@
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { SortBy, ListData } from "@/entityTypes/commonType";
+import type { EmailServiceTagView } from "@/entityTypes/emailmarketingType";
 
 export interface ValidateEmailServiceOptions {
   readonly mode: "create" | "update" | "send";
@@ -101,6 +102,38 @@ export interface EmailServiceModuleInterface {
 
   /** Find an email service by its user-defined tag. */
   findEmailServiceByTag(tagName: string): Promise<EmailServiceEntity | undefined>;
+
+  /**
+   * Find ALL email services sharing a tag (multi-tag: a tag may be attached
+   * to many services). Returns credentials NOT decrypted — list callers only
+   * need identity fields. Prefer this over findEmailServiceByTag when the
+   * caller can handle multiple matches.
+   */
+  findEmailServicesByTag(tagName: string): Promise<EmailServiceEntity[]>;
+
+  /**
+   * Get the tag IDs attached to a service. Returns `[]` when the service has
+   * no tags or does not exist.
+   */
+  getServiceTagIds(serviceId: number): Promise<number[]>;
+
+  /**
+   * Get the full tag views ({id, name}) for a single service.
+   */
+  getTagsForService(serviceId: number): Promise<EmailServiceTagView[]>;
+
+  /**
+   * Batch-load tag views for many services (used by list/export to avoid an
+   * N+1 query per service). Keys with no tags map to an empty array.
+   */
+  getTagsForServices(serviceIds: number[]): Promise<Map<number, EmailServiceTagView[]>>;
+
+  /**
+   * Replace the tag set for a service. Diffs against the current set so
+   * unchanged pairs are preserved (avoids churn in audit/junction rows).
+   * Pass `[]` to clear all tags.
+   */
+  setServiceTags(serviceId: number, tagIds: number[]): Promise<void>;
 
   /**
    * Find email services by host

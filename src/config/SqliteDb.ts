@@ -1,3 +1,4 @@
+import { DB_ENTITIES } from "@/config/dbEntities";
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
@@ -13,6 +14,7 @@ import { EmailFilterTaskRelationEntity } from "@/entity/EmailFilterTaskRelation.
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
+import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
 // import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
 import { EmailMarketingTaskEntity } from "@/entity/EmailMarketingTask.entity";
@@ -98,6 +100,13 @@ import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.en
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
 import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
+import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
+import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
+import { AIToolOutputReservationEntity } from "@/entity/AIToolOutputReservation.entity";
+import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
+import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
+import { AIToolResultProjectionEntity } from "@/entity/AIToolResultProjection.entity";
+import { AIToolOutputBootstrapEntity } from "@/entity/AIToolOutputBootstrap.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
@@ -456,7 +465,22 @@ function normalizeDbDir(filepath: string): string {
 }
 
 function isTestFallbackDir(filepath: string): boolean {
-  return normalizeDbDir(filepath) === getSqliteTestFallbackDir();
+  const normalized = normalizeDbDir(filepath);
+  if (normalized === getSqliteTestFallbackDir()) {
+    return true;
+  }
+  // resolveTestDbPath() (@/config/testDbPath) namespaces the fallback dir per
+  // vitest worker (`aifetchly-test-<VITEST_POOL_ID>`) so concurrent workers
+  // don't share one SQLite file. Recognize those suffixed dirs too — otherwise
+  // the getInstance guard below never fires for them, and any empty-path
+  // BaseDb/BaseModule construction under vitest resets (and fire-and-forget
+  // destroys) the live DataSource mid-test, leaving repositories bound to the
+  // destroyed connection (EntityMetadataNotFoundError on next use).
+  const fallbackParent = path.dirname(getSqliteTestFallbackDir());
+  return (
+    path.dirname(normalized) === fallbackParent &&
+    /^aifetchly-test(-\d+)?$/.test(path.basename(normalized))
+  );
 }
 
 /**
@@ -490,135 +514,7 @@ export class SqliteDb {
       this.connection = new DataSource({
         type: "better-sqlite3",
         database: path.join(filepath, "scraper.db"),
-        entities: [
-          AccountCookiesEntity,
-          SearchTaskEntity,
-          BuckemailTaskEntity,
-          EmailMarketingSendLogEntity,
-          EmailMarketingTaskDetailEntity,
-          EmailSearchResultEntity,
-          EmailSearchResultDetailEntity,
-          EmailSearchTaskEntity,
-          EmailSearchTaskUrlEntity,
-          EmailSearchTaskProxyEntity,
-          //EmailSearchUrlEntity,
-          ExtraModuleEntity,
-          ProxyCheckEntity,
-          ProxyEntity,
-          SearchKeywordEntity,
-          SearchResultEntity,
-          TaskRunEntity,
-          EmailMarketingTaskEntity,
-          SystemSettingGroupEntity,
-          SystemSettingEntity,
-          SystemSettingOptionEntity,
-          // VideoCaptionEntity,
-          // VideoDescriptionEntity,
-          // VideoDownloadEntity,
-          // VideoDownloadTaskEntity,
-          // VideoDownloadTaskAccountsEntity,
-          // VideoDownloadTaskDetailEntity,
-          // VideoDownloadTaskProxyEntity,
-          // VideoDownloadTaskUrlsEntity,
-          // VideoDownloadTagEntity,
-          // VideoDownloadTaskKeywordEntity,
-          SearchTaskProxyEntity,
-          SearchAccountEntity,
-          // VideoPublishRecordEntity,
-          ScheduleTaskEntity,
-          ScheduleExecutionLogEntity,
-          ScheduleDependencyEntity,
-          SchedulerStatusEntity,
-          EmailTemplateEntity,
-          EmailFilterEntity,
-          EmailFilterDetailEntity,
-          EmailTemplateTaskRelationEntity,
-          EmailFilterTaskRelationEntity,
-          EmailServiceEntity,
-          EmailServiceTagEntity,
-          EmailServiceTaskRelationEntity,
-          SocialAccountEntity,
-          YellowPagesTaskEntity,
-          YellowPagesResultEntity,
-          YellowPagesPlatformEntity,
-          SessionRecordingEntity,
-          RAGDocumentEntity,
-          RAGChunkEntity,
-          // RAGModelEntity,
-          AIChatMessageEntity,
-          AIChatAttachmentEntity,
-          AIChatPendingMessageEntity,
-          AIChatConversationEntity,
-          AIChatRunEntity,
-          AIArtifactEntity,
-          VectorEntity,
-          VectorMetadataEntity,
-          MCPToolEntity,
-          TaskEntity,
-          ContactInfoEntity,
-          InstalledSkillEntity,
-          InstalledPluginEntity,
-          PluginMarketplaceEntity,
-          DependencyInstallAuditEntity,
-          ShellAuditEntity,
-          GoogleMapsSearchRecordEntity,
-          YandexMapsSearchRecordEntity,
-          AiMessageTaskEntity,
-          AiMessageTaskRunEntity,
-          ConversationToolStateEntity,
-          EmailReceivedMessageEntity,
-          EmailReplyDraftEntity,
-          EmailReplyIdentityProfileEntity,
-          EmailAutoReplyRuleEntity,
-          EmailReplyAuditLogEntity,
-          EmailAutoReplyAuditLogEntity,
-
-          EmailReplyDraftRevisionEntity,
-          EmailReplyApprovalEntity,
-          EmailReplySendAttemptEntity,
-          OutboundEmailIntentEntity,
-          OutboundEmailDraftBatchEntity,
-          OutboundEmailDraftEntity,
-          OutboundEmailDraftRevisionEntity,
-          OutboundEmailAuditLogEntity,
-          OutboundEmailAuthorizationEntity,
-          OutboundEmailSendAttemptEntity,
-          OutboundEmailDeliveryOutcomeEntity,
-          EmailConversationEntity,
-          EmailReplyKnowledgeScopeEntity,
-          AIChatPlanEntity,
-          AIChatPlanVersionEntity,
-          AIChatPlanQuestionEntity,
-          AIChatPlanApprovalEntity,
-          AIChatGoalEntity,
-          AIChatGoalRunEntity,
-          AIChatGoalEvidenceEntity,
-          AIChatSessionMemoryEntity,
-          AIChatCompactSummaryEntity,
-          AIChatArchiveStateEntity,
-          AIChatArchiveTurnEntity,
-          AIChatArchiveEntryEntity,
-          AIChatCompactionRunEntity,
-          AIChatCompactionSectionEntity,
-          AIChatContextGenerationEntity,
-          AIChatArchiveSearchFragmentEntity,
-          AgentDefinitionEntity,
-          AgentTaskEntity,
-          AgentTaskMessageEntity,
-          AgentToolCallEntity,
-          AIUserMemoryEntity,
-          AIMemoryConsolidationRunEntity,
-          AIWorkspaceMemoryEntity,
-          AIWorkspaceMemoryConsolidationRunEntity,
-          AIWorkspaceMemoryScopeEntity,
-          AIWorkspaceMemoryScopePathEntity,
-          AIWorkspaceMemoryPortableStateEntity,
-          AIWorkspaceMemorySyncAuditEntity,
-          WorkspaceEntity,
-          AIFetchlyWorkspaceTrustEntity,
-          HookConfigEntity,
-          HookAuditEntryEntity,
-        ],
+        entities: DB_ENTITIES,
         synchronize: true,
         migrations: [],
         subscribers: [],
@@ -753,6 +649,7 @@ export class SqliteDb {
       console.log(
         `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${normalized}, resetting instance...`
       );
+
       // Destroy old connection asynchronously (fire and forget)
       // The old instance will be replaced immediately with a new one
       const oldInstance = SqliteDb.instance;

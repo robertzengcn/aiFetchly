@@ -21,6 +21,20 @@ export class PortableWorkspaceMemory1700000000000
   name = "PortableWorkspaceMemory1700000000000";
 
   async up(queryRunner: QueryRunner): Promise<void> {
+    // 2026-10-09 merge guard: on a migrations-only (clean) database this
+    // migration sorts BEFORE the 0000 baseline by timestamp, so
+    // ai_workspace_memories cannot exist yet — the baseline (or
+    // synchronize) creates the full modern schema. Skip silently;
+    // regenerate the baseline before re-arming the packaged-build gate
+    // (see src/config/dbMigrations.ts note).
+    const tableExists = (
+      (await queryRunner.query(
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='ai_workspace_memories'`
+      )) as { n: number }[]
+    )[0]?.n;
+    if (!tableExists) {
+      return;
+    }
     // 1. Scope tables (idempotent CREATE).
     await queryRunner.query(
       `CREATE TABLE IF NOT EXISTS "ai_workspace_memory_scopes" (

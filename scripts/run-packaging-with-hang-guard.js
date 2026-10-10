@@ -161,6 +161,11 @@ function main() {
     // python, make, etc.) instead of only the direct child.
     detached: process.platform !== "win32",
     env: process.env,
+    // On Windows forgeBin resolves to a .cmd shim; Node (>=18.20, the
+    // CVE-2024-27980 fix) throws EINVAL when spawning .cmd/.bat without a
+    // shell. Quote-safe because args contain no shell metacharacters
+    // (fixed package targets only).
+    shell: process.platform === "win32",
   });
 
   let sawCompletionMarker = false;
@@ -170,11 +175,11 @@ function main() {
   let hardTimer = null;
   let stallTimer = null;
   let settled = false;
+  let completionOutputTail = "";
   // Holds the teardown returned by installSignalHandlers(), set once finish()
   // exists. Cleared on finish() so the signal listeners are removed before the
   // guard force-exits (avoids a re-entrant signal re-triggering finish()).
   let removeSignalHandlers = null;
-  let completionOutputTail = "";
 
   function forwardChunk(outStream, chunk) {
     outStream.write(chunk);
@@ -183,9 +188,9 @@ function main() {
     if (sawCompletionMarker) {
       return;
     }
-    completionOutputTail = `${completionOutputTail}${chunk.toString("utf-8")}`.slice(
-      -1024
-    );
+    completionOutputTail = `${completionOutputTail}${chunk.toString(
+      "utf-8"
+    )}`.slice(-1024);
     if (hasCompletedPostPackageHook(completionOutputTail)) {
       sawCompletionMarker = true;
       console.log(
@@ -339,7 +344,7 @@ function main() {
 
 // Exported for tests. `main()` runs only when this file is the entry point
 // (require.main === module), not when it is required by a test.
-module.exports = { installSignalHandlers, hasCompletedPostPackageHook };
+module.exports = { hasCompletedPostPackageHook, installSignalHandlers };
 
 if (require.main === module) {
   main();

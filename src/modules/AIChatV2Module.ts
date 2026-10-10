@@ -12,6 +12,7 @@ import { buildAutoPlanPromptSection } from "@/service/ChatModePromptSection";
 import { AIChatArchiveAppendCoupler } from "@/service/AIChatArchiveAppendCoupler";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type {
   ChatV2ConversationSummary,
@@ -227,11 +228,28 @@ export class AIChatV2Module extends BaseModule {
     turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const toolResult = params.toolResult;
+    // The caller may pass EITHER a legacy full result OR the bounded UI
+    // projection of a saved result (technical design §10.1). Metadata must
+    // never become a second copy of the payload, so a receipt is detected and
+    // stored as descriptors only; the receipt text already lives in `content`.
+    const isSavedResultReceipt =
+      typeof toolResult.toolOutputRefs !== "undefined" ||
+      typeof toolResult.toolOutputPreservation !== "undefined";
+    const metadataToolResult = isSavedResultReceipt
+      ? {
+          operationStatus: toolResult.operationStatus,
+          toolOutputRefs: toolResult.toolOutputRefs,
+          toolOutputPreservation: toolResult.toolOutputPreservation,
+          toolOutputPreview: toolResult.toolOutputPreview,
+          previewComplete: toolResult.previewComplete,
+          storageErrorCode: toolResult.storageErrorCode,
+        }
+      : toolResult;
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
       toolCallId: params.toolCallId,
       toolName: params.toolName,
-      toolResult,
+      toolResult: metadataToolResult,
       toolResultStatus:
         toolResult.success === false
           ? ("error" as const)
@@ -398,6 +416,31 @@ export class AIChatV2Module extends BaseModule {
         `clear aborted: compaction invalidate failed for ${conversationId}`
       );
     }
+    // Fence PRESERVED OUTPUTS too (AC-14/§11.6). Deleting the messages is not
+    // enough: the output scope keeps its epoch, so every previously captured
+    // artifact would stay authorized and readable after a clear. Invalidating
+    // the scope rotates the epoch, marks the rows `deleting`, and revokes their
+    // grants, so an in-flight writer cannot publish and a cleared conversation
+    // cannot be retrieved.
+    //
+    // This runs BEFORE the messages are deleted, and like the fences above it
+    // aborts the clear on failure: a failed fence plus a successful delete would
+    // silently reopen the resurrection window.
+    try {
+      await new ToolResultModule().invalidateScope(
+        "default",
+        conversationId
+      );
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: tool output scope invalidate failed, aborting clear:",
+        err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: tool output scope invalidate failed for ${conversationId}`
+      );
+    }
     const deleted = await this.chatModule.clearConversation(conversationId);
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
@@ -425,6 +468,17 @@ export class AIChatV2Module extends BaseModule {
     const summaries = await this.getConversations();
     let total = 0;
     for (const s of summaries) {
+      // Same fence as `clearConversation`: a bulk clear must invalidate the
+      // preserved-output epoch too, or every captured artifact of every cleared
+      // conversation stays readable.
+      try {
+        await new ToolResultModule().invalidateScope("default", s.conversationId);
+      } catch (err) {
+        console.error(
+          "[ai-chat-v2] clearAllV2History: tool output scope invalidate failed:",
+          err
+        );
+      }
       total += await this.chatModule.clearConversation(s.conversationId);
       // Remove generated artifacts scoped to this v2 conversation.
       try {

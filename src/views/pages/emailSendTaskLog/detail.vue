@@ -95,14 +95,42 @@
         <div>{{ detail.attemptId ?? "—" }}</div>
       </v-card>
 
-      <!-- Body card: legacy content / authorized bodyText -->
+      <!-- Body card: rendered HTML preview + source text tabs when HTML exists -->
       <v-card variant="outlined" class="pa-3 mt-4">
         <div class="text-subtitle-2">
           {{ detail.source === "authorized"
             ? t("emailtasksendlog.body")
             : t("emailtasksendlog.content") }}
         </div>
-        <pre class="text-body-2">{{ bodyText || "—" }}</pre>
+        <template v-if="hasHtmlPreview">
+          <v-tabs v-model="activeTab" density="compact" class="mb-2">
+            <v-tab value="preview">{{ t("emailtasksendlog.html_preview") || "HTML preview" }}</v-tab>
+            <v-tab value="source">{{ t("emailtasksendlog.source_text") || "Source" }}</v-tab>
+          </v-tabs>
+          <v-window v-model="activeTab">
+            <v-window-item value="preview">
+              <!--
+                Security: stored email HTML renders ONLY in this sandboxed
+                iframe. sandbox="" disables scripts, forms, popups,
+                same-origin, and top navigation. NEVER use v-html here.
+                referrerpolicy=no-referrer blocks referrer leakage; remote
+                images are stripped to [image hidden] (tracking-pixel defense).
+              -->
+              <iframe
+                class="email-html-frame"
+                sandbox=""
+                referrerpolicy="no-referrer"
+                data-testid="html-preview-frame"
+                :srcdoc="renderedHtml"
+                :title="t('emailtasksendlog.html_preview') || 'HTML preview'"
+              />
+            </v-window-item>
+            <v-window-item value="source">
+              <pre class="text-body-2">{{ bodyText || "—" }}</pre>
+            </v-window-item>
+          </v-window>
+        </template>
+        <pre v-else class="text-body-2">{{ bodyText || "—" }}</pre>
       </v-card>
 
       <!-- Legacy half: raw transport log -->
@@ -133,17 +161,49 @@ const router = useRouter();
 const detail = ref<UnifiedSendLogDetailEntry | null>(null);
 const loading = ref(true);
 const errorMessage = ref("");
+const activeTab = ref<string>("preview");
 
 /**
- * The body shown in the body card: legacy rows carry the sent content on
+ * The body shown in the source tab: legacy rows carry the sent content on
  * `content`, authorized rows on the revision-pinned `bodyText`. Rendered in
  * <pre> only — never v-html — since this is stored email content.
  */
-const bodyText = computed(() => {
+function getBodyText(): string {
   const d = detail.value;
   if (!d) return "";
   return d.source === "authorized" ? d.bodyText ?? "" : d.content ?? "";
-});
+}
+const bodyText = computed<string>(() => getBodyText());
+
+/**
+ * Raw HTML candidate for the rendered preview: authorized rows use the
+ * revision's sanitized `bodyHtml`; legacy rows reuse `content` when it looks
+ * like HTML (bulk sends store the rendered template there).
+ */
+function getRawHtml(): string {
+  const d = detail.value;
+  if (!d) return "";
+  if (d.source === "authorized") return d.bodyHtml ?? "";
+  return d.content ?? "";
+}
+const rawHtml = computed<string>(() => getRawHtml());
+
+/** True when the raw HTML candidate contains at least one tag. */
+function containsHtmlTag(html: string): boolean {
+  return /<[^>]+>/.test(html);
+}
+const hasHtmlPreview = computed<boolean>(() => containsHtmlTag(rawHtml.value));
+
+/**
+ * Render sanitized HTML with remote images disabled (tracking-pixel defense).
+ * Authorized `bodyHtml` is already sanitized at draft time; legacy `content`
+ * is raw template HTML, so both render only in the sandboxed iframe and with
+ * <img> stripped to a placeholder.
+ */
+function stripRemoteImages(html: string): string {
+  return html.replace(/<img[^>]*>/gi, "[image hidden]");
+}
+const renderedHtml = computed<string>(() => stripRemoteImages(rawHtml.value));
 
 onMounted(async () => {
   const source = String(route.params.source ?? "");
@@ -188,3 +248,13 @@ function statusColor(status: string): string {
   return "default";
 }
 </script>
+<style scoped>
+.email-html-frame {
+  width: 100%;
+  min-height: 400px;
+  max-height: 560px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  background: #fff;
+}
+</style>

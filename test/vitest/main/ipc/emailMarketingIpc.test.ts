@@ -22,6 +22,7 @@ const mockFindEmailServiceByName = vi.hoisted(() => vi.fn());
 const mockValidateEmailServiceForSave = vi.hoisted(() => vi.fn());
 const mockUpdateEmailService = vi.hoisted(() => vi.fn());
 const mockCreateEmailService = vi.hoisted(() => vi.fn());
+const mockApplyEmailServiceTagsFromForm = vi.hoisted(() => vi.fn());
 const tagMocks = vi.hoisted(() => ({
   listEmailServiceTags: vi.fn(),
   createEmailServiceTag: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("@/controller/emailMarketingController", () => ({
     validateEmailServiceForSave: mockValidateEmailServiceForSave,
     updateEmailService: mockUpdateEmailService,
     createEmailService: mockCreateEmailService,
+    applyEmailServiceTagsFromForm: mockApplyEmailServiceTagsFromForm,
     ...tagMocks,
   };
     }
@@ -699,6 +701,130 @@ describe("Email Marketing IPC Handlers", () => {
       expect(mockGetEmailServiceEntity).not.toHaveBeenCalled();
       expect(mockValidateEmailServiceForSave).not.toHaveBeenCalled();
       expect(mockUpdateEmailService).not.toHaveBeenCalled();
+    });
+
+    test("rejects non-array tagIds before touching the controller", async () => {
+      // tagIds must be an array of positive ints (emailServiceUpdateInputSchema).
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          tagIds: 4, // number, not array
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+      expect(mockApplyEmailServiceTagsFromForm).not.toHaveBeenCalled();
+    });
+
+    test("rejects non-positive tagIds entries without touching the controller", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          tagIds: [0], // 0 is not a valid tag id
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+      expect(mockApplyEmailServiceTagsFromForm).not.toHaveBeenCalled();
+    });
+
+    test("rejects non-string tagNames entries without touching the controller", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          tagNames: [7],
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+      expect(mockApplyEmailServiceTagsFromForm).not.toHaveBeenCalled();
+    });
+
+    test("forwards tagIds/tagNames to applyEmailServiceTagsFromForm after the row update", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          tagIds: [4, 7],
+          tagNames: ["NewTag"],
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      expect(mockUpdateEmailService).toHaveBeenCalledTimes(1);
+      // Tag application happens after the entity update (both calls made).
+      expect(mockApplyEmailServiceTagsFromForm).toHaveBeenCalledTimes(1);
+      expect(mockApplyEmailServiceTagsFromForm).toHaveBeenCalledWith(5, [4, 7], ["NewTag"]);
+    });
+
+    test("omits tag application entirely when tagIds/tagNames are absent (preserve)", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      expect(mockUpdateEmailService).toHaveBeenCalledTimes(1);
+      // Absent tagIds + tagNames → preserve existing tags; no call made.
+      expect(mockApplyEmailServiceTagsFromForm).not.toHaveBeenCalled();
+    });
+
+    test("forwards explicit empty tagIds (clear-all) to applyEmailServiceTagsFromForm", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          tagIds: [],
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      // tagIds: [] is an explicit clear — the call IS made with the empty array.
+      expect(mockApplyEmailServiceTagsFromForm).toHaveBeenCalledWith(5, [], undefined);
     });
 
     test("accepts numeric ports (v-number-input emits numbers) and persists them as strings", async () => {

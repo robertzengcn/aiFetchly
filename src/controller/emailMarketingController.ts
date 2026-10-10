@@ -61,7 +61,9 @@ interface ParsedEmailServiceImportRow {
 /** Source keys accepted for each normalized field (§10.2). */
 const IMPORT_FIELD_ALIASES: Record<EmailServiceImportField, string[]> = {
   name: ["name"],
-  tag: ["tag", "tagname", "tag_name"],
+  // Accept both "tags" (current export header, multi-tag) and the legacy
+  // singular "tag"/"tagname"/"tag_name" so older exports still import.
+  tag: ["tags", "tag", "tagname", "tag_name"],
   smtpUsername: ["smtpUsername", "smtpusername", "smtp_username"],
   from: ["from", "from_email"],
   replyTo: ["replyTo", "replyto", "reply_to"],
@@ -243,12 +245,17 @@ export class EmailMarketingController {
       tagId,
       untagged
     );
+    // Batch-expand tags for all services on the page (single junction query).
+    const tagsByService = await this.emailServiceModule.getTagsForServices(
+      listdata.records.map((s) => s.id)
+    );
     const listdata2: EmailServiceListdata[] = listdata.records.map((item) => {
+      const tags = tagsByService.get(item.id) ?? [];
       return {
         id: item.id,
         name: item.name,
-        tagId: item.tagId ?? null,
-        tag: item.tag?.name ?? null,
+        tagIds: tags.map((t) => t.id),
+        tags,
         from: item.from,
         host: item.host,
         receiveProtocol: item.receiveProtocol,
@@ -266,12 +273,16 @@ export class EmailMarketingController {
   ): Promise<EmailServiceEntitydata | undefined> {
     const entity = await this.emailServiceModule.getEmailService(id);
     if (!entity) return undefined;
+    const [tagIds, tags] = await Promise.all([
+      this.emailServiceModule.getServiceTagIds(id),
+      this.emailServiceModule.getTagsForService(id),
+    ]);
     // Credentials never round-trip to the renderer. An empty string is the
     // "unchanged" sentinel: on save, an empty password means keep existing.
     return {
       ...entity,
-      tagId: entity.tagId ?? null,
-      tag: entity.tag?.name ?? null,
+      tagIds,
+      tags,
       password: "",
       receivePassword: "",
     } as unknown as EmailServiceEntitydata;
@@ -293,10 +304,6 @@ export class EmailMarketingController {
   ): Promise<number> {
     const entity = new EmailServiceEntity();
     entity.name = param.name;
-    entity.tagId =
-      param.tagId === undefined
-        ? null
-        : await this.resolveTagId(param.tagId);
     entity.host = param.host;
     entity.port = param.port;
     entity.from = param.from;
@@ -317,14 +324,28 @@ export class EmailMarketingController {
     entity.receiveFolder = param.receiveFolder ?? "INBOX";
     entity.receiveEnabled = param.receiveEnabled ?? 0;
 
+    // Resolve the desired tag set from the form payload.
+    //  - tagIds absent + tagNames absent → preserve existing (update path).
+    //  - tagIds: []                     → clear all tags.
+    //  - tagIds: [...]                   → replace with these tags.
+    //  - tagNames: ["new", ...]          → auto-create names not yet in the DB,
+    //    merge their new IDs into the set (atomic with the save).
+    const resolveTagIdsForSave = async (): Promise<number[] | undefined> => {
+      // If neither field is present, preserve (undefined sentinel).
+      if (param.tagIds === undefined && param.tagNames === undefined) {
+        return undefined;
+      }
+      return await this.resolveFormTagIds(
+        param.tagIds ?? [],
+        param.tagNames ?? []
+      );
+    };
+
     // On update paths an empty password means "keep existing" (credentials
     // are never returned to the form, so the form sends an empty sentinel).
     const updatePreservingPasswords = async (id: number): Promise<void> => {
       const existing = await this.emailServiceModule.getEmailService(id);
       if (existing) {
-        if (param.tagId === undefined) {
-          entity.tagId = existing.tagId ?? null;
-        }
         if (!entity.password || entity.password.length === 0) {
           entity.password = existing.password;
         }
@@ -333,6 +354,11 @@ export class EmailMarketingController {
         }
       }
       await this.emailServiceModule.updateEmailService(id, entity);
+      // Apply the tag set after the row exists. undefined = preserve.
+      const desiredTagIds = await resolveTagIdsForSave();
+      if (desiredTagIds !== undefined) {
+        await this.emailServiceModule.setServiceTags(id, desiredTagIds);
+      }
     };
 
     if (param.id && param.id > 0) {
@@ -358,15 +384,82 @@ export class EmailMarketingController {
       return existingBySender.id;
     }
 
-    return await this.emailServiceModule.createEmailService(entity);
+    const newId = await this.emailServiceModule.createEmailService(entity);
+    // For a brand-new service, tagIds/tagNames absent means no tags (not
+    // "preserve"). Resolve whatever the form sent and assign it.
+    const desiredTagIds = await resolveTagIdsForSave();
+    if (desiredTagIds && desiredTagIds.length > 0) {
+      await this.emailServiceModule.setServiceTags(newId, desiredTagIds);
+    }
+    return newId;
   }
   //update email service
   public async updateEmailService(
     id: number,
     entity: EmailServiceEntity
   ): Promise<void> {
-    entity.tagId = await this.resolveTagId(entity.tagId);
     return await this.emailServiceModule.updateEmailService(id, entity);
+  }
+
+  /**
+   * Apply the tag set from a service-form submit to an existing service row.
+   * Used by the IPC update path (which updates the entity directly rather than
+   * going through createEmailService). Mirrors the same semantics:
+   *  - tagIds absent + tagNames absent → preserve existing tags (no-op).
+   *  - tagIds: []                     → clear all tags.
+   *  - tagIds: [...]                   → replace.
+   *  - tagNames: ["new", ...]          → auto-create names not yet in the DB,
+   *    merge their new IDs into the set.
+   */
+  public async applyEmailServiceTagsFromForm(
+    serviceId: number,
+    tagIds: number[] | undefined,
+    tagNames: string[] | undefined
+  ): Promise<void> {
+    if (tagIds === undefined && tagNames === undefined) {
+      return; // preserve
+    }
+    const resolved = await this.resolveFormTagIds(tagIds ?? [], tagNames ?? []);
+    await this.emailServiceModule.setServiceTags(serviceId, resolved);
+  }
+
+  /**
+   * Resolve a form's tag payload to a validated, deduplicated array of tag IDs.
+   * Auto-creates any `tagNames` that don't yet exist (the auto-create-on-save
+   * UX), tolerating a race where another caller creates the same name between
+   * the findByName check and createTag. Every resulting ID is validated to
+   * exist so a stale form can't attach a deleted tag.
+   */
+  private async resolveFormTagIds(
+    tagIds: number[],
+    tagNames: string[]
+  ): Promise<number[]> {
+    const ids = new Set<number>(tagIds);
+    for (const rawName of tagNames) {
+      const trimmed = rawName.trim();
+      if (trimmed.length === 0) continue;
+      const existing = await this.emailServiceTagModule.findByName(trimmed);
+      if (existing) {
+        ids.add(existing.id);
+      } else {
+        try {
+          const newId = await this.emailServiceTagModule.createTag(trimmed);
+          ids.add(newId);
+        } catch (error: unknown) {
+          // Race: another caller created it between findByName and create.
+          if (
+            error instanceof Error &&
+            error.message === "EMAIL_SERVICE_TAG_DUPLICATE"
+          ) {
+            const race = await this.emailServiceTagModule.findByName(trimmed);
+            if (race) ids.add(race.id);
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
+    return await this.resolveTagIds([...ids]);
   }
 
   public async listEmailServiceTags(
@@ -385,17 +478,32 @@ export class EmailMarketingController {
 
   public async deleteEmailServiceTag(
     id: number
-  ): Promise<{ affectedServiceCount: number }> {
+  ): Promise<{
+    affectedServiceCount: number;
+    servicesBecomingUntagged: number;
+  }> {
     return await this.emailServiceTagModule.deleteTag(id);
   }
 
-  private async resolveTagId(tagId: number | null | undefined): Promise<number | null> {
-    if (tagId === undefined || tagId === null) return null;
-    const tag = await this.emailServiceTagModule.getTag(tagId);
-    if (!tag) {
-      throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+  /**
+   * Validate that every tag ID in the array exists. Returns the validated
+   * IDs as-is (duplicates removed). Throws EMAIL_SERVICE_TAG_NOT_FOUND for
+   * any ID that does not resolve to a real tag.
+   */
+  private async resolveTagIds(tagIds: number[]): Promise<number[]> {
+    if (tagIds.length === 0) return [];
+    const unique = [...new Set(tagIds)];
+    // Batch-validate in one query rather than one getTag(id) per ID (N+1).
+    const found = await this.emailServiceTagModule.getTagsByIds(unique);
+    const resolved: number[] = [];
+    for (const id of unique) {
+      const tag = found.get(id);
+      if (!tag) {
+        throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+      }
+      resolved.push(tag.id);
     }
-    return tag.id;
+    return resolved;
   }
 
   /**
@@ -443,16 +551,23 @@ export class EmailMarketingController {
   ): Promise<string | EmailServiceExportPayload> {
     const entities = await this.emailServiceModule.exportEmailServicesList();
 
+    // Batch-load tag views for every exported service so each row carries
+    // its full tag set (multi-tag) without an N+1 query per service.
+    const tagMap = await this.emailServiceModule.getTagsForServices(
+      entities.map((e) => e.id)
+    );
+
     const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
       const identity = resolveEmailServiceIdentity({
         smtpUsername: item.smtpUsername,
         from: item.from,
         replyTo: item.replyTo,
       });
+      const tags = (tagMap.get(item.id) ?? []).map((t) => t.name);
       return {
         id: item.id,
         name: item.name,
-        tag: item.tag?.name ?? null,
+        tags,
         smtpUsername: identity.smtpUsername,
         from: item.from,
         replyTo: identity.replyToAddress,
@@ -484,7 +599,7 @@ export class EmailMarketingController {
     const headers = [
       "id",
       "name",
-      "tag",
+      "tags",
       "smtpUsername",
       "from",
       "replyTo",
@@ -506,7 +621,10 @@ export class EmailMarketingController {
     const csvRows = rows.map((row) => [
       this.escapeCsvField(row.id),
       this.escapeCsvField(row.name),
-      this.escapeCsvField(row.tag),
+      // Multi-tag: join names with ", " so a single CSV cell carries all
+      // tags. escapeCsvField re-quotes when the joined string itself
+      // contains commas/quotes/newlines.
+      this.escapeCsvField(row.tags.join(", ")),
       this.escapeCsvField(row.smtpUsername),
       this.escapeCsvField(row.from),
       this.escapeCsvField(row.replyTo),
@@ -590,17 +708,30 @@ export class EmailMarketingController {
       const values = parsedRow.values;
       const present = parsedRow.presentFields;
 
-      let importedTagId: number | null | undefined;
-      let missingTagName: string | undefined;
+      // Multi-tag import: resolve each name in values.tagNames to an existing
+      // tag ID, optionally creating missing ones (createMissingTags option).
+      // The tag set is applied AFTER the service row exists via setServiceTags.
+      //  - tag field absent  → preserve existing tags (update) / none (create)
+      //  - tagNames: []      → clear all tags
+      //  - tagNames: [...]   → replace with these tags
+      let desiredTagIds: number[] | undefined;
+      let pendingCreateNames: string[] = [];
       if (present.has("tag")) {
-        if (values.tag && values.tag.trim().length > 0) {
+        const names = values.tagNames ?? [];
+        if (names.length > 0) {
+          const resolvedIds: number[] = [];
+          const toCreate: string[] = [];
           try {
-            const tag = await this.emailServiceTagModule.findByName(values.tag);
-            if (!tag && !options.createMissingTags) {
-              throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+            for (const name of names) {
+              const tag = await this.emailServiceTagModule.findByName(name);
+              if (tag) {
+                resolvedIds.push(tag.id);
+              } else if (options.createMissingTags) {
+                toCreate.push(name);
+              } else {
+                throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+              }
             }
-            importedTagId = tag?.id;
-            missingTagName = tag ? undefined : values.tag;
           } catch (error: unknown) {
             skipped++;
             const code = error instanceof Error && /^EMAIL_SERVICE_TAG_/.test(error.message)
@@ -609,8 +740,11 @@ export class EmailMarketingController {
             errors.push(`row ${rowNumber}: ${code}`);
             continue;
           }
+          desiredTagIds = resolvedIds;
+          pendingCreateNames = toCreate;
         } else {
-          importedTagId = null;
+          // Blank tag cell = clear all tags.
+          desiredTagIds = [];
         }
       }
 
@@ -637,9 +771,6 @@ export class EmailMarketingController {
       const candidate = new EmailServiceEntity();
       if (isUpdate) {
         const ex = existing!;
-        candidate.tagId = present.has("tag")
-          ? importedTagId ?? null
-          : ex.tagId ?? null;
         candidate.name = (values.name ?? ex.name) as string;
         candidate.host = (values.host ?? ex.host) as string;
         candidate.port = (values.port ?? ex.port) as string;
@@ -709,7 +840,6 @@ export class EmailMarketingController {
         // New service: absent SMTP username → From; absent Reply-To → null;
         // password absent/blank → rejected by validation (create mode).
         candidate.name = (values.name ?? "") as string;
-        candidate.tagId = importedTagId ?? null;
         candidate.host = (values.host ?? "") as string;
         candidate.port = (values.port ?? "") as string;
         candidate.from = (values.from ?? "") as string;
@@ -762,23 +892,37 @@ export class EmailMarketingController {
       }
 
       try {
-        if (missingTagName !== undefined) {
+        // Create any pending tag names (createMissingTags path), tolerating
+        // a race where another caller created the same name between our
+        // findByName check and createTag.
+        for (const name of pendingCreateNames) {
           try {
-            candidate.tagId = await this.emailServiceTagModule.createTag(missingTagName);
+            const newId = await this.emailServiceTagModule.createTag(name);
+            desiredTagIds = [...(desiredTagIds ?? []), newId];
           } catch (error: unknown) {
-            if (!(error instanceof Error) || error.message !== "EMAIL_SERVICE_TAG_DUPLICATE") throw error;
-            const tag = await this.emailServiceTagModule.findByName(missingTagName);
-            if (!tag) throw error;
-            candidate.tagId = tag.id;
+            if (
+              error instanceof Error &&
+              error.message === "EMAIL_SERVICE_TAG_DUPLICATE"
+            ) {
+              const race = await this.emailServiceTagModule.findByName(name);
+              if (race) {
+                desiredTagIds = [...(desiredTagIds ?? []), race.id];
+              } else {
+                throw error;
+              }
+            } else {
+              throw error;
+            }
           }
         }
+        const targetId = isUpdate ? existing!.id! : await this.emailServiceModule.createEmailService(candidate);
         if (isUpdate) {
-          await this.emailServiceModule.updateEmailService(
-            existing!.id!,
-            candidate
-          );
-        } else {
-          await this.emailServiceModule.createEmailService(candidate);
+          await this.emailServiceModule.updateEmailService(targetId, candidate);
+        }
+        // Apply the resolved tag set after the row exists. undefined means
+        // the import row omitted the tag field → preserve existing tags.
+        if (desiredTagIds !== undefined) {
+          await this.emailServiceModule.setServiceTags(targetId, desiredTagIds);
         }
         imported++;
       } catch (rowError) {
@@ -980,6 +1124,23 @@ export class EmailMarketingController {
           (values as Record<string, unknown>)[field] =
             str.length > 0 ? str : null;
           break;
+        case "tag": {
+          // The export serializes multi-tag as a comma-joined cell
+          // ("tag1, tag2"). Split on commas, trim, drop empties. A blank
+          // cell means "clear all tags"; presence + empty tagNames encodes
+          // that for the import loop.
+          if (str.length > 0) {
+            const names = str
+              .split(",")
+              .map((part) => part.trim())
+              .filter((part) => part.length > 0);
+            values.tagNames = names;
+          } else {
+            // Blank tag cell = clear. Signal via empty array + presence.
+            values.tagNames = [];
+          }
+          break;
+        }
         default:
           (values as Record<string, unknown>)[field] = str;
       }

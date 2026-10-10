@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
@@ -38,6 +39,7 @@ import {
 import { isArchiveReadsEnabled } from "@/config/featureFlags";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import type { ChatV2HistorySelectionMetadata } from "@/entityTypes/aiChatV2Types";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
@@ -49,12 +51,26 @@ import {
   serializeToolResultContent,
   normalizeToolResult,
   isPermissionPromptResult,
+  toolResultReceiptUiMetadata,
+  buildBoundedToolFailureContent,
 } from "@/service/AIChatQueryLoop";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import {
+  ToolResultPipeline,
+  ToolResultPublicationError,
+} from "@/service/toolResult/ToolResultPipeline";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
+import {
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
+} from "@/config/featureFlags";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import {
   userSafeError,
@@ -506,6 +522,54 @@ export class AIChatQueryEngine {
    */
   private activeTurns = new Map<string, ActiveTurnState>();
   private pendingPermissions = new Map<string, PendingPermissionTurn>();
+
+  /**
+   * Preserved-output pipeline, one per conversation.
+   *
+   * Cached so the output epoch is resolved once per conversation rather than on
+   * every tool result, and shared with the loop's own instance so both paths
+   * use the same policy.
+   */
+  private readonly toolResultPipelines = new Map<string, ToolResultPipeline>();
+  private readonly conversationEpochs = new Map<string, string>();
+  private toolResultModule: ToolResultModule | null = null;
+  private toolResultStorage: ToolResultStorageService | null = null;
+
+  /** Build (or reuse) the pipeline for a conversation. */
+  private getToolResultPipeline(conversationId: string): ToolResultPipeline {
+    const existing = this.toolResultPipelines.get(conversationId);
+    if (existing) return existing;
+    const pipeline = new ToolResultPipeline({
+      captureEnabled: isToolOutputCaptureEnabled,
+      modelRefsEnabled: isToolOutputModelRefsEnabled,
+      module: (this.toolResultModule ??= new ToolResultModule()),
+      storage:
+        this.toolResultStorage ??
+        (this.toolResultStorage = new ToolResultStorageService({
+          root: getToolResultStorageRoot(),
+        })),
+    });
+    this.toolResultPipelines.set(conversationId, pipeline);
+    return pipeline;
+  }
+
+  /**
+   * Resolve the conversation's current output epoch.
+   *
+   * A durable fence: a result prepared against a stale epoch is rejected at
+   * commit, which is the correct outcome when the user clears the conversation
+   * while a tool is being approved.
+   */
+  private async resolveConversationEpoch(
+    conversationId: string
+  ): Promise<string> {
+    const cached = this.conversationEpochs.get(conversationId);
+    if (cached) return cached;
+    const module = this.toolResultModule ?? new ToolResultModule();
+    const epoch = await module.currentEpoch("default", conversationId);
+    this.conversationEpochs.set(conversationId, epoch);
+    return epoch;
+  }
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   /**
    * Stage A §3.5 (FR-010/024): pending actions claimed by their run owner.
@@ -569,7 +633,13 @@ export class AIChatQueryEngine {
     deps?: AIChatQueryEngineDeps
   ) {
     this.contextAssembler =
-      deps?.contextAssembler ?? new AIChatContextAssembler();
+      deps?.contextAssembler ??
+      new AIChatContextAssembler({
+        compactionReader: new AIChatCompactionModule(),
+        archiveModule: new AIChatArchiveModule(),
+        // T14: substitute bounded projections for oversized legacy rows.
+        projectionLookup: new ToolResultModule().asLegacyProjectionLookup(),
+      });
     this.compactAgent = deps?.compactAgent;
     this.modelCatalog = new AIChatModelCatalogService();
     this.autoDreamService = deps?.autoDreamService;
@@ -914,6 +984,31 @@ export class AIChatQueryEngine {
       input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
+
+    // FR-31 / NFR-03 (audit finding 8): a pasted credential is rejected at
+    // the ORDINARY CHAT boundary — BEFORE any persistence, provider call,
+    // or conversation creation. The message text never reaches the
+    // transcript; the user gets the typed error with secure-input guidance.
+    if (!scheduledContext) {
+      const credentialCheck = checkChatMessageForCredentials(
+        request.message || ""
+      );
+      if (credentialCheck.rejected) {
+        eventSink.emit({
+          type: "error",
+          conversationId: request.conversationId || "",
+          errorMessage: `${credentialCheck.errorCode}: ${credentialCheck.message}`,
+        });
+        // Outcome contract (Stage A FR-022): the boundary rejection is a
+        // failed segment. Nothing was persisted, so the ids are the
+        // request's own (assistant id empty by construction).
+        return {
+          type: "failed",
+          conversationId: request.conversationId || "",
+          assistantMessageId: "",
+        };
+      }
+    }
 
     // ------------------------------------------------------------------
     // 1. Resolve plan state
@@ -2674,8 +2769,111 @@ export class AIChatQueryEngine {
         }
       );
 
-      const toolPayload = normalizeToolResult(toolResult);
-      const toolContent = serializeToolResultContent(toolPayload);
+      let toolPayload = normalizeToolResult(toolResult);
+      let toolContent = serializeToolResultContent(toolPayload);
+
+      // Preserved-output pipeline on the RESUME path (technical design §9.2).
+      // A resumed attempt must use exactly the same preparation and storage
+      // policy as a foreground one (AC-09); otherwise the first tool call of
+      // any session - which always takes this path - bypasses the receipt,
+      // which is where gated tools (outbound email, file edit, shell) live.
+      const toolResultPipeline = this.getToolResultPipeline(
+        matchedByToolId.conversationId
+      );
+      if (toolResultPipeline.isActive()) {
+        try {
+          const conversationEpoch = await this.resolveConversationEpoch(
+            matchedByToolId.conversationId
+          );
+          // A NEW execution identity: the permission placeholder and this
+          // resumed attempt are different phases, so they must not share an
+          // artifact key (technical design §5.1).
+          const executionId = `${matchedByToolId.conversationId}:${
+            matchedByToolId.turnId ?? matchedByToolId.assistantMessageId
+          }:${matchedByToolId.toolCallId}:resume`;
+          const prepared = await toolResultPipeline.process({
+            context: {
+              profileId: "default",
+              conversationId: matchedByToolId.conversationId,
+              conversationEpoch,
+              turnId:
+                matchedByToolId.turnId ?? matchedByToolId.assistantMessageId,
+              executionId,
+              toolCallId: matchedByToolId.toolCallId,
+              toolName: matchedByToolId.toolName,
+              signal: matchedByToolId.abortController.signal,
+            },
+            outcome: {
+              success: toolResult.success,
+              executionTimeMs: toolResult.execution_time_ms,
+              summary:
+                typeof toolResult.result.summary === "string"
+                  ? toolResult.result.summary
+                  : undefined,
+              error:
+                typeof toolResult.result.error === "string"
+                  ? toolResult.result.error
+                  : undefined,
+              control: toolResult.result,
+              output: toolResult.result,
+              outputFormat: "json",
+              previewKind: Array.isArray(toolResult.result)
+                ? "records"
+                : "text",
+              sourceCompleteness: toolResult.partial ? "partial" : "complete",
+              isEmpty:
+                Object.keys(toolResult.result).length === 0 &&
+                !toolResult.result.summary,
+            },
+            store: async ({ receipt }) => {
+              // The receipt REPLACES the permission-prompt row, which is the
+              // existing `replacesPermissionPromptForToolId` contract.
+              await module.saveToolResultMessage({
+                conversationId: matchedByToolId.conversationId,
+                assistantMessageId: matchedByToolId.assistantMessageId,
+                toolCallId: matchedByToolId.toolCallId,
+                toolName: matchedByToolId.toolName,
+                content: JSON.stringify(receipt),
+                toolResult: toolResultReceiptUiMetadata(receipt),
+                replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+                ...(matchedByToolId.turnId
+                  ? { turnId: matchedByToolId.turnId }
+                  : {}),
+              });
+            },
+          });
+          toolContent = prepared.modelContent;
+          if (prepared.receipt) {
+            // Rebuilt from the trusted outcome plus bounded descriptors: the
+            // legacy payload spread the producer's whole body.
+            toolPayload = {
+              success: toolResult.success,
+              executionTimeMs: toolResult.execution_time_ms,
+              toolResultReceipt: prepared.receipt,
+              ...prepared.uiMetadata,
+            } as Record<string, unknown>;
+          }
+        } catch (err: unknown) {
+          if (err instanceof ToolResultPublicationError) {
+            // Durable publication failed: stop rather than continue and imply
+            // the result was saved.
+            throw err;
+          }
+          console.warn(
+            `[ai-chat-v2] resumed tool result preparation failed, using bounded fallback: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+          // Bounded fallback, for the same reason as the main loop: the legacy
+          // payload is the producer's whole body.
+          toolContent = buildBoundedToolFailureContent({
+            result: toolResult,
+            code: "OUTPUT_NOT_AVAILABLE",
+            message: err instanceof Error ? err.message : String(err),
+          });
+          toolPayload = JSON.parse(toolContent) as Record<string, unknown>;
+        }
+      }
 
       eventSink.emit({
         type: "tool_result",
@@ -2740,6 +2938,15 @@ export class AIChatQueryEngine {
             originalUserRequest: matchedByToolId.request.message,
             toolCallId: matchedByToolId.toolCallId,
           })
+        );
+      }
+
+      // Prompt-skill hidden context (design §10.5/§17.2): the SAME shared
+      // builder as AIChatQueryLoop so both streaming paths deliver one
+      // short acknowledgement followed by one model-only instruction block.
+      if (toolResult.success && toolResult.promptSkillContext) {
+        matchedByToolId.conversationMessages.push(
+          buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
         );
       }
 
@@ -3572,6 +3779,20 @@ export class AIChatQueryEngine {
           });
         }
         if (event.type === "tool_result") {
+          // A result that already carries a saved-receipt was persisted
+          // DURABLY by the pipeline's publisher before the event was emitted.
+          // Writing it again here would double-write the same row (and could
+          // race the archive coupler), so the pipeline is the single writer for
+          // that case and this sink only handles the legacy inline path.
+          if (
+            (event.toolResult as Record<string, unknown> | undefined)
+              ?.toolResultReceipt !== undefined
+          ) {
+            return;
+          }
+          // Stage A strict persistence (FR-006/017): NO .catch — a rejected
+          // save propagates through flush() as
+          // AIChatRequiredPersistenceError so dependent execution blocks.
           saves.push({
             kind: "tool_result",
             toolCallId: event.toolCallId,

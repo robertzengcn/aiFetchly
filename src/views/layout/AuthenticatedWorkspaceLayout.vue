@@ -9,11 +9,9 @@
   <AppWorkspaceShell>
     <template #navigation>
       <AiChatWorkspaceSidebar
-        :redesign-default="redesignDefault"
         @select="(id) => void openConversation(id)"
         @new-chat="() => void createChat()"
         @retry="() => void chatWorkspace.bootstrap()"
-        @toggle-mode="onToggleMode"
       />
     </template>
     <!-- Narrow mode needs a visible menu action (PRD §16.3): the sidebar
@@ -56,7 +54,6 @@ import {
   createAndSelectWorkspaceChat,
 } from "@/views/composables/chatWorkspaceSelection";
 import {
-  isWorkspaceRedesignEnabled,
   setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
 import {
@@ -93,9 +90,6 @@ watch(
   }
 );
 
-/** Rollout flag state (workspace redesign PRD §33) — footer mode toggle. */
-const redesignDefault = ref(false);
-
 /**
  * Conversation-selection coordinator (design §8.4): routing FIRST when an
  * inner page is open, then the selection handshake only when the selection
@@ -127,25 +121,6 @@ async function ensureChatRoute(): Promise<void> {
 }
 
 provide(CHAT_WORKSPACE_SELECTION_KEY, { openConversation, createChat });
-
-/** Rollback path: switching to classic re-shows the dock after navigation. */
-async function onToggleMode(): Promise<void> {
-  const next = !redesignDefault.value;
-  try {
-    await setWorkspaceRedesignEnabled(next);
-    redesignDefault.value = next;
-    // The layout BOUNDARY selects the shell through the localStorage
-    // `aifetchly.innerPageShellV2` flag — the durable redesign preference
-    // alone never remounts the classic layout. Write BOTH so the toggle
-    // actually switches the active shell (review: rollback-path fix).
-    innerPageShell.setShellEnabled(next);
-  } catch {
-    // Flag write failed — mode stays unchanged.
-  }
-  if (!next) {
-    void router.push("/dashboard/home");
-  }
-}
 
 // --- Application-level chat integrations (ported from the legacy layout) ----
 // The classic layout.vue was the only listener for the dashboard "ask AI"
@@ -209,13 +184,13 @@ onMounted(() => {
   // authenticated lifetime (design §8.3), torn down only when the
   // authenticated application unmounts — never on center-route changes.
   void chatWorkspace.bootstrap();
-  void isWorkspaceRedesignEnabled()
-    .then((enabled) => {
-      redesignDefault.value = enabled;
-    })
-    .catch(() => {
-      redesignDefault.value = false;
-    });
+  // The workspace shell is now the only shell (footer toggle removed):
+  // enforce the durable redesign preference and the boundary flag on every
+  // mount so the app always lands on the converged shell.
+  setWorkspaceRedesignEnabled(true).catch(() => {
+    // Preference write failed — the in-memory shell flag below still applies.
+  });
+  innerPageShell.setShellEnabled(true);
 });
 
 onUnmounted(() => {

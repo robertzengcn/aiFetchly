@@ -101,6 +101,7 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
   },
 }));
 const mockCompleteChat = vi.hoisted(() => vi.fn());
+const mockListModels = vi.hoisted(() => vi.fn());
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
@@ -109,6 +110,7 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
     // AIChatModelCatalogService; a vi.fn() factory is not constructable.
     AiChatApi: class {
       openAIChatCompletion = mockCompleteChat;
+      listOpenAIModels = mockListModels;
     },
   };
 });
@@ -153,6 +155,27 @@ describe("AI Chat V2 Compaction Start IPC", () => {
   });
 
   it("forwards the selected model and rejects oversized summarize requests before dispatch", async () => {
+    // The interactive providerSummarize wires the live model catalog resolver
+    // (§8.1): max_tokens is capped at min(sectionOutputCapTokens, real
+    // model output limit) — here 1,500 against the 16,384 reported limit —
+    // not the 1,024-token unknown-model fallback that truncated CJK-dense
+    // summaries mid-string ("Unterminated string in JSON at position 2571").
+    // A small (8k) context window keeps the oversized-input rejection
+    // assertion meaningful (40,000 chars ≈ 10,000 tokens exceeds 8k).
+    mockListModels.mockResolvedValue({
+      object: "list",
+      data: [
+        {
+          id: "selected-model",
+          object: "model",
+          created: 1,
+          owned_by: "test",
+          context_window: 8_000,
+          max_tokens: 16_384,
+        },
+      ],
+      default_model: "selected-model",
+    });
     mockCompleteChat.mockResolvedValue({ choices: [] });
     mockRequestCompaction.mockResolvedValueOnce({ state: "completed", runId: "budget-run", sectionsPacked: 1 });
     await mockIpcMain.callHandler(
@@ -167,7 +190,7 @@ describe("AI Chat V2 Compaction Start IPC", () => {
     await input.summarize("system", "source", input.model);
     expect(mockCompleteChat).toHaveBeenCalledWith({
       model: "selected-model",
-      max_tokens: 1_024,
+      max_tokens: 1_500,
       messages: [
         { role: "system", content: "system" },
         { role: "user", content: "source" },

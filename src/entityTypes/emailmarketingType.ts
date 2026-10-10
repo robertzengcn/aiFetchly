@@ -155,10 +155,29 @@ export type EmailFilterDetialdata = {
   id?: number;
   content: string;
 };
+/**
+ * A tag attached to an email service, as surfaced to the UI / AI layer.
+ * Carries no secrets — safe to return to the renderer.
+ */
+export interface EmailServiceTagView {
+  id: number;
+  name: string;
+}
+
 export type EmailServiceEntitydata = {
   id?: number;
-  tagId?: number | null;
-  tag?: string | null;
+  /**
+   * Tag IDs to assign to this service. Absent on update = preserve existing
+   * tags; `[]` = clear all tags; `[...]` = replace. On create, absent means
+   * "no tags".
+   */
+  tagIds?: number[];
+  /**
+   * Tag names the user typed in the autocomplete that don't correspond to an
+   * existing tag. These are auto-created on save (atomic with the service
+   * upsert) so the user never has to leave the service form to make a tag.
+   */
+  tagNames?: string[];
   smtpUsername?: string | null;
   from: string;
   replyTo?: string | null;
@@ -185,8 +204,8 @@ export type EmailServiceEntitydata = {
 export type EmailServiceListdata = {
   id: number;
   name: string;
-  tagId: number | null;
-  tag: string | null;
+  tagIds: number[];
+  tags: EmailServiceTagView[];
   from: string;
   host: string;
   receiveProtocol: EmailReceiveProtocol;
@@ -204,11 +223,14 @@ export interface EmailServiceTagSummary {
  * Safe (secret-free) single projection of one email service for both CSV and
  * JSON export (§11.1). Uses the EFFECTIVE smtpUsername so legacy rows export a
  * usable login identifier. Never contains SMTP or receive passwords.
+ *
+ * `tags` is an array of tag names (multi-tag). CSV serializes it as a
+ * comma-joined, escaped cell; JSON as a string array.
  */
 export type SafeEmailServiceExportRow = {
   id: number;
   name: string;
-  tag: string | null;
+  tags: string[];
   smtpUsername: string;
   from: string;
   replyTo: string | null;

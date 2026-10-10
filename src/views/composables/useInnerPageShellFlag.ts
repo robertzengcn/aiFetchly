@@ -1,14 +1,21 @@
 import { ref } from "vue";
 
 /**
- * Convergence rollout flags (design §26.2): `innerPageShellV2` enables the
+ * Convergence rollout flags (design §26.2): `innerPageShellV3` enables the
  * shared authenticated shell; per-family enablement (scheduleUiV2) controls
  * converged content. Flags are ROLLOUT CONTROLS, not permissions, and use
  * the existing local settings mechanism (localStorage) so rollback is a
  * single toggle with no data migration (design §30.2).
  */
-const SHELL_FLAG_KEY = "aifetchly.innerPageShellV2";
+const SHELL_FLAG_KEY = "aifetchly.innerPageShellV3";
 const SCHEDULE_FLAG_KEY = "aifetchly.scheduleUiV2";
+/**
+ * Retired V2 shell key. V2's stored "false" (left over from classic-toggle
+ * exploration) kept long-time users stuck on the legacy drawer while the
+ * rollout default is on. V3 restarts the rollout default-on; the toggle and
+ * rollback keep working going forward. Removed best-effort on load.
+ */
+const LEGACY_SHELL_FLAG_KEY = "aifetchly.innerPageShellV2";
 
 function readFlag(key: string): boolean {
   try {
@@ -34,6 +41,13 @@ function writeFlag(key: string, value: boolean): void {
 // Module-scope SHARED state: every caller (the layout boundary, the route
 // host, the shell toggle) must observe the same refs so a runtime toggle
 // reactively switches the shell (review: rollback-path reactivity fix).
+// V3 defaults on (readFlag(null) === true); the retired V2 key is dropped so
+// a stale explicit "false" cannot pin the legacy drawer on.
+try {
+  localStorage.removeItem(LEGACY_SHELL_FLAG_KEY);
+} catch {
+  // Storage unavailable — nothing to migrate.
+}
 const shellEnabled = ref(readFlag(SHELL_FLAG_KEY));
 const scheduleEnabled = ref(readFlag(SCHEDULE_FLAG_KEY));
 

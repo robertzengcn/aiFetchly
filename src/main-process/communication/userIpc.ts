@@ -109,7 +109,7 @@ function clearAllTokens(): void {
  * Attaches UI-facing side-effects to the loopback callback outcome.
  *
  * On success: sends LOGIN_STATUS:processing (the completion module
- * navigates to Dashboard separately).
+ * navigates to AI_Chat_Workspace separately).
  *
  * On failure: sends LOGIN_STATUS:error to the renderer, shows an error
  * dialog, and clears any partially-stored tokens.
@@ -259,7 +259,7 @@ export function registerUserIpcHandlers(
    * In parallel, attaches UI-facing side-effects to the loopback callback
    * processing: on failure, sends LOGIN_STATUS:error to the renderer,
    * shows a dialog, and clears tokens. On success, the completion module
-   * already navigates to Dashboard.
+   * already navigates to AI_Chat_Workspace.
    *
    * The renderer's subsequent OPENLOGINPAGE call is a no-op (the browser
    * is already opened here); calling prepareDesktopLogin() twice would

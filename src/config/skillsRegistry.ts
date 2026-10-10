@@ -20,7 +20,13 @@ import type {
 import {
   isArchiveReadsEnabled,
   isHistoryToolsEnabled,
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
 } from "@/config/featureFlags";
+import {
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+} from "@/entityTypes/toolResultToolTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -30,6 +36,7 @@ import { MCPToolService } from "@/service/MCPToolService";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
 import { executeShellCommand } from "@/service/ShellToolService";
+import { SKILL_INSTALL_COMPACT_REMINDER } from "@/service/SkillInstallationRoutingPromptSection";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
 import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
 import { ZodError } from "zod";
@@ -1333,6 +1340,115 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: TOOL_RESULT_READ_TOOL_NAME,
+    description:
+      "Read a bounded page of a large saved tool result by output_id (given in a tool result receipt). " +
+      "Returns a page of text plus a next_cursor; keep passing the cursor until complete is true. " +
+      "The receipt's preview is only a sample, so read before concluding a large result does not contain " +
+      "something. If you stop reading early, say so rather than claiming you reviewed the whole output. " +
+      "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+        },
+        max_tokens: {
+          type: "number",
+          description:
+            "Optional smaller page request in tokens. Can only reduce the page, never exceed the limit.",
+          minimum: 1,
+          maximum: 32000,
+        },
+      },
+      required: ["output_id"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      // Available while reference delivery is on OR this conversation already
+      // holds committed references (technical design §8.1). Gating on the
+      // `capture` flag instead would make a default install return
+      // RETRIEVAL_NOT_ENABLED for artifacts it already saved, which is exactly
+      // what PRD §12 and TD §13.4 forbid.
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
+        };
+      }
+      const { handleToolResultRead } = await import(
+        "@/service/agentTools/toolResultReadTool"
+      );
+      return handleToolResultRead(args, context);
+    },
+  },
+  {
+    name: TOOL_RESULT_SEARCH_TOOL_NAME,
+    description:
+      "Search a large saved tool result for a literal phrase (1-200 chars) by output_id. " +
+      "Returns bounded matches with read cursors. No-match is final only when scan_complete is true; " +
+      "otherwise resume with next_cursor. scan_complete refers to the saved bytes only - if " +
+      "source_completeness is 'partial', the producer itself truncated and absence cannot be concluded. " +
+      "The query is literal text, never a regular expression.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        query: {
+          type: "string",
+          description: "Literal text to search for (1-200 characters). Never a regex.",
+          minLength: 1,
+          maxLength: 200,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+        },
+        max_matches: {
+          type: "number",
+          description: "Max matches to return (default 10, max 20).",
+          default: 10,
+          minimum: 1,
+          maximum: 20,
+        },
+      },
+      required: ["output_id", "query"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
+        };
+      }
+      const { handleToolResultSearch } = await import(
+        "@/service/agentTools/toolResultSearchTool"
+      );
+      return handleToolResultSearch(args, context);
+    },
+  },
+  {
     name: "file_edit",
     description:
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
@@ -2459,7 +2575,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const shellResult = await executeShellCommand(
         args,
-        context.conversationId
+        context.conversationId,
+        context.toolCallId
       );
 
       // Fire-and-forget audit logging (use validated fields from result)
@@ -2485,6 +2602,599 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         success: shellResult.success,
         result: { ...shellResult } as Record<string, unknown>,
       };
+    },
+  },
+  {
+    name: "skill_install_prepare",
+    description:
+      SKILL_INSTALL_COMPACT_REMINDER +
+      " Start or resume a typed skill installation. Call this DIRECTLY when the user " +
+      "asks to install, set up, register, update, repair, or configure a skill from a " +
+      "repository URL or local package — it owns acquisition, inspection, planning, and " +
+      "activation. Do NOT clone with shell tools, copy with file tools, or search the " +
+      "catalog for Git first. Never pass API keys or secrets here; the installer " +
+      "requests them through a secure input when needed. Continue the installation " +
+      "with the returned session_id and next_action.",
+    parameters: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description:
+            "Repository URL (GitHub/Git) or local folder/zip path to install from.",
+        },
+        ref: {
+          type: "string",
+          description: "Optional branch, tag, or commit to pin.",
+        },
+        subdirectory: {
+          type: "string",
+          description:
+            "Optional subdirectory when the skill is not at the repo root.",
+        },
+        mode: {
+          type: "string",
+          enum: ["managed-copy", "linked"],
+          description:
+            "Activation mode. managed-copy (default) works everywhere; linked exposes " +
+            "an external directory via symlink/junction for development.",
+        },
+        constraints: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Non-secret user constraints, e.g. 'read install.md first', " +
+            "'wire up ffmpeg', 'wait for footage after install'.",
+        },
+        sessionId: {
+          type: "string",
+          description: "Existing session id when resuming an installation.",
+        },
+      },
+      required: ["source"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallPrepareArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return {
+          success: false,
+          result: {
+            error:
+              "The skill installer is disabled on this installation " +
+              "(AIFETCHLY_SKILL_INSTALL_ENABLED).",
+          },
+        };
+      }
+      const parsed = SkillInstallPrepareArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: {
+            error: parsed.error.issues.map((i) => i.message).join("; "),
+          },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.prepare({
+        conversationId: context.conversationId,
+        source: parsed.data.source,
+        ...(parsed.data.ref !== undefined ? { ref: parsed.data.ref } : {}),
+        ...(parsed.data.subdirectory !== undefined
+          ? { subdirectory: parsed.data.subdirectory }
+          : {}),
+        ...(parsed.data.mode !== undefined ? { mode: parsed.data.mode } : {}),
+        ...(parsed.data.constraints !== undefined
+          ? { constraints: parsed.data.constraints }
+          : {}),
+        ...(parsed.data.sessionId !== undefined
+          ? { sessionId: parsed.data.sessionId }
+          : {}),
+      });
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_approve",
+    description:
+      "Record the user's decision on a reviewed installation plan. The DECISION ITSELF " +
+      "comes from the user clicking Approve/Reject on the install card — approval is bound " +
+      "to an opaque renderer-side token this tool cannot supply. Calling it before the user " +
+      "has decided returns APPROVAL_REQUIRED; poll skill_install_status to observe the " +
+      "card-driven outcome instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+        planRevision: {
+          type: "string",
+          description: "The plan revision shown to the user.",
+        },
+        approve: {
+          type: "boolean",
+          description: "true to proceed, false to cancel.",
+        },
+        selectedSkillIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Which discovered skills to activate (multi-skill packages).",
+        },
+      },
+      required: ["sessionId", "planRevision", "approve"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallApproveArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return { success: false, result: { error: "Installer disabled." } };
+      }
+      const parsed = SkillInstallApproveArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: {
+            error: parsed.error.issues.map((i) => i.message).join("; "),
+          },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.approve({
+        sessionId: parsed.data.sessionId,
+        planRevision: parsed.data.planRevision,
+        approve: parsed.data.approve,
+        ...(parsed.data.selectedSkillIds !== undefined
+          ? { selectedSkillIds: parsed.data.selectedSkillIds }
+          : {}),
+        // FR-29: the model's execution context binds the call to its
+        // conversation; a session from another conversation is rejected.
+        conversationId: context.conversationId,
+      });
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_update",
+    description:
+      "Update an INSTALLED skill to its latest source revision. Re-acquires the recorded " +
+      "source, re-inspects, and returns a fresh plan for approval — expanded capabilities " +
+      "always require renewed approval. Identify the installation by its installation_id " +
+      "OR by the installed skill's exact name (a unique name resolves deterministically; " +
+      "an ambiguous name returns the candidate ids).",
+    parameters: {
+      type: "object",
+      properties: {
+        installationId: {
+          type: "string",
+          description:
+            "Installation id from a prior skill_install_status/approve result.",
+        },
+        name: {
+          type: "string",
+          description:
+            "Installed skill name, e.g. 'video-use' (natural-language identity).",
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return { success: false, result: { error: "Installer disabled." } };
+      }
+      const installationId = String(args.installationId ?? "");
+      const name = String(args.name ?? "");
+      if (!installationId && !name) {
+        return {
+          success: false,
+          result: { error: "installationId or name is required." },
+        };
+      }
+      const snapshot = await new SkillInstallationModule().update({
+        ...(installationId ? { installationId } : {}),
+        ...(name ? { name } : {}),
+        // FR-26/FR-29: keep the real conversation on the update session.
+        conversationId: context.conversationId,
+      });
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_repair",
+    description:
+      "Repair an installed skill WITHOUT updating it: recheck the activation, content, " +
+      "registry registration, and status; re-register in the runtime catalog when missing. " +
+      "Identify the installation by its installation_id OR by the installed skill's " +
+      "exact name.",
+    parameters: {
+      type: "object",
+      properties: {
+        installationId: {
+          type: "string",
+          description: "Installation id from a prior installer result.",
+        },
+        name: {
+          type: "string",
+          description:
+            "Installed skill name, e.g. 'video-use' (natural-language identity).",
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const installationId = String(args.installationId ?? "");
+      const name = String(args.name ?? "");
+      if (!installationId && !name) {
+        return {
+          success: false,
+          result: { error: "installationId or name is required." },
+        };
+      }
+      const report = await new SkillInstallationModule().repair({
+        ...(installationId ? { installationId } : {}),
+        ...(name ? { name } : {}),
+      });
+      return { success: report.ok, result: { ...report } };
+    },
+  },
+  {
+    name: "skill_install_status",
+    description:
+      "Get the current state, progress summary, and next required action for an " +
+      "installation session. Every lifecycle step is correlated by session_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallStatusArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallStatusArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.getStatus(
+        parsed.data.sessionId,
+        context.conversationId
+      );
+      return { success: true, result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_cancel",
+    description:
+      "Cancel an in-progress installation. Cancels before activation remove staging " +
+      "data; cancels after activation begins trigger rollback.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallCancelArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallCancelArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.cancel(
+        parsed.data.sessionId,
+        context.conversationId
+      );
+      return {
+        success: snapshot.state === "cancelled",
+        result: { ...snapshot },
+      };
+    },
+  },
+  {
+    name: "skill_install_retry",
+    description:
+      "Retry a failed installation from its recorded source (FR-20). Runs a fresh " +
+      "attempt for the same canonical source and returns the new session snapshot. " +
+      "Automatic retries stop after three failures with the same cause — then the user " +
+      "must review the failure or change the source.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "The FAILED session id whose source should be retried.",
+        },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallCancelArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallCancelArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.retry(
+        parsed.data.sessionId,
+        context.conversationId
+      );
+      return {
+        success: !snapshot.errorCode,
+        result: { ...snapshot },
+      };
+    },
+  },
+  {
+    name: "use_skill",
+    description:
+      "Invoke an installed prompt skill and load its instructions for the current task. " +
+      "Accepts the skill's visible name or its prompt: runtime id from the available-skills list. " +
+      "Returns a short acknowledgement; the verified instructions follow as hidden context. " +
+      "This tool only INVOKES already-installed skills — it never installs, updates, repairs, " +
+      "or configures skill packages (use skill_install_prepare for that).",
+    parameters: {
+      type: "object",
+      properties: {
+        skill: {
+          type: "string",
+          description:
+            "Skill name or prompt: runtime id, e.g. 'video-use' or 'prompt:user:<id>'.",
+        },
+        arguments: {
+          type: "string",
+          description:
+            "Optional task context for the invocation (plain text, never secrets).",
+        },
+        invocationReason: {
+          type: "string",
+          description: "Optional short reason for diagnostics.",
+        },
+      },
+      required: ["skill"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { getDefaultPromptSkillInvocationService } = await import(
+        "@/service/PromptSkillInvocationService"
+      );
+      const { getDefaultFilesystemContextService } = await import(
+        "@/service/ConversationFilesystemContextService"
+      );
+      const scope = await getDefaultFilesystemContextService()
+        .resolve(context.conversationId)
+        .then((r) => (r.ok ? r.context : null))
+        .catch(() => null);
+      const outcome = await getDefaultPromptSkillInvocationService().invoke(
+        {
+          skill: String(args.skill ?? ""),
+          ...(args.arguments !== undefined
+            ? { arguments: String(args.arguments) }
+            : {}),
+          ...(args.invocationReason !== undefined
+            ? { invocationReason: String(args.invocationReason) }
+            : {}),
+        },
+        {
+          conversationId: context.conversationId,
+          conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
+          ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
+            ? { workspaceId: scope.workspaceId }
+            : {}),
+          invocationSource: "model",
+          // FR-24 (audit finding 7): bound the hidden instruction block by
+          // the caller's REAL remaining-context estimate when available.
+          ...(context.remainingContextTokens !== undefined &&
+          Number.isFinite(context.remainingContextTokens) &&
+          context.remainingContextTokens > 0
+            ? {
+                availableTokens: Math.min(
+                  Math.floor(context.remainingContextTokens),
+                  16_000
+                ),
+              }
+            : {}),
+        }
+      );
+      if (!outcome.ok) {
+        return { success: false, result: { ...outcome.result } };
+      }
+      return {
+        success: true,
+        result: { ...outcome.result },
+        // Transient sibling: the query loop turns this into the hidden
+        // instruction message; it is never persisted or emitted.
+        ...(outcome.attachment
+          ? { promptSkillContext: outcome.attachment }
+          : {}),
+      };
+    },
+  },
+  {
+    name: "skill_resource_list",
+    description:
+      "List files inside an invoked prompt skill's root (bounded, read-only). " +
+      "Use after use_skill when the skill instructions reference helper files " +
+      "(e.g. helpers/) and you need their names/sizes before reading.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        subpath: {
+          type: "string",
+          description:
+            "Optional relative subdirectory inside the skill root (e.g. 'helpers').",
+        },
+      },
+      required: ["runtime_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { listSkillResources } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const outcome = await listSkillResources(
+        String(args.runtime_id ?? ""),
+        args.subpath === undefined ? undefined : String(args.subpath),
+        context.conversationId
+      );
+      return outcome;
+    },
+  },
+  {
+    name: "skill_resource_read",
+    description:
+      "Read one text file from an invoked prompt skill's root (read-only, bounded). " +
+      "Use for omitted SKILL.md sections or referenced helper files after use_skill. " +
+      "Rejects absolute paths, traversal, binaries, and oversized files.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Relative path inside the skill root (e.g. 'helpers/cut.py').",
+        },
+      },
+      required: ["runtime_id", "path"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { readSkillResource } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const outcome = await readSkillResource(
+        String(args.runtime_id ?? ""),
+        String(args.path ?? ""),
+        context.conversationId
+      );
+      return outcome;
+    },
+  },
+  {
+    name: "skill_resource_execute",
+    description:
+      "Run ONE helper script inside an invoked prompt skill's root (separately " +
+      "approved every call). Only whitelisted script types (.py, .js, .mjs, .sh) run " +
+      "through their interpreter with bounded plain-string arguments — never shell " +
+      "text, binaries, or writes. The skill root grants no other capability.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        path: {
+          type: "string",
+          description: "Helper file inside the skill root, e.g. 'helpers/cut.py'.",
+        },
+        args: {
+          type: "array",
+          items: { type: "string" },
+          description: "Plain-string arguments for the helper (no shell text).",
+        },
+      },
+      required: ["runtime_id", "path"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { executeSkillResource } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const rawArgs = Array.isArray(args.args) ? args.args : [];
+      const outcome = await executeSkillResource(
+        String(args.runtime_id ?? ""),
+        String(args.path ?? ""),
+        rawArgs.map((a: unknown) => String(a ?? "")),
+        context.conversationId
+      );
+      return outcome;
     },
   },
   {
@@ -4063,7 +4773,7 @@ function managedBrowserToolWrapper(
     }) => void;
   }
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
-  const service = getDefaultManagedBrowserAiToolService();
+  getDefaultManagedBrowserAiToolService();
   return method(args, {
     conversationId: context.conversationId,
     toolCallId: context.toolCallId,
@@ -4565,6 +5275,93 @@ const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
   CONVERSATION_HISTORY_READ_TOOL_NAME,
 ]);
 
+/**
+ * True when the retrieval tools may run for this conversation.
+ *
+ * Two independent reasons, both required by the design:
+ *   1. model-visible reference delivery is enabled, OR
+ *   2. the conversation already holds committed references.
+ *
+ * Condition 2 is what makes rollback safe: disabling capture stops new writes
+ * but must never unregister readers for output that is already on disk.
+ */
+async function isToolResultRetrievalAvailable(
+  context: { conversationId: string }
+): Promise<boolean> {
+  // The two rollout flags short-circuit the registry lookup entirely: when
+  // either is on, retrieval is unconditionally available regardless of
+  // whether this conversation has ever saved an output.
+  if (isToolOutputModelRefsEnabled()) return true;
+  if (isToolOutputCaptureEnabled()) return true;
+
+  // Both flags are off. Retrieval is still allowed IF this conversation
+  // already holds a committed artifact (TD §13.4: turning capture off must
+  // not erase readability of what was already saved). Otherwise the gate
+  // denies — and a denied `tool_result_read`/`tool_result_search` call
+  // returns the opaque `OUTPUT_NOT_AVAILABLE` to the model.
+  let committed = false;
+  let registryError: unknown = null;
+  try {
+    const { ToolResultModule } = await import("@/modules/ToolResultModule");
+    const { hasCommittedOutputs } = await import(
+      "@/service/toolResult/toolResultAvailability"
+    );
+    committed = await hasCommittedOutputs(
+      new ToolResultModule(),
+      context.conversationId
+    );
+  } catch (e) {
+    // Fail closed: an unreadable registry must not expose retrieval.
+    registryError = e;
+  }
+
+  if (committed) return true;
+
+  // Diagnose WHY the gate denied, without changing the model-facing code.
+  // The gate collapses feature-off / no-committed-outputs / registry-error
+  // into one opaque `OUTPUT_NOT_AVAILABLE` (correct for the contract:
+  // existence must not leak). But that leaves a human debugging a ~3ms
+  // bail with no signal as to which condition fired. This log line makes
+  // the three cases distinguishable at a glance in the main-process log:
+  //   - flags_off_no_committed_outputs: rollout flags off AND this
+  //     conversation never saved an output (the common hallucinated-id
+  //     case — the model is calling tool_result_read against an id that
+  //     was never issued here).
+  //   - registry_error: the registry lookup itself threw (e.g. DB not
+  //     openable), which fail-closed into denial.
+  logRetrievalDenialReason(
+    context.conversationId,
+    registryError
+      ? "registry_error"
+      : "flags_off_no_committed_outputs",
+    registryError instanceof Error
+      ? registryError.message
+      : registryError
+        ? String(registryError)
+        : undefined
+  );
+  return false;
+}
+
+/**
+ * Diagnostic helper: record WHY retrieval was denied for a conversation.
+ *
+ * Kept separate from the gate so the gate stays branch-free and fast on
+ * the happy path (flags on → immediate `true`, no extra work). Only the
+ * denial path pays for stringifying the reason.
+ */
+function logRetrievalDenialReason(
+  conversationId: string,
+  detail: "flags_off_no_committed_outputs" | "registry_error",
+  extra?: string
+): void {
+  console.warn(
+    `[SkillRegistry] tool_result retrieval unavailable for conversation "${conversationId}" (${detail})${
+      extra ? `: ${extra}` : ""
+    }`
+  );
+}
+
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,
   enablement: SkillRuntimeEnablement
@@ -4573,6 +5370,23 @@ function isSkillRuntimeEnabled(
     skill.source === "built-in" &&
     HISTORY_TOOL_NAMES.has(skill.name) &&
     (!isHistoryToolsEnabled() || !isArchiveReadsEnabled())
+  ) {
+    return false;
+  }
+  // Catalog honesty for the tool_result retrieval tools (TD §13.4 rollback
+  // semantics): with capture AND modelRefs both off, the conversation-scoped
+  // gate would deny every call, so advertising the tools only invites
+  // guaranteed-failing `RETRIEVAL_NOT_ENABLED` calls. Exclude them from the
+  // model-facing catalog instead. A conversation with committed outputs under
+  // this opt-out keeps them readable through the gate's registry fallback —
+  // this filter only controls what is ADVERTISED, matching the documented
+  // rollback rule ("modelRefs off -> no new references are advertised").
+  if (
+    skill.source === "built-in" &&
+    (skill.name === TOOL_RESULT_READ_TOOL_NAME ||
+      skill.name === TOOL_RESULT_SEARCH_TOOL_NAME) &&
+    !isToolOutputModelRefsEnabled() &&
+    !isToolOutputCaptureEnabled()
   ) {
     return false;
   }

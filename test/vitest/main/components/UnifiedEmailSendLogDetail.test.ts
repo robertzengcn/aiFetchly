@@ -96,6 +96,22 @@ const stubs = {
     template: '<div data-testid="error-alert"><slot /></div>',
   },
   VIcon: { props: ["start", "size", "color"], template: "<i><slot /></i>" },
+  VTabs: {
+    props: ["modelValue"],
+    template: '<div data-testid="html-tabs"><slot /></div>',
+  },
+  VTab: {
+    props: ["value"],
+    template: '<button :data-testid="\'tab-\' + value"><slot /></button>',
+  },
+  VWindow: {
+    props: ["modelValue"],
+    template: "<div><slot /></div>",
+  },
+  VWindowItem: {
+    props: ["value"],
+    template: "<div><slot /></div>",
+  },
 };
 
 const LEGACY_DETAIL: UnifiedSendLogDetailEntry = {
@@ -200,6 +216,67 @@ describe("SendLogDetail (unified send-log detail page)", () => {
     expect(wrapper.text()).toContain("authorized-reply@svc.com");
     // The legacy-only log card is absent on an authorized row.
     expect(wrapper.text()).not.toContain("smtp transcript");
+  });
+
+  it("renders HTML preview in a sandboxed iframe with tabs when bodyHtml exists", async () => {
+    apiMocks.getUnifiedEmailSendLogDetail.mockResolvedValue({
+      ...AUTHORIZED_DETAIL,
+      bodyText: "Hello text",
+      bodyHtml: '<p>Hello <b>html</b></p><img src="https://tracker.example/pixel.gif">',
+    });
+    const { wrapper } = await mountDetail("authorized", "12");
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLogDetail).toHaveBeenCalled();
+    });
+    await vi.dynamicImportSettled();
+
+    // Tabs are shown when HTML content exists.
+    expect(wrapper.find('[data-testid="html-tabs"]').exists()).toBe(true);
+    // Sandboxed iframe carries the rendered HTML, never v-html.
+    const frame = wrapper.find('[data-testid="html-preview-frame"]');
+    expect(frame.exists()).toBe(true);
+    expect(frame.attributes("sandbox")).toBeDefined();
+    const srcdoc = frame.attributes("srcdoc") ?? "";
+    expect(srcdoc).toContain("<b>html</b>");
+    // Tracking-pixel defense: remote images are stripped.
+    expect(srcdoc).not.toContain("<img");
+    expect(srcdoc).toContain("[image hidden]");
+    // Source text is still available.
+    expect(wrapper.text()).toContain("Hello text");
+  });
+
+  it("renders legacy HTML content in the sandboxed preview", async () => {
+    apiMocks.getUnifiedEmailSendLogDetail.mockResolvedValue({
+      ...LEGACY_DETAIL,
+      content: "<h1>Hi</h1><p>legacy html</p>",
+    });
+    const { wrapper } = await mountDetail("legacy", "11");
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLogDetail).toHaveBeenCalled();
+    });
+    await vi.dynamicImportSettled();
+
+    const frame = wrapper.find('[data-testid="html-preview-frame"]');
+    expect(frame.exists()).toBe(true);
+    expect((frame.attributes("srcdoc") ?? "")).toContain("legacy html");
+  });
+
+  it("shows text only with no preview tabs for plain-text content", async () => {
+    apiMocks.getUnifiedEmailSendLogDetail.mockResolvedValue({
+      ...LEGACY_DETAIL,
+      content: "just plain text, no tags",
+    });
+    const { wrapper } = await mountDetail("legacy", "11");
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLogDetail).toHaveBeenCalled();
+    });
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="html-tabs"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="html-preview-frame"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).toContain("just plain text, no tags");
   });
 
   it("shows an error alert when the detail fetch fails", async () => {

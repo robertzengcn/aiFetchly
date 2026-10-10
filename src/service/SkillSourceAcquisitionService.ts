@@ -1,0 +1,422 @@
+/**
+ * SkillSourceAcquisitionService — acquires a skill source into app-owned
+ * staging (design §9, PRD §11).
+ *
+ * Reuses the existing plugin source fetchers (git / github / local folder /
+ * local zip) so acquisition limits and redaction have one owner, then moves
+ * the acquired tree into the session staging layout:
+ *
+ *   <stagingRoot>/sessions/<session-id>/source/
+ *
+ * Never clones into the user's home directory. Records the resolved Git
+ * commit (or content hash for archives/local copies) BEFORE activation so
+ * provenance is immutable. Staging root defaults to Electron userData with
+ * an AIFETCHLY_SKILL_STAGING_ROOT override for tests/advanced deployments.
+ */
+
+import { spawn } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import {
+  GitHubPluginFetcher,
+  classifyGitHubUrl,
+} from "@/service/pluginSources/GitHubPluginFetcher";
+import { GitPluginFetcher } from "@/service/pluginSources/GitPluginFetcher";
+import { LocalFolderPluginFetcher } from "@/service/pluginSources/LocalFolderPluginFetcher";
+import { LocalZipPluginFetcher } from "@/service/pluginSources/LocalZipPluginFetcher";
+import type { PluginSourceRequest } from "@/service/pluginSources/pluginSourceTypes";
+import { SkillInstallationWorkerClient } from "@/service/SkillInstallationWorkerClient";
+import type {
+  ResolvedSkillSource,
+  SkillSourceDescriptor,
+  SkillSourceKind,
+} from "@/entityTypes/skillInstallationTypes";
+import { sha256Hex } from "@/utils/contentHash";
+
+export interface AcquisitionLimits {
+  readonly maxFiles: number;
+  readonly maxTotalBytes: number;
+  readonly timeoutMs: number;
+}
+
+export const DEFAULT_ACQUISITION_LIMITS: AcquisitionLimits = {
+  maxFiles: 5_000,
+  maxTotalBytes: 250 * 1024 * 1024,
+  timeoutMs: 60_000,
+};
+
+export type AcquisitionResult =
+  | { readonly ok: true; readonly source: ResolvedSkillSource }
+  | {
+      readonly ok: false;
+      readonly code:
+        | "SOURCE_ACQUISITION_FAILED"
+        | "SOURCE_AUTH_REQUIRED"
+        | "SOURCE_LIMIT_EXCEEDED"
+        | "SOURCE_INVALID";
+      readonly message: string;
+    };
+
+/**
+ * Defense-in-depth redaction (NFR-03): strip URL userinfo from any remote
+ * URI before it becomes canonicalUri — the canonical form flows into
+ * provenance rows, safe plan summaries, and diagnostics. The schema
+ * boundary already REJECTS credentialed sources; this guarantees nothing
+ * credential-shaped persists if one ever slips past (or arrives from a
+ * legacy stored session).
+ */
+export function redactSourceCredentials(uri: string): string {
+  return uri.replace(
+    /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@:\s]+(?::[^/@\s]*)?@/,
+    "$1"
+  );
+}
+
+/** Normalize a user-supplied source string into a descriptor. */
+export function normalizeSkillSource(
+  raw: string
+): SkillSourceDescriptor | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const github = classifyGitHubUrl(trimmed);
+
+  if (/^https:\/\/github\.com\//.test(trimmed) && github.type === "repo") {
+    // Strip .git and trailing slash; subdirectory travels separately.
+    return {
+      kind: "github",
+      canonicalUri: `https://github.com/${github.owner}/${github.repo}`,
+    };
+  }
+  if (/^git@|^ssh:\/\/|^git:\/\//.test(trimmed)) {
+    return { kind: "git", canonicalUri: redactSourceCredentials(trimmed) };
+  }
+  if (/^https:\/\/[^\s]+\.git$/i.test(trimmed)) {
+    return {
+      kind: "git",
+      canonicalUri: redactSourceCredentials(trimmed.replace(/\.git$/i, "")),
+    };
+  }
+  // Local references — absolute or explicitly relative paths.
+  if (
+    path.isAbsolute(trimmed) ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  ) {
+    return {
+      kind: trimmed.match(/\.(zip|tgz|tar\.gz)$/i)
+        ? "local-archive"
+        : "local-directory",
+      canonicalUri: path.resolve(trimmed),
+    };
+  }
+  return null;
+}
+
+export function resolveStagingRoot(override?: string): string {
+  if (override) return override;
+  const env = process.env.AIFETCHLY_SKILL_STAGING_ROOT;
+  if (env) return env;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const { app } = require("electron") as typeof import("electron");
+    return path.join(app.getPath("userData"), "skill-installation");
+  } catch {
+    return path.join(os.tmpdir(), "aifetchly-skill-installation");
+  }
+}
+
+export class SkillSourceAcquisitionService {
+  private readonly git = new GitPluginFetcher();
+  private readonly github = new GitHubPluginFetcher();
+  private readonly localFolder = new LocalFolderPluginFetcher();
+  private readonly localZip = new LocalZipPluginFetcher();
+  private readonly limits: AcquisitionLimits;
+  private readonly stagingRoot: string;
+  private readonly stagingClient: SkillInstallationWorkerClient;
+
+  constructor(
+    limits: AcquisitionLimits = DEFAULT_ACQUISITION_LIMITS,
+    stagingRoot?: string,
+    stagingClient?: SkillInstallationWorkerClient
+  ) {
+    this.limits = limits;
+    this.stagingRoot = resolveStagingRoot(stagingRoot);
+    this.stagingClient = stagingClient ?? new SkillInstallationWorkerClient();
+  }
+
+  /**
+   * Acquire a source into session staging. The returned tree lives under
+   * the app-owned staging root; cancel/uninstall removes it wholesale.
+   */
+  async acquire(
+    sessionId: string,
+    descriptor: SkillSourceDescriptor
+  ): Promise<AcquisitionResult> {
+    const sessionDir = this.sessionDir(sessionId);
+    const sourceDir = path.join(sessionDir, "source");
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+      fs.mkdirSync(sourceDir, { recursive: true });
+    } catch (err) {
+      return {
+        ok: false,
+        code: "SOURCE_ACQUISITION_FAILED",
+        message: `Failed to prepare staging: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+
+    const request = this.buildRequest(descriptor);
+    if (!request.ok) {
+      return { ok: false, code: "SOURCE_INVALID", message: request.message };
+    }
+
+    const acquired = await this.fetcherFor(descriptor.kind).acquire(
+      request.req
+    );
+    if (!acquired.success) {
+      const message = acquired.errors
+        .map((e) => e.message)
+        .join("; ")
+        .replace(/https?:\/\/[^\s]+/g, "[source]"); // redact URLs
+      // E5 (PRD §23.1 source-auth-required): authentication/authorization
+      // failures against the remote are their own typed code — the fix is
+      // credentials (helper/agent), not a retry.
+      const authFailure = /\b(auth|authentication|permission denied|403|access denied|could not read from remote)\b/i.test(
+        message
+      );
+      return {
+        ok: false,
+        code: authFailure ? "SOURCE_AUTH_REQUIRED" : "SOURCE_ACQUISITION_FAILED",
+        message: authFailure
+          ? `${message} (source authentication required — configure a Git credential helper or SSH key)`
+          : message,
+      };
+    }
+
+    const { localRoot, cleanup } = acquired.source;
+    try {
+      const target = path.join(sourceDir, "content");
+
+      // Stage through the worker client: the bounded copy + tree hash runs
+      // in the skill-installation utility process when available (design
+      // §15.2 — acquisition must not block the main process), falling back
+      // to inline staging with IDENTICAL limits and hashes.
+      const staged = await this.stagingClient.stage(localRoot, target, {
+        maxFiles: this.limits.maxFiles,
+        maxTotalBytes: this.limits.maxTotalBytes,
+        maxDepth: 20,
+      });
+      if (!staged.ok) {
+        return {
+          ok: false,
+          code:
+            staged.code === "SOURCE_LIMIT_EXCEEDED"
+              ? "SOURCE_LIMIT_EXCEEDED"
+              : "SOURCE_ACQUISITION_FAILED",
+          message: staged.message,
+        };
+      }
+
+      const contentHash = staged.result.contentHash;
+
+      // FR-03 (audit finding 10): the fetcher's TRUSTED provenance wins.
+      // The GitHub archive fetcher already knows the immutable commit SHA
+      // it resolved and downloaded; rev-parse against the archive checkout
+      // cannot work (no .git) and a staged-tree hash is a CONTENT
+      // identity, not a commit. Only when the fetcher supplied none (git
+      // clones, local sources) do we fall back to rev-parse / tree hash.
+      const fetcherProvenance = acquired.source.provenance;
+      const fetcherSha =
+        fetcherProvenance?.sourceMeta &&
+        typeof fetcherProvenance.sourceMeta.resolvedCommitSha === "string" &&
+        /^[0-9a-f]{40}$/i.test(fetcherProvenance.sourceMeta.resolvedCommitSha)
+          ? (fetcherProvenance.sourceMeta.resolvedCommitSha as string).toLowerCase()
+          : null;
+      const fetcherAcquisition =
+        fetcherProvenance?.sourceMeta &&
+        typeof fetcherProvenance.sourceMeta.acquisition === "string"
+          ? (fetcherProvenance.sourceMeta.acquisition as string)
+          : null;
+      const resolvedRevision =
+        fetcherSha ??
+        (await this.resolveRevision(localRoot, target, descriptor));
+
+      return {
+        ok: true,
+        source: {
+          sourceId: sha256Hex(
+            `${descriptor.kind}:${descriptor.canonicalUri}`
+          ).slice(0, 16),
+          canonicalUri: descriptor.canonicalUri,
+          resolvedRevision,
+          acquiredRoot: target,
+          contentHash,
+          acquisitionMethod:
+            fetcherAcquisition === "github-archive" ||
+            fetcherAcquisition === "github-release-asset"
+              ? fetcherAcquisition
+              : descriptor.kind === "git" || descriptor.kind === "github"
+                ? "git"
+                : "local-copy",
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        code: "SOURCE_ACQUISITION_FAILED",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      try {
+        await cleanup();
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+
+  /**
+   * Resolve a session's staging directory with a hard containment guard:
+   * the resolved path must sit strictly INSIDE <stagingRoot>/sessions
+   * (separator-aware), and the id must match the strict charset. Guards
+   * every recursive delete against traversal via model-controlled ids
+   * (NFR-05 / review S1).
+   */
+  private sessionDir(sessionId: string): string {
+    if (!/^[A-Za-z0-9:_-]+$/.test(sessionId)) {
+      throw new Error("Invalid session id.");
+    }
+    const sessionsRoot = path.resolve(this.stagingRoot, "sessions");
+    const resolved = path.resolve(sessionsRoot, sessionId);
+    const rootWithSep = sessionsRoot.endsWith(path.sep)
+      ? sessionsRoot
+      : sessionsRoot + path.sep;
+    if (resolved !== sessionsRoot && !resolved.startsWith(rootWithSep)) {
+      throw new Error("Session path escapes the staging root.");
+    }
+    return resolved;
+  }
+
+  /** Remove one session's staging tree (cancel / cleanup path). */
+  removeSession(sessionId: string): void {
+    let sessionDir: string;
+    try {
+      sessionDir = this.sessionDir(sessionId);
+    } catch {
+      return; // invalid id — nothing we own to remove
+    }
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+
+  private buildRequest(
+    descriptor: SkillSourceDescriptor
+  ): { ok: true; req: PluginSourceRequest } | { ok: false; message: string } {
+    switch (descriptor.kind) {
+      case "github":
+      case "git":
+        return {
+          ok: true,
+          req: {
+            kind: descriptor.kind,
+            uri: descriptor.canonicalUri,
+            ...(descriptor.requestedRevision
+              ? { ref: descriptor.requestedRevision }
+              : {}),
+          },
+        };
+      case "local-directory":
+        return {
+          ok: true,
+          req: { kind: "local-folder", folderPath: descriptor.canonicalUri },
+        };
+      case "local-archive":
+        return {
+          ok: true,
+          req: { kind: "local-zip", zipPath: descriptor.canonicalUri },
+        };
+      default:
+        return { ok: false, message: "Unsupported source kind." };
+    }
+  }
+
+  private fetcherFor(kind: SkillSourceKind) {
+    switch (kind) {
+      case "github":
+        return this.github;
+      case "git":
+        return this.git;
+      case "local-archive":
+        return this.localZip;
+      default:
+        return this.localFolder;
+    }
+  }
+
+  private async resolveRevision(
+    cloneRoot: string,
+    stagingRoot: string,
+    descriptor: SkillSourceDescriptor
+  ): Promise<string> {
+    // An explicitly pinned 40-hex revision IS the provenance (PRD §11.2).
+    if (
+      descriptor.requestedRevision &&
+      /^[0-9a-f]{40}$/i.test(descriptor.requestedRevision)
+    ) {
+      return descriptor.requestedRevision;
+    }
+    // FR-03: git/github acquisitions record the RESOLVED COMMIT SHA — read
+    // HEAD from the fetcher's still-live clone (typed args, bounded wait)
+    // BEFORE staging cleanup. Branch, tag, and default-branch installs all
+    // resolve through the same rev-parse. The staged-tree content hash
+    // remains the SEPARATE content identity (both are recorded).
+    if (descriptor.kind === "git" || descriptor.kind === "github") {
+      try {
+        const sha = await this.revParseHead(cloneRoot);
+        if (sha) return sha;
+      } catch {
+        /* archive fallback path has no .git — content identity below */
+      }
+    }
+    // Non-git sources (and archive fallbacks without a local clone) use the
+    // content hash of the staged tree as their immutable identity.
+    const { hashTree } = await import(
+      "@/childprocess/skill-installation/stagePackage"
+    );
+    return hashTree(stagingRoot);
+  }
+
+  /** `git -C <clone> rev-parse HEAD` with typed args and a bounded wait. */
+  private revParseHead(cloneRoot: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      try {
+        const child = spawn("git", ["-C", cloneRoot, "rev-parse", "HEAD"], {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        });
+        let out = "";
+        const timer = setTimeout(() => {
+          child.kill();
+          resolve(null);
+        }, 10_000);
+        child.stdout?.on("data", (chunk: Buffer) => {
+          out += chunk.toString("utf8");
+        });
+        child.on("error", () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          const trimmed = out.trim();
+          resolve(code === 0 && /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : null);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+}

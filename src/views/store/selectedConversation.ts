@@ -339,8 +339,26 @@ export const useSelectedConversationStore = defineStore(
         }
         return true;
       } catch (err) {
-        errorMessage.value =
+        const messageText: string =
           err instanceof Error ? err.message : "Failed to start the run";
+        // Pre-V2 parity (AiChatBox + AiChatV2.showAssistantError): surface the
+        // denial as a visible assistant bubble so an AI-disabled
+        // (subscription-required) rejection is not silent. The optimistic user
+        // row is kept for retry; the error bubble carries the backend's
+        // user-safe message (e.g. hosted-subscription notice).
+        presenter.appendLocalUserMessage({
+          id: `local-error-${Date.now()}`,
+          conversationId,
+          role: "assistant",
+          content: messageText,
+          timestamp: new Date().toISOString(),
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2", error: messageText },
+        });
+        syncFromPresenter();
+        // syncFromPresenter copies the presenter's (null) errorMessage, so
+        // re-apply the rejection AFTER the sync or the banner stays silent.
+        errorMessage.value = messageText;
         streamStatus.value = "error";
         return false;
       }

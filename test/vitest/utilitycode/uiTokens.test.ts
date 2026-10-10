@@ -59,9 +59,22 @@ describe("convergence token palettes (IPR-009..013)", () => {
     ).toBeGreaterThan(0.35);
   });
 
-  it("reserves the burnt-orange accent consistently across themes", () => {
+  it("reserves the technology-blue accent consistently across themes", () => {
     expect(aifetchlyDark.primary).not.toBe(aifetchlyLight.primary);
     expect(paletteFor("aifetchlyDark")).toBe(aifetchlyDark);
     expect(paletteFor("aifetchlyLight")).toBe(aifetchlyLight);
+  });
+
+  it("uses a blue primary in both themes (technology symbol)", () => {
+    const isBlueDominant = (hex: string): boolean => {
+      const v = hex.replace("#", "");
+      const full = v.length === 3 ? v.split("").map((c) => c + c).join("") : v;
+      const r = parseInt(full.slice(0, 2), 16);
+      const g = parseInt(full.slice(2, 4), 16);
+      const b = parseInt(full.slice(4, 6), 16);
+      return b > r && b >= g;
+    };
+    expect(isBlueDominant(aifetchlyDark.primary)).toBe(true);
+    expect(isBlueDominant(aifetchlyLight.primary)).toBe(true);
   });
 });

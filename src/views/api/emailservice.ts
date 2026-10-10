@@ -107,7 +107,7 @@ export async function updateEmailServiceTag(
 
 export async function deleteEmailServiceTag(
   id: number
-): Promise<{ affectedServiceCount: number }> {
+): Promise<{ affectedServiceCount: number; servicesBecomingUntagged: number }> {
   return await windowInvoke(EMAILSERVICETAGDELETE, { id });
 }
 //send test email

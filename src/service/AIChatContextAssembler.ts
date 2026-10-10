@@ -20,6 +20,8 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { PromptSkillInvocationModule } from "@/modules/PromptSkillInvocationModule";
+import { buildPromptSkillCatalogBlock } from "@/service/PromptSkillCatalogPresenter";
 import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import {
   buildToolHistoryIndexBlock,
@@ -41,6 +43,10 @@ import { MessageType } from "@/entityTypes/commonType";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import { log } from "@/modules/Logger";
+import type {
+  LegacyProjection,
+  LegacyProjectionLookup,
+} from "@/entityTypes/toolResultTypes";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import type { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 
@@ -100,6 +106,15 @@ export interface AIChatContextAssemblerDeps {
    * (engine default, IPC, scheduled factory).
    */
   readonly archiveModule?: AIChatArchiveModule;
+  /**
+   * Legacy projection lookup (T14 / design §10.2). When supplied, the
+   * assembler substitutes a bounded projection's content for any legacy
+   * oversized row whose `messageId` has a projection — the original row is
+   * never mutated, and the bounded content is what gets costed and sent.
+   * When absent, legacy rows are loaded with their raw content (the
+   * pre-T14 behavior), so this is a strictly additive enhancement.
+   */
+  readonly projectionLookup?: LegacyProjectionLookup;
 }
 
 export interface AIChatContextAssembleInput {
@@ -203,10 +218,16 @@ export class AIChatContextAssembler {
   private readonly compactionReader?: AIChatContextCompactionReader;
   /** Archive access for turn-backed retention; absent → bounded-row fallback. */
   private readonly archiveModule?: AIChatArchiveModule;
+  /**
+   * Legacy projection lookup (T14). When present, oversized legacy rows are
+   * replaced by their bounded projection at read time. Absent → raw content.
+   */
+  private readonly projectionLookup?: LegacyProjectionLookup;
 
   constructor(deps?: AIChatContextAssemblerDeps) {
     this.compactionReader = deps?.compactionReader;
     this.archiveModule = deps?.archiveModule;
+    this.projectionLookup = deps?.projectionLookup;
   }
 
   /**
@@ -432,10 +453,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to resolve active workspace:",
-        err
-      );
+      log.error("[ai-chat-context] failed to resolve active workspace:", err);
     }
 
     // Environment & system context. Informs the model of the OS, app
@@ -445,10 +463,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to build environment context:",
-        err
-      );
+      log.error("[ai-chat-context] failed to build environment context:", err);
     }
 
     // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
@@ -481,10 +496,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] available agents injection failed:",
-        err
-      );
+      log.error("[ai-chat-context] available agents injection failed:", err);
     }
 
     // Built-in tool capabilities guidance (HTML-artifacts design §15,
@@ -507,6 +519,50 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Application-owned skill installation routing policy (design §8.5,
+    // FR-26): injected exactly once per turn as system context, after core
+    // capability guidance and BEFORE any repository-authored or invoked-skill
+    // content. Only while the installer feature flag is enabled; repository
+    // content can never replace or weaken this section.
+    try {
+      const { isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (isSkillInstallerEnabled()) {
+        const { buildSkillInstallationRoutingSection } = await import(
+          "@/service/SkillInstallationRoutingPromptSection"
+        );
+        messages.push({
+          role: "system",
+          content: buildSkillInstallationRoutingSection(),
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] skill installation routing policy injection failed:",
+        err
+      );
+    }
+
+    // Available prompt skills catalog (design §10.3, NFR-09): metadata-only
+    // discovery so the model knows what use_skill can invoke. Instruction
+    // bodies are NEVER injected here — they load lazily after invocation.
+    try {
+      const workspaceResolved = await new WorkspaceResolver().resolve(
+        input.conversationId
+      );
+      const catalogBlock = buildPromptSkillCatalogBlock(
+        workspaceResolved ? { workspaceId: workspaceResolved.workspaceId } : {}
+      );
+      if (catalogBlock.length > 0) {
+        messages.push({ role: "system", content: catalogBlock });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] prompt skill catalog injection failed:",
+        err
+      );
+    }
     // Approved-plan execution context. `buildPlanModeSystemPrompt` (the only
     // other path that inlines planMarkdown into the system prompt) is gated on
     // `mode === "plan"`, but after a user approves the plan the execution round
@@ -568,10 +624,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] workspace memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] workspace memory retrieval failed:", err);
       }
     }
     if (workspaceContextBlock.length > 0) {
@@ -603,10 +656,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] durable memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] durable memory retrieval failed:", err);
       }
     }
     if (durableContextBlock.length > 0) {
@@ -651,6 +701,45 @@ export class AIChatContextAssembler {
           "conflict.\n\n" +
           evidenceBodies.join("\n\n---\n\n"),
       });
+    }
+
+    // Invoked prompt-skill reattachment (design §10.10/§17.2): full
+    // compaction must not summarize away active skill contracts. Reattach
+    // the STORED verified snapshots in deterministic invocation order AFTER
+    // the compact summary and BEFORE recent messages, so recent explicit
+    // user instructions can still refine the task. Recovery never mutates
+    // the stored block — a linked source that changed or vanished cannot
+    // rewrite past context.
+    try {
+      const invocationModule = new PromptSkillInvocationModule();
+      // FR-23 reconciliation: only invocations whose skill is still
+      // installed, enabled, and hash-identical reattach; invalid ones are
+      // deactivated with a bounded structured diagnostic (never silently
+      // restored, never silently dropped).
+      const { reattach, diagnostics } =
+        await invocationModule.reconcileForRecovery(input.conversationId);
+      for (const invocation of reattach) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-reattached]\n` +
+            `The following skill was invoked earlier in this conversation and ` +
+            `remains applicable:\n${invocation.normalizedInstructions}`,
+        });
+      }
+      for (const diagnostic of diagnostics) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-diagnostic code="${diagnostic.code}" runtime_id="${diagnostic.runtimeId}"]\n` +
+            `${diagnostic.message}`,
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] invoked prompt-skill reattachment failed:",
+        err
+      );
     }
 
     // Active composite boundary wins for tool evidence too; a resolved legacy
@@ -814,6 +903,82 @@ export class AIChatContextAssembler {
   }
 
   /**
+   * Replace oversized legacy rows with their bounded projection content
+   * (T14 / design §10.2). The original row objects are NEVER mutated — for
+   * each row whose `messageId` has a projection, a shallow copy carries the
+   * projection's bounded `content` instead. Rows without a projection pass
+   * through unchanged. When no `projectionLookup` is wired, this is a no-op
+   * (the pre-T14 raw-content behavior).
+   *
+   * The substitution is read-only with respect to the source archive: the
+   * original evidence stays immutable on disk, only the in-memory copy the
+   * assembler costs and sends is bounded. This is why the lookup is never
+   * asked to create a projection synchronously in the read hot path — that
+   * would re-materialize the full payload to truncate it, the exact
+   * anti-pattern the design forbids.
+   */
+  private async substituteProjections(
+    rows: AIChatMessageEntity[]
+  ): Promise<AIChatMessageEntity[]> {
+    if (!this.projectionLookup || rows.length === 0) return rows;
+    const keys = rows.map((r) => r.messageId);
+    let byKey: ReadonlyMap<string, LegacyProjection>;
+    try {
+      byKey = await this.projectionLookup.lookup({
+        profileId: "default",
+        sourceRowKeys: keys,
+      });
+    } catch {
+      // A lookup failure must never break context assembly — fall back to raw.
+      return rows;
+    }
+    if (byKey.size === 0) return rows;
+    let touched = false;
+    const out: AIChatMessageEntity[] = rows.map((row) => {
+      const proj = byKey.get(row.messageId);
+      if (!proj) return row;
+      touched = true;
+      // Immutable copy with the bounded content swapped in. `Object.assign`
+      // onto a fresh instance sharing the original's prototype preserves the
+      // `AIChatMessageEntity` type (a plain spread would drop the TypeORM
+      // entity methods), so downstream code that reads entity fields keeps
+      // type-checking without a cast. The original row object is untouched.
+      const copy = Object.create(
+        Object.getPrototypeOf(row)
+      ) as AIChatMessageEntity;
+      Object.assign(copy, row, {
+        content: proj.content,
+        metadata: this.mergeProjectionMetadata(row.metadata, proj),
+      });
+      return copy;
+    });
+    return touched ? out : rows;
+  }
+
+  /**
+   * Merge a projection's output references into a row's existing metadata
+   * JSON without clobbering unrelated keys. If the merge fails (corrupt
+   * metadata), keep the original metadata rather than dropping the row.
+   */
+  private mergeProjectionMetadata(
+    existing: string | undefined,
+    proj: LegacyProjection
+  ): string | undefined {
+    const refsJson = proj.outputRefsJson ?? "[]";
+    if (!existing) {
+      return JSON.stringify({ toolOutputRefs: JSON.parse(refsJson) });
+    }
+    try {
+      const parsed = JSON.parse(existing) as Record<string, unknown>;
+      const refs = JSON.parse(refsJson) as unknown;
+      return JSON.stringify({ ...parsed, toolOutputRefs: refs });
+    } catch {
+      // Keep the original metadata on any parse failure.
+      return existing;
+    }
+  }
+
+  /**
    * Turn-projection retention: the live tail always, plus newest complete
    * turns newest-first while the token budget allows. Turns that cannot be
    * loaded fully, or that exceed the budget alone, become labeled receipts
@@ -861,6 +1026,11 @@ export class AIChatContextAssembler {
         `live tail past turn ${newest.turnId} exceeds bounded reads; shorten the current turn or split it before retrying`
       );
     }
+    // T14: substitute bounded projections for oversized legacy rows BEFORE the
+    // cost estimate so a turn with projections is costed at its bounded size
+    // (an oversized turn that has a projection now fits the budget instead of
+    // becoming a receipt). Original rows are never mutated.
+    const liveRows = await this.substituteProjections(live.rows);
 
     // Newest complete turns first, while the shared budget allows.
     const kept: AIChatMessageEntity[] = [];
@@ -868,7 +1038,7 @@ export class AIChatContextAssembler {
     let spent = 0;
     for (let i = ranges.length - 1; i >= 0; i--) {
       const turn = ranges[i];
-      const { rows, complete } = await archive.readTurnRows(
+      const { rows: rawRows, complete } = await archive.readTurnRows(
         input.conversationId,
         turn.firstTimestampMs,
         turn.firstRowId,
@@ -881,7 +1051,7 @@ export class AIChatContextAssembler {
         // truncation (FR-05). Boundary message ids scope the retrieval range.
         receipts.unshift({
           turnId: turn.turnId,
-          detail: `could not be fully loaded within bounded reads (${rows.length}+ rows)`,
+          detail: `could not be fully loaded within bounded reads (${rawRows.length}+ rows)`,
           firstRef: `#${turn.firstRowId}`,
           lastRef: `#${turn.lastRowId}`,
         });
@@ -890,6 +1060,9 @@ export class AIChatContextAssembler {
         );
         continue;
       }
+      // T14: substitute projections before costing, so the budget sees the
+      // bounded content rather than the raw oversized body.
+      const rows = await this.substituteProjections(rawRows);
       const cost = rows.reduce(
         (sum, r) => sum + this.estimator.estimateText(r.content ?? ""),
         0
@@ -915,7 +1088,7 @@ export class AIChatContextAssembler {
       spent += cost;
       kept.unshift(...rows);
     }
-    return { rows: [...kept, ...live.rows], receipts };
+    return { rows: [...kept, ...liveRows], receipts };
   }
 
   private async buildEnvironmentContext(): Promise<string> {

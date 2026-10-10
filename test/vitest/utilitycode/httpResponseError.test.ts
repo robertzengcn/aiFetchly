@@ -10,14 +10,18 @@ const mockTokenGetValue = vi.hoisted(() =>
 );
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: mockTokenGetValue,
-    setValue: vi.fn(),
-  })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue = mockTokenGetValue;
+    setValue = vi.fn();
+  },
 }));
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({ removeToken: vi.fn() })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  User: class {
+    removeToken = vi.fn();
+  },
 }));
 
 vi.mock("@/modules/tokenRefresh", () => {
@@ -27,11 +31,13 @@ vi.mock("@/modules/tokenRefresh", () => {
       this.name = "RefreshTokenInvalidError";
     }
   }
-  const Stub = vi.fn().mockImplementation(() => ({}));
-  (Stub as unknown as { refreshOnce: () => Promise<unknown> }).refreshOnce =
-    () =>
+  // Vitest 4: vi.fn() stub is not constructable but HttpClient does
+  // `new TokenRefreshService()` — use a class with static refreshOnce.
+  class TokenRefreshService {
+    static refreshOnce = (): Promise<unknown> =>
       Promise.reject(new RefreshTokenInvalidError("no refresh in this test"));
-  return { RefreshTokenInvalidError, TokenRefreshService: Stub };
+  }
+  return { RefreshTokenInvalidError, TokenRefreshService };
 });
 
 vi.mock("@/modules/fieldCipher", () => ({

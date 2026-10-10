@@ -313,22 +313,21 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     ).toBe(false);
   });
 
-  it("places the workspace strip below the header and above the transcript", async () => {
+  it("places the workspace strip above the composer and below the transcript", async () => {
     const wrapper = mountSurface();
     const chatWorkspace = useChatWorkspaceStore();
     chatWorkspace.setSelected("conv-1");
     await flushPromises();
 
-    const header = wrapper.get(
-      '[data-testid="conversation-header-stub"]'
-    ).element;
     const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
     const transcript = wrapper.get('[data-testid="transcript-stub"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
     expect(
-      header.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING
+      transcript.compareDocumentPosition(strip) &
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      strip.compareDocumentPosition(transcript) &
+      strip.compareDocumentPosition(composer) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
@@ -354,6 +353,65 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
     expect(chatWorkspace.selectedConversationId).toBe("fresh-chat");
     expect(selected.messages).toEqual([]);
+  });
+
+  it("creates and selects a chat when sending from the empty state", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "fresh-chat",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    // Empty state: no conversation selected — the composer is still mounted.
+    expect(
+      wrapper.find('[data-testid="workspace-empty-state"]').exists()
+    ).toBe(true);
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "hello from empty state", []);
+    await flushPromises();
+
+    // The send must ensure a conversation first (legacy-dock parity):
+    // a fresh chat is created + selected and the run starts against it.
+    expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
+    expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "fresh-chat",
+      message: "hello from empty state",
+    });
+  });
+
+  it("shows the workspace chooser above the composer with no conversation selected", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    // Empty state — the badge (unset → Choose action) still renders and the
+    // strip sits above the composer input, never hidden.
+    expect(wrapper.findComponent({ name: "WorkspaceBadge" }).exists()).toBe(
+      true
+    );
+    const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
+    expect(
+      strip.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("creates a chat when choosing a workspace with no conversation selected", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "WorkspaceBadge" })
+      .vm.$emit("request-set-workspace");
+    await flushPromises();
+
+    expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
+    expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
   });
 
   it("renders the approved workspace through the shared composable", async () => {

@@ -26,6 +26,8 @@ by a prompt select a persistent scheduled-message loop.
 
 ## 2. Scope and Supersession
 
+The [task-completion and recovery technical design](./scheduled-loop-premature-stop-recovery-technical-design.md) defines proposed shared execution-level verification and budgets for manual and scheduled tasks, plus scheduled-occurrence accounting. It uses generic execution/ledger storage with an optional scheduled-run link. It supersedes unconditional success on a normal turn ending for those runs. Cadence, conversation binding, overlap, and approval behavior remain governed by this scheduled-loop design; natural-language schedule-wide stopping remains separate.
+
 The earlier scheduled AI message design at
 `docs/superpowers/specs/2026-06-09-scheduled-ai-message-task-design.md` selected
 "new conversation per run." This document supersedes that decision only for

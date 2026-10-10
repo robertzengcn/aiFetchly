@@ -12,6 +12,32 @@ import { ToolExecutor } from "@/service/ToolExecutor";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 
+// File tools resolve the shared conversation filesystem scope before the
+// FileToolService is constructed; give every conversation an approved
+// workspace so these tracking tests exercise the mock service below.
+const WORKSPACE_ROOT = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("node:path") as typeof import("node:path");
+  return fs.mkdtempSync(path.join(os.tmpdir(), "te-track-ws-"));
+});
+
+vi.mock("@/modules/WorkspaceModule", () => {
+  const getActiveWorkspace = vi.fn().mockResolvedValue({
+    id: 55,
+    rootPath: WORKSPACE_ROOT,
+    approvalState: "approved",
+  });
+  return {
+    WorkspaceModule: vi.fn().mockImplementation(() => ({
+      getActiveWorkspace,
+    })),
+  };
+});
+
 // Mock FileToolService to avoid real file operations
 const mockFileToolExecute = vi.fn();
 

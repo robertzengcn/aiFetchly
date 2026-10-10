@@ -17,90 +17,6 @@
       @delete="onDelete"
     />
 
-    <!-- Conversation workspace chooser (design §9.2): directly below the
-         header, above the run strip and transcript, inside the center. -->
-    <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
-      <template v-if="conversationId">
-        <AIConversationReportButton
-          :enabled="conversationReportEnabled"
-          :loading="reportCapabilitiesLoading"
-          :disabled-reason="conversationReportDisabledReason"
-          compact
-          @open="onOpenConversationReport"
-        />
-        <WorkspaceBadge
-          :workspace="conversationWorkspace.workspace.value"
-          :memory-count="conversationWorkspace.memoryCount.value"
-          :loading="conversationWorkspace.loading.value"
-          :busy="workspaceChangesBlocked"
-          @request-set-workspace="onRequestWorkspaceSetup"
-          @request-open-memory="openWorkspaceMemory"
-        />
-        <!-- Refresh failure: sanitized localized message + retry (FR-WS-002
-             error state). The raw exception never reaches the DOM. -->
-        <p
-          v-if="conversationWorkspace.errorMessage.value"
-          class="chat-center__workspace-error"
-          role="alert"
-          data-testid="workspace-load-error"
-        >
-          <v-icon size="x-small" color="warning" class="mr-1">
-            mdi-alert-circle-outline
-          </v-icon>
-          {{ t("workspace.loadFailed") || "Couldn't load the workspace." }}
-          <button
-            type="button"
-            class="chat-center__workspace-retry"
-            data-testid="workspace-retry"
-            @click="conversationWorkspace.refresh()"
-          >
-            {{ t("workspace.retry") || "Retry" }}
-          </button>
-        </p>
-        <!-- Approved workspace whose root could not be resolved (deleted /
-             inaccessible) — recoverable via retry (FR-WS-002). -->
-        <p
-          v-if="conversationWorkspace.pathUnavailable.value"
-          class="chat-center__workspace-error"
-          role="status"
-          data-testid="workspace-path-unavailable"
-        >
-          <v-icon size="x-small" color="warning" class="mr-1">
-            mdi-folder-remove-outline
-          </v-icon>
-          {{
-            t("workspace.pathUnavailable") ||
-            "Workspace folder is not accessible right now."
-          }}
-          <button
-            type="button"
-            class="chat-center__workspace-retry"
-            data-testid="workspace-path-retry"
-            @click="conversationWorkspace.refresh()"
-          >
-            {{ t("workspace.retry") || "Retry" }}
-          </button>
-        </p>
-        <WorkspaceRequiredCard
-          v-if="conversationWorkspace.setupOpen.value && conversationId"
-          :conversation-id="conversationId"
-          @approved="onWorkspaceApproved"
-          @cancel="conversationWorkspace.closeSetup()"
-        />
-        <WorkspaceTrustCard
-          v-if="
-            conversationWorkspace.trustCardVisible.value &&
-            conversationWorkspace.watchId.value &&
-            conversationId
-          "
-          :workspace-id="conversationWorkspace.watchId.value"
-          :conversation-id="conversationId"
-          @trusted="conversationWorkspace.trustAccepted()"
-          @dismissed="conversationWorkspace.trustDismissed()"
-        />
-      </template>
-    </div>
-
     <AiChatRunStrip
       :runtime-status="selectedStore.runtimeStatus"
       :recovering="recovering"
@@ -166,6 +82,94 @@
       >
         {{ t("workspaceChat.loadOlder") || "Load older messages" }}
       </button>
+    </div>
+
+    <!-- Conversation workspace chooser (design §9.2): directly above the
+         composer input, below the transcript, inside the center — the
+         workspace applies to the message being composed. -->
+    <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
+      <!-- The workspace badge is always visible above the composer: with no
+           conversation selected it renders its unset state (Choose action),
+           which creates a chat on demand via onRequestWorkspaceSetup. -->
+      <WorkspaceBadge
+        :workspace="conversationWorkspace.workspace.value"
+        :memory-count="conversationWorkspace.memoryCount.value"
+        :loading="conversationWorkspace.loading.value"
+        :busy="workspaceChangesBlocked"
+        @request-set-workspace="onRequestWorkspaceSetup"
+        @request-open-memory="openWorkspaceMemory"
+      />
+      <template v-if="conversationId">
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
+        <!-- Refresh failure: sanitized localized message + retry (FR-WS-002
+             error state). The raw exception never reaches the DOM. -->
+        <p
+          v-if="conversationWorkspace.errorMessage.value"
+          class="chat-center__workspace-error"
+          role="alert"
+          data-testid="workspace-load-error"
+        >
+          <v-icon size="x-small" color="warning" class="mr-1">
+            mdi-alert-circle-outline
+          </v-icon>
+          {{ t("workspace.loadFailed") || "Couldn't load the workspace." }}
+          <button
+            type="button"
+            class="chat-center__workspace-retry"
+            data-testid="workspace-retry"
+            @click="conversationWorkspace.refresh()"
+          >
+            {{ t("workspace.retry") || "Retry" }}
+          </button>
+        </p>
+        <!-- Approved workspace whose root could not be resolved (deleted /
+             inaccessible) — recoverable via retry (FR-WS-002). -->
+        <p
+          v-if="conversationWorkspace.pathUnavailable.value"
+          class="chat-center__workspace-error"
+          role="status"
+          data-testid="workspace-path-unavailable"
+        >
+          <v-icon size="x-small" color="warning" class="mr-1">
+            mdi-folder-remove-outline
+          </v-icon>
+          {{
+            t("workspace.pathUnavailable") ||
+            "Workspace folder is not accessible right now."
+          }}
+          <button
+            type="button"
+            class="chat-center__workspace-retry"
+            data-testid="workspace-path-retry"
+            @click="conversationWorkspace.refresh()"
+          >
+            {{ t("workspace.retry") || "Retry" }}
+          </button>
+        </p>
+        <WorkspaceRequiredCard
+          v-if="conversationWorkspace.setupOpen.value && conversationId"
+          :conversation-id="conversationId"
+          @approved="onWorkspaceApproved"
+          @cancel="conversationWorkspace.closeSetup()"
+        />
+        <WorkspaceTrustCard
+          v-if="
+            conversationWorkspace.trustCardVisible.value &&
+            conversationWorkspace.watchId.value &&
+            conversationId
+          "
+          :workspace-id="conversationWorkspace.watchId.value"
+          :conversation-id="conversationId"
+          @trusted="conversationWorkspace.trustAccepted()"
+          @dismissed="conversationWorkspace.trustDismissed()"
+        />
+      </template>
     </div>
 
     <!-- Composer with next-message controls BELOW the textarea (design §10):
@@ -1117,6 +1121,16 @@ async function onComposerSend(
       "Too many referenced images for one request.";
     return;
   }
+  // Empty-state send (no conversation selected): create + select a chat
+  // first (legacy-dock parity via ensureWorkspaceConversationId) so the
+  // typed pending draft has a conversation to send into. Without this the
+  // store's sendMessage silently returns false and both Send + Enter die
+  // with no feedback. After the over-limit guard so a rejected send never
+  // mints an empty chat; refs were captured above under the pending key.
+  if (!conversationId.value) {
+    await onNewChat();
+    if (!conversationId.value) return;
+  }
   // Reference-only sends still need a message for the model (legacy parity).
   const messageText =
     generatedImageReferences.length > 0 && text.trim().length === 0
@@ -1440,7 +1454,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px 0;
+  padding: 0 12px 6px;
   flex-shrink: 0;
 }
 

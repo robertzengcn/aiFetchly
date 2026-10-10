@@ -124,22 +124,35 @@ describe("EmailMarketingController", () => {
       return entity;
     };
 
+    // Multi-tag export: exportEmailServices now calls
+    // emailServiceModule.getTagsForServices(serviceIds) to batch-load tags.
+    // These export tests assert no tags on the services, so the stub returns
+    // an empty Map. Returns a full stub so each test only overrides
+    // exportEmailServicesList.
+    const makeExportStub = (
+      exportEmailServicesList: sinon.SinonStub
+    ): EmailServiceModuleInterface =>
+      ({
+        exportEmailServicesList,
+        getTagsForServices: sinon.stub().resolves(new Map<number, never[]>()),
+      } as unknown as EmailServiceModuleInterface);
+
     it("exports CSV with header and safe fields only (no password)", async () => {
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon
           .stub()
           .resolves([
             makeService(1, "Primary SMTP"),
             makeService(2, 'Secondary, SMTP "quoted"'),
-          ]),
-      } as unknown as EmailServiceModuleInterface;
+          ])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"
       )) as string;
 
       expect(csv).to.contain(
-        "id,name,tag,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time"
+        "id,name,tags,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time"
       );
       // Full first data row locks the column ORDER (legacy row: effective
       // smtpUsername === from, replyTo → empty cell, receive fields unset →
@@ -155,11 +168,9 @@ describe("EmailMarketingController", () => {
     });
 
     it("exports JSON with safe fields only (no password)", async () => {
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon
-          .stub()
-          .resolves([makeService(1, "Primary SMTP")]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([makeService(1, "Primary SMTP")])
+      );
 
       const payload = (await emailMarketingController.exportEmailServices(
         "json"
@@ -181,16 +192,16 @@ describe("EmailMarketingController", () => {
     });
 
     it("returns a header-only CSV when there are no services", async () => {
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon.stub().resolves([]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"
       )) as string;
 
       expect(csv).to.equal(
-        "id,name,tag,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time\n"
+        "id,name,tags,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time\n"
       );
     });
 
@@ -200,9 +211,9 @@ describe("EmailMarketingController", () => {
       const service = makeService(3, "Identity Service");
       service.smtpUsername = "login@example.com";
       service.replyTo = "replies@example.com";
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon.stub().resolves([service]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([service])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"
@@ -234,9 +245,9 @@ describe("EmailMarketingController", () => {
       service.receiveUsername = "recvuser";
       service.receiveFolder = "Archive";
       service.receiveEnabled = 1;
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon.stub().resolves([service]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([service])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"
@@ -267,11 +278,9 @@ describe("EmailMarketingController", () => {
     it("exports no password key or value in either format for a password-bearing service", async () => {
       // makeService sets a real password; neither the CSV nor the JSON export
       // may carry it, and the JSON row must not even contain a `password` key.
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon
-          .stub()
-          .resolves([makeService(4, "Secret Service")]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([makeService(4, "Secret Service")])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"
@@ -302,9 +311,9 @@ describe("EmailMarketingController", () => {
       // ssl is numeric; keep a sane value but ensure it still routes through
       // the escaper without breaking.
       service.ssl = 1;
-      emailMarketingController.emailServiceModule = {
-        exportEmailServicesList: sinon.stub().resolves([service]),
-      } as unknown as EmailServiceModuleInterface;
+      emailMarketingController.emailServiceModule = makeExportStub(
+        sinon.stub().resolves([service])
+      );
 
       const csv = (await emailMarketingController.exportEmailServices(
         "csv"

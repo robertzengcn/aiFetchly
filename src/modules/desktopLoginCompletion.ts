@@ -5,7 +5,7 @@
  * exchanges it for tokens via /api/desktop-auth/exchange, the resulting
  * tokens need to be persisted and a cascade of side-effects triggered
  * (device registration, DB path reset, WebSocket init, auto-refresh,
- * navigate to Dashboard).
+ * navigate to AI_Chat_Workspace).
  *
  * This module isolates that cascade so it can be invoked from:
  *   - The loopback-callback path (primary flow)
@@ -89,7 +89,7 @@ export type CompleteDesktopLoginResult =
 
 /**
  * Persists tokens, fetches user info, registers device, resets DB singletons,
- * initializes WebSocket, starts auto-refresh, and navigates to Dashboard.
+ * initializes WebSocket, starts auto-refresh, and navigates to AI_Chat_Workspace.
  *
  * Non-fatal errors (device registration, DB init, WebSocket) are logged but
  * do not fail the overall result — login is considered successful once the
@@ -318,13 +318,13 @@ export async function completeDesktopLogin(
     TokenRefreshService.startAutoRefresh();
   }
 
-  // --- 7. Navigate to Dashboard --------------------------------------
+  // --- 7. Navigate to AI chat workspace ------------------------------
   // Resolve lazily (not the step-5 capture) in case the window changed
   // while the WebSocket init above was awaited.
   const navWin = resolveTargetWindow(win);
   if (navWin) {
     navWin.webContents.send(NATIVATECOMMAND, {
-      path: "Dashboard",
+      path: "AI_Chat_Workspace",
     } as NativateDatatype);
   } else {
     log.error(

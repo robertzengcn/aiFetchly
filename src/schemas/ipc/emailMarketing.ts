@@ -80,7 +80,17 @@ const portStringSchema = z.union([
 export const emailServiceUpdateInputSchema = lazySchema(() =>
   z.object({
     id: z.union([z.number(), z.string().min(1)]).optional(),
-    tagId: z.number().int().positive().nullable().optional(),
+    /**
+     * Tag IDs to assign. Absent = preserve existing tags; `[]` = clear all;
+     * `[...]` = replace. (Mirrors the password sentinel convention.)
+     */
+    tagIds: z.array(z.number().int().positive()).optional(),
+    /**
+     * Tag names typed in the autocomplete that don't correspond to an existing
+     * tag. Auto-created on save so the user never has to leave the service form
+     * to make a tag. Merged into the resolved set alongside `tagIds`.
+     */
+    tagNames: z.array(z.string().max(64)).optional(),
     name: z.string().max(255).optional(),
     smtpUsername: z.string().max(255).nullable().optional(),
     from: z.string().min(1).max(255),

@@ -3,8 +3,27 @@
  * "serialized input (6551) + output (1024) + safety (820) exceeds context (8192)"
  * because the query loop's budget resolver read an unloaded catalog and
  * treated every model as the 8,192-token unknown-model fallback.
+ *
+ * The recoverable-large-tool-results rollout flags are forced OFF here: the
+ * fat raw tool results this test drives pressure with are externalized to
+ * bounded receipts when the capture pipeline is active, so the transcript
+ * would never reach budget pressure and the relief mechanism under test
+ * would never fire. The pipeline's own ON-path behavior is covered by
+ * AIChatQueryLoopToolResults.test.ts.
  */
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/config/featureFlags", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/config/featureFlags")
+  >("@/config/featureFlags");
+  return {
+    ...actual,
+    isToolOutputCaptureEnabled: () => false,
+    isToolOutputModelRefsEnabled: () => false,
+  };
+});
+
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
@@ -268,19 +287,30 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
     expect(stream).toHaveBeenCalledTimes(1);
   });
 
-  it("stubs older tool payloads when the live turn exceeds the window", async () => {
+  /**
+   * The retired `shrinkLiveTurnToolPayloads` sliced older tool RESULT bodies
+   * down to 400 characters and replaced older tool-call ARGUMENTS with `{}`.
+   * Both are forbidden: the first silently falsifies evidence the model was
+   * given, and the second fabricates a tool call that never happened.
+   *
+   * The replacement (technical design §7.3) reduces truthfully or fails with a
+   * real budget error. This test pins the invariants that must hold either way.
+   */
+  it("never fabricates tool arguments or falsifies result bodies under budget pressure", async () => {
+    const seen: Array<{ args: string; toolContent: string }> = [];
     const stream = vi.fn(
       async (
         req: OpenAIChatCompletionRequest,
         onChunk: (chunk: OpenAIChatCompletionChunk) => void
       ) => {
-        const toolMessages = req.messages.filter((m) => m.role === "tool");
-        const older = toolMessages.slice(0, -1);
-        expect(
-          older.every(
-            (m) => typeof m.content !== "string" || m.content.length < 500
-          )
-        ).toBe(true);
+        for (const m of req.messages) {
+          if (Array.isArray(m.tool_calls)) {
+            for (const c of m.tool_calls) seen.push({ args: c.function.arguments, toolContent: "" });
+          }
+          if (m.role === "tool") {
+            seen.push({ args: "", toolContent: typeof m.content === "string" ? m.content : "" });
+          }
+        }
         onChunk(makeChunk("ok", "stop"));
       }
     );
@@ -323,16 +353,50 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
             },
           ],
         },
-        {
-          role: "tool" as const,
-          tool_call_id: `call_${i}`,
-          content: fat,
-        },
+        { role: "tool" as const, tool_call_id: `call_${i}`, content: fat },
       ]).flat(),
     ];
-    const result = await loop.run(input);
-    expect(result.type).toBe("completed");
-    expect(stream).toHaveBeenCalledTimes(1);
+
+    // The turn may legitimately fail with a truthful budget error now; what it
+    // must NEVER do is succeed by lying about the transcript.
+    let threw: unknown = null;
+    let outcome: unknown = null;
+    try {
+      outcome = await loop.run(input);
+    } catch (err: unknown) {
+      threw = err;
+    }
+
+    const dispatched = seen.length > 0;
+    for (const entry of seen) {
+      // Invariant 1: arguments are never blanked to "{}".
+      if (entry.args !== "") {
+        expect(entry.args).not.toBe("{}");
+        expect(JSON.parse(entry.args).email_html_content).toBe(fat);
+      }
+      // Invariant 2: a result body is either intact or explicitly marked, never
+      // silently clipped to a stub.
+      if (entry.toolContent !== "") {
+        expect(entry.toolContent.length === 0 || entry.toolContent === fat).toBe(true);
+      }
+    }
+    if (threw) {
+      // A thrown budget error is a truthful failure.
+      expect(String(threw)).toMatch(/budget|context|over capacity/i);
+    } else {
+      // Otherwise the loop must reach a DEFINITIVE terminal state. It may
+      // complete (if compaction made room) or fail (if it could not), but it
+      // must not quietly proceed with a transcript it falsified to fit.
+      expect(["completed", "failed"]).toContain(
+        (outcome as { type?: string } | null)?.type
+      );
+    }
+    // If it did dispatch, the invariants above were checked against the real
+    // request; if it did not, the terminal state carries the reason.
+    if (!dispatched) {
+      expect(threw !== null || (outcome as { type?: string })?.type === "failed")
+        .toBe(true);
+    }
   });
 
   // Regression: a scheduled-loop turn runs many tool rounds in a single

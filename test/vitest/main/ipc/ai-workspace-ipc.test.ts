@@ -63,16 +63,22 @@ describe("AI workspace IPC folder picker", () => {
     resetElectronMocks();
   });
 
-  it("returns a denied response instead of silent null when AI is disabled", async () => {
+  it("opens the folder picker even when AI is disabled (workspace choosing is local-only)", async () => {
     mockState.aiEnabled = "false";
+    mockShowOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ["/tmp/workspace"],
+    });
 
     const result = (await mockIpcMain.callHandler(
       DIALOG_PICK_FOLDER
     )) as CommonMessage<string | null>;
 
-    expect(result.status).toBe(false);
-    expect(result.msg).toContain("AI feature is not enabled");
-    expect(mockShowOpenDialog).not.toHaveBeenCalled();
+    expect(mockShowOpenDialog).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: true,
+      data: "/tmp/workspace",
+    });
   });
 
   it("returns the selected folder in a standard IPC response", async () => {

@@ -184,6 +184,7 @@ export class OutboundEmailSendLogModule extends BaseModule {
       sender: revision?.senderAddress,
       actor: revision?.actor,
       bodyText: revision?.bodyText,
+      bodyHtml: revision?.bodyHtml ?? null,
       providerMessageId: outcome.providerMessageId ?? undefined,
       errorCode: outcome.errorCode ?? undefined,
       submittedAt: outcome.submittedAt?.toISOString(),

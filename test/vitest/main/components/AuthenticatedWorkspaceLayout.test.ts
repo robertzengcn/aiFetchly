@@ -7,7 +7,6 @@ import { createI18n } from "vue-i18n";
 
 const bootstrapWorkspaceMock = vi.fn();
 const subscribeSummaryEventsMock = vi.fn();
-const isWorkspaceRedesignEnabledMock = vi.fn();
 const setWorkspaceRedesignEnabledMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const selectConversationMock = vi.fn();
@@ -19,8 +18,6 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: (...args: unknown[]) => bootstrapWorkspaceMock(...args),
   subscribeSummaryEvents: (...args: unknown[]) =>
     subscribeSummaryEventsMock(...args),
-  isWorkspaceRedesignEnabled: (...args: unknown[]) =>
-    isWorkspaceRedesignEnabledMock(...args),
   setWorkspaceRedesignEnabled: (...args: unknown[]) =>
     setWorkspaceRedesignEnabledMock(...args),
   createWorkspaceConversationId: (...args: unknown[]) =>
@@ -44,6 +41,7 @@ import AuthenticatedWorkspaceLayout from "@/views/layout/AuthenticatedWorkspaceL
 import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWorkspaceSidebar.vue";
 import { useAppShellStore } from "@/views/store/appShell";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { useInnerPageShellFlag } from "@/views/composables/useInnerPageShellFlag";
 
 const i18n = createI18n({
   legacy: false,
@@ -89,7 +87,14 @@ async function mountLayout(shellWidth = 1400) {
     ],
   });
   const wrapper = mount(AuthenticatedWorkspaceLayout, {
-    global: { plugins: [pinia, i18n, router] },
+    global: {
+      plugins: [pinia, i18n, router],
+      stubs: {
+        AccountMenu: {
+          template: '<div data-testid="account-menu-stub" />',
+        },
+      },
+    },
   });
   setActivePinia(pinia);
   // Let the responsive composable's rAF-debounced initial measurement land
@@ -104,7 +109,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
-  isWorkspaceRedesignEnabledMock.mockResolvedValue(true);
   setWorkspaceRedesignEnabledMock.mockResolvedValue(undefined);
   createWorkspaceConversationIdMock.mockReturnValue("fresh-1");
   selectConversationMock.mockResolvedValue({
@@ -136,6 +140,15 @@ describe("AuthenticatedWorkspaceLayout (chat-first shell design §7.2, TODO gap 
     await expect(wrapper.find('[data-testid="chat-route-stub"]').exists()).toBe(
       true
     );
+  });
+
+  it("forces the redesign preference and shell flag on at mount (no toggle-off path)", async () => {
+    useInnerPageShellFlag().setShellEnabled(false);
+    await mountLayout();
+    await flushPromises();
+
+    expect(setWorkspaceRedesignEnabledMock).toHaveBeenCalledWith(true);
+    expect(useInnerPageShellFlag().shellEnabled.value).toBe(true);
   });
 
   it("keeps the sidebar DOM identity across center-route changes", async () => {

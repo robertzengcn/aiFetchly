@@ -149,6 +149,32 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.messages.some((m) => m.content === "rejected B")).toBe(true);
   });
 
+  it("an AI-disabled (subscription-required) rejection appends a visible assistant notice", async () => {
+    await seedStore("idle");
+    const subscriptionMessage =
+      "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat.";
+    startChatRunMock.mockRejectedValue(new Error(subscriptionMessage));
+
+    const store = useSelectedConversationStore();
+    const accepted = await store.sendMessage("hello with no subscription");
+    await flushPromises();
+
+    expect(accepted).toBe(false);
+    expect(store.errorMessage).toContain("subscription");
+    // Optimistic user row is kept for retry after purchasing.
+    expect(
+      store.messages.some(
+        (m) => m.role === "user" && m.content === "hello with no subscription"
+      )
+    ).toBe(true);
+    // Pre-V2 parity: the denial is also an assistant bubble so the transcript
+    // shows the purchase notice instead of staying silent.
+    const notice = store.messages.find(
+      (m) => m.role === "assistant" && m.content === subscriptionMessage
+    );
+    expect(notice).toBeDefined();
+  });
+
   it("appendDeliveredUserRow adds the persisted row once (id-keyed)", async () => {
     await seedStore("idle");
     const store = useSelectedConversationStore();

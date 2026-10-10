@@ -2,6 +2,8 @@
 
 ## 1. Purpose
 
+Completion-policy addendum (2026-10-04): the [shared task-completion PRD](./scheduled-loop-premature-stop-recovery-advice.md) and [technical design](./scheduled-loop-premature-stop-recovery-technical-design.md) define the proposed execution-scoped coordinator/controller, manual request resolution, schedule-independent execution/ledger storage, resume binding, and durable terminal-event ordering. These supersede unconditional task success on a normal turn ending for enrolled manual/scheduled tasks; existing tool, workspace, and approval boundaries remain.
+
 This document translates `docs/ai-chat-query-engine-prd.md` into an implementation-facing technical design.
 
 The goal is to extract the current AI chat v2 orchestration from `src/main-process/communication/ai-chat-v2-ipc.ts` into a small query-engine layer while preserving current behavior.

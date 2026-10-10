@@ -717,6 +717,12 @@ async function execute(
       ...(execResult.modelArtifacts
         ? { modelArtifacts: execResult.modelArtifacts }
         : {}),
+      // Thread the transient prompt-skill instruction block the same way as
+      // modelArtifacts: sibling of `result`, hooks never see it, the query
+      // loop builds a model-only handoff message from it.
+      ...(execResult.promptSkillContext
+        ? { promptSkillContext: execResult.promptSkillContext }
+        : {}),
     };
 
     // 7. PostToolUse / PostToolUseFailure hooks
