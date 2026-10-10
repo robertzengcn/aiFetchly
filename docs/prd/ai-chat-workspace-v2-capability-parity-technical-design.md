@@ -5,13 +5,20 @@
 | Field                | Value                                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------------------ |
 | Status               | Proposed                                                                                               |
-| Version              | 1.0                                                                                                    |
-| Date                 | 2026-09-08                                                                                             |
+| Version              | 1.1                                                                                                    |
+| Date                 | 2026-10-10                                                                                             |
 | Owner                | AiFetchly Engineering                                                                                  |
 | Product requirements | [AI Chat Workspace and Chat V2 Capability Parity PRD](./ai-chat-workspace-v2-capability-parity-prd.md) |
 | Target application   | AiFetchly Electron application                                                                         |
 | Primary stack        | TypeScript 5, Electron, Vue 3, Pinia, Vuetify, TypeORM, SQLite                                         |
 | Primary route        | `/aiworkspace`                                                                                         |
+
+
+### Revision baseline — 2026-10-10
+
+This revision audits the merged `dev` checkout at `6a9e3f51` against the current source, including the natural-language skill-installation merge. It is a documentation update, not an implementation or runtime certification. “Implemented” below means a reachable code path exists; it does not assert that its full acceptance suite passed. Proposed contracts and files in later sections remain future work unless explicitly identified as existing.
+
+The default chat composition root is `src/views/components/aiChatWorkspace/AiChatCenterSurface.vue`, mounted through the authenticated application layout. There is no current `AiChatWorkspaceShell.vue`. Existing shared components must be preserved while filling the remaining gaps.
 
 ## 1. Purpose
 
@@ -29,7 +36,8 @@ They must become one pipeline. A message must never be independently dispatchabl
 ### 2.1 In scope
 
 - Full composer acceptance semantics, including pasted content and voice origin.
-- Shared slash-command, goal, and scheduled-loop routing.
+- Shared slash-command, goal, scheduled-loop and prompt-skill routing.
+- Natural-language skill installation, managed-browser intervention, recoverable history and compaction; portable-memory regression coverage.
 - Durable queue integration with the workspace scheduler and run envelope.
 - Workspace-native pending, steering, plan, permission, outbound-email, generated-image, reporting, voice, workspace trust, memory, retry, and recovery behavior.
 - Shared renderer orchestration extracted from `AiChatV2.vue`.
@@ -50,41 +58,29 @@ They must become one pipeline. A message must never be independently dispatchabl
 ### 3.1 Workspace path today
 
 ```text
-AiChatWorkspaceShell.vue
-  -> selectedConversation.sendMessage()
-  -> aiChatWorkspace.startChatRun()
-  -> ai-chat-workspace-ipc.ts
-  -> AIChatCoordinator.startRun()
-  -> AIChatRunModule.createRun()
-  -> AIChatExecutionScheduler.submit()
-  -> AIChatQueryEngine.submitMessage()
+AiChatCenterSurface.onComposerSend
+  -> selectedConversation.sendMessage
+  -> aiChatWorkspace.startChatRun / workspace IPC
+  -> AIChatCoordinator.startRun
+       idle -> run module -> scheduler -> query engine
+       busy -> delegated durable pending queue -> pending lifecycle events
 ```
 
-`AIChatCoordinator.startRun()` rejects a second live run for the same conversation. `selectedConversation.isBusy` passes a busy state to the shared composer, so the workspace cannot accept ordinary follow-ups while a turn runs.
+The center handles `onAccepted` after store acceptance and passes `fromVoice` to `useAiChatVoice`. It explicitly discards `pastedContents`; the assumption that paste bodies are already in the text must be removed. Direct generated-image references already cross the workspace schema. `historySelectionIds` and `submissionId` are existing V2 request fields but are not part of the workspace send path.
 
-The workspace send handler currently receives text and files but drops the composer's `pastedContents`, `fromVoice`, and `onAccepted` values. It also creates a renderer-only optimistic message before the main process accepts the request.
+Busy sends are no longer categorically rejected. The coordinator has delegation and terminal hooks; the center consumes pending state and the transcript mounts queue controls. The all-sends pending bridge in sections 4–8 is a target migration. Preserve the existing coordinator/queue integration until the bridge replaces its ownership atomically.
 
-### 3.2 Chat V2 path today
+### 3.2 Chat V2 reference and shared components
 
-```text
-AiChatV2Composer.vue
-  -> AiChatV2.vue command and capability orchestration
-  -> AI_CHAT_V2_PENDING_CREATE
-  -> AIChatTurnQueueService.submit()
-  -> AIChatPendingMessageModule.createPendingMessage()
-  -> SQLite pending row
-  -> claim oldest row
-  -> promote user message transaction
-  -> AIChatQueryEngine.submitPersistedUserMessage()
-```
+`AiChatV2.vue` routes loop/goal/skill/general commands, prepares archive references, handles plan continuation, image inference/batches, single-output reports, compaction, navigation and managed-browser presentation. Ordinary sends use `AIChatTurnQueueService`. Its early acceptance callback is not the target correctness contract: shared extraction must follow section 6 durable acceptance semantics.
 
-This path closes idle-versus-running races by persisting every ordinary send before dispatch. It supports FIFO delivery, explicit steering, per-conversation holds, restart recovery, deterministic user and assistant message identifiers, and atomic transcript promotion.
+Already shared with the workspace: `useAiChatVoice.ts`, `useConversationWorkspace.ts`, `WorkspaceMemoryPanel.vue` (including portable memory and Auto Dream), composer/selectors, permission message cards and outbound-email review components. Reuse these; avoid building parallel voice/memory implementations under a new folder.
 
-### 3.3 Presentation gap
+### 3.3 Semantic projection and action gaps
 
-`AiChatWorkspaceTranscript.vue` correctly groups tool calls and results into semantic execution rows. Its current semantic result kinds cover summary, artifact, files, images, permission, error, and structured results. Permission is informational, and outbound-email and generated-image batch actions are not first-class results.
+The workspace transcript already extracts permission prompts and outbound batches before generic tool grouping. Installation results are still reduced to semantic receipts instead of the `SkillInstallCard` branch in `AiChatV2Message.vue`. Add installation extraction to that same classification layer. Advanced image and single-output report events must be forwarded across every relevant transcript/semantic-result boundary.
 
-Chat V2 currently owns action-heavy behavior in `AiChatV2.vue`, `AiChatV2Messages.vue`, and `AiChatV2Message.vue`. Directly copying that behavior into `AiChatWorkspaceShell.vue` would create a second monolith and future drift.
+Managed browser and recoverable-history UI are mounted by V2 but absent from the center. Portable memory is present transitively through the shared panel. Source import presence alone does not establish route-level acceptance; test each action from `/aiworkspace`.
 
 ## 4. Architectural Decisions
 
@@ -211,11 +207,15 @@ Removal requires all of the following for a rolling 14-day default-route soak:
 
 Low sample volume extends the soak. It never weakens the incident gates.
 
+### AD-010: Preserve shipped integration and separate migration from parity wiring
+
+Use the actual center and shared composables. Extend the existing permission/outbound special-case projection for installation actions. Backend queue unification remains required by AD-001, but renderer browser/installation/history work may proceed independently. Each migration commit must retain a working dispatcher; never subscribe two owners to launch the same pending head. This design defines new bridge/overlay/composable files as proposed, not existing evidence.
+
 ## 5. Target Architecture
 
 ```text
 Renderer
-  AiChatWorkspaceShell
+  AiChatCenterSurface
     Shared composer
     useChatSubmission
     useChatCommands
@@ -306,7 +306,8 @@ The workspace should stop maintaining a narrower `StartWorkspaceRunRequest`. It 
 - normalized uploaded files;
 - pasted contents;
 - direct generated-image references;
-- trusted confirmed generated-image batch.
+- trusted confirmed generated-image batch;
+- opaque `historySelectionIds` and retry-stable `submissionId` (section 12.11).
 
 Workspace IPC may expose workspace-named channels, but both surfaces must call one `AIChatSubmissionService` and one schema family.
 
@@ -346,7 +347,7 @@ Routing order:
 
 1. Detect leading slash.
 2. Parse built-in goal and scheduled-loop commands.
-3. Resolve plugin, user, and workspace-scoped commands through the current registry.
+3. Resolve explicit `/skill` invocation through the existing prompt-skill API, then other plugin, user, and workspace-scoped commands through the current registry.
 4. Execute local-only commands or call their trusted IPC.
 5. For prompt expansion, submit once with `clientRequestId = command:<originalRequestId>:<continuationKey>`.
 6. Render local success or failure exchanges through a shared local-message helper.
@@ -502,7 +503,7 @@ Persisted history remains authoritative for delivered content. Live runtime over
 
 ### 10.1 Shell composition
 
-`AiChatWorkspaceShell.vue` becomes a composition root. It selects stores, instantiates composables, binds events, and lays out workspace-native components. It must not implement domain algorithms.
+`AiChatCenterSurface.vue` becomes a composition root. It selects stores, instantiates composables, binds events, and lays out workspace-native components. It must not implement domain algorithms.
 
 Recommended additions:
 
@@ -631,6 +632,8 @@ The component emits identity plus action type. A composable resolves the trusted
 
 ### 12.2 Tool permissions
 
+Current delta: the workspace renders permission cards, but `AiChatCenterSurface.onGrantPermission` discards `payload.persistent`. Trace the shared card grant and resume sequence before changing IPC: persist a grant exactly once through the existing permission service, then resume the captured tool. Do not treat a successful resume as proof that a persistent grant was stored. Test both choices and failure between grant and resume.
+
 - Project permission metadata into an actionable `ToolPermissionDecisionView`.
 - Display tool, category, bounded preview, shell preview when allowed, and canonical workspace context.
 - Call existing trusted permission IPC for grant once, persistent grant, or deny.
@@ -697,6 +700,47 @@ The component emits identity plus action type. A composable resolves the trusted
 - Use stable error-code-to-i18n mapping.
 - Prefer the newest authoritative usage update and selected model context window.
 - Keep compaction engine-owned; expose its completion or failure through normal event projection.
+
+### 12.9 Skill installation and prompt-skill dispatch
+
+**Existing contracts:** `AiChatV2Message.vue` recognizes tool names beginning with `skill_install_`; `SkillInstallCard.vue` receives an `InstallSnapshot` and optional `conversationId`, subscribes to session changes and calls `src/views/api/skillInstallation.ts`. `src/views/pages/systemsetting/plugins.vue` already hosts installation management.
+
+1. Before generic grouping, validate and classify installation tool results into a dedicated transcript item carrying source message identity, captured conversation ID and the safe snapshot. Reuse the existing card's result recognition; do not fabricate a snapshot from arbitrary structured text.
+2. Mount `SkillInstallCard` once per intended session presentation. Deduplicate repeated lifecycle receipts by session identity, retaining historical receipts without exposing obsolete approval controls.
+3. Preserve existing snapshot refresh and event ordering guards, plan/dependency approval, approved-command execution, secret submission, retry and cancel. Route card failures into localized action feedback. On history load, refresh session status before enabling mutations.
+4. Keep credentials in the existing ephemeral entry flow. Projection DTOs contain safe snapshots only; no secrets in Pinia persistence, report evidence or sidebar summaries.
+5. Add `/skill` to shared command routing using `parseSkillSlashCommand` and `invokePromptSkill` as V2 does. Capture conversation and task before awaiting invocation; submit the resulting task through the shared submission path once. Missing skill or failed acknowledgement returns a rejected/local command receipt, never a model fallback.
+6. Link to existing Plugins settings for installation management. Installation does not itself grant permission for subsequent skill execution.
+
+### 12.10 Managed-browser workspace integration
+
+**Existing contracts:** `ManagedBrowserStartPanel.vue`, `ManagedBrowserSessionCard.vue`, its `ManagedBrowserHandoffDialog.vue`, and `src/views/api/managedBrowser.ts`. These currently own start confirmation, snapshot loading, status/progress/notices/approval subscriptions and session controls.
+
+Initially compose these shared components in a compact workspace browser region with a persistent intervention indicator. Detailed account/progress information may live in Activity, but handoff/approval controls must remain reachable with the inspector closed. Do not mount a second V2 parent to obtain its browser subscribers.
+
+Treat browser session identity as independent of chat run identity. Use the service's real session/account ownership; never infer conversation ownership from whichever chat is currently selected. Snapshot the target session before asynchronous actions. Chat switching preserves the session and route unmount removes renderer listeners/timers only. The existing Stop action, not component disposal, terminates the browser.
+
+Refresh active sessions on mount, subscribe once per owning surface, reject stale session events and retain existing duplicate-action guards. Keep account eligibility, login verification, takeover lease, extension limits and approval policy in the current services. Expose safe origin/status fields only; do not add cookies, credentials or browser connection details to chat history.
+
+### 12.11 Recoverable history and compaction
+
+Compose `AiChatHistoryDrawer.vue` and `AiChatSelectedContext.vue` under the existing history rollout flag. Store per-conversation draft selections and a retry-stable submission ID, separately from the 200 mounted transcript messages. Archive navigation must use the history API rather than expanding the entire transcript.
+
+Extend the workspace request chain together: shared submission input -> `selectedConversation.SendOptions` -> workspace API/types -> strict `StartChatRun` schema -> coordinator/queue adapters -> engine request. Carry `historySelectionIds`, `submissionId` and `pastedContents` using existing V2 definitions and limits. Do not merely add renderer fields that the schema strips or rejects. Queue persistence must retain the same context through deferred dispatch and retries; update the pending envelope only if its existing contract cannot carry it.
+
+Main process resolves opaque selection IDs against conversation, archive epoch/revision and remaining budget. Route `historySelectionAcceptedIds`, `historySelectionChangedIds` and `historySelectionRejectedIds` from the engine start acknowledgement through the selected-only presenter. Clear accepted chips for the matching submission/conversation only. Retain changed/rejected references with safe feedback. Durable pending acceptance clears accepted ordinary draft content, but archive chips follow the later reference-resolution acknowledgement.
+
+Reuse `AiChatCompactionStatus.vue` and existing V2 retry/cancel APIs. Display progress/errors independently of the generic run recovering flag. Compaction completion/retry must refresh authoritative context/history state without destroying draft references. Turning the rollout flag off hides the drawer/chips and prevents fresh archive-reference submission; already accepted pending work follows the persisted contract.
+
+### 12.12 Remaining shared integration seams
+
+- **Pastes/attachments:** replace the center's `void options?.pastedContents` shortcut with explicit forwarding. Reuse `buildUploadedAttachments` behavior and existing MIME/size limits. Add a local preparation guard to prevent duplicate sends while files encode; clear it on every outcome. Capture conversation and draft identity before the first await.
+- **Workspace setup:** connect composer `request-workspace` to the existing setup method, preserving the empty-state create/select path. Keep watcher release and trust revalidation in `useConversationWorkspace`.
+- **Portable memory:** retain `WorkspaceMemoryPanel` as owner of portable dialogs, storage-mode routing, concurrency tokens, rescan, identity confirmation and Auto Dream. Re-key/close stale overlays on workspace change; never reconstruct file operations in the center.
+- **Navigation:** route selected live tool results through `handleAiNavigationToolResult`. Track consumed result identity, skip history seeding and reject foreign-conversation events. Do not invent URL navigation from receipt text.
+- **Agent tasks/files:** reuse `AgentTaskListDialog` or provide equivalent Activity controls with existing cancellation APIs. Preserve file-operation metadata in semantic details and trusted artifact actions.
+- **Reporting/images:** forward report, save-generated-image, retry-generated-image-batch and stop-batch actions through transcript and execution-result components. Existing Use/Edit events do not cover the full contract. Conversation reporting remains mounted.
+- **Recovery/reasoning:** expose retry count/layer and compaction separately; replace the hard-coded transcript reasoning visibility with a user-controlled preference, preserving bounded rendering.
 
 ## 13. Persistence Changes
 
@@ -899,23 +943,25 @@ Exit: both surfaces pass existing Chat V2 tests for these capabilities.
 
 Exit: queue/steering E2E scenarios pass through `/aiworkspace`.
 
-### Phase 3: Specialized results and safety flows
+### Phase 3: Specialized results, installation, and browser safety flows
 
-1. Add permission action projection.
-2. Add outbound-email projection and overlay.
+1. Complete existing permission actions and add installation-session projection.
+2. Preserve outbound-email projection/overlay and integrate managed-browser controls.
 3. Add generated-image actions, chooser, batch, retry, stop, and save.
 4. Add per-output and conversation reporting.
 
 Exit: safety-critical E2E suites pass from the default route.
 
-### Phase 4: Voice, workspace, memory, and recovery
+### Phase 4: Recoverable history, compaction, and shared integration regression
 
-1. Integrate shared voice orchestration.
-2. Integrate workspace binding, trust, watcher, and memory management.
-3. Add retry and recovery detail.
+1. Integrate archive search, selected context and compaction controls.
+2. Reuse existing voice, workspace/trust/watcher and portable-memory integrations; certify their workspace lifecycle.
+3. Complete navigation, task/file actions, reasoning preference, retry and recovery detail.
 4. Complete accessibility and six-language coverage.
 
 Exit: component, integration, accessibility, and localization gates pass.
+
+Phase 3 also delivers installation review and managed-browser intervention (12.9–12.10). Phase 4 delivers archive-reference submission and compaction controls (12.11), completes integration seams (12.12), and certifies inherited voice/portable-memory behavior. Preserve current permission/email special cases throughout.
 
 ### Phase 5: Soak and cleanup decision
 
@@ -947,7 +993,7 @@ Exit: component, integration, accessibility, and localization gates pass.
 
 | File                                                                     | Planned change                                                            |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `src/views/components/aiChatWorkspace/AiChatWorkspaceShell.vue`          | Become composition root and bind full composer/actions                    |
+| `src/views/components/aiChatWorkspace/AiChatCenterSurface.vue`          | Become composition root and bind full composer/actions                    |
 | `src/views/store/selectedConversation.ts`                                | Reconstruct pending and capability snapshot; remove direct start-run path |
 | `src/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue`     | Render pending rows and emit semantic actions                             |
 | `src/views/components/aiChatWorkspace/toolExecutionProjection.ts`        | Normalize permission, outbound email, and image batches                   |
@@ -959,6 +1005,20 @@ Exit: component, integration, accessibility, and localization gates pass.
 | `src/views/store/chatGeneratedImageSelection.ts`                         | Conversation-keyed image selection                                        |
 | `src/views/api/aiChatWorkspace.ts`                                       | Full typed submission and pending APIs                                    |
 | `src/views/lang/{en,zh,es,fr,de,ja}.ts`                                  | Complete new UI translations                                              |
+
+### 20.3 Merged-feature implementation delta
+
+| Existing file or area | Required change / preservation |
+| --- | --- |
+| `AiChatCenterSurface.vue` | Compose browser/history surfaces; wire missing events; retain voice, memory, report and acceptance integrations |
+| `AiChatWorkspaceTranscript.vue` | Classify installation sessions before generic grouping; forward full image/report events |
+| `toolExecutionProjection.ts`, `SemanticToolResult.vue`, execution row/group components | Preserve actionable domain metadata through live/history projections without duplicating action cards |
+| `selectedConversation.ts`, `workspaceStreamPresenter.ts` | Carry submission context and reference-resolution acknowledgement; selected-only navigation/recovery updates |
+| `src/views/api/aiChatWorkspace.ts`, `src/entityTypes/aiChatWorkspaceTypes.ts`, `src/schemas/ipc/aiChatWorkspace.ts` | Add missing context fields atomically with service adapters; use strict bounds from V2 |
+| `AIChatCoordinator.ts`, `AIChatTurnQueueService.ts` and queue wiring | Preserve busy delegation during bridge migration; verify all context survives idle and queued execution |
+| Existing `useAiChatVoice.ts`, `useConversationWorkspace.ts`, `WorkspaceMemoryPanel.vue` | Reuse and extend only where regression evidence requires it |
+| Shared command orchestration (proposed) | Extract goal/loop/skill/general command ordering and schedule approval from V2 |
+| `SkillInstallCard.vue`, managed-browser components | Reuse state machines and APIs; add workspace composition tests rather than copying implementation |
 
 ## 21. Verification Strategy
 
@@ -1018,7 +1078,22 @@ Run critical flows from `/`, verifying it resolves to `/aiworkspace`:
 9. Bind, trust, change, and remove a workspace; manage memory.
 10. Switch conversations during active work and verify no cross-application.
 
-### 21.5 Required commands
+### 21.5 Merged-feature verification matrix
+
+Existing tests are reference coverage, not proof of workspace integration. Extend `test/vitest/main/components/AiChatCenterSurface.test.ts` and `AiChatWorkspaceTranscript.test.ts` in the same implementation commits. Preserve `store/selectedConversation.queue.test.ts` and `store/selectedConversation.permission.test.ts`.
+
+| Requirements | Component/contract coverage | Default-route E2E gate |
+| --- | --- | --- |
+| FR-SKL-001..006 | Installation classification, safe snapshot, refresh, duplicate approval, credential redaction, `/skill` dispatch failure | Install review -> dependency/credential action -> completion -> reload; Plugins manager remains reachable |
+| FR-BRW-001..006 | Extend `ManagedBrowserStartPanel.test.ts`, `ManagedBrowserSessionCard.test.ts`, `ManagedBrowserHandoffDialog.test.ts` with center ownership checks | Account start -> handoff -> verify -> resume -> stop, including expiry and route return |
+| FR-HIS-001..005 | `AiChatHistoryDrawer.test.ts`, `AiChatSelectedContext.test.ts`; workspace schema/queue/presenter round trip for reference IDs and paste map | Search archive -> select -> send -> mixed reference acknowledgement -> transport retry -> compaction retry/cancel |
+| FR-INT-001..002 | `WorkspaceMemoryPanel.portable.test.ts` and portable dialog suites plus center setup event | Portable review/conflict/stale edit; workspace switch with dialog open; Auto Dream status |
+| FR-INT-003..005 | Navigation dedupe and history/background suppression, task target, reasoning preference/retry state | Live selected navigation and task cancel; background completion leaves active route intact |
+| Existing shipped surfaces | Voice terminal flush; permission retry; email dialog reopen; conversation reporting | Run existing critical journeys from `/`, without a V2 dock fallback |
+
+Add new critical specs under `test/e2e/specs/` with `.test.ts` names. Assert side effects through authoritative service state, not just card visibility. Mock external providers/browser services for deterministic CI and retain explicitly configured live checks separately. This documentation revision runs document consistency checks only; the implementation release must run the commands below.
+
+### 21.6 Required commands
 
 ```bash
 yarn typecheck
@@ -1046,6 +1121,10 @@ Use the repository's actual script aliases if `package.json` differs. UI changes
 | FR-WSP-001..010 | 12.7, 14.3      | Workspace trust, watcher, and memory tests       |
 | FR-REC-001..008 | 8.6, 12.8, 15   | Recovery unit, component, and restart E2E tests  |
 | FR-LIF-001..006 | 9, 10, 15       | Selection race and background-run E2E tests      |
+| FR-SKL-001..006 | 12.9, 20.3, 21.5 | Installation and prompt invocation tests |
+| FR-BRW-001..006 | 12.10, 20.3, 21.5 | Browser intervention and lifecycle tests |
+| FR-HIS-001..005 | 12.11, 20.3, 21.5 | Archive reference and compaction tests |
+| FR-INT-001..005 | 12.12, 20.3, 21.5 | Shared integration regression tests |
 | A11Y-001..010   | 16.1            | Component accessibility and manual certification |
 
 ## 23. Rollout and Rollback
@@ -1127,3 +1206,8 @@ Implementation is complete when:
 - [AI Chat Message Queue and Steering PRD](../ai-chat-message-queue-prd.md)
 - [Generated-Image Editing Technical Design](./ai-chat-generated-image-editing-technical-design.md)
 - [Intent-Aware AI Outbound Email Delivery Technical Design](./ai-outbound-email-intent-aware-delivery-technical-design.md)
+
+- [Natural-Language Skill Installation PRD](./natural-language-skill-installation-prd.md) and [Technical Design](./natural-language-skill-installation-technical-design.md)
+- [Managed Social Browser PRD](./puppeteer-managed-social-browser-prd.md) and [Technical Design](./puppeteer-managed-social-browser-technical-design.md)
+- [Recoverable History and Incremental Compaction PRD](./ai-chat-recoverable-history-incremental-compaction-prd.md) and [Technical Design](./ai-chat-recoverable-history-incremental-compaction-technical-design.md)
+- [Portable Workspace Memory PRD](./portable-workspace-memory-prd.md) and [Technical Design](./portable-workspace-memory-technical-design.md)

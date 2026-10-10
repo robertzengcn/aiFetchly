@@ -4,7 +4,7 @@
 
 | Field                     | Value                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document version          | v1.0                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Document version          | v1.1                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Status                    | Proposed                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Created                   | 2026-09-08                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Owner                     | AiFetchly Product, Desktop, AI Platform, Safety, and Quality Engineering                                                                                                                                                                                                                                                                                                                                                                          |
@@ -16,9 +16,18 @@
 | Related PRDs              | [`AI Chat Workspace UI Redesign PRD`](./ai-chat-workspace-ui-redesign-prd.md), [`AI Chat Conversation Reporting PRD`](./ai-chat-conversation-reporting-prd.md), [`AI Outbound Email Intent-Aware Delivery PRD`](./ai-outbound-email-intent-aware-delivery-prd.md)                                                                                                                                                                                 |
 | Related technical designs | [`AI Chat-First Application Shell and Composer Refinement Technical Design`](./ai-chat-first-application-shell-technical-design.md), [`AI Chat Workspace UI Redesign Technical Design`](./ai-chat-workspace-ui-redesign-technical-design.md), [`AI Chat Message Queue Technical Design`](../ai-chat-message-queue-technical-design.md), [`AI Chat Conversation Reporting Technical Design`](./ai-chat-conversation-reporting-technical-design.md) |
 
+
+### Revision baseline — 2026-10-10
+
+This revision audits the merged `dev` checkout at `6a9e3f51` against the current source, including the natural-language skill-installation merge. It is a documentation update, not an implementation or runtime certification. “Implemented” below means a reachable code path exists; it does not assert that its full acceptance suite passed. Proposed contracts and files in later sections remain future work unless explicitly identified as existing.
+
+The default chat composition root is `src/views/components/aiChatWorkspace/AiChatCenterSurface.vue`, mounted through the authenticated application layout. There is no current `AiChatWorkspaceShell.vue`. Existing shared components must be preserved while filling the remaining gaps.
+
 ## 1. Executive Summary
 
 AiFetchly already sends users to `/aiworkspace` by default, but that surface does not yet provide all capabilities available in Chat V2. The two surfaces share the main AI query engine, so several backend behaviors already work in both. However, many user-facing workflows remain implemented only inside `AiChatV2.vue`. The workspace can therefore display a conversation while omitting or breaking the actions needed to finish it.
+
+This revision additionally covers natural-language skill installation, prompt-skill invocation, managed-browser intervention, recoverable archive context and compaction, while preserving inherited portable-memory capabilities.
 
 This PRD makes the AI Chat Workspace the complete default chat experience. It requires parity for message submission, slash commands, goals, scheduled loops, durable same-conversation queuing, steering, plan decisions, permission decisions, outbound-email review, generated-image editing, content reporting, voice, workspace trust, workspace memory, retry, and recovery.
 
@@ -48,6 +57,13 @@ This PRD does not replace the detailed safety rules, schemas, or backend behavio
 - The voice documents remain authoritative for runtime installation, model readiness, recording, transcription, and speech playback.
 - The workspace redesign documents remain authoritative for one trusted renderer, bounded history, semantic execution rows, inspector ownership, and background conversation behavior.
 
+These merged-feature documents remain authoritative for their domain contracts:
+
+- [Natural-Language Skill Installation PRD](./natural-language-skill-installation-prd.md) and [Technical Design](./natural-language-skill-installation-technical-design.md)
+- [Managed Social Browser PRD](./puppeteer-managed-social-browser-prd.md) and [Technical Design](./puppeteer-managed-social-browser-technical-design.md)
+- [Recoverable History and Incremental Compaction PRD](./ai-chat-recoverable-history-incremental-compaction-prd.md) and [Technical Design](./ai-chat-recoverable-history-incremental-compaction-technical-design.md)
+- [Portable Workspace Memory PRD](./portable-workspace-memory-prd.md) and [Technical Design](./portable-workspace-memory-technical-design.md)
+
 ### 2.3 Superseded assumptions
 
 The following assumptions are no longer acceptable:
@@ -66,41 +82,41 @@ The following assumptions are no longer acceptable:
 
 The root route redirects to `/aiworkspace`. Users therefore encounter the workspace gaps during the primary application journey, not an optional preview.
 
-### 3.2 Capabilities already shared or substantially available
+### 3.2 Existing workspace capabilities to preserve
 
-The workspace currently provides or inherits:
+The merged workspace already has bounded history and background run ownership; mode/model/approval controls; accepted-send draft clearing and voice-origin handling; busy-send delegation to the durable queue with Steer/Cancel/Resume; actionable permission cards; an outbound-email review card/dialog; explicit generated-image reference selection; conversation-level reporting; shared voice orchestration; and workspace selection, trust, watcher, and memory management.
 
-- Conversation selection, bounded history, unread state, and background run summaries.
-- Main-process run ownership and cross-conversation execution scheduling.
-- Basic AI query execution through `AIChatQueryEngine`.
-- Mode, model, and tool-approval selection.
-- Ordinary image and document attachments within current IPC limits.
-- Assistant text, reasoning, plan metadata, tool lifecycle projection, and artifact reopening.
-- Provider retry, context compaction, and much of the query engine's error mapping.
-- Backend outbound-email intent resolution and send gating when the shared engine path is used.
-- Goal, scheduled-loop, recovery, and usage events when they are emitted by an existing run.
-- Plan decision and plan-question presentation at a basic level.
+`WorkspaceMemoryPanel.vue` also provides portable-memory enablement, review, conflict resolution, diagnostics, storage choices, identity regeneration, and Auto Dream. These are inherited through the workspace's existing memory dialog. They are regression scope, not new missing panels.
 
-### 3.3 Verified capability gaps
+### 3.3 Verified capability inventory and remaining work
 
-| Capability                 | Chat V2 behavior                                                                     | Current workspace behavior                                                           | User impact                                                         | Priority |
-| -------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | -------- |
-| Composer acceptance        | Receives the full composer options object and clears the draft only after acceptance | Accepts only text and files; ignores `pastedContents`, `fromVoice`, and `onAccepted` | Drafts and pasted context can be mishandled                         | P0       |
-| Same-conversation queue    | Normal messages can queue during a running turn                                      | Composer is busy and coordinator rejects another run                                 | Follow-up messages are blocked or rejected                          | P0       |
-| Steering                   | A queued message can redirect an active turn at safe boundaries                      | No workspace steering action                                                         | Users cannot correct expensive or unsafe work in progress           | P0       |
-| Slash and loop commands    | Parent routes slash, goal, and loop commands before model submission                 | Workspace submits raw command text as a normal AI message                            | Suggestions can lead to the wrong behavior                          | P0       |
-| Tool permission            | Grant once, grant persistently, or deny through an actionable card                   | Semantic result shows informational permission text                                  | A run can wait without a way to continue                            | P0       |
-| Plan decisions             | Validates the returned state and starts execution or revision follow-up              | Calls the decision API but ignores the result and does not continue                  | Approved plans may not execute; failed decisions look successful    | P0       |
-| Outbound email             | Tool result opens batch review, approval, send, and delivery progress                | Tool result is collapsed into a generic semantic receipt                             | Safety-gated email cannot be reviewed or sent from the default chat | P0       |
-| Generated images           | Select, edit, infer references, confirm batch, save, retry, and stop                 | Some images render, but actions and request fields are not wired                     | Image editing workflows stop at display                             | P1       |
-| Reporting                  | Per-output and conversation-level reporting with capability checks                   | Message report events are unhandled; no conversation report entry                    | Safety reporting is missing from the default chat                   | P1       |
-| Voice                      | Recording, transcription, setup, playback, spoken-response policy, and errors        | Only a few composer events route to settings or cancellation                         | Microphone and spoken responses are incomplete or absent            | P1       |
-| Workspace trust and memory | Select or change workspace, review trust, inspect and edit memory                    | Inspector displays a limited summary without the full actions                        | Filesystem tools lack discoverable setup and trust recovery         | P1       |
-| Retry and recovery detail  | Shows retry attempt and recovery layer information                                   | Run strip shows a reduced recovering state                                           | Users cannot tell whether work is retrying, waiting, or stuck       | P1       |
+| Capability | Current workspace evidence | Remaining work | Priority |
+| --- | --- | --- | --- |
+| Composer acceptance and context | `AiChatCenterSurface.onComposerSend` uses `onAccepted` only after store acceptance and passes voice origin | Forward `pastedContents` end to end; normalize attachments through the shared helper; preserve identity and draft on asynchronous failure | P0 |
+| Same-conversation queue and steering | Coordinator delegates busy sends; transcript mounts `AiChatV2PendingMessage`; center wires queue actions | Unify idle/busy dispatch and durable run identity; verify restart, terminal mapping, steering eligibility, and selected runtime state | P0 |
+| Slash, goal, loop, prompt skill | Workspace send goes directly to `selectedStore.sendMessage` | Add command dispatch, `/skill` invocation, goal planning, schedule approval, and pause/resume/status controls; never submit raw commands accidentally | P0 |
+| Plan decisions | Decision/question surfaces exist; question API response is checked | Validate decision results and start execution/revision continuation exactly once; surface question transport failures | P0 |
+| Tool permission | Transcript forwards grant/deny; center and store resume parked tools | Fix discarded `persistent` choice in `onGrantPermission`; verify grant persistence versus resume, failed-action retry and authoritative reconstruction; do not replace with informational receipts | P0 |
+| Outbound email | `AiChatOutboundBatchReviewCard` mounts shared review/send dialog | Keep review discoverable and test delivery outcomes, re-open, reload and duplicate clicks | P0 regression |
+| Natural-language skill installation | `AiChatV2Message` handles `skill_install_*` via `SkillInstallCard`; workspace groups tool results generically | Add dedicated installation projection/card with approvals, dependency actions, credentials, retry/cancel and restored status | P0 |
+| Managed social browser | V2 mounts `ManagedBrowserStartPanel` and `ManagedBrowserSessionCard`; workspace does not | Add start, session status, takeover, login verification, resume/extend/stop, notices and approvals | P0 |
+| Generated images | Explicit Use/Edit and reference tray are wired; request carries direct references | Add inference/chooser, confirmed batches, save, retry failed batch and stop events across semantic tool-result paths | P1 |
+| AI-content reports | Conversation button/dialog already mounted | Forward single-output report events and reported-state feedback; preserve conversation reporting | P1 |
+| Recoverable history and selected context | Workspace has ordinary paged history only | Add feature-gated archive search/drawer, selected-context chips and opaque-reference submission/acknowledgement | P1 |
+| Voice | `useAiChatVoice` and runtime install dialog already wired | Regression-test voice acceptance, terminal speech flush, selection changes and failure recovery | P1 regression |
+| Workspace, trust and memory | `useConversationWorkspace`, trust/setup cards and shared memory panel are mounted | Handle composer `request-workspace`; preserve portable-memory and Auto Dream actions, async selection safety and watcher cleanup | P1 |
+| Compaction and recovery | Header can request compaction; run strip has reduced recovery state | Add compaction status/retry/cancel/history, retry attempt/layer detail and user reasoning visibility preference | P1 |
+| Tool completion side effects | V2 handles navigation results and offers agent task controls; workspace projection principally renders receipts | Integrate trusted navigation handling, task cancellation/status, and file-change details or document an equivalent existing workspace entry | P1 |
+
+### 3.4 Implementation versus target architecture
+
+The current coordinator starts an idle conversation directly and delegates busy sends to the pending queue. The single durable-intent path in section 10 is the target architecture, not the implementation baseline. Queue unification is an incremental backend migration; it must not block independent renderer fixes or remove existing queue controls.
+
+Chat V2 is a capability reference, not a correctness oracle. For example, its `onSend` currently invokes acceptance before several later validation/dispatch steps. The workspace's stricter accepted-send rule must be preserved in shared extraction.
 
 ## 4. Problem Statement
 
-The default workspace presents a newer information architecture but a smaller effective product. Users can start ordinary conversations, yet several actions disappear exactly when they are needed: a tool asks for permission, a plan is approved, an email draft needs review, an image needs editing, or a second message should queue behind active work.
+The default workspace presents a newer information architecture but a smaller effective product. Users can start conversations and complete several shared workflows, yet command dispatch, plan continuation, skill-installation review, managed-browser intervention, selected history context, and advanced image actions remain incomplete. Existing queue, permission, email, voice, and memory integrations also need regression coverage through the default route.
 
 The code has two sources of drift:
 
@@ -202,7 +218,7 @@ This initiative does not include:
 2. Chat V2 remains available only as a migration rollback until removal is separately approved.
 3. `AiChatV2Composer.vue` remains the shared message-entry component unless a later technical design replaces it for both surfaces together.
 4. The workspace retains its semantic transcript. Tool messages must not revert to duplicate generic call/result cards.
-5. Shared behavior must be extracted from `AiChatV2.vue` into typed composables, stores, or renderer-safe controllers. It must not be copied wholesale into `AiChatWorkspaceShell.vue`.
+5. Shared behavior must be extracted from `AiChatV2.vue` into typed composables, stores, or renderer-safe controllers. It must not be copied wholesale into `AiChatCenterSurface.vue`.
 6. The workspace coordinator remains the main-process owner of workspace run envelopes and cross-conversation resource scheduling.
 7. The durable pending-message service remains the authority for same-conversation FIFO order, steering, pause, resume, cancellation, and restart recovery.
 8. A technical design must define one mapping between pending-message identity and workspace run identity. The same user message must never exist as two independently dispatchable jobs.
@@ -421,6 +437,40 @@ The implementation must compose these concerns. It must not:
 - **FR-LIF-004**: A selected conversation can reconstruct pending, running, waiting, terminal, plan, permission, and reportable-output presentation after reload.
 - **FR-LIF-005**: Clear and delete remain unavailable while active execution could re-persist content.
 - **FR-LIF-006**: New chat creates one stable conversation identity used consistently by workspace binding, commands, queue records, runs, messages, plans, and generated images.
+
+### 12.13 Natural-language skill installation and prompt invocation
+
+- **FR-SKL-001**: Installation tool results must render the shared interactive installation card outside collapsed generic execution receipts, for live and historical messages.
+- **FR-SKL-002**: Show the safe plan's source, pinned revision, activation target, selected skills, mode, requested permissions, dependencies, credential names, warnings, progress and outcome using the existing installation contract.
+- **FR-SKL-003**: Preserve approve/decline, dependency approval, approved command execution, credential entry, retry and cancel. Repeated actions cannot execute a stale or duplicate transition; refresh authoritative status first where required by the existing card.
+- **FR-SKL-004**: Credential values never appear in transcript, reports, event summaries, diagnostics or persisted renderer state. A reopened historical card must re-fetch status and must not replay an approval.
+- **FR-SKL-005**: `/skill <name> [task]` invokes the existing prompt-skill service in the captured conversation, then submits the task once. Missing/disabled skills produce a recoverable local error; an acknowledgement failure must not fall through to ordinary model text.
+- **FR-SKL-006**: Keep installation management reachable through the existing Plugins settings page; do not duplicate `SkillInstallManager` inside every conversation.
+
+### 12.14 Managed-browser sessions and human intervention
+
+- **FR-BRW-001**: Offer eligible-account selection, purpose entry and explicit start confirmation from the workspace, reusing the existing managed-browser API and account eligibility rules.
+- **FR-BRW-002**: Display authoritative account/platform, proxy indicator, state, current origin, progress and safe error codes. Rehydrate active sessions on mount before relying on new events.
+- **FR-BRW-003**: Preserve Pause AI, Take over, Verify login, Resume, Extend and Stop with state-dependent availability; retain existing handoff and approval dialogs and timeout behavior.
+- **FR-BRW-004**: Session actions target the captured session identity. Switching chat or closing the inspector does not stop a session or silently transfer it to another conversation. Global/account-scoped sessions must be labelled as such rather than assigned an invented conversation owner.
+- **FR-BRW-005**: Keep intervention actions discoverable even when execution groups and inspector are closed; do not depend on a model-generated follow-up to expose them.
+- **FR-BRW-006**: Cancelled start/approval performs no action. Duplicate clicks, stale events, expired handoffs and failed verification show recoverable authoritative state without bypassing login or approval requirements.
+
+### 12.15 Recoverable history and compaction
+
+- **FR-HIS-001**: Under the existing history rollout flag, expose archive search/navigation and passage selection through `AiChatHistoryDrawer`, alongside bounded ordinary transcript paging.
+- **FR-HIS-002**: Show removable selected-context chips per conversation. Sending carries opaque `historySelectionIds` and a stable `submissionId`, never renderer-supplied archive passage bodies.
+- **FR-HIS-003**: Main process re-resolves references against ownership, current archive epoch/revision and prompt budget. Accepted IDs clear only their corresponding chips; changed or rejected selections remain visible with an explanation.
+- **FR-HIS-004**: Transport retry reuses submission identity. Switching conversations or restoring a draft never transfers selected history to another conversation; disabling the flag prevents new reference submission.
+- **FR-HIS-005**: Show compaction progress, retry, cancel and history access with current busy restrictions. Compaction must not erase the user's selected-context draft or expand the 200-message mounted window.
+
+### 12.16 Shared integration and regression requirements
+
+- **FR-INT-001**: Preserve portable-memory enable/review/conflict/diagnostic/rescan/reveal/storage/identity workflows and Auto Dream through the existing shared panel. Confirmations and concurrency tokens remain authoritative.
+- **FR-INT-002**: Wire composer workspace requests to the existing setup flow. Failed trust/setup leaves the draft and tool request retryable.
+- **FR-INT-003**: Process trusted navigation tool results through the existing navigation handler, at most once for a live selected-conversation result; historical replay must not navigate. Background results must not hijack the current route.
+- **FR-INT-004**: Expose agent-task status/cancellation and file-operation details through workspace activity/artifacts or an equivalent reachable shared surface. Preserve task identity and never cancel unrelated work.
+- **FR-INT-005**: Restore a reasoning visibility control and detailed retry/recovery status. A selected-conversation preference must not change main-process authorization or execution.
 
 ## 13. Workspace Presentation Requirements
 
@@ -646,7 +696,7 @@ Metrics must not contain prompts, assistant content, report evidence, tool argum
 ### Phase 0: Characterization and contract lock
 
 - Add workspace characterization tests for the full composer event payload.
-- Add tests proving current command, queue, permission, plan, email, image, report, voice, and workspace gaps.
+- Characterize implemented queue, permission, email, voice and workspace paths; add failing tests only for verified remaining gaps.
 - Define the pending-message-to-run identity and state mapping in technical design.
 - Freeze new surface-specific orchestration in `AiChatV2.vue` unless accompanied by workspace parity.
 
@@ -658,14 +708,14 @@ Exit gate: tests describe every requirement group and the technical design resol
 - Preserve `onAccepted`, pasted content, voice origin, and attachment behavior.
 - Route slash, goal, and scheduled-loop commands correctly.
 - Extract plan action continuation behavior.
-- Add actionable workspace permission decisions.
+- Complete persistent/once permission semantics and failed-action recovery on existing cards.
 
 Exit gate: ordinary, command, plan, question, and permission journeys pass component and main-process tests.
 
 ### Phase 2: Queue and steering
 
 - Integrate durable same-conversation pending messages with workspace run envelopes and global scheduling.
-- Add pending bubbles and steer, cancel, and resume actions.
+- Preserve pending bubbles and steer, cancel, and resume actions while unifying dispatch ownership.
 - Reconstruct pending state after selection and restart.
 - Run all eight existing queue/steering Electron E2E scenarios against the default route.
 
@@ -673,17 +723,18 @@ Exit gate: all queue/steering E2E scenarios pass without routing to Chat V2.
 
 ### Phase 3: Safety-critical specialized results
 
-- Add outbound-email semantic result and review flow.
+- Preserve the existing outbound-email review flow and certify authorization/delivery outcomes.
+- Add skill-installation cards and managed-browser intervention controls.
 - Add generated-image semantic result, selection, request fields, batch actions, and save flow.
-- Add per-output and conversation-level reporting.
+- Add per-output reporting and preserve existing conversation reporting.
 
 Exit gate: outbound-email, generated-image, and reporting component plus Electron E2E suites pass on `/aiworkspace`.
 
-### Phase 4: Voice, workspace trust, memory, and recovery detail
+### Phase 4: Recoverable history, compaction, shared integrations, and regression certification
 
-- Extract shared voice and conversation-workspace orchestration.
-- Wire full composer voice state and spoken-response controls.
-- Add workspace chooser, required state, trust review, watcher refresh, and memory management.
+- Add recoverable-history search, context selection, acknowledgement and compaction controls.
+- Reuse and regression-test existing voice and conversation-workspace composables.
+- Preserve workspace chooser, trust, watcher, portable-memory and Auto Dream behavior; complete remaining workspace setup events.
 - Expose retry and recovery details in the workspace hierarchy.
 
 Exit gate: voice, workspace, trust, memory, retry, and recovery parity tests pass in all supported responsive layouts.
@@ -696,6 +747,8 @@ Exit gate: voice, workspace, trust, memory, retry, and recovery parity tests pas
 - Decide separately whether to remove, retain, or reduce Chat V2.
 
 Exit gate: product, safety, accessibility, QA, and desktop owners approve removal of the rollback dependency.
+
+Phase 3 delivers FR-SKL and FR-BRW and completes image and single-report gaps while preserving the shipped email surface. Phase 4 delivers FR-HIS/FR-INT and verifies existing voice, trust and portable-memory behavior. No phase may treat an inherited capability as complete solely because its component is imported.
 
 ## 22. Testing Strategy
 
@@ -806,6 +859,17 @@ The hard E2E gate is `yarn test:e2e` in a deterministic loopback-only environmen
 27. Given 200% scaling or narrow layout, when a decision is required, then the primary action remains visible without horizontal page scrolling.
 28. Given a conversation is inactive, when private detail events occur, then only bounded summary state reaches its sidebar row.
 
+### Additional merged-feature acceptance criteria
+
+29. Given an installation requires review, the workspace shows its safe plan and approval actions; reload refreshes the same session, and a second click cannot install twice (FR-SKL-001..004).
+30. Given `/skill` resolves successfully, exactly one invocation and task turn use the originating conversation; a failed lookup preserves retryable input (FR-SKL-005).
+31. Given a managed browser requests takeover or approval, the workspace exposes the existing intervention flow while the inspector is closed; reload reconstructs status and stale session actions fail safely (FR-BRW-001..006).
+32. Given archive selections include accepted, changed and rejected references, only accepted chips clear; a transport retry uses the same submission identity and no raw passage is trusted (FR-HIS-001..004).
+33. Given compaction fails or is cancelled, progress settles, retry/history actions remain available and selected context is retained (FR-HIS-005).
+34. Given portable memory is enabled, review/conflict resolution and stale-edit rejection still work through the workspace memory dialog; Auto Dream status refreshes (FR-INT-001).
+35. Given a live navigation result for another conversation or a historical replay, no route change occurs; selected live results navigate once through the existing validator (FR-INT-003).
+36. Given an ordinary send fails validation, neither Chat V2 nor workspace shared extraction clears its text, attachments, pasted bodies, image references or history draft.
+
 ## 24. Success Metrics
 
 The migration is successful when:
@@ -836,9 +900,9 @@ The migration is successful when:
 | Large parent component remains source of truth       | New features continue to drift         | Contribution rule: shared interactive capability cannot ship on one chat surface only |
 | Removing Chat V2 too early                           | Users lose a working fallback          | Default-only soak and separate cleanup decision                                       |
 
-## 26. Open Technical Questions
+## 26. Architecture Decisions and Remaining Verification
 
-These questions must be resolved in the technical design without changing the user outcomes in this PRD:
+The following design questions are resolved by technical decisions AD-001..009 and sections 9–12. Implementation must verify those decisions against the merged queue adapters; they are not evidence that the migration has shipped:
 
 1. At what transition is a workspace run envelope created for a pending message: acceptance, global scheduling, or dispatch?
 2. Which stable field maps `pendingMessageId`, `clientRequestId`, `runId`, user `messageId`, and assistant `messageId`?
@@ -854,7 +918,7 @@ These questions must be resolved in the technical design without changing the us
 | Area                            | Current implementation or evidence                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Default route                   | `src/views/router/index.ts`                                                                                                                         |
-| Workspace composition           | `src/views/components/aiChatWorkspace/AiChatWorkspaceShell.vue`                                                                                     |
+| Workspace composition           | `src/views/components/aiChatWorkspace/AiChatCenterSurface.vue`                                                                                     |
 | Workspace transcript            | `src/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue`                                                                                |
 | Selected conversation           | `src/views/store/selectedConversation.ts`                                                                                                           |
 | Workspace coordinator           | `src/service/AIChatCoordinator.ts`                                                                                                                  |
