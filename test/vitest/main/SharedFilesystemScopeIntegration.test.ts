@@ -32,6 +32,9 @@ const WORKSPACE_ROOT = vi.hoisted(() => {
 const CONVERSATION_ID = "shared-scope-conv";
 
 vi.mock("@/modules/WorkspaceModule", () => {
+  // vitest-4: `new WorkspaceModule()` needs a CONSTRUCTABLE mock — an
+  // arrow vi.fn() impl returns a plain object from the call but breaks
+  // under construction semantics in the main checkout's vitest 4.
   const getActiveWorkspace = vi
     .fn()
     .mockImplementation(async (conversationId: string) =>
@@ -44,11 +47,10 @@ vi.mock("@/modules/WorkspaceModule", () => {
           }
         : null
     );
-  return {
-    WorkspaceModule: vi.fn().mockImplementation(() => ({
-      getActiveWorkspace,
-    })),
-  };
+  class WorkspaceModule {
+    getActiveWorkspace = getActiveWorkspace;
+  }
+  return { WorkspaceModule };
 });
 
 describe("shared conversation filesystem scope (shell ↔ file tools)", () => {

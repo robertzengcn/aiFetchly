@@ -36,17 +36,18 @@ const WORKSPACE_ROOT = vi.hoisted(() => {
 // WorkspaceModule.getActiveWorkspace; mock that method with an approved
 // workspace record so the shared scope resolves to WORKSPACE_ROOT.
 vi.mock("@/modules/WorkspaceModule", () => {
+  // vitest-4: `new WorkspaceModule()` needs a CONSTRUCTABLE mock (an
+  // arrow vi.fn() impl does not survive construction in vitest 4).
   const getActiveWorkspace = vi.fn().mockResolvedValue({
     id: 42,
     conversationId: "test-conv-001",
     rootPath: WORKSPACE_ROOT,
     approvalState: "approved",
   });
-  return {
-    WorkspaceModule: vi.fn().mockImplementation(() => ({
-      getActiveWorkspace,
-    })),
-  };
+  class WorkspaceModule {
+    getActiveWorkspace = getActiveWorkspace;
+  }
+  return { WorkspaceModule };
 });
 
 // ---------------------------------------------------------------------------
