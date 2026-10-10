@@ -178,8 +178,8 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T09 — Start and attach the actual successor after Continue/Retry [P1, confirmed]
 
-- [ ] Connect successful successor creation to the engine/conversation lease/stream with its trusted binding.
-- [ ] Update renderer to the returned successor identity and disclose Retry's new attempt/allowance.
+- [x] Connect successful successor creation to the engine/conversation lease/stream with its trusted binding.
+- [x] Update renderer to the returned successor identity and disclose Retry's new attempt/allowance.
 
 **Evidence:** `ai-chat-v2-ipc.ts:2117–2128` creates a successor then immediately returns; it never dispatches the engine. `AiChatV2.vue:1617` and `:1639` only change badge status and keep the parent ID. These controls cannot perform the user's requested work.
 
@@ -392,15 +392,15 @@ Its opening still says Slice 1 only, no live callsites and all ACs failing live,
 | FR-11 Consequential actions | Deferred Slice 3; scaffolding bugs | T22/T23. |
 | FR-12 Honest persisted outcomes/accounting | Partial | T02/T11/T12/T19/T21/T23. Scheduled transaction exists; manual/delivery/accounting gaps remain. |
 | FR-13 Visible execution/outcomes | Missing live emitter; incorrect terminal badge | T13/T14. |
-| FR-14 Actions/notifications | Partial | T09/T12/T13/T24: successor dispatch, safe Stop and durable one-time delivery. |
+| FR-14 Actions/notifications | Partial | T09/T12/T13/T24: successor dispatch, safe Stop and durable one-time delivery. T09 landed — created successor dispatches the engine with the trusted binding + renderer adopts the successor identity and attaches the successor stream; T12/T13/T24 remain. |
 | FR-15 i18n/UI tests | Partial | Six-language parity and components pass; T14/T26 honest labels and real flow coverage missing. |
 | FR-16 Reasons/provenance | Partial — desktop side landed (T21) | T21: candidates derive provenance/streamTerminalSeen/safetyRestriction from actual finishReason/content diagnostics (candidateDiagnostics.ts) at all 4 consult sites; content_filter→CONTENT_RESTRICTED; length/error/auth/quota/non_recoverable→distinct codes; sink error consult holds for decision. T25 server-side optional metadata remains. |
 | FR-17 Default manual protection | Partial | T01/T18: recognized tasks enroll without usable contracts; other task phrasing bypasses. |
 | FR-18 Conservative intent | Partial | T01/T17/T18: structured multilingual analysis and actual source validation missing. |
 | FR-19 Usable manual contracts | Missing live generation; library partial | T01/T03/T17. |
 | FR-20 One execution/owner | Partial | T08/T15: shared lineage claim and actual goal ownership/fencing missing. |
-| FR-21 Preparation/follow-ups | Partial | T08/T09/T10/T15/T23: preparation same execution, successor work, no replay. |
-| FR-22 Honest manual UX | Partial | T04/T09/T12/T13/T14: actual checker Stop, outcome labels, running successor. |
+| FR-21 Preparation/follow-ups | Partial | T08/T09/T10/T15/T23: preparation same execution, successor work, no replay. T09 landed — Continue claims lineage and dispatches the successor through the engine with the trusted binding; Retry mints a fresh bounded attempt on the retry channel; T10 dedup prevents replay of the same submission. T15/T23 remain. |
+| FR-22 Honest manual UX | Partial | T04/T09/T12/T13/T14: actual checker Stop, outcome labels, running successor. T09 landed — the running successor's identity and task_execution_state chunks drive the badge (no parent-id dead-air); T04/T12/T13/T14 remain. |
 | FR-23 Manual execution-wide limits | Missing live ledger enforcement | T05/T06/T08. |
 | FR-24 Durable manual outcomes | Partial | Independent manual rows exist; T08/T11/T12/T20/T23/T24 remain. |
 
@@ -453,7 +453,7 @@ This table assesses required end-to-end behavior against source and tests. `Not 
 | AC-24 Stop during checker/recovery | Delayed-stream Stop passes; checking unproved | T04/T12/T26: actual in-flight checker abort and durable cancellation. |
 | AC-25 Replacement fences owner | Partial; asynchronous fencing/state gaps | T08/T12/T13/T15: generation checks/no old goal/events. |
 | AC-26 Same submission retry | DB dedup passes; engine violates no redispatch | T10. |
-| AC-27 Continue remaining allowance | Not satisfied | T05/T08/T09/T20: shared ledger, one active running successor. |
+| AC-27 Continue remaining allowance | Partial — successor dispatch landed | T05/T08/T09/T20: shared ledger, one active running successor. T09 landed — Continue dispatches the engine with the trusted binding and the renderer attaches the successor stream; the successor identity is tracked, not the parent's. T05/T08/T20 remain for the remaining-allowance ledger enforcement + alternating-work accounting. |
 | AC-28 Effect lost/restart/new run | Deferred Slice 3 | T22/T23/T24. |
 | AC-29 Compaction/fallback/traffic totals | Not satisfied | T05/T06/T20. |
 | AC-30 Recoverable pre-decision error | Landed (T21) | T21: recoverable recovery reasons (network/timeout/rate_limit/overload/server_error/output_limit/context_overflow/media_overflow/model_unavailable) do NOT become permanent codes — fall through to STREAM_INCOMPLETE/NO_PROGRESS; only auth/quota/non_recoverable map to distinct permanent codes; sink error consult holds for controller decision instead of blind failed; no fabricated recoveryReason when no recovery_status fired. T26 real-flow E2E remains. |

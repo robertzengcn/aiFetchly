@@ -55,7 +55,10 @@ import {
   AI_CHAT_V2_COMPACTION_CANCEL,
   AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_COMPACTION_PROGRESS,
+  AI_CHAT_V2_TASK_CONTINUE,
+  AI_CHAT_V2_TASK_RETRY,
 } from "@/config/channellist";
+import type { ChatV2TaskExecutionStateEvent } from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Per-conversation stream listeners, keyed by conversationId. Each entry holds
@@ -341,6 +344,134 @@ export async function streamChatV2Message(
  */
 export function stopChatV2Stream(conversationId?: string): void {
   windowSend(AI_CHAT_V2_STREAM_STOP, conversationId ? { conversationId } : {});
+}
+
+/**
+ * T09 (FR-14/21/22, AC-16/27/28): attach the renderer to a task successor
+ * (Continue / Retry) background turn.
+ *
+ * The component usually invokes the successor IPC itself first (create +
+ * dispatch), then calls this helper with the SAME `submissionId`. The
+ * second invoke dedups in the model as `reused` (no re-dispatch, no renewed
+ * limits), so a `reused` response is SUCCESS here: the listeners still need
+ * attaching because the engine turn from the first invoke is already
+ * streaming. A denied / conflicted invoke (status false) is a real failure:
+ * report it, clean up, and reject.
+ *
+ * The successor's events stream over the shared recovery channels
+ * (AI_CHAT_V2_STREAM_CHUNK / _COMPLETE) with the successor's conversationId —
+ * never AI_CHAT_V2_STREAM, which nothing sends for a successor. Listener
+ * lifecycle mirrors streamChatV2Message: replace-then-register per
+ * conversation, stale-conversation events neither route nor detach, and a
+ * terminal event for the successor conversation resolves (complete) or
+ * rejects (error) and detaches both listeners.
+ */
+export interface AttachChatV2SuccessorStreamInput {
+  mode: "continue" | "retry";
+  parentExecutionId: string;
+  /** Same submissionId the create call used — enables the model dedup. */
+  submissionId: string;
+  conversationId: string;
+  /** Optional successor identity (from a prior `created` response). */
+  executionId?: string;
+  onTaskExecutionState: (state: ChatV2TaskExecutionStateEvent) => void;
+  onComplete: (chunk: ChatV2StreamChunk) => void;
+  onError: (error: Error) => void;
+}
+
+export async function attachChatV2SuccessorStream(
+  input: AttachChatV2SuccessorStreamInput
+): Promise<void> {
+  const {
+    mode,
+    parentExecutionId,
+    submissionId,
+    conversationId,
+    onTaskExecutionState,
+    onComplete,
+    onError,
+  } = input;
+  return new Promise((resolve, reject) => {
+    const conversationKey = conversationId;
+    const isChunkForRequest = (chunk: ChatV2StreamChunk): boolean =>
+      chunk.conversationId === conversationId;
+    const cleanup = (): void => {
+      detachConversationStreamListeners(conversationKey, false);
+    };
+
+    const chunkHandler = (raw: unknown): void => {
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
+        if (!isChunkForRequest(chunk)) return;
+        if (
+          chunk.eventType === "task_execution_state" &&
+          chunk.taskExecutionState
+        ) {
+          onTaskExecutionState(chunk.taskExecutionState);
+        }
+      } catch (err) {
+        console.error("aiChatV2: successor chunk parse error", err);
+      }
+    };
+
+    const completeHandler = (raw: unknown): void => {
+      let shouldCleanup = true;
+      try {
+        const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
+        if (!isChunkForRequest(chunk)) {
+          shouldCleanup = false;
+          return;
+        }
+        if (chunk.eventType === "error" && chunk.errorMessage) {
+          const error = new Error(chunk.errorMessage);
+          onError(error);
+          reject(error);
+        } else {
+          onComplete(chunk);
+          resolve();
+        }
+      } catch (err) {
+        const error =
+          err instanceof Error
+            ? err
+            : new Error("Successor completion parse error");
+        onError(error);
+        reject(error);
+      } finally {
+        if (shouldCleanup) {
+          cleanup();
+        }
+      }
+    };
+
+    void (async () => {
+      try {
+        detachConversationStreamListeners(conversationKey, false);
+        const chunkListener = windowReceive(
+          AI_CHAT_V2_STREAM_CHUNK,
+          chunkHandler
+        );
+        const completeListener = windowReceive(
+          AI_CHAT_V2_STREAM_COMPLETE,
+          completeHandler
+        );
+        streamListenersByConversation.set(conversationKey, {
+          chunkListener,
+          completeListener,
+          detachedResolve: resolve,
+        });
+        const channel =
+          mode === "retry" ? AI_CHAT_V2_TASK_RETRY : AI_CHAT_V2_TASK_CONTINUE;
+        await windowInvoke(channel, { parentExecutionId, submissionId });
+      } catch (err) {
+        cleanup();
+        const error =
+          err instanceof Error ? err : new Error("Successor attach failed");
+        onError(error);
+        reject(error);
+      }
+    })();
+  });
 }
 
 /**

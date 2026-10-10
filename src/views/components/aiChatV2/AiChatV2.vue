@@ -822,6 +822,7 @@ import {
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
+  attachChatV2SuccessorStream,
   clearChatV2Conversation,
   getChatV2Conversations,
   getChatV2History,
@@ -1612,12 +1613,30 @@ async function continueTaskExecution(): Promise<void> {
       submissionId,
     });
     if (result && result.status === "created" && result.executionId) {
-      // Optimistically mark continuing; the next task_execution_state chunk
-      // confirms. A reused/deduped result leaves the existing badge as-is.
+      // T09: adopt the SUCCESSOR identity (not the parent's) so the badge
+      // tracks the execution that actually runs, then attach the successor
+      // stream. The attach helper re-invokes with the SAME submissionId —
+      // the model dedups that as `reused` (no re-dispatch, no renewed
+      // limits) — and forwards task_execution_state chunks to the badge.
       activeTaskExecution.value = {
         ...parent,
+        executionId: result.executionId,
         status: "continuing",
       };
+      void attachChatV2SuccessorStream({
+        mode: "continue",
+        parentExecutionId: parent.executionId,
+        submissionId,
+        conversationId: parent.conversationId,
+        executionId: result.executionId,
+        onTaskExecutionState: (state) => {
+          activeTaskExecution.value = { ...state };
+        },
+        onComplete: () => {},
+        onError: (err) => {
+          console.error("[AiChatV2] successor stream failed:", err);
+        },
+      });
     }
   } catch (err) {
     console.error("[AiChatV2] continueTask failed:", err);
@@ -1636,10 +1655,28 @@ async function retryTaskExecution(): Promise<void> {
       submissionId,
     });
     if (result && result.status === "created" && result.executionId) {
+      // T09: same successor-identity adoption as Continue, on the retry
+      // channel — the retried execution is a NEW bounded attempt, so the
+      // badge must track its id and stream, not the parent's.
       activeTaskExecution.value = {
         ...parent,
+        executionId: result.executionId,
         status: "resolving",
       };
+      void attachChatV2SuccessorStream({
+        mode: "retry",
+        parentExecutionId: parent.executionId,
+        submissionId,
+        conversationId: parent.conversationId,
+        executionId: result.executionId,
+        onTaskExecutionState: (state) => {
+          activeTaskExecution.value = { ...state };
+        },
+        onComplete: () => {},
+        onError: (err) => {
+          console.error("[AiChatV2] successor stream failed:", err);
+        },
+      });
     }
   } catch (err) {
     console.error("[AiChatV2] retryTask failed:", err);

@@ -3,7 +3,10 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
-import { streamChatV2Message } from "@/views/api/aiChatV2";
+import {
+  streamChatV2Message,
+  attachChatV2SuccessorStream,
+} from "@/views/api/aiChatV2";
 import { continueTask, retryTask } from "@/views/api/aiChatTaskExecution";
 import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
 
@@ -14,16 +17,23 @@ import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
  * Continue/Retry invoke the recovery IPC with the parent executionId and a
  * FRESH submissionId (one successor — AC-27); they must NOT resend the user
  * message or re-freeze a contract (that stays main-process authoritative).
+ * T09 (AC-16/27/28): a `created` response also ADOPTS the successor identity
+ * (the badge stops referencing the parent row) and attaches the successor
+ * stream listeners so the dispatched successor turn is not dead-air.
  */
 
-const { continueTaskMock, retryTaskMock } = vi.hoisted(() => ({
-  continueTaskMock: vi.fn().mockResolvedValue(null),
-  retryTaskMock: vi.fn().mockResolvedValue(null),
-}));
+const { continueTaskMock, retryTaskMock, attachSuccessorMock } = vi.hoisted(
+  () => ({
+    continueTaskMock: vi.fn().mockResolvedValue(null),
+    retryTaskMock: vi.fn().mockResolvedValue(null),
+    attachSuccessorMock: vi.fn().mockResolvedValue(undefined),
+  })
+);
 
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  attachChatV2SuccessorStream: attachSuccessorMock,
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
   startCompaction: vi.fn().mockResolvedValue({ started: true }),
@@ -462,6 +472,126 @@ describe("AiChatV2 task execution chunk routing", () => {
     expect(req.submissionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );
+  });
+
+  it("Continue created response adopts the successor identity and attaches the successor stream (T09)", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await streamWithTaskChunks(wrapper, [
+      {
+        executionId: "exec-parent",
+        conversationId: "v2-test",
+        status: "terminal",
+        reasonCode: "NO_PROGRESS",
+        outcome: "incomplete",
+      },
+    ]);
+    const continueBtn = wrapper
+      .findAll("button[aria-label]")
+      .find((b) => b.attributes("aria-label") === "Continue");
+    await continueBtn!.trigger("click");
+    await flushPromises();
+
+    // The successor identity replaces the parent's in the badge state — the
+    // renderer must not keep pointing at the finalized parent row (T09).
+    // The badge flips to "continuing"; the successor executionId is visible
+    // through the attach call (script setup does not expose the ref on vm).
+    expect(continueTask).toHaveBeenCalledTimes(1);
+    expect(badge(wrapper).attributes("data-status")).toBe("continuing");
+    // The successor stream listeners are attached so the dispatched turn's
+    // chunks reach the badge (dead-air otherwise).
+    expect(attachChatV2SuccessorStream).toHaveBeenCalledTimes(1);
+    const attachArgs = attachSuccessorMock.mock.calls[0][0] as {
+      mode: string;
+      parentExecutionId: string;
+      executionId: string;
+      conversationId: string;
+    };
+    expect(attachArgs.mode).toBe("continue");
+    expect(attachArgs.parentExecutionId).toBe("exec-parent");
+    expect(attachArgs.executionId).toBe("exec-new");
+    expect(attachArgs.conversationId).toBe("v2-test");
+  });
+
+  it("Retry created response adopts the successor identity and attaches the successor stream (T09)", async () => {
+    retryTaskMock.mockResolvedValue({
+      executionId: "exec-retry-new",
+      status: "created",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+    await streamWithTaskChunks(wrapper, [
+      {
+        executionId: "exec-parent",
+        conversationId: "v2-test",
+        status: "terminal",
+        reasonCode: "MODEL_ATTEMPT_LIMIT",
+        outcome: "incomplete",
+      },
+    ]);
+    const retryBtn = wrapper
+      .findAll("button[aria-label]")
+      .find((b) => b.attributes("aria-label") === "Retry");
+    await retryBtn!.trigger("click");
+    await flushPromises();
+
+    const state = badge(wrapper);
+    expect(state.attributes("data-status")).toBe("resolving");
+    expect(attachChatV2SuccessorStream).toHaveBeenCalledTimes(1);
+    const attachArgs = attachSuccessorMock.mock.calls[0][0] as {
+      mode: string;
+      executionId: string;
+      conversationId: string;
+    };
+    expect(attachArgs.mode).toBe("retry");
+    expect(attachArgs.executionId).toBe("exec-retry-new");
+    expect(attachArgs.conversationId).toBe("v2-test");
+  });
+
+  it("attaching the successor stream routes the successor's task_execution_state chunks to the badge (T09)", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await streamWithTaskChunks(wrapper, [
+      {
+        executionId: "exec-parent",
+        conversationId: "v2-test",
+        status: "terminal",
+        reasonCode: "NO_PROGRESS",
+        outcome: "incomplete",
+      },
+    ]);
+    const continueBtn = wrapper
+      .findAll("button[aria-label]")
+      .find((b) => b.attributes("aria-label") === "Continue");
+    await continueBtn!.trigger("click");
+    await flushPromises();
+
+    // The real attach helper forwards successor chunks into the component's
+    // task_execution_state branch: drive the registered handler. The helper
+    // takes a single input object — the callback lives on it, not as a
+    // positional argument.
+    const handler = (
+      attachSuccessorMock.mock.calls[0][0] as {
+        onTaskExecutionState: (
+          state: ChatV2StreamChunk["taskExecutionState"]
+        ) => void;
+      }
+    ).onTaskExecutionState;
+    handler({
+      executionId: "exec-new",
+      conversationId: "v2-test",
+      status: "active",
+    });
+    await flushPromises();
+    expect(badge(wrapper).attributes("data-status")).toBe("active");
+
+    handler({
+      executionId: "exec-new",
+      conversationId: "v2-test",
+      status: "verifying",
+    });
+    await flushPromises();
+    expect(badge(wrapper).attributes("data-status")).toBe("verifying");
   });
 
   it("a reused/denied Continue response leaves the badge untouched (no optimistic flip)", async () => {
