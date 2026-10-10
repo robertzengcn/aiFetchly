@@ -88,11 +88,18 @@ export async function readClusterEvidence(
     };
   }
 
+  // Order by id ASC so the [0] picks below (activeDraftId/activeAttemptId
+  // binding on the guard row) are deterministic across reads. Without this,
+  // a multi-record cluster binds whichever row SQLite returns first —
+  // non-deterministic and operator-undiagnosable. listByMessage uses
+  // { id: DESC }; cluster evidence uses ASC for stable oldest-first binding.
   const drafts = await draftRepo.find({
     where: { messageId: In(clusterRowIds) },
+    order: { id: "ASC" },
   });
   const attempts = await attemptRepo.find({
     where: { messageId: In(clusterRowIds) },
+    order: { id: "ASC" },
   });
 
   const replyStatus = seed?.replyStatus ?? null;
