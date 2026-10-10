@@ -60,6 +60,27 @@ export interface SendOptions {
     messageId: string;
     imageIndex: number;
   }[];
+  /**
+   * FR-SUB-004 (capability parity): send-time paste bodies keyed by the
+   * composer's numeric paste ids — forwarded through the workspace IPC to
+   * the engine exactly as the Chat V2 stream edge does.
+   */
+  readonly pastedContents?: Record<string, string>;
+  /**
+   * FR-IMG-004 trusted channel: the user-confirmed generated-image batch
+   * reference set (above the 3-reference direct cap). Rides outside
+   * `generatedImageReferences` as `confirmedGeneratedImageBatch`.
+   */
+  readonly confirmedBatchReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
+  /**
+   * FR-HIS-002 transport: opaque archive references + retry-stable
+   * submission identity (resolved by the engine start acknowledgement).
+   */
+  readonly historySelectionIds?: readonly string[];
+  readonly submissionId?: string;
 }
 
 /**
@@ -322,6 +343,14 @@ export const useSelectedConversationStore = defineStore(
           showReasoning: options?.showReasoning,
           uploadedFiles: options?.attachments,
           generatedImageReferences: options?.generatedImageReferences,
+          pastedContents: options?.pastedContents,
+          confirmedGeneratedImageBatch: options?.confirmedBatchReferences
+            ? { references: [...options.confirmedBatchReferences] }
+            : undefined,
+          historySelectionIds: options?.historySelectionIds
+            ? [...options.historySelectionIds]
+            : undefined,
+          submissionId: options?.submissionId,
         });
         activeRunId.value = response.runId;
         runtimeStatus.value = response.status;

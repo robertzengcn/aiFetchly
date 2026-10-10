@@ -76,3 +76,66 @@ describe("startChatRunRequestSchema generatedImageReferences cap", () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+/**
+ * Capability-parity PRD FR-SUB-004/FR-IMG-004/FR-HIS-002 (transport): the
+ * workspace start-run boundary must accept the SAME submission context the
+ * Chat V2 pending-queue edge already carries — pasted-content bodies, the
+ * trusted confirmed generated-image batch channel, opaque history-selection
+ * references, and the retry-stable submission identity.
+ */
+describe("startChatRunRequestSchema submission-context parity fields", () => {
+  it("accepts pastedContents map entries", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({ pastedContents: { "1": "pasted body text" } })
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a confirmed generated-image batch (trusted channel)", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({
+        confirmedGeneratedImageBatch: {
+          references: [
+            reference("m1", 0),
+            reference("m2", 1),
+            reference("m3", 0),
+            reference("m4", 0),
+          ],
+        },
+      })
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an empty confirmed batch (at least one reference)", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({ confirmedGeneratedImageBatch: { references: [] } })
+    );
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts opaque historySelectionIds and a retry-stable submissionId", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({
+        historySelectionIds: ["src-1", "src-2"],
+        submissionId: "11111111-2222-3333-4444-555555555555",
+      })
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects malformed historySelectionIds entries", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({ historySelectionIds: [""] })
+    );
+    expect(parsed.success).toBe(false);
+  });
+
+  it("still rejects unknown keys (strict shape)", () => {
+    const parsed = startChatRunRequestSchema.safeParse(
+      request({ pastedBodies: { p1: "renamed attacker key" } })
+    );
+    expect(parsed.success).toBe(false);
+  });
+});

@@ -137,6 +137,15 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
               generatedImageReferences: request.generatedImageReferences
                 ? [...request.generatedImageReferences]
                 : undefined,
+              // FR-SUB-004/FR-IMG-004/FR-HIS-002 parity: a delegated busy
+              // send must carry the same submission context the idle path
+              // forwards — the pending-queue schema accepts these fields and
+              // `rebuildTurnInputs` replays them at dispatch.
+              pastedContents: request.pastedContents,
+              confirmedGeneratedImageBatch:
+                request.confirmedGeneratedImageBatch,
+              historySelectionIds: request.historySelectionIds,
+              submissionId: request.submissionId,
             },
           });
           if (!receipt.pendingMessage) return null;

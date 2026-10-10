@@ -331,6 +331,80 @@ describe("AIChatCoordinator", () => {
     expect(fake.turns).toHaveLength(0);
   });
 
+  /**
+   * Capability-parity PRD FR-SUB-004/FR-IMG-004/FR-HIS-002: the workspace
+   * idle dispatch must carry the SAME submission context the Chat V2 stream
+   * edge accepts — pasted bodies, confirmed image batches, opaque history
+   * references, and the retry-stable submission id — all the way into the
+   * engine request. A field accepted by the schema but dropped by
+   * buildEngineRequest would silently change model behavior per surface.
+   */
+  it("forwards submission context through the idle dispatch into the engine request", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+
+    const accepted = await coordinator.startRun({
+      ...request(6),
+      pastedContents: { "1": "pasted body text" },
+      confirmedGeneratedImageBatch: {
+        references: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 1 },
+        ],
+      },
+      historySelectionIds: ["src-1", "src-2"],
+      submissionId: "11111111-2222-3333-4444-555555555555",
+    });
+    expect(accepted.ok).toBe(true);
+    await waitFor(() => fake.turns.length === 1);
+    const engineRequest = fake.turns[0].input.request;
+    expect(engineRequest.pastedContents).toEqual({ "1": "pasted body text" });
+    expect(engineRequest.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
+    expect(engineRequest.historySelectionIds).toEqual(["src-1", "src-2"]);
+    expect(engineRequest.submissionId).toBe(
+      "11111111-2222-3333-4444-555555555555"
+    );
+  });
+
+  /**
+   * Busy-path parity (FR-SUB-004): the coordinator hands the FULL request
+   * (context included) to the busySubmit port — the IPC adapter forwards it
+   * into the durable pending queue, whose schema already accepts these
+   * fields.
+   */
+  it("hands submission context to the busy-submit delegation intact", async () => {
+    const busyRequests: Array<
+      Parameters<AIChatCoordinator["startRun"]>[0]
+    > = [];
+    const { coordinator, fake } = buildCoordinator(
+      undefined,
+      async (busyRequest) => {
+        busyRequests.push(busyRequest);
+        return { pendingRunId: "pending-p-6" };
+      }
+    );
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-test-7", "running");
+    const accepted = await coordinator.startRun({
+      ...request(7),
+      pastedContents: { "2": "queued paste body" },
+      historySelectionIds: ["src-9"],
+      submissionId: "99999999-2222-3333-4444-555555555555",
+    });
+    expect(accepted.ok).toBe(true);
+    expect(busyRequests).toHaveLength(1);
+    expect(busyRequests[0].pastedContents).toEqual({ "2": "queued paste body" });
+    expect(busyRequests[0].historySelectionIds).toEqual(["src-9"]);
+    expect(busyRequests[0].submissionId).toBe(
+      "99999999-2222-3333-4444-555555555555"
+    );
+    expect(fake.turns).toHaveLength(0);
+  });
+
   it("cancel stops a queue-owned engine turn with no coordinator run", async () => {
     const { coordinator, fake } = buildCoordinator();
     await SqliteDb.ensureInitialized();

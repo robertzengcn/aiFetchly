@@ -384,6 +384,56 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  /**
+   * FR-SUB-004 (capability parity PRD): the composer's pasted-content map
+   * must reach the workspace start-run IPC — the same engine request
+   * behavior Chat V2 provides. A surface that drops the map would let the
+   * model see only the placeholder text.
+   */
+  it("forwards the composer pastedContents map through the workspace send", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "fresh-chat",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "see pasted block 1", [], {
+      pastedContents: { "1": "the full pasted body text" },
+    });
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "fresh-chat",
+      pastedContents: { "1": "the full pasted body text" },
+    });
+  });
+
+  /**
+   * FR-SUB-002/003: a rejected submission must never invoke the composer's
+   * acceptance callback (draft retention) — pasted bodies included.
+   */
+  it("keeps the draft when the workspace send is rejected (no acceptance callback)", async () => {
+    startChatRunMock.mockRejectedValue(new Error("queue limit reached"));
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    const acceptedSpy = vi.fn();
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "retry me", [], {
+      pastedContents: { "1": "pasted body" },
+      onAccepted: acceptedSpy,
+    });
+    await flushPromises();
+
+    expect(acceptedSpy).not.toHaveBeenCalled();
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();

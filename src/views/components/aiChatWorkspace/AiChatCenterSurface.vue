@@ -1111,7 +1111,10 @@ async function onComposerSend(
     onAccepted?: () => void;
   }
 ): Promise<void> {
-  void options?.pastedContents; // send-time paste bodies ride the composer's message text
+  // FR-SUB-004 (capability parity): paste bodies travel as their own bounded
+  // map so the engine expands the same content the Chat V2 stream edge
+  // receives — the composer's visible text carries only the placeholders.
+  const pastedContents = options?.pastedContents;
   // Generated-image preflight: explicit tray selections only (the legacy
   // ambiguity/inference offer is not part of the shell surface).
   const generatedImageReferences = activeGeneratedImageRefs.value;
@@ -1161,6 +1164,10 @@ async function onComposerSend(
     attachments: uploadedFiles,
     generatedImageReferences:
       generatedImageReferences.length > 0 ? generatedImageReferences : undefined,
+    pastedContents:
+      pastedContents && Object.keys(pastedContents).length > 0
+        ? pastedContents
+        : undefined,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
   // clears only when THIS send was accepted — keying on shared run state

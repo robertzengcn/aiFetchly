@@ -79,6 +79,22 @@ export interface StartWorkspaceRunRequest {
     messageId: string;
     imageIndex: number;
   }[];
+  /**
+   * FR-SUB-004 (capability parity): send-time paste bodies, keyed by the
+   * composer's numeric paste ids. Mirrors the strict IPC schema fields.
+   */
+  readonly pastedContents?: Record<string, string>;
+  /** FR-IMG-004 trusted channel: user-confirmed generated-image batch set. */
+  readonly confirmedGeneratedImageBatch?: {
+    references: readonly {
+      messageId: string;
+      imageIndex: number;
+    }[];
+  };
+  /** FR-HIS-002 transport: opaque archive references (never bodies). */
+  readonly historySelectionIds?: readonly string[];
+  /** Retry-stable submission identity resolved at engine start ack. */
+  readonly submissionId?: string;
   readonly resourceClass?: "general";
 }
 

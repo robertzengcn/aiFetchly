@@ -595,6 +595,14 @@ export class AIChatCoordinator {
       toolApprovalMode: request.toolApprovalMode,
       uploadedFiles: request.uploadedFiles,
       generatedImageReferences: request.generatedImageReferences,
+      // FR-SUB-004/FR-IMG-004/FR-HIS-002 (capability parity): submission
+      // context must reach the engine identically on the workspace surface
+      // and the Chat V2 stream edge — pasted bodies, the trusted confirmed
+      // image batch, opaque archive references, and the retry-stable id.
+      pastedContents: request.pastedContents,
+      confirmedGeneratedImageBatch: request.confirmedGeneratedImageBatch,
+      historySelectionIds: request.historySelectionIds,
+      submissionId: request.submissionId,
     };
   }
 

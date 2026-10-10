@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 
 /**
  * Strict Zod v4 schemas for the ai-chat-workspace:* IPC boundary
@@ -117,6 +118,41 @@ export const startChatRunRequestSchema = z
       .max(3)
       .optional(),
     resourceClass: z.literal("general").optional(),
+    /**
+     * FR-SUB-004 (capability-parity PRD): send-time paste bodies — the same
+     * bounded map the Chat V2 stream edge accepts (`aiChatV2PastedContents
+     * Schema`), so both surfaces reach identical engine request behavior.
+     */
+    pastedContents: aiChatV2PastedContentsSchema.optional(),
+    /**
+     * FR-HIS-002 transport: opaque archive references (never passage
+     * bodies) + the retry-stable submission identity. The main process
+     * re-resolves each id against ownership/epoch/budget.
+     */
+    historySelectionIds: z
+      .array(z.string().min(1).max(100))
+      .max(20)
+      .optional(),
+    submissionId: z.string().min(8).max(64).optional(),
+    /**
+     * FR-IMG-004 trusted channel: the user-confirmed generated-image batch
+     * reference set (above the 3-reference direct cap). Mirrors the pending
+     * queue's `aiChatPendingCreateInputSchema` contract so one staging
+     * implementation serves both surfaces.
+     */
+    confirmedGeneratedImageBatch: z
+      .strictObject({
+        references: z
+          .array(
+            z.strictObject({
+              messageId: z.string().min(1).max(100),
+              imageIndex: z.number().int().min(0).max(50),
+            })
+          )
+          .min(1)
+          .max(50),
+      })
+      .optional(),
   })
   .strict();
 
