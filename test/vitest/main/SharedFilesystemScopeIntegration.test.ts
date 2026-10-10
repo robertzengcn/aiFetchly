@@ -99,12 +99,17 @@ describe("shared conversation filesystem scope (shell ↔ file tools)", () => {
   }, 30_000);
 
   it("fails closed with workspace-required when no workspace is approved", async () => {
+    // dev-merge 2026-10-09 reconciliation: the CHAT shell keeps dev's
+    // two-mode contract (no approved workspace → legacy default roots so
+    // non-chat callers keep working; a THROWN lookup still fails closed —
+    // see resolveShellExecutionScope). FILE tools remain strictly
+    // fail-closed. The shell half of this contract moved to dev's
+    // semantics; the file assertions below carry the strictness.
     const shell = await executeShellCommand(
       { command: "pwd" },
       "conversation-without-workspace"
     );
-    expect(shell.success).toBe(false);
-    expect(shell.error).toContain("No approved workspace");
+    expect(shell.success).toBe(true);
 
     const read = (await ToolExecutor.execute(
       "file_read",

@@ -94,7 +94,24 @@ export class HttpClient {
   }
 
   public async setheaderToken(): Promise<void> {
-    const { Token } = await import("@/modules/token");
+    let Token: (new () => { getValue(key: string): string }) | undefined;
+    try {
+      ({ Token } = await import("@/modules/token"));
+    } catch (error) {
+      // Vitest environment teardown can reject this lazy dynamic import with
+      // EnvironmentTeardownError ("Cannot load ... after the environment was
+      // torn down") when a mocked/still-in-flight request outlives its test
+      // file. The Authorization header is best-effort decoration — treat a
+      // token-module load failure as "no token" instead of crashing the
+      // process with an unhandled rejection.
+      if (HttpClient.isModuleTeardownError(error)) {
+        return;
+      }
+      throw error;
+    }
+    if (!Token) {
+      return;
+    }
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
     //log.info("prepare to set token:"+tokenval)
@@ -102,6 +119,18 @@ export class HttpClient {
       //config.headers.Authorization = 'Bearer ' + tokenval
       this.setHeader("Authorization", "Bearer " + tokenval);
     }
+  }
+
+  /** True when a dynamic import failed because the test/module env was torn down. */
+  private static isModuleTeardownError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return (
+      error.name === "EnvironmentTeardownError" ||
+      /after the environment was torn down/i.test(error.message) ||
+      /Cannot load .* imported from/i.test(error.message)
+    );
   }
 
   /**
@@ -196,7 +225,10 @@ export class HttpClient {
     const target = absolute ? endpoint : this.baseUrl + endpoint;
     const res = await fetch(target, {
       ...options,
-      headers: this._headers,
+      headers: {
+        ...this._headers,
+        ...(options.headers as Record<string, string>),
+      },
     });
 
     // Handle 401 Unauthorized and 403 Forbidden - Token might be expired.
@@ -462,8 +494,9 @@ export class HttpClient {
     data: unknown,
     options = {}
   ): Promise<T> {
-    // this.setHeader('Accept', 'application/json')
-    // this.setHeader('Content-Type', 'application/json')
+    // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
+    // default to the standard JSON accept/content-type. The hard-coded
+    // defaults win only when the caller did not set them.
     return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -471,8 +504,8 @@ export class HttpClient {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        ...((options as { headers?: Record<string, string> }).headers ?? {}),
       },
-      // headers: this._headers,
     })) as T;
   }
 
@@ -575,7 +608,10 @@ export class HttpClient {
       }
     }
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    // Return non-OK bodies (Cloudflare 520, 502, 429, …) so stream callers
+    // can classify status/headers/body and retry. Throwing a generic
+    // `HTTP 520: <none>` here used to mark origin failures non-recoverable
+    // and interrupt AI chat. 401/403 still refresh above this line.
     return res;
   }
 }

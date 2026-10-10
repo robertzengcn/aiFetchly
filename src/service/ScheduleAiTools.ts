@@ -15,6 +15,7 @@ import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
+import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import {
   ScheduleToolErrorCode,
   ScheduleToolFailure,
@@ -205,6 +206,15 @@ export async function validateTaskReference(
       break;
     }
 
+    case TaskType.AI_MESSAGE: {
+      const module = new AiMessageTaskModule();
+      const task = await module.getTask(taskId);
+      if (task === null) {
+        throw new Error(`AI message task ${taskId} not found`);
+      }
+      break;
+    }
+
     default:
       throw new Error(`Unsupported task type: ${taskType}`);
   }
@@ -365,6 +375,65 @@ export async function listScheduleExecutionsForAi(args: unknown): Promise<
   }
 }
 
+type WorkspaceApplyResult =
+  | { ok: true; applied: boolean; workspacePath: string | null }
+  | { ok: false; error: string };
+
+type ScheduleMutationData = {
+  schedule: SafeSchedulePayload;
+  workspace_path?: string | null;
+};
+
+function scheduleToolData(
+  schedule: ScheduleTaskEntity,
+  workspace: Extract<WorkspaceApplyResult, { ok: true }>
+): ScheduleMutationData {
+  const payload: {
+    schedule: SafeSchedulePayload;
+    workspace_path?: string | null;
+  } = { schedule: toSafeSchedulePayload(schedule) };
+  if (workspace.applied) {
+    payload.workspace_path = workspace.workspacePath;
+  }
+  return payload;
+}
+
+/**
+ * When a schedule's task is an AI message, persist `workspacePath` on that
+ * task and approve it for the task conversation. `undefined` leaves the
+ * stored path unchanged.
+ */
+async function applyAiMessageWorkspacePath(
+  taskType: TaskType,
+  taskId: number,
+  workspacePath: string | null | undefined
+): Promise<WorkspaceApplyResult> {
+  if (workspacePath === undefined) {
+    return { ok: true, applied: false, workspacePath: null };
+  }
+  if (taskType !== TaskType.AI_MESSAGE) {
+    return {
+      ok: false,
+      error:
+        "workspace_path can only be set when the schedule task type is ai_message",
+    };
+  }
+  try {
+    const module = new AiMessageTaskModule();
+    await module.updateTask({ id: taskId, workspacePath });
+    const task = await module.getTask(taskId);
+    return {
+      ok: true,
+      applied: true,
+      workspacePath: task?.workspace_path ?? null,
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Invalid workspace path";
+    return { ok: false, error: message };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Create schedule tool
 // ---------------------------------------------------------------------------
@@ -376,7 +445,7 @@ export async function listScheduleExecutionsForAi(args: unknown): Promise<
  */
 export async function createScheduleForAi(
   args: unknown
-): Promise<ScheduleToolResult<{ schedule: SafeSchedulePayload }>> {
+): Promise<ScheduleToolResult<ScheduleMutationData>> {
   // 1. Parse and validate input
   const parsed = createScheduleSchema.safeParse(args);
   if (!parsed.success) {
@@ -405,6 +474,18 @@ export async function createScheduleForAi(
     const message =
       error instanceof Error ? error.message : "Task validation failed";
     return toolFailure(ScheduleToolErrorCode.TASK_NOT_FOUND, message);
+  }
+
+  const workspaceResult = await applyAiMessageWorkspacePath(
+    input.task_type as TaskType,
+    input.task_id,
+    input.workspace_path
+  );
+  if (!workspaceResult.ok) {
+    return toolFailure(
+      ScheduleToolErrorCode.VALIDATION_FAILED,
+      workspaceResult.error
+    );
   }
 
   // 4. Validate parent schedule if provided
@@ -462,7 +543,7 @@ export async function createScheduleForAi(
           : "Unknown scheduler sync error";
       return {
         success: true,
-        data: { schedule: toSafeSchedulePayload(savedSchedule) },
+        data: scheduleToolData(savedSchedule, workspaceResult),
         warning: `Schedule created but scheduler sync failed: ${syncMessage}`,
       };
     }
@@ -471,7 +552,7 @@ export async function createScheduleForAi(
   // 9. Return success
   return {
     success: true,
-    data: { schedule: toSafeSchedulePayload(savedSchedule) },
+    data: scheduleToolData(savedSchedule, workspaceResult),
   };
 }
 
@@ -486,7 +567,7 @@ export async function createScheduleForAi(
  */
 export async function updateScheduleForAi(
   args: unknown
-): Promise<ScheduleToolResult<{ schedule: SafeSchedulePayload }>> {
+): Promise<ScheduleToolResult<ScheduleMutationData>> {
   // 1. Parse and validate input
   const parsed = updateScheduleSchema.safeParse(args);
   if (!parsed.success) {
@@ -520,6 +601,18 @@ export async function updateScheduleForAi(
         error instanceof Error ? error.message : "Task validation failed";
       return toolFailure(ScheduleToolErrorCode.TASK_NOT_FOUND, message);
     }
+  }
+
+  const workspaceResult = await applyAiMessageWorkspacePath(
+    finalTaskType,
+    finalTaskId,
+    updateFields.workspace_path
+  );
+  if (!workspaceResult.ok) {
+    return toolFailure(
+      ScheduleToolErrorCode.VALIDATION_FAILED,
+      workspaceResult.error
+    );
   }
 
   // 4. Validate cron expression when trigger_type is CRON and a new
@@ -600,7 +693,7 @@ export async function updateScheduleForAi(
         : "Unknown scheduler sync error";
     return {
       success: true,
-      data: { schedule: toSafeSchedulePayload(updatedSchedule) },
+      data: scheduleToolData(updatedSchedule, workspaceResult),
       warning: `Schedule updated but scheduler sync failed: ${syncMessage}`,
     };
   }
@@ -608,7 +701,7 @@ export async function updateScheduleForAi(
   // 9. Return success
   return {
     success: true,
-    data: { schedule: toSafeSchedulePayload(updatedSchedule) },
+    data: scheduleToolData(updatedSchedule, workspaceResult),
   };
 }
 
@@ -839,9 +932,9 @@ export async function runScheduleNowForAi(args: unknown): Promise<
     );
   }
 
-  // 4. Execute immediately via ScheduleManager
+  // 4. Queue the run and return. The task keeps going in the background.
   try {
-    await getScheduleManager().executeSchedule(schedule_id);
+    await getScheduleManager().executeSchedule(schedule_id, { detach: true });
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Failed to execute schedule";

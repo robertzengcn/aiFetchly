@@ -15,6 +15,9 @@
  */
 
 import * as crypto from "crypto";
+import {
+  spawnOwned,
+} from "@/main-process/lifecycle/ownedSpawn";
 import * as path from "path";
 import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
 import {
@@ -45,10 +48,16 @@ function defaultFork(): ForkFn | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     const { utilityProcess } = require("electron") as typeof import("electron");
-    return (modulePath, args, opts) =>
-      utilityProcess.fork(modulePath, [...args], {
-        env: opts.env,
-      }) as unknown as WorkerHandle;
+    return (modulePath, args, opts) => {
+      // AC-05 spawn gate (dev merge 2026-10-09): the worker fork consults
+      // the owned-spawn gate; a refused fork throws the gate's typed error
+      // so the caller's existing fallback (inline staging) takes over.
+      return spawnOwned("skill-installation-worker", () =>
+        utilityProcess.fork(modulePath, [...args], {
+          env: opts.env,
+        })
+      ) as unknown as WorkerHandle;
+    };
   } catch {
     return null;
   }

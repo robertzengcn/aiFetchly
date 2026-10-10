@@ -9,6 +9,11 @@ import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN } from "@/config/usersetting";
 import { buildAutoPlanPromptSection } from "@/service/ChatModePromptSection";
+import { AIChatArchiveAppendCoupler } from "@/service/AIChatArchiveAppendCoupler";
+import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
@@ -29,16 +34,60 @@ function uuid(): string {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Defensively parse the JSON `metadata` column into a record. Returns null for
+ * absent/corrupt/non-object payloads instead of throwing.
+ */
+function parseMetadataRecord(
+  raw: string | undefined
+): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export class AIChatV2Module extends BaseModule {
   private chatModule: AIChatModule;
   private sessionMemoryModule: AIChatSessionMemoryModule;
   private compactModule: AIChatCompactModule;
+  private archiveCoupler: AIChatArchiveAppendCoupler;
 
   constructor() {
     super();
     this.chatModule = new AIChatModule();
     this.sessionMemoryModule = new AIChatSessionMemoryModule();
     this.compactModule = new AIChatCompactModule();
+    this.archiveCoupler = new AIChatArchiveAppendCoupler();
+  }
+
+  /**
+   * Archive index coupling after a v2 message is appended (technical-design
+   * §5.1 line 149). Awaited so post-turn compaction sees a live archive row
+   * (including a re-archive after clear) before it claims a run. The coupler
+   * is flag-gated and never throws; the index backfill itself stays
+   * fire-and-forget inside coupleAppend. Must run AFTER the source row is
+   * committed so the backfill read sees it.
+   */
+  private async coupleArchiveAppend(conversationId: string): Promise<void> {
+    try {
+      await this.archiveCoupler.coupleAppend(conversationId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[ai-chat-v2] archive append coupling failed: ${msg}`);
+    }
   }
 
   /** Create (or reuse) a v2 conversation id. */
@@ -55,8 +104,9 @@ export class AIChatV2Module extends BaseModule {
     messageId?: string;
     timestamp?: Date;
     metadata?: ChatV2MessageMetadata;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: params.messageId ?? `user-${uuid()}`,
       conversationId: params.conversationId,
       role: "user",
@@ -65,9 +115,12 @@ export class AIChatV2Module extends BaseModule {
       metadata: {
         source: "chat-v2",
         ...(params.metadata ?? {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
+    await this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   /**
@@ -81,8 +134,9 @@ export class AIChatV2Module extends BaseModule {
     messageId: string;
     timestamp?: Date;
     metadata?: ChatV2MessageMetadata;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
-    return this.chatModule.saveMessageIfAbsent({
+    const saved = await this.chatModule.saveMessageIfAbsent({
       messageId: params.messageId,
       conversationId: params.conversationId,
       role: "user",
@@ -91,9 +145,12 @@ export class AIChatV2Module extends BaseModule {
       metadata: {
         source: "chat-v2",
         ...(params.metadata ?? {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
+    await this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveAssistantMessage(params: {
@@ -104,12 +161,14 @@ export class AIChatV2Module extends BaseModule {
     tokensUsed?: number;
     metadata?: ChatV2MessageMetadata;
     timestamp?: Date;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const meta: ChatV2MessageMetadata = {
       source: "chat-v2",
       ...(params.metadata ?? {}),
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: params.messageId ?? `assistant-${uuid()}`,
       conversationId: params.conversationId,
       role: "assistant",
@@ -120,6 +179,8 @@ export class AIChatV2Module extends BaseModule {
       metadata: meta,
       messageType: MessageType.MESSAGE,
     });
+    await this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveToolCallMessage(params: {
@@ -131,14 +192,16 @@ export class AIChatV2Module extends BaseModule {
     timestamp?: Date;
     model?: string;
     tokensUsed?: number;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
       toolCallId: params.toolCallId,
       toolName: params.toolName,
       toolArguments: params.toolArguments,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: `tool-call-${params.toolCallId}`,
       conversationId: params.conversationId,
       role: "assistant",
@@ -149,6 +212,8 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_CALL,
     });
+    await this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveToolResultMessage(params: {
@@ -160,19 +225,43 @@ export class AIChatV2Module extends BaseModule {
     toolResult: Record<string, unknown>;
     replacesPermissionPromptForToolId?: string;
     timestamp?: Date;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const toolResult = params.toolResult;
+    // The caller may pass EITHER a legacy full result OR the bounded UI
+    // projection of a saved result (technical design §10.1). Metadata must
+    // never become a second copy of the payload, so a receipt is detected and
+    // stored as descriptors only; the receipt text already lives in `content`.
+    const isSavedResultReceipt =
+      typeof toolResult.toolOutputRefs !== "undefined" ||
+      typeof toolResult.toolOutputPreservation !== "undefined";
+    const metadataToolResult = isSavedResultReceipt
+      ? {
+          operationStatus: toolResult.operationStatus,
+          toolOutputRefs: toolResult.toolOutputRefs,
+          toolOutputPreservation: toolResult.toolOutputPreservation,
+          toolOutputPreview: toolResult.toolOutputPreview,
+          previewComplete: toolResult.previewComplete,
+          storageErrorCode: toolResult.storageErrorCode,
+        }
+      : toolResult;
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
       toolCallId: params.toolCallId,
       toolName: params.toolName,
-      toolResult,
+      toolResult: metadataToolResult,
       toolResultStatus:
         toolResult.success === false
           ? ("error" as const)
           : ("success" as const),
       toolResultSummary:
-        typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+        typeof toolResult.summary === "string"
+          ? toolResult.summary
+          : // Steering-skipped tools carry a stable reason code instead of
+          // a summary — surface it so receipts explain the skip.
+          typeof toolResult.reason === "string"
+          ? toolResult.reason
+          : undefined,
       success: toolResult.success !== false,
       executionTimeMs:
         typeof toolResult.executionTimeMs === "number"
@@ -182,8 +271,9 @@ export class AIChatV2Module extends BaseModule {
         typeof toolResult.summary === "string" ? toolResult.summary : undefined,
       error:
         typeof toolResult.error === "string" ? toolResult.error : undefined,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: `tool-result-${
         params.replacesPermissionPromptForToolId ?? params.toolCallId
       }`,
@@ -194,6 +284,8 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_RESULT,
     });
+    await this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async getConversationMessages(
@@ -208,9 +300,148 @@ export class AIChatV2Module extends BaseModule {
     );
   }
 
+  /**
+   * Resolve a v2 assistant message by composite (conversation, messageId).
+   * Guards: conversation must be v2-scoped, role assistant, messageType
+   * MESSAGE, and metadata must carry source "chat-v2". Returns null otherwise;
+   * never touches the filesystem.
+   */
+  async getGeneratedImageSourceMessage(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    if (!conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return null;
+    }
+    const message = await this.chatModule.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
+    if (!message || message.role !== "assistant") {
+      return null;
+    }
+    if (message.messageType !== MessageType.MESSAGE) {
+      return null;
+    }
+    const metadata = parseMetadataRecord(message.metadata);
+    if (!metadata || metadata.source !== "chat-v2") {
+      return null;
+    }
+    return message;
+  }
+
+  /** Bounded existence check after (timestamp, rowId) — no full load. */
+  async hasMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId = 0
+  ): Promise<boolean> {
+    return this.chatModule.hasMessagesAfter(
+      conversationId,
+      afterTimestamp,
+      afterRowId
+    );
+  }
+
+  /** Bounded delta read after (timestamp, rowId), capped at `limit` rows. */
+  async getMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId: number,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    return this.chatModule.getMessagesAfter(
+      conversationId,
+      afterTimestamp,
+      afterRowId,
+      limit
+    );
+  }
+
+  /** Scoped boundary-row lookup — never crosses conversations. */
+  async findBoundaryInConversation(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return this.chatModule.findBoundaryInConversation(
+      conversationId,
+      messageId
+    );
+  }
+
+  /** Bounded recent-message read (newest `limit`, chronological). */
+  async getRecentMessages(
+    conversationId: string,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    return this.chatModule.getRecentMessages(conversationId, limit);
+  }
+
   async clearConversation(conversationId: string): Promise<number> {
+    // Fence first (P1-4, §11.6/AC-13): tombstone + invalidate the compaction
+    // epoch BEFORE deleting sources so an in-flight summarize cannot recreate
+    // derived records after the messages are gone. Fencing is mandatory, not
+    // best-effort (invariant 9): if the fence fails the clear aborts so a
+    // failed fence + successful delete cannot reopen the resurrection window.
+    // Tombstone gets one retry; invalidate aborts on first failure.
+    try {
+      try {
+        await new AIChatArchiveStateModel(this.dbpath).tombstone(
+          conversationId
+        );
+      } catch {
+        await new AIChatArchiveStateModel(this.dbpath).tombstone(
+          conversationId
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: archive tombstone failed, aborting clear:",
+        err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: archive tombstone failed for ${conversationId}`
+      );
+    }
+    try {
+      await new AIChatCompactionModule().invalidateConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: compaction invalidate failed, aborting clear:",
+        err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: compaction invalidate failed for ${conversationId}`
+      );
+    }
+    // Fence PRESERVED OUTPUTS too (AC-14/§11.6). Deleting the messages is not
+    // enough: the output scope keeps its epoch, so every previously captured
+    // artifact would stay authorized and readable after a clear. Invalidating
+    // the scope rotates the epoch, marks the rows `deleting`, and revokes their
+    // grants, so an in-flight writer cannot publish and a cleared conversation
+    // cannot be retrieved.
+    //
+    // This runs BEFORE the messages are deleted, and like the fences above it
+    // aborts the clear on failure: a failed fence plus a successful delete would
+    // silently reopen the resurrection window.
+    try {
+      await new ToolResultModule().invalidateScope(
+        "default",
+        conversationId
+      );
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: tool output scope invalidate failed, aborting clear:",
+        err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: tool output scope invalidate failed for ${conversationId}`
+      );
+    }
     const deleted = await this.chatModule.clearConversation(conversationId);
-    // Cascade compact + session memory clear. Failures are logged, not thrown.
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
     } catch (err) {
@@ -222,19 +453,12 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteByConversation(conversationId);
     } catch (err) {
-      log.error(
-        "[ai-chat-v2] clearConversation: compact clear failed:",
-        err
-      );
+      log.error("[ai-chat-v2] clearConversation: compact clear failed:", err);
     }
-    // Cascade artifact clear so generated HTML is removed with the chat.
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
-      log.error(
-        "[ai-chat-v2] clearConversation: artifact clear failed:",
-        err
-      );
+      log.error("[ai-chat-v2] clearConversation: artifact clear failed:", err);
     }
     return deleted;
   }
@@ -244,6 +468,17 @@ export class AIChatV2Module extends BaseModule {
     const summaries = await this.getConversations();
     let total = 0;
     for (const s of summaries) {
+      // Same fence as `clearConversation`: a bulk clear must invalidate the
+      // preserved-output epoch too, or every captured artifact of every cleared
+      // conversation stays readable.
+      try {
+        await new ToolResultModule().invalidateScope("default", s.conversationId);
+      } catch (err) {
+        console.error(
+          "[ai-chat-v2] clearAllV2History: tool output scope invalidate failed:",
+          err
+        );
+      }
       total += await this.chatModule.clearConversation(s.conversationId);
       // Remove generated artifacts scoped to this v2 conversation.
       try {

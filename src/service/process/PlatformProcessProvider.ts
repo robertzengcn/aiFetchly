@@ -40,6 +40,13 @@ export interface ProcessInvocation {
    * `backgrounded: true` + `backgroundId` instead of killing the tree.
    */
   readonly onTimeoutDetain?: (child: ChildProcess) => string;
+  /**
+   * dev-merge 2026-10-09 (shell output capture): fired SYNCHRONOUSLY right
+   * after a successful spawn, before any stream listener attaches — lets the
+   * caller spool output (attachShellCapture) with no lost early chunks.
+   * Returning nothing; a throwing callback is ignored (capture is optional).
+   */
+  readonly onSpawn?: (child: ChildProcess) => void;
 }
 
 export interface ProcessExecutionResult {
@@ -198,6 +205,10 @@ export function buildChildEnvironment(
 // ---------------------------------------------------------------------------
 
 import { spawn, type ChildProcess } from "child_process";
+import {
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
 
 export interface ProcessRunnerConfig {
   readonly kind: ProcessProviderKind;
@@ -266,6 +277,24 @@ export async function runProcessCapture(
 
   return new Promise<ProcessExecutionResult>((resolve) => {
     let child: ChildProcess;
+    // AC-05 spawn gate (dev merge 2026-10-09): every main-process launch
+    // site consults the owned-spawn gate; a refused launch resolves as a
+    // typed spawn failure instead of orphaning work at shutdown.
+    if (!ownedSpawnAllowed("process-provider")) {
+      resolve({
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        stderr: "Application is shutting down; process execution refused",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        timedOut: false,
+        durationMs: Date.now() - start,
+        provider: config.kind,
+        diagnosticCode: "PROCESS_SPAWN_FAILED",
+      });
+      return;
+    }
     try {
       child = spawn(invocation.executable, [...invocation.args], {
         cwd: invocation.cwd,
@@ -289,6 +318,20 @@ export async function runProcessCapture(
         diagnosticCode: "PROCESS_SPAWN_FAILED",
       });
       return;
+    }
+
+    // Detached children own their process group (pgid === pid) — record
+    // it so force-verify signals the group, not just the leader.
+    registerOwnedProcess("process-provider", child, {
+      isolatedProcessGroupId: child.pid ?? undefined,
+    });
+    // Sync spawn hook (capture spool) — before any listeners attach.
+    if (invocation.onSpawn) {
+      try {
+        invocation.onSpawn(child);
+      } catch {
+        /* capture is best-effort; never fail the run */
+      }
     }
 
     const timer = setTimeout(() => {

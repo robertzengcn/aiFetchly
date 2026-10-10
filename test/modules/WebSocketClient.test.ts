@@ -9,17 +9,33 @@ import { Token } from '@/modules/token';
 import { TOKENNAME } from '@/config/usersetting';
 import { BrowserWindow } from 'electron';
 import WebSocket from 'ws';
-import { log } from '@/modules/Logger';
+
+/** Private members accessed by these tests. */
+interface WebSocketClientInternals {
+  hasValidToken(): boolean;
+  messageQueue: Record<string, unknown>[];
+  MAX_QUEUE_SIZE: number;
+  maxReconnectAttempts: number;
+  reconnectDelay: number;
+  maxReconnectDelay: number;
+  manualDisconnect: boolean;
+  reconnectAttempts: number;
+  ws: { readyState: number } | null;
+  doConnect(): void;
+}
+
+function internals(client: WebSocketClient): WebSocketClientInternals {
+  return client as unknown as WebSocketClientInternals;
+}
 
 describe('WebSocketClient', () => {
   let wsClient: WebSocketClient;
   let tokenGetValueStub: SinonStub;
-  let browserWindowMock: any;
-  let wsMock: any;
+  let browserWindowMock: BrowserWindow;
 
   beforeEach(() => {
     // Reset singleton instance
-    (WebSocketClient as any).instance = null;
+    (WebSocketClient as unknown as { instance: WebSocketClient | null }).instance = null;
 
     // Mock Token service
     tokenGetValueStub = sinon.stub(Token.prototype, 'getValue');
@@ -31,7 +47,7 @@ describe('WebSocketClient', () => {
         send: sinon.stub(),
       },
       isDestroyed: sinon.stub().returns(false),
-    };
+    } as unknown as BrowserWindow;
 
     // Set environment for development
     process.env.NODE_ENV = 'test';
@@ -86,19 +102,19 @@ describe('WebSocketClient', () => {
       const validToken = `header.${Buffer.from(JSON.stringify(validPayload)).toString('base64')}.signature`;
 
       tokenGetValueStub.withArgs(TOKENNAME).returns(validToken);
-      const result = (wsClient as any).hasValidToken();
+      const result = internals(wsClient).hasValidToken();
       expect(result).to.be.true;
     });
 
     it('should reject empty token', () => {
       tokenGetValueStub.withArgs(TOKENNAME).returns('');
-      const result = (wsClient as any).hasValidToken();
+      const result = internals(wsClient).hasValidToken();
       expect(result).to.be.false;
     });
 
     it('should reject null token', () => {
       tokenGetValueStub.withArgs(TOKENNAME).returns(null);
-      const result = (wsClient as any).hasValidToken();
+      const result = internals(wsClient).hasValidToken();
       expect(result).to.be.false;
     });
 
@@ -111,7 +127,7 @@ describe('WebSocketClient', () => {
       const expiredToken = `header.${Buffer.from(JSON.stringify(expiredPayload)).toString('base64')}.signature`;
 
       tokenGetValueStub.withArgs(TOKENNAME).returns(expiredToken);
-      const result = (wsClient as any).hasValidToken();
+      const result = internals(wsClient).hasValidToken();
       expect(result).to.be.false;
     });
 
@@ -124,7 +140,7 @@ describe('WebSocketClient', () => {
       const validToken = `header.${Buffer.from(JSON.stringify(validPayload)).toString('base64')}.signature`;
 
       tokenGetValueStub.withArgs(TOKENNAME).returns(validToken);
-      const result = (wsClient as any).hasValidToken();
+      const result = internals(wsClient).hasValidToken();
       expect(result).to.be.true;
     });
   });
@@ -134,7 +150,7 @@ describe('WebSocketClient', () => {
       const result = wsClient.send({ type: 'test', data: 'message' });
       expect(result).to.be.false;
 
-      const queueSize = (wsClient as any).messageQueue.length;
+      const queueSize = internals(wsClient).messageQueue.length;
       expect(queueSize).to.be.greaterThan(0);
     });
 
@@ -142,19 +158,19 @@ describe('WebSocketClient', () => {
       wsClient.send({ type: 'ping' });
       wsClient.send({ type: 'pong' });
 
-      const queueSize = (wsClient as any).messageQueue.length;
+      const queueSize = internals(wsClient).messageQueue.length;
       expect(queueSize).to.equal(0);
     });
 
     it('should limit queue size', () => {
-      const maxSize = (wsClient as any).MAX_QUEUE_SIZE;
+      const maxSize = internals(wsClient).MAX_QUEUE_SIZE;
 
       // Send more messages than max size
       for (let i = 0; i < maxSize + 10; i++) {
         wsClient.send({ type: 'test', id: i });
       }
 
-      const queueSize = (wsClient as any).messageQueue.length;
+      const queueSize = internals(wsClient).messageQueue.length;
       expect(queueSize).to.be.at.most(maxSize);
     });
 
@@ -164,7 +180,7 @@ describe('WebSocketClient', () => {
 
       wsClient.clearMessageQueue();
 
-      const queueSize = (wsClient as any).messageQueue.length;
+      const queueSize = internals(wsClient).messageQueue.length;
       expect(queueSize).to.equal(0);
     });
   });
@@ -176,17 +192,17 @@ describe('WebSocketClient', () => {
       // we need to check the default values here.
 
       // The actual values come from the WS_CONFIG constant
-      expect((wsClient as any).maxReconnectAttempts).to.be.a('number');
-      expect((wsClient as any).reconnectDelay).to.be.a('number');
-      expect((wsClient as any).maxReconnectDelay).to.be.a('number');
+      expect(internals(wsClient).maxReconnectAttempts).to.be.a('number');
+      expect(internals(wsClient).reconnectDelay).to.be.a('number');
+      expect(internals(wsClient).maxReconnectDelay).to.be.a('number');
     });
 
     it('should use default values when env vars not set', () => {
       // Check that default configuration values are set
       // Default values are: MAX_RECONNECT_ATTEMPTS: 10, RECONNECT_DELAY: 3000, etc.
-      expect((wsClient as any).maxReconnectAttempts).to.be.greaterThan(0);
-      expect((wsClient as any).reconnectDelay).to.be.greaterThan(0);
-      expect((wsClient as any).maxReconnectDelay).to.be.greaterThan(0);
+      expect(internals(wsClient).maxReconnectAttempts).to.be.greaterThan(0);
+      expect(internals(wsClient).reconnectDelay).to.be.greaterThan(0);
+      expect(internals(wsClient).maxReconnectDelay).to.be.greaterThan(0);
     });
 
     it('should throw error in production if VITE_LOGIN_URL not set', () => {
@@ -203,7 +219,7 @@ describe('WebSocketClient', () => {
   describe('Disconnect', () => {
     it('should set manualDisconnect flag', () => {
       wsClient.disconnect();
-      expect((wsClient as any).manualDisconnect).to.be.true;
+      expect(internals(wsClient).manualDisconnect).to.be.true;
     });
 
     it('should clear client ID', () => {
@@ -212,17 +228,62 @@ describe('WebSocketClient', () => {
     });
 
     it('should reset reconnect attempts', () => {
-      (wsClient as any).reconnectAttempts = 5;
+      internals(wsClient).reconnectAttempts = 5;
       wsClient.disconnect();
-      expect((wsClient as any).reconnectAttempts).to.equal(0);
+      expect(internals(wsClient).reconnectAttempts).to.equal(0);
     });
   });
 
   describe('Reconnect', () => {
     it('should disconnect and clear manual flag', () => {
-      (wsClient as any).manualDisconnect = true;
+      internals(wsClient).manualDisconnect = true;
       wsClient.reconnect();
-      expect((wsClient as any).manualDisconnect).to.be.false;
+      expect(internals(wsClient).manualDisconnect).to.be.false;
+    });
+  });
+
+  describe('retryConnectIfDisconnected', () => {
+    it('should skip retry when token is still invalid', () => {
+      tokenGetValueStub.withArgs(TOKENNAME).returns('');
+      const result = wsClient.retryConnectIfDisconnected(browserWindowMock);
+      expect(result).to.be.false;
+    });
+
+    it('should skip retry when no window is available', () => {
+      const validPayload = {
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        user_id: 123,
+      };
+      const validToken = `header.${Buffer.from(JSON.stringify(validPayload)).toString('base64')}.signature`;
+      tokenGetValueStub.withArgs(TOKENNAME).returns(validToken);
+
+      const result = wsClient.retryConnectIfDisconnected();
+      expect(result).to.be.false;
+    });
+
+    it('should connect after token becomes valid and a window is provided', () => {
+      const doConnectStub = sinon.stub(internals(wsClient), 'doConnect');
+      const validPayload = {
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        user_id: 123,
+      };
+      const validToken = `header.${Buffer.from(JSON.stringify(validPayload)).toString('base64')}.signature`;
+      tokenGetValueStub.withArgs(TOKENNAME).returns(validToken);
+
+      const result = wsClient.retryConnectIfDisconnected(browserWindowMock);
+
+      expect(result).to.be.true;
+      expect(doConnectStub.calledOnce).to.be.true;
+    });
+
+    it('should not open a second socket when already connected', () => {
+      const doConnectStub = sinon.stub(internals(wsClient), 'doConnect');
+      internals(wsClient).ws = { readyState: WebSocket.OPEN };
+
+      const result = wsClient.retryConnectIfDisconnected(browserWindowMock);
+
+      expect(result).to.be.true;
+      expect(doConnectStub.called).to.be.false;
     });
   });
 });

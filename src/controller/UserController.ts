@@ -106,13 +106,24 @@ export class UserController {
 
   /**
    * Check if user has any active AI-enabled plan.
+   *
+   * Public so {@link SubscriptionEntitlementService} and tests share the same
+   * matcher and do not duplicate plan-detection logic. See technical design §6.4.
    */
-  private hasActiveAiPlan(plans: Array<UserPlan>): boolean {
+  public plansEnableAi(plans: Array<UserPlan>): boolean {
     if (!plans || plans.length === 0) return false;
     return plans.some(
       (plan) =>
         plan.status.toLowerCase() === "active" && this.isAiEnabledPlan(plan)
     );
+  }
+
+  /**
+   * @deprecated Alias kept for internal call sites. New callers should use
+   *   {@link plansEnableAi}. The body is shared so the matcher stays in one place.
+   */
+  private hasActiveAiPlan(plans: Array<UserPlan>): boolean {
+    return this.plansEnableAi(plans);
   }
 
   /**

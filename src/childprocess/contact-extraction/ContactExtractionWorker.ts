@@ -49,19 +49,60 @@ type ExtractContactFromUrlsMessage = Extract<
  */
 const SHUTDOWN_BROWSER_TIMEOUT_MS = 3000;
 let shuttingDown = false;
+let shutdownForceTimer: NodeJS.Timeout | null = null;
+
+/** Single watchdog builder: force-exit if graceful close exceeds `ms`. */
+function armShutdownWatchdog(ms: number, exitCode: number): void {
+  if (shutdownForceTimer !== null) {
+    clearTimeout(shutdownForceTimer);
+  }
+  shutdownForceTimer = setTimeout(() => {
+    log.warn(
+      `ContactExtractionWorker: graceful close exceeded ${ms}ms, forcing exit`
+    );
+    process.exit(exitCode);
+  }, ms);
+  shutdownForceTimer.unref();
+}
+
+/** Re-bound the graceful-close watchdog to the parent's remaining allowance. */
+function adjustShutdownTimeout(boundedMs: number): void {
+  armShutdownWatchdog(boundedMs, 0);
+}
+
+/**
+ * §7 shutdown-request handler (design §7): bound local cleanup to the parent's
+ * remaining allowance, acknowledge with the correlatable requestId, then run
+ * the graceful path (closing flag rejects new jobs; browsers close; exit).
+ * Exported for direct unit tests — the ack ordering and bounded timer are
+ * contract-critical.
+ */
+export function handleWorkerShutdown(message: {
+  requestId: string;
+  remainingMs?: number;
+}): void {
+  if (typeof message.remainingMs === "number") {
+    const bounded = Math.max(
+      250,
+      Math.min(message.remainingMs, SHUTDOWN_BROWSER_TIMEOUT_MS)
+    );
+    if (bounded < SHUTDOWN_BROWSER_TIMEOUT_MS) {
+      adjustShutdownTimeout(bounded);
+    }
+  }
+  process.send?.({ type: "shutdown-ack", requestId: message.requestId });
+  gracefulShutdown("shutdown-request", 0);
+}
+
 function gracefulShutdown(signal: string, exitCode: number): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log.info(
     `ContactExtractionWorker: received ${signal}, closing browsers and exiting`
   );
-  const force = setTimeout(() => {
-    log.warn(
-      `ContactExtractionWorker: graceful close exceeded ${SHUTDOWN_BROWSER_TIMEOUT_MS}ms, forcing exit`
-    );
-    process.exit(exitCode);
-  }, SHUTDOWN_BROWSER_TIMEOUT_MS);
-  force.unref();
+  if (shutdownForceTimer === null) {
+    armShutdownWatchdog(SHUTDOWN_BROWSER_TIMEOUT_MS, exitCode);
+  }
   closeAllActiveBrowsers()
     .catch((e) =>
       log.error("ContactExtractionWorker: closeAllActiveBrowsers failed:", e)
@@ -92,13 +133,22 @@ function initializeWorker(): void {
     }
 
     const message = parsed.data;
+    if (message.type === "shutdown") {
+      handleWorkerShutdown(message);
+      return;
+    }
+    if (shuttingDown) {
+      // Closing flag rejects new work (design §7 step 1).
+      log.warn(
+        "ContactExtractionWorker: dropping inbound job — shutdown in progress"
+      );
+      return;
+    }
     if (message.type === "extract-contact") {
       handleExtractionRequest(message);
     } else if (message.type === "extract-contact-from-urls") {
       handleExtractContactFromUrls(message);
     }
-    // 'shutdown' is a no-op at the schema level; the worker exits via
-    // SIGTERM/SIGINT handlers (process signals), not via IPC.
   });
 
   // Handle worker errors — WS-4 R4.3: on fatal error, notify main + exit(1)

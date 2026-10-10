@@ -87,6 +87,29 @@ export class EmailTemplateTaskRelationModel extends BaseDb {
         return await this.repository.find({ where: { buckemailTaskId } });
     }
 
+    /**
+     * Template IDs bound to the task, read from the relation column so a
+     * missing TypeORM join cannot drop the ids the send worker needs.
+     */
+    async listEmailTemplateIdsByTaskId(buckemailTaskId: number): Promise<number[]> {
+        const relations = await this.repository.find({
+            where: { buckemailTaskId, status: 1 },
+            order: { id: "DESC" },
+            select: ["emailTemplateId"],
+        });
+        const ids: number[] = [];
+        const seen = new Set<number>();
+        for (const relation of relations) {
+            const id = relation.emailTemplateId;
+            if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
+                continue;
+            }
+            seen.add(id);
+            ids.push(id);
+        }
+        return ids;
+    }
+
     async deleteByBuckemailTaskId(buckemailTaskId: number): Promise<void> {
         await this.repository.delete({ buckemailTaskId });
     }

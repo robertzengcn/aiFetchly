@@ -4,6 +4,10 @@
  */
 
 import { spawn, spawnSync } from "child_process";
+import {
+  ownedSpawnAllowed,
+  spawnOwned,
+} from "@/main-process/lifecycle/ownedSpawn";
 import { log } from "@/modules/Logger";
 import * as crypto from "crypto";
 import * as fs from "fs";
@@ -216,12 +220,21 @@ async function runProcess(
   timeoutMs: number
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // T05 (2026-09-21 audit): pip/venv installs run up to 5 minutes —
+    // they are NOT bounded one-shots. Gate on shutdown and register the
+    // process so the force phase can cancel it within the exit budget.
+    if (!ownedSpawnAllowed("skill-env-installer")) {
+      reject(new Error("Application is shutting down; refusing install"));
+      return;
+    }
+    const child = spawnOwned("skill-env-installer", () =>
+      spawn(command, args, {
+        cwd,
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    );
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {

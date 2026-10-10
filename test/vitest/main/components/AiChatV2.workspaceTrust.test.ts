@@ -65,13 +65,26 @@ vi.mock("@/views/api/slashCommands", () => ({
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -84,6 +97,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2Conversation: vi.fn(),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChat", () => ({
@@ -176,7 +192,9 @@ async function mountChatWithActiveWorkspace(): Promise<
 > {
   const wrapper = mountChat();
   await flushPromises();
-  await wrapper.find(".workspace-badge--unset").trigger("click");
+  // FR-WS-003: drive the explicit Choose workspace action (the unset badge
+  // container is no longer the click target).
+  await wrapper.find('[data-testid="workspace-badge-choose"]').trigger("click");
   await flushPromises();
   return wrapper;
 }

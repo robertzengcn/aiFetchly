@@ -29,12 +29,17 @@ vi.mock("@/modules/buckEmailTaskModule", () => ({
       email_subject: string;
       email_html_content: string;
     }> {
+      void _input;
       return {
         emailservicelist: [],
         filterlist: [],
         email_subject: "",
         email_html_content: "",
       };
+    }
+
+    async startBuckEmailCampaign(): Promise<number> {
+      return 0;
     }
   },
 }));
@@ -48,7 +53,6 @@ import {
   previewBulkEmailSendTask,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
-import { DIRECT_EMAIL_SOURCE as DIRECT_EMAIL_SOURCE_AI } from "@/entityTypes/emailMarketingAiTypes";
 
 describe("EmailMarketingAiTools", () => {
   afterEach(() => {
@@ -261,10 +265,8 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.recipient_count).to.equal(1);
-      expect(result.email_content).to.deep.equal({
-        subject: "Hello from content mode",
-        content: "<p>Inline HTML body</p>",
-      });
+      expect(result.email_subject).to.equal("Hello from content mode");
+      expect(result.email_html_content).to.equal("Inline HTML body");
       expect(result.template_ids).to.equal(undefined);
     });
 
@@ -279,16 +281,16 @@ describe("EmailMarketingAiTools", () => {
         throw new Error("Expected validation failure");
       }
       expect(result.validation_errors).to.include(
-        "Provide either template_ids or email_subject and email_html_content"
+        "Provide either template_ids or email_subject and email_content"
       );
     });
   });
 
   describe("startBulkEmailSendTask", () => {
-    it("starts content-only sends and persists inline email fields", async () => {
+    it("waits for content-only SMTP delivery before returning", async () => {
       sinon.stub(BuckEmailTaskModule.prototype, "ensureConnection").resolves();
-      sinon
-        .stub(BuckEmailTaskModule.prototype, "startBuckEmailTask")
+      const startStub = sinon
+        .stub(BuckEmailTaskModule.prototype, "startBuckEmailCampaign")
         .resolves(77);
 
       const result = await startBulkEmailSendTask({
@@ -303,20 +305,22 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.task_id).to.equal(77);
+      expect(result.status).to.equal("completed");
       expect(result.recipient_count).to.equal(1);
       expect(result.template_ids).to.equal(undefined);
+      expect(startStub.calledOnce).to.equal(true);
+      expect(startStub.firstCall.args[1]).to.deep.equal({ waitForExit: true });
 
-      const startArgs = (
-        BuckEmailTaskModule.prototype.startBuckEmailTask as sinon.SinonStub
-      ).firstCall.args[0];
+      const startArgs = startStub.firstCall.args[0] as Buckemailstruct;
       expect(startArgs.email_subject).to.equal("Campaign subject");
-      expect(startArgs.email_html_content).to.equal("<p>Body</p>");
+      expect(startArgs.email_html_content).to.equal("Body");
+      expect(startArgs.EmailServicelist).to.deep.equal([3]);
     });
 
-    it("starts direct sends with normalized deduplicated EmailList", async () => {
+    it("starts direct sends with normalized deduplicated EmailList and SMTP relations", async () => {
       sinon.stub(BuckEmailTaskModule.prototype, "ensureConnection").resolves();
       const startStub = sinon
-        .stub(BuckEmailTaskModule.prototype, "startBuckEmailTask")
+        .stub(BuckEmailTaskModule.prototype, "startBuckEmailCampaign")
         .resolves(123);
 
       const result = await startBulkEmailSendTask({
@@ -343,15 +347,16 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.task_id).to.equal(123);
+      expect(result.status).to.equal("completed");
       expect(result.recipient_count).to.equal(2);
       expect(startStub.calledOnce).to.equal(true);
+      expect(startStub.firstCall.args[1]).to.deep.equal({ waitForExit: true });
       expect(startStub.firstCall.args[0]).to.deep.equal({
-        type: BuckEmailType.EXTRACTEMAIL,
-        emailtaskentityId: 0,
-        email_list_json: JSON.stringify([
+        EmailBtype: BuckEmailType.EXTRACTEMAIL,
+        EmailtaskentityId: undefined,
+        EmailList: [
           {
             address: "first@example.com",
-            title: "Duplicate",
             source: DIRECT_EMAIL_SOURCE,
           },
           {
@@ -359,14 +364,11 @@ describe("EmailMarketingAiTools", () => {
             title: "Second",
             source: DIRECT_EMAIL_SOURCE,
           },
-        ]),
-        email_subject: null,
-        email_html_content: null,
-        notduplicate: 1,
-        record_time: "",
-        log_file: "",
-        error_file: "",
-        status: 0,
+        ],
+        EmailTemplateslist: [1],
+        EmailFilterlist: [2],
+        EmailServicelist: [3],
+        NotDuplicate: true,
       });
     });
 

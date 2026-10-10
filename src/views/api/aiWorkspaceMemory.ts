@@ -4,6 +4,7 @@ import type {
   AIWorkspaceMemorySearchInput,
   AIWorkspaceMemoryView,
   AIWorkspaceAutoDreamStatusView,
+  AIWorkspaceMemoryConsolidationRunView,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -60,8 +61,11 @@ export const workspaceMemoryApi = {
     call<null>(CH.ARCHIVE, input),
   delete: (input: { conversationId: string; memoryId: string }) =>
     call<number>(CH.DELETE, input),
-  runAutoDream: (input: { conversationId: string; force?: boolean } = {
-    conversationId: "",
-  }) => call<unknown>(CH.RUN_AUTO_DREAM, input),
-  autoDreamStatus: () => call<AIWorkspaceAutoDreamStatusView>(CH.AUTO_DREAM_STATUS),
+  runAutoDream: (
+    input: { conversationId: string; force?: boolean } = {
+      conversationId: "",
+    }
+  ) => call<AIWorkspaceMemoryConsolidationRunView[]>(CH.RUN_AUTO_DREAM, input),
+  autoDreamStatus: () =>
+    call<AIWorkspaceAutoDreamStatusView>(CH.AUTO_DREAM_STATUS),
 };

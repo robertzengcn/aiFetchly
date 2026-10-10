@@ -1,11 +1,11 @@
 import { ZodError } from "zod";
+import { incrementOutboundMetric } from "@/service/outboundEmail/OutboundEmailMetrics";
 import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import {
   Buckemailstruct,
   BulkEmailPreviewResult,
   BulkEmailStartResult,
-  mapBuckemailTaskStartInputToEntity,
 } from "@/entityTypes/emailmarketingType";
 import { EmailFilterModule } from "@/modules/EmailFilterModule";
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
@@ -30,6 +30,7 @@ import {
   getEmailServiceConfigInputSchema,
   getEmailSearchTaskEmailsInputSchema,
 } from "@/entityTypes/emailMarketingAiTypes";
+import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -143,13 +144,14 @@ function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
 
   const templateIds = parsed.template_ids ?? [];
   const subject = parsed.email_subject?.trim();
-  const html = parsed.email_html_content?.trim();
+  // The DB column is still named email_html_content; the value sent is text.
+  const bodyText = resolveInlineOutboundBody(parsed);
   const usesTemplates = templateIds.length > 0;
-  const usesInlineContent = Boolean(subject && html);
+  const usesInlineContent = Boolean(subject && bodyText);
 
   if (!usesTemplates && !usesInlineContent) {
     throw new Error(
-      "Provide either template_ids or email_subject and email_html_content"
+      "Provide either template_ids or email_subject and email_content"
     );
   }
 
@@ -161,7 +163,7 @@ function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
     service_ids: parsed.service_ids,
     not_duplicate: parsed.not_duplicate,
     email_subject: usesInlineContent ? subject : undefined,
-    email_html_content: usesInlineContent ? html : undefined,
+    email_html_content: usesInlineContent ? bodyText : undefined,
     uses_templates: usesTemplates,
     uses_inline_content: usesInlineContent,
   };
@@ -220,49 +222,22 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
   };
 }
 
-function toEmailItemFromSearchResult(
-  item: string | { address: string; source?: string; title?: string }
-): EmailItem {
-  if (typeof item === "string") {
-    return { title: item, address: item, source: DIRECT_EMAIL_SOURCE };
-  }
-  const title =
-    "title" in item && typeof item.title === "string"
-      ? item.title
-      : item.address;
-  return {
-    title,
-    address: item.address,
-    source: item.source ?? DIRECT_EMAIL_SOURCE,
-  };
-}
-
-function isEmailServiceEntity(item: unknown): item is {
-  id: number;
-  name: string;
-  from: string;
-  host: string;
-  port: string;
-  ssl: number;
-  status: number;
-} {
-  return (
-    typeof item === "object" && item !== null && "id" in item && "name" in item
-  );
-}
-
-function sanitizeEmailService(service: {
-  id: number;
-  name: string;
-  from: string;
-  host: string;
-  port: string;
-  ssl: number;
-  status: number;
-}): SanitizedEmailService {
+function sanitizeEmailService(
+  service: {
+    id: number;
+    name: string;
+    from: string;
+    host: string;
+    port: string;
+    ssl: number;
+    status: number;
+  },
+  tags: string[] = []
+): SanitizedEmailService {
   return {
     id: service.id,
     name: service.name,
+    tags,
     address: service.from,
     source: service.host,
     port: String(service.port),
@@ -406,9 +381,18 @@ export async function listEmailServices(
       input.search
     );
 
+    // Batch-expand tag names so each sanitized service carries its full tag set.
+    const tagMap = await module.getTagsForServices(
+      result.records.map((s) => s.id)
+    );
     return {
       success: true,
-      records: result.records.map((service) => sanitizeEmailService(service)),
+      records: result.records.map((service) =>
+        sanitizeEmailService(
+          service,
+          (tagMap.get(service.id) ?? []).map((t) => t.name)
+        )
+      ),
       total: result.num,
     };
   } catch (error) {
@@ -426,14 +410,52 @@ export async function getEmailServiceConfig(
     const module = new EmailServiceModule();
     await module.ensureConnection();
 
-    const service = await module.getEmailService(input.service_id);
-    if (!service) {
-      throw new Error(`Email service ${input.service_id} not found`);
+    // service_id resolves directly to one service.
+    if (input.service_id !== undefined) {
+      const service = await module.getEmailService(input.service_id);
+      if (!service) {
+        throw new Error(`Email service ${input.service_id} not found`);
+      }
+      const tagViews = await module.getTagsForService(service.id);
+      return {
+        success: true,
+        service: sanitizeEmailService(
+          service,
+          tagViews.map((t) => t.name)
+        ),
+      };
     }
 
+    // Tag lookup (multi-tag): a tag can be attached to many services. One
+    // match returns it; multiple matches return a candidate list so the AI
+    // must disambiguate via service_id on a follow-up call.
+    const services = await module.findEmailServicesByTag(input.tag!);
+    if (services.length === 0) {
+      throw new Error(`Email service tag ${input.tag} not found`);
+    }
+    if (services.length === 1) {
+      const service = services[0]!;
+      const tagViews = await module.getTagsForService(service.id);
+      return {
+        success: true,
+        service: sanitizeEmailService(
+          service,
+          tagViews.map((t) => t.name)
+        ),
+      };
+    }
+    const tagMap = await module.getTagsForServices(
+      services.map((s) => s.id)
+    );
     return {
       success: true,
-      service: sanitizeEmailService(service),
+      candidates: services.map((service) =>
+        sanitizeEmailService(
+          service,
+          (tagMap.get(service.id) ?? []).map((t) => t.name)
+        )
+      ),
+      message: `Tag "${input.tag}" matches ${services.length} email services. Call again with service_id to pick one.`,
     };
   } catch (error) {
     return error instanceof ZodError
@@ -506,6 +528,7 @@ export async function previewBulkEmailSendTask(
   try {
     const input = bulkEmailTaskInputSchema.parse(args);
     const recipients = await resolveBulkRecipients(input);
+    const bodyText = resolveInlineOutboundBody(input);
 
     return {
       success: true,
@@ -515,11 +538,10 @@ export async function previewBulkEmailSendTask(
       filter_ids: input.filter_ids,
       service_ids: input.service_ids,
       not_duplicate: input.not_duplicate,
-      ...(input.email_subject !== undefined &&
-      input.email_html_content !== undefined
+      ...(input.email_subject !== undefined && bodyText !== undefined
         ? {
             email_subject: input.email_subject,
-            email_html_content: input.email_html_content,
+            email_html_content: bodyText,
           }
         : {}),
     };
@@ -534,13 +556,21 @@ export async function startBulkEmailSendTask(
   args: unknown
 ): Promise<EmailMarketingAiToolResult<BulkEmailStartResult>> {
   try {
-    const input = bulkEmailTaskInputSchema.parse(args);
-    const recipients = await resolveBulkRecipients(input);
+    const parsed = parseBulkEmailTaskInput(args);
+    const recipients = await resolveBulkRecipients(parsed);
+
+    // §27.2 rule 4 — deprecation telemetry for AI calls using legacy inline
+    // content arguments. New sends should go through the domain gate and the
+    // authorized draft pipeline; inline subject/text is the pre-gate shape.
+    incrementOutboundMetric("legacy_inline_content_send", {
+      uses_inline_content: parsed.uses_inline_content,
+    });
+
     const module = new BuckEmailTaskModule();
     await module.ensureConnection();
 
     const taskInput = makeBuckEmailTaskInput({
-      ...input,
+      ...parsed,
       // emailtaskentityId, so we pass undefined here to avoid storing a
       // redundant copy in email_list_json. For direct sends, the EmailList is
       // serialized to email_list_json so prepareData() can load it without a
@@ -550,25 +580,28 @@ export async function startBulkEmailSendTask(
           ? recipients.recipients
           : undefined,
     });
-    const entity = mapBuckemailTaskStartInputToEntity(taskInput);
-    const taskId = await module.startBuckEmailTask(entity, {
+    // Do not report tool success until every SMTP attempt has finished.
+    // The worker's empty-template completion bug has been fixed, so waiting
+    // here now gives the caller an accurate delivery outcome.
+    const taskId = await module.startBuckEmailCampaign(taskInput, {
       waitForExit: true,
     });
 
     return {
       success: true,
       task_id: taskId,
+      status: "completed",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
-      template_ids: input.template_ids,
-      filter_ids: input.filter_ids,
-      service_ids: input.service_ids,
-      not_duplicate: input.not_duplicate,
-      ...(input.email_subject !== undefined &&
-      input.email_html_content !== undefined
+      template_ids: parsed.template_ids,
+      filter_ids: parsed.filter_ids,
+      service_ids: parsed.service_ids,
+      not_duplicate: parsed.not_duplicate,
+      ...(parsed.email_subject !== undefined &&
+      parsed.email_html_content !== undefined
         ? {
-            email_subject: input.email_subject,
-            email_html_content: input.email_html_content,
+            email_subject: parsed.email_subject,
+            email_html_content: parsed.email_html_content,
           }
         : {}),
     };

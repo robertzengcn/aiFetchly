@@ -4,12 +4,30 @@ import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({
     messages: [],
@@ -18,7 +36,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -232,6 +251,7 @@ function mountChat() {
 describe("AiChatV2 new conversation while streaming", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
   });
 
   it("shows a message sent in a new chat while another conversation is still streaming", async () => {

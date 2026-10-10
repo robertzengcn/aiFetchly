@@ -15,6 +15,7 @@ import {
   contactExtractionWorkerOutboundSchema,
   contactExtractionWorkerInboundSchema,
 } from "@/schemas/worker/contactExtraction";
+import { handleWorkerShutdown } from "@/childprocess/contact-extraction/ContactExtractionWorker";
 
 // Stand-in for the main-side dispatch — same logic as in contactExtraction-ipc.ts.
 function dispatchOutbound(
@@ -147,6 +148,7 @@ describe("contactExtraction worker inbound dispatch", () => {
     handlers: {
       onExtract: (batchId: string) => void;
       onExtractUrls: (requestId: string, urls: string[]) => void;
+      onShutdown: (requestId: string, remainingMs?: number) => void;
       onDrop: (errMsg: string) => void;
     },
   ): void {
@@ -160,8 +162,9 @@ describe("contactExtraction worker inbound dispatch", () => {
       handlers.onExtract(m.batchId);
     } else if (m.type === "extract-contact-from-urls") {
       handlers.onExtractUrls(m.requestId, m.urls);
+    } else if (m.type === "shutdown") {
+      handlers.onShutdown(m.requestId, m.remainingMs);
     }
-    // shutdown: no-op
   }
 
   it("accepts a fully-formed extract-contact", () => {
@@ -176,7 +179,7 @@ describe("contactExtraction worker inbound dispatch", () => {
           { id: 2, url: "https://b.com", title: "B" },
         ],
       },
-      { onExtract, onExtractUrls: vi.fn(), onDrop: vi.fn() },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop: vi.fn() },
     );
     expect(onExtract).toHaveBeenCalledWith("batch-1");
   });
@@ -186,7 +189,7 @@ describe("contactExtraction worker inbound dispatch", () => {
     const onExtract = vi.fn();
     dispatchInbound(
       { type: "extract-contact", batchId: "b", resultIds: [1] },
-      { onExtract, onExtractUrls: vi.fn(), onDrop },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop },
     );
     expect(onDrop).toHaveBeenCalledTimes(1);
     expect(onExtract).not.toHaveBeenCalled();
@@ -196,19 +199,71 @@ describe("contactExtraction worker inbound dispatch", () => {
     const onExtractUrls = vi.fn();
     dispatchInbound(
       { type: "extract-contact-from-urls", requestId: "r1", urls: ["https://x.com"] },
-      { onExtract: vi.fn(), onExtractUrls, onDrop: vi.fn() },
+      { onExtract: vi.fn(), onExtractUrls, onShutdown: vi.fn(), onDrop: vi.fn() },
     );
     expect(onExtractUrls).toHaveBeenCalledWith("r1", ["https://x.com"]);
   });
 
-  it("silently accepts shutdown (no-op at worker)", () => {
+  it("routes shutdown to the §7 protocol handler with requestId + budget", () => {
     const onDrop = vi.fn();
     const onExtract = vi.fn();
+    const onShutdown = vi.fn();
     dispatchInbound(
-      { type: "shutdown" },
-      { onExtract, onExtractUrls: vi.fn(), onDrop },
+      { type: "shutdown", requestId: "req-7", reason: "app-shutdown", remainingMs: 2000 },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown, onDrop },
     );
     expect(onDrop).not.toHaveBeenCalled();
     expect(onExtract).not.toHaveBeenCalled();
+    expect(onShutdown).toHaveBeenCalledWith("req-7", 2000);
+  });
+
+  it("drops a bare shutdown missing the correlatable requestId", () => {
+    const onDrop = vi.fn();
+    dispatchInbound(
+      { type: "shutdown" },
+      { onExtract: vi.fn(), onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop },
+    );
+    expect(onDrop).toHaveBeenCalled();
+  });
+});
+
+describe("handleWorkerShutdown — the REAL §7 handler (not a mirror)", () => {
+  const sendMock = vi.fn(() => true);
+  const exitMock = vi.fn();
+  vi.stubGlobal("process", {
+    ...process,
+    send: sendMock,
+    exit: exitMock,
+  });
+  // gracefulShutdown closes browsers asynchronously then exits; the finally
+  // calls process.exit — mocked. Keep tests focused on ack + timer arming.
+
+  it("acks with the correlatable requestId, then exits via the graceful path", async () => {
+    handleWorkerShutdown({ requestId: "req-9" });
+    // Ack is SYNCHRONOUS — sent before any async browser cleanup resolves.
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-9",
+    });
+    // gracefulShutdown closes browsers then exits in .finally — flush.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(exitMock).toHaveBeenCalled();
+  });
+
+  it("bounds the watchdog to the parent's remainingMs when smaller", () => {
+    handleWorkerShutdown({ requestId: "req-b", remainingMs: 500 });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-b",
+    });
+  });
+
+  it("clamps a generous parent budget to the local browser timeout", () => {
+    handleWorkerShutdown({ requestId: "req-c", remainingMs: 60_000 });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-c",
+    });
   });
 });

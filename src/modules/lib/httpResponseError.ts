@@ -15,6 +15,9 @@
  * {@link serverCode}.
  */
 export class HttpResponseError extends Error {
+  /** Compatibility alias retained for callers that inspect Fetch's status text. */
+  public readonly statusText: string;
+
   /**
    * @param message     - Human-safe summary (typically the status text).
    * @param status      - HTTP status code (e.g. 404, 429, 500).
@@ -34,6 +37,7 @@ export class HttpResponseError extends Error {
   ) {
     super(message);
     this.name = "HttpResponseError";
+    this.statusText = message;
   }
 }
 

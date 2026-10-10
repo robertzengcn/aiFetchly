@@ -30,7 +30,9 @@ export const countryEvidenceSourceSchema = z.enum([
   "unknown",
 ]);
 
-export type CountryEvidenceSourceInput = z.infer<typeof countryEvidenceSourceSchema>;
+export type CountryEvidenceSourceInput = z.infer<
+  typeof countryEvidenceSourceSchema
+>;
 
 // ---------------------------------------------------------------------------
 // Input schema (design §7.3)
@@ -119,13 +121,15 @@ export const CONTACT_VERIFICATION_TOOL_PARAMETERS: Record<string, unknown> = {
             type: "array",
             maxItems: 50,
             items: { type: "string", minLength: 1, maxLength: 320 },
-            description: "Email addresses to verify (may be empty if phones given).",
+            description:
+              "Email addresses to verify (may be empty if phones given).",
           },
           phones: {
             type: "array",
             maxItems: 50,
             items: { type: "string", minLength: 1, maxLength: 128 },
-            description: "Phone numbers to verify (may be empty if emails given).",
+            description:
+              "Phone numbers to verify (may be empty if emails given).",
           },
           context: {
             type: "object",
@@ -196,16 +200,41 @@ export const CONTACT_VERIFICATION_TOOL_DESCRIPTION: string =
   "resolution, and mail-routing records. For phone numbers, check extraction " +
   "noise, international or national formatting, numbering-plan metadata, and " +
   "country evidence associated with the same contact block.\n\n" +
-  "Call this tool immediately after any tool, including extract_contact_info, " +
-  "returns one or more previously unverified email addresses or phone numbers. " +
-  "Run verification before presenting, exporting, saving, or using those " +
-  "contacts as verified data. Pass original values, source URLs, and nearby " +
-  "contact context.\n\n" +
+  "Call this tool after any tool, including extract_contact_info, returns one " +
+  "or more email addresses or phone numbers, and before presenting, exporting, " +
+  "saving, or using those contacts as verified data. Pass original values, " +
+  "source URLs, and nearby contact context. Nested verification fields on " +
+  "extract_contact_info results are a Standard preview only — still call this " +
+  "tool on the compiled contact list before the user-facing deliverable.\n\n" +
   "Do not use the website domain, company headquarters, campaign country, user " +
   "locale, or an unrelated office address as authoritative country evidence. If " +
   "a national phone number lacks strong same-block country evidence, preserve " +
   "the original number and classify its region as ambiguous.\n\n" +
   "This tool does not confirm mailbox existence, phone-line activity, ownership, " +
   "deliverability, reachability, or marketing consent. Do not claim that it does. " +
-  "Do not re-verify contacts that already contain a completed verification result " +
-  "unless the user requests it or the prior result is stale or temporary.";
+  'Do not invent statuses such as "verified". Skip a repeat call only when THIS ' +
+  "tool already returned a completed result for the same values in this " +
+  "conversation, unless the user requests re-verification or the prior result " +
+  "is stale or temporary.";
+
+/**
+ * extract_contact_info description postcondition. Both registration surfaces
+ * import this so the model is required to call verify_contact_info before
+ * presenting or exporting extracted contacts (PRD FR-13 / §8.1).
+ */
+export const EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION: string =
+  "POSTCONDITION: If extraction succeeds and returns at least one email " +
+  "address or phone number, you MUST call verify_contact_info with those " +
+  "original emails, phones, and source URLs before presenting, exporting, " +
+  "saving, or using them as verified data. Do not invent statuses such as " +
+  '"verified". Nested per-URL verification fields are a Standard preview ' +
+  "only — still call verify_contact_info on the compiled contact list before " +
+  "the user-facing deliverable. Skip verify_contact_info only when no email " +
+  "or phone was found.";
+
+/** Appended to the extract_contact_info tool summary when contacts exist. */
+export const EXTRACT_CONTACT_VERIFY_NEXT_STEP: string =
+  "REQUIRED NEXT STEP: Call verify_contact_info with the extracted emails, " +
+  "phones, and source URLs before presenting, exporting, saving, or using " +
+  "these contacts as verified data. Pass original values. Do not invent " +
+  "verification statuses.";

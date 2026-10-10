@@ -207,6 +207,149 @@ export class RAGDocumentModel extends BaseDb {
     return await queryBuilder.getMany();
   }
 
+  async findSearchableDocumentIds(filters: {
+    documentIds?: number[];
+    fileTypes?: string[];
+    author?: string;
+    tags?: string[];
+    uploadedFrom?: Date;
+    uploadedTo?: Date;
+    // Phase 3 filters (optional; omitted when not supplied).
+    language?: string;
+    documentDateFrom?: Date;
+    documentDateTo?: Date;
+    // Equality filters for the fixed custom-metadata allowlist. Keys are
+    // selected in code (see switch below); values are bound parameters.
+    customProduct?: string;
+    customCustomer?: string;
+    customCampaign?: string;
+    customCategory?: string;
+  }): Promise<number[]> {
+    const queryBuilder = this.repository.createQueryBuilder("document");
+    queryBuilder.select("document.id", "id");
+    queryBuilder.where("document.status = :status", { status: "active" });
+    queryBuilder.andWhere("document.processingStatus = :processingStatus", {
+      processingStatus: "completed",
+    });
+    if (filters.documentIds && filters.documentIds.length > 0) {
+      queryBuilder.andWhere("document.id IN (:...filterDocumentIds)", {
+        filterDocumentIds: filters.documentIds,
+      });
+    }
+    if (filters.fileTypes && filters.fileTypes.length > 0) {
+      queryBuilder.andWhere("document.fileType IN (:...filterFileTypes)", {
+        filterFileTypes: filters.fileTypes,
+      });
+    }
+    const authorTrimmed: string = (filters.author ?? "").trim();
+    if (authorTrimmed.length > 0) {
+      const escaped: string = authorTrimmed.replace(/[\\%_]/g, (m: string) => `\\${m}`);
+      queryBuilder.andWhere(
+        "LOWER(document.author) LIKE :filterAuthor ESCAPE '\\'",
+        { filterAuthor: `%${escaped.toLowerCase()}%` }
+      );
+    }
+    const tags: string[] = (filters.tags ?? [])
+      .map((t: string) => t.trim())
+      .filter((t: string) => t.length > 0);
+    if (tags.length > 0) {
+      const tagClauses: string[] = [];
+      const params: Record<string, string> = {};
+      tags.forEach((tag: string, index: number) => {
+        const escaped: string = tag
+          .replace(/[\\%_"]/g, (m: string) => `\\${m}`)
+          .toLowerCase();
+        tagClauses.push(`LOWER(document.tags) LIKE :filterTag${index} ESCAPE '\\'`);
+        params[`filterTag${index}`] = `%"${escaped}"%`;
+      });
+      queryBuilder.andWhere(`(${tagClauses.join(" OR ")})`, params);
+    }
+    if (filters.uploadedFrom) {
+      queryBuilder.andWhere("document.uploadedAt >= :uploadedFrom", {
+        uploadedFrom: filters.uploadedFrom,
+      });
+    }
+    if (filters.uploadedTo) {
+      queryBuilder.andWhere("document.uploadedAt <= :uploadedTo", {
+        uploadedTo: filters.uploadedTo,
+      });
+    }
+    // Phase 3: language exact match (case-insensitive on the stored value).
+    const languageTrimmed: string = (filters.language ?? "").trim();
+    if (languageTrimmed.length > 0) {
+      queryBuilder.andWhere("LOWER(document.language) = :filterLanguage", {
+        filterLanguage: languageTrimmed.toLowerCase(),
+      });
+    }
+    // Phase 3: documentDate range. NULL dates are excluded by a range filter.
+    if (filters.documentDateFrom) {
+      queryBuilder.andWhere("document.documentDate >= :documentDateFrom", {
+        documentDateFrom: filters.documentDateFrom,
+      });
+    }
+    if (filters.documentDateTo) {
+      queryBuilder.andWhere("document.documentDate <= :documentDateTo", {
+        documentDateTo: filters.documentDateTo,
+      });
+    }
+    // Phase 3: custom-metadata equality filters. The allowlist is a fixed set
+    // of keys; select each in code with a switch and bind the value as a
+    // quoted-token LIKE against the JSON text (technical design §6.3). Do
+    // NOT concatenate user keys into SQL identifiers. product = "Acme"
+    // matches "product":"Acme" and not a longer value because the closing
+    // quote bounds the token.
+    type CustomKey = "product" | "customer" | "campaign" | "category";
+    const customEntries: Array<{ key: CustomKey; value: string }> = [];
+    if (filters.customProduct !== undefined)
+      customEntries.push({ key: "product", value: filters.customProduct });
+    if (filters.customCustomer !== undefined)
+      customEntries.push({ key: "customer", value: filters.customCustomer });
+    if (filters.customCampaign !== undefined)
+      customEntries.push({ key: "campaign", value: filters.customCampaign });
+    if (filters.customCategory !== undefined)
+      customEntries.push({ key: "category", value: filters.customCategory });
+    for (const { key, value } of customEntries) {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) {
+        continue;
+      }
+      // Escape SQL LIKE wildcards and the bounding double-quote, then build a
+      // JSON-token pattern: "key":"value" (whitespace-tolerant around the
+      // colon via optional spaces). The bound parameter carries the pattern;
+      // the column name is fixed by the switch, never user input.
+      const escapedValue = trimmed
+        .replace(/[\\%_"]/g, (m: string) => `\\${m}`)
+        .toLowerCase();
+      let jsonColumn: string;
+      let paramBase: string;
+      switch (key) {
+        case "product":
+          jsonColumn = "document.customMetadata";
+          paramBase = "filterCustomProduct";
+          break;
+        case "customer":
+          jsonColumn = "document.customMetadata";
+          paramBase = "filterCustomCustomer";
+          break;
+        case "campaign":
+          jsonColumn = "document.customMetadata";
+          paramBase = "filterCustomCampaign";
+          break;
+        case "category":
+          jsonColumn = "document.customMetadata";
+          paramBase = "filterCustomCategory";
+          break;
+      }
+      const pattern = `%"${key}":%"${escapedValue}"%`;
+      queryBuilder.andWhere(
+        `LOWER(${jsonColumn}) LIKE :${paramBase} ESCAPE '\\'`,
+        { [paramBase]: pattern }
+      );
+    }
+    const rows: Array<{ id: number }> = await queryBuilder.getRawMany();
+    return rows.map((r: { id: number }) => r.id);
+  }
+
   async getDocumentStats(): Promise<{
     total: number;
     byStatus: Record<string, number>;

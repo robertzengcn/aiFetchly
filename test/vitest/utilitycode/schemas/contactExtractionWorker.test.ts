@@ -192,9 +192,10 @@ describe("contactExtractionWorkerInboundSchema", () => {
     expect(r.success).toBe(true);
   });
 
-  it("accepts shutdown", () => {
+  it("accepts shutdown (with the design §7 requestId)", () => {
     const r = contactExtractionWorkerInboundSchema().safeParse({
       type: "shutdown",
+      requestId: "req-test",
     });
     expect(r.success).toBe(true);
   });
@@ -213,5 +214,43 @@ describe("contactExtractionWorkerInboundSchema", () => {
       type: "extract-mystery",
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("contact extraction shutdown protocol (design §7)", () => {
+  it("inbound shutdown requires a requestId and carries optional budget fields", () => {
+    const schema = contactExtractionWorkerInboundSchema();
+    expect(
+      schema.safeParse({ type: "shutdown", requestId: "req-1" }).success
+    ).toBe(true);
+    const full = schema.safeParse({
+      type: "shutdown",
+      requestId: "req-1",
+      reason: "app-shutdown",
+      remainingMs: 2000,
+    });
+    expect(full.success).toBe(true);
+    // Missing requestId is rejected — the ack must be correlatable.
+    expect(schema.safeParse({ type: "shutdown" }).success).toBe(false);
+    // Negative budgets are rejected.
+    expect(
+      schema.safeParse({
+        type: "shutdown",
+        requestId: "req-1",
+        remainingMs: -1,
+      }).success
+    ).toBe(false);
+  });
+
+  it("outbound shutdown-ack echoes the requestId", () => {
+    const schema = contactExtractionWorkerOutboundSchema();
+    const parsed = schema.safeParse({
+      type: "shutdown-ack",
+      requestId: "req-42",
+    });
+    expect(parsed.success).toBe(true);
+    expect(
+      schema.safeParse({ type: "shutdown-ack" }).success
+    ).toBe(false);
   });
 });

@@ -1,5 +1,7 @@
 import { EmailMarketingController } from "@/controller/emailMarketingController";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
+import * as fs from "fs";
+import * as path from "path";
 import {
   EMAILMARKETINGTEMPLIST,
   EMAILMARKETINGTEMPREMOVE,
@@ -12,13 +14,18 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICEUPDATE,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
+  EMAILSERVICETAGLIST,
+  EMAILSERVICETAGCREATE,
+  EMAILSERVICETAGUPDATE,
+  EMAILSERVICETAGDELETE,
   EMAILFILTERDELETE,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
 } from "@/config/channellist";
 import {
   CommonResponse,
-  CommonMessage,
   CommonIdrequest,
   CommonDialogMsg,
 } from "@/entityTypes/commonType";
@@ -29,7 +36,10 @@ import {
   EmailSendParam,
   EmailFilterDetialdata,
   EmailTemplateRespdata,
+  EmailServiceImportResult,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
+import { smtpFailureI18nKey } from "@/service/emailService/SmtpFailureMessageMap";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterEntity } from "@/entity/EmailFilter.entity";
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
@@ -37,9 +47,18 @@ import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   emailMarketingListInputSchema,
+  emailServiceListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
+  emailServiceUpdateInputSchema,
+  emailServiceExportInputSchema,
+  emailServiceImportInputSchema,
+  emailServiceTagListInputSchema,
+  emailServiceTagCreateInputSchema,
+  emailServiceTagUpdateInputSchema,
+  emailServiceTagDeleteInputSchema,
 } from "@/schemas/ipc/emailMarketing";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 
 /**
  * Email Marketing IPC handlers.
@@ -231,13 +250,15 @@ export function registerEmailMarketingIpcHandlers() {
 
   registerValidatedHandler(
     EMAILSERVICELIST,
-    emailMarketingListInputSchema,
+    emailServiceListInputSchema,
     async (input) => {
       const emailmarketCon = new EmailMarketingController();
       const res = await emailmarketCon.getEmailServiceList(
         input.page ?? 0,
         input.size ?? 100,
-        input.search
+        input.search,
+        input.tagId,
+        input.untagged
       );
       if (!res) {
         throw new Error("emailmarketing.service_list_error");
@@ -264,7 +285,7 @@ export function registerEmailMarketingIpcHandlers() {
 
   registerValidatedHandler(
     EMAILSERVICEUPDATE,
-    emailMarketingUpdateInputSchema,
+    emailServiceUpdateInputSchema,
     async (input) => {
       const qdata = input as unknown as EmailServiceEntitydata;
       const emailmarketCon = new EmailMarketingController();
@@ -291,8 +312,26 @@ export function registerEmailMarketingIpcHandlers() {
         const entity = new EmailServiceEntity();
         entity.name = qdata.name ?? existing.name;
         entity.host = qdata.host ?? existing.host;
-        entity.port = qdata.port ?? existing.port;
+        // Schema normalizes numeric ports to strings, but coerce defensively:
+        // v-number-input emits numbers and validateEmailService calls .trim().
+        entity.port =
+          qdata.port !== undefined && qdata.port !== null
+            ? String(qdata.port)
+            : existing.port;
         entity.from = qdata.from ?? existing.from;
+        entity.smtpUsername =
+          qdata.smtpUsername !== undefined
+            ? qdata.smtpUsername === null ||
+              qdata.smtpUsername.trim().length === 0
+              ? null
+              : qdata.smtpUsername.trim()
+            : existing.smtpUsername ?? null;
+        entity.replyTo =
+          qdata.replyTo !== undefined
+            ? qdata.replyTo === null || qdata.replyTo.trim().length === 0
+              ? null
+              : qdata.replyTo.trim()
+            : existing.replyTo ?? null;
         // Empty incoming password = keep existing (credential sentinel).
         entity.password =
           qdata.password && qdata.password.length > 0
@@ -303,10 +342,16 @@ export function registerEmailMarketingIpcHandlers() {
         entity.receiveProtocol =
           qdata.receiveProtocol ?? existing.receiveProtocol ?? "imap";
         entity.imapHost = qdata.imapHost ?? existing.imapHost ?? null;
-        entity.imapPort = qdata.imapPort ?? existing.imapPort ?? null;
+        entity.imapPort =
+          qdata.imapPort !== undefined && qdata.imapPort !== null
+            ? String(qdata.imapPort)
+            : existing.imapPort ?? null;
         entity.imapSsl = qdata.imapSsl ?? existing.imapSsl ?? 1;
         entity.pop3Host = qdata.pop3Host ?? existing.pop3Host ?? null;
-        entity.pop3Port = qdata.pop3Port ?? existing.pop3Port ?? null;
+        entity.pop3Port =
+          qdata.pop3Port !== undefined && qdata.pop3Port !== null
+            ? String(qdata.pop3Port)
+            : existing.pop3Port ?? null;
         entity.pop3Ssl = qdata.pop3Ssl ?? existing.pop3Ssl ?? 1;
         entity.receiveUsername =
           qdata.receiveUsername ?? existing.receiveUsername ?? null;
@@ -318,10 +363,63 @@ export function registerEmailMarketingIpcHandlers() {
           qdata.receiveFolder ?? existing.receiveFolder ?? "INBOX";
         entity.receiveEnabled =
           qdata.receiveEnabled ?? existing.receiveEnabled ?? 0;
+        // §7.2: reject CR/LF in smtpUsername/from/replyTo before persistence
+        // so header injection cannot reach SMTP DATA. Mirrors the import path.
+        await emailmarketCon.validateEmailServiceForSave(
+          entity,
+          "update",
+          serviceId
+        );
         await emailmarketCon.updateEmailService(serviceId, entity);
+        // Multi-tag: apply the tag set after the row update. The controller's
+        // createEmailService handles this internally, but the IPC update path
+        // updates the entity directly, so apply tags here.
+        //  - tagIds absent + tagNames absent → preserve existing tags.
+        //  - tagIds: []                     → clear all tags.
+        //  - tagIds: [...]                   → replace.
+        if (qdata.tagIds !== undefined || qdata.tagNames !== undefined) {
+          await emailmarketCon.applyEmailServiceTagsFromForm(
+            serviceId,
+            qdata.tagIds,
+            qdata.tagNames
+          );
+        }
         return { id: serviceId } satisfies CommonIdrequest<number>;
       }
 
+      // Create path: validate a representative entity before persistence.
+      // createEmailService re-derives the entity from qdata, so validate the
+      // same shape here to reject CR/LF before any row is written.
+      const createEntity = new EmailServiceEntity();
+      createEntity.name = qdata.name;
+      createEntity.host = qdata.host;
+      createEntity.port =
+        qdata.port !== undefined && qdata.port !== null
+          ? String(qdata.port)
+          : qdata.port;
+      createEntity.from = qdata.from;
+      createEntity.smtpUsername = qdata.smtpUsername ?? null;
+      createEntity.replyTo = qdata.replyTo ?? null;
+      createEntity.password = qdata.password;
+      createEntity.ssl = qdata.ssl;
+      createEntity.receiveProtocol = qdata.receiveProtocol ?? "imap";
+      createEntity.imapHost = qdata.imapHost ?? null;
+      createEntity.imapPort =
+        qdata.imapPort !== undefined && qdata.imapPort !== null
+          ? String(qdata.imapPort)
+          : null;
+      createEntity.imapSsl = qdata.imapSsl ?? 1;
+      createEntity.pop3Host = qdata.pop3Host ?? null;
+      createEntity.pop3Port =
+        qdata.pop3Port !== undefined && qdata.pop3Port !== null
+          ? String(qdata.pop3Port)
+          : null;
+      createEntity.pop3Ssl = qdata.pop3Ssl ?? 1;
+      createEntity.receiveUsername = qdata.receiveUsername ?? null;
+      createEntity.receivePassword = qdata.receivePassword ?? null;
+      createEntity.receiveFolder = qdata.receiveFolder ?? "INBOX";
+      createEntity.receiveEnabled = qdata.receiveEnabled ?? 0;
+      await emailmarketCon.validateEmailServiceForSave(createEntity, "create");
       const createdId = await emailmarketCon.createEmailService(qdata);
       if (!createdId) {
         throw new Error("emailmarketing.create_email_service_error");
@@ -341,6 +439,139 @@ export function registerEmailMarketingIpcHandlers() {
     }
   );
 
+  registerValidatedHandler(
+    EMAILSERVICETAGLIST,
+    emailServiceTagListInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return await controller.listEmailServiceTags(input.search);
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGCREATE,
+    emailServiceTagCreateInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return { id: await controller.createEmailServiceTag(input.name) };
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGUPDATE,
+    emailServiceTagUpdateInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      await controller.updateEmailServiceTag(input.id, input.name);
+      return { id: input.id };
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGDELETE,
+    emailServiceTagDeleteInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return await controller.deleteEmailServiceTag(input.id);
+    }
+  );
+
+  // ── Service export ────────────────────────────────────────────────────
+
+  registerValidatedHandler(
+    EMAILSERVICEEXPORT,
+    emailServiceExportInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      const format = input.format ?? "csv";
+      const exportData = await controller.exportEmailServices(format);
+      const fileExtension = format === "csv" ? "csv" : "json";
+      const defaultFilename = `email_services_export_${
+        new Date().toISOString().split("T")[0]
+      }.${fileExtension}`;
+
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showSaveDialog({
+        title: "Export Email Services",
+        defaultPath: path.join(app.getPath("documents"), defaultFilename),
+        filters: [
+          {
+            name: format === "csv" ? "CSV Files" : "JSON Files",
+            extensions: [fileExtension],
+          },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+        throw new Error("Export cancelled by user");
+      }
+      const filePath = dialogResult.filePaths[0];
+      const content =
+        format === "csv"
+          ? (exportData as string)
+          : JSON.stringify(exportData, null, 2);
+      fs.writeFileSync(filePath, content, "utf-8");
+      return filePath;
+    }
+  );
+
+  // ── Service import ────────────────────────────────────────────────────
+
+  registerValidatedHandler(
+    EMAILSERVICEIMPORT,
+    emailServiceImportInputSchema,
+    async (input) => {
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showOpenDialog({
+        title: "Import Email Services",
+        defaultPath: app.getPath("documents"),
+        filters: [
+          { name: "CSV Files", extensions: ["csv"] },
+          { name: "JSON Files", extensions: ["json"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        properties: ["openFile"],
+      });
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+        throw new Error("Import cancelled by user");
+      }
+      const filePath = dialogResult.filePaths[0];
+      const ext = path.extname(filePath).toLowerCase().replace(".", "");
+      const format: "csv" | "json" = ext === "json" ? "json" : "csv";
+      let content: string;
+      try {
+        content = fs.readFileSync(filePath, "utf-8");
+      } catch {
+        // Read failure (file deleted/moved or unreadable between the dialog
+        // and the read): surface a stable key instead of a raw ENOENT/EACCES
+        // message with the full path.
+        throw new Error("import_failed");
+      }
+
+      const controller = new EmailMarketingController();
+      let result: EmailServiceImportResult;
+      try {
+        result = input.createMissingTags === true
+          ? await controller.importEmailServices(content, format, { createMissingTags: true })
+          : await controller.importEmailServices(content, format);
+      } catch {
+        // Malformed CSV/JSON or wrong structure — nothing was written.
+        // Surface ONLY the message key: parse-error text (e.g. V8's
+        // JSON.parse "Unexpected token..." embeds a raw source snippet)
+        // can echo file content — which may include password values —
+        // into the envelope and the main-process log.
+        throw new Error("import_invalid_file");
+      }
+
+      // Empty file / zero valid rows: surface as a failure envelope so the
+      // renderer shows the "no valid rows" message instead of a silent reload.
+      if (result.imported === 0 && result.skipped === 0) {
+        throw new Error("import_no_valid_rows");
+      }
+      return result;
+    }
+  );
+
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SENDTESTEMAIL, async (event, arg): Promise<void> => {
     const qdata = JSON.parse(arg as string) as EmailSendParam;
@@ -348,14 +579,17 @@ export function registerEmailMarketingIpcHandlers() {
     await emailmarketCon
       .sendEmail(
         qdata,
-        (errorMessage: string) => {
+        (sendEmailError: SendEmailError) => {
+          const errorKey =
+            smtpFailureI18nKey(sendEmailError.code) ??
+            "emailservice.send_test_email_error";
           const resp: CommonDialogMsg = {
             status: false,
             code: 202411141455379,
             data: {
               action: "error",
-              title: "emailservice.send_test_email_error",
-              content: errorMessage,
+              title: errorKey,
+              content: sendEmailError.message,
             },
           };
           (

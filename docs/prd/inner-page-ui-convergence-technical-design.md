@@ -10,6 +10,7 @@
 - **Source requirements**: [`inner-page-ui-convergence-prd.md`](./inner-page-ui-convergence-prd.md)
 - **Parent product contract**: [`ai-chat-workspace-ui-redesign-prd.md`](./ai-chat-workspace-ui-redesign-prd.md)
 - **Parent technical design**: [`ai-chat-workspace-ui-redesign-technical-design.md`](./ai-chat-workspace-ui-redesign-technical-design.md)
+- **Shell refinement technical design**: [`ai-chat-first-application-shell-technical-design.md`](./ai-chat-first-application-shell-technical-design.md) — follow-on authority for the persistent authenticated route parent and default chat center
 - **Visual reference**: [`ai-chat-workspace-redesign-preview.html`](../design/ai-chat-workspace-redesign-preview.html)
 - **Related test design**: [`playwright-ui-testing-technical-design.md`](./playwright-ui-testing-technical-design.md)
 

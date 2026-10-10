@@ -89,6 +89,10 @@ const BATCH_WORKER_OUTPUT_SCHEMA = {
   },
 };
 
+// Source-neutral (design §13.3): never mentions where the image came from —
+// the trusted initialImageArtifacts channel attaches it to the first message.
+const GENERATED_IMAGE_EDITOR_PROMPT = `Process exactly one supplied image according to the instruction in the task packet. Use the image already attached to the initial task message. Do not search for another file and do not request a workspace. Return the produced generated-image artifact and a compact status only.`;
+
 const BUILT_INS: readonly AgentDefinitionView[] = [
   {
     id: "agent-lead-researcher",
@@ -137,6 +141,29 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
     maxToolCalls: 6,
     maxRuntimeMs: 240000,
     maxContinueCalls: 4,
+    outputSchema: BATCH_WORKER_OUTPUT_SCHEMA,
+    status: "active",
+    source: "built-in",
+    health: "healthy",
+    manifest: {},
+  },
+  {
+    id: "agent-generated-image-editor",
+    name: "Generated Image Editor",
+    description:
+      "Edits the single generated image attached to the initial task message per the packet instruction. Tool-free — no file search, no workspace.",
+    version: 1,
+    systemPrompt: GENERATED_IMAGE_EDITOR_PROMPT,
+    // Deliberately empty: the input image arrives as a trusted multimodal
+    // content part on the initial message (RunAgentRequest.
+    // initialImageArtifacts), so the editor never calls attach_local_images
+    // and never resolves files itself. maxToolCalls stays >0 only as a
+    // defensive bound against stray model tool attempts.
+    allowedTools: [],
+    mode: "specialist",
+    maxToolCalls: 2,
+    maxRuntimeMs: 240000,
+    maxContinueCalls: 0,
     outputSchema: BATCH_WORKER_OUTPUT_SCHEMA,
     status: "active",
     source: "built-in",

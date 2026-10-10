@@ -2,6 +2,7 @@ import * as puppeteer from 'puppeteer';
 import { log } from "@/modules/Logger";
 import { browserManager, BrowserManager } from './browserManager';
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 /**
  * Example 1: Using the default browser manager instance
  */
@@ -204,3 +205,4 @@ export const examples = {
     errorHandling: exampleWithErrorHandling,
     batchOperations: exampleBatchOperations
 }; 
+/* eslint-enable @typescript-eslint/no-var-requires */

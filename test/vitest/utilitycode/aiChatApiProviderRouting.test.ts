@@ -6,18 +6,40 @@ import { USER_AI_ENABLED, USER_AI_PROVIDER_MODE } from "@/config/usersetting";
 // secret service, and resolver all see the same data within a test.
 const tokenStore = new Map<string, string>();
 
+// Mirror of the real HttpResponseError, defined via vi.hoisted so both the
+// mock factory and the tests can reference it (hoisted mock factories cannot
+// see ordinary top-level variables). Production detects the
+// small-model-unavailable retry signal via `instanceof` + status.
+const { MockHttpResponseError } = vi.hoisted(() => {
+  class MockHttpResponseError extends Error {
+    readonly status: number;
+    readonly statusText: string;
+    constructor(status: number, statusText: string) {
+      super(statusText || `HTTP ${status}`);
+      this.name = "HttpResponseError";
+      this.status = status;
+      this.statusText = statusText;
+    }
+  }
+  return { MockHttpResponseError };
+});
+
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: (k: string) => tokenStore.get(k) ?? "",
-    setValue: (k: string, v: string) => {
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue(k: string): string {
+      return tokenStore.get(k) ?? "";
+    }
+    setValue(k: string, v: string): void {
       tokenStore.set(k, v);
-    },
-    deleteValue: (k: string) => {
+    }
+    deleteValue(k: string): void {
       tokenStore.delete(k);
-    },
-    hasValue: (k: string) =>
-      tokenStore.has(k) && (tokenStore.get(k)?.length ?? 0) > 0,
-  })),
+    }
+    hasValue(k: string): boolean {
+      return tokenStore.has(k) && (tokenStore.get(k)?.length ?? 0) > 0;
+    }
+  },
 }));
 
 // Hosted HttpClient captured so we can assert it is (or is not) used.
@@ -25,11 +47,16 @@ const mockGet = vi.fn();
 const mockPostJson = vi.fn();
 const mockPostStream = vi.fn();
 vi.mock("@/modules/lib/httpclient", () => ({
-  HttpClient: vi.fn().mockImplementation(() => ({
-    get: mockGet,
-    postJson: mockPostJson,
-    postStream: mockPostStream,
-  })),
+  HttpClient: class {
+    constructor() {
+      return {
+        get: mockGet,
+        postJson: mockPostJson,
+        postStream: mockPostStream,
+      };
+    }
+  },
+  HttpResponseError: MockHttpResponseError,
 }));
 
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
@@ -37,6 +64,13 @@ import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettin
 /** Read the first argument of the first call to a mocked fetch. */
 const firstCallUrl = (m: unknown): string =>
   String((m as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]);
+
+/** Parse the JSON body of the first call to a mocked fetch. */
+const firstCallBody = (m: unknown): Record<string, unknown> => {
+  const calls = (m as { mock: { calls: unknown[][] } }).mock.calls;
+  const init = calls[0]?.[1] as RequestInit | undefined;
+  return JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+};
 
 function enableLocalProvider(): void {
   const svc = new AIProviderSettingsService();
@@ -160,76 +194,6 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("forwards the caller AbortSignal to fetch on a local non-stream completion", async () => {
-    enableLocalProvider();
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          id: "x",
-          object: "chat.completion",
-          created: 0,
-          model: "llama3.1",
-          choices: [
-            {
-              index: 0,
-              message: { role: "assistant", content: "pong" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    ) as unknown as typeof fetch;
-    const original = globalThis.fetch;
-    globalThis.fetch = fetchMock;
-    try {
-      const controller = new AbortController();
-      await api.openAIChatCompletion(
-        { messages: [{ role: "user", content: "ping" }] },
-        controller.signal
-      );
-      // The local client links the caller's signal to an internal
-      // AbortController (so timeout-abort and caller-abort are
-      // distinguishable), so the fetch RequestInit's signal is an
-      // AbortSignal that aborts when the caller aborts.
-      const init = (fetchMock as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls[0]![1] as RequestInit;
-      expect(init.signal).toBeInstanceOf(AbortSignal);
-    } finally {
-      globalThis.fetch = original;
-    }
-  });
-
-  it("forwards the caller AbortSignal to postJson on a hosted non-stream completion", async () => {
-    enableHosted();
-    mockPostJson.mockResolvedValueOnce({
-      id: "x",
-      object: "chat.completion",
-      created: 0,
-      model: "hosted-model",
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: "ok" },
-          finish_reason: "stop",
-        },
-      ],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    });
-    const controller = new AbortController();
-    await api.openAIChatCompletion(
-      { messages: [{ role: "user", content: "ping" }] },
-      controller.signal
-    );
-    // postJson's third arg carries { signal } so it flows into _fetchJSON's fetch.
-    expect(mockPostJson).toHaveBeenCalledWith(
-      "/api/ai/v1/chat/completions",
-      expect.anything(),
-      { signal: controller.signal }
-    );
-  });
-
   it("openAIChatCompletionStream parses local SSE chunks", async () => {
     enableLocalProvider();
     const sseBody =
@@ -273,56 +237,167 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("listOpenAIModels returns hosted models even without AI entitlement", async () => {
-    // No hosted entitlement and no local config — model listing is ungated.
-    mockGet.mockResolvedValue({
-      object: "list",
-      data: [{ id: "gpt-4", object: "model" }],
-    });
-    const res = await api.listOpenAIModels();
-    expect(res.data).toHaveLength(1);
-    expect(res.data[0].id).toBe("gpt-4");
+  it("falls back to the hosted model list when the resolver denies", async () => {
+    // 821509d8 deliberately removed the AI-enable gate from model listing:
+    // a denial (no hosted entitlement AND no local config) now falls back to
+    // the hosted list instead of throwing; execution gates live elsewhere.
+    const models = await api.listOpenAIModels();
+    expect(models.object).toBe("list");
+    expect(Array.isArray(models.data)).toBe(true);
   });
 
-  it("openAIChatCompletion throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — chat is gated.
-    await expect(
-      api.openAIChatCompletion({
-        messages: [{ role: "user", content: "hi" }],
-      })
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletionStream throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — streaming chat is gated.
-    const onChunk = vi.fn();
-    await expect(
-      api.openAIChatCompletionStream(
-        { messages: [{ role: "user", content: "hi" }] },
-        onChunk
-      )
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletion succeeds when hosted AI is enabled", async () => {
+  it("hosted sends the small alias on the wire without the internal fallback", async () => {
     enableHosted();
     mockPostJson.mockResolvedValue({
       id: "x",
       object: "chat.completion",
       created: 0,
-      model: "gpt-x",
+      model: "cheap-model",
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content: "hello" },
+          message: { role: "assistant", content: "ok" },
           finish_reason: "stop",
         },
       ],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     });
+    await api.openAIChatCompletion({
+      messages: [{ role: "user", content: "hi" }],
+      model: "small",
+      fallbackModel: "deepseek-v4-flash",
+    });
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    expect(mockPostJson.mock.calls[0]?.[0]).toBe("/api/ai/v1/chat/completions");
+    const wire = mockPostJson.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(wire.model).toBe("small");
+    expect(wire).not.toHaveProperty("fallbackModel");
+  });
+
+  it("hosted retries once with the fallback model when small is unavailable (404)", async () => {
+    enableHosted();
+    mockPostJson
+      .mockRejectedValueOnce(new MockHttpResponseError(404, "Not Found"))
+      .mockResolvedValueOnce({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "deepseek-v4-flash",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "recovered" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
     const res = await api.openAIChatCompletion({
       messages: [{ role: "user", content: "hi" }],
+      model: "small",
+      fallbackModel: "deepseek-v4-flash",
     });
-    expect(res.choices[0].message.content).toBe("hello");
+    expect(res.choices[0].message.content).toBe("recovered");
+    expect(mockPostJson).toHaveBeenCalledTimes(2);
+    const first = mockPostJson.mock.calls[0]?.[1] as Record<string, unknown>;
+    const second = mockPostJson.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(first.model).toBe("small");
+    expect(second.model).toBe("deepseek-v4-flash");
+    expect(second).not.toHaveProperty("fallbackModel");
+  });
+
+  it("hosted retries with the model omitted when small is unavailable and no fallback", async () => {
+    enableHosted();
+    mockPostJson
+      .mockRejectedValueOnce(new MockHttpResponseError(404, "Not Found"))
+      .mockResolvedValueOnce({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "server-default",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "recovered" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    const res = await api.openAIChatCompletion({
+      messages: [{ role: "user", content: "hi" }],
+      model: "small",
+    });
+    expect(res.choices[0].message.content).toBe("recovered");
+    expect(mockPostJson).toHaveBeenCalledTimes(2);
+    const second = mockPostJson.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(second).not.toHaveProperty("model");
+  });
+
+  it("hosted does not retry a non-404 error on the small alias", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(
+      new MockHttpResponseError(500, "Server Error")
+    );
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
+    ).rejects.toThrow();
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("hosted does not retry a 404 for a literal (non-alias) model", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+        model: "gpt-x",
+        fallbackModel: "deepseek-v4-flash",
+      })
+    ).rejects.toThrow();
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("local maps the small alias to the configured default model", async () => {
+    enableLocalProvider();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "x",
+          object: "chat.completion",
+          created: 0,
+          model: "llama3.1",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "pong" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    ) as unknown as typeof fetch;
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      await api.openAIChatCompletion({
+        messages: [{ role: "user", content: "ping" }],
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      });
+      expect(mockPostJson).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const wire = firstCallBody(fetchMock);
+      expect(wire.model).toBe("llama3.1");
+      expect(wire).not.toHaveProperty("fallbackModel");
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

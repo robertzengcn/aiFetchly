@@ -16,6 +16,8 @@ export const E2E_ENV = {
   AI_BASE_URL: "AIFETCHLY_E2E_AI_BASE_URL",
   ALLOWED_ORIGINS: "AIFETCHLY_E2E_ALLOWED_ORIGINS",
   USER_DATA_PATH: "ELECTRON_USER_DATA_PATH",
+  /** Tool-output root override (mirror src/service/toolResult/toolResultRoot.ts). */
+  TOOL_OUTPUT_ROOT: "AIFETCHLY_TOOL_OUTPUT_ROOT",
   IS_TEST: "IS_TEST",
   NODE_ENV: "NODE_ENV",
   // Skill-installation isolation overrides (natural-language-skill-installation):
@@ -38,6 +40,8 @@ export interface E2ETestRoot {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /** Per-test root for preserved tool-output artifacts (mirror of E2EEnvironment). */
+  readonly toolOutputRootPath: string;
   readonly stateFilePath: string;
   readonly networkViolationsPath: string;
   /** Recursively remove the root only after containment validation passes. */
@@ -45,4 +49,13 @@ export interface E2ETestRoot {
 }
 
 /** Origin allowed for renderer network traffic (the Vite dev server). */
-export const RENDERER_ORIGIN = "http://127.0.0.1:5173";
+/**
+ * Renderer origin for the whole E2E harness. Honors the same
+ * AIFETCHLY_E2E_RENDERER_ORIGIN env the E2E main bundle bakes in at build
+ * time (vite.e2e.main.config.mjs), so a session can move off the default
+ * 5173 when another worktree's dev server holds it. Everything (playwright
+ * webServer, sanitized-env origins, launch URL wait, spec helpers) derives
+ * from this single constant.
+ */
+export const RENDERER_ORIGIN =
+  process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173";

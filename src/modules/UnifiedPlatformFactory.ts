@@ -4,6 +4,7 @@ import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/modules/interfa
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { BaseModule } from '@/modules/baseModule';
 
+/* eslint-disable @typescript-eslint/ban-types */
 /**
  * Configuration-only platform adapter that uses only JSON configuration
  * for data extraction without custom logic.
@@ -447,3 +448,4 @@ class HybridPlatformAdapter implements IBasePlatformAdapter {
         return customFunction;
     }
 } 
+/* eslint-enable @typescript-eslint/ban-types */

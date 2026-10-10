@@ -3,6 +3,7 @@ import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
+import type { SmtpFailureCode } from "@/modules/lib/smtpErrorClassifier";
 
 /**
  * AI Email Template tone options
@@ -154,9 +155,32 @@ export type EmailFilterDetialdata = {
   id?: number;
   content: string;
 };
+/**
+ * A tag attached to an email service, as surfaced to the UI / AI layer.
+ * Carries no secrets — safe to return to the renderer.
+ */
+export interface EmailServiceTagView {
+  id: number;
+  name: string;
+}
+
 export type EmailServiceEntitydata = {
   id?: number;
+  /**
+   * Tag IDs to assign to this service. Absent on update = preserve existing
+   * tags; `[]` = clear all tags; `[...]` = replace. On create, absent means
+   * "no tags".
+   */
+  tagIds?: number[];
+  /**
+   * Tag names the user typed in the autocomplete that don't correspond to an
+   * existing tag. These are auto-created on save (atomic with the service
+   * upsert) so the user never has to leave the service form to make a tag.
+   */
+  tagNames?: string[];
+  smtpUsername?: string | null;
   from: string;
+  replyTo?: string | null;
   password: string;
   host: string;
   port: string;
@@ -180,10 +204,64 @@ export type EmailServiceEntitydata = {
 export type EmailServiceListdata = {
   id: number;
   name: string;
+  tagIds: number[];
+  tags: EmailServiceTagView[];
   from: string;
   host: string;
   receiveProtocol: EmailReceiveProtocol;
   create_time: string;
+};
+
+export interface EmailServiceTagSummary {
+  id: number;
+  name: string;
+  normalizedName: string;
+  serviceCount: number;
+}
+
+/**
+ * Safe (secret-free) single projection of one email service for both CSV and
+ * JSON export (§11.1). Uses the EFFECTIVE smtpUsername so legacy rows export a
+ * usable login identifier. Never contains SMTP or receive passwords.
+ *
+ * `tags` is an array of tag names (multi-tag). CSV serializes it as a
+ * comma-joined, escaped cell; JSON as a string array.
+ */
+export type SafeEmailServiceExportRow = {
+  id: number;
+  name: string;
+  tags: string[];
+  smtpUsername: string;
+  from: string;
+  replyTo: string | null;
+  host: string;
+  port: string;
+  ssl: number;
+  receiveProtocol: EmailReceiveProtocol;
+  imapHost: string | null;
+  imapPort: string | null;
+  imapSsl: number;
+  pop3Host: string | null;
+  pop3Port: string | null;
+  pop3Ssl: number;
+  receiveUsername: string | null;
+  receiveFolder: string;
+  receiveEnabled: number;
+  create_time: string;
+};
+
+/** JSON export envelope for the email service list (safe fields only). */
+export type EmailServiceExportPayload = {
+  total: number;
+  services: SafeEmailServiceExportRow[];
+  exportDate: string;
+};
+
+/** Result envelope for email service import (counts + per-row errors). */
+export type EmailServiceImportResult = {
+  imported: number;
+  skipped: number;
+  errors: string[]; // capped at first 10, e.g. "row 4: password is required"
 };
 
 /**
@@ -307,6 +385,17 @@ export type EmailSendResult = {
   title: string;
   content: string;
   info?: string;
+  /** Structured SMTP failure category (§19.2) when status is false; absent on success or unclassified throws. */
+  failureCode?: SmtpFailureCode;
+  /**
+   * Identity metadata for the send log (FR-014). All optional and non-secret:
+   * which email-service record sent, and the From / SMTP username / Reply-To
+   * it presented. Absent when the worker could not resolve a service.
+   */
+  emailServiceId?: number;
+  fromAddress?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
 };
 export type EmailSendParam = {
   Setting: EmailServiceEntitydata;
@@ -317,4 +406,14 @@ export type EmailRequestData = {
   Receiver: string;
   Title: string;
   Content: string;
+};
+
+/**
+ * Structured error payload returned by `EmailService.sendEmail()` (§19).
+ * `code` is null when the failure was a resolution/setup error rather than a
+ * classified SMTP rejection (e.g. missing service, no stored password).
+ */
+export type SendEmailError = {
+  readonly message: string;
+  readonly code: SmtpFailureCode | null;
 };

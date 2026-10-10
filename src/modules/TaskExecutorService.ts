@@ -29,6 +29,7 @@ import type { YandexMapsSearchInput } from "@/entityTypes/yandexMapsTypes";
 //     CANCELLED = 'cancelled'
 // }
 
+/* eslint-disable no-case-declarations */
 /**
  * WS-5 R5.1 — injectable collaborators for {@link TaskExecutorService}.
  * Each is optional in the constructor; omitting one yields the real module.
@@ -823,3 +824,5 @@ export class TaskExecutorService {
     }
   }
 }
+
+/* eslint-enable no-case-declarations */

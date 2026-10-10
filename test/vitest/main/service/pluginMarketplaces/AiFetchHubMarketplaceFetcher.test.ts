@@ -33,11 +33,13 @@ const HUB_ENTRY_GENERIC_SOURCE = {
 
 describe("AiFetchHubMarketplaceFetcher", () => {
   let getClient: () => HubCatalogClient;
-  let getFirstParty: ReturnType<typeof vi.fn>;
+  let getFirstParty: ReturnType<typeof vi.fn> & {
+    <T = unknown>(absoluteUrl: string, options?: RequestInit): Promise<T>;
+  };
 
   beforeEach(() => {
     vi.stubEnv("VITE_PLUGIN_HUB_URL", "https://plugins.example.com");
-    getFirstParty = vi.fn();
+    getFirstParty = vi.fn() as unknown as typeof getFirstParty;
     getClient = () => ({ getFirstParty });
   });
 

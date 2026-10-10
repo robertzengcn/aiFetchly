@@ -4,13 +4,25 @@ import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -21,6 +33,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
   setChatV2ToolApprovalMode: vi.fn(),
 }));

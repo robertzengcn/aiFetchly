@@ -315,10 +315,13 @@ describe("SkillInstallationModule lifecycle", () => {
       sessionId: `cancel-mid-${Date.now()}`,
     });
     const { SqliteDb } = await import("@/config/SqliteDb");
+    // The model takes the DB DIRECTORY (BaseDb joins scraper.db itself);
+    // connection.options.database is the FILE path and would nest
+    // scraper.db/scraper.db (EEXIST on the driver's mkdir).
     const sessionsModel = new SkillInstallationSessionModel(
-      SqliteDb.getInstance(process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir)
-        .connection.options.database as string
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
     );
+    void SqliteDb;
     const row = await sessionsModel.findBySessionId(second.sessionId);
     if (row) {
       row.state = "activating";

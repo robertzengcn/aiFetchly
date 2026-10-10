@@ -9,24 +9,24 @@ const mockMarkInterrupted = vi.hoisted(() => vi.fn());
 const mockRunChatLoop = vi.hoisted(() => vi.fn());
 const mockCleanupInactiveDependencies = vi.hoisted(() => vi.fn());
 const mockCleanupOldExecutions = vi.hoisted(() => vi.fn());
+const mockScheduleManagerDestroy = vi.hoisted(() => vi.fn());
+const mockScheduleManagerGet = vi.hoisted(() => vi.fn());
+const mockSqliteDbReset = vi.hoisted(() =>
+  vi.fn(async () => ({ connection: {}, isInitialized: true }))
+);
 
 vi.mock("@/config/SqliteDb", () => ({
   SqliteDb: {
     getInstance: () => ({ connection: {} }),
+    getLiveInstance: () => ({ connection: {} }),
     ensureInitialized: vi.fn(async () => undefined),
-    resetInstance: vi.fn(async () => ({ connection: {}, isInitialized: true })),
+    resetInstance: mockSqliteDbReset,
   },
 }));
 vi.mock("@/modules/ScheduleManager", () => ({
   ScheduleManager: {
-    getInstance: () => ({
-      initializeSchedules: vi.fn(async () => undefined),
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => undefined),
-      handleAppShutdown: vi.fn(async () => undefined),
-      getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
-      cleanupInactiveDependencies: mockCleanupInactiveDependencies,
-    }),
+    getInstance: mockScheduleManagerGet,
+    destroyInstance: mockScheduleManagerDestroy,
     resetInstance: vi.fn(async () => ({
       initializeSchedules: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
@@ -38,44 +38,72 @@ vi.mock("@/modules/ScheduleManager", () => ({
   },
 }));
 vi.mock("@/modules/ScheduleTaskModule", () => ({
-  ScheduleTaskModule: vi.fn().mockImplementation(() => ({
+  ScheduleTaskModule: class {
+    constructor() {
+      return {
     getSchedulesReadyToExecute: vi.fn(async () => []),
     getSchedulesByTriggerType: vi.fn(async () => []),
     getScheduleById: vi.fn(async () => null),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/model/ScheduleExecutionLog.model", () => ({
-  ScheduleExecutionLogModel: vi.fn().mockImplementation(() => ({
+  ScheduleExecutionLogModel: class {
+    constructor() {
+      return {
     cleanupOldExecutions: mockCleanupOldExecutions,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/modules/TaskExecutorService", () => ({
-  TaskExecutorService: vi.fn().mockImplementation(() => ({})),
+  TaskExecutorService: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 vi.mock("@/model/ScheduleTask.model", () => ({
-  ScheduleTaskModel: vi.fn().mockImplementation(() => ({
+  ScheduleTaskModel: class {
+    constructor() {
+      return {
     findDueIntervalSchedules: mockFindDue,
     claimIntervalOccurrence: mockClaim,
     getSchedulesByTriggerType: mockGetByTrigger,
     pauseWithReason: mockPauseWithReason,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/model/AiMessageTaskRun.model", () => ({
-  AiMessageTaskRunModel: vi.fn().mockImplementation(() => ({
+  AiMessageTaskRunModel: class {
+    constructor() {
+      return {
     markInterruptedRuns: mockMarkInterrupted,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/service/ScheduledAiMessageRunner", () => ({
-  ScheduledAiMessageRunner: vi.fn().mockImplementation(() => ({
+  ScheduledAiMessageRunner: class {
+    constructor() {
+      return {
     runChatScheduledLoop: mockRunChatLoop,
-  })),
+  };
+    }
+  },
 }));
 
 // Token.getValue(USERSDBPATH) drives refreshDatabaseForUserPath(). Hoist the
 // resolver so each test can pin the "current" user path.
 const mockGetValue = vi.hoisted(() => vi.fn());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: mockGetValue })),
+  Token: class {
+    constructor() {
+      return { getValue: mockGetValue };
+    }
+  },
 }));
 
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
@@ -104,6 +132,15 @@ type PrivateScheduler = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockScheduleManagerDestroy.mockResolvedValue(undefined);
+  mockScheduleManagerGet.mockImplementation(() => ({
+    initializeSchedules: vi.fn(async () => undefined),
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+    handleAppShutdown: vi.fn(async () => undefined),
+    getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
+    cleanupInactiveDependencies: mockCleanupInactiveDependencies,
+  }));
   mockFindDue.mockResolvedValue([]);
   mockClaim.mockResolvedValue({ kind: "not_due" });
   mockGetByTrigger.mockResolvedValue([]);
@@ -245,6 +282,19 @@ describe("BackgroundScheduler.refreshDatabaseForUserPath", () => {
     expect(scheduler.currentDbPath).toBe("/tmp/sched-new");
     // Initialization state is cleared so start() re-initializes cleanly.
     expect(scheduler.isInitialized).toBe(false);
+  });
+
+  it("rebuilds ScheduleManager only after replacing the shared database", async () => {
+    const scheduler = new BackgroundScheduler("/tmp/sched-old");
+    mockGetValue.mockReturnValue("/tmp/sched-new");
+
+    await scheduler.refreshDatabaseForUserPath();
+
+    const destroyOrder = mockScheduleManagerDestroy.mock.invocationCallOrder[0];
+    const resetOrder = mockSqliteDbReset.mock.invocationCallOrder[0];
+    const getOrders = mockScheduleManagerGet.mock.invocationCallOrder;
+    expect(destroyOrder).toBeLessThan(resetOrder);
+    expect(getOrders.at(-1)).toBeGreaterThan(resetOrder);
   });
 });
 

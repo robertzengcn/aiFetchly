@@ -41,7 +41,9 @@ interface FakeDepsKit {
   setVersion: (v: string) => void;
 }
 
-function makeKit(overrides: Partial<ManualUpdateServiceDeps> = {}): FakeDepsKit {
+function makeKit(
+  overrides: Partial<ManualUpdateServiceDeps> = {}
+): FakeDepsKit {
   const autoUpdater = new FakeAutoUpdater();
   let version = "1.2.3";
   let nowMs = 1_000_000;
@@ -70,25 +72,45 @@ function makeKit(overrides: Partial<ManualUpdateServiceDeps> = {}): FakeDepsKit 
 describe("computeUpdateSupport", () => {
   it("rejects unpackaged dev builds", () => {
     expect(
-      computeUpdateSupport({ isPackaged: false, platform: "win32", isWindowsStore: false }),
+      computeUpdateSupport({
+        isPackaged: false,
+        platform: "win32",
+        isWindowsStore: false,
+      })
     ).toEqual({ supported: false, reason: "development" });
   });
   it("rejects Microsoft Store builds", () => {
     expect(
-      computeUpdateSupport({ isPackaged: true, platform: "win32", isWindowsStore: true }),
+      computeUpdateSupport({
+        isPackaged: true,
+        platform: "win32",
+        isWindowsStore: true,
+      })
     ).toEqual({ supported: false, reason: "store" });
   });
   it("rejects unsupported platforms (linux)", () => {
     expect(
-      computeUpdateSupport({ isPackaged: true, platform: "linux", isWindowsStore: false }),
+      computeUpdateSupport({
+        isPackaged: true,
+        platform: "linux",
+        isWindowsStore: false,
+      })
     ).toEqual({ supported: false, reason: "platform" });
   });
   it("accepts packaged Windows + macOS GitHub builds", () => {
     expect(
-      computeUpdateSupport({ isPackaged: true, platform: "win32", isWindowsStore: false }),
+      computeUpdateSupport({
+        isPackaged: true,
+        platform: "win32",
+        isWindowsStore: false,
+      })
     ).toEqual({ supported: true });
     expect(
-      computeUpdateSupport({ isPackaged: true, platform: "darwin", isWindowsStore: false }),
+      computeUpdateSupport({
+        isPackaged: true,
+        platform: "darwin",
+        isWindowsStore: false,
+      })
     ).toEqual({ supported: true });
   });
 });
@@ -117,9 +139,9 @@ describe("ManualUpdateService", () => {
     });
     it("reports unsupported (development) on an unpackaged build", () => {
       const kit = makeKit({ isPackaged: () => false });
-      expect(new ManualUpdateService(kit.deps).getStatus().unsupportedReason).toBe(
-        "development",
-      );
+      expect(
+        new ManualUpdateService(kit.deps).getStatus().unsupportedReason
+      ).toBe("development");
     });
     it("start() subscribes autoUpdater events once on a supported channel", () => {
       const kit = makeKit();
@@ -143,7 +165,9 @@ describe("ManualUpdateService", () => {
   describe("checkForUpdatesNow", () => {
     it("returns unsupported without invoking autoUpdater", async () => {
       const kit = makeKit({ isPackaged: () => false });
-      const status = await new ManualUpdateService(kit.deps).checkForUpdatesNow();
+      const status = await new ManualUpdateService(
+        kit.deps
+      ).checkForUpdatesNow();
       expect(status.state).toBe("unsupported");
       expect(kit.autoUpdater.checkForUpdatesCalls).toBe(0);
     });
@@ -229,6 +253,33 @@ describe("ManualUpdateService", () => {
       const kit = makeKit();
       new ManualUpdateService(kit.deps).quitAndInstall();
       expect(kit.autoUpdater.quitAndInstallCalls).toBe(0);
+    });
+
+    it("routes through the coordinated exit when the port is bound (design §12)", async () => {
+      const port = await import("@/main-process/lifecycle/exitRequestPort");
+      const exitReasons: string[] = [];
+      port.bindExitRequestor(async (reason) => {
+        exitReasons.push(reason);
+      });
+      try {
+        const kit = makeKit();
+        const svc = new ManualUpdateService(kit.deps);
+        await svc.checkForUpdatesNow();
+        kit.autoUpdater.emit("update-downloaded", {}, { version: "1.3.0" });
+
+        svc.quitAndInstall();
+        // Coordinated path: the exit was requested; the install itself is
+        // DEFERRED to the terminal action the coordinator invokes later.
+        expect(exitReasons).toEqual(["update-restart"]);
+        expect(kit.autoUpdater.quitAndInstallCalls).toBe(0);
+        const action = port.takeUpdateRestartAction();
+        expect(action).toBeTypeOf("function");
+        action?.();
+        expect(kit.autoUpdater.quitAndInstallCalls).toBe(1);
+        expect(port.takeUpdateRestartAction()).toBeNull(); // consumed once
+      } finally {
+        port.bindExitRequestor(null as unknown as never); // restore unbound
+      }
     });
   });
 

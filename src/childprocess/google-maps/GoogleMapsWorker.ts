@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * Google Maps Worker — Puppeteer-based child process scraper.
  *
@@ -66,6 +67,13 @@ interface ProgressMessage {
   message: string;
 }
 
+/** Worker -> parent browser-identity report (design §7, T01). */
+interface DescendantReportMessage {
+  type: "descendant-report";
+  pid: number;
+  label: string;
+}
+
 interface ResultMessage {
   type: "result";
   requestId: string;
@@ -110,7 +118,9 @@ logWorkerEvent(`started execPath=${process.execPath} cwd=${process.cwd()}`);
 // Helpers
 // ---------------------------------------------------------------------------
 
-function send(msg: ProgressMessage | ResultMessage): void {
+function send(
+  msg: ProgressMessage | ResultMessage | DescendantReportMessage
+): void {
   if (process.send) {
     process.send(msg);
   }
@@ -255,6 +265,17 @@ function deduplicate(
 // ---------------------------------------------------------------------------
 
 async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
+  if (shutdownResponder.isShuttingDown()) {
+    // T01: closing flag rejects new jobs (design §7 step 1) with the
+    // worker's own error-result shape so the parent can reconcile.
+    send({
+      type: "result",
+      requestId: msg.requestId,
+      success: false,
+      error: "Worker is shutting down",
+    });
+    return;
+  }
   const { requestId, query, location, maxResults, showBrowser } = msg;
   isCancelled = false;
   logWorkerEvent(
@@ -277,6 +298,17 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       ],
     });
     logWorkerEvent(`browser launched requestId=${requestId}`);
+    // T01 (design §7): report the browser's identity to the parent AT
+    // LAUNCH so force verification can see it even if this worker dies
+    // first. ppid validation happens on the parent side.
+    const browserPid = browser.process()?.pid;
+    if (browserPid !== undefined) {
+      send({
+        type: "descendant-report",
+        pid: browserPid,
+        label: "browser",
+      } as DescendantReportMessage);
+    }
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -815,6 +847,28 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
+
+process.on("message", (raw: unknown) => {
+  // §7 graceful shutdown (design §7): ack, then exit within the parent's
+  // budget. Parent observes exit + force-verifies (ack is not exit proof).
+  if (shutdownResponder.handle(raw)) return;
+});
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => {
+    process.send?.(message);
+  },
+  // T01 (design §7): actually close the owned Puppeteer browser before the
+  // process exits — a prompt exit alone would orphan the browser to the
+  // force phase. Best-effort: close failures still exit within budget and
+  // the ack precedes this cleanup either way.
+  closeOwnedResources: async () => {
+    const owned = browser;
+    browser = null;
+    if (owned) {
+      await owned.close().catch(() => undefined);
+    }
+  },
+});
 
 process.on("message", (raw: unknown) => {
   const validation = parseWorkerMessage<GoogleMapsWorkerInbound>(

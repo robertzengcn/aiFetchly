@@ -2,6 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { URL } from "url";
+import * as http from "http";
+import * as https from "https";
 import { GitHubPluginFetcher } from "./GitHubPluginFetcher";
 import { GitPluginFetcher } from "./GitPluginFetcher";
 import { LocalZipPluginFetcher } from "./LocalZipPluginFetcher";
@@ -27,12 +29,33 @@ import {
  *   - git URL (.git / git@ / ssh://) → GitPluginFetcher
  *   - github.com URL → GitHubPluginFetcher
  *
- * Plain HTTP is rejected; HTTPS only.
+ * Plain HTTP is rejected; HTTPS only. The single sanctioned exception is the
+ * Playwright E2E harness: under the launcher-only E2E gate (AIFETCHLY_E2E=1
+ * AND the AIFETCHLY_E2E_ROOT sentinel, both set exclusively by the sanitized
+ * E2E launcher, never in production or developer launches) an
+ * http://127.0.0.1|.zip URL from the FakePluginHub loopback server is
+ * accepted so the critical install flow can run with zero external network.
+ * The E2E network guard already denies every non-loopback host in that mode,
+ * so this exception cannot widen the reachable surface.
  *
  * Source of truth: Spec §5.6.
  */
 
 export type UrlClass = "zip" | "git" | "github" | "rejected" | "unknown";
+
+/**
+ * E2E-only: loopback http zip URL served by the FakePluginHub fixture.
+ * Gated on BOTH AIFETCHLY_E2E=1 and the launcher-only AIFETCHLY_E2E_ROOT
+ * sentinel (set exclusively by the sanitized E2E launcher and validated by
+ * the E2E bootstrap) so a packaged or developer launch with a hostile
+ * AIFETCHLY_E2E env var alone can never activate the exception.
+ */
+function isE2ELoopbackHttpZipUrl(raw: string): boolean {
+  if (process.env.AIFETCHLY_E2E !== "1") return false;
+  if (!process.env.AIFETCHLY_E2E_ROOT) return false;
+  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(raw)) return false;
+  return /\.zip(\?.*)?$/i.test(raw);
+}
 
 export function classifyUrlKind(raw: string): UrlClass {
   if (!raw) return "unknown";
@@ -41,6 +64,9 @@ export function classifyUrlKind(raw: string): UrlClass {
   // eligible github.com URL — including a trailing .git — must take the
   // archive path, never native Git. Non-GitHub .git stays Git.
   if (/^https:\/\/github\.com\//i.test(raw)) return "github";
+  if (raw.startsWith("http://")) {
+    return isE2ELoopbackHttpZipUrl(raw) ? "zip" : "rejected";
+  }
   if (/^git@/.test(raw) || /^ssh:\/\//.test(raw) || raw.endsWith(".git")) {
     return "git";
   }
@@ -216,4 +242,72 @@ export class UrlPluginFetcher implements PluginSourceFetcher {
       }
     }
   }
+}
+
+function downloadTo(url: string, dest: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let redirects = 0;
+    let aborted = false;
+    const done = (ok: boolean) => {
+      if (!aborted) {
+        aborted = true;
+        resolve(ok);
+      }
+    };
+    const req = (target: string) => {
+      // http is reachable ONLY for the E2E FakePluginHub loopback exception
+      // (see isE2ELoopbackHttpZipUrl); every other target — including https
+      // redirects that downgrade to plain http — keeps using https and fails
+      // exactly as before.
+      const transport =
+        target.startsWith("http://") && isE2ELoopbackHttpZipUrl(target)
+          ? http
+          : https;
+      const r = transport.get(target, { timeout: 60_000 }, (res) => {
+        if (
+          res.statusCode &&
+          res.statusCode >= 300 &&
+          res.statusCode < 400 &&
+          res.headers.location
+        ) {
+          if (++redirects > 5) return done(false);
+          res.destroy();
+          req(res.headers.location);
+          return;
+        }
+        if (!res.statusCode || res.statusCode !== 200) {
+          res.destroy();
+          return done(false);
+        }
+        const out = fs.createWriteStream(dest);
+        let size = 0;
+        res.on("data", (c: Buffer) => {
+          size += c.length;
+          if (size > PLUGIN_PACKAGE_LIMITS.maxZipBytes) {
+            r.destroy();
+            out.destroy();
+            try {
+              fs.rmSync(dest, { force: true });
+            } catch {
+              /* ignore */
+            }
+            done(false);
+          }
+        });
+        res.pipe(out);
+        out.on("finish", () => done(true));
+        out.on("error", () => done(false));
+      });
+      r.on("error", () => done(false));
+      // The `timeout` option only emits a 'timeout' event — without this
+      // handler a stalled server hangs the install forever.
+      r.on("timeout", () => {
+        if (!aborted) {
+          aborted = true;
+          r.destroy(new Error("Request timed out"));
+        }
+      });
+    };
+    req(url);
+  });
 }

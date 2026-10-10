@@ -127,9 +127,9 @@ export function fixInteropNamespacePlugin() {
   };
 }
 
-// Custom platform-aware copy plugin. Copies icons, sqlite-vec native extension,
-// and platform protocol-registry templates into the build output directory so
-// the bundled main process can locate them at runtime (mirrors production).
+// Custom platform-aware copy plugin. Copies icons and the sqlite-vec native
+// extension into the build output directory so the bundled main process can
+// locate them at runtime (mirrors production).
 export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
   return {
     name: "platform-copy",
@@ -243,76 +243,10 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
         }
       }
 
-      // Copy platform-specific protocol-registry templates (guarded for worktree
-      // environments where node_modules may be sparse).
-      if (process.platform === "linux") {
-        console.log("Copying Linux templates...");
-        const linuxFiles = [
-          [
-            "node_modules/protocol-registry/src/linux/templates/desktop.ejs",
-            path.join(outDir, "templates/desktop.ejs"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/templates/script.ejs",
-            path.join(outDir, "templates/script.ejs"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/index.js",
-            path.join(outDir, "index.js"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/postinstall.js",
-            path.join(outDir, "postinstall.js"),
-          ],
-        ];
-        for (const [src, dest] of linuxFiles) {
-          if (fs.existsSync(src)) {
-            fs.copyFileSync(src, dest);
-          } else {
-            console.warn(`Skipping copy: ${src} not found`);
-          }
-        }
-      } else if (process.platform === "darwin") {
-        console.log("Copying macOS templates...");
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/templates/script.ejs",
-          path.join(outDir, "templates/script.ejs")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/templates/app.ejs",
-          path.join(outDir, "templates/app.ejs")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/templates/url-app.ejs",
-          path.join(outDir, "templates/url-app.ejs")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/defaultAppExist.sh",
-          path.join(outDir, "defaultAppExist.sh")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/index.js",
-          path.join(outDir, "index.js")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/macos/plistMutator.js",
-          path.join(outDir, "plistMutator.js")
-        );
-      } else if (process.platform === "win32") {
-        console.log("Copying Windows templates...");
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/windows/templates/app-script.ejs",
-          path.join(outDir, "templates/app-script.ejs")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/windows/index.js",
-          path.join(outDir, "index.js")
-        );
-        fs.copyFileSync(
-          "node_modules/protocol-registry/src/windows/registry.js",
-          path.join(outDir, "registry.js")
-        );
-      }
+      // Note: platform-specific protocol-registry templates were previously
+      // copied into the build output here, but the package has been removed.
+      // The custom protocol scheme is registered at runtime via Electron's
+      // app.setAsDefaultProtocolClient(), which needs no extra template files.
     },
   };
 }

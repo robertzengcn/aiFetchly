@@ -152,12 +152,12 @@
               />
             </div>
 
-            <!-- High-impact tools: per-tool typed confirmation required. -->
+            <!-- High-impact tools: checkbox enables directly. -->
             <div v-if="highImpactTools.length > 0" class="mt-3">
               <div class="text-caption font-weight-bold mb-1">
                 {{
                   t("aiChatV2.scheduledLoop.highImpactTools") ||
-                  "Write / email tools — type the name to enable"
+                  "Write / email tools"
                 }}
               </div>
               <v-alert
@@ -168,7 +168,7 @@
               >
                 {{
                   t("aiChatV2.scheduledLoop.highImpactWarning") ||
-                  "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Type each tool name to confirm."
+                  "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Tick each tool to enable."
                 }}
               </v-alert>
               <div
@@ -188,20 +188,6 @@
                   <div class="text-caption text-medium-emphasis">
                     {{ tool.description }}
                   </div>
-                  <v-text-field
-                    v-if="pendingHighImpact[tool.name]"
-                    v-model="confirmInput[tool.name]"
-                    :placeholder="
-                      t('aiChatV2.scheduledLoop.typeToConfirm', {
-                        name: tool.name,
-                      }) || `Type ${tool.name} to confirm`
-                    "
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                    :data-testid="`high-impact-confirm-${tool.name}`"
-                    @input="onConfirmInput(tool.name)"
-                  />
                 </div>
               </div>
             </div>
@@ -274,26 +260,14 @@ const allowSkills = ref(true);
 const allowMcp = ref(true);
 const allowSubagents = ref(true);
 const selectedAutomation = ref<string[]>([]);
-// checkbox state per high-impact tool (ticked = user intends to enable)
+// checkbox state per high-impact tool (ticked = enabled)
 const pendingHighImpact = reactive<Record<string, boolean>>({});
-// typed confirmation text per high-impact tool
-const confirmInput = reactive<Record<string, string>>({});
 
-/** The high-impact tools the user has correctly typed-in to confirm. */
+/** The high-impact tools the user has ticked to enable. */
 function confirmedHighImpact(): string[] {
   return highImpactTools.value
-    .filter(
-      (tool) =>
-        pendingHighImpact[tool.name] && confirmInput[tool.name] === tool.name
-    )
+    .filter((tool) => pendingHighImpact[tool.name])
     .map((tool) => tool.name);
-}
-
-/** Clear the confirmation text if the user edited away from the exact name. */
-function onConfirmInput(name: string): void {
-  if (confirmInput[name] !== name) {
-    // no-op; confirmedHighImpact() re-checks on confirm
-  }
 }
 
 function applyPromptSuggestions(): void {
@@ -342,7 +316,6 @@ function reset(): void {
   allowSubagents.value = true;
   selectedAutomation.value = [];
   for (const key of Object.keys(pendingHighImpact)) delete pendingHighImpact[key];
-  for (const key of Object.keys(confirmInput)) delete confirmInput[key];
 }
 
 function close(): void {
@@ -374,7 +347,6 @@ defineExpose({
   allowSubagents,
   selectedAutomation,
   pendingHighImpact,
-  confirmInput,
   confirmedHighImpact,
 });
 </script>

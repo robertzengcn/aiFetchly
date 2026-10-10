@@ -35,3 +35,23 @@ export const itemSearchParamSchema = lazySchema(() =>
       .optional(),
   }),
 )
+
+export const emailServiceListInputSchema = lazySchema(() =>
+  z
+    .strictObject({
+      page: z.number().int().nonnegative().optional(),
+      size: z.number().int().positive().optional(),
+      where: z.string().optional(),
+      search: z.string().optional(),
+      tagId: z.number().int().positive().optional(),
+      untagged: z.boolean().optional(),
+      sortby: z
+        .union([sortBySchema(), z.array(sortBySchema())])
+        .transform((v) => (Array.isArray(v) ? (v[0] ?? undefined) : v))
+        .optional(),
+    })
+    .refine((value) => !(value.tagId !== undefined && value.untagged === true), {
+      message: "tagId and untagged cannot be used together",
+      path: ["tagId"],
+    })
+)

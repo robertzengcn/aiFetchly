@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 export {};
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
@@ -11,17 +12,13 @@ import {
   Buckemailremotedata,
 } from "@/entityTypes/emailmarketingType";
 import { EmailSend } from "@/childprocess/emailSend";
-import { Proxy } from "@/entityTypes/proxyType";
 // import { VideoDownloadFactory } from "@/modules/videodownload/VideoDownloadFactory"
 // import { VideodoanloadSuccessCall, VideoCaptionGenerateParam, CookiesProxy, processVideoDownloadParam, VideodownloadMsg, VideodownloadTaskMsg } from "@/entityTypes/videoType"
 // import { VideoCaptionFactory } from "@/modules/videoCaption/VideoCaptionFactory"
 // import { VideoCaptionImpl } from '@/modules/interface/VideoCaptionImpl';
 // import { extraFileEntity, VideoCaptionMsg,VideoPublishMsg } from "@/entityTypes/videoType";
-import { TransItemsParam } from "@/entityTypes/translateType";
 // import { VideoTranslateItem } from "@/entityTypes/videoType";
-import { TranslateProducer } from "@/modules/TranslateProducer";
 // import { VideoDownloadTagEntity } from "@/entity/VideoDownloadTag.entity"
-import { CommonMessage } from "@/entityTypes/commonType";
 import { Usersearchdata } from "@/entityTypes/searchControlType";
 import { UserSearch } from "@/childprocess/userSearch";
 import { ResultParseItemType } from "@/entityTypes/scrapeType";
@@ -30,6 +27,15 @@ import { AIRecoveryResponse } from "@/entityTypes/processMessage-type";
 import { handleAIRecoveryResponse } from "@/childprocess/utils/AIRecoveryBridge";
 import { handleAiSupportResponse } from "@/childprocess/utils/AiSupportBridge";
 import type { AiSupportResponseMessage } from "@/modules/interface/BackgroundProcessMessages";
+import {
+  authorizedEmailWorkerPayloadV2Schema,
+  authorizedEmailWorkerPayloadV3Schema,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
+import type {
+  AuthorizedEmailWorkerEvent,
+  AuthorizedEmailWorkerPayloadV2,
+  AuthorizedEmailWorkerPayloadV3,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 // import { VideoPublishParam } from "./entityTypes/videoPublishType";
@@ -50,6 +56,14 @@ const parentPort = (
     };
   }
 ).parentPort;
+
+// §7 graceful shutdown (design §7): parse the parent shutdown request,
+// ack with the requestId, close anything this worker owns, exit within the
+// parent's budget. The parent observes exit and force-verifies — the ack is
+// never exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
 function isAiFeatureEnabled(): boolean {
   try {
     const tokenService = new Token();
@@ -66,6 +80,18 @@ function isAiFeatureEnabled(): boolean {
 }
 
 if (parentPort) {
+  parentPort.on("message", (e) => {
+    // §7 shutdown request arrives as a JSON string on the same channel.
+    let raw: unknown = e.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort.on("message", async (e) => {
     try {
       //console.log(e.data)
@@ -147,6 +173,92 @@ if (parentPort) {
           //});
           break;
         }
+        case "sendAuthorizedEmails":
+          {
+            // §16.1 — validate the versioned payload with the schema matching
+            // its `version` discriminant before any send. v3 carries v2
+            // identity (smtpUsername + replyToAddress); v2 is the legacy shape.
+            // An invalid payload never reaches EmailSend.
+            if (!pme.data) {
+              console.error("[taskCode] sendAuthorizedEmails: data is null");
+              return;
+            }
+            const rawData = pme.data as {
+              version?: number;
+              emailServices?: unknown[];
+            };
+            if (rawData.version === 3) {
+              const parsed = authorizedEmailWorkerPayloadV3Schema.safeParse({
+                ...rawData,
+                emailServices: rawData.emailServices,
+              });
+              if (!parsed.success) {
+                console.error(
+                  "[taskCode] sendAuthorizedEmails: v3 payload failed schema validation:",
+                  parsed.error.message
+                );
+                return;
+              }
+              const workerPayload = {
+                ...parsed.data,
+                emailServices: (pme.data as AuthorizedEmailWorkerPayloadV3)
+                  .emailServices,
+              } as AuthorizedEmailWorkerPayloadV3;
+              const emailsendModel = new EmailSend();
+              await emailsendModel
+                .sendAuthorizedEnvelopes(workerPayload, (event) => {
+                  const message: ProcessMessage<AuthorizedEmailWorkerEvent> = {
+                    action: "OutboundEmailDeliveryEvent",
+                    data: event,
+                  };
+                  parentPort.postMessage(JSON.stringify(message));
+                })
+                .catch((error: unknown) => {
+                  const message =
+                    error instanceof Error ? error.message : String(error);
+                  console.error(
+                    `[taskCode] sendAuthorizedEmails failed: ${message}`
+                  );
+                });
+              break;
+            }
+            // Default: v2 (legacy) payload.
+            const parsed = authorizedEmailWorkerPayloadV2Schema.safeParse({
+              ...rawData,
+              emailServices: rawData.emailServices,
+            });
+            if (!parsed.success) {
+              console.error(
+                "[taskCode] sendAuthorizedEmails: payload failed schema validation:",
+                parsed.error.message
+              );
+              return;
+            }
+            const workerPayload = {
+              ...parsed.data,
+              emailServices: (pme.data as AuthorizedEmailWorkerPayloadV2)
+                .emailServices,
+            } as AuthorizedEmailWorkerPayloadV2;
+            const emailsendModel = new EmailSend();
+            await emailsendModel
+              .sendAuthorizedEnvelopes(workerPayload, (event) => {
+                // §6.4 — forward each typed event to the main process. Events
+                // carry only sanitized codes, never SMTP credentials.
+                const message: ProcessMessage<AuthorizedEmailWorkerEvent> = {
+                  action: "OutboundEmailDeliveryEvent",
+                  data: event,
+                };
+                parentPort.postMessage(JSON.stringify(message));
+              })
+              .catch((error: unknown) => {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                console.error(
+                  `[taskCode] sendAuthorizedEmails failed: ${message}`
+                );
+              });
+          }
+          break;
         case "sendEmail":
           {
             const emailsendModel = new EmailSend();
@@ -157,12 +269,16 @@ if (parentPort) {
             await emailsendModel
               .send(
                 pme.data as Buckemailremotedata,
-                (receiver, title, content) => {
+                (receiver, title, content, identity) => {
                   const senddata: EmailSendResult = {
                     receiver: receiver,
                     status: true,
                     title: title,
                     content: content,
+                    emailServiceId: identity?.emailServiceId,
+                    fromAddress: identity?.fromAddress,
+                    smtpUsername: identity?.smtpUsername ?? null,
+                    replyTo: identity?.replyTo ?? null,
                   };
                   const message: ProcessMessage<EmailSendResult> = {
                     action: "EmailSendSuccess",
@@ -170,13 +286,18 @@ if (parentPort) {
                   };
                   parentPort.postMessage(JSON.stringify(message));
                 },
-                (receiver, info, title, content) => {
+                (receiver, info, title, content, identity, failureCode) => {
                   const senddata: EmailSendResult = {
                     receiver: receiver,
                     status: false,
                     info: info,
                     title: title,
                     content: content,
+                    failureCode: failureCode,
+                    emailServiceId: identity?.emailServiceId,
+                    fromAddress: identity?.fromAddress,
+                    smtpUsername: identity?.smtpUsername ?? null,
+                    replyTo: identity?.replyTo ?? null,
                   };
                   const message: ProcessMessage<EmailSendResult> = {
                     action: "EmailSendFailure",

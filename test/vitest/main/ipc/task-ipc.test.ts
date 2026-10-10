@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { registerTaskIpcHandlers } from "@/main-process/communication/task-ipc";
-import { TaskController } from "@/controller/taskController";
 import type { BrowserWindow } from "electron";
 
 // Self-contained electron ipcMain mock. registerValidatedHandler imports
@@ -20,35 +19,50 @@ vi.mock("electron", () => ({
   },
 }));
 
-// Mock TaskController
+const mockCreateTask = vi.hoisted(() => vi.fn().mockResolvedValue(1));
+const mockUpdateTask = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockDeleteTask = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockGetTaskList = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    tasks: [],
+    total: 0,
+    page: 1,
+    size: 10,
+  })
+);
+const mockGetTaskDetail = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    task: {
+      id: 1,
+      name: "Test Task",
+      status: "pending",
+    },
+  })
+);
+const mockRunTask = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockCancelTask = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockGetTaskResults = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    results: [],
+    total: 0,
+    page: 1,
+    size: 10,
+  })
+);
+
+// Vitest 4: vi.fn() is not constructable; production does `new TaskController()`.
 vi.mock("@/controller/taskController", () => {
   return {
-    TaskController: vi.fn().mockImplementation(() => ({
-      createTask: vi.fn().mockResolvedValue(1),
-      updateTask: vi.fn().mockResolvedValue(true),
-      deleteTask: vi.fn().mockResolvedValue(true),
-      getTaskList: vi.fn().mockResolvedValue({
-        tasks: [],
-        total: 0,
-        page: 1,
-        size: 10,
-      }),
-      getTaskDetail: vi.fn().mockResolvedValue({
-        task: {
-          id: 1,
-          name: "Test Task",
-          status: "pending",
-        },
-      }),
-      runTask: vi.fn().mockResolvedValue(true),
-      cancelTask: vi.fn().mockResolvedValue(true),
-      getTaskResults: vi.fn().mockResolvedValue({
-        results: [],
-        total: 0,
-        page: 1,
-        size: 10,
-      }),
-    })),
+    TaskController: class {
+      createTask = mockCreateTask;
+      updateTask = mockUpdateTask;
+      deleteTask = mockDeleteTask;
+      getTaskList = mockGetTaskList;
+      getTaskDetail = mockGetTaskDetail;
+      runTask = mockRunTask;
+      cancelTask = mockCancelTask;
+      getTaskResults = mockGetTaskResults;
+    },
   };
 });
 
@@ -92,17 +106,7 @@ describe("Task IPC Handlers", () => {
     test("should propagate errors", async () => {
       // registerValidatedHandler catches handler errors and returns them as a
       // failure envelope (msg = err.message) instead of throwing.
-      const MockedTaskController = vi.mocked(TaskController);
-      MockedTaskController.mockImplementationOnce(() => ({
-        createTask: vi.fn().mockRejectedValue(new Error("Creation failed")),
-        updateTask: vi.fn(),
-        deleteTask: vi.fn(),
-        getTaskList: vi.fn(),
-        getTaskDetail: vi.fn(),
-        runTask: vi.fn(),
-        cancelTask: vi.fn(),
-        getTaskResults: vi.fn(),
-      }) as unknown as TaskController);
+      mockCreateTask.mockRejectedValueOnce(new Error("Creation failed"));
 
       const fn = handlers.get("task:create")!;
       const result = (await fn({}, { name: "Test Task" })) as Envelope<null>;
@@ -118,7 +122,10 @@ describe("Task IPC Handlers", () => {
 
     test("should handle task update request", async () => {
       const fn = handlers.get("task:update")!;
-      const result = (await fn({}, { id: 1, name: "Updated Task" })) as Envelope<boolean>;
+      const result = (await fn(
+        {},
+        { id: 1, name: "Updated Task" }
+      )) as Envelope<boolean>;
       expect(result.status).toBe(true);
       expect(result.data).toBe(true);
     });

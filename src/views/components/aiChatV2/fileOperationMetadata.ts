@@ -153,7 +153,12 @@ export function extractFileOperationFromMessage(
   return record;
 }
 
-function extractArtifactExportOperations(
+/**
+ * Rebuild artifact-export file-op records from a persisted tool_result row
+ * (toolName `export_generated_artifacts`). Exported so main-process tests can
+ * verify persisted rows stay chip-compatible.
+ */
+export function extractArtifactExportOperations(
   message: MessageWithMaybeFileToolResult,
   conversationId: string,
   workspaceRoot?: string | null

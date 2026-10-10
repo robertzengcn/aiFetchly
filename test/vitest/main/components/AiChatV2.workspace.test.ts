@@ -4,13 +4,26 @@ import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -22,6 +35,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
 }));
 
 vi.mock("@/views/api/workspace", () => ({
@@ -119,11 +135,15 @@ function mountChat() {
 }
 
 describe("AiChatV2 workspace picker", () => {
-  it("opens the workspace picker card when the unset badge is clicked", async () => {
+  it("opens the workspace picker card when the unset badge's Choose action is clicked", async () => {
     const wrapper = mountChat();
     await flushPromises();
 
-    await wrapper.find(".workspace-badge--unset").trigger("click");
+    // FR-WS-003: the unset state exposes an explicit Choose workspace action
+    // (the container itself is no longer the click target).
+    await wrapper
+      .find('[data-testid="workspace-badge-choose"]')
+      .trigger("click");
     await flushPromises();
 
     const card = wrapper.find("[data-testid='workspace-required']");

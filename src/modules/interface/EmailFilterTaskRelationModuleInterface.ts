@@ -17,6 +17,11 @@ export interface EmailFilterTaskRelationModuleInterface {
     getEmailFiltersByBuckemailTaskId(buckemailTaskId: number): Promise<EmailFilterTaskRelationEntity[]>;
 
     /**
+     * Filter IDs bound to the task, read from the relation column.
+     */
+    getEmailFilterIdsByTaskId(buckemailTaskId: number): Promise<number[]>;
+
+    /**
      * Update relations by buckemail task ID
      * @param buckemailTaskId The buckemail task ID
      * @param relations Array of email filter task relation entity types

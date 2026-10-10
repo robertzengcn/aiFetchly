@@ -35,12 +35,17 @@ import {
   resolveShellInterpreter,
 } from "@/service/process";
 import { getDefaultBackgroundShellRegistry } from "@/service/BackgroundShellRegistry";
+import {
+  attachShellCapture,
+  type ShellCapture,
+} from "@/service/ShellCaptureService";
 import { ShellExecutionRequestSchema } from "@/entityTypes/shellTypes";
 import type {
   ShellExecutionResult,
   ShellInterpreter,
 } from "@/entityTypes/shellTypes";
 import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
+import { getDefaultWorkspaceRoots } from "@/config/fileToolConfig";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -62,9 +67,18 @@ export interface ShellExecutionScope {
 }
 
 /**
- * Resolve the shell execution scope for a conversation. Fail closed with a
- * structured message when no workspace is approved — the home directory is
- * never a silent substitute (PRD §15.2, FR-12).
+ * Resolve the shell execution scope for a conversation through the shared
+ * ConversationFilesystemContextService (design §6.2: shell and file tools
+ * observe the SAME canonical workspace).
+ *
+ * dev-merge 2026-10-09 — two-mode contract (dev Finding 7), reconciled with
+ * our PRD §15.2 fail-closed rule:
+ *   - resolver returns null (NO approved workspace) → the CHAT shell keeps
+ *     dev's legacy default roots (home + userData) so non-chat callers and
+ *     workspace-less conversations keep working — the skill installer's
+ *     own tools still fail closed via their own scope checks;
+ *   - resolver THROWS (lookup genuinely failed) → fail closed with NO
+ *     roots (never widen the jail on error).
  */
 export async function resolveShellExecutionScope(
   conversationId: string
@@ -72,15 +86,25 @@ export async function resolveShellExecutionScope(
   const resolution = await getDefaultFilesystemContextService().resolve(
     conversationId
   );
-  if (!resolution.ok) {
-    return { error: resolution.message };
+  if (resolution.ok) {
+    const ctx = resolution.context;
+    return {
+      conversationId: ctx.conversationId,
+      defaultCwd: ctx.defaultCwd,
+      allowedRoots: ctx.roots.map((r) => r.canonicalPath),
+    };
   }
-  const ctx = resolution.context;
-  return {
-    conversationId: ctx.conversationId,
-    defaultCwd: ctx.defaultCwd,
-    allowedRoots: ctx.roots.map((r) => r.canonicalPath),
-  };
+  if (resolution.code === "WORKSPACE_NOT_APPROVED") {
+    // Dev's fallback: no approved workspace → legacy default roots.
+    const defaults = getDefaultWorkspaceRoots();
+    return {
+      conversationId,
+      defaultCwd: defaults[0] ?? process.cwd(),
+      allowedRoots: defaults,
+    };
+  }
+  // INVALID_CONVERSATION / WORKSPACE_RESOLUTION_FAILED → fail closed.
+  return { error: resolution.message };
 }
 
 /**
@@ -91,7 +115,9 @@ export async function resolveShellExecutionScope(
  */
 export async function executeShellCommand(
   rawArgs: Record<string, unknown>,
-  conversationId: string
+  conversationId: string,
+  /** dev-merge 2026-10-09: enables output spooling (ShellCaptureService). */
+  toolCallId?: string
 ): Promise<ShellExecutionResult> {
   const startTime = Date.now();
 
@@ -153,7 +179,9 @@ export async function executeShellCommand(
     cwdResult.path,
     timeoutMs,
     startTime,
-    autoBackground
+    autoBackground,
+    conversationId,
+    toolCallId
   );
 
   // Attach validated fields for audit logging
@@ -260,9 +288,16 @@ async function runShell(
   cwd: string,
   timeoutMs: number,
   startTime: number,
-  autoBackground: boolean
+  autoBackground: boolean,
+  conversationId?: string,
+  toolCallId?: string
 ): Promise<ShellExecutionResult> {
   const interpreter = resolveShellInterpreter(shell);
+  // dev-merge 2026-10-09 (T16 output capture): with a toolCallId, spool
+  // stdout/stderr into a preserved artifact via the provider's SYNCHRONOUS
+  // onSpawn hook — fired before any stream listener attaches, so no early
+  // output is lost. Best-effort: disabled capture skips the spool.
+  const captureRef: { current: ShellCapture | null } = { current: null };
   const result = await getPlatformProcessProvider().execute({
     executable: interpreter.executable,
     args: [...interpreter.args, command],
@@ -276,24 +311,67 @@ async function runShell(
       SHELL_STDOUT_MAX_CHARS,
       SHELL_STDERR_MAX_CHARS
     ) * 4,
+    ...(toolCallId && conversationId
+      ? {
+          onSpawn: (child) => {
+            captureRef.current = attachShellCapture(child, {
+              conversationId,
+              toolCallId,
+              toolName: "shell_execute",
+              executionId: `${conversationId}:exec:${toolCallId}`,
+            });
+          },
+        }
+      : {}),
     ...(autoBackground
       ? {
-          onTimeoutDetain: (child) =>
-            getDefaultBackgroundShellRegistry().detain(child, { command }),
+          onTimeoutDetain: (child) => {
+            // T16: the registry continues the SAME artifact — detach the
+            // foreground listeners and hand the registry the capture handle.
+            captureRef.current?.detach(child);
+            const capture = captureRef.current;
+            return getDefaultBackgroundShellRegistry().detain(child, {
+              command,
+              ...(capture ? { capture } : {}),
+            });
+          },
         }
       : {}),
   });
+  // Foreground completion finalizes the spool (a spawn-failure diagnostic
+  // resolves before onSpawn fired — captureRef stays null, nothing to do).
+  // finalize() returns the artifact ref and the AUTHORITATIVE inline
+  // previews/truncation flags (T16): when capture is present its getters
+  // win over the provider's byte-window capture.
+  let toolResultRef: ShellExecutionResult["tool_result_ref"];
+  if (captureRef.current && !result.backgrounded) {
+    // FOREGROUND completion only — a backgrounded child's artifact is
+    // finalized by the registry on close (finalizing here would consume
+    // it and poll() would never surface the ref).
+    try {
+      toolResultRef = (await captureRef.current.finalize()) ?? undefined;
+    } catch {
+      /* capture finalization is best-effort; inline fields stand */
+    }
+  }
 
   // Auto-background: not a timeout failure — the registry owns the child.
+  // With a capture attached (T16), its BOUNDED inline getters are the
+  // honest foreground preview; the artifact continues in the registry.
   if (result.backgrounded) {
+    const bgCapture = captureRef.current;
     return {
       success: true,
       exit_code: null,
-      stdout: result.stdout,
-      stderr: result.stderr,
+      stdout: bgCapture ? bgCapture.getInlineStdout() : result.stdout,
+      stderr: bgCapture ? bgCapture.getInlineStderr() : result.stderr,
       duration_ms: Date.now() - startTime,
-      stdout_truncated: false,
-      stderr_truncated: false,
+      stdout_truncated: bgCapture
+        ? bgCapture.getStdoutTruncated()
+        : false,
+      stderr_truncated: bgCapture
+        ? bgCapture.getStderrTruncated()
+        : false,
       timed_out: false,
       backgrounded: true,
       shell_id: result.backgroundId as string,
@@ -318,6 +396,25 @@ async function runShell(
     };
   }
 
+  // Capture-present (T16): the spool's inline getters are AUTHORITATIVE —
+  // the provider window still feeds the capture-less fallback below.
+  if (captureRef.current) {
+    const c = captureRef.current;
+    return {
+      success: !result.timedOut && result.exitCode === 0,
+      exit_code: result.timedOut ? null : result.exitCode,
+      stdout: c.getInlineStdout(),
+      stderr: c.getInlineStderr(),
+      duration_ms: Date.now() - startTime,
+      stdout_truncated: c.getStdoutTruncated(),
+      stderr_truncated: c.getStderrTruncated(),
+      timed_out: result.timedOut,
+      ...(toolResultRef ? { tool_result_ref: toolResultRef } : {}),
+      ...(result.timedOut
+        ? { error: `Command timed out after ${timeoutMs}ms` }
+        : {}),
+    };
+  }
   const stdout = capChars(result.stdout, SHELL_STDOUT_MAX_CHARS);
   const stderr = capChars(result.stderr, SHELL_STDERR_MAX_CHARS);
   return {

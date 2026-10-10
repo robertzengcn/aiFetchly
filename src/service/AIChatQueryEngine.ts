@@ -2,6 +2,7 @@
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import { AIChatGoalModule } from "@/modules/AIChatGoalModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import {
@@ -15,6 +16,13 @@ import type {
   ToolFunction,
 } from "@/api/aiChatApi";
 import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import { GeneratedImageReferenceService } from "@/service/GeneratedImageReferenceService";
+import {
+  GeneratedImageReferenceError,
+  type GeneratedImageReferenceErrorCode,
+  type ResolveGeneratedImagesResult,
+} from "@/entityTypes/generatedImageReferenceTypes";
+import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
@@ -22,7 +30,7 @@ import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { DesktopNotifyService } from "@/service/DesktopNotifyService";
@@ -32,7 +40,20 @@ import {
   serializeToolResultContent,
   normalizeToolResult,
   isPermissionPromptResult,
+  toolResultReceiptUiMetadata,
+  buildBoundedToolFailureContent,
 } from "@/service/AIChatQueryLoop";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import {
+  ToolResultPipeline,
+  ToolResultPublicationError,
+} from "@/service/toolResult/ToolResultPipeline";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
+import {
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
+} from "@/config/featureFlags";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
@@ -43,7 +64,14 @@ import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler
 import {
   userSafeError,
   isContextWindowExceededError,
+  imageEditErrorCode,
 } from "@/service/AIChatErrorMapper";
+import { extractToolResultImages } from "@/service/toolResultImageHarvest";
+import {
+  AIChatTurnControl,
+  type AIChatSteeringInstruction,
+  type AIChatSteeringReservation,
+} from "@/service/AIChatTurnControl";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -55,17 +83,21 @@ import {
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
   AIChatPlanLoopContext,
+  AIChatTurnTerminalEvent,
   AnswerPlanQuestionRequest,
   PendingPermissionTurn,
   PendingPlanQuestionTurn,
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
+import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import type {
   ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
@@ -73,13 +105,27 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
+  ChatV2GeneratedImageReference,
+  ChatV2GeneratedImageReferenceMetadata,
+  ChatV2HistorySelectionMetadata,
 } from "@/entityTypes/aiChatV2Types";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
+import {
+  buildSelectedHistoryContextBlock,
+  toSelectedHistoryExcerptInputs,
+  type SelectedHistoryExcerptInput,
+} from "@/service/SelectedHistoryContextBlock";
+import { isArchiveReadsEnabled } from "@/config/featureFlags";
 import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
@@ -87,14 +133,27 @@ import type {
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
 import { log } from "@/modules/Logger";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { buildResolverInput } from "@/service/outboundEmail/OutboundEmailPreviousAssistantContext";
+import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
+/**
+ * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
+ * plan-mode active while it is being drafted, clarified, or awaiting
+ * approval. Once the user approves the plan, execution runs in chat mode
+ * with the normal system prompt and full tool access — so "approved" is
+ * NOT plan-mode active here either. Both predicates delegate to the shared
+ * isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the renderer and main
+ * process can never disagree about which prompt/toolset a round uses after
+ * approval.
+ */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
-  return (
-    plan.status !== "completed" &&
-    plan.status !== "cancelled" &&
-    plan.status !== "rejected"
-  );
+  return isPlanStatusPlanningActive(plan.status);
 }
 
 /**
@@ -121,9 +180,10 @@ function collectRecentUserMessages(
 /**
  * Detect whether the assembled transcript contains any AI-generated image
  * references (the `<generated_images>` marker injected by
- * {@link augmentContentWithGeneratedImages}). Used to auto-promote
- * image-editing tools when the user's follow-up message lacks
- * image-specific keywords but clearly references a prior generated image.
+ * {@link augmentContentWithGeneratedImages}). Informational context flag for
+ * tool-catalog awareness only: the tool-load policy no longer auto-promotes
+ * export/attach tools for follow-up edits, because a selected generated image
+ * arrives attached to the current user turn and is edited directly.
  */
 function messagesHaveGeneratedImages(
   messages: readonly OpenAIChatMessage[]
@@ -138,6 +198,39 @@ function messagesHaveGeneratedImages(
 
 /** Maximum persisted reasoning characters per assistant message (32 KB). */
 const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
+
+/**
+ * Stable English fallback strings per generated-image error code. The
+ * renderer localizes via `errorCode`; these keep terminal chunks readable
+ * when shown raw.
+ */
+const GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES: Record<
+  GeneratedImageReferenceErrorCode,
+  string
+> = {
+  generated_image_reference_invalid:
+    "The selected generated image reference is invalid.",
+  generated_image_not_owned:
+    "You do not have access to the selected generated image.",
+  generated_image_missing: "The selected generated image no longer exists.",
+  generated_image_outside_store:
+    "The selected generated image is outside the allowed storage location.",
+  generated_image_symlink_rejected:
+    "The selected generated image failed a security check.",
+  generated_image_unsupported_type:
+    "The selected generated image has an unsupported format.",
+  generated_image_too_large: "The generated image exceeds the size limit.",
+  generated_image_dimension_limit:
+    "The generated image exceeds the dimension limit.",
+  generated_image_reference_limit: "Too many images attached to this request.",
+  generated_image_ambiguous:
+    "The selected generated image reference is ambiguous.",
+  generated_image_fusion_limit:
+    "Too many generated images selected for this request.",
+  generated_image_batch_partial:
+    "Some selected generated images could not be prepared.",
+  generated_image_batch_cancelled: "Generated image preparation was cancelled.",
+};
 
 /**
  * Trigger a proactive pre-turn compact when the assembled context's token
@@ -248,6 +341,18 @@ export interface AIChatQuerySubmitInput {
    * object (technical-design §14.1).
    */
   scheduledContext?: AIChatScheduledTurnContext;
+  /**
+   * Main-process-only trusted signal: true only for unattended scheduled-loop
+   * turns where the user pre-allowlisted `start_email_send_task` via the typed
+   * confirmation at loop creation (policy.autoApproveTools AND
+   * policy.allowedTools includes the send tool). When true, the outbound-email
+   * gate honors `skip_review=true` even for blocking reasonCodes (e.g. a dedup
+   * negation the pure resolver misreads as do-not-send), because that typed
+   * pre-allowlist IS the trusted authorization AD-003 requires and there is no
+   * human present to click Review. Never set for interactive chat — the
+   * renderer cannot forge `scheduledContext`, so this flag is unreachable there.
+   */
+  outboundSendPreAuthorized?: boolean;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -256,6 +361,11 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine enqueues session memory updates
    * after each completed assistant turn. */
   compactAgent?: AIChatCompactAgentService;
+  /** Optional. When provided, the engine routes post-turn compaction through
+   * the durable incremental coordinator (technical-design §11) instead of the
+   * legacy compact agent's all-history path. The coordinator is opt-in so
+   * existing tests and the legacy flow remain unchanged when absent. */
+  compactionCoordinator?: AIChatCompactionCoordinator;
   /** Optional. When provided, the engine triggers auto-dream consolidation
    * after each completed assistant turn. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
@@ -271,12 +381,58 @@ export interface AIChatQueryEngineDeps {
       messageId: string;
       images: OpenAIChatImage[];
     }): Promise<OpenAIChatImage[]>;
+    /** Optional. Copies descriptors persisted under a foreign identity
+     * (e.g. a sub-agent's `agent-v2-*` conversation) into the final parent
+     * conversation + assistant-message identity before persistence, so the
+     * parent conversation can re-reference its own outputs later. When
+     * omitted, descriptors pass through un-rehomed. */
+    rehomeImages?(input: {
+      images: OpenAIChatImage[];
+      targetConversationId: string;
+      targetMessageId: string;
+    }): Promise<OpenAIChatImage[]>;
   };
+  /** Optional. Resolves renderer-supplied generated-image references into
+   * transient edit-input artifacts before the user message is persisted.
+   * When omitted, a default GeneratedImageReferenceService is used. */
+  generatedImageReferenceResolver?: Pick<
+    GeneratedImageReferenceService,
+    "resolveGeneratedImages"
+  >;
   /** Optional filter scoping which built-in tool schemas the engine advertises
    * to the model. Scheduled (unattended) profiles use this to expose only
    * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
    * beyond the executeTool guard. */
   toolFilter?: (toolName: string) => boolean;
+  /**
+   * Optional. Persists one steering instruction (atomic user-row insert +
+   * pending-row applied flip) when the turn's steering mailbox consumes it.
+   * Wired to AIChatPendingMessageModule.promoteSteeringToUserMessage by the
+   * interactive engine owner. When omitted, active turns expose no steering
+   * mailbox and reserveSteering always returns null.
+   */
+  steeringPromoter?: (input: {
+    readonly instruction: AIChatSteeringInstruction;
+    readonly boundary: import("@/entityTypes/aiChatV2Types").AIChatSafeBoundary;
+  }) => Promise<void>;
+  /**
+   * Optional. Notified at every turn's true terminal (completed/cancelled/
+   * failed), including turns resumed after a permission/plan-question pause —
+   * those resumed continuations are fire-and-forget, so their owner (the
+   * coordinator for its runs, the durable queue for its drained rows) would
+   * otherwise never learn the conversation freed up. Idempotent consumers
+   * only: coordinator-run turns also notify through their own path.
+   */
+  onTurnTerminal?: (
+    conversationId: string,
+    outcome: "completed" | "cancelled" | "failed"
+  ) => void;
+  /**
+   * Optional factory for the selection re-resolution service (§13.3). When
+   * omitted the engine builds its own archive-backed service; tests inject a
+   * stub so selection resolution does not need a live database.
+   */
+  historyRetrievalServiceFactory?: () => AIChatHistoryRetrievalService;
 }
 
 /**
@@ -287,7 +443,13 @@ export interface AIChatQueryEngineDeps {
 interface ActiveTurnState {
   abortController: AbortController;
   assistantMessageId: string;
+  /** Turn association (technical-design §4.3). Generated at turn-accept and
+   * propagated to every assistant/tool save so the archive can group rows.
+   * Optional because legacy rows / resumed flows may carry no association. */
+  turnId?: string;
   eventSink: AIChatQueryEventSink;
+  /** Steering mailbox for this turn; absent when steering is unavailable. */
+  control?: AIChatTurnControl;
 }
 
 export class AIChatQueryEngine {
@@ -300,18 +462,72 @@ export class AIChatQueryEngine {
    */
   private activeTurns = new Map<string, ActiveTurnState>();
   private pendingPermissions = new Map<string, PendingPermissionTurn>();
+
+  /**
+   * Preserved-output pipeline, one per conversation.
+   *
+   * Cached so the output epoch is resolved once per conversation rather than on
+   * every tool result, and shared with the loop's own instance so both paths
+   * use the same policy.
+   */
+  private readonly toolResultPipelines = new Map<string, ToolResultPipeline>();
+  private readonly conversationEpochs = new Map<string, string>();
+  private toolResultModule: ToolResultModule | null = null;
+  private toolResultStorage: ToolResultStorageService | null = null;
+
+  /** Build (or reuse) the pipeline for a conversation. */
+  private getToolResultPipeline(conversationId: string): ToolResultPipeline {
+    const existing = this.toolResultPipelines.get(conversationId);
+    if (existing) return existing;
+    const pipeline = new ToolResultPipeline({
+      captureEnabled: isToolOutputCaptureEnabled,
+      modelRefsEnabled: isToolOutputModelRefsEnabled,
+      module: (this.toolResultModule ??= new ToolResultModule()),
+      storage:
+        this.toolResultStorage ??
+        (this.toolResultStorage = new ToolResultStorageService({
+          root: getToolResultStorageRoot(),
+        })),
+    });
+    this.toolResultPipelines.set(conversationId, pipeline);
+    return pipeline;
+  }
+
+  /**
+   * Resolve the conversation's current output epoch.
+   *
+   * A durable fence: a result prepared against a stale epoch is rejected at
+   * commit, which is the correct outcome when the user clears the conversation
+   * while a tool is being approved.
+   */
+  private async resolveConversationEpoch(
+    conversationId: string
+  ): Promise<string> {
+    const cached = this.conversationEpochs.get(conversationId);
+    if (cached) return cached;
+    const module = this.toolResultModule ?? new ToolResultModule();
+    const epoch = await module.currentEpoch("default", conversationId);
+    this.conversationEpochs.set(conversationId, epoch);
+    return epoch;
+  }
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly modelCatalog: AIChatModelCatalogService;
+  private readonly compactionCoordinator?: AIChatCompactionCoordinator;
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
+  private readonly generatedImageReferenceResolver?: AIChatQueryEngineDeps["generatedImageReferenceResolver"];
   /** Optional filter that scopes which tool schemas the engine advertises to
    * the model. Used by the scheduled (unattended) profile to expose only
    * task-policy-approved tools (FR-16), narrowing the prompt-injection
    * surface beyond the executeToken guard. */
   private readonly toolFilter?: (toolName: string) => boolean;
+  private readonly historyRetrievalServiceFactory?: () => AIChatHistoryRetrievalService;
+  /** Persists steering instructions consumed by active turns' mailboxes. */
+  private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
+  private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -323,14 +539,259 @@ export class AIChatQueryEngine {
     private readonly loop: AIChatQueryLoop,
     deps?: AIChatQueryEngineDeps
   ) {
+    // Default assembler reads the published generation (§12) and retains
+    // token-budgeted complete turns (FR-05) so EVERY engine consumer —
+    // interactive, scheduled, subagent, recovery — assembles published
+    // context without each call site remembering the injections (FR-04/08).
     this.contextAssembler =
-      deps?.contextAssembler ?? new AIChatContextAssembler();
+      deps?.contextAssembler ??
+      new AIChatContextAssembler({
+        compactionReader: new AIChatCompactionModule(),
+        archiveModule: new AIChatArchiveModule(),
+        // T14: substitute bounded projections for oversized legacy rows.
+        projectionLookup: new ToolResultModule().asLegacyProjectionLookup(),
+      });
     this.compactAgent = deps?.compactAgent;
     this.modelCatalog = new AIChatModelCatalogService();
+    this.compactionCoordinator = deps?.compactionCoordinator;
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
+    this.generatedImageReferenceResolver =
+      deps?.generatedImageReferenceResolver;
     this.toolFilter = deps?.toolFilter;
+    this.steeringPromoter = deps?.steeringPromoter;
+    this.onTurnTerminalCb = deps?.onTurnTerminal;
+    this.historyRetrievalServiceFactory = deps?.historyRetrievalServiceFactory;
+  }
+
+  /**
+   * /goal execution should keep calling the model past the per-cycle tool
+   * cap. Plan-mode turns still pause (AskUserQuestion must not be skipped).
+   * Lookup failures must not fail the turn.
+   */
+  private async shouldAutoContinueGoal(
+    conversationId: string,
+    isPlanMode: boolean
+  ): Promise<boolean> {
+    if (isPlanMode || !conversationId) {
+      return false;
+    }
+    try {
+      const goal = await new AIChatGoalModule().getActiveGoal(conversationId);
+      return goal !== null;
+    } catch (err) {
+      console.warn("[ai-chat-v2] goal lookup for auto-continue failed:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Re-resolve submit-time selected-context references (technical-design §13.3).
+   *
+   * The renderer sends OPAQUE ARCHIVE REFERENCES ONLY — never passage text. The
+   * backend re-validates each reference against the current epoch/revision and
+   * enforces the final budget. Resolution failure is never fatal to the turn:
+   * selections degrade to "not included" and the user's own message still goes
+   * out, with the ACCEPTED submitted ids reported back on the `start` event so
+   * the UI clears only those chips and retains the rejected drafts.
+   */
+  private async resolveSelectedHistory(
+    conversationId: string,
+    turnId: string,
+    sourceIds: readonly string[]
+  ): Promise<{
+    readonly metadata: ChatV2HistorySelectionMetadata[];
+    readonly excerpts: SelectedHistoryExcerptInput[];
+    readonly rejectedCount: number;
+    readonly changedIds: readonly string[];
+    readonly rejectedIds: readonly string[];
+  }> {
+    const empty = {
+      metadata: [] as ChatV2HistorySelectionMetadata[],
+      excerpts: [] as SelectedHistoryExcerptInput[],
+      rejectedCount: 0,
+      changedIds: [] as readonly string[],
+      rejectedIds: [] as readonly string[],
+    };
+    if (sourceIds.length === 0) return empty;
+    if (!isArchiveReadsEnabled()) return empty;
+    try {
+      const factory =
+        this.historyRetrievalServiceFactory ??
+        (() => new AIChatHistoryRetrievalService(new AIChatArchiveModule()));
+      const svc = factory();
+      const result = await svc.resolveSelections(
+        conversationId,
+        sourceIds,
+        turnId
+      );
+      // Every selection rejected for size ⇒ the send would ship with zero
+      // selected context while the chips still render as attached. FR-10
+      // requires the user to narrow the selection, so the turn fails with an
+      // actionable capacity error BEFORE persist/send; drafts survive.
+      if (result.errorCode === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE") {
+        throw new RecoverableHistoryError(
+          "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+          `selected history passages do not fit this turn (${result.rejected.length} rejected); remove or narrow a selection and resend`
+        );
+      }
+      const metadata: ChatV2HistorySelectionMetadata[] = result.resolved.map(
+        (e, i) => ({
+          // Prefer the SUBMITTED reference so the renderer can reconcile this
+          // back to its own chip; the archive re-encodes `e.sourceId`.
+          sourceId: result.acceptedSubmittedIds?.[i] ?? e.sourceId,
+          messageId: e.messageId,
+          role: e.role,
+          timestamp: e.timestamp,
+          exact: e.exact,
+        })
+      );
+      const changed = (result.refreshed ?? []).map((r) => r.submittedId);
+      const changedSet = new Set(changed);
+      return {
+        metadata,
+        excerpts: toSelectedHistoryExcerptInputs(result.resolved),
+        rejectedCount: result.rejected.length,
+        // Stale references are quoted nowhere; their chips survive for
+        // explicit user re-confirmation (§4.2, AC-18).
+        changedIds: changed,
+        // Hard rejections (unavailable/oversized, not stale) mark chips
+        // rejected so the user can remove or replace them (P2-10, AC-18).
+        rejectedIds: result.rejected.filter((id) => !changedSet.has(id)),
+      };
+    } catch (err) {
+      // Capacity rejections are turn-blocking, not degrade-to-empty.
+      if (
+        err instanceof RecoverableHistoryError &&
+        err.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+      ) {
+        throw err;
+      }
+      console.warn("[ai-chat-v2] history selection resolution failed:", err);
+      return {
+        ...empty,
+        rejectedCount: sourceIds.length,
+        rejectedIds: [...sourceIds],
+      };
+    }
+  }
+
+  /**
+   * Shrink the active context before a dispatch that is already at or over
+   * the budget. Awaited so the same turn can rebuild and retry preflight.
+   */
+  private async compactBeforeDispatch(
+    conversationId: string,
+    model?: string
+  ): Promise<void> {
+    if (this.compactionCoordinator) {
+      await this.compactionCoordinator.requestCompactionForTurn(
+        conversationId,
+        { trigger: "reactive-overflow", model }
+      );
+      return;
+    }
+    if (this.compactAgent) {
+      // Pass the model's real context window as the prompt-token sentinel
+      // rather than Number.MAX_SAFE_INTEGER. The threshold in
+      // enqueueAutoCompact is 0.8 * contextWindow, so the window itself is
+      // always >= threshold and reliably trips compaction — and the value
+      // stored in lastPromptTokens stays a realistic finite count instead
+      // of poisoning the next turn's session-memory gate with 9e15.
+      const promptTokens = await this.resolveCompactionSentinel(model);
+      await this.compactAgent.enqueueAutoCompact({
+        conversationId,
+        reason: "budget-pressure",
+        promptTokens,
+        model,
+      });
+    }
+  }
+
+  /**
+   * Reactive overflow compaction (AC-23, FR-07): after a budget-rejected turn,
+   * shrink the active context through the same bounded coordinator every
+   * other trigger uses. Without a coordinator, fall back to the compact
+   * agent's threshold path with provably-over-window tokens. Never throws —
+   * the turn's error emission below is the user-visible outcome.
+   */
+  private requestReactiveCompaction(
+    conversationId: string,
+    model?: string
+  ): void {
+    try {
+      if (this.compactionCoordinator) {
+        const coordinator = this.compactionCoordinator;
+        Promise.resolve(
+          coordinator.requestCompactionForTurn(conversationId, {
+            trigger: "reactive-overflow",
+            model,
+          })
+        ).catch((err: unknown) =>
+          console.error(
+            "[ai-chat-compaction] reactive-overflow request failed:",
+            err
+          )
+        );
+      } else if (this.compactAgent) {
+        const compactAgent = this.compactAgent;
+        // Resolve the model's real context window as the prompt-token
+        // sentinel (see compactBeforeDispatch): it reliably exceeds the
+        // 0.8 * contextWindow threshold without storing 9e15 in
+        // lastPromptTokens. The async resolution happens inside the
+        // fire-and-forget chain so this method stays synchronous.
+        void this.resolveCompactionSentinel(model)
+          .then((promptTokens) =>
+            compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "reactive-overflow",
+              promptTokens,
+              model,
+            })
+          )
+          .catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compact] reactive-overflow auto-compact failed:",
+              err
+            )
+          );
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] reactive-overflow dispatch failed:",
+        err
+      );
+    }
+  }
+
+  /**
+   * Resolve a prompt-token sentinel for the reactive compaction fallback
+   * path (no coordinator). Returns the model's real context window — a
+   * finite, realistic value that provably meets/exceeds the compact
+   * agent's 0.8 * contextWindow threshold, so it reliably trips an
+   * auto-compact while keeping lastPromptTokens sane. Falls back to a
+   * conservative large window when the catalog lookup is unavailable
+   * (tests skip the live catalog fetch). Never throws.
+   */
+  private async resolveCompactionSentinel(model?: string): Promise<number> {
+    try {
+      const contextWindow = await this.modelCatalogService.getContextWindow(
+        model
+      );
+      if (contextWindow > 0) {
+        return contextWindow;
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] sentinel context-window lookup failed:",
+        err
+      );
+    }
+    // The catalog is unloaded/unavailable (e.g. VITEST skips the fetch).
+    // Use the recovery default (128k) — still finite and above the 8,192
+    // unknown-model threshold the compact agent falls back to.
+    return AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -519,8 +980,66 @@ export class AIChatQueryEngine {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly budgetService = new ToolPromptBudgetService();
+  private readonly modelCatalogService = new AIChatModelCatalogService();
   private readonly conversationToolStateService =
     new ConversationToolStateService();
+
+  /**
+   * Resolve renderer-supplied generated-image references into transient
+   * data-URL artifacts for the current turn, enforcing the combined image
+   * count (uploaded + referenced) and the data-URL budget. Returns the
+   * resolver result, or a stable error code to emit as a terminal chunk.
+   */
+  private async resolveGeneratedImageInputs(input: {
+    conversationId: string;
+    references: readonly ChatV2GeneratedImageReference[];
+    uploadedImageCount: number;
+  }): Promise<
+    | { ok: true; result: ResolveGeneratedImagesResult }
+    | { ok: false; errorCode: GeneratedImageReferenceErrorCode }
+  > {
+    let resolved: ResolveGeneratedImagesResult;
+    try {
+      const resolver =
+        this.generatedImageReferenceResolver ??
+        new GeneratedImageReferenceService();
+      resolved = await resolver.resolveGeneratedImages({
+        conversationId: input.conversationId,
+        references: input.references,
+        detail: "auto",
+      });
+    } catch (err: unknown) {
+      if (err instanceof GeneratedImageReferenceError) {
+        return { ok: false, errorCode: err.code };
+      }
+      throw err;
+    }
+    if (
+      input.uploadedImageCount + resolved.artifacts.length >
+      CHAT_IMAGE_LIMITS.maxImagesPerRequest
+    ) {
+      return { ok: false, errorCode: "generated_image_reference_limit" };
+    }
+    if (
+      resolved.totalDataUrlChars > CHAT_IMAGE_LIMITS.targetTotalDataUrlChars
+    ) {
+      return { ok: false, errorCode: "generated_image_too_large" };
+    }
+    return { ok: true, result: resolved };
+  }
+
+  /**
+   * Real per-model context window for tool-catalog auto mode. Vitest skips
+   * the live catalog fetch so unit tests do not hang on the models API.
+   */
+  private async resolveContextWindowTokens(
+    model?: string
+  ): Promise<number | undefined> {
+    if (process.env.VITEST === "true") {
+      return undefined;
+    }
+    return this.modelCatalogService.getContextWindow(model);
+  }
 
   /**
    * Build the deferred tool catalog + mode decision for a turn (FR-8, design
@@ -599,7 +1118,8 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request, scheduledContext } = input;
+    const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
+      input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -639,13 +1159,29 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     let conversationId: string;
     let assistantMessageId: string;
+    let turnId: string;
     let messages: OpenAIChatMessage[];
+    let reassembleMessages: (() => Promise<OpenAIChatMessage[]>) | null = null;
     let textApprovedPlanState: AIChatPlanStateView | null = null;
+    let intentDecisionId: number | null = null;
+    let sourceUserMessageId: string | undefined;
+    /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
+    let historySelectionAcceptedIds: readonly string[] = [];
+    /** Submitted refs whose source moved (§4.2), reported on `start`. */
+    let historySelectionChangedIds: readonly string[] = [];
+    /** Submitted refs hard-rejected (unavailable/oversized), reported on `start`. */
+    let historySelectionRejectedIds: readonly string[] = [];
 
     try {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
+      // Generate the turn id once, at accept time (technical-design §4.3).
+      // Scheduled turns reuse the stable scheduled id so a crash-retry stamps
+      // the same turn association on replayed rows (§14.2).
+      turnId = scheduledContext
+        ? scheduledContext.userMessageId
+        : `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -734,17 +1270,97 @@ export class AIChatQueryEngine {
           pastedTextResolution.modelMessage
         );
       const modelUserMessage = atMentionResolution.modelMessage;
+
+      // Re-resolve user-selected archived passages (§13.3). The renderer sends
+      // opaque source ids only; the backend re-validates epoch/revision and the
+      // final budget. Accepted excerpts become the "current user + selected"
+      // context block below; the references (never the text) are persisted with
+      // the user row. Rejected/unavailable selections never block the turn.
+      const selectionResolution = await this.resolveSelectedHistory(
+        conversationId,
+        turnId,
+        request.historySelectionIds ?? []
+      );
+      const selectedHistoryBlock = buildSelectedHistoryContextBlock(
+        selectionResolution.excerpts
+      );
+      historySelectionAcceptedIds = selectionResolution.metadata.map(
+        (m) => m.sourceId
+      );
+      historySelectionChangedIds = selectionResolution.changedIds;
+      historySelectionRejectedIds = selectionResolution.rejectedIds;
+
+      // "Current user + selected" allocation slot: the selected archive
+      // passages are folded into the SAME user message the user authored, so
+      // preflight can never evict them as an independent optional block
+      // (technical-design line 372) and they are included exactly once.
+      const userMessageForModel =
+        selectedHistoryBlock.length > 0
+          ? `${modelUserMessage}\n\n${selectedHistoryBlock}`
+          : modelUserMessage;
       if (currentUserContentParts && currentUserContentParts.length > 0) {
-        // Fold the @-mention context into the multimodal text part.
+        // Fold the @-mention context (+ selected passages) into the multimodal text part.
         currentUserContentParts = [
-          { type: "text", text: modelUserMessage },
+          { type: "text", text: userMessageForModel },
           ...currentUserContentParts.slice(1),
         ];
+      }
+
+      // Resolve selected generated images into transient edit-input parts.
+      // Runs AFTER the final conversation id is known and BEFORE any
+      // user-message persistence so a failed resolution leaves the
+      // transcript untouched. Artifacts carry dataUrls in memory only.
+      let generatedImageRefMetadata:
+        | ChatV2GeneratedImageReferenceMetadata[]
+        | undefined;
+      if (
+        request.generatedImageReferences &&
+        request.generatedImageReferences.length > 0
+      ) {
+        const uploadedImageCount =
+          currentUserContentParts?.filter((part) => part.type === "image_url")
+            .length ?? 0;
+        const resolution = await this.resolveGeneratedImageInputs({
+          conversationId,
+          references: request.generatedImageReferences,
+          uploadedImageCount,
+        });
+        if (!resolution.ok) {
+          log.warn(
+            `[ai-chat-v2] rejecting generated-image edit conv=${conversationId} code=${resolution.errorCode}`
+          );
+          eventSink.emit({
+            type: "error",
+            conversationId,
+            errorMessage:
+              GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES[resolution.errorCode],
+            errorCode: resolution.errorCode,
+          });
+          return;
+        }
+        const generatedParts: OpenAIImageUrlContentPart[] =
+          resolution.result.artifacts.map((artifact) => ({
+            type: "image_url",
+            image_url: { url: artifact.dataUrl, detail: artifact.detail },
+          }));
+        const effectiveText =
+          modelUserMessage.trim().length > 0
+            ? modelUserMessage
+            : "Describe the selected image.";
+        currentUserContentParts = [
+          { type: "text", text: effectiveText },
+          ...(currentUserContentParts ? currentUserContentParts.slice(1) : []),
+          ...generatedParts,
+        ];
+        generatedImageRefMetadata = [...resolution.result.metadata];
       }
 
       // Build user-message metadata (source + attachments + @-mentions).
       const userMetadata: ChatV2MessageMetadata = {
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
+        ...(generatedImageRefMetadata
+          ? { generatedImageReferences: generatedImageRefMetadata }
+          : {}),
       };
       if (scheduledContext) {
         userMetadata.scheduledLoop = {
@@ -763,28 +1379,46 @@ export class AIChatQueryEngine {
       if (pastedTextResolution.pastedBlocks.length > 0) {
         userMetadata.pastedBlocks = pastedTextResolution.pastedBlocks;
       }
+      // Persist only the ACCEPTED references (provenance, never the text).
+      if (selectionResolution.metadata.length > 0) {
+        userMetadata.historySelections = selectionResolution.metadata;
+      }
       const hasUserMetadataBeyondSource =
         !!attachmentMetadata ||
         atMentionResolution.metadata.length > 0 ||
         pastedTextResolution.pastedBlocks.length > 0 ||
-        !!scheduledContext;
+        !!scheduledContext ||
+        !!generatedImageRefMetadata ||
+        selectionResolution.metadata.length > 0;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
       // Scheduled turns use a stable message id + insert-if-absent so a
       // crash-retry does not duplicate the transcript row (technical-design §14.2).
-      const savedUser = scheduledContext
-        ? await module.saveUserMessageIfAbsent({
-            conversationId,
-            content: messageToSave,
-            messageId: scheduledContext.userMessageId,
-            metadata: userMetadata,
-          })
-        : await module.saveUserMessage({
-            conversationId,
-            content: messageToSave,
-            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
-          });
+      // Interactive turns with a submissionId take the same idempotent path with
+      // a derived stable id so a transport retry reuses the accepted user row
+      // (§13.3) instead of writing a second one.
+      const idempotentMessageId = scheduledContext
+        ? scheduledContext.userMessageId
+        : request.submissionId
+        ? `user-${request.submissionId}`
+        : undefined;
+      const savedUser =
+        (scheduledContext && scheduledContext.userMessageId) ||
+        request.submissionId
+          ? await module.saveUserMessageIfAbsent({
+              conversationId,
+              content: messageToSave,
+              messageId: idempotentMessageId ?? "",
+              metadata: userMetadata,
+              turnId,
+            })
+          : await module.saveUserMessage({
+              conversationId,
+              content: messageToSave,
+              metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+              turnId,
+            });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {
@@ -795,12 +1429,83 @@ export class AIChatQueryEngine {
         );
       }
 
+      // Resolve and persist the outbound-email delivery intent for this turn
+      // from TRUSTED user-authored text only (technical design §9): raw user
+      // message, never tool args / retrieved content / assistant statements.
+      // Idempotent across stream retries via the (conversationId, sourceUserMessageId)
+      // unique index. Failures resolve to draft_only and never break chat.
+      sourceUserMessageId = savedUser.messageId;
+      try {
+        const intentModule = new OutboundEmailIntentModule();
+        const existing = await intentModule.findBySource(
+          conversationId,
+          savedUser.messageId
+        );
+        // Re-verify the cached decision against the CURRENT user-authored
+        // text before reusing it (technical design §9): the (conversationId,
+        // sourceUserMessageId) row is only a valid cache hit when its stored
+        // sourceTextHash still matches this turn's text and it was produced
+        // by the current resolver version. A mismatch (text changed or the
+        // resolver was upgraded) re-resolves and overwrites the stale row.
+        const userAuthoredText = request.message || "";
+        const currentHash = hashUserAuthoredText(userAuthoredText);
+        if (
+          existing &&
+          existing.sourceTextHash === currentHash &&
+          existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+        ) {
+          intentDecisionId = existing.id;
+        } else {
+          // Load the conversation's messages (chronological ASC) so the
+          // resolver can evaluate the contextual-affirmation path (§9.1/§9.4):
+          // a short "yes, send it" authorizes a send ONLY when the immediately
+          // preceding assistant message asked an explicit send-confirmation
+          // question. Passing null here (the prior bug, RC3) made that path
+          // dead and forced every affirmation back to draft_only.
+          const priorMessages = await module.getConversationMessages(
+            conversationId
+          );
+          const decision = OutboundEmailIntentResolver.resolve(
+            buildResolverInput(
+              {
+                conversationId,
+                sourceUserMessageId: savedUser.messageId,
+                userAuthoredText,
+              },
+              priorMessages
+            )
+          );
+          const decisionFields = {
+            mode: decision.mode,
+            reasonCode: decision.reasonCode,
+            confidence: decision.confidence,
+            evidenceJson: JSON.stringify(decision.evidence),
+            sourceTextHash: decision.sourceTextHash,
+            resolverVersion: decision.resolverVersion,
+          };
+          if (existing) {
+            await intentModule.updateDecision(existing.id, decisionFields);
+            intentDecisionId = existing.id;
+          } else {
+            const persisted = await intentModule.create({
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              ...decisionFields,
+            } as OutboundEmailIntentEntity);
+            intentDecisionId = persisted.id;
+          }
+        }
+      } catch (err) {
+        console.error("[outbound-email-intent] resolve failed:", err);
+        intentDecisionId = null;
+      }
+
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: modelUserMessage,
+        currentUserMessage: userMessageForModel,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
@@ -868,6 +1573,21 @@ export class AIChatQueryEngine {
           }
         }
       }
+      const assembleInput = {
+        conversationId,
+        currentUserMessage: userMessageForModel,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: (isPlanMode ? "plan" : "chat") as "plan" | "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts,
+      };
+      reassembleMessages = async () => {
+        const again = await this.contextAssembler.assemble(assembleInput);
+        return [...again.messages];
+      };
     } catch (err) {
       log.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
@@ -881,7 +1601,318 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 3. Lifecycle hooks: SessionStart (once per conversation)
+    // 3-9. Run the turn (shared execution path; design §12.2)
+    // ------------------------------------------------------------------
+    const terminal = await this.runPersistedTurn({
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState,
+      sourceUserMessageId,
+      reassembleMessages,
+      intentDecisionId,
+      turnId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
+      outboundSendPreAuthorized,
+    });
+    if (terminal.type === "conversation_busy") {
+      // The legacy direct path cannot queue; surface a clear error instead of
+      // silently dropping the message. The queue service avoids this by
+      // checking engine status before dispatch.
+      eventSink.emit({
+        type: "error",
+        conversationId,
+        errorMessage:
+          "This conversation is still working on the previous message. Please wait for it to finish or stop it.",
+      });
+    }
+  }
+
+  /**
+   * Queue-dispatch entry point (design §12.1): run a turn for a user row the
+   * pending queue already persisted. Assembles context from the stored
+   * model-facing content, then delegates to the shared execution path and
+   * returns the narrow terminal classification the queue service acts on.
+   */
+  async submitPersistedUserMessage(input: {
+    readonly eventSink: AIChatQueryEventSink;
+    readonly request: ChatV2StreamRequest;
+    readonly savedUser: AIChatMessageEntity;
+    readonly modelContent: string;
+    readonly contentParts?:
+      | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
+      | undefined;
+    readonly assistantMessageId?: string;
+  }): Promise<AIChatTurnTerminalEvent> {
+    const { eventSink, request, savedUser, modelContent } = input;
+    const conversationId = savedUser.conversationId;
+    const planModule = new AIChatPlanModule();
+
+    let planState: AIChatPlanStateView | null = null;
+    try {
+      planState = await planModule.getPlanState(conversationId);
+    } catch {
+      // ignore lookup failures
+    }
+    const isPlanMode = request.mode === "plan" || isActivePlanState(planState);
+    const module = new AIChatV2Module();
+
+    // Queue-dispatched turns bypass submitMessage's persistence path, so bind
+    // outbound-email intent here as well. This preserves the trusted
+    // user-message/decision chain for the normal queued UI flow.
+    let queuedIntentDecisionId: number | null = null;
+    try {
+      const intentModule = new OutboundEmailIntentModule();
+      const existing = await intentModule.findBySource(
+        conversationId,
+        savedUser.messageId
+      );
+      const userAuthoredText = request.message || modelContent;
+      const currentHash = hashUserAuthoredText(userAuthoredText);
+      if (
+        existing &&
+        existing.sourceTextHash === currentHash &&
+        existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+      ) {
+        queuedIntentDecisionId = existing.id;
+      } else {
+        const priorMessages = await module.getConversationMessages(
+          conversationId
+        );
+        const decision = OutboundEmailIntentResolver.resolve(
+          buildResolverInput(
+            {
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              userAuthoredText,
+            },
+            priorMessages
+          )
+        );
+        const decisionFields = {
+          mode: decision.mode,
+          reasonCode: decision.reasonCode,
+          confidence: decision.confidence,
+          evidenceJson: JSON.stringify(decision.evidence),
+          sourceTextHash: decision.sourceTextHash,
+          resolverVersion: decision.resolverVersion,
+        };
+        if (existing) {
+          await intentModule.updateDecision(existing.id, decisionFields);
+          queuedIntentDecisionId = existing.id;
+        } else {
+          const persisted = await intentModule.create({
+            conversationId,
+            sourceUserMessageId: savedUser.messageId,
+            ...decisionFields,
+          } as OutboundEmailIntentEntity);
+          queuedIntentDecisionId = persisted.id;
+        }
+      }
+    } catch (err) {
+      log.error("[outbound-email-intent] queued resolve failed:", err);
+    }
+
+    let messages: OpenAIChatMessage[];
+    try {
+      const basePrompt =
+        request.systemPrompt ?? module.getDefaultSystemPrompt();
+      const assembled = await this.contextAssembler.assemble({
+        conversationId,
+        currentUserMessage: modelContent,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: isPlanMode ? "plan" : "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts: input.contentParts,
+      });
+      messages = [...assembled.messages];
+
+      // Proactive pre-turn compact (same gate as submitMessage §2).
+      const compactAgent = this.compactAgent;
+      if (compactAgent && assembled.tokenEstimate > 0) {
+        const contextWindow = await this.resolveContextWindowForModel(
+          request.model
+        );
+        const threshold = Math.floor(
+          AUTO_COMPACT_THRESHOLD_FRACTION * contextWindow
+        );
+        if (assembled.tokenEstimate >= threshold) {
+          log.info(
+            `[ai-chat-compact] pre-turn compact (queued) conv=${conversationId} estimate=${assembled.tokenEstimate} threshold=${threshold} window=${contextWindow}`
+          );
+          try {
+            const compacted = await compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "pre_turn_proactive",
+              promptTokens: assembled.tokenEstimate,
+              model: request.model,
+            });
+            if (compacted) {
+              const reassembled = await this.contextAssembler.assemble({
+                conversationId,
+                currentUserMessage: modelContent,
+                currentUserMessageId: savedUser.messageId,
+                baseSystemPrompt: basePrompt,
+                mode: isPlanMode ? "plan" : "chat",
+                model: request.model,
+                maxTokens: request.maxTokens,
+                planState,
+                currentUserContentParts: input.contentParts,
+              });
+              messages = [...reassembled.messages];
+            }
+          } catch (err) {
+            log.error(
+              "[ai-chat-compact] pre-turn compact failed (continuing with original context):",
+              err
+            );
+          }
+        }
+      }
+    } catch (err) {
+      log.error("[ai-chat-v2] persisted-turn assembly error:", err);
+      void redirectToLoginOnAuthExpired(err);
+      eventSink.emit({
+        type: "error",
+        conversationId,
+        errorMessage: userSafeError(err),
+      });
+      return { type: "failed", conversationId, assistantMessageId: "" };
+    }
+
+    const assistantMessageId =
+      input.assistantMessageId ??
+      `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return await this.runPersistedTurn({
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState: null,
+      scheduledContext: undefined,
+      sourceUserMessageId: savedUser.messageId,
+      intentDecisionId: queuedIntentDecisionId,
+    });
+  }
+
+  /**
+   * Phase 1 of steering acceptance: synchronously reserve the running turn
+   * for one pending message. Returns null when the conversation has no
+   * steerable (running, mailbox-equipped) turn (design §10.3).
+   */
+  reserveSteering(
+    conversationId: string,
+    pendingMessageId: string
+  ): AIChatSteeringReservation | null {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry || !entry.control) return null;
+    return entry.control.reserve(pendingMessageId);
+  }
+
+  /**
+   * Drop an uncommitted steering reservation (the DB claim failed). No-op
+   * when the turn already closed.
+   */
+  cancelSteeringReservation(
+    conversationId: string,
+    reservation: AIChatSteeringReservation
+  ): void {
+    const entry = this.activeTurns.get(conversationId);
+    entry?.control?.cancelReservation(reservation.reservationId);
+  }
+
+  /**
+   * Phase 3 of steering acceptance: commit the DB-claimed instruction into
+   * the turn's mailbox. Returns false when the turn closed first — the
+   * caller must restore the row to queued.
+   */
+  commitSteering(
+    conversationId: string,
+    reservation: AIChatSteeringReservation,
+    instruction: AIChatSteeringInstruction
+  ): boolean {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry || !entry.control) return false;
+    if (entry.assistantMessageId !== reservation.targetAssistantMessageId) {
+      return false;
+    }
+    return entry.control.commit(reservation, instruction);
+  }
+
+  /**
+   * Shared turn execution (design §12.2): SessionStart hook, tool catalog,
+   * active-turn registration, start event, plan context, prompt hook, loop
+   * run, and result handling. Returns the terminal classification.
+   *
+   * CONVERSATION_BUSY (design §12.3): an active/pending turn already owns
+   * the conversation. The prior-turn REPLACEMENT behavior is removed — a
+   * late queue drain must never replace a newer turn; only explicit Stop
+   * aborts an active turn.
+   */
+  private async runPersistedTurn(input: {
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+    readonly messages: OpenAIChatMessage[];
+    readonly request: ChatV2StreamRequest;
+    readonly eventSink: AIChatQueryEventSink;
+    readonly isPlanMode: boolean;
+    readonly planState: AIChatPlanStateView | null;
+    readonly textApprovedPlanState: AIChatPlanStateView | null;
+    readonly scheduledContext?: AIChatScheduledTurnContext;
+    readonly sourceUserMessageId?: string;
+    readonly intentDecisionId?: number | null;
+    readonly turnId?: string;
+    readonly historySelectionAcceptedIds?: readonly string[];
+    readonly historySelectionChangedIds?: readonly string[];
+    readonly historySelectionRejectedIds?: readonly string[];
+    readonly reassembleMessages?: (() => Promise<OpenAIChatMessage[]>) | null;
+    readonly outboundSendPreAuthorized?: boolean;
+  }): Promise<AIChatTurnTerminalEvent> {
+    const {
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState,
+      sourceUserMessageId,
+      intentDecisionId,
+      turnId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
+      reassembleMessages,
+      outboundSendPreAuthorized,
+    } = input;
+    const module = new AIChatV2Module();
+    const planModule = new AIChatPlanModule();
+
+    // Busy gate (§12.3): never replace an in-flight turn.
+    if (
+      this.activeTurns.has(conversationId) ||
+      this.pendingPermissions.has(conversationId) ||
+      this.pendingPlanQuestions.has(conversationId)
+    ) {
+      return { type: "conversation_busy", conversationId };
+    }
+
+    // ------------------------------------------------------------------
+    // Lifecycle hooks: SessionStart (once per conversation)
     // ------------------------------------------------------------------
     if (!this.startedConversations.has(conversationId)) {
       this.startedConversations.add(conversationId);
@@ -909,7 +1940,7 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 4. Resolve tools (skills + plan mode tools)
+    // Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
     const allToolFunctions = await SkillRegistry.getAllToolFunctions();
     // Scheduled (unattended) profiles scope the advertised catalog to
@@ -923,9 +1954,15 @@ export class AIChatQueryEngine {
     // Resolve auto-plan config. Only active in plain chat mode (not when the
     // conversation is already in plan mode), only when AI is enabled, and only
     // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    // An approved plan also blocks auto-entry: its execution rounds run in
+    // chat mode (isActivePlanState is false), but EnterPlanMode would be
+    // guaranteed to fail there — ensurePlanForConversation resolves the
+    // approved plan and handleEnterPlanMode rejects re-entry — so advertising
+    // the tool mid-execution only invites a doomed call.
     const tokenService = new Token();
     const autoPlanEnabled =
       !isPlanMode &&
+      planState?.status !== "approved" &&
       tokenService.getValue(USER_AI_ENABLED) === "true" &&
       tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
 
@@ -948,6 +1985,7 @@ export class AIChatQueryEngine {
       recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
       hasRecentGeneratedImages: messagesHaveGeneratedImages(messages),
+      contextWindowTokens: await this.resolveContextWindowTokens(request.model),
     });
 
     // Load persisted discovered-tool state so tools discovered in earlier turns
@@ -957,30 +1995,34 @@ export class AIChatQueryEngine {
       : undefined;
 
     // ------------------------------------------------------------------
-    // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
-    //    the new turn. Cross-conversation turns are left alone so background
-    //    streaming can continue (concurrent-turns support).
+    // Register the turn. A steering mailbox is attached only when the engine
+    // has a steering promoter AND this is an interactive turn (scheduled
+    // turns are not steerable in v1).
     // ------------------------------------------------------------------
-    const prior = this.activeTurns.get(conversationId);
-    if (prior) {
-      prior.abortController.abort();
-    }
     const abortController = new AbortController();
+    const control = this.steeringPromoter
+      ? new AIChatTurnControl(async ({ instruction, boundary }) => {
+          await this.steeringPromoter!({ instruction, boundary });
+        }, assistantMessageId)
+      : undefined;
     this.activeTurns.set(conversationId, {
       abortController,
       assistantMessageId,
+      turnId,
       eventSink,
+      ...(control ? { control } : {}),
     });
-    this.pendingPermissions.delete(conversationId);
-    this.pendingPlanQuestions.delete(conversationId);
 
     // ------------------------------------------------------------------
-    // 5. Emit start event
+    // Emit start event
     // ------------------------------------------------------------------
     eventSink.emit({
       type: "start",
       conversationId,
       messageId: assistantMessageId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
     });
     if (textApprovedPlanState) {
       eventSink.emit({
@@ -992,7 +2034,7 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 6. Build plan context if in plan mode
+    // Build plan context if in plan mode
     // ------------------------------------------------------------------
     const planContext: AIChatPlanLoopContext | undefined =
       isPlanMode && planState
@@ -1010,7 +2052,7 @@ export class AIChatQueryEngine {
         : undefined;
 
     // ------------------------------------------------------------------
-    // 8. UserPromptSubmit lifecycle hook
+    // UserPromptSubmit lifecycle hook
     // ------------------------------------------------------------------
     HookDispatcher.executeHooks({
       eventName: "UserPromptSubmit",
@@ -1028,7 +2070,7 @@ export class AIChatQueryEngine {
     });
 
     // ------------------------------------------------------------------
-    // 9. Run the loop
+    // Run the loop
     // ------------------------------------------------------------------
     const streamEventSink = this.createPersistingEventSink(module, eventSink);
     const loopInput: AIChatQueryLoopInput = {
@@ -1055,14 +2097,48 @@ export class AIChatQueryEngine {
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
+      ...(control ? { steeringControl: control } : {}),
+      sourceUserMessageId,
+      intentDecisionId,
+      turnId,
+      outboundSendPreAuthorized,
+      goalAutoContinue: await this.shouldAutoContinueGoal(
+        conversationId,
+        isPlanMode
+      ),
+      relieveBudgetPressure: async () => {
+        await this.compactBeforeDispatch(conversationId, request.model);
+        return reassembleMessages ? reassembleMessages() : null;
+      },
     };
 
     try {
       const result = await this.loop.run(loopInput);
       await this.handleLoopResult(result, module, streamEventSink);
+      if (result.type === "paused_for_permission") {
+        return {
+          type: "paused_for_permission",
+          conversationId,
+          assistantMessageId,
+        };
+      }
+      if (result.type === "paused_for_plan_question") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId,
+          assistantMessageId,
+        };
+      }
+      return {
+        type: result.type,
+        conversationId,
+        assistantMessageId,
+      };
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
+      return { type: "failed", conversationId, assistantMessageId };
     } finally {
+      control?.close();
       // Clear this turn's map entry unless it was paused (permission/plan
       // question handlers move the entry into the pending maps themselves).
       // Only delete when the current entry still points at THIS turn AND
@@ -1206,6 +2282,7 @@ export class AIChatQueryEngine {
     this.activeTurns.set(conversationId, {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
       eventSink: matchedByToolId.eventSink,
     });
     const module = new AIChatV2Module();
@@ -1223,6 +2300,16 @@ export class AIChatQueryEngine {
           toolCallId: matchedByToolId.toolCallId,
           args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
+          // Trusted intent context (technical design §9/§14.2): re-thread the
+          // originating turn's persisted user-message id + intent decision id
+          // so outbound-email tools bind the draft to the exact user message
+          // even when executed via the permission-resume path.
+          sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+          intentDecisionId: matchedByToolId.intentDecisionId,
+          // Re-thread the gate-resolved outbound authorization (§14.2/§15.1)
+          // so the approved send claims the draft batch instead of silently
+          // falling to the legacy send path (RC4).
+          outboundAuthorization: matchedByToolId.outboundAuthorization,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.
@@ -1236,8 +2323,114 @@ export class AIChatQueryEngine {
         }
       );
 
-      const toolPayload = normalizeToolResult(toolResult);
-      const toolContent = serializeToolResultContent(toolPayload);
+      let toolPayload = normalizeToolResult(toolResult);
+      let toolContent = serializeToolResultContent(toolPayload);
+
+      // Preserved-output pipeline on the RESUME path (technical design §9.2).
+      // A resumed attempt must use exactly the same preparation and storage
+      // policy as a foreground one (AC-09); otherwise the first tool call of
+      // any session - which always takes this path - bypasses the receipt,
+      // which is where gated tools (outbound email, file edit, shell) live.
+      const toolResultPipeline = this.getToolResultPipeline(
+        matchedByToolId.conversationId
+      );
+      if (toolResultPipeline.isActive()) {
+        try {
+          const conversationEpoch = await this.resolveConversationEpoch(
+            matchedByToolId.conversationId
+          );
+          // A NEW execution identity: the permission placeholder and this
+          // resumed attempt are different phases, so they must not share an
+          // artifact key (technical design §5.1).
+          const executionId = `${matchedByToolId.conversationId}:${
+            matchedByToolId.turnId ?? matchedByToolId.assistantMessageId
+          }:${matchedByToolId.toolCallId}:resume`;
+          const prepared = await toolResultPipeline.process({
+            context: {
+              profileId: "default",
+              conversationId: matchedByToolId.conversationId,
+              conversationEpoch,
+              turnId:
+                matchedByToolId.turnId ?? matchedByToolId.assistantMessageId,
+              executionId,
+              toolCallId: matchedByToolId.toolCallId,
+              toolName: matchedByToolId.toolName,
+              signal: matchedByToolId.abortController.signal,
+            },
+            outcome: {
+              success: toolResult.success,
+              executionTimeMs: toolResult.execution_time_ms,
+              summary:
+                typeof toolResult.result.summary === "string"
+                  ? toolResult.result.summary
+                  : undefined,
+              error:
+                typeof toolResult.result.error === "string"
+                  ? toolResult.result.error
+                  : undefined,
+              control: toolResult.result,
+              output: toolResult.result,
+              outputFormat: "json",
+              previewKind: Array.isArray(toolResult.result)
+                ? "records"
+                : "text",
+              sourceCompleteness: toolResult.partial ? "partial" : "complete",
+              isEmpty:
+                Object.keys(toolResult.result).length === 0 &&
+                !toolResult.result.summary,
+            },
+            store: async ({ receipt }) => {
+              // The receipt REPLACES the permission-prompt row, which is the
+              // existing `replacesPermissionPromptForToolId` contract.
+              const { AIChatV2Module } = await import(
+                "@/modules/AIChatV2Module"
+              );
+              await new AIChatV2Module().saveToolResultMessage({
+                conversationId: matchedByToolId.conversationId,
+                assistantMessageId: matchedByToolId.assistantMessageId,
+                toolCallId: matchedByToolId.toolCallId,
+                toolName: matchedByToolId.toolName,
+                content: JSON.stringify(receipt),
+                toolResult: toolResultReceiptUiMetadata(receipt),
+                replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+                ...(matchedByToolId.turnId
+                  ? { turnId: matchedByToolId.turnId }
+                  : {}),
+              });
+            },
+          });
+          toolContent = prepared.modelContent;
+          if (prepared.receipt) {
+            // Rebuilt from the trusted outcome plus bounded descriptors: the
+            // legacy payload spread the producer's whole body.
+            toolPayload = {
+              success: toolResult.success,
+              executionTimeMs: toolResult.execution_time_ms,
+              toolResultReceipt: prepared.receipt,
+              ...prepared.uiMetadata,
+            } as Record<string, unknown>;
+          }
+        } catch (err: unknown) {
+          if (err instanceof ToolResultPublicationError) {
+            // Durable publication failed: stop rather than continue and imply
+            // the result was saved.
+            throw err;
+          }
+          console.warn(
+            `[ai-chat-v2] resumed tool result preparation failed, using bounded fallback: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+          // Bounded fallback, for the same reason as the main loop: the legacy
+          // payload is the producer's whole body.
+          toolContent = buildBoundedToolFailureContent({
+            result: toolResult,
+            code: "OUTPUT_NOT_AVAILABLE",
+            message: err instanceof Error ? err.message : String(err),
+          });
+          toolPayload = JSON.parse(toolContent) as Record<string, unknown>;
+        }
+      }
 
       eventSink.emit({
         type: "tool_result",
@@ -1312,6 +2505,9 @@ export class AIChatQueryEngine {
         hasRecentGeneratedImages: messagesHaveGeneratedImages(
           matchedByToolId.conversationMessages
         ),
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
       });
 
       const loopInput: AIChatQueryLoopInput = {
@@ -1335,6 +2531,23 @@ export class AIChatQueryEngine {
         toolCatalog: resumeCatalogContext.toolCatalog,
         toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
         toolCatalogState: matchedByToolId.toolCatalogState,
+        // The approved tool executed OUTSIDE the loop (direct SkillExecutor
+        // call above), so its generated-image outputs would otherwise never
+        // be folded into the turn's result.images. Seed them here — the loop
+        // merges them with anything its own rounds produce (FR-4).
+        seededToolImages: extractToolResultImages(toolResult),
+        // Keep the originating user turn attached to every round after a
+        // permission resume. Without these fields, a successfully approved
+        // draft is followed by a send round with no trusted intent, so the
+        // outbound gate incorrectly falls back to `draft_required`.
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          matchedByToolId.conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
       };
 
       void this.loop
@@ -1352,6 +2565,159 @@ export class AIChatQueryEngine {
             errorMessage: userSafeError(err),
           });
           this.clearConversationTurnState(matchedByToolId.conversationId);
+          this.clearStagedConfirmedBatchRefs(matchedByToolId.conversationId);
+        });
+
+      return { ok: true };
+    } catch (err) {
+      this.clearActiveTurnState(conversationId);
+      return { ok: false, error: userSafeError(err) };
+    }
+  }
+
+  /**
+   * Deny a paused tool after the user declines permission (scheduled-loop
+   * deny-and-continue path). Unlike the interactive path (which stops the
+   * whole conversation on deny), this synthesizes a denied tool_result,
+   * pushes it to the conversation, and re-enters the loop from nextRound so
+   * the scheduled run can proceed WITHOUT the tool. The model receives a
+   * "permission denied" tool result and may continue with an alternate plan.
+   *
+   * Structural twin of {@link resumeToolAfterPermission} with three
+   * differences: (1) synthesizes a denied ToolExecutionResult instead of
+   * calling SkillExecutor.execute; (2) skips the isPermissionPromptResult
+   * re-check (a deny is terminal, the tool won't re-prompt); (3) skips the
+   * image-artifact handoff (a denied tool produces no artifacts).
+   */
+  async denyToolPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const convId = request.conversationId;
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== matchedByToolId.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
+
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
+      eventSink: matchedByToolId.eventSink,
+    });
+    const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(
+      module,
+      matchedByToolId.eventSink
+    );
+
+    try {
+      // Synthesize the denied tool result — do NOT re-execute the tool. The
+      // renderer's deny path (AiChatV2.vue handleSkillPermissionDeny) already
+      // expects a denied-message content, so we match that shape here.
+      const deniedPayload = {
+        success: false,
+        executionTimeMs: 0,
+        error: "Permission denied. The tool will not be executed.",
+      };
+      const toolContent = JSON.stringify(deniedPayload);
+      eventSink.emit({
+        type: "tool_result",
+        conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
+        fullContent: toolContent,
+        toolResult: deniedPayload,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+      });
+
+      matchedByToolId.conversationMessages.push({
+        role: "tool",
+        tool_call_id: matchedByToolId.toolCallId,
+        content: toolContent,
+      });
+
+      // Rebuild the deferred catalog (mirrors resumeToolAfterPermission).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: matchedByToolId.openAITools,
+        conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
+        autoPlanEnabled: false,
+        userMessage: matchedByToolId.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          matchedByToolId.conversationMessages
+        ),
+        model: matchedByToolId.request.model,
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
+      });
+
+      const loopInput: AIChatQueryLoopInput = {
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
+        eventSink,
+        skillRegistry: SkillRegistry,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: matchedByToolId.toolCatalogState,
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
+      };
+
+      void this.loop
+        .run(loopInput)
+        .then(async (result) => {
+          await this.handleLoopResult(result, module, eventSink);
+        })
+        .catch((err) => {
+          console.error("[ai-chat-v2] deny-resume loop failed:", err);
+          void redirectToLoginOnAuthExpired(err);
+          matchedByToolId.eventSink.emit({
+            type: "error",
+            conversationId,
+            messageId: matchedByToolId.assistantMessageId,
+            errorMessage: userSafeError(err),
+          });
+          this.clearConversationTurnState(conversationId);
         });
 
       return { ok: true };
@@ -1402,6 +2768,7 @@ export class AIChatQueryEngine {
     this.activeTurns.set(request.conversationId, {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
+      turnId: pending.turnId,
       eventSink: pending.eventSink,
     });
 
@@ -1465,6 +2832,9 @@ export class AIChatQueryEngine {
       hasRecentGeneratedImages: messagesHaveGeneratedImages(
         pending.conversationMessages
       ),
+      contextWindowTokens: await this.resolveContextWindowTokens(
+        pending.request.model
+      ),
     });
 
     const loopInput: AIChatQueryLoopInput = {
@@ -1487,6 +2857,11 @@ export class AIChatQueryEngine {
       toolCatalog: resumePlanCatalogContext.toolCatalog,
       toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
       toolCatalogState: pending.toolCatalogState,
+      turnId: pending.turnId,
+      goalAutoContinue: await this.shouldAutoContinueGoal(
+        pending.conversationId,
+        Boolean(planContext)
+      ),
     };
 
     const module = new AIChatV2Module();
@@ -1507,6 +2882,7 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(err),
         });
         this.clearConversationTurnState(pending.conversationId);
+        this.clearStagedConfirmedBatchRefs(pending.conversationId);
       });
 
     return { ok: true };
@@ -1535,15 +2911,32 @@ export class AIChatQueryEngine {
         snapshot: result.toolCatalogState,
       });
     }
+    // True-terminal notification (see deps.onTurnTerminal): resumed-turn
+    // continuations are fire-and-forget, so this is the only place their
+    // owner learns the conversation freed up.
+    if (
+      result.type === "completed" ||
+      result.type === "cancelled" ||
+      result.type === "failed"
+    ) {
+      this.onTurnTerminalCb?.(result.conversationId, result.type);
+    }
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const completedTurnId = activeTurn?.turnId;
         const generatedImages = await this.storeGeneratedImages({
           conversationId,
           assistantMessageId,
           images: result.images,
         });
-        if (result.fullContent.length > 0 || generatedImages) {
+        if (
+          result.fullContent.length > 0 ||
+          generatedImages ||
+          (typeof result.reasoningContent === "string" &&
+            result.reasoningContent.length > 0)
+        ) {
           await module.saveAssistantMessage({
             conversationId,
             content: result.fullContent,
@@ -1557,7 +2950,12 @@ export class AIChatQueryEngine {
               ...buildReasoningMetadata(result.reasoningContent, result.model),
               generatedImages,
               recovery: result.recoveryMetadata,
+              ...(result.directionTransitions &&
+              result.directionTransitions.length > 0
+                ? { directionTransitions: result.directionTransitions }
+                : {}),
             },
+            turnId: completedTurnId,
           });
         }
         eventSink.emit({
@@ -1571,9 +2969,28 @@ export class AIChatQueryEngine {
           totalTokens: result.totalTokens,
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
+          reasoningContent: result.reasoningContent,
         });
-        const compactAgent = this.compactAgent;
-        if (compactAgent) {
+        // Post-turn compaction. The durable incremental coordinator (§11) takes
+        // precedence when injected — it dedups concurrent requests, acquires a
+        // durable claim with fence/lease, and atomically saves/publishes the
+        // bounded representation. Fall back to the legacy in-memory auto-compact
+        // + session-memory advisory update when only the legacy agent is present.
+        const coordinator = this.compactionCoordinator;
+        if (coordinator) {
+          Promise.resolve(
+            coordinator.requestCompactionForTurn(conversationId, {
+              trigger: "auto",
+              model: result.model,
+            })
+          ).catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compaction] post-turn coordinator request failed:",
+              err
+            )
+          );
+        } else if (this.compactAgent) {
+          const compactAgent = this.compactAgent;
           const compactInput = {
             conversationId,
             reason: "assistant_turn_completed",
@@ -1601,6 +3018,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               log.error("[ai-auto-dream] chat trigger failed:", err)
@@ -1611,6 +3029,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               log.error("[workspace-auto-dream] chat trigger failed:", err)
@@ -1628,10 +3047,15 @@ export class AIChatQueryEngine {
           );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        // Terminal: drop any staged confirmed reference set the turn did not
+        // consume so it can never feed a later unrelated batch call.
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "cancelled": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const cancelledTurnId = activeTurn?.turnId;
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1645,6 +3069,7 @@ export class AIChatQueryEngine {
               cancelled: true,
               ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
+            turnId: cancelledTurnId,
           });
         }
         eventSink.emit({
@@ -1656,11 +3081,24 @@ export class AIChatQueryEngine {
         });
         this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "failed": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const failedTurnId = activeTurn?.turnId;
         void redirectToLoginOnAuthExpired(result.error);
+        // Reactive overflow (AC-23): a budget-rejected turn means the active
+        // context no longer fits — compact it through the SAME bounded
+        // coordinator (trigger "reactive-overflow"), never a secondary
+        // unbounded path. Fire-and-forget; the error below still surfaces.
+        if (
+          result.error instanceof RecoverableHistoryError &&
+          result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+        ) {
+          this.requestReactiveCompaction(conversationId, result.model);
+        }
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1674,6 +3112,7 @@ export class AIChatQueryEngine {
               error: userSafeError(result.error),
               ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
+            turnId: failedTurnId,
           });
         }
         eventSink.emit({
@@ -1682,6 +3121,9 @@ export class AIChatQueryEngine {
           messageId:
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
+          // Stable image-edit codes let the renderer localize provider edit
+          // failures distinctly from invalid references and transient issues.
+          errorCode: imageEditErrorCode(result.error) ?? undefined,
         });
         // Emergency auto-compact: when the turn failed because the context
         // window was exceeded, immediately run a full compact so the next
@@ -1711,12 +3153,19 @@ export class AIChatQueryEngine {
         }
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "paused_for_permission": {
         // Move the turn from activeTurns into pendingPermissions so the three
         // maps stay disjoint (a conversation is in exactly one of them). The
         // activeTurns entry is dropped; resuming re-adds it.
+        // The steering mailbox closes (design §12.4): committed-but-unapplied
+        // steering is paused by the queue service via the pause classification.
+        const pausedPermissionEntry = this.activeTurns.get(
+          result.pending.conversationId
+        );
+        pausedPermissionEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
         this.pendingPermissions.set(
           result.pending.conversationId,
@@ -1728,6 +3177,10 @@ export class AIChatQueryEngine {
         break;
       }
       case "paused_for_plan_question": {
+        const pausedPlanEntry = this.activeTurns.get(
+          result.pending.conversationId
+        );
+        pausedPlanEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
         this.pendingPlanQuestions.set(
           result.pending.conversationId,
@@ -1769,6 +3222,20 @@ export class AIChatQueryEngine {
   }
 
   /**
+   * Drop any staged user-confirmed batch reference set for ONE conversation.
+   * Called on every terminal turn path (completed/cancelled/failed, unexpected
+   * engine failure, and resume-loop failures). The batch tool consumes the
+   * staged set at job start INSIDE the running turn — the query loop blocks
+   * on the job via pollAsyncJobToCompletion — so clearing here can never race
+   * a legitimate pending consume; anything still staged when the turn ends is
+   * stale (the turn finished without a generated-batch call) and must not
+   * leak into a later unrelated turn.
+   */
+  private clearStagedConfirmedBatchRefs(conversationId: string): void {
+    getConfirmedBatchReferenceRegistry().clear(conversationId);
+  }
+
+  /**
    * Defensively clear ALL turn state for one conversation — the active entry
    * plus any pending permission / plan-question entries. Used on
    * failure / catch paths where state may be inconsistent. Terminal success
@@ -1806,6 +3273,7 @@ export class AIChatQueryEngine {
           };
         }
         if (event.type === "tool_call") {
+          const toolTurnId = this.activeTurns.get(event.conversationId)?.turnId;
           saves.push(
             module
               .saveToolCallMessage({
@@ -1816,6 +3284,7 @@ export class AIChatQueryEngine {
                 toolArguments: event.toolArguments,
                 model: latestUsage?.model,
                 tokensUsed: latestUsage?.totalTokens,
+                turnId: toolTurnId,
               })
               .catch((err: unknown) => {
                 log.error("[ai-chat-v2] save tool call failed:", err);
@@ -1823,6 +3292,18 @@ export class AIChatQueryEngine {
           );
         }
         if (event.type === "tool_result") {
+          // A result that already carries a saved-receipt was persisted
+          // DURABLY by the pipeline's publisher before the event was emitted.
+          // Writing it again here would double-write the same row (and could
+          // race the archive coupler), so the pipeline is the single writer for
+          // that case and this sink only handles the legacy inline path.
+          if (
+            (event.toolResult as Record<string, unknown> | undefined)
+              ?.toolResultReceipt !== undefined
+          ) {
+            return;
+          }
+          const toolTurnId = this.activeTurns.get(event.conversationId)?.turnId;
           saves.push(
             module
               .saveToolResultMessage({
@@ -1834,6 +3315,7 @@ export class AIChatQueryEngine {
                 toolResult: event.toolResult,
                 replacesPermissionPromptForToolId:
                   event.replacesPermissionPromptForToolId,
+                turnId: toolTurnId,
               })
               .catch((err: unknown) => {
                 log.error("[ai-chat-v2] save tool result failed:", err);
@@ -1885,7 +3367,20 @@ export class AIChatQueryEngine {
         messageId: input.assistantMessageId,
         images: input.images,
       });
-      return stored.length > 0 ? stored : undefined;
+      // Re-home descriptors persisted under foreign identities (e.g. a batch
+      // sub-agent's `agent-v2-*` conversation) into THIS parent conversation
+      // + assistant-message identity before metadata.generatedImages is
+      // written, so the parent conversation can re-reference its outputs in
+      // later turns. Direct completions are already stored under the final
+      // identity, so this is a no-op pass-through for them (idempotent).
+      const rehomed = storage.rehomeImages
+        ? await storage.rehomeImages({
+            images: stored,
+            targetConversationId: input.conversationId,
+            targetMessageId: input.assistantMessageId,
+          })
+        : stored;
+      return rehomed.length > 0 ? rehomed : undefined;
     } catch (err) {
       log.warn(
         `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,
@@ -1914,5 +3409,6 @@ export class AIChatQueryEngine {
       errorMessage: userSafeError(err),
     });
     this.clearConversationTurnState(conversationId, assistantMessageId);
+    this.clearStagedConfirmedBatchRefs(conversationId);
   }
 }

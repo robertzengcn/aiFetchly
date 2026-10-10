@@ -54,6 +54,12 @@ export const EMAILSERVICEUPDATE = "email:service:update";
 export const EMAILSERVICEDETAIL = "email:service:detail";
 export const EMAILSERVICELIST = "email:service:list";
 export const EMAILSERVICEDELETE = "email:service:delete";
+export const EMAILSERVICEEXPORT = "email:service:export";
+export const EMAILSERVICEIMPORT = "email:service:import";
+export const EMAILSERVICETAGLIST = "email:service:tag:list";
+export const EMAILSERVICETAGCREATE = "email:service:tag:create";
+export const EMAILSERVICETAGUPDATE = "email:service:tag:update";
+export const EMAILSERVICETAGDELETE = "email:service:tag:delete";
 
 //email template
 export const EMAILTEMPLATE_LIST = "email:template:list";
@@ -71,6 +77,9 @@ export const BUCKEMAILTASKLIST = "buck:email:task:list";
 export const SENDTESTEMAIL = "send:test:email";
 export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
 export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
+export const UNIFIED_EMAIL_SEND_LOG = "buck:email:sendlog:unified";
+export const UNIFIED_EMAIL_SEND_LOG_DETAIL =
+  "buck:email:sendlog:unified:detail";
 
 // ======== Email receive + AI auto-reply ========
 export const EMAIL_RECEIVE_SYNC = "email:receive:sync";
@@ -141,6 +150,13 @@ export const VIDEO_INFORMATION_TRANSLATE = "video:information:translate";
 export const VIDEO_VOICE_TRANSLATE = "video:voice:translate";
 export const SYSTEM_SETTING_UPDATE = "system_setting:update";
 export const QUERY_USER_INFO = "user:info";
+// Subscription entitlement reconciliation (PRD: subscription-entitlement-reconciliation).
+// Manual / test / renderer-initiated pull — calls the service, never TypeORM.
+export const USER_REFRESH_ENTITLEMENT = "user:refresh-entitlement";
+// Renderer asks main to open the pricing page (records pricingOpenedAt + retry loop).
+export const USER_OPEN_PRICING_PLAN = "user:open-pricing-plan";
+// Main -> renderer broadcast of the new entitlement snapshot (only when changed).
+export const USER_INFO_UPDATED = "user:info:updated";
 export const OPENLOGINPAGE = "open:page";
 export const GET_LOGIN_URL = "user:get_login_url";
 export const CANCEL_DESKTOP_LOGIN = "user:cancel_desktop_login";
@@ -325,6 +341,9 @@ export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
 /** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
 export const AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION =
   "ai-chat-v2:resume-tool-after-permission";
+/** Deny a V2 scheduled-loop tool call paused for permission (deny-and-continue). */
+export const AI_CHAT_V2_DENY_TOOL_PERMISSION =
+  "ai-chat-v2:deny-tool-permission";
 // Plan Mode channels
 export const AI_CHAT_V2_PLAN_STATE = "ai-chat-v2:plan-state";
 export const AI_CHAT_V2_ANSWER_QUESTION = "ai-chat-v2:answer-question";
@@ -333,8 +352,6 @@ export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
 export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
   "ai-chat-v2:request-plan-changes";
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
-export const AI_CHAT_V2_COMPACT_CONVERSATION =
-  "ai-chat-v2:compact-conversation";
 export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
@@ -342,6 +359,23 @@ export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
 /** Main->renderer: read cached expanded pasted-text bodies for previews. */
 export const AI_CHAT_V2_READ_PASTE_CACHE = "ai-chat-v2:read-paste-cache";
 export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+/**
+ * Renderer->Main: save one generated image into the approved workspace
+ * (explicit user intent — no model-facing permission flow). Handler enforces
+ * the chat availability gate, authorizes the reference via
+ * GeneratedImageReferenceService, and reuses the export_generated_artifacts
+ * copy policy.
+ */
+export const AI_CHAT_V2_EXPORT_GENERATED_IMAGE =
+  "ai-chat-v2:export-generated-image";
+
+// AI Chat V2 pending-message queue & steering (message-queue PRD §12)
+export const AI_CHAT_V2_PENDING_CREATE = "ai-chat-v2:pending-message-create";
+export const AI_CHAT_V2_PENDING_LIST = "ai-chat-v2:pending-message-list";
+export const AI_CHAT_V2_PENDING_STEER = "ai-chat-v2:pending-message-steer";
+export const AI_CHAT_V2_PENDING_CANCEL = "ai-chat-v2:pending-message-cancel";
+export const AI_CHAT_V2_PENDING_RESUME = "ai-chat-v2:pending-message-resume";
+export const AI_CHAT_V2_PENDING_EVENT = "ai-chat-v2:pending-message-event";
 export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
 export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
@@ -404,6 +438,38 @@ export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
  * drops the context badge immediately (mirrors the manual compact flow). */
 export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
 
+// ==================== AiChatV2 Recoverable History Channels ====================
+// Recoverable conversation history + incremental compaction (technical-design
+// §13). History browsing is LOCAL-only (no AI calls, no AI-enable gate);
+// compaction status/cancel mirror the AI-gated compact flow.
+/** Renderer->Main: search archived history excerpts (local index scan, §13.1). */
+export const AI_CHAT_V2_HISTORY_SEARCH = "ai-chat-v2:history-search";
+/** Renderer->Main: read archived history source slices (§13.1). */
+export const AI_CHAT_V2_HISTORY_READ = "ai-chat-v2:history-read";
+/** Renderer->Main: paginated browse of archived history (local, §13.1). */
+export const AI_CHAT_V2_HISTORY_BROWSE = "ai-chat-v2:history-browse";
+/** Renderer->Main: resolve user-selected passages to exact excerpts (§13.1). */
+export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
+  "ai-chat-v2:history-resolve-selections";
+/** Renderer->Main: read whether the recoverable-history UI stage is enabled (design §18, stage 3). */
+export const AI_CHAT_V2_HISTORY_UI_ENABLED = "ai-chat-v2:history-ui-enabled";
+/** Renderer->Main: read the active compaction run status (§13.1). */
+export const AI_CHAT_V2_COMPACT_CONVERSATION =
+  "ai-chat-v2:compact-conversation";
+export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
+/** Renderer->Main: cancel the active compaction run (§13.1). */
+export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
+/**
+ * Renderer->Main: start (or resume) a bounded compaction run and return
+ * immediately (§13.1 start/status/progress). The run continues in the main
+ * process; the badge follows progress events + status — never one blocking
+ * RPC for the whole batch. Resume is just another start call: fresh claims
+ * resume from persisted checkpoints.
+ */
+export const AI_CHAT_V2_COMPACTION_START = "ai-chat-v2:compaction-start";
+/** Main->renderer compaction run lifecycle/progress broadcast (§13.1). */
+export const AI_CHAT_V2_COMPACTION_PROGRESS = "ai-chat-v2:compaction-progress";
+
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See
 // docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §6.
@@ -428,6 +494,31 @@ export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
   "ai-chat-v2:voice-model-download-progress";
 export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
   "ai-chat-v2:voice-model-cancel-download";
+
+// ==================== AI Chat Workspace Redesign Channels ====================
+// Redesigned three-region chat workspace (docs/prd/ai-chat-workspace-ui-redesign-*.md).
+// Invoke channels are request/response; event channels are main→renderer.
+export const AI_CHAT_WORKSPACE_BOOTSTRAP = "ai-chat-workspace:bootstrap";
+export const AI_CHAT_WORKSPACE_SELECT = "ai-chat-workspace:select";
+export const AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL =
+  "ai-chat-workspace:unsubscribe-detail";
+export const AI_CHAT_WORKSPACE_START_RUN = "ai-chat-workspace:start-run";
+export const AI_CHAT_WORKSPACE_CANCEL_RUN = "ai-chat-workspace:cancel-run";
+export const AI_CHAT_WORKSPACE_HISTORY_PAGE = "ai-chat-workspace:history-page";
+export const AI_CHAT_WORKSPACE_MARK_READ = "ai-chat-workspace:mark-read";
+export const AI_CHAT_WORKSPACE_RENAME = "ai-chat-workspace:rename";
+export const AI_CHAT_WORKSPACE_DELETE = "ai-chat-workspace:delete";
+export const AI_CHAT_WORKSPACE_DUPLICATE = "ai-chat-workspace:duplicate";
+export const AI_CHAT_WORKSPACE_EXPORT = "ai-chat-workspace:export";
+export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
+/** Main→Renderer: redacted sidebar projection updates (no content bodies). */
+export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
+  "ai-chat-workspace:summary-event";
+/** Main→Renderer: selected-conversation detailed run events. */
+export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
+/** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
+export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
+export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
@@ -604,6 +695,43 @@ export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
 export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
 export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
 
+// ==================== Managed Browser Channels (design §22) ====================
+// Session channels are AI-facing (registerAiValidatedHandler — USER_AI_ENABLED
+// is checked FIRST); settings/cache channels are management-only
+// (registerValidatedHandler). Event channels are main → renderer pushes.
+export const MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS =
+  "managed-browser:list-eligible-accounts";
+export const MANAGED_BROWSER_LIST_ACTIVE = "managed-browser:list-active";
+export const MANAGED_BROWSER_START = "managed-browser:start";
+export const MANAGED_BROWSER_STATUS = "managed-browser:status";
+export const MANAGED_BROWSER_HANDOFF = "managed-browser:handoff";
+export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
+  "managed-browser:verify-manual-login";
+export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
+export const MANAGED_BROWSER_STOP = "managed-browser:stop";
+export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
+export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
+export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
+  "managed-browser:capture-screenshot";
+export const MANAGED_BROWSER_EXTEND_HANDOFF = "managed-browser:extend-handoff";
+export const MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS =
+  "managed-browser:get-effective-settings";
+export const MANAGED_BROWSER_GET_CACHE_STATUS =
+  "managed-browser:get-cache-status";
+export const MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION =
+  "managed-browser:issue-clear-confirmation";
+export const MANAGED_BROWSER_CLEAR_CACHE = "managed-browser:clear-cache";
+export const MANAGED_BROWSER_UPDATE_SETTINGS =
+  "managed-browser:update-settings";
+// Event channels (main → renderer)
+export const MANAGED_BROWSER_STATUS_EVENT = "managed-browser:status-changed";
+export const MANAGED_BROWSER_PROGRESS_EVENT = "managed-browser:progress";
+export const MANAGED_BROWSER_APPROVAL_EVENT =
+  "managed-browser:approval-required";
+export const MANAGED_BROWSER_CHAT_NOTICE_EVENT = "managed-browser:chat-notice";
+export const MANAGED_BROWSER_CACHE_PROGRESS_EVENT =
+  "managed-browser:cache-progress";
+
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";
 export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";
@@ -661,6 +789,70 @@ export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
 
+// Portable workspace memory (Markdown files under .aifetchly/memory/)
+// Non-AI operations — available without an AI subscription (design §20.4).
+export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
+  "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
+  "ai:portable-workspace-memory:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CREATE =
+  "ai:portable-workspace-memory:create";
+export const AI_PORTABLE_WORKSPACE_MEMORY_UPDATE =
+  "ai:portable-workspace-memory:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE =
+  "ai:portable-workspace-memory:archive-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE =
+  "ai:portable-workspace-memory:delete-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
+  "ai:portable-workspace-memory:enable:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =
+  "ai:portable-workspace-memory:enable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW =
+  "ai:portable-workspace-memory:export:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT =
+  "ai:portable-workspace-memory:export";
+export const AI_PORTABLE_WORKSPACE_MEMORY_RESCAN =
+  "ai:portable-workspace-memory:rescan";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST =
+  "ai:portable-workspace-memory:diagnostics:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST =
+  "ai:portable-workspace-memory:conflicts:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE =
+  "ai:portable-workspace-memory:conflict:resolve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE =
+  "ai:portable-workspace-memory:policy:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE =
+  "ai:portable-workspace-memory:promote";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE =
+  "ai:portable-workspace-memory:privatize";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
+  "ai:portable-workspace-memory:review:approve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
+  "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST =
+  "ai:portable-workspace-memory:review:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION =
+  "ai:portable-workspace-memory:review:approve-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION =
+  "ai:portable-workspace-memory:review:reject-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE =
+  "ai:portable-workspace-memory:reveal-file";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
+  "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =
+  "ai:portable-workspace-memory:get-state";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
+  "ai:portable-workspace-memory:bridge:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =
+  "ai:portable-workspace-memory:bridge:apply";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE =
+  "ai:portable-workspace-memory:bridge:remove";
+export const AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE =
+  "ai:portable-workspace-memory:identity:regenerate";
+// Renderer push event (main → renderer): one summary per reconciliation.
+export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
+  "ai:portable-workspace-memory:changed";
+
 // Workspace Management Channels
 export const AI_WORKSPACE_SET = "ai-workspace:set";
 export const AI_WORKSPACE_GET = "ai-workspace:get";
@@ -716,3 +908,61 @@ export const DIAGNOSTICS_GET_STATUS = "diagnostics:get-status";
 export const DIAGNOSTICS_SET_DEBUG = "diagnostics:set-debug";
 export const DIAGNOSTICS_CLEAR_LOCAL = "diagnostics:clear-local";
 export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
+
+// ======== AI Content Reporting ========
+// Safety/support reporting for AI-generated output (Microsoft Store Policy
+// 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
+export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";
+
+/** Capability discovery for content reporting (design §13). NOT AI-gated. */
+export const AI_CONTENT_REPORT_CAPABILITIES = "ai:content:report:capabilities";
+
+// ======== Intent-Aware Outbound Email Delivery (§17) ========
+// Request/response (invoke) channels drive the review/approve/send lifecycle.
+// BATCH_PROGRESS is a main→renderer event channel for live status updates.
+// Draft generation is AI-gated; the review/approve/send/discard/status
+// channels are plain (they operate on already-authorized state and must stay
+// usable for inspection even when AI is disabled).
+export const OUTBOUND_EMAIL_BATCH_GET = "outbound:email:batch:get";
+export const OUTBOUND_EMAIL_DRAFT_UPDATE = "outbound:email:draft:update";
+export const OUTBOUND_EMAIL_BATCH_APPROVE = "outbound:email:batch:approve";
+export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
+export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
+export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
+export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== Application lifecycle (exit & system tray) channels ========
+// PRD: docs/prd/application-exit-and-system-tray-prd.md; design §10.
+// Lifecycle IPC is NOT an AI feature — no AI entitlement check.
+// CLOSE_CHOICE_* events are main↔renderer dialog plumbing; the lifecycle
+// state channels let the renderer reflect shutdown progress and block new
+// task actions while the main process is quitting.
+export const APPLICATION_LIFECYCLE_GET_STATE =
+  "application:lifecycle:get-state";
+export const APPLICATION_CLOSE_CHOICE_REQUEST =
+  "application:lifecycle:close-choice:request";
+export const APPLICATION_CLOSE_CHOICE_ACK =
+  "application:lifecycle:close-choice:ack";
+export const APPLICATION_CLOSE_CHOICE_SUBMIT =
+  "application:lifecycle:close-choice:submit";
+export const APPLICATION_LIFECYCLE_STATE_CHANGED =
+  "application:lifecycle:state-changed";
+
+// ======== E2E test-support channels ========
+// Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).
+// They exist because the sanitized E2E environment cannot run the production
+// create path for these rows (e.g. email-service credential encryption requires
+// the remote /api/user/secret-key backend, which does not exist in E2E), so the
+// test harness needs a direct, gated seeding path. They never exist in a
+// production or development run.
+export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
+
+// ---------------------------------------------------------------------------
+// Recoverable large tool results (AI Chat V2).
+// The viewer is an AI-gated surface; saved data stays on disk regardless, so
+// disabling AI stops access here without deleting anything.
+// ---------------------------------------------------------------------------
+export const AI_TOOL_RESULT_GET = "ai-tool-result:get";
+export const AI_TOOL_RESULT_READ = "ai-tool-result:read";
+export const AI_TOOL_RESULT_SEARCH = "ai-tool-result:search";
+export const AI_TOOL_RESULT_EXPORT = "ai-tool-result:export";

@@ -1,7 +1,7 @@
 /**
  * Tests for AiSupportBridge (observe-execute AI_SUPPORT_REQUEST/RESPONSE).
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import {
   requestAiSupport,
   handleAiSupportResponse,
@@ -13,7 +13,7 @@ import type {
 } from "@/modules/interface/BackgroundProcessMessages";
 
 describe("AiSupportBridge", () => {
-  let mockSendMessage: ReturnType<typeof vi.fn>;
+  let mockSendMessage: Mock;
   let mockParentPort: ParentPort;
 
   beforeEach(() => {

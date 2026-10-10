@@ -87,24 +87,21 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
-        <v-btn
-          icon
-          size="small"
-          variant="text"
+        <AiChatCompactionStatus
+          :status="compactionStatus"
+          :busy="compactionBusy"
+          class="mx-1"
+          @retry="handleCompactionRetry"
+          @cancel="handleCompactionCancel"
+          @open-history="historyUiEnabled && (showHistoryDrawer = true)"
+        />
+        <AiChatVoiceOutputToggle
+          :enabled="spokenResponseEnabled"
+          :saving="voiceSettingsSaving"
           class="v2-shell__speech-toggle"
-          data-testid="spoken-response-toggle"
-          :color="spokenResponseEnabled ? 'primary' : undefined"
-          :loading="voiceSettingsSaving"
-          :disabled="voiceSettingsSaving"
-          :title="spokenResponseToggleTitle"
-          :aria-label="spokenResponseToggleTitle"
-          :aria-pressed="spokenResponseEnabled"
-          @click="toggleSpokenResponse"
-        >
-          <v-icon size="small">
-            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
-          </v-icon>
-        </v-btn>
+          @toggle="toggleSpokenResponse"
+          @open-settings="openAIProviderSettings"
+        />
         <v-btn
           v-if="showCompactConversationButton"
           icon
@@ -114,12 +111,24 @@
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
           "
-          @click="handleCompactConversation"
+          @click="handleCompactStart"
           :title="
             t('aiChatV2.compact_conversation') || 'Compact conversation'
           "
         >
           <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          v-if="historyUiEnabled"
+          data-testid="ai-history-drawer-toggle"
+          :disabled="!activeConversationId"
+          @click="showHistoryDrawer = true"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+        >
+          <v-icon size="small">mdi-book-search-outline</v-icon>
         </v-btn>
         <v-btn
           icon
@@ -149,6 +158,29 @@
         >
           <v-icon size="small">mdi-plus-circle</v-icon>
         </v-btn>
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          data-testid="toggle-reasoning"
+          @click="toggleReasoningVisible"
+          :title="
+            showReasoning
+              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
+              : t('aiChatV2.show_reasoning') || 'Show reasoning'
+          "
+        >
+          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
+            mdi-brain
+          </v-icon>
+        </v-btn>
         <v-btn
           icon
           size="small"
@@ -166,6 +198,7 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
+        ref="messagesListRef"
         :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
@@ -176,6 +209,12 @@
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
+        :pending-messages="activePendingMessages"
+        :runtime-status="authoritativeRuntimeStatus"
+        @steer-pending="onSteerPending"
+        @cancel-pending="onCancelPending"
+        @resume-pending="onResumePending"
+        :reported-message-ids="reportedMessageIds"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -183,7 +222,19 @@
         @request-plan-changes="handleRequestPlanChanges"
         @open-artifact="(id: string) => emit('open-artifact', id)"
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @use-generated-image="onUseGeneratedImage"
+        @edit-generated-image="onEditGeneratedImage"
+        @save-generated-image="onSaveGeneratedImage"
+        @retry-generated-image-batch="onRetryGeneratedImageBatch"
+        @stop-batch="onStop"
+        @report="onSingleReportRequest"
       />
+
+      <!-- Managed-browser session card: shows the live social-browser
+           session (account, state, handoff controls) whenever one is
+           active. Renders nothing when no session is running. -->
+      <ManagedBrowserSessionCard />
+      <ManagedBrowserStartPanel />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
@@ -300,7 +351,7 @@
           v-if="showWorkspaceRequired && activeConversationId"
           :conversation-id="activeConversationId"
           @approved="onWorkspaceApproved"
-          @cancel="showWorkspaceRequired = false"
+          @cancel="conversationWorkspace.closeSetup()"
         />
         <!-- Phase 14 (Plan 14-04): inline trust card (D-03). Renders only
              when an approved workspace with .aifetchly instructions is
@@ -344,22 +395,9 @@
         </v-card>
       </v-dialog>
 
-      <v-sheet
-        v-if="liveScheduledAssistant"
-        class="px-3 py-2 scheduled-live-bubble"
-        color="grey-lighten-4"
-        elevation="0"
-      >
-        <div class="d-flex align-center text-caption text-medium-emphasis mb-1">
-          <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
-          <span>{{
-            t("aiChatV2.scheduledLoop.statusRunning") || "running"
-          }}</span>
-        </div>
-        <div class="text-body-2 scheduled-live-content">
-          {{ liveScheduledAssistant.content }}
-        </div>
-      </v-sheet>
+      <!-- Scheduled-loop turns stream directly into the normal chat message
+           list (see handleScheduledStream) so they look identical to
+           interactive responses. No separate running-area bubble. -->
 
       <!-- TTS prerequisite notice: shown when the user tries to enable spoken
            responses (the header speaker toggle) before a TTS model is installed.
@@ -405,6 +443,13 @@
         </v-btn>
       </div>
 
+      <AiChatSelectedContext
+        v-if="historyUiEnabled"
+        :selections="selectedContextItems"
+        @remove="removeSelectedContext"
+        @clear="clearSelectedContext"
+      />
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -419,6 +464,9 @@
         :voice-speaking="voiceSpeaking"
         :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
+        :selected-generated-images="selectedGeneratedImageViews"
+        :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
+        :generated-image-focus-signal="composerFocusSignal"
         @send="onSend"
         @stop="onStop"
         @request-workspace="handleWorkspaceSetupRequest"
@@ -427,6 +475,9 @@
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
         @open-voice-settings="openAIProviderSettings"
+        @remove-generated-image="onRemoveGeneratedImage"
+        @clear-generated-images="onClearGeneratedImages"
+        @reorder-generated-images="onReorderGeneratedImages"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -434,13 +485,11 @@
             v-model="selectedModel"
             :items="availableModels"
             :default-model="defaultModelId"
-            :disabled="chatIsRunning"
             :loading="availableModels.length === 0"
             class="ml-2"
           />
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
             class="ml-2"
             @update:model-value="onToolApprovalModeChange"
           />
@@ -479,7 +528,139 @@
       @cancel="onScheduledLoopApprovalCancel"
     />
 
+    <!-- Ambiguity chooser: several generated images could match the request;
+         the user picks one to proceed as the sole reference. Persistent so an
+         outside click cannot dismiss it and strand a stale pending send. -->
+    <v-dialog
+      v-model="showGeneratedImageChooser"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-chooser"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.referenceTrayTitle") ||
+              "Reference images"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t(
+                "aiChatV2.generatedImageRefs.errors.generated_image_ambiguous"
+              ) || "Several images could match your request."
+            }}
+          </p>
+          <div class="d-flex flex-wrap ga-2">
+            <v-btn
+              v-for="(candidate, idx) in ambiguityCandidates"
+              :key="`${candidate.reference.messageId}:${candidate.reference.imageIndex}`"
+              variant="outlined"
+              size="small"
+              :data-testid="`ai-chat-generated-candidate-${idx}`"
+              @click="chooseAmbiguityCandidate(candidate)"
+            >
+              <img
+                v-if="candidate.thumbUrl"
+                :src="candidate.thumbUrl"
+                :alt="
+                  candidate.fileName ||
+                  t('aiChatV2.generatedImageRefs.useAsReference') ||
+                  'Reference image'
+                "
+                class="mr-1"
+                style="max-height: 32px; max-width: 48px; border-radius: 4px"
+              />
+              <v-icon v-else size="small" class="mr-1">mdi-image-outline</v-icon>
+              {{ candidate.fileName || `#${idx + 1}` }}
+            </v-btn>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-chooser-cancel"
+            @click="cancelAmbiguityChooser"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
+    <!-- Batch confirmation: more than 3 images inferred; confirm sends plain
+         text (main process runs them as a batch), decline aborts. -->
+    <v-dialog
+      v-model="showBatchConfirmDialog"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-batch-confirm"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmTitle") ||
+              "Process as batch?"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmBody", {
+                count: pendingGeneratedImageBatchCount,
+              }) ||
+              "Each selected image will be edited independently in a background batch. This may take a while."
+            }}
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-batch-decline"
+            @click="declineGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            data-testid="ai-chat-generated-batch-confirm-accept"
+            @click="confirmGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.generatedImageRefs.send") || "Send" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Generated-image preflight errors (fusion limit, reference limit). -->
+    <v-snackbar
+      v-model="showGeneratedImageNotice"
+      timeout="4000"
+      location="bottom"
+      data-testid="ai-chat-generated-error-toast"
+    >
+      {{ generatedImageNotice }}
+    </v-snackbar>
+
+
+
+    <v-snackbar
+      v-model="scheduledPermissionNotice"
+      timeout="5000"
+      location="bottom"
+      data-testid="scheduled-permission-notice"
+    >
+      {{ scheduledPermissionNoticeText }}
+    </v-snackbar>
 
     <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
       {{
@@ -488,89 +669,15 @@
       }}
     </v-snackbar>
 
-    <v-dialog
+    <AiChatVoiceRuntimeInstallDialog
       v-model="voiceRuntimeInstallDialog"
-      max-width="520"
-      persistent
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-microphone-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.voice.runtime_install_title") ||
-              "Install local voice runtime?"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t("aiChatV2.voice.runtime_install_message") ||
-              "Voice input needs the local voice runtime and Whisper Base voice model. Download and install them now?"
-            }}
-          </p>
-          <div
-            v-if="voiceRuntimeInstallSizeText"
-            class="text-caption text-medium-emphasis mb-3"
-          >
-            {{ voiceRuntimeInstallSizeText }}
-          </div>
-          <v-alert
-            v-if="voiceRuntimeInstallError"
-            type="error"
-            variant="tonal"
-            density="comfortable"
-            class="mb-3"
-          >
-            {{ voiceRuntimeInstallError }}
-          </v-alert>
-          <div v-if="voiceRuntimeInstalling" class="mt-3">
-            <div class="d-flex align-center mb-2">
-              <v-progress-circular
-                indeterminate
-                size="18"
-                width="2"
-                color="primary"
-                class="mr-2"
-              />
-              <span class="text-body-2">
-                {{ voiceRuntimeInstallProgressText }}
-              </span>
-            </div>
-            <v-progress-linear
-              v-if="voiceRuntimeInstallPercent !== undefined"
-              :model-value="voiceRuntimeInstallPercent"
-              color="primary"
-              height="6"
-              rounded
-            />
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            :disabled="voiceRuntimeInstalling"
-            @click="voiceRuntimeInstallDialog = false"
-          >
-            {{ t("common.cancel") || "Cancel" }}
-          </v-btn>
-          <v-btn
-            color="primary"
-            variant="flat"
-            :loading="voiceRuntimeInstalling"
-            :disabled="voiceRuntimeInstalling"
-            @click="confirmInstallVoiceRuntime"
-          >
-            {{
-              t("aiChatV2.voice.runtime_install_confirm") ||
-              "Download and install"
-            }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :installing="voiceRuntimeInstalling"
+      :error="voiceRuntimeInstallError"
+      :size-text="voiceRuntimeInstallSizeText"
+      :progress-text="voiceRuntimeInstallProgressText"
+      :percent="voiceRuntimeInstallPercent"
+      @confirm="confirmInstallVoiceRuntime"
+    />
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -665,6 +772,31 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Recoverable-history browser drawer (technical-design §13.1, §18 stage 3).
+         Gated on the history-UI rollout flag: no drawer, toggle, or selection
+         chips when the stage is off so users cannot select passages that
+         resolve to empty. -->
+    <AiChatHistoryDrawer
+      v-if="activeConversationId && historyUiEnabled"
+      v-model="showHistoryDrawer"
+      :conversation-id="activeConversationId"
+      @select="handleHistorySelect"
+      @navigate="handleHistoryNavigate"
+    />
+    <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
+    <AIContentReportDialog
+      v-if="singleReportDialogOpen && activeSingleDescriptor"
+      v-model="singleReportDialogOpen"
+      :descriptor="activeSingleDescriptor"
+      @submitted="onSingleReportSubmitted"
+    />
+    <!-- Multi-select conversation report dialog (design §10.3). NOT AI-gated. -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
@@ -682,6 +814,9 @@ import { useRouter } from "vue-router";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageEvent,
+  AIChatPendingMessageView,
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
@@ -692,6 +827,8 @@ import type {
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
+  ChatV2GeneratedImageReference,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -710,10 +847,15 @@ import {
   clearChatV2Conversation,
   getChatV2Conversations,
   getChatV2History,
-  streamChatV2Message,
+  awaitChatV2Turn,
+  createChatV2PendingMessage,
+  steerChatV2PendingMessage,
+  cancelChatV2PendingMessage,
+  resumeChatV2PendingQueue,
+  subscribeChatV2PendingEvents,
   stopChatV2Stream,
   getChatV2PlanState,
-  compactChatV2Conversation,
+  startCompaction,
   subscribeAutoCompacted,
   unsubscribeAutoCompacted,
   answerChatV2Question,
@@ -724,37 +866,16 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
+  exportGeneratedImage,
+  getCompactionStatus,
+  cancelCompaction,
+  subscribeCompactionProgress,
+  unsubscribeCompactionProgress,
+  denyChatV2ToolPermission,
 } from "@/views/api/aiChatV2";
-import {
-  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-  cancelVoiceJob,
-  downloadVoiceModel,
-  getVoiceSettings,
-  getVoiceStatus,
-  notifyVoiceModelsChanged,
-  onVoiceModelDownloadProgress,
-  setVoiceSettings,
-} from "@/views/api/aiChatV2Voice";
-import {
-  getLocalAiRuntimeStatus,
-  installLocalAiRuntime,
-  onLocalAiRuntimeProgress,
-  prepareLocalAiRuntimeInstall,
-} from "@/views/api/localAiRuntime";
-import type {
-  AiChatVoiceRuntimeStatus,
-  AiChatVoiceSettingsView,
-  AiChatVoiceTtsMode,
-  VoiceModelDownloadProgress,
-} from "@/entityTypes/aiChatVoiceTypes";
-import type {
-  LocalAiRuntimeDownloadProgress,
-  LocalAiRuntimeInstallOffer,
-  LocalAiRuntimeStatus,
-} from "@/entityTypes/localAiRuntimeTypes";
-import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
-import { SpeechResponseController } from "./voice/SpeechResponseController";
+import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
+import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
+import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -771,9 +892,17 @@ import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import ManagedBrowserSessionCard from "./ManagedBrowserSessionCard.vue";
+import ManagedBrowserStartPanel from "./ManagedBrowserStartPanel.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
+import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
+import AiChatSelectedContext from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -783,12 +912,9 @@ import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
-import { getWorkspace } from "@/views/api/workspace";
-import {
-  acquireWorkspaceWatch,
-  releaseWorkspaceWatch,
-  previewWorkspaceAgents,
-} from "@/views/api/workspaceWatch";
+import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
+import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
+import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import {
   createGoal,
   getActiveGoal,
@@ -800,6 +926,7 @@ import {
   isValidLoopCount,
 } from "@/views/utils/aiGoalCommand";
 import { parseAiLoopCommand } from "@/service/slashCommands/AiChatLoopCommandParser";
+import { pastedBlocksFromSend } from "@/service/pastedText/PastedTextDisplay";
 import {
   parseSkillSlashCommand,
   SKILL_SLASH_DEFAULT_TASK,
@@ -821,12 +948,15 @@ import type {
   ChatV2ConversationUpdatedEvent,
   ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
-import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
-import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
-import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
+import {
+  extractArtifactMetadata,
+  extractToolOutputDescriptors,
+  ensureArtifactMetadata,
+  ensureToolOutputMetadata,
+} from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
   mergeFileOperationRecords,
@@ -839,6 +969,7 @@ import {
 import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
+  estimateVisibleContextTokens,
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
@@ -851,12 +982,29 @@ import { isPlanStateActive } from "./planStateUtil";
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
+  writeAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
 } from "@/service/AIChatErrorSentinels";
+import {
+  inferGeneratedImageReferences,
+  isFusionWording,
+} from "./generatedImageReferenceInference";
+import type { GeneratedImageReferenceView } from "./generatedImageReferenceView";
+import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
+import {
+  buildChatV2ConversationSnapshot,
+  hasEligibleChatV2Candidate,
+} from "@/views/components/aiContentReport/conversationReportSnapshot";
+import { useReportCapabilities } from "@/views/utils/reportCapabilities";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -908,6 +1056,17 @@ const lastHandledOpenConversationRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
+// Conversation report (v2) orchestration — lifted from AiChatV2Messages
+// (design §11.1). The single-output dialog and the conversation dialog share
+// this mount point; the per-message button now emits `report` upward.
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<
+  ReturnType<typeof buildChatV2ConversationSnapshot> | null
+>(null);
+const reportedMessageIds = ref<Set<string>>(new Set());
+const singleReportDialogOpen = ref(false);
+const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
+
 const isStreaming = ref(false);
 const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
@@ -942,7 +1101,41 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+// Persistent (timeout=-1) notice shown when a scheduled run pauses for
+// interactive tool permission — action-required, so it stays until dismissed.
+const scheduledPermissionNotice = ref(false);
+const scheduledPermissionNoticeText = ref("");
+// Recoverable-history + incremental-compaction state (technical-design §13).
+const showHistoryDrawer = ref(false);
+/**
+ * History-UI rollout flag (design §18 stage 3). Fail-closed: false until the
+ * main-process flag read resolves true. When false the drawer toggle,
+ * selected-context chips, and "use in next reply" affordances are hidden so
+ * users cannot select passages that backend resolution would no-op.
+ */
+const historyUiEnabled = ref(false);
+const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+const compactionBusy = ref(false);
+const selectedContextItems = ref<SelectedContextItem[]>([]);
+/**
+ * Per-conversation selection drafts (§13.3, FR-10): switching conversations
+ * preserves each conversation's draft instead of discarding it, so context
+ * choices never leak across chats and are restored on return.
+ */
+const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map());
+/**
+ * Stable submission identity (§13.3): kept until acceptance is resolved.
+ * Transport retry reuses the same ID so the backend reuses the accepted
+ * user-turn metadata instead of duplicating the message + selected context.
+ * Provider-failure retry re-executes the existing turn rather than adding a
+ * second selected-context message.
+ */
+const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+// Template ref on AiChatV2Messages so we can force-scroll to the bottom after
+// history loads (the internal pinnedToBottom flag may be stale from a previous
+// conversation).
+const messagesListRef = ref<{ scrollToBottomForce: () => Promise<void> } | null>(null);
 
 interface MessageListController {
   get(): ChatV2MessageView[];
@@ -957,6 +1150,8 @@ interface ConversationRuntimeState {
   streamError: string | null;
   retryInfo: RetryInfo | null;
   recoveryInfo: RecoveryInfo | null;
+  /** Non-terminal queued messages (message-queue PRD §7.2). */
+  pendingMessages: AIChatPendingMessageView[];
 }
 
 const conversationRuntime = ref<Map<string, ConversationRuntimeState>>(
@@ -971,6 +1166,132 @@ const createIdleRuntimeState = (): ConversationRuntimeState => ({
   streamError: null,
   retryInfo: null,
   recoveryInfo: null,
+  pendingMessages: [],
+});
+
+// -------------------------------------------------------------------------
+// Pending-message queue state (message-queue PRD)
+// -------------------------------------------------------------------------
+
+/** Parked turn renderers for messages that dispatch later (queued case). */
+interface ParkedQueuedTurn {
+  readonly conversationId: string;
+  readonly pendingMessageId: string;
+  readonly activate: (assistantMessageId: string) => void;
+}
+const parkedQueuedTurns = new Map<string, ParkedQueuedTurn>();
+let unsubscribePendingEvents: (() => void) | null = null;
+
+const upsertPendingMessage = (view: AIChatPendingMessageView): void => {
+  const current =
+    getConversationRuntimeState(view.conversationId).pendingMessages ?? [];
+  const exists = current.some(
+    (entry) => entry.pendingMessageId === view.pendingMessageId
+  );
+  const next = exists
+    ? current.map((entry) =>
+        entry.pendingMessageId === view.pendingMessageId ? view : entry
+      )
+    : [...current, view];
+  patchConversationRuntimeState(view.conversationId, {
+    pendingMessages: next,
+  });
+};
+
+const removePendingMessage = (
+  conversationId: string,
+  pendingMessageId: string
+): void => {
+  const current =
+    getConversationRuntimeState(conversationId).pendingMessages ?? [];
+  patchConversationRuntimeState(conversationId, {
+    pendingMessages: current.filter(
+      (entry) => entry.pendingMessageId !== pendingMessageId
+    ),
+  });
+};
+
+/** Park a queued message's turn renderer until its dispatch starts. */
+const parkQueuedPendingTurn = (
+  view: AIChatPendingMessageView,
+  activate: (assistantMessageId: string) => void
+): void => {
+  upsertPendingMessage(view);
+  parkedQueuedTurns.set(view.pendingMessageId, {
+    conversationId: view.conversationId,
+    pendingMessageId: view.pendingMessageId,
+    activate,
+  });
+};
+
+/**
+ * Pending lifecycle events are refreshable hints: upsert the view, activate
+ * parked turn renderers on dispatch, and drop bubbles once delivered.
+ */
+const handlePendingEvent = (event: AIChatPendingMessageEvent): void => {
+  if (event.pendingMessage) {
+    upsertPendingMessage(event.pendingMessage);
+  }
+  const parked = parkedQueuedTurns.get(event.pendingMessageId);
+  if (parked && event.status === "dispatching") {
+    const assistantId =
+      event.pendingMessage?.activeAssistantMessageId ?? undefined;
+    if (assistantId) {
+      parked.activate(assistantId);
+      parkedQueuedTurns.delete(event.pendingMessageId);
+    }
+  }
+  if (
+    event.status === "sent" ||
+    event.status === "cancelled" ||
+    event.status === "applied"
+  ) {
+    removePendingMessage(event.conversationId, event.pendingMessageId);
+    parkedQueuedTurns.delete(event.pendingMessageId);
+  }
+};
+
+const onSteerPending = async (pendingMessageId: string): Promise<void> => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  try {
+    const view = await steerChatV2PendingMessage(
+      conversationId,
+      pendingMessageId
+    );
+    if (view) {
+      upsertPendingMessage(view);
+    }
+  } catch (err) {
+    streamError.value =
+      err instanceof Error
+        ? err.message
+        : t("aiChatV2.queue.steer_failed") || "Couldn't steer this message.";
+  }
+};
+
+const onCancelPending = async (pendingMessageId: string): Promise<void> => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  try {
+    await cancelChatV2PendingMessage(conversationId, pendingMessageId);
+  } catch (err) {
+    console.error("[ai-chat-v2] cancel pending failed:", err);
+  }
+};
+
+const onResumePending = async (conversationId: string): Promise<void> => {
+  try {
+    await resumeChatV2PendingQueue(conversationId);
+  } catch (err) {
+    console.error("[ai-chat-v2] resume queue failed:", err);
+  }
+};
+
+const activePendingMessages = computed<AIChatPendingMessageView[]>(() => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return [];
+  return getConversationRuntimeState(conversationId).pendingMessages ?? [];
 });
 
 const getConversationRuntimeState = (
@@ -1056,6 +1377,302 @@ const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
   markConversationRuntimeStopped(activeConversationId.value, errorMessage);
 };
 
+// --- Conversation-scoped generated-image selection (composer tray) ---
+interface GeneratedImageDraftState {
+  readonly references: ChatV2GeneratedImageReference[];
+}
+
+type GeneratedImageDraftMap = Map<string, GeneratedImageDraftState>;
+
+/** Hard cap on stored selections per conversation (direct requests cap at 3). */
+const GENERATED_IMAGE_DRAFT_CAP = 50;
+/** Max generated-image refs attached to a single direct request. */
+const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
+/** Draft key used before a conversation id exists (brand-new chat). */
+const DRAFT_KEY_PENDING = "__pending_conversation__";
+/** Neutral instruction sent when the user attaches refs but no text. */
+const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
+
+const draftKeyFor = (conversationId: string | null): string =>
+  conversationId ?? DRAFT_KEY_PENDING;
+
+const generatedImageDrafts = ref<GeneratedImageDraftMap>(new Map());
+
+const sameGeneratedImageRef = (
+  a: ChatV2GeneratedImageReference,
+  b: ChatV2GeneratedImageReference
+): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+
+const setGeneratedImageDraft = (
+  key: string,
+  references: ChatV2GeneratedImageReference[]
+): void => {
+  const nextMap: GeneratedImageDraftMap = new Map(generatedImageDrafts.value);
+  if (references.length === 0) nextMap.delete(key);
+  else nextMap.set(key, { references });
+  generatedImageDrafts.value = nextMap;
+};
+
+const getGeneratedImageDraft = (
+  conversationId: string | null
+): ChatV2GeneratedImageReference[] =>
+  [...(generatedImageDrafts.value.get(draftKeyFor(conversationId))?.references ?? [])];
+
+const activeGeneratedImageRefs = computed<ChatV2GeneratedImageReference[]>(() =>
+  getGeneratedImageDraft(activeConversationId.value)
+);
+
+function resolveGeneratedImageViewModel(
+  reference: ChatV2GeneratedImageReference
+): GeneratedImageReferenceView {
+  const message = messages.value.find((m) => m.id === reference.messageId);
+  const image = message?.metadata?.generatedImages?.[reference.imageIndex];
+  return {
+    reference,
+    fileName:
+      typeof image?.file_name === "string" ? image.file_name : undefined,
+    thumbUrl: typeof image?.url === "string" ? image.url : undefined,
+  };
+}
+
+const selectedGeneratedImageViews = computed<GeneratedImageReferenceView[]>(
+  () => activeGeneratedImageRefs.value.map(resolveGeneratedImageViewModel)
+);
+
+const composerFocusSignal = ref(0);
+
+function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  const key = draftKeyFor(activeConversationId.value);
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  if (current.some((ref) => sameGeneratedImageRef(ref, reference))) {
+    setGeneratedImageDraft(
+      key,
+      current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+    );
+    return;
+  }
+  if (current.length >= GENERATED_IMAGE_DRAFT_CAP) return;
+  setGeneratedImageDraft(key, [...current, reference]);
+}
+
+function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [reference]);
+  composerFocusSignal.value += 1;
+}
+
+// --- Save-to-workspace action for generated images -------------------------
+// The button click IS user intent; the main process still gates on chat
+// availability and authorizes the reference before copying the file.
+
+/** Pending exports awaiting an approved workspace, keyed by conversation. */
+const pendingGeneratedImageExports = ref<
+  Map<string, ChatV2GeneratedImageReference[]>
+>(new Map());
+
+function showGeneratedImageToast(message: string): void {
+  generatedImageNotice.value = message;
+}
+
+function enqueuePendingGeneratedImageExport(
+  conversationId: string,
+  reference: ChatV2GeneratedImageReference
+): void {
+  const key = draftKeyFor(conversationId);
+  const nextMap = new Map(pendingGeneratedImageExports.value);
+  const current = nextMap.get(key) ?? [];
+  if (
+    !current.some((ref) => sameGeneratedImageRef(ref, reference))
+  ) {
+    nextMap.set(key, [...current, reference]);
+  }
+  pendingGeneratedImageExports.value = nextMap;
+}
+
+function takePendingGeneratedImageExports(
+  conversationId: string
+): ChatV2GeneratedImageReference[] {
+  const key = draftKeyFor(conversationId);
+  const pending = pendingGeneratedImageExports.value.get(key) ?? [];
+  if (pending.length > 0) {
+    const nextMap = new Map(pendingGeneratedImageExports.value);
+    nextMap.delete(key);
+    pendingGeneratedImageExports.value = nextMap;
+  }
+  return pending;
+}
+
+async function attemptGeneratedImageExport(
+  conversationId: string,
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  try {
+    const result = await exportGeneratedImage(conversationId, reference);
+    if (result.status === "workspace_required") {
+      // Keep the export queued and surface the SAME request-workspace flow as
+      // the composer; the export retries automatically once a workspace is
+      // approved for this conversation.
+      enqueuePendingGeneratedImageExport(conversationId, reference);
+      ensureWorkspaceConversationId();
+      conversationWorkspace.requestSetup();
+      showGeneratedImageToast(
+        t("aiChatV2.imageTool.errors.workspaceRequired") ||
+          "An approved workspace is required first."
+      );
+      return;
+    }
+    showGeneratedImageToast(
+      t("aiChatV2.artifactExport.savedToWorkspace", {
+        fileName: result.fileName ?? "",
+      }) || `Saved ${result.fileName ?? ""} to your workspace.`
+    );
+  } catch (err) {
+    showGeneratedImageToast(
+      err instanceof Error && err.message
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${err.message})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  }
+}
+
+async function onSaveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  const conversationId = activeConversationId.value ?? ensureWorkspaceConversationId();
+  await attemptGeneratedImageExport(conversationId, reference);
+}
+
+/**
+ * Retry-failed action on a settled generated-image batch card: resubmit ONLY
+ * the failed/cancelled opaque references (never successful ones) with the
+ * original shared instruction, via the trusted user-confirmed staging channel.
+ */
+function onRetryGeneratedImageBatch(payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void {
+  if (payload.references.length === 0) return;
+  void onSend(payload.instruction, undefined, {
+    bypassGeneratedImageInference: true,
+    confirmedBatchReferences: [...payload.references],
+  });
+}
+
+/**
+ * Retry exports that were queued because no approved workspace existed.
+ * Called once a workspace becomes approved for the active conversation so the
+ * user's click completes without needing another action.
+ */
+async function retryPendingGeneratedImageExports(): Promise<void> {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  const pending = takePendingGeneratedImageExports(conversationId);
+  for (const reference of pending) {
+    await attemptGeneratedImageExport(conversationId, reference);
+  }
+}
+
+function onRemoveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): void {
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  setGeneratedImageDraft(
+    draftKeyFor(activeConversationId.value),
+    current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+  );
+}
+
+function onClearGeneratedImages(): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), []);
+}
+
+function onReorderGeneratedImages(
+  references: ChatV2GeneratedImageReference[]
+): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    ...references,
+  ]);
+}
+
+// Ambiguity chooser / batch confirmation / error toast state.
+interface PendingGeneratedImageSend {
+  /** Draft key of the conversation that created this pending send. */
+  readonly conversationId: string;
+  readonly text: string;
+  readonly files: File[];
+  /** Reference set captured at batch-confirmation time; replayed verbatim on
+   * confirm so the main process stages exactly what the user approved. */
+  readonly confirmedReferences?: ChatV2GeneratedImageReference[];
+  readonly options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  };
+}
+
+const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
+const showGeneratedImageChooser = ref(false);
+const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
+const showBatchConfirmDialog = ref(false);
+/** Number of references shown in the batch-confirmation copy. */
+const pendingGeneratedImageBatchCount = computed<number>(
+  () => pendingGeneratedImageSend.value?.confirmedReferences?.length ?? 0
+);
+const generatedImageNotice = ref<string | null>(null);
+const showGeneratedImageNotice = computed<boolean>({
+  get: () => generatedImageNotice.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) generatedImageNotice.value = null;
+  },
+});
+
+function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  if (
+    !pending ||
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    // The pending send belongs to a different conversation (stale chooser
+    // state); discard it instead of replaying it into the active one.
+    return;
+  }
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    view.reference,
+  ]);
+  void onSend(pending.text, pending.files, pending.options);
+}
+
+function cancelAmbiguityChooser(): void {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+}
+
+function confirmGeneratedImageBatch(): void {
+  const pending = pendingGeneratedImageSend.value;
+  const confirmed = pending?.confirmedReferences;
+  pendingGeneratedImageSend.value = null;
+  showBatchConfirmDialog.value = false;
+  if (!pending || !confirmed || confirmed.length === 0) return;
+  void onSend(pending.text, pending.files, {
+    ...pending.options,
+    bypassGeneratedImageInference: true,
+    // Trusted channel: the exact set the user just confirmed, replayed
+    // verbatim so the main process stages it before the model runs.
+    confirmedBatchReferences: [...confirmed],
+  });
+}
+
+function declineGeneratedImageBatch(): void {
+  pendingGeneratedImageSend.value = null;
+  showBatchConfirmDialog.value = false;
+}
+
+
 const setAuthoritativeRuntimeStatus = (
   conversationId: string,
   status: ChatV2RuntimeStatus
@@ -1118,9 +1735,14 @@ const mergePersistedAndLiveMessages = (
         liveMessage.metadata?.generatedImages?.length ?? 0;
       const persistedImageCount =
         persistedMessage.metadata?.generatedImages?.length ?? 0;
+      const liveReasoningLen =
+        liveMessage.metadata?.reasoning?.content?.length ?? 0;
+      const persistedReasoningLen =
+        persistedMessage.metadata?.reasoning?.content?.length ?? 0;
       if (
         liveMessage.content.length > persistedMessage.content.length ||
-        liveImageCount > persistedImageCount
+        liveImageCount > persistedImageCount ||
+        liveReasoningLen > persistedReasoningLen
       ) {
         const metadataSource =
           liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
@@ -1202,17 +1824,28 @@ async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
-// Workspace tracking
+// Workspace tracking — shared composable (chat-first shell design §9.1).
+// The classic dock and the new chat center surface consume ONE implementation
+// of badge state, memory counting, setup flow, watch lifecycle, and trust
+// card. Read-only aliases keep the template bindings unchanged.
 // ---------------------------------------------------------------------------
-// Active workspace for the current conversation. Null when no conversation is
-// selected or the conversation has no workspace yet. Drives the badge.
-const activeWorkspace = ref<WorkspaceSummary | null>(null);
-// True when the active conversation has no workspace — shows the pick card.
-const showWorkspaceRequired = ref(false);
+const conversationWorkspace = useConversationWorkspace(activeConversationId);
+const activeWorkspace = computed(() => conversationWorkspace.workspace.value);
+const showWorkspaceRequired = computed(
+  () => conversationWorkspace.setupOpen.value
+);
+const workspaceMemoryCount = computed(
+  () => conversationWorkspace.memoryCount.value
+);
+const activeWorkspaceWatchId = computed(
+  () => conversationWorkspace.watchId.value
+);
+const showWorkspaceTrustCard = computed(
+  () => conversationWorkspace.trustCardVisible.value
+);
 
-// Workspace memory panel + count for the active approved workspace.
+// Workspace memory panel dialog (display state local to this surface).
 const showWorkspaceMemory = ref(false);
-const workspaceMemoryCount = ref(0);
 
 function openWorkspaceMemory(): void {
   if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
@@ -1222,26 +1855,22 @@ function openWorkspaceMemory(): void {
   showWorkspaceMemory.value = true;
 }
 
-async function refreshWorkspaceMemoryCount(): Promise<void> {
-  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
-    workspaceMemoryCount.value = 0;
-    return;
-  }
-  try {
-    // One IPC + DB round-trip: fetch up to 200 active memories and use the
-    // returned length as the badge count (capped at 200, which is plenty for
-    // a badge — beyond that the exact number doesn't matter to the user).
-    const resp = await workspaceMemoryApi.list({
-      conversationId: activeConversationId.value,
-      status: "active",
-      limit: 200,
-    });
-    workspaceMemoryCount.value =
-      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
-  } catch {
-    workspaceMemoryCount.value = 0;
-  }
+function refreshWorkspaceMemoryCount(): void {
+  void conversationWorkspace.refreshMemoryCount();
 }
+
+// Re-resolve relative file-op paths once the workspace root resolves (the
+// composable owns workspace refresh; this is the chat-specific side effect).
+watch(activeWorkspace, () => {
+  const conversationId = activeConversationId.value;
+  if (conversationId && messages.value.length > 0) {
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
+  }
+});
 
 function createLocalConversationId(): string {
   const randomId =
@@ -1271,50 +1900,7 @@ function handleWorkspaceSetupRequest(): void {
   // change folders. Re-picking creates a new pending workspace that supersedes
   // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
-  showWorkspaceRequired.value = true;
-}
-
-/**
- * Fetch the workspace (if any) for the given conversation and update the
- * badge/required-card state. Called on mount and whenever the active
- * conversation changes.
- */
-async function refreshWorkspace(conversationId: string | null): Promise<void> {
-  if (!conversationId) {
-    activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
-    void refreshWorkspaceMemoryCount();
-    return;
-  }
-  try {
-    const ws = await getWorkspace(conversationId);
-    activeWorkspace.value = ws
-      ? {
-          id: ws.id,
-          conversationId: ws.conversationId,
-          rootPath: ws.rootPath,
-          label: ws.label,
-          approvalState: ws.approvalState,
-        }
-      : null;
-    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
-  } catch {
-    // non-fatal; treat as no workspace
-    activeWorkspace.value = null;
-  }
-  void refreshWorkspaceMemoryCount();
-  // Re-resolve relative file-op paths once workspace root is known.
-  if (
-    conversationId &&
-    activeConversationId.value === conversationId &&
-    messages.value.length > 0
-  ) {
-    hydrateFileOpsFromMessages(
-      conversationId,
-      messages.value,
-      activeWorkspace.value?.rootPath
-    );
-  }
+  conversationWorkspace.requestSetup();
 }
 
 /**
@@ -1425,6 +2011,12 @@ async function refreshScheduledLoopStatus(): Promise<void> {
 /** Clear scheduled-loop UI state when leaving the current conversation. */
 function resetScheduledLoopViewState(): void {
   activeScheduledLoop.value = null;
+  if (
+    liveScheduledAssistant.value &&
+    activeAssistantMessageId.value === liveScheduledAssistant.value.messageId
+  ) {
+    activeAssistantMessageId.value = null;
+  }
   liveScheduledAssistant.value = null;
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
@@ -1451,6 +2043,142 @@ function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
 }
 
 /**
+ * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
+ * Updates the status badge for the active conversation; ignored for other
+ * conversations (the badge is per-conversation, not global). A `completed`
+ * event also raises the compacted notice — the manual flow no longer waits
+ * on a blocking RPC, so completion is observed here instead.
+ */
+function handleCompactionProgress(
+  event: ChatV2CompactionProgressEvent
+): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  compactionStatus.value = {
+    state: event.state,
+    runId: event.runId,
+    generationId: event.generationId,
+    sectionsPacked: event.sectionsPacked,
+  };
+  if (event.state === "completed") {
+    compactNotice.value = true;
+  }
+}
+
+/**
+ * Build a SelectedContextItem from a resolved history excerpt (§13.3). The
+ * preview text is display-only — the backend re-resolves the opaque sourceId
+ * on submit; renderer text is never trusted as the original quote.
+ */
+function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  // Fail-closed when the history-UI stage is off: ignore drawer selections
+  // so no chips render without backend resolution (§18).
+  if (!historyUiEnabled.value) return;
+  const existing = selectedContextItems.value.find(
+    (item) => item.sourceId === excerpt.sourceId
+  );
+  if (existing) return; // dedup: a passage can be selected only once
+  const preview =
+    excerpt.text.length > 80
+      ? excerpt.text.slice(0, 77) + "…"
+      : excerpt.text;
+  const estimatedTokens = Math.ceil(excerpt.text.length / 4);
+  selectedContextItems.value = [
+    ...selectedContextItems.value,
+    { sourceId: excerpt.sourceId, preview, estimatedTokens },
+  ];
+  syncActiveDraft();
+}
+
+function removeSelectedContext(sourceId: string): void {
+  selectedContextItems.value = selectedContextItems.value.filter(
+    (item) => item.sourceId !== sourceId
+  );
+  syncActiveDraft();
+}
+
+function clearSelectedContext(): void {
+  selectedContextItems.value = [];
+  syncActiveDraft();
+}
+
+/** Persist the active conversation's draft (per-conversation drafts, §13.3). */
+function syncActiveDraft(): void {
+  const id = activeConversationId.value;
+  if (id) {
+    selectedContextDrafts.value.set(id, [...selectedContextItems.value]);
+  }
+}
+
+/**
+ * Source navigation from the history drawer (§13.2, AC-17): close the drawer
+ * and return to the transcript without touching model state. Viewing never
+ * mutates the next model request — only an explicit "Select passage" action
+ * (handleHistorySelect) adds context chips. In particular, navigating must
+ * NOT draft a selection: otherwise a look-only browse would silently grow the
+ * next request.
+ */
+function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
+  showHistoryDrawer.value = false;
+  if (!excerpt) return;
+  void nextTick(() => {
+    const selector = `[data-message-id="${excerpt.messageId}"]`;
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const previous = el.style.outline;
+    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+    window.setTimeout(() => {
+      el.style.outline = previous;
+    }, 1_600);
+  });
+}
+
+/** Bounded retry for a failed/paused/cancelled compaction run (§13, FR-11). */
+async function handleCompactionRetry(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await handleCompactStart();
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/** User-initiated cancel of the active compaction run (§11.6, FR-09). */
+async function handleCompactionCancel(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await cancelCompaction(activeConversationId.value);
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/**
+ * Load the current compaction status when switching conversations so the
+ * badge reflects the active run (if any) for the focused conversation.
+ */
+async function refreshCompactionStatus(): Promise<void> {
+  if (!activeConversationId.value) {
+    compactionStatus.value = null;
+    return;
+  }
+  try {
+    compactionStatus.value = await getCompactionStatus(
+      activeConversationId.value
+    );
+  } catch {
+    // Status is best-effort; a failure leaves the prior badge (or null).
+    compactionStatus.value = null;
+  }
+}
+
+/**
  * Handle a scheduled-turn completion broadcast (refresh hint only). Reloads the
  * authoritative history when the originating conversation is active and idle;
  * defers until the active stream ends so scheduled tokens never merge into an
@@ -1460,12 +2188,38 @@ function handleConversationUpdated(
   event: ChatV2ConversationUpdatedEvent
 ): void {
   void loadConversations();
+  if (event.reason === "scheduled_turn_permission_requested") {
+    // Surface an action-required notice so the user knows a scheduled run is
+    // paused waiting for approval. Auto-dismisses after 5s — the actionable
+    // permission card is also persisted in the rendered history below, so the
+    // snackbar is a transient attention-grabber, not the only entry point.
+    const baseText =
+      t("aiChatV2.permission_requested_scheduled") ||
+      "A scheduled task is asking for permission to use a tool.";
+    scheduledPermissionNoticeText.value = event.toolName
+      ? `${baseText} (${event.toolName})`
+      : baseText;
+    scheduledPermissionNotice.value = true;
+  }
   if (event.conversationId === activeConversationId.value) {
-    // The persisted row replaces any optimistic live bubble.
+    // The persisted row replaces any optimistic live message. Clear the
+    // streaming marker so the normal chat bubble returns to idle; the
+    // optimistic content stays until loadHistory swaps in the persisted row.
     if (liveScheduledAssistant.value) {
+      if (
+        activeAssistantMessageId.value ===
+        liveScheduledAssistant.value.messageId
+      ) {
+        activeAssistantMessageId.value = null;
+      }
       liveScheduledAssistant.value = null;
     }
-    if (isStreaming.value) {
+    // A permission-requested pause is user-action-required: the persisted
+    // permission card must render immediately even mid-stream, so bypass the
+    // scheduledRefreshPending deferral for this reason.
+    const isPermissionRequested =
+      event.reason === "scheduled_turn_permission_requested";
+    if (isStreaming.value && !isPermissionRequested) {
       scheduledRefreshPending.value = true;
     } else {
       void loadHistory(event.conversationId);
@@ -1488,32 +2242,113 @@ watch(isStreaming, (streaming) => {
 /**
  * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
  * routing: only render when the originating conversation is active and no
- * interactive stream is running, so scheduled tokens never merge into an
- * interactive bubble. Transient — the persisted row replaces it on the
- * terminal conversation-updated reload.
+ * interactive turn is in flight, so scheduled tokens never merge into an
+ * interactive bubble. Renders directly as a normal assistant chat message
+ * (same bubble/markdown path as interactive turns) — transient until the
+ * terminal conversation-updated event reloads authoritative history.
+ *
+ * Guard is `isStreaming || pinnedPermissionPrompt`, NOT `chatIsRunning`.
+ * `chatIsRunning` is `isStreaming || authoritativeRuntimeStatus === "running"`,
+ * and a scheduled turn sets `authoritativeRuntimeStatus` to "running" itself
+ * (its `submitMessage` registers in the engine's `activeTurns`, which
+ * `getConversationRuntimeStatus` reports as "running"). Guarding on
+ * `chatIsRunning` would make a scheduled turn trip its own guard, dropping
+ * every token and leaving only the typing indicator ("running label"). Only an
+ * interactive stream or an interactive permission card should defer scheduled
+ * rendering — the scheduled turn's own "running" status must not.
  */
 function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (event.conversationId !== activeConversationId.value) return;
-  // Defer when the conversation has any active interactive turn (streaming OR
-  // a pending tool-permission prompt) so scheduled tokens never render beside
-  // an interactive bubble/card.
-  if (chatIsRunning.value) return;
+  // Defer only for a genuinely INTERACTIVE turn in flight (an active stream,
+  // or a pinned interactive permission card) so scheduled tokens never render
+  // beside an interactive bubble/card. Do NOT use `chatIsRunning` here: it
+  // includes `authoritativeRuntimeStatus === "running"`, which the scheduled
+  // turn itself causes and which would suppress its own token stream.
+  if (isStreaming.value || pinnedPermissionPrompt.value) return;
+  if (event.kind === "start") {
+    // The scheduled turn has begun (before the first token). Create an empty
+    // optimistic assistant message and mark it active-streaming so the bubble
+    // shows the "Generating…" loading indicator immediately — the user must
+    // see the AI received the message before tokens arrive. The message is
+    // filled in by subsequent `token` events.
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: "",
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
+    }
+    liveScheduledAssistant.value = {
+      messageId: event.messageId,
+      content: "",
+    };
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
+    return;
+  }
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
-    if (
-      !liveScheduledAssistant.value ||
-      liveScheduledAssistant.value.messageId !== event.messageId
-    ) {
-      liveScheduledAssistant.value = { messageId: event.messageId, content: delta };
-    } else {
+    if (!delta) return;
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: delta,
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
       liveScheduledAssistant.value = {
         messageId: event.messageId,
-        content: liveScheduledAssistant.value.content + delta,
+        content: delta,
+      };
+    } else {
+      const existing = messages.value[existingIdx];
+      const nextContent = existing.content + delta;
+      const next = [...messages.value];
+      next[existingIdx] = { ...existing, content: nextContent };
+      messages.value = next;
+      liveScheduledAssistant.value = {
+        messageId: event.messageId,
+        content: nextContent,
       };
     }
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
+    return;
   }
-  // "done" / "error": leave the bubble in place; the terminal
-  // conversation-updated event reloads authoritative history and clears it.
+  // "done" / "error": the terminal turn has ended. Clear the streaming marker
+  // so the bubble's "Generating…" loading indicator stops; the persisted row
+  // from the terminal conversation-updated reload is authoritative and will
+  // replace the optimistic content. Leave the message itself in place so the
+  // text doesn't vanish before the reload swaps it in.
+  if (liveScheduledAssistant.value?.messageId === event.messageId) {
+    if (activeAssistantMessageId.value === event.messageId) {
+      activeAssistantMessageId.value = null;
+    }
+    liveScheduledAssistant.value = null;
+  }
 }
 
 /** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
@@ -1603,29 +2438,39 @@ async function runScheduledLoopControl(
 }
 
 /**
- * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
- * to reflect the newly-created + approved workspace and hides the card.
+ * Handler for the WorkspaceRequiredCard's `approved` event. Adopts the
+ * newly-created + approved workspace through the shared composable.
  */
 function onWorkspaceApproved(
   workspaceId: number,
   rootPath: string
 ): void {
-  activeWorkspace.value = {
-    id: workspaceId,
-    conversationId: activeConversationId.value ?? "",
-    rootPath,
-    label: null,
-    approvalState: "approved",
-  };
-  showWorkspaceRequired.value = false;
+  conversationWorkspace.applyApprovedWorkspace(workspaceId, rootPath);
+  // A workspace just became ready — complete any save-to-workspace actions
+  // that were queued while none existed.
+  void retryPendingGeneratedImageExports();
 }
 
-// Refresh the workspace badge whenever the active conversation changes.
+// Workspace badge refresh on conversation change is owned by the shared
+// useConversationWorkspace composable (design §9.1).
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Drop any stale ambiguity-chooser / pending send from the previous
+    // conversation so it can never replay into the newly active one.
+    cancelAmbiguityChooser();
+    // Per-conversation drafts (§13.3): stash the outgoing draft and restore
+    // the incoming one so switching preserves work without cross-chat leaks.
+    if (previousId) {
+      selectedContextDrafts.value.set(previousId, [
+        ...selectedContextItems.value,
+      ]);
+    }
+    selectedContextItems.value = id
+      ? [...(selectedContextDrafts.value.get(id) ?? [])]
+      : [];
+    void refreshCompactionStatus();
   }
-  void refreshWorkspace(id);
   void refreshActiveGoal();
   if (id) {
     void refreshScheduledLoopStatus();
@@ -1657,176 +2502,27 @@ async function refreshSlashCommandCount(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card
+// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card now live
+// in the shared useConversationWorkspace composable (chat-first shell design
+// §9.1); this surface only maps the card's events onto composable calls.
 // ---------------------------------------------------------------------------
-// activeWorkspaceWatchId holds the workspaceId token returned by acquire.
-// Null before acquire resolves, after release, or when no approved workspace
-// exists. Drives BOTH the subscriber filter (compare against event.workspaceId
-// — D-04) and the trust-card mount condition.
-const activeWorkspaceWatchId = ref<string | null>(null);
-// True when the active workspace's preview carried AGENTS.md content (i.e.
-// the workspace contains .aifetchly). Used as the trust-card mount gate so
-// the card does NOT render for approved workspaces without .aifetchly.
-const activeWorkspaceHasAgents = ref(false);
-// Per-session dismissal set. The trust card does not reappear for a
-// workspace the user dismissed this session. Persistence across app
-// restarts is deferred to Phase 17 (AIFetchlyWorkspaceTrust entity) —
-// Plan 14-04 reuses in-session state per the plan's "do NOT create a new
-// persistence layer" rule.
-const dismissedTrustWorkspaces = ref<ReadonlySet<string>>(new Set());
-
-/**
- * Inline trust card mounts when ALL of:
- *   - active workspace is approved (existing approval state),
- *   - acquireWorkspaceWatch returned a watch token (worker is watching),
- *   - previewWorkspaceAgents returned non-empty content (workspace has
- *     AGENTS.md / .aifetchly instructions — TRS-07 preview path),
- *   - the user has not dismissed the card for this workspace this session.
- *
- * The card is rendered INLINE near the existing WorkspaceRequiredCard — NOT
- * a modal/banner (D-03).
- */
-const showWorkspaceTrustCard = computed(() => {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return false;
-  if (!activeWorkspace.value) return false;
-  if (activeWorkspace.value.approvalState !== "approved") return false;
-  if (!activeWorkspaceHasAgents.value) return false;
-  if (dismissedTrustWorkspaces.value.has(wid)) return false;
-  return true;
-});
-
-/**
- * Acquire a workspace watch for the supplied conversation. Idempotent —
- * releasing the previous watch (if any) before acquiring the new one
- * covers the workspace-switch path. Non-fatal on IPC failure: chat still
- * works without live-update; the user can /reload-config to retry.
- *
- * After a successful acquire, probes previewWorkspaceAgents to learn
- * whether the workspace contains .aifetchly content. That probe is the
- * sole source of the hasAgents flag (TRS-07 — the renderer NEVER touches
- * the filesystem).
- */
-async function acquireActiveWorkspaceWatch(
-  conversationId: string
-): Promise<void> {
-  // Release any previous watch first (covers switch).
-  await releaseActiveWorkspaceWatch();
-  // Reset hasAgents — the new workspace's probe repopulates it.
-  activeWorkspaceHasAgents.value = false;
-  try {
-    const result = await acquireWorkspaceWatch({ conversationId });
-    if (!result) {
-      // No approved workspace / resolver miss — fail-closed, no watch.
-      activeWorkspaceWatchId.value = null;
-      return;
-    }
-    activeWorkspaceWatchId.value = result.workspaceId;
-    // Probe for AGENTS.md content via the TRS-07 preview channel.
-    try {
-      const content = await previewWorkspaceAgents(result.workspaceId);
-      activeWorkspaceHasAgents.value = content.length > 0;
-    } catch {
-      // Preview failure is non-fatal — treat as "no agents content" so the
-      // card stays hidden. The user can still chat; the watcher is active.
-      activeWorkspaceHasAgents.value = false;
-    }
-  } catch (err) {
-    // Non-fatal: log and leave watchId null. Chat still works.
-    console.error(
-      "[AiChatV2] acquireWorkspaceWatch failed (non-fatal):",
-      err
-    );
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Release the active workspace watch, if any. Idempotent — safe to call on
- * unmount, on switch, or when no watch is active.
- */
-async function releaseActiveWorkspaceWatch(): Promise<void> {
-  const wid = activeWorkspaceWatchId.value;
-  const convId = activeConversationId.value;
-  if (!wid || !convId) {
-    activeWorkspaceWatchId.value = null;
-    return;
-  }
-  try {
-    await releaseWorkspaceWatch({ conversationId: convId, workspaceId: wid });
-  } catch (err) {
-    // Non-fatal: worst case is a transient consumer leak; main will GC the
-    // consumer when the worker sees no other consumers for this workspace.
-    console.error(
-      "[AiChatV2] releaseWorkspaceWatch failed (non-fatal):",
-      err
-    );
-  } finally {
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Watch the active workspace to drive acquire/release. Fires whenever the
- * resolved active workspace changes (conversation switch, pick-folder flow,
- * approval). The watcher is additive to the existing activeConversationId
- * watcher — that one refreshes the badge; this one manages the watcher
- * lifecycle.
- */
-watch(
-  activeWorkspace,
-  (next, prev) => {
-    // Only re-acquire when something material changed. approvalState flips
-    // from pending→approved after the WorkspaceRequiredCard flow, so we
-    // DO want to fire on that transition.
-    const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
-    const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
-    if (prevKey === nextKey) return;
-    if (!next || next.approvalState !== "approved") {
-      // Not eligible — release any stale watch and bail.
-      void releaseActiveWorkspaceWatch();
-      return;
-    }
-    const convId = activeConversationId.value;
-    if (!convId) return;
-    void acquireActiveWorkspaceWatch(convId);
-  }
-);
 
 /**
  * Trust-card 'trusted' handler. The IPC was already called inside the card
- * (setWorkspaceTrust). Hide the card by adding the workspace to the
- * dismissed set — Phase 14 binary gate reuses the approval state, so trust
- * equals the existing approval (already set by the card's setTrust call).
+ * (setWorkspaceTrust); dismissing hides the card for this session.
  */
 function onWorkspaceTrustAccepted(scope: WorkspaceTrustScope): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (wid) {
-    dismissedTrustWorkspaces.value = new Set([
-      ...dismissedTrustWorkspaces.value,
-      wid,
-    ]);
-  }
-  // The trust-set IPC triggers a manager.rescan → AIFETCHLY_CONFIG_CHANGED
-  // event with the matching workspaceId. The subscriber filter refreshes
-  // the command cache from that event.
+  conversationWorkspace.trustAccepted();
   void scope; // Phase 17 branches on scope for per-capability trust.
 }
 
 /**
  * Trust-card 'dismissed' handler (Keep disabled). Persist the dismissal
  * in-session so the card does not reappear on the next chat open for this
- * workspace. The user keeps chatting with the workspace config untrusted
- * (Phase 14: untrusted means the watcher still runs but applyWorkspaceSnapshot
- * drops instructions/commands at the trust-filter boundary — TRS-01).
+ * workspace. The user keeps chatting with the workspace config untrusted.
  */
 function onWorkspaceTrustDismissed(): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return;
-  dismissedTrustWorkspaces.value = new Set([
-    ...dismissedTrustWorkspaces.value,
-    wid,
-  ]);
+  conversationWorkspace.trustDismissed();
 }
 
 // Conversation search state
@@ -1889,6 +2585,11 @@ const handleReasoningVisibilityChanged = (event: Event): void => {
     typeof customEvent.detail?.visible === "boolean"
       ? customEvent.detail.visible
       : readAiChatReasoningVisible();
+};
+const toggleReasoningVisible = (): void => {
+  const next = !showReasoning.value;
+  showReasoning.value = next;
+  writeAiChatReasoningVisible(next);
 };
 
 const resolveContextWindowLocal = (model?: string): number =>
@@ -2235,10 +2936,18 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
+//
+// Only fires for INTERACTIVE streams. A scheduled turn sets
+// `authoritativeRuntimeStatus` to "running" (its submitMessage registers in
+// the engine's activeTurns) but never sets `isStreaming`; its tokens stream
+// into a normal assistant message via handleScheduledStream, which already
+// shows its own "Generating…" stream status. Showing the typing dots here too
+// would render a redundant "running label" below the file list during every
+// scheduled run, so we gate on `isStreaming` (interactive) — not
+// `chatIsRunning`, which includes the scheduled turn's own "running" state.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!chatIsRunning.value) return false;
-  if (!isStreaming.value) return true;
+  if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
   // active text streaming — show dots so the user knows the AI is processing.
@@ -2297,9 +3006,10 @@ function onScheduledLoopApprovalCancel(): void {
 /** Set when a scheduled turn completes while an interactive stream is active;
  * the history is reloaded once the active stream terminates (design §18.3). */
 const scheduledRefreshPending = ref(false);
-/** Optimistic live content for a scheduled turn streaming into the active
- * conversation. Transient — cleared on terminal reload; never mutates the
- * persisted message list (technical-design §13.2). */
+/** Tracker for the in-flight scheduled turn rendered as a normal chat
+ * message. Transient — cleared on terminal reload or conversation switch.
+ * The message itself lives in `messages` so it renders through the standard
+ * AiChatV2Messages/AiChatV2Message path (technical-design §13.2). */
 const liveScheduledAssistant = ref<{ messageId: string; content: string } | null>(null);
 const goalStatusDescriptor = computed(() => {
   const status = activeGoal.value?.status;
@@ -2483,7 +3193,14 @@ const applyPlanState = (state: AIChatPlanStateView | null): void => {
 };
 
 const streamStatus = computed<Status>(() => {
-  if (chatIsRunning.value) return "streaming";
+  // A scheduled turn streams into an optimistic assistant message (see
+  // handleScheduledStream) without ever setting `isStreaming`. Treat an
+  // in-flight scheduled stream as streaming so its bubble shows the
+  // "Generating…" loading indicator immediately — `chatIsRunning` alone is
+  // insufficient because it depends on `authoritativeRuntimeStatus`, which is
+  // only refreshed by the 1s runtime-status poll and so may still be "idle"
+  // when the `start` event arrives.
+  if (chatIsRunning.value || liveScheduledAssistant.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
@@ -2491,6 +3208,58 @@ const streamStatus = computed<Status>(() => {
 });
 
 // truncateText + formatTimestamp extracted to aiChatV2Utils.ts
+// FR-1.3, §9.1: the header button is enabled only when the capability
+// envelope enables v2 reporting AND at least one visible message is an
+// eligible reportable AI output. With zero eligible outputs the button is
+// disabled and announces the noEligibleOutputs reason so the action is
+// stable-but-clear rather than opening an empty dialog.
+const hasReportableConversationOutput = computed(() =>
+  hasEligibleChatV2Candidate({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  })
+);
+// Capability state with retry — see the useReportCapabilities docstring
+// (src/views/utils/reportCapabilities.ts) for the bug history. The rearm
+// key makes every conversation switch restart the retry chain, including
+// switches between two conversations that both hold eligible output.
+const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+  useReportCapabilities({
+    hasEligibleOutput: () => hasReportableConversationOutput.value,
+    rearmKey: () => activeConversationId.value,
+  });
+const conversationReportEnabled = computed(
+  () =>
+    reportCapabilities.value?.conversationReporting.enabled === true &&
+    hasReportableConversationOutput.value
+);
+const conversationReportDisabledReason = computed(() => {
+  if (reportCapabilities.value?.conversationReporting.enabled !== true) {
+    return (
+      t("aiConversationReport.unavailable") ||
+      "Conversation reporting is currently unavailable."
+    );
+  }
+  if (!hasReportableConversationOutput.value) {
+    return (
+      t("aiConversationReport.noEligibleOutputs") ||
+      "There are no reportable AI outputs in this conversation yet."
+    );
+  }
+  return "";
+});
+
+// Journey 11.5, §19: if the active conversation changes while the report
+// dialog is open, the frozen snapshot would describe a conversation the user
+// is no longer viewing. Close the dialog without submitting so a later open
+// rebuilds a fresh snapshot against the new conversation.
+watch(activeConversationId, () => {
+  if (!conversationReportDialogOpen.value) return;
+  conversationReportDialogOpen.value = false;
+  conversationReportSnapshot.value = null;
+});
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
@@ -2517,7 +3286,37 @@ const mapStreamErrorMessage = (raw: string): string => {
       "Your session has expired. Please sign in again."
     );
   }
+  if (raw === IMAGE_EDIT_UNAVAILABLE_SENTINEL) {
+    return (
+      t("aiChatV2.generatedImageRefs.errors.image_edit_unavailable") ||
+      "Image editing is unavailable: no edit-capable model is configured. Configure one and try again."
+    );
+  }
+  if (raw === IMAGE_EDIT_PROVIDER_FAILED_SENTINEL) {
+    return (
+      t("aiChatV2.generatedImageRefs.errors.image_edit_provider_failed") ||
+      "The AI provider failed to edit the image. Retry, or check the provider configuration."
+    );
+  }
   return raw;
+};
+
+/**
+ * Localize machine-readable generated-image error codes carried by terminal
+ * stream chunks (mapped onto the Error by the api layer). Falls back to the
+ * existing raw-message mapping when no translation exists for the code.
+ */
+const displayStreamErrorMessage = (error: Error): string => {
+  const code = (error as { errorCode?: unknown }).errorCode;
+  if (
+    typeof code === "string" &&
+    (code.startsWith("generated_image_") || code.startsWith("image_edit_"))
+  ) {
+    const key = `aiChatV2.generatedImageRefs.errors.${code}`;
+    const translated = t(key);
+    if (translated && translated !== key) return translated;
+  }
+  return mapStreamErrorMessage(error.message);
 };
 
 const loadConversations = async (): Promise<void> => {
@@ -2688,9 +3487,19 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // shortcut. Re-derive it on load so artifact cards reappear on history
     // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
     // tool_result chunks auto-open.
-    const persistedMessages = (resp?.messages ?? []).map(
-      ensureArtifactMetadata
+    //
+    // The same nesting applies to the preserved-output descriptors
+    // (`toolOutputRefs`/`toolOutputPreservation`/`toolOutputPreview`): they
+    // live under `metadata.toolResult` in persisted rows but are read at the
+    // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
+    // receipt card visible after a restart (PRD §11 cross-restart durability).
+    const persistedMessages = (resp?.messages ?? []).map((m) =>
+      ensureToolOutputMetadata(ensureArtifactMetadata(m))
     );
+    // Seed pending bubbles from the durable queue (FR-43).
+    patchConversationRuntimeState(conversationId, {
+      pendingMessages: resp?.pendingMessages ?? [],
+    });
     const runtime = conversationRuntime.value.get(conversationId);
     messages.value =
       runtime?.isStreaming && runtime.messages.length > 0
@@ -2708,10 +3517,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       messages.value,
       activeWorkspace.value?.rootPath
     );
-    // Reset context-usage tracking for the loaded conversation. If any
-    // history rows carry tokensUsed, seed the baseline estimate from the
-    // most recent assistant message; otherwise start at zero until the
-    // next server usage_update arrives.
+    // Reset context-usage tracking for the loaded conversation. Prefer a
+    // persisted tokensUsed value. When history has none (the request was
+    // rejected before a usage report), estimate from the visible transcript
+    // so the header meter is not stuck at 0%.
     lastUsage.value = null;
     const latestWithTokens = [...messages.value]
       .reverse()
@@ -2721,10 +3530,14 @@ const loadHistory = async (conversationId: string): Promise<void> => {
           typeof m.tokensUsed === "number" &&
           m.tokensUsed > 0
       );
-    streamingEstimatedTokens.value =
+    const persistedTokens =
       typeof latestWithTokens?.tokensUsed === "number"
         ? latestWithTokens.tokensUsed
         : 0;
+    streamingEstimatedTokens.value =
+      persistedTokens > 0
+        ? persistedTokens
+        : estimateVisibleContextTokens(messages.value);
     if (latestWithTokens?.model) {
       activeModel.value = latestWithTokens.model;
     }
@@ -2759,6 +3572,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load tool approval mode for this conversation
     void loadToolApprovalMode(conversationId);
+    // Scroll to the latest message after history loads. Use the force variant
+    // because the child component's pinnedToBottom flag may be stale from a
+    // previous conversation where the user scrolled up.
+    await messagesListRef.value?.scrollToBottomForce();
   } catch (err) {
     if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);
@@ -2816,6 +3633,7 @@ async function clearCurrentConversation(): Promise<void> {
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
+      setGeneratedImageDraft(conversationId, []);
       const next = new Map(fileOps.value);
       next.delete(conversationId);
       fileOps.value = next;
@@ -2828,7 +3646,7 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Release only the active-view fields — do NOT clear stream listeners. Each
   // conversation owns its own listener now; a backgrounded streaming turn must
   // keep its listener so its chunks keep updating conversationRuntime[conv]
@@ -2857,7 +3675,7 @@ const detachActiveStreamView = (): void => {
 };
 
 const onStop = (): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Cancel in-flight STT/TTS worker work so the shared worker stops
   // synthesizing for a response the user has abandoned (TODO P0-5).
   void cancelVoiceJob();
@@ -3003,6 +3821,13 @@ const upsertToolResultMessage = (
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
     artifact: extractArtifactMetadata(toolResult),
+    // Preserved-output descriptors (recoverable large tool results): the
+    // capture pipeline spreads these into the live `tool_result` payload via
+    // `toolResultReceiptUiMetadata`, so extract them to the metadata top level
+    // on the same boundary as `artifact`. Without this the receipt card never
+    // renders during a live stream — the descriptors are present but nested
+    // under `metadata.toolResult`, where `preservedOutput` does not read.
+    ...(extractToolOutputDescriptors(toolResult) ?? {}),
   };
 
   if (existingIdx !== -1) {
@@ -3120,7 +3945,9 @@ const handlePinnedPermissionGrant = (): void => {
   void handleSkillPermissionGrant(message);
 };
 
-const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
+const handleSkillPermissionDeny = async (
+  message: ChatV2MessageView
+): Promise<void> => {
   const idx = messages.value.findIndex((m) => m.id === message.id);
   const deniedMessage =
     t("aiChatV2.permission_denied") ||
@@ -3137,10 +3964,25 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       },
     };
   }
-  // Stop only the conversation that owns the denied tool — background
-  // conversations are unaffected. Detach its listener and resolve its pending
-  // stream promise so its onSend await unblocks.
   const targetConversationId = message.conversationId || undefined;
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (toolId) {
+    try {
+      const result = await denyChatV2ToolPermission(
+        toolId,
+        targetConversationId
+      );
+      if (result.handled) {
+        // Scheduled engine owned the paused turn — it synthesized a denied
+        // tool_result and the run continues. Do NOT stop the stream; the
+        // terminal event resolves the card.
+        return;
+      }
+    } catch {
+      // IPC denied (e.g. AI gate) — fall through to interactive stop below.
+    }
+  }
+  // Interactive path (no scheduled engine, or IPC failed): stop the stream.
   stopChatV2Stream(targetConversationId);
   if (message.conversationId) {
     detachChatV2ConversationStreamListeners(message.conversationId, true);
@@ -3153,7 +3995,7 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 const handlePinnedPermissionDeny = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  handleSkillPermissionDeny(message);
+  void handleSkillPermissionDeny(message);
 };
 
 // ---------------------------------------------------------------------------
@@ -3304,17 +4146,26 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.planId,
       planState.value.currentVersion
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Approval did not take effect (no updated state came back). Do NOT
+      // send the "begin executing" message — the model would start executing
+      // a plan that was never approved. Surface the failure so the user can
+      // retry from the still-pinned card.
+      streamError.value =
+        t("aiChatV2Plan.approve_failed") ||
+        "Plan approval did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After approval, kick off a new AI round so the assistant begins
-    // executing the plan. The plan-mode system prompt now reflects the
-    // "approved" status, so high-impact tools are unblocked. This also
-    // drives the typing indicator (isStreaming + !receivedFirstResponse).
+    // executing the plan. applyPlanState above flipped the mode back to
+    // "chat" (approval ends plan mode), so this round runs with the normal
+    // chat system prompt and the full toolset. This also drives the typing
+    // indicator (isStreaming + !receivedFirstResponse).
     const continueText =
       t("aiChatV2Plan.approved_continue_message") ||
       "Plan approved. Please begin executing the plan now.";
@@ -3334,12 +4185,19 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Rejection did not take effect. Do not send the revise message —
+      // the plan status is unchanged and the model must not be told the
+      // user rejected it. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.reject_failed") ||
+        "Plan rejection did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After rejection, send the feedback to the LLM so it can revise
     // the plan or respond accordingly.
@@ -3365,12 +4223,19 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // The change request did not take effect. Do not send the update
+      // message — the plan status is unchanged and the model must not be
+      // told the user requested changes. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.changes_request_failed") ||
+        "Requesting plan changes did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After requesting changes, send the feedback to the LLM so it can
     // update the plan accordingly.
@@ -3386,7 +4251,14 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   }
 };
 
-const handleCompactConversation = async (): Promise<void> => {
+/**
+ * Manual compact entry point (design §13.1 start/status/progress). Starts a
+ * bounded run and returns IMMEDIATELY — the batch continues in the main
+ * process while the badge follows progress events + status, so navigating
+ * away mid-batch loses nothing. Resume/retry is just another start call.
+ * Completion surfaces via `handleCompactionProgress` (notice + badge).
+ */
+const handleCompactStart = async (): Promise<void> => {
   if (
     !activeConversationId.value ||
     chatIsRunning.value ||
@@ -3397,27 +4269,136 @@ const handleCompactConversation = async (): Promise<void> => {
   isCompacting.value = true;
   streamError.value = null;
   try {
-    const summary = await compactChatV2Conversation(
+    const ack = await startCompaction(
       activeConversationId.value,
       resolveModelForRequest()
     );
-    if (summary) {
-      const tokenEstimate =
-        summary.outputTokenEstimate ??
-        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
-      streamingEstimatedTokens.value = tokenEstimate;
-      lastUsage.value = null;
-      if (summary.model) {
-        activeModel.value = summary.model;
-      }
-      compactNotice.value = true;
+    if (!ack.started) {
+      streamError.value =
+        t("aiChatCompaction.compaction_start_failed") ||
+        "Compaction failed to start.";
     }
+    void refreshCompactionStatus();
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   } finally {
     isCompacting.value = false;
   }
 };
+
+function showGeneratedImageError(message: string): void {
+  generatedImageNotice.value = message;
+}
+
+/**
+ * Resolve the generated-image references for an outgoing turn.
+ *
+ * Returns the effective reference list (empty = plain text send), or null
+ * when the send must abort because a dialog is now waiting on the user
+ * (ambiguity chooser / batch confirmation) or a guard tripped (fusion /
+ * reference limit toast).
+ */
+function runGeneratedImagePreflight(
+  text: string,
+  files: File[],
+  options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+    /** Internal: user-confirmed batch reference set (trusted resend). */
+    confirmedBatchReferences?: ChatV2GeneratedImageReference[];
+  },
+  bypassInference = false
+): ChatV2GeneratedImageReference[] | null {
+  // Trusted resend channel: the user just approved this exact reference set in
+  // the batch-confirmation dialog. The confirmed set rides outside
+  // generatedImageReferences, so return an empty effective list and skip every
+  // guard — otherwise the explicit tray (still holding the selection) would
+  // re-trigger the same dialog in a loop.
+  if (
+    options?.confirmedBatchReferences &&
+    options.confirmedBatchReferences.length > 0
+  ) {
+    return [];
+  }
+  const explicit = getGeneratedImageDraft(activeConversationId.value);
+  let effective: ChatV2GeneratedImageReference[] = [];
+  if (explicit.length > 0) {
+    effective = [...explicit];
+  } else if (!bypassInference) {
+    const result = inferGeneratedImageReferences({
+      text,
+      messages: messages.value,
+      explicitSelection: [],
+    });
+    if (result.kind === "ambiguous") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
+      ambiguityCandidates.value = result.candidates.map((candidate) => ({
+        reference: candidate.reference,
+        fileName: candidate.fileName,
+        thumbUrl:
+          resolveGeneratedImageViewModel(candidate.reference).thumbUrl ??
+          candidate.thumbUrl,
+      }));
+      showGeneratedImageChooser.value = true;
+      return null;
+    }
+    if (
+      (result.kind === "resolved" || result.kind === "batch_confirmation") &&
+      result.references.length > GENERATED_IMAGE_REFERENCE_LIMIT &&
+      isFusionWording(text)
+    ) {
+      showGeneratedImageError(
+        t("aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit") ||
+          "Combining images is limited to 3 at a time."
+      );
+      return null;
+    }
+    if (result.kind === "batch_confirmation") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+        confirmedReferences: [...result.references],
+      };
+      showBatchConfirmDialog.value = true;
+      return null;
+    }
+    if (result.kind === "resolved") {
+      effective = [...result.references];
+    }
+  }
+  if (effective.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
+    if (isFusionWording(text)) {
+      showGeneratedImageError(
+        t(
+          "aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit"
+        ) || "Combining images is limited to 3 at a time."
+      );
+      return null;
+    }
+    // Explicit multi-selections above three are paid work: ask for batch
+    // confirmation instead of hard-blocking. Confirm stages the approved set
+    // via the trusted channel; decline keeps the tray untouched.
+    pendingGeneratedImageSend.value = {
+      conversationId: draftKeyFor(activeConversationId.value),
+      text,
+      files,
+      options,
+      confirmedReferences: [...effective],
+    };
+    showBatchConfirmDialog.value = true;
+    return null;
+  }
+  return effective;
+}
 
 const onSend = async (
   text: string,
@@ -3427,23 +4408,24 @@ const onSend = async (
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
+    /** Internal: skip generated-image inference (batch-confirm resend). */
+    bypassGeneratedImageInference?: boolean;
+    /** Internal: the user-confirmed batch reference set (trusted channel). */
+    confirmedBatchReferences?: ChatV2GeneratedImageReference[];
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
   // dialog only — no interactive stream) works while another conversation
   // is still running.
   const loopCmd = parseAiLoopCommand(text);
-  const loopBypassesStreamGuard =
-    loopCmd.type === "scheduled_loop" ||
-    loopCmd.type === "scheduled_loop_control" ||
-    loopCmd.type === "invalid_loop";
 
-  // Block only when the *active* conversation is already streaming. A
-  // background conversation may still be running after New Chat / switch;
-  // allowing send here is required so the composer-cleared draft is not
-  // silently dropped. Background turns are NOT aborted — they keep streaming
-  // on the main process and update their own conversationRuntime entry.
-  if (!loopBypassesStreamGuard && chatIsRunning.value) {
+  // Message-queue PRD §7.1: ORDINARY messages submitted while the active
+  // conversation streams are queued durably — the composer stays usable.
+  // Command-like inputs (slash/goal/loop) keep their dedicated paths and
+  // stay blocked while streaming, exactly as before.
+  const isCommandLike =
+    loopCmd.type !== "none" || text.trim().startsWith("/");
+  if (isCommandLike && chatIsRunning.value) {
     return;
   }
   // The composer owns the draft and clears it only after this handler accepts
@@ -3452,21 +4434,27 @@ const onSend = async (
   // before acknowledgement would silently discard a rejected message.
   options?.onAccepted?.();
   streamError.value = null;
+  // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
+  // (§13.3) — never the passage text. The backend re-resolves each reference
+  // against the current epoch/revision and the final budget. The draft is kept
+  // until the `start` event reports which references were accepted, so a
+  // rejected/unchanged selection is never silently dropped.
+  const pendingSelectionIds = selectedContextItems.value.map((item) => item.sourceId);
+  // Stable submission identity (§13.3): reuse the pending ID across transport
+  // retries so the backend reuses the same user-turn metadata instead of
+  // duplicating the message. Resolved (cleared) on `start` acceptance below.
+  if (!pendingSubmissionId.value) {
+    pendingSubmissionId.value = crypto.randomUUID();
+  }
+  const submissionId = pendingSubmissionId.value;
 
   attachmentError.value = null;
-  voicePlaybackError.value = null;
   // Record whether this user message originated from voice input so the
   // `after_voice_input` TTS policy speaks only the reply to a voice send
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
-  // pass no `fromVoice`, which correctly clears the flag.
-  speechController.updateOptions({
-    latestInputWasVoice: options?.fromVoice === true,
-  });
-  // Start a fresh spoken-response session for every assistant turn. The
-  // controller is intentionally stopped by "Stop", conversation switching, and
-  // voice recording; without re-arming here, later replies can be silently
-  // ignored even when spoken responses are enabled.
-  speechController.start();
+  // pass no `fromVoice`, which correctly clears the flag. The composable
+  // clears any stale playback error when arming the new session.
+  beginAssistantResponse(options?.fromVoice === true);
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
@@ -3624,15 +4612,74 @@ const onSend = async (
     isPreparingAttachments.value = false;
   }
 
+  // Generated-image preflight: resolve which images this turn references.
+  // Explicit tray selections win; otherwise deterministic inference runs over
+  // the visible conversation. Ambiguous matches open the chooser dialog and
+  // over-limit batches ask for confirmation — both abort this send (the user's
+  // selection is preserved) until resolved.
+  const effectiveGeneratedImageRefs = runGeneratedImagePreflight(
+    text,
+    files ?? [],
+    options,
+    options?.bypassGeneratedImageInference === true
+  );
+  if (effectiveGeneratedImageRefs === null) return;
+
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    modelMessage.trim().length === 0
+  ) {
+    modelMessage = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
+
   // Resolve text: if only images with no text, use default prompt
-  const displayText = text || defaultPromptForAttachments(files ?? []);
+  let displayText = text || defaultPromptForAttachments(files ?? []);
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    displayText.trim().length === 0
+  ) {
+    displayText = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
   const streamConversationId = ensureWorkspaceConversationId();
+  const sentDraftKey = draftKeyFor(streamConversationId);
+  // A brand-new chat just received its real id: move any pending draft entry
+  // so the tray keeps showing the selection under the new key.
+  if (
+    sentDraftKey !== DRAFT_KEY_PENDING &&
+    generatedImageDrafts.value.has(DRAFT_KEY_PENDING)
+  ) {
+    const pendingEntry = generatedImageDrafts.value.get(DRAFT_KEY_PENDING);
+    if (
+      pendingEntry &&
+      !generatedImageDrafts.value.has(sentDraftKey) &&
+      activeConversationId.value === streamConversationId
+    ) {
+      setGeneratedImageDraft(sentDraftKey, [...pendingEntry.references]);
+      setGeneratedImageDraft(DRAFT_KEY_PENDING, []);
+    }
+  }
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
     (!chunk.conversationId || chunk.conversationId === streamConversationId);
 
   const nowIso = new Date().toISOString();
+  const optimisticPastedBlocks = pastedBlocksFromSend(
+    displayText,
+    options?.pastedContents
+  );
+  const tempUserMetadata: ChatV2MessageMetadata | undefined =
+    attachmentMetadata || optimisticPastedBlocks
+      ? {
+          source: "chat-v2",
+          ...(attachmentMetadata
+            ? { attachments: attachmentMetadata }
+            : {}),
+          ...(optimisticPastedBlocks
+            ? { pastedBlocks: optimisticPastedBlocks }
+            : {}),
+        }
+      : undefined;
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: streamConversationId,
@@ -3640,9 +4687,7 @@ const onSend = async (
     content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
-    metadata: attachmentMetadata
-      ? { source: "chat-v2", attachments: attachmentMetadata }
-      : undefined,
+    metadata: tempUserMetadata,
   };
   let streamMessages = [...messages.value, tempUser];
   const streamMessageListController: MessageListController = {
@@ -3705,6 +4750,15 @@ const onSend = async (
     }
   };
 
+  // Queue turn renderer guard: while a message is QUEUED behind a running
+  // turn, its renderer must ignore the other turn's chunks. PARKED turns
+  // activate only on their own dispatch (assistant id from the pending
+  // event). Immediate dispatches (conversation was idle) adopt the first
+  // chunk they see — the engine always emits start first. Captured BEFORE
+  // this send's own optimistic isStreaming patch.
+  const turnParked = chatIsRunning.value;
+  let turnAssistantId: string | null = null;
+  let turnActive = false;
   patchConversationRuntimeState(streamConversationId, {
     isStreaming: true,
     activeAssistantMessageId: assistantId,
@@ -3739,25 +4793,115 @@ const onSend = async (
       reasoning: showReasoning.value
         ? { enabled: true, summary: "auto" }
         : undefined,
+      generatedImageReferences:
+        effectiveGeneratedImageRefs.length > 0
+          ? [...effectiveGeneratedImageRefs]
+          : undefined,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
     }
-    await streamChatV2Message(
-      streamRequest,
+    // Trusted channel: the user-confirmed batch reference set rides outside
+    // generatedImageReferences (which stays capped at 3 for direct sends).
+    if (
+      options?.confirmedBatchReferences &&
+      options.confirmedBatchReferences.length > 0
+    ) {
+      streamRequest.confirmedGeneratedImageBatch = {
+        references: [...options.confirmedBatchReferences],
+      };
+    }
+    // Selected archived passages (§13.3): opaque refs + stable submission id.
+    if (pendingSelectionIds.length > 0) {
+      streamRequest.historySelectionIds = pendingSelectionIds;
+    }
+    streamRequest.submissionId = submissionId;
+    // Queue path (design §9.2/§14.3): attach the turn renderer FIRST, then
+    // create the durable pending row; the main process dispatches it.
+    const queuedTurn = awaitChatV2Turn(
+      streamConversationId,
       (chunk: ChatV2StreamChunk) => {
+        if (!turnActive) {
+          if (turnParked) {
+            // Queued behind a running turn: bind strictly to THIS turn's
+            // dispatch (assistant id arrives via the pending event).
+            if (
+              chunk.eventType === "start" &&
+              chunk.messageId &&
+              chunk.messageId === turnAssistantId
+            ) {
+              turnActive = true;
+            } else {
+              return;
+            }
+          } else if (chunk.eventType === "start" && chunk.messageId) {
+            if (turnAssistantId && chunk.messageId !== turnAssistantId) {
+              return;
+            }
+            turnAssistantId = chunk.messageId;
+            turnActive = true;
+          } else {
+            turnActive = true;
+          }
+        }
         if (!isCurrentStreamChunk(chunk)) return;
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
             tempUser.conversationId = chunk.conversationId;
             assistant.conversationId = chunk.conversationId;
           }
-          if (chunk.messageId) {
+          if (chunk.messageId && chunk.messageId !== assistant.id) {
+            const previousId = assistant.id;
             assistant.id = chunk.messageId;
             patchConversationRuntimeState(streamConversationId, {
               activeAssistantMessageId: chunk.messageId,
             });
+            if (assistantAdded) {
+              const currentMessages = streamMessageListController.get();
+              const idx = currentMessages.findIndex(
+                (m) => m.id === previousId
+              );
+              if (idx !== -1) {
+                const nextMessages = [...currentMessages];
+                nextMessages[idx] = {
+                  ...nextMessages[idx],
+                  id: chunk.messageId,
+                };
+                streamMessageListController.set(nextMessages);
+              }
+            }
           }
+          // `start` marks acceptance/persistence (§13.3): clear ONLY the
+          // selected passages the backend actually accepted — those are now
+          // folded into the turn. Drafts whose source changed or could not
+          // fit stay in the chips so the user is not silently charged for
+          // context they did not get. Changed-source survivors are flagged
+          // so the user explicitly re-confirms the refreshed passage before
+          // it is ever quoted (§4.2, AC-18). Acceptance also resolves the
+          // stable submission identity so the next turn mints a fresh ID.
+          if (pendingSelectionIds.length > 0) {
+            const accepted = new Set<string>(
+              chunk.historySelectionAcceptedIds ?? []
+            );
+            const changed = new Set<string>(
+              chunk.historySelectionChangedIds ?? []
+            );
+            const rejected = new Set<string>(
+              (chunk as { historySelectionRejectedIds?: readonly string[] })
+                .historySelectionRejectedIds ?? []
+            );
+            selectedContextItems.value = selectedContextItems.value
+              .filter((item) => !accepted.has(item.sourceId))
+              .map((item) =>
+                changed.has(item.sourceId)
+                  ? { ...item, refreshed: true }
+                  : rejected.has(item.sourceId)
+                    ? { ...item, rejected: true }
+                    : item
+              );
+            syncActiveDraft();
+          }
+          pendingSubmissionId.value = null;
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
           // Real token counts from the server. Replace the streaming
@@ -3831,14 +4975,17 @@ const onSend = async (
               truncated: over,
             },
           };
-          const reasoningIdx = messages.value.findIndex(
+          const currentMessages = streamMessageListController.get();
+          const reasoningIdx = currentMessages.findIndex(
             (m) => m.id === assistant.id
           );
           if (reasoningIdx !== -1) {
-            messages.value[reasoningIdx] = {
-              ...messages.value[reasoningIdx],
+            const nextMessages = [...currentMessages];
+            nextMessages[reasoningIdx] = {
+              ...nextMessages[reasoningIdx],
               metadata: assistant.metadata,
             };
+            streamMessageListController.set(nextMessages);
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
@@ -3898,7 +5045,7 @@ const onSend = async (
             // user isn't looking at — every sibling active-view mutation below
             // is already gated by isCurrentStreamView().
             if (isCurrentStreamView()) {
-              speechController.pushDelta(chunk.contentDelta);
+              pushAssistantDelta(chunk.contentDelta);
             }
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
@@ -3918,6 +5065,8 @@ const onSend = async (
               nextMessages[idx] = {
                 ...nextMessages[idx],
                 content: assistant.content,
+                metadata:
+                  assistant.metadata ?? nextMessages[idx].metadata,
               };
               streamMessageListController.set(nextMessages);
             }
@@ -4052,7 +5201,19 @@ const onSend = async (
         }
       },
       (complete: ChatV2StreamChunk) => {
+        if (!turnActive) {
+          // Complete-only turns (no streamed chunks) still belong to this
+          // send when it was an immediate dispatch.
+          if (turnParked) return;
+          turnActive = true;
+        }
         if (!isCurrentStreamChunk(complete)) return;
+        // The turn was accepted end-to-end: drop this conversation's
+        // generated-image selection. Error paths intentionally keep it so the
+        // user can retry without re-picking.
+        if (complete.eventType === "complete") {
+          setGeneratedImageDraft(sentDraftKey, []);
+        }
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -4094,9 +5255,9 @@ const onSend = async (
           // speech synth while the user is viewing a different conversation.
           if (isCurrentStreamView()) {
             if (!speechReceivedTextDelta) {
-              speechController.pushDelta(complete.fullContent);
+              pushAssistantDelta(complete.fullContent);
             }
-            speechController.flush();
+            completeAssistantResponse();
           }
         }
         const generatedImages =
@@ -4110,6 +5271,30 @@ const onSend = async (
             source: "chat-v2",
             generatedImages,
           };
+        }
+        if (
+          showReasoning.value &&
+          typeof complete.reasoningContent === "string" &&
+          complete.reasoningContent.length > 0
+        ) {
+          ensureAssistantAdded();
+          const existing = assistant.metadata?.reasoning?.content ?? "";
+          if (complete.reasoningContent.length >= existing.length) {
+            const truncated =
+              complete.reasoningContent.length > REASONING_LIVE_MAX_CHARS;
+            assistant.metadata = {
+              ...(assistant.metadata ?? { source: "chat-v2" }),
+              reasoning: {
+                content: truncated
+                  ? complete.reasoningContent.slice(0, REASONING_LIVE_MAX_CHARS)
+                  : complete.reasoningContent,
+                format: "plain_text",
+                source: "server",
+                model: complete.model,
+                truncated,
+              },
+            };
+          }
         }
         if (assistantAdded) {
           const currentMessages = streamMessageListController.get();
@@ -4170,7 +5355,11 @@ const onSend = async (
         void loadConversations();
       },
       (error: Error) => {
-        const displayMessage = mapStreamErrorMessage(error.message);
+        if (!turnActive) {
+          if (turnParked) return;
+          turnActive = true;
+        }
+        const displayMessage = displayStreamErrorMessage(error);
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -4182,12 +5371,56 @@ const onSend = async (
         showAssistantError(displayMessage);
       }
     );
+    const clientRequestId = `cr-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+    let receipt: AIChatPendingCreateResult | null = null;
+    try {
+      receipt = await createChatV2PendingMessage(
+        clientRequestId,
+        streamRequest
+      );
+    } catch (err) {
+      queuedTurn.detach();
+      throw err;
+    }
+    if (!receipt) {
+      queuedTurn.detach();
+      throw new Error(
+        t("aiChatV2.queue.limit_reached") ||
+          "The message could not be queued. Please try again."
+      );
+    }
+    if (receipt.disposition === "dispatch_scheduled") {
+      await queuedTurn.promise;
+      return;
+    }
+    // Queued behind a running turn (or a held queue): park the renderer.
+    // The pending bubble replaces the optimistic user bubble; the runtime
+    // flags we optimistically set are rolled back (the running turn owns
+    // the streaming state).
+    parkQueuedPendingTurn(receipt.pendingMessage, (assistantId: string) => {
+      turnAssistantId = assistantId;
+    });
+    streamMessageListController.set(
+      streamMessageListController.get().filter(
+        (m) => m.id !== tempUser.id && m.id !== assistant.id
+      )
+    );
+    patchConversationRuntimeState(streamConversationId, {
+      isStreaming: false,
+      activeAssistantMessageId: null,
+      receivedFirstResponse: false,
+      streamError: null,
+    });
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
     const runtimeError = getConversationRuntimeState(streamConversationId)
       .streamError;
     if (!runtimeError) {
-      const displayMessage = mapStreamErrorMessage(rawMessage);
+      const displayMessage = displayStreamErrorMessage(
+        err instanceof Error ? err : new Error(rawMessage)
+      );
       patchConversationRuntimeState(streamConversationId, {
         isStreaming: false,
         activeAssistantMessageId: null,
@@ -4305,376 +5538,76 @@ watch(
   }
 );
 
-const voiceSpeaking = ref(false);
-const voicePlaybackError = ref<string | null>(null);
-const speechController = new SpeechResponseController(
-  {
-    ttsMode: "disabled",
-    latestInputWasVoice: false,
-  },
-  undefined,
-  undefined,
-  (error) => {
-    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
-    voicePlaybackError.value =
-      error.message.trim().length > 0
-        ? `${fallback} ${error.message}`
-        : fallback;
-  }
-);
-speechController.start();
-const voiceInputEnabled = ref(false);
-// Bridge the controller's imperative speaking state into Vue reactivity so the
-// composer can show a stop-speaking control (TODO P1-2).
-const unsubscribeSpeaking = speechController.subscribe((speaking) => {
-  voiceSpeaking.value = speaking;
+// ---------------------------------------------------------------------------
+// Voice orchestration — shared composable (chat-first shell design §11.1).
+// The classic dock and the chat center surface consume ONE implementation of
+// settings loading, availability detection, installs, and spoken-response
+// playback. Destructured aliases preserve the composer's prop bindings.
+// ---------------------------------------------------------------------------
+const {
+  inputEnabled: voiceInputEnabled,
+  autoSend: voiceAutoSend,
+  maxRecordingMs: voiceMaxRecordingMs,
+  spokenResponseEnabled,
+  speaking: voiceSpeaking,
+  settingsSaving: voiceSettingsSaving,
+  modelInstalling: voiceModelInstalling,
+  modelInstallError: voiceModelInstallError,
+  ttsInstallPrompt: voiceTtsInstallPrompt,
+  playbackError: voicePlaybackError,
+  missingInputModel: voiceMissingModel,
+  runtimeUnavailable: voiceRuntimeUnavailable,
+  chatReady: voiceChatReady,
+  runtimeInstallDialog: voiceRuntimeInstallDialog,
+  runtimeInstalling: voiceRuntimeInstalling,
+  runtimeInstallError: voiceRuntimeInstallError,
+  runtimeInstallSizeText: voiceRuntimeInstallSizeText,
+  runtimeInstallProgressText: voiceRuntimeInstallProgressText,
+  runtimeInstallPercent: voiceRuntimeInstallPercent,
+  loadSettings: loadVoiceSettings,
+  toggleSpokenResponse,
+  installRequiredModel: handleInstallVoiceModel,
+  installTtsModel: handleInstallTtsModel,
+  installRequiredRuntime: handleInstallVoiceRuntime,
+  confirmRuntimeInstall: confirmInstallVoiceRuntime,
+  stopSpeaking: onStopSpeaking,
+  onRecordingStart: onVoiceRecordingStart,
+  beginAssistantResponse,
+  pushAssistantDelta,
+  completeAssistantResponse,
+  stopSpeechPlayback,
+  dispose: disposeAiChatVoice,
+} = useAiChatVoice({
+  chatReady: () => availableModels.value.length > 0,
 });
-const voiceAutoSend = ref(false);
-const voiceMaxRecordingMs = ref<number>(60_000);
-const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
-const voiceLocalRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
-const VOICE_SHERPA_RUNTIME_ID = "voice-sherpa" as const;
-const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
-const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
-const voiceSettingsSaving = ref(false);
-const voiceModelInstalling = ref(false);
-const voiceModelInstallError = ref<string | null>(null);
-/**
- * True when the user tried to enable spoken responses (TTS) but the speech
- * model isn't installed. Drives an inline install affordance so we never
- * persist a TTS enablement that would silently fail on every reply. Mirrors
- * the STT model-missing notice in AiChatV2Composer.
- */
-const voiceTtsInstallPrompt = ref(false);
-const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
-const voiceRuntimeInstallDialog = ref(false);
-const voiceRuntimeInstalling = ref(false);
-const voiceRuntimeInstallError = ref<string | null>(null);
-const voiceRuntimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
-const voiceRuntimeInstallProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
-const voiceRuntimeModelProgress = ref<VoiceModelDownloadProgress | null>(null);
-let unsubscribeVoiceRuntimeProgress: (() => void) | null = null;
-let unsubscribeVoiceModelProgress: (() => void) | null = null;
-const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
-const spokenResponseToggleTitle = computed(() =>
-  spokenResponseEnabled.value
-    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
-    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
-);
-const voiceMissingModel = computed(
-  () =>
-    voiceInputEnabled.value &&
-    (voiceStatus.value?.sttState === "missing_model" ||
-      voiceStatus.value?.sttState === "unavailable"),
-);
-const voiceRuntimeUnavailable = computed(() => {
-  if (!voiceInputEnabled.value) return false;
-  // PRD §10.4: prompt for the downloadable voice-sherpa runtime when absent,
-  // even if a legacy bundled sherpa addon still satisfies sttState.
-  if (!isLocalAiRuntimeUsable(voiceLocalRuntimeStatus.value?.state)) {
-    return true;
-  }
-  return voiceStatus.value?.sttState === "unavailable";
-});
-/**
- * Whether the chat can accept a voice auto-send right now. The renderer has no
- * synchronous AI-entitlement flag, so model availability is the proxy: if no
- * model is selectable the main process would reject the send, so we keep the
- * transcript in the draft instead (PRD §7.13 / TODO P1-5).
- */
-const voiceChatReady = computed(() => availableModels.value.length > 0);
-const voiceRuntimeInstallPercent = computed<number | undefined>(() => {
-  if (voiceRuntimeModelProgress.value?.pct !== undefined) {
-    return voiceRuntimeModelProgress.value.pct;
-  }
-  return voiceRuntimeInstallProgress.value?.percent;
-});
-const voiceRuntimeInstallProgressText = computed(() => {
-  const modelProgress = voiceRuntimeModelProgress.value;
-  if (modelProgress) {
-    if (modelProgress.phase === "downloading") {
-      return (
-        t("aiChatV2.voice.runtime_install_downloading_model", {
-          pct: modelProgress.pct ?? 0,
-        }) || `Downloading Whisper Base... ${modelProgress.pct ?? 0}%`
-      );
-    }
-    if (modelProgress.phase === "verifying") {
-      return (
-        t("aiChatV2.voice.runtime_install_verifying_model") ||
-        "Verifying Whisper Base..."
-      );
-    }
-    if (modelProgress.phase === "extracting") {
-      return (
-        t("aiChatV2.voice.runtime_install_extracting_model") ||
-        "Installing Whisper Base..."
-      );
-    }
-  }
-
-  const runtimeProgress = voiceRuntimeInstallProgress.value;
-  if (!runtimeProgress) {
-    return (
-      t("aiChatV2.voice.runtime_install_preparing") ||
-      "Preparing download..."
-    );
-  }
-  const phaseKey = `localAiRuntime.${runtimeProgress.phase}`;
-  const phaseText = t(phaseKey) || runtimeProgress.phase;
-  if (runtimeProgress.percent !== undefined) {
-    return `${phaseText} ${runtimeProgress.percent}%`;
-  }
-  return phaseText;
-});
-const voiceRuntimeInstallSizeText = computed(() => {
-  const offer = voiceRuntimeInstallOffer.value;
-  if (!offer) return "";
-  return (
-    t("aiChatV2.voice.runtime_install_size", {
-      runtimeSize: formatBytes(offer.archiveSizeBytes),
-      modelSize: "198MB",
-    }) ||
-    `Runtime download: ${formatBytes(offer.archiveSizeBytes)}. Whisper Base model: ~198MB.`
-  );
-});
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
-  voiceSettings.value = settings;
-  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
-  voiceAutoSend.value = settings.autoSendTranscript;
-  voiceMaxRecordingMs.value = settings.maxRecordingMs;
-  voiceTtsMode.value = settings.ttsMode;
-  // Push the full TTS option set into the speech controller so spoken
-  // responses use the saved language/voice/speed (TODO P0-3). "auto"
-  // language defers detection to the worker; an unset voice id is omitted.
-  speechController.updateOptions({
-    ttsMode: settings.ttsMode,
-    ...(settings.ttsLanguage !== "auto"
-      ? { language: settings.ttsLanguage }
-      : {}),
-    ...(settings.ttsVoiceId !== undefined
-      ? { voiceId: settings.ttsVoiceId }
-      : {}),
-    speed: settings.ttsSpeed,
-  });
-}
-
-async function loadVoiceSettings(): Promise<void> {
-  try {
-    const [settings, status, localRuntimeStatus] = await Promise.all([
-      getVoiceSettings(),
-      getVoiceStatus(),
-      getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID).catch(() => null),
-    ]);
-    applyVoiceSettings(settings);
-    voiceStatus.value = status;
-    voiceLocalRuntimeStatus.value = localRuntimeStatus;
-    if (
-      status.sttState !== "missing_model" &&
-      status.sttState !== "unavailable"
-    ) {
-      voiceModelInstallError.value = null;
-    }
-  } catch {
-    voiceInputEnabled.value = false;
-    voiceAutoSend.value = false;
-    voiceMaxRecordingMs.value = 60_000;
-    voiceSettings.value = null;
-    voiceTtsMode.value = "disabled";
-    speechController.updateOptions({ ttsMode: "disabled" });
-    voiceStatus.value = null;
-    voiceLocalRuntimeStatus.value = null;
-  }
-}
-
-async function toggleSpokenResponse(): Promise<void> {
-  if (voiceSettingsSaving.value) return;
-  voiceSettingsSaving.value = true;
-  voiceModelInstallError.value = null;
-  voicePlaybackError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const enabling = current.ttsMode === "disabled";
-    if (enabling) {
-      // Verify the TTS runtime + model are installed before persisting an
-      // enablement that would otherwise silently fail synthesis on every
-      // assistant reply. Mirrors the voice-input (STT) prerequisite check in
-      // AiChatV2Composer.onMicClick.
-      const status = await getVoiceStatus();
-      voiceStatus.value = status;
-      if (status.ttsState === "unavailable") {
-        // Shared sherpa-onnx runtime missing -> offer the runtime installer
-        // (it fixes both STT and TTS). Do not persist ttsMode yet.
-        handleInstallVoiceRuntime();
-        return;
-      }
-      if (status.ttsState === "missing_model") {
-        // TTS model missing -> surface an install affordance in the chat.
-        // Do not persist ttsMode until the model is installed.
-        voiceTtsInstallPrompt.value = true;
-        return;
-      }
-    }
-    const nextTtsMode: AiChatVoiceTtsMode = enabling
-      ? "all_assistant_messages"
-      : "disabled";
-    const saved = await setVoiceSettings({
-      ...current,
-      ttsMode: nextTtsMode,
-    });
-    applyVoiceSettings(saved);
-  } catch (err) {
-    voiceModelInstallError.value =
-      err instanceof Error ? err.message : String(err);
-  } finally {
-    voiceSettingsSaving.value = false;
-  }
-}
-
-async function handleInstallVoiceModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  try {
-    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-/**
- * Download the configured TTS (speech response) model. Triggered when the user
- * tries to enable spoken responses before a TTS model is installed. Mirrors
- * `handleInstallVoiceModel` but targets `ttsModelId` instead of the STT model.
- */
-async function handleInstallTtsModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const ttsModelId =
-      voiceSettings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
-    await downloadVoiceModel(ttsModelId);
-    notifyVoiceModelsChanged();
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.tts_model_install_failed") || "Speech model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-async function handleInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstallError.value = null;
-  voiceRuntimeInstallOffer.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  voiceRuntimeInstallDialog.value = true;
-  try {
-    voiceRuntimeInstallOffer.value =
-      await prepareLocalAiRuntimeInstall("voice-sherpa");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_prepare_failed") ||
-        "Could not prepare the voice runtime download."
-      } ${msg}`;
-  }
-}
-
-async function confirmInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstalling.value = true;
-  voiceModelInstalling.value = true;
-  voiceRuntimeInstallError.value = null;
-  voiceModelInstallError.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  try {
-    const offer = await prepareLocalAiRuntimeInstall("voice-sherpa");
-    voiceRuntimeInstallOffer.value = offer;
-    await installLocalAiRuntime({
-      operationId: offer.operationId,
-      runtimeId: offer.runtimeId,
-      expectedRuntimeVersion: offer.runtimeVersion,
-      consentToken: offer.consentToken,
-    });
-
-    await downloadVoiceModel(DEFAULT_VOICE_STT_MODEL_ID);
-    notifyVoiceModelsChanged();
-
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const saved = await setVoiceSettings({
-      ...current,
-      inputMode: "push_to_talk",
-      sttModelId: DEFAULT_VOICE_STT_MODEL_ID,
-    });
-    applyVoiceSettings(saved);
-    await loadVoiceSettings();
-    voiceRuntimeInstallDialog.value = false;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_failed") ||
-        "Voice runtime installation failed."
-      } ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceRuntimeInstalling.value = false;
-    voiceModelInstalling.value = false;
-    voiceRuntimeInstallProgress.value = null;
-    voiceRuntimeModelProgress.value = null;
-  }
-}
-
-function handleVoiceSettingsChanged(): void {
-  void loadVoiceSettings();
-}
-
-/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
-function onVoiceRecordingStart(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
-
-/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
-function onStopSpeaking(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
 
 onMounted(() => {
+  // Pending lifecycle events drive queued-bubble state and activate parked
+  // turn renderers when the queue dispatches (message-queue PRD §7).
+  unsubscribePendingEvents = subscribeChatV2PendingEvents(handlePendingEvent);
   void loadConversations();
   void loadVoiceSettings();
+  // History-UI rollout flag (§18 stage 3, R-1): fail-closed. A missing
+  // helper is treated like a transport error (false) — never enabled.
+  // Component tests that need the drawer stub `isHistoryUiEnabled`.
+  // Production always exports the function via preload + IPC.
+  try {
+    const fn = (aiChatV2Api as unknown as Record<string, unknown>)
+      .isHistoryUiEnabled as (() => Promise<boolean>) | undefined;
+    if (typeof fn !== "function") {
+      historyUiEnabled.value = false;
+    } else {
+      void fn()
+        .then((enabled) => {
+          historyUiEnabled.value = enabled === true;
+        })
+        .catch(() => {
+          historyUiEnabled.value = false;
+        });
+    }
+  } catch {
+    historyUiEnabled.value = false;
+  }
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(
@@ -4682,34 +5615,9 @@ onMounted(() => {
     handleProviderSettingsChanged
   );
   window.addEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  // Model install/remove changes installed status without altering settings;
-  // reload voice status so the mic button reflects availability live.
-  window.addEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.addEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
-    if (progress.runtimeId !== VOICE_SHERPA_RUNTIME_ID) return;
-    voiceRuntimeInstallProgress.value = progress;
-    if (progress.phase === "done") {
-      void getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID)
-        .then((status) => {
-          voiceLocalRuntimeStatus.value = status;
-        })
-        .catch(() => undefined);
-    }
-  });
-  unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
-    if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;
-    voiceRuntimeModelProgress.value = progress;
-  });
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -4751,11 +5659,54 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
+  // Incremental-compaction run lifecycle updates the status badge (§13.1).
+  subscribeCompactionProgress(handleCompactionProgress);
 });
 
+// --- Conversation + single-output report orchestration (design §11.1) -----
+// `streamStatus` is a computed<Status> (line ~2550); `visibleMessages` is a
+// computed<ChatV2MessageView[]> (line ~2210). The snapshot is captured at open
+// time from the current visible messages so a streaming response is frozen.
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildChatV2ConversationSnapshot({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  reportedMessageIds.value = new Set([
+    ...reportedMessageIds.value,
+    ...payload.selectedMessageIds,
+  ]);
+  // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
+  // and copy the report reference; the dialog itself owns closing on dismiss.
+}
+
+function onSingleReportRequest(
+  descriptor: ReportableOutputDescriptor
+): void {
+  activeSingleDescriptor.value = descriptor;
+  singleReportDialogOpen.value = true;
+}
+
+function onSingleReportSubmitted(): void {
+  const id = activeSingleDescriptor.value?.context.messageId;
+  if (id) {
+    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+  }
+}
+
 onBeforeUnmount(() => {
-  speechController.stop();
-  unsubscribeSpeaking();
+  unsubscribePendingEvents?.();
+  unsubscribePendingEvents = null;
+  disposeAiChatVoice();
   stopRuntimeStatusPoll();
   detachActiveStreamView();
   window.removeEventListener(
@@ -4763,25 +5714,14 @@ onBeforeUnmount(() => {
     handleProviderSettingsChanged
   );
   window.removeEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress?.();
-  unsubscribeVoiceRuntimeProgress = null;
-  unsubscribeVoiceModelProgress?.();
-  unsubscribeVoiceModelProgress = null;
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
   unsubscribeAutoCompacted();
+  unsubscribeCompactionProgress();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
@@ -4793,8 +5733,14 @@ onBeforeUnmount(() => {
   // Phase 14 (Plan 14-04): release the active workspace watch so the worker
   // can GC consumers. Non-fatal on failure; main will eventually drop the
   // consumer when no other consumers reference the workspace.
-  void releaseActiveWorkspaceWatch();
+  void conversationWorkspace.dispose();
 });
+
+// Expose internal handlers for component tests. The permission card and
+// conversation list have deep rendering dependencies (many stubbed
+// subcomponents); driving them through the template proved brittle, so tests
+// assert contracts at this level instead.
+defineExpose({ handleSkillPermissionDeny, onSelectConversation });
 </script>
 
 <style scoped>

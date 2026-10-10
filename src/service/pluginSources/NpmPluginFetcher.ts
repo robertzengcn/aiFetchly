@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -108,11 +109,15 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
         }
         resolve({ code, stdout, tarball });
       };
+      if (!ownedSpawnAllowed("npm-plugin-fetch")) {
+        throw new Error("Application is shutting down; refusing plugin fetch");
+      }
       const child = spawn("npm", args, {
         cwd: workdir,
         env: process.env,
         shell: false,
       });
+      registerOwnedProcess("npm-plugin-fetch", child);
       const timer = setTimeout(() => {
         // Don't let a hung npm process outlive the timeout.
         try {
@@ -157,10 +162,14 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
     fs.mkdirSync(extractDir, { recursive: true });
 
     const extracted = await new Promise<boolean>((resolve) => {
+      if (!ownedSpawnAllowed("npm-plugin-extract")) {
+        throw new Error("Application is shutting down; refusing plugin extraction");
+      }
       const child = spawn("tar", ["-xzf", tarball, "-C", extractDir], {
         env: process.env,
         shell: false,
       });
+      registerOwnedProcess("npm-plugin-extract", child);
       let done = false;
       const finish = (ok: boolean) => {
         if (done) return;

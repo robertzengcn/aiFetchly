@@ -55,6 +55,7 @@ export default ({ mode }) => {
                 // the importing module's directory (src/modules/node_modules/...),
                 // which breaks vitest collection with ERR_MODULE_NOT_FOUND.
                 "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
+                "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "bufferutil": path.resolve(__dirname, "./node_modules/bufferutil"),
                 "utf-8-validate": path.resolve(__dirname, "./node_modules/utf-8-validate"),
             },

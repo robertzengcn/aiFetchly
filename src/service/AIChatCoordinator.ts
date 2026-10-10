@@ -1,0 +1,733 @@
+import { AIChatEventRouter } from "@/service/AIChatEventRouter";
+import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
+import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
+import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
+import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import { AIChatRunModule } from "@/modules/AIChatRunModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatConversationModel } from "@/model/AIChatConversation.model";
+import type { StartChatRunRequestPayload } from "@/schemas/ipc/aiChatWorkspace";
+import { normalizeChatV2UploadedFiles } from "@/main-process/communication/ai-chat-v2-ipc";
+import type { ChatV2UploadedAttachment } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatRunStatus,
+  ConversationRuntimeStatus,
+  ConversationSummaryEvent,
+  StartChatRunResponse,
+} from "@/entityTypes/aiChatWorkspaceTypes";
+import type {
+  ChatV2RuntimeStatus,
+  ChatV2StreamChunk,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
+
+/** Structural engine view the coordinator depends on (DI-friendly). */
+export interface CoordinatorEngine {
+  submitMessage(input: AIChatQuerySubmitInput): Promise<void>;
+  stopActiveTurn(conversationId?: string): void;
+  getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
+}
+
+export interface AIChatCoordinatorDeps {
+  readonly engine: CoordinatorEngine;
+  readonly runModule: AIChatRunModule;
+  readonly conversationModule: AIChatConversationModule;
+  readonly router: AIChatEventRouter;
+  readonly scheduler: AIChatExecutionScheduler;
+  readonly turnCoordinator: AIChatConversationTurnCoordinator;
+  /** AI enablement gate — checked before any AI work executes. */
+  readonly canUseChat: () => { ok: true } | { ok: false; message: string };
+  /**
+   * Cross-path terminal notification (chat-first shell / message-queue
+   * unification): invoked once per run terminal so the durable pending queue
+   * can re-drain rows queued behind this turn (completed) or hold them
+   * (cancelled/failed). Optional so non-production wiring stays untouched.
+   */
+  readonly onRunTerminal?: (
+    conversationId: string,
+    status: ChatRunStatus
+  ) => void;
+  /**
+   * Busy-conversation send delegation (message-queue PRD §9.2): when the
+   * conversation already has a live/running turn, a new send is routed into
+   * the durable pending queue instead of being rejected. Returns the
+   * pending-row run marker, or null when the queue declined (limit, gate) so
+   * the caller keeps the legacy rejection.
+   */
+  readonly busySubmit?: (
+    request: StartChatRunRequestPayload
+  ) => Promise<{ pendingRunId: string } | null>;
+}
+
+interface LiveRunState {
+  readonly runId: string;
+  readonly conversationId: string;
+  status: ChatRunStatus;
+  readonly workspaceKey: string | null;
+  cancelRequested: boolean;
+  terminalChunk: ChatV2StreamChunk | null;
+  /**
+   * True once executeDispatch has returned (normal terminal OR parked pause).
+   * Terminal chunks arriving afterwards belong to the parked turn's follow-up
+   * (permission-grant resume, deny-stop cancel) and are settled detached via
+   * settleDetachedTerminal instead of the held terminalChunk slot.
+   */
+  dispatchSettled: boolean;
+}
+
+const CLIENT_REQUEST_CACHE_MAX = 200;
+
+/**
+ * Main-process execution owner for the redesigned chat workspace
+ * (technical-design §7.3): validates, persists a durable run envelope,
+ * schedules bounded execution, adapts engine events with run identity,
+ * persists terminal state BEFORE broadcasting summary hints, and keeps runs
+ * alive across renderer reloads and selection changes.
+ */
+export class AIChatCoordinator {
+  private readonly liveRuns = new Map<string, LiveRunState>();
+  private readonly runIndex = new Map<string, string>();
+  private readonly startRequests = new Map<
+    string,
+    StartChatRunRequestPayload
+  >();
+  private readonly clientRequestCache = new Map<string, StartChatRunResponse>();
+  /** Cached unread flag so non-completion summaries never clear it wrongly. */
+  private readonly liveUnread = new Map<string, boolean>();
+
+  constructor(private readonly deps: AIChatCoordinatorDeps) {}
+
+  // -------------------------------------------------------------------------
+  // Start
+  // -------------------------------------------------------------------------
+
+  /**
+   * Accept a run: gate AI use, dedupe by clientRequestId, persist the run
+   * envelope (queued), submit to the scheduler, and return the accepted id.
+   */
+  async startRun(
+    request: StartChatRunRequestPayload
+  ): Promise<
+    | { ok: true; response: StartChatRunResponse }
+    | { ok: false; message: string }
+  > {
+    // AI enablement gate FIRST — before any AI work executes (PRD decision 19).
+    const gate = this.deps.canUseChat();
+    if (!gate.ok) {
+      return { ok: false, message: gate.message };
+    }
+
+    const cached = this.clientRequestCache.get(request.clientRequestId);
+    if (cached) {
+      return { ok: true, response: cached }; // send-button retry safety
+    }
+
+    // One live run per conversation (PRD §19.4 / turn-coordinator
+    // semantics): a second send before the first resolves would overwrite
+    // the live slot and strand run B as permanently queued. Route it into
+    // the durable pending queue instead (message-queue PRD §9.2: every busy
+    // send becomes a pending row — the bubble is the rendered surface and
+    // the queue drains FIFO at the turn terminal).
+    const engineBusy =
+      this.deps.engine.getConversationRuntimeStatus(request.conversationId) !==
+      "idle";
+    if (this.liveRuns.has(request.conversationId) || engineBusy) {
+      const delegated = this.deps.busySubmit
+        ? await this.deps.busySubmit(request)
+        : null;
+      if (delegated) {
+        const queuedResponse: StartChatRunResponse = {
+          conversationId: request.conversationId,
+          runId: delegated.pendingRunId,
+          status: "queued",
+          acceptedAt: new Date().toISOString(),
+        };
+        this.rememberClientRequest(request.clientRequestId, queuedResponse);
+        return { ok: true, response: queuedResponse };
+      }
+      return {
+        ok: false,
+        message:
+          "A run is already active for this conversation. Wait for it to finish or stop it first.",
+      };
+    }
+
+    const run = await this.deps.runModule.createRun({
+      conversationId: request.conversationId,
+      owner: "interactive",
+      resourceClass: request.resourceClass ?? "general",
+    });
+
+    // Attachment normalization is shared with the legacy stream path so both
+    // surfaces enforce identical bounds (mime allowlist, image byte caps).
+    const uploadedFiles: ChatV2UploadedAttachment[] | undefined =
+      request.uploadedFiles
+        ? normalizeChatV2UploadedFiles(request.uploadedFiles)
+        : undefined;
+
+    const context = await this.resolveConversationContext(
+      request.conversationId
+    );
+    this.liveRuns.set(request.conversationId, {
+      runId: run.runId,
+      conversationId: request.conversationId,
+      status: "queued",
+      workspaceKey: context.workspaceKey,
+      cancelRequested: false,
+      terminalChunk: null,
+      dispatchSettled: false,
+    });
+    this.runIndex.set(run.runId, request.conversationId);
+    this.startRequests.set(run.runId, {
+      ...request,
+      uploadedFiles:
+        uploadedFiles && uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    });
+    this.liveUnread.set(request.conversationId, context.unread);
+
+    // User-message projection update (preview + generated title once).
+    await this.deps.conversationModule.recordMessagePersisted({
+      conversationId: request.conversationId,
+      isResult: false,
+      previewText: request.message,
+      generatedTitle: request.message,
+      timestamp: new Date(),
+    });
+
+    this.deps.scheduler.submit({
+      runId: run.runId,
+      conversationId: request.conversationId,
+      owner: "interactive",
+      resourceClass: request.resourceClass ?? "general",
+    });
+    void this.broadcastRunSummary(request.conversationId, "run_queued");
+
+    const response: StartChatRunResponse = {
+      conversationId: request.conversationId,
+      runId: run.runId,
+      status: "queued",
+      acceptedAt: new Date().toISOString(),
+    };
+    this.rememberClientRequest(request.clientRequestId, response);
+
+    // Dispatch immediately when capacity exists.
+    this.pump();
+    const liveStatus = this.liveRuns.get(request.conversationId)?.status;
+    return {
+      ok: true,
+      response: {
+        ...response,
+        status: liveStatus === "running" ? "running" : "queued",
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Cancel
+  // -------------------------------------------------------------------------
+
+  /**
+   * Cancel one queued or active run. Idempotent: cancelling a terminal run
+   * is a no-op. Queued cancellation removes the entry without starting work;
+   * active cancellation asks the engine to abort (its `cancelled` terminal
+   * event completes the durable transition).
+   */
+  async cancelRun(input: {
+    conversationId: string;
+    runId?: string;
+  }): Promise<{ cancelled: boolean }> {
+    const conversationId = input.runId
+      ? this.runIndex.get(input.runId) ?? input.conversationId
+      : input.conversationId;
+    const live = this.liveRuns.get(conversationId);
+    if (!live) {
+      // Queue-owned turn (durable pending queue drained outside the
+      // coordinator): no run envelope exists here, but the engine turn is
+      // stoppable — its `cancelled` terminal makes the queue hold the
+      // remaining rows (FR-14 durable pause).
+      const queueStatus =
+        this.deps.engine.getConversationRuntimeStatus(conversationId);
+      if (
+        queueStatus === "running" ||
+        queueStatus === "awaiting_permission" ||
+        queueStatus === "awaiting_user"
+      ) {
+        this.deps.engine.stopActiveTurn(conversationId);
+        return { cancelled: true };
+      }
+      return { cancelled: false };
+    }
+
+    if (this.deps.scheduler.isQueued(live.runId)) {
+      this.deps.scheduler.cancelQueued(live.runId);
+      await this.deps.runModule.transition(live.runId, "cancelled");
+      this.finalizeAfterTerminal(conversationId, "cancelled");
+      return { cancelled: true };
+    }
+
+    if (this.deps.scheduler.isActive(live.runId)) {
+      live.cancelRequested = true;
+      this.deps.engine.stopActiveTurn(conversationId);
+      return { cancelled: true };
+    }
+
+    // Parked (paused) run: dispatch already returned, so the scheduler no
+    // longer tracks it. Ask the engine for the truth — it reports
+    // awaiting_permission/awaiting_user while a turn is parked on a
+    // permission card or plan question. stopActiveTurn emits `cancelled`
+    // through the parked sink, which settleDetachedTerminal settles durably
+    // (this is the deny-a-permission-prompt path).
+    const engineStatus =
+      this.deps.engine.getConversationRuntimeStatus(conversationId);
+    if (
+      engineStatus === "awaiting_permission" ||
+      engineStatus === "awaiting_user"
+    ) {
+      live.cancelRequested = true;
+      this.deps.engine.stopActiveTurn(conversationId);
+      return { cancelled: true };
+    }
+
+    // Detached RUNNING turn (review fix): a permission grant / question
+    // answer resumed the engine turn AFTER executeDispatch returned, so the
+    // scheduler entry is already released — the isActive check above misses
+    // it and the resumed tool/model would be uncancellable. Route it through
+    // the same detached path; the engine's `cancelled` terminal settles via
+    // settleDetachedTerminal.
+    if (engineStatus === "running" && live.dispatchSettled) {
+      live.cancelRequested = true;
+      this.deps.engine.stopActiveTurn(conversationId);
+      return { cancelled: true };
+    }
+
+    return { cancelled: false };
+  }
+
+  // -------------------------------------------------------------------------
+  // Selection / sidebar support
+  // -------------------------------------------------------------------------
+
+  setSelectedConversation(conversationId: string | null): void {
+    this.deps.scheduler.setSelectedConversation(conversationId);
+  }
+
+  /** Live runtime lookup for the sidebar projection (design §16.1). */
+  getLiveRuntime(conversationId: string): {
+    runtimeStatus: ConversationRuntimeStatus;
+    activeRunId: string | null;
+  } | null {
+    const live = this.liveRuns.get(conversationId);
+    if (!live) return null;
+    return { runtimeStatus: live.status, activeRunId: live.runId };
+  }
+
+  /** Track read-marker state so summary events never clear unread wrongly. */
+  markReadLive(conversationId: string): void {
+    this.liveUnread.set(conversationId, false);
+  }
+
+  /** Startup reconciliation (§19.4) — abandoned runs become `interrupted`. */
+  async reconcileOnStartup(reason: string): Promise<number> {
+    return this.deps.runModule.reconcileInterruptedRuns(reason);
+  }
+
+  // -------------------------------------------------------------------------
+  // Dispatch + execution
+  // -------------------------------------------------------------------------
+
+  private pump(): void {
+    this.deps.scheduler.pump((dispatch) => {
+      void this.executeDispatch(dispatch.runId, dispatch.conversationId);
+    });
+  }
+
+  private async executeDispatch(
+    runId: string,
+    conversationId: string
+  ): Promise<void> {
+    const live = this.liveRuns.get(conversationId);
+    if (!live || live.runId !== runId) {
+      // Stale dispatch target (e.g. cancelled between pump and execute).
+      this.startRequests.delete(runId);
+      this.runIndex.delete(runId);
+      this.deps.scheduler.complete(runId);
+      return;
+    }
+
+    // Same-conversation turn coordination at dispatch time (design §10.3).
+    const lease = this.deps.turnCoordinator.tryAcquire({
+      conversationId,
+      owner: "interactive",
+      ownerId: runId,
+    });
+    if (!lease) {
+      // Lease lost: the slot returns with its original enqueue time; a pump
+      // lets a now-eligible run take the freed capacity instead of waiting
+      // for the next unrelated dispatch.
+      this.deps.scheduler.requeue(runId);
+      this.pump();
+      return;
+    }
+
+    try {
+      await this.deps.runModule.transition(runId, "running");
+      live.status = "running";
+      void this.broadcastRunSummary(conversationId, "run_started");
+
+      const adapter = new AIChatRunEventAdapter(runId, conversationId);
+      await this.deps.engine.submitMessage({
+        request: this.buildEngineRequest(live),
+        eventSink: this.createRunSink(live, adapter),
+      });
+
+      const terminal = live.terminalChunk;
+      if (!terminal) {
+        // The engine parks a permission/question turn AFTER its last sink
+        // event (the park is engine state, not a chunk), so the in-flight
+        // sampler can miss it. Sampling once more after submitMessage
+        // resolves is race-free: the park happens inside submitMessage's
+        // awaited loop handler.
+        const parked = mapEngineStatus(
+          this.deps.engine.getConversationRuntimeStatus(conversationId)
+        );
+        if (parked === "awaiting_permission" || parked === "awaiting_user") {
+          live.status = parked;
+          live.dispatchSettled = true;
+          try {
+            await this.deps.runModule.transition(runId, parked);
+          } catch (err) {
+            console.warn(
+              "[ai-chat-workspace] pause transition failed for run",
+              runId,
+              err
+            );
+          }
+          void this.broadcastRunSummary(
+            conversationId,
+            parked === "awaiting_permission"
+              ? "permission_required"
+              : "user_input_required"
+          );
+          // Keep the live entry: the parked turn's eventual terminal
+          // (permission-grant resume or deny-stop cancel) routes through
+          // settleDetachedTerminal. The finally block below still releases
+          // the lease and scheduler capacity — the run is parked, not
+          // executing.
+          return;
+        }
+      }
+      let finalStatus: ChatRunStatus = live.cancelRequested
+        ? "cancelled"
+        : "completed";
+      let errorSummary: string | null = null;
+      if (terminal) {
+        const hint = AIChatRunEventAdapter.statusHintFor(terminal.eventType);
+        if (hint) finalStatus = hint;
+        if (terminal.eventType === "error" && terminal.errorMessage) {
+          errorSummary = terminal.errorMessage.slice(0, 500);
+        }
+      }
+      // Persist terminal state BEFORE routing the terminal detail event or
+      // the summary hint (design §5.3 persistence-precedes-terminal-hints).
+      await this.deps.runModule.transition(runId, finalStatus, {
+        errorSummary,
+      });
+      if (
+        (finalStatus === "completed" || finalStatus === "cancelled") &&
+        terminal?.fullContent
+      ) {
+        await this.deps.conversationModule.recordMessagePersisted({
+          conversationId,
+          isResult: finalStatus === "completed",
+          previewText: terminal.fullContent,
+          timestamp: new Date(),
+        });
+      }
+      if (terminal) {
+        this.deps.router.sendDetailEvent(adapter.wrap(terminal));
+      }
+      this.finalizeAfterTerminal(conversationId, finalStatus);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        await this.deps.runModule.transition(runId, "failed", {
+          errorCode: "execution_error",
+          errorSummary: message.slice(0, 500),
+        });
+      } catch (transitionErr) {
+        console.error(
+          "[ai-chat-workspace] terminal transition failed for run",
+          runId,
+          transitionErr
+        );
+      }
+      this.finalizeAfterTerminal(conversationId, "failed");
+    } finally {
+      lease.release();
+      this.deps.scheduler.complete(runId);
+      this.pump();
+    }
+  }
+
+  /**
+   * Run-owned sink: maps engine events to chunks, wraps them with run
+   * identity, routes detail events, and samples engine runtime status on
+   * non-token chunks to observe permission/question pauses (which the engine
+   * exposes as state, not sink events).
+   */
+  private createRunSink(
+    live: LiveRunState,
+    adapter: AIChatRunEventAdapter
+  ): AIChatQueryEventSink {
+    const handleChunk = (chunk: ChatV2StreamChunk): void => {
+      if (isTerminalChunk(chunk)) {
+        if (live.dispatchSettled) {
+          // Parked-turn terminal: dispatch already returned (the run paused
+          // on a permission card / plan question), so settle it detached —
+          // this is the permission-grant resume completing, or the deny-stop
+          // cancel.
+          void this.settleDetachedTerminal(live, adapter, chunk);
+          return;
+        }
+        live.terminalChunk = chunk; // routed after the durable transition
+        return;
+      }
+      this.deps.router.sendDetailEvent(adapter.wrap(chunk));
+      this.sampleEngineStatus(live);
+    };
+    return createChatV2StreamSink({
+      sendChunk: handleChunk,
+      sendComplete: handleChunk,
+    });
+  }
+
+  /**
+   * Settle a terminal chunk that arrived after executeDispatch returned —
+   * the paused-turn follow-up (resume completion or deny-stop cancel).
+   * Mirrors executeDispatch's terminal handling: durable transition first,
+   * then the terminal detail event, then finalize/broadcast.
+   */
+  private async settleDetachedTerminal(
+    live: LiveRunState,
+    adapter: AIChatRunEventAdapter,
+    chunk: ChatV2StreamChunk
+  ): Promise<void> {
+    // Guard against stragglers after the run already finalized (the live
+    // entry is removed there, so identity comparison detects it).
+    if (this.liveRuns.get(live.conversationId) !== live) return;
+    try {
+      const hint = AIChatRunEventAdapter.statusHintFor(chunk.eventType);
+      const finalStatus: ChatRunStatus =
+        hint ?? (live.cancelRequested ? "cancelled" : "completed");
+      const errorSummary =
+        chunk.eventType === "error" && chunk.errorMessage
+          ? chunk.errorMessage.slice(0, 500)
+          : null;
+      await this.deps.runModule.transition(live.runId, finalStatus, {
+        errorSummary,
+      });
+      if (
+        (finalStatus === "completed" || finalStatus === "cancelled") &&
+        chunk.fullContent
+      ) {
+        await this.deps.conversationModule.recordMessagePersisted({
+          conversationId: live.conversationId,
+          isResult: finalStatus === "completed",
+          previewText: chunk.fullContent,
+          timestamp: new Date(),
+        });
+      }
+      this.deps.router.sendDetailEvent(adapter.wrap(chunk));
+      this.finalizeAfterTerminal(live.conversationId, finalStatus);
+    } catch (err) {
+      console.error(
+        "[ai-chat-workspace] detached terminal settle failed for run",
+        live.runId,
+        err
+      );
+      this.finalizeAfterTerminal(live.conversationId, "failed");
+    }
+  }
+
+  /** Detect awaiting/resume transitions the engine exposes as state. */
+  private sampleEngineStatus(live: LiveRunState): void {
+    const mapped = mapEngineStatus(
+      this.deps.engine.getConversationRuntimeStatus(live.conversationId)
+    );
+    if (!mapped || mapped === live.status) return;
+    live.status = mapped;
+    const reason: ConversationSummaryEvent["reason"] =
+      mapped === "awaiting_permission"
+        ? "permission_required"
+        : mapped === "awaiting_user"
+        ? "user_input_required"
+        : "run_started";
+    // FR-023/037: serialize the durable transition BEFORE broadcasting
+    // the summary hint — persistence must precede terminal hints.
+    void this.deps.runModule
+      .transition(live.runId, mapped)
+      .then(() => {
+        void this.broadcastRunSummary(live.conversationId, reason);
+      })
+      .catch((err) =>
+        console.warn("[ai-chat-workspace] waiting transition failed:", err)
+      );
+  }
+
+  private buildEngineRequest(live: LiveRunState): ChatV2StreamRequest {
+    const request = this.startRequests.get(live.runId);
+    if (!request) {
+      // Should not happen — startRun always registers the payload first.
+      return { conversationId: live.conversationId, message: "" };
+    }
+    return {
+      conversationId: request.conversationId,
+      message: request.message,
+      model: request.model,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+      systemPrompt: request.systemPrompt,
+      mode: request.mode,
+      showReasoning: request.showReasoning,
+      reasoning: request.reasoning,
+      toolApprovalMode: request.toolApprovalMode,
+      uploadedFiles: request.uploadedFiles,
+      generatedImageReferences: request.generatedImageReferences,
+    };
+  }
+
+  private async resolveConversationContext(
+    conversationId: string
+  ): Promise<{ workspaceKey: string | null; unread: boolean }> {
+    // Two point lookups — building the entire sidebar per send would cost
+    // O(all conversations + all runs) on every message.
+    try {
+      const projection =
+        await this.deps.conversationModule.getConversationProjection(
+          conversationId
+        );
+      if (!projection) {
+        return { workspaceKey: null, unread: false };
+      }
+      const workspaceKey =
+        await this.deps.conversationModule.getWorkspaceKeyForConversation(
+          conversationId
+        );
+      return {
+        workspaceKey: workspaceKey ?? projection.workspaceKey ?? null,
+        unread: AIChatConversationModel.isUnread(projection),
+      };
+    } catch {
+      return { workspaceKey: null, unread: false };
+    }
+  }
+
+  private rememberClientRequest(
+    clientRequestId: string,
+    response: StartChatRunResponse
+  ): void {
+    if (this.clientRequestCache.size >= CLIENT_REQUEST_CACHE_MAX) {
+      const oldest = this.clientRequestCache.keys().next().value;
+      if (oldest !== undefined) this.clientRequestCache.delete(oldest);
+    }
+    this.clientRequestCache.set(clientRequestId, response);
+  }
+
+  private finalizeAfterTerminal(
+    conversationId: string,
+    status: ChatRunStatus
+  ): void {
+    const live = this.liveRuns.get(conversationId);
+    if (status === "completed") {
+      this.liveUnread.set(conversationId, true);
+    }
+    if (live) {
+      this.startRequests.delete(live.runId);
+      this.runIndex.delete(live.runId); // bounded lifetime maps
+    }
+    // Remove the live entry BEFORE broadcasting so the terminal summary
+    // reports `idle` (+ unread on completion) instead of a stuck running
+    // state (design §8.6).
+    this.liveRuns.delete(conversationId);
+    // Cross-path terminal notification: the durable pending queue re-drains
+    // or holds rows queued behind this (coordinator-run) turn.
+    this.deps.onRunTerminal?.(conversationId, status);
+    const reason: ConversationSummaryEvent["reason"] =
+      status === "completed"
+        ? "run_completed"
+        : status === "failed"
+        ? "run_failed"
+        : status === "cancelled"
+        ? "run_cancelled"
+        : "run_interrupted";
+    void this.broadcastRunSummary(conversationId, reason);
+  }
+
+  private async broadcastRunSummary(
+    conversationId: string,
+    reason: ConversationSummaryEvent["reason"]
+  ): Promise<void> {
+    const live = this.liveRuns.get(conversationId);
+    const runtimeStatus: ConversationRuntimeStatus = live
+      ? live.status
+      : "idle";
+    const attention =
+      runtimeStatus === "awaiting_permission"
+        ? ("permission" as const)
+        : runtimeStatus === "awaiting_user"
+        ? ("user_input" as const)
+        : ("none" as const);
+    // A conversation created via the renderer's New-chat button enters the
+    // sidebar with an EMPTY title and only learns the projection's generated
+    // title (design §8.6) through these broadcasts — nothing else refreshes
+    // the store mid-session. Titles are sidebar-visible data (bootstrap sends
+    // them too), so this stays within the status-metadata-only contract.
+    // The lookup must never block the status broadcast itself.
+    let title: string | undefined;
+    try {
+      const projection =
+        await this.deps.conversationModule.getConversationProjection(
+          conversationId
+        );
+      if (projection?.title) {
+        title = projection.title;
+      }
+    } catch (err) {
+      console.warn("[ai-chat-workspace] summary title lookup failed:", err);
+    }
+    this.deps.router.broadcastSummary({
+      conversationId,
+      workspaceKey: live?.workspaceKey ?? null,
+      runtimeStatus,
+      attention,
+      unread: this.liveUnread.get(conversationId) ?? false,
+      lastActivityAt: new Date().toISOString(),
+      runId: live?.runId,
+      ...(title !== undefined ? { title } : {}),
+      reason,
+    });
+  }
+}
+
+function isTerminalChunk(chunk: ChatV2StreamChunk): boolean {
+  return (
+    chunk.eventType === "complete" ||
+    chunk.eventType === "error" ||
+    chunk.eventType === "cancelled"
+  );
+}
+
+function mapEngineStatus(status: ChatV2RuntimeStatus): ChatRunStatus | null {
+  switch (status) {
+    case "running":
+      return "running";
+    case "awaiting_permission":
+      return "awaiting_permission";
+    case "awaiting_user":
+      return "awaiting_user";
+    default:
+      return null;
+  }
+}

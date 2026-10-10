@@ -6,7 +6,7 @@ import {
 } from "@/model/AIUserMemory.model";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
-import { looksSecretlike } from "@/service/MemorySecretFilter";
+import { applyConsolidationPlanInTransaction } from "@/modules/lib/consolidationPlanApply";
 import type { ParseResult } from "@/service/AIAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import type {
@@ -167,74 +167,40 @@ export class AIUserMemoryModule extends BaseModule {
   }): Promise<void> {
     await this.ensureConnection();
     await this.sqliteDb.connection.transaction(async (manager) => {
-      const memoryRepo = manager.getRepository(AIUserMemoryEntity);
-      const runRepo = manager.getRepository(AIMemoryConsolidationRunEntity);
-
-      // Apply archives first to clear contradictions.
-      for (const a of input.plan.archive) {
-        await memoryRepo.update(
-          { memoryId: a.memoryId },
-          { status: "archived" }
-        );
-      }
-      for (const u of input.plan.update) {
-        const patch: Record<string, unknown> = {};
-        if (u.title !== undefined) patch.title = u.title;
-        if (u.content !== undefined) patch.content = u.content;
-        if (u.confidence !== undefined)
-          patch.confidence = clampConfidence(u.confidence);
-        // Defense-in-depth: re-check update title/content for secret-like
-        // values before writing (throws -> rollback).
-        if (u.title !== undefined || u.content !== undefined) {
-          rejectSecretLike(
-            u.title !== undefined ? u.title : null,
-            u.content !== undefined ? u.content : null
-          );
-        }
-        if (Object.keys(patch).length > 0) {
-          await memoryRepo.update({ memoryId: u.memoryId }, patch);
-        }
-      }
-      for (const c of input.plan.create) {
-        // Defense-in-depth: re-run the secret filter inside the transaction
-        // so a plan that slipped past the parser (or came from a different
-        // caller) cannot persist secret-like content. Throws -> rollback.
-        rejectSecretLike(c.title, c.content);
-        const e = new AIUserMemoryEntity();
-        e.memoryId = `mem-${randomUUID()}`;
-        e.type = c.type;
-        e.title = c.title;
-        e.content = c.content;
-        e.status = "active";
-        e.confidence = clampConfidence(c.confidence ?? 100);
-        e.sourceKind =
-          c.sourceKind === "chat_v2" || c.sourceKind === "agent_task"
-            ? c.sourceKind
-            : "manual";
-        e.sourceConversationId = c.sourceKind === "chat_v2" ? c.sourceId : null;
-        e.sourceAgentTaskId = c.sourceKind === "agent_task" ? c.sourceId : null;
-        e.sourceMessageIds = c.sourceMessageIds ?? null;
-        await memoryRepo.save(e);
-      }
-
-      // Mark the run completed in the same transaction.
-      await runRepo.update(
-        { runId: input.runId },
-        {
-          status: "completed",
-          finishedAt: new Date(),
+      await applyConsolidationPlanInTransaction({
+        manager,
+        memoryEntity: AIUserMemoryEntity,
+        runEntity: AIMemoryConsolidationRunEntity,
+        plan: input.plan,
+        runId: input.runId,
+        completion: {
           chatConversationsReviewed: input.chatConversationsReviewed,
           agentTasksReviewed: input.agentTasksReviewed,
-          memoriesCreated: input.plan.create.length,
-          memoriesUpdated: input.plan.update.length,
-          memoriesArchived: input.plan.archive.length,
-          model: input.model ?? null,
-          errorMessage: null,
-          ...(input.reviewedThrough !== undefined
-            ? { reviewedThrough: input.reviewedThrough }
-            : {}),
-        }
-      );
+          model: input.model,
+          reviewedThrough: input.reviewedThrough,
+        },
+        buildCreateEntity: (c) => {
+          const e = new AIUserMemoryEntity();
+          e.memoryId = `mem-${randomUUID()}`;
+          e.type = c.type;
+          e.title = c.title;
+          e.content = c.content;
+          e.status = "active";
+          e.confidence = clampConfidence(c.confidence ?? 100);
+          e.sourceKind =
+            c.sourceKind === "chat_v2" || c.sourceKind === "agent_task"
+              ? c.sourceKind
+              : "manual";
+          e.sourceConversationId =
+            c.sourceKind === "chat_v2" ? c.sourceId ?? null : null;
+          e.sourceAgentTaskId =
+            c.sourceKind === "agent_task" ? c.sourceId ?? null : null;
+          e.sourceMessageIds = (c.sourceMessageIds as string[] | null) ?? null;
+          return e;
+        },
+        archiveWhere: (memoryId) => ({ memoryId }),
+        updateWhere: (memoryId) => ({ memoryId }),
+      });
     });
   }
 
@@ -292,22 +258,6 @@ function validateCreate(input: AIUserMemoryCreateInput): void {
 function clampConfidence(v: number): number {
   if (!Number.isFinite(v)) return 100;
   return Math.max(0, Math.min(100, Math.round(v)));
-}
-
-/**
- * Defense-in-depth secret rejection for transactional plan application. The
- * primary secret filter runs at parse time (parseAutoDreamModelOutput's
- * filterCreate), but re-checking here prevents a future caller from
- * persisting an unvalidated plan that slipped past the parser (or came from
- * a different parser). Throws on secret-like content so the transaction
- * rolls back before any mutation.
- */
-function rejectSecretLike(title: string | null, content: string | null): void {
-  if (looksSecretlike(title) || looksSecretlike(content)) {
-    throw new Error(
-      "Refusing to persist memory with secret-like content (secret filter)"
-    );
-  }
 }
 
 function resolveListStatus(

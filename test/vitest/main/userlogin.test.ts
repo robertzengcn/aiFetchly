@@ -38,18 +38,26 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/modules/remotesource", () => ({
-  RemoteSource: vi.fn().mockImplementation(() => ({
+  RemoteSource: class {
+    constructor() {
+      return {
     GetUserInfo: vi
       .fn()
       .mockImplementation(() => Promise.resolve(mockState.userInfo)),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: mockTokenGetValue,
     setValue: mockTokenSetValue,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/lib/function", () => ({

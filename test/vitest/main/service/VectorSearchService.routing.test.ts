@@ -18,20 +18,30 @@ const stubLocalProvider = {
 };
 
 vi.mock("@/service/embedding/EmbeddingProviderFactory", () => ({
-  EmbeddingProviderFactory: vi.fn().mockImplementation(() => ({
+  EmbeddingProviderFactory: class {
+    constructor() {
+      return {
     create: spies.factoryCreate.mockReturnValue(stubLocalProvider),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/VectorStoreService", () => ({
-  VectorStoreService: vi.fn().mockImplementation(() => ({
+  VectorStoreService: class {
+    constructor() {
+      return {
     initialize: vi.fn().mockResolvedValue(undefined),
     isInitialized: vi.fn().mockReturnValue(true),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/api/ragConfigApi", () => ({
-  RagConfigApi: vi.fn().mockImplementation(() => ({
+  RagConfigApi: class {
+    constructor() {
+      return {
     getAvailableEmbeddingModels: vi.fn().mockResolvedValue({
       status: true,
       code: 200,
@@ -62,7 +72,9 @@ vi.mock("@/api/ragConfigApi", () => ({
         },
       ],
     }),
-  })),
+  };
+    }
+  },
 }));
 
 import { VectorSearchService } from "@/service/VectorSearchService";

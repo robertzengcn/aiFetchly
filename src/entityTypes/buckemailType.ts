@@ -1,29 +1,102 @@
-import { ItemSearchparam } from "@/entityTypes/commonType"
-export type BuckEmailListType={
-    TaskId: number;
-    Type:String;
-    Status:String;
-    RecordTime?: string;
-}
-export interface BuckEmailTasklogQueryType extends ItemSearchparam{
-    TaskId: number;
+import { ItemSearchparam } from "@/entityTypes/commonType";
+export type BuckEmailListType = {
+  TaskId: number;
+  Type: string;
+  Status: string;
+  RecordTime?: string;
+};
+export interface BuckEmailTasklogQueryType extends ItemSearchparam {
+  TaskId: number;
 }
 
 export interface EmailMarketingSendLogListDisplay {
-    id: number;
-    status:string;
-    receiver: string;
-    title: string;
-    // content: string;
-    record_time?: string;
+  id: number;
+  status: string;
+  receiver: string;
+  title: string;
+  // content: string;
+  record_time?: string;
+}
+
+/**
+ * One row in the unified send-log view — aggregates legacy bulk-task sends
+ * (emailmarketing_send_log) with authorized outbound sends
+ * (outbound_email_delivery_outcome). `source` distinguishes the two halves so
+ * the UI can badge them and the user can tell an AI-authorized send from a
+ * bulk-task send.
+ *
+ * `id` is the row id within its source table (not globally unique); the
+ * (source, id) pair is the stable identity. Optional fields are populated only
+ * on the half that owns them (taskId on legacy, batchId/draftId on authorized).
+ */
+export interface UnifiedSendLogEntry {
+  id: number;
+  source: "legacy" | "authorized";
+  status: string;
+  receiver: string;
+  title: string;
+  record_time?: string;
+  taskId?: number;
+  batchId?: number;
+  draftId?: number;
 }
 export interface EmailMarketingSendLogDetailDisplay {
-    id: number;
-    status:string;
-    receiver: string;
-    title: string;
-    content: string;
-    record_time?: string;
+  id: number;
+  status: string;
+  receiver: string;
+  title: string;
+  content: string;
+  record_time?: string;
 }
 
-
+/**
+ * Detail payload for one row of the unified send-log view, keyed by the
+ * (source, id) pair (each half has its own id space). Optional fields are
+ * populated only on the half that owns them:
+ *
+ *  - legacy:    content, log, taskId, emailServiceId, fromAddress,
+ *               smtpUsername, replyTo (identity columns, FR-014)
+ *  - authorized: sender, actor, bodyText, bodyHtml, providerMessageId,
+ *               errorCode, submittedAt, completedAt, batchId, draftId,
+ *               revisionId, attemptId, emailServiceId, smtpUsername, replyTo
+ *               (revision identity, FR-014)
+ *
+ * Identity fields are non-secret by construction: the legacy columns come
+ * from the child-process send result, the authorized ones from the frozen
+ * revision. Neither ever carries a password.
+ *
+ * bodyHtml is the revision's sanitized HTML (nullable when text-only). The
+ * detail view renders it only inside a sandboxed iframe with remote images
+ * stripped — never via v-html.
+ */
+export interface UnifiedSendLogDetailEntry {
+  id: number;
+  source: "legacy" | "authorized";
+  status: string;
+  receiver: string;
+  title: string;
+  record_time?: string;
+  // legacy half
+  content?: string;
+  log?: string;
+  taskId?: number;
+  // identity metadata (FR-014) — both halves; visible From is `fromAddress`
+  // on legacy and `sender` on authorized.
+  emailServiceId?: number;
+  fromAddress?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
+  // authorized half
+  sender?: string;
+  actor?: string;
+  bodyText?: string;
+  bodyHtml?: string | null;
+  providerMessageId?: string;
+  errorCode?: string;
+  submittedAt?: string;
+  completedAt?: string;
+  batchId?: number;
+  draftId?: number;
+  revisionId?: number;
+  attemptId?: number;
+}

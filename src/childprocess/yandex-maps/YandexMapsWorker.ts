@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * Yandex Maps Worker -- Puppeteer-based child process scraper.
  *
@@ -60,6 +61,13 @@ interface ProgressMessage {
   message: string;
 }
 
+/** Worker -> parent browser-identity report (design §7, T01). */
+interface DescendantReportMessage {
+  type: "descendant-report";
+  pid: number;
+  label: string;
+}
+
 interface ResultMessage {
   type: "result";
   requestId: string;
@@ -79,7 +87,9 @@ let isCancelled = false;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function send(msg: ProgressMessage | ResultMessage): void {
+function send(
+  msg: ProgressMessage | ResultMessage | DescendantReportMessage
+): void {
   if (process.send) {
     process.send(msg);
   }
@@ -420,6 +430,15 @@ const DETAIL_PANEL_SELECTORS = [
 // ---------------------------------------------------------------------------
 
 async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
+  if (shutdownResponder.isShuttingDown()) {
+    send({
+      type: "result",
+      requestId: msg.requestId,
+      success: false,
+      error: "Worker is shutting down",
+    });
+    return;
+  }
   const { requestId, query, location, maxResults, showBrowser, language } = msg;
   isCancelled = false;
 
@@ -449,6 +468,17 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     browser = await browserManager.launchWithStealth({
       headless: !showBrowser,
     });
+
+    // T01 (design §7): report the browser's identity to the parent at
+    // launch so force verification can see it even if this worker dies.
+    const browserPid = browser.process()?.pid;
+    if (browserPid !== undefined) {
+      send({
+        type: "descendant-report",
+        pid: browserPid,
+        label: "browser",
+      } as DescendantReportMessage);
+    }
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -1306,6 +1336,25 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
+
+process.on("message", (raw: unknown) => {
+  // §7 graceful shutdown (design §7): ack, then exit within the parent's
+  // budget. Parent observes exit + force-verifies (ack is not exit proof).
+  if (shutdownResponder.handle(raw)) return;
+});
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => {
+    process.send?.(message);
+  },
+  // T01 (design §7): close the owned Puppeteer browser before exit.
+  closeOwnedResources: async () => {
+    const owned = browser;
+    browser = null;
+    if (owned) {
+      await owned.close().catch(() => undefined);
+    }
+  },
+});
 
 process.on("message", (raw: unknown) => {
   const validation = parseWorkerMessage<YandexMapsWorkerInbound>(

@@ -58,6 +58,11 @@ export const contactExtractionWorkerOutboundSchema = lazySchema(() =>
       type: z.literal("worker-ready"),
     }),
     z.object({
+      type: z.literal("shutdown-ack"),
+      /** Echoes the shutdown-request requestId (design §7). */
+      requestId: z.string().min(1),
+    }),
+    z.object({
       type: z.literal("worker-log"),
       level: z.enum(["info", "warn", "error", "debug"]).default("info"),
       args: z.array(z.unknown()).default([]),
@@ -114,6 +119,12 @@ export const contactExtractionWorkerInboundSchema = lazySchema(() =>
     }),
     z.object({
       type: z.literal("shutdown"),
+      /** Correlates the ack with this request (design §7). */
+      requestId: z.string().min(1),
+      /** Why the parent is shutting down (report/telemetry only). */
+      reason: z.string().optional(),
+      /** Remaining parent shutdown budget — worker bounds local cleanup. */
+      remainingMs: z.number().int().min(0).optional(),
     }),
   ])
 );

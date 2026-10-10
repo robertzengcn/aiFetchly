@@ -19,6 +19,7 @@ import { HookRegistry } from "@/service/hooks/HookRegistry";
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
@@ -30,51 +31,66 @@ const mockCreateConversationIfNeeded = vi
 const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     saveUserMessage: mockSaveUserMessage,
     getConversationMessages: mockGetConversationMessages,
+    getRecentMessages: mockGetRecentMessages,
     saveAssistantMessage: mockSaveAssistantMessage,
     saveToolCallMessage: mockSaveToolCallMessage,
     saveToolResultMessage: mockSaveToolResultMessage,
     createConversationIfNeeded: mockCreateConversationIfNeeded,
     getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatAttachmentModule", () => ({
-  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
+  AIChatAttachmentModule: vi.fn().mockImplementation(function () {
+    return {
     saveUploadedFiles: vi.fn().mockResolvedValue(undefined),
-  })),
+  };
+  }),
 }));
 
 const mockGetPlanState = vi.fn().mockResolvedValue(null);
 const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
     getPlanState: mockGetPlanState,
     ensurePlanForConversation: mockEnsurePlanForConversation,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
     getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+  };
+  }),
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
     getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+  };
+  }),
 }));
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return {
     listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
-  return { ...actual, AiChatApi: vi.fn().mockImplementation(() => ({})) };
+  return { ...actual, AiChatApi: vi.fn().mockImplementation(function () {
+    return {};
+  }) };
 });
 
 vi.mock("@/service/DesktopNotifyService", () => ({
@@ -93,7 +109,9 @@ vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: { execute: vi.fn() },
 }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn() };
+  }),
 }));
 vi.mock("@/config/usersetting", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/usersetting")>();
@@ -240,17 +258,14 @@ describe("AIChatQueryEngine concurrent turns", () => {
     expect(engine.getConversationRuntimeStatus("v2-B")).toBe("idle");
   });
 
-  it("same-conversation re-send aborts the prior turn but not its successor", async () => {
+  it("same-conversation re-send returns busy without aborting the active turn (message-queue design §12.3)", async () => {
     const firstDeferred = createDeferred<AIChatQueryLoopResult>();
-    const secondDeferred = createDeferred<AIChatQueryLoopResult>();
     const captured: AbortController[] = [];
-    let callCount = 0;
-    // NOTE: deliberately NOT abort-aware — we control exactly when the stale
-    // first turn resolves so we can assert the assistantMessageId guard.
+    // NOTE: deliberately NOT abort-aware — we control exactly when the first
+    // turn resolves so we can assert the assistantMessageId guard.
     const fakeRun = vi.fn((input: AIChatQueryLoopInput) => {
       captured.push(input.abortController);
-      callCount += 1;
-      return callCount === 1 ? firstDeferred.promise : secondDeferred.promise;
+      return firstDeferred.promise;
     });
     const engine = createEngineWithFakeLoop(fakeRun);
 
@@ -260,41 +275,34 @@ describe("AIChatQueryEngine concurrent turns", () => {
     });
     await vi.waitFor(() => expect(fakeRun).toHaveBeenCalledTimes(1));
 
-    void engine.submitMessage({
+    // A second send while the first is still active no longer replaces the
+    // turn — the queue owns serialization, so the engine reports busy and
+    // leaves the active turn untouched.
+    const secondSink = makeEventCollector();
+    await engine.submitMessage({
       request: { message: "A2", conversationId: "v2-A" },
-      eventSink: makeEventCollector().sink,
+      eventSink: secondSink.sink,
     });
-    await vi.waitFor(() => expect(fakeRun).toHaveBeenCalledTimes(2));
-
-    // The first turn's controller was aborted; the second's was not.
-    expect(captured[0].signal.aborted).toBe(true);
-    expect(captured[1].signal.aborted).toBe(false);
-    // Exactly one active turn for A.
+    expect(fakeRun).toHaveBeenCalledTimes(1);
+    expect(captured[0].signal.aborted).toBe(false);
     expect(engine.getConversationRuntimeStatus("v2-A")).toBe("running");
+    // The busy path surfaced an error chunk on the second send's sink.
+    const busyError = secondSink.events.find((e) => e.type === "error") as
+      | { errorMessage?: string }
+      | undefined;
+    expect(busyError?.errorMessage).toBeTruthy();
 
-    // The stale first turn now resolves cancelled. It must NOT delete the
-    // second turn's entry (assistantMessageId guard in clearActiveTurnState).
+    // The first turn still resolves normally and clears the conversation.
     firstDeferred.resolve({
-      type: "cancelled",
-      conversationId: "v2-A",
-      assistantMessageId: "assistant-first",
-      partialContent: "",
-      model: "gpt-4",
-    });
-    await firstSubmit; // wait for the stale turn's full post-loop cleanup
-
-    // The second turn is still the active one.
-    expect(engine.getConversationRuntimeStatus("v2-A")).toBe("running");
-
-    // Cleanup: resolve the second turn to avoid a dangling promise.
-    secondDeferred.resolve({
       type: "completed",
       conversationId: "v2-A",
-      assistantMessageId: "assistant-second",
-      fullContent: "",
+      assistantMessageId: "assistant-first",
+      fullContent: "done",
       finishReason: "stop",
       model: "gpt-4",
     });
+    await firstSubmit;
+    expect(engine.getConversationRuntimeStatus("v2-A")).toBe("idle");
   });
 
   it("stopActiveTurn(conversationId) stops one turn and leaves others running", async () => {

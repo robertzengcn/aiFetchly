@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * Website Content Scraper Child Process
  *
@@ -268,6 +269,12 @@ const parentPort = (
   }
 ).parentPort;
 
+// §7 graceful shutdown (design §7): ack + prompt clean exit within the
+// parent's budget; the parent observes exit and force-verifies.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 if (!parentPort) {
   log.error(
     "[websiteContentScraper] Missing Electron utilityProcess parentPort; worker cannot receive scrape requests."
@@ -275,6 +282,17 @@ if (!parentPort) {
 }
 
 if (parentPort) {
+  parentPort.on("message", (e) => {
+    let raw: unknown = e.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort.on("message", async (e: { data: string }) => {
     try {
       const raw = JSON.parse(e.data) as unknown;

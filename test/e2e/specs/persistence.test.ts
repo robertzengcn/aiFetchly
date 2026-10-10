@@ -24,17 +24,13 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  // Chat-first boot race: composer may already be present.
-  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  if (await chatToggle.isVisible().catch(() => false)) {
-    await chatToggle.click();
-  }
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
-// First test arg must be a destructuring pattern; `{}` = no fixtures used.
-// eslint-disable-next-line no-empty-pattern
-test("conversation persists across a controlled restart (T-12)", async ({}, testInfo) => {
+test("conversation persists across a controlled restart (T-12)", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -63,10 +59,9 @@ test("conversation persists across a controlled restart (T-12)", async ({}, test
       await composer(app1).fill(marker);
       await app1.mainWindow.getByTestId("ai-chat-send").click();
       // Wait for the streamed response to complete -> the turn + message persist.
-      await expect(app1.mainWindow.getByTestId("ai-chat-root")).toContainText(
-        "Hello world!",
-        { timeout: 30_000 }
-      );
+      await expect(
+        app1.mainWindow.getByTestId("workspace-transcript")
+      ).toContainText("Hello world!", { timeout: 30_000 });
       await expect(app1.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
         timeout: 30_000,
       });

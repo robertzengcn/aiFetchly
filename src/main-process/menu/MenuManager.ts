@@ -3,6 +3,10 @@ import { log } from "@/modules/Logger";
 import type { MenuItemConstructorOptions } from "electron";
 import * as path from "path";
 import * as fs from "fs";
+import {
+  isExitRequestorBound,
+  requestAppExit,
+} from "@/main-process/lifecycle/exitRequestPort";
 
 /**
  * Menu Manager for Session Recording Control
@@ -33,6 +37,12 @@ export class MenuManager {
             label: "Quit",
             accelerator: process.platform === "darwin" ? "Cmd+Q" : "Ctrl+Q",
             click: () => {
+              // Application-exit FR-04: explicit Quit uses the SAME cleanup
+              // path as every other exit source (never the close dialog).
+              if (isExitRequestorBound()) {
+                void requestAppExit("application-menu");
+                return;
+              }
               (app as any).quit();
             },
           },

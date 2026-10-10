@@ -137,17 +137,47 @@ export interface AgentFinding {
   confidence: number;
 }
 
+/** Trusted, runtime-only transient image handed to one isolated worker agent.
+ *
+ * CHANNEL CONTRACT (security boundary):
+ * - Accepted ONLY as an in-process field on {@link RunAgentRequest} consumed
+ *   by AgentRuntime.runSync. NEVER parse these from tool arguments or
+ *   taskPacket JSON — data URLs are coordinator-prepared trusted input that
+ *   has already passed authorization, not model-controlled data.
+ * - Transient: the runtime strips them before taskModule.createTask (only
+ *   the packet is persisted), never copies them into {@link AgentResult},
+ *   and never exposes them to hooks. They flow into the prompt builder only.
+ */
+export interface AgentInitialImageArtifact {
+  /** Origin `${messageId}:${imageIndex}` of the source generated image. */
+  readonly sourceId: string;
+  readonly fileName: string;
+  readonly mimeType: "image/png" | "image/jpeg";
+  readonly dataUrl: string;
+  readonly detail: "auto" | "low" | "high";
+}
+
 /** Request to run one specialist agent. */
 export interface RunAgentRequest {
   agentId: string;
   prompt: string;
   taskPacket: AgentTaskPacket;
   parentConversationId?: string;
+  /**
+   * The parent agent's id. Used (with {@link parentConversationId}) to issue
+   * inter-agent handoff grants so the parent can read the child's preserved
+   * tool outputs (T15b). Absent for top-level / user-driven runs.
+   */
+  parentAgentId?: string;
   parentTaskId?: string;
   workflowRunId?: string;
   model?: string;
   executionMode: AgentExecutionMode;
   outputSchemaOverride?: Record<string, unknown>;
+  /** Runtime-only transient images (see {@link AgentInitialImageArtifact}).
+   * Forwarded into the initial user prompt ONLY — stripped from persistence,
+   * results, and hooks. */
+  initialImageArtifacts?: readonly AgentInitialImageArtifact[];
 }
 
 /** Result of one specialist agent run. */
@@ -183,6 +213,14 @@ export interface AgentResult {
    * still completes, but callers should surface this so the user knows the
    * batch's artifacts may be incomplete. */
   storageWarning?: string;
+  /**
+   * Preserved tool-output ids the child agent externalized during its run
+   * (T15b). Populated only when the sub-agent's loop was wired with
+   * preserved-output collaborators AND at least one tool result exceeded the
+   * inline ceiling. The parent agent reads these via the grant the child
+   * issues at its terminal; callers may use them for observability.
+   */
+  outputIds?: string[];
 }
 
 /** Snapshot returned by getTask / tool polling. */

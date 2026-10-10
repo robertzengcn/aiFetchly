@@ -1,84 +1,138 @@
 <template>
-  <div ref="scroller" class="v2-messages" @scroll="onScroll">
-    <div v-if="messages.length === 0" class="v2-messages__empty">
-      <v-icon size="40" color="grey-lighten-1">mdi-chat-outline</v-icon>
-      <div class="v2-messages__empty-title">
-        {{ t("aiChatV2.empty_title") || "Start a conversation" }}
+  <!-- Wrapper is the positioning ancestor for the floating button (sibling of
+       the scroller, NOT a child — an absolute element inside an overflow:auto
+       container scrolls with the content and is pushed off-screen below). -->
+  <div class="v2-messages__wrapper">
+    <div ref="scroller" class="v2-messages" @scroll="onScroll">
+      <div v-if="messages.length === 0" class="v2-messages__empty">
+        <v-icon size="40" color="grey-lighten-1">mdi-chat-outline</v-icon>
+        <div class="v2-messages__empty-title">
+          {{ t("aiChatV2.empty_title") || "Start a conversation" }}
+        </div>
+        <div class="v2-messages__empty-desc">
+          {{ t("aiChatV2.empty_description") || "Ask anything." }}
+        </div>
       </div>
-      <div class="v2-messages__empty-desc">
-        {{ t("aiChatV2.empty_description") || "Ask anything." }}
+      <!-- Pending (queued) messages: user bubbles in creation order, visually
+           distinct; only delivered rows feed context/tool/token features. -->
+      <AiChatV2PendingMessage
+        v-for="pending in pendingMessages"
+        :key="`pending-${pending.pendingMessageId}`"
+        :view="pending"
+        :runtime-status="runtimeStatus"
+        :steering-enabled="steeringEnabled"
+        @steer="(id: string) => emit('steer-pending', id)"
+        @cancel="(id: string) => emit('cancel-pending', id)"
+        @resume="(conversationId: string) => emit('resume-pending', conversationId)"
+      />
+      <AiChatV2Message
+        v-for="m in messages"
+        :key="m.id"
+        :message="m"
+        :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
+        :error-message="errorMessage"
+        :disabled="isStreaming"
+        :workspace-root="workspaceRoot"
+        :show-reasoning="showReasoning"
+        :reported="props.reportedMessageIds.has(m.id)"
+        @grant-permission="onGrantPermission"
+        @deny-permission="onDenyPermission"
+        @approve-plan="emit('approve-plan')"
+        @reject-plan="(fb) => emit('reject-plan', fb)"
+        @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
+        @open-artifact="(id: string) => emit('open-artifact', id)"
+        @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @report="onReportRequest"
+        @use-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('use-generated-image', reference)
+        "
+        @edit-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('edit-generated-image', reference)
+        "
+        @save-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('save-generated-image', reference)
+        "
+        @retry-generated-image-batch="onRetryGeneratedImageBatch"
+        @stop-batch="emit('stop-batch')"
+      />
+      <div
+        v-if="showTypingIndicator"
+        class="v2-messages__typing"
+        :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
+      >
+        <span class="v2-messages__typing-dot" />
+        <span class="v2-messages__typing-dot" />
+        <span class="v2-messages__typing-dot" />
       </div>
-    </div>
-    <AiChatV2Message
-      v-for="m in messages"
-      :key="m.id"
-      :message="m"
-      :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
-      :error-message="errorMessage"
-      :disabled="isStreaming"
-      :workspace-root="workspaceRoot"
-      :show-reasoning="showReasoning"
-      @grant-permission="onGrantPermission"
-      @deny-permission="onDenyPermission"
-      @approve-plan="emit('approve-plan')"
-      @reject-plan="(fb) => emit('reject-plan', fb)"
-      @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
-      @open-artifact="(id: string) => emit('open-artifact', id)"
-      @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
-    />
-    <div
-      v-if="showTypingIndicator"
-      class="v2-messages__typing"
-      :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
-    >
-      <span class="v2-messages__typing-dot" />
-      <span class="v2-messages__typing-dot" />
-      <span class="v2-messages__typing-dot" />
-    </div>
-    <div
-      v-if="retryInfo"
-      class="v2-messages__retry"
-      :aria-label="
-        t('aiChatV2.reconnecting') || 'Reconnecting to AI server…'
-      "
-    >
-      <v-icon size="16" class="v2-messages__retry-icon">mdi-refresh</v-icon>
-      <span class="v2-messages__retry-text">
-        {{ t("aiChatV2.reconnecting") || "Reconnecting…" }}
-        <span class="v2-messages__retry-count">
-          {{
-            t("aiChatV2.reconnect_attempt", {
-              n: retryInfo.attempt,
-              max: retryInfo.maxAttempts,
-            }) ||
-            `(attempt ${retryInfo.attempt}/${retryInfo.maxAttempts})`
-          }}
+      <div
+        v-if="retryInfo"
+        class="v2-messages__retry"
+        :aria-label="
+          t('aiChatV2.reconnecting') || 'Reconnecting to AI server…'
+        "
+      >
+        <v-icon size="16" class="v2-messages__retry-icon">mdi-refresh</v-icon>
+        <span class="v2-messages__retry-text">
+          {{ t("aiChatV2.reconnecting") || "Reconnecting…" }}
+          <span class="v2-messages__retry-count">
+            {{
+              t("aiChatV2.reconnect_attempt", {
+                n: retryInfo.attempt,
+                max: retryInfo.maxAttempts,
+              }) ||
+              `(attempt ${retryInfo.attempt}/${retryInfo.maxAttempts})`
+            }}
+          </span>
         </span>
-      </span>
+      </div>
+      <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
     </div>
-    <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
+    <v-btn
+      v-if="showScrollButton"
+      class="v2-messages__scroll-down"
+      icon
+      size="small"
+      color="primary"
+      data-testid="scroll-to-bottom"
+      :title="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      :aria-label="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      @click="onScrollButtonClick"
+    >
+      <v-icon>mdi-chevron-down</v-icon>
+    </v-btn>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from "vue";
+import { ref, watch, nextTick, onMounted, withDefaults } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPendingMessageView,
+  ChatV2GeneratedImageReference,
+  ChatV2MessageView,
+  ChatV2RuntimeStatus,
+} from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
+import AiChatV2PendingMessage from "./AiChatV2PendingMessage.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
-const props = defineProps<{
-  messages: ChatV2MessageView[];
-  activeAssistantMessageId: string | null;
-  streamStatus: Status;
-  errorMessage?: string;
-  showTypingIndicator?: boolean;
-  isStreaming?: boolean;
-  retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
-  /** Active seven-layer recovery status. Null when no recovery is running. */
-  recoveryInfo?: {
+const props = withDefaults(
+    defineProps<{
+    messages: ChatV2MessageView[];
+    activeAssistantMessageId: string | null;
+    streamStatus: Status;
+    errorMessage?: string;
+    showTypingIndicator?: boolean;
+    isStreaming?: boolean;
+    retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+    /** Active seven-layer recovery status. Null when no recovery is running. */
+    recoveryInfo?: {
     layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
     reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
     attempt?: number;
@@ -89,10 +143,20 @@ const props = defineProps<{
     currentModel?: string;
     fallbackModel?: string;
     message?: string;
-  } | null;
-  workspaceRoot?: string;
-  showReasoning?: boolean;
-}>();
+    } | null;
+    workspaceRoot?: string;
+    showReasoning?: boolean;
+    /** Non-terminal queued messages for this conversation (PRD §7.2). */
+    pendingMessages?: AIChatPendingMessageView[];
+    /** Main-process runtime status, drives Steer visibility (PRD §7.3). */
+    runtimeStatus?: ChatV2RuntimeStatus;
+    /** Steering kill switch (presentation only; default on). */
+    steeringEnabled?: boolean;
+    /** Message ids already reported this session (parent-owned after lift). */
+    reportedMessageIds?: Set<string>;
+  }>(),
+  { steeringEnabled: true, reportedMessageIds: () => new Set<string>() }
+);
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
   (e: "deny-permission", message: ChatV2MessageView): void;
@@ -101,16 +165,52 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
+  (e: "steer-pending", pendingMessageId: string): void;
+  (e: "cancel-pending", pendingMessageId: string): void;
+  (e: "resume-pending", conversationId: string): void;
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();
 const { t } = useI18n();
 
+// AI Content Report — the single-output dialog is now owned by the parent
+// (AiChatV2.vue) so the conversation-report dialog and the single-output
+// dialog share one mount point (design §11.1). This component just emits
+// `report` upward with the descriptor.
+function onReportRequest(descriptor: ReportableOutputDescriptor): void {
+  emit("report", descriptor);
+}
+
 const scroller = ref<HTMLDivElement | null>(null);
 let pinnedToBottom = true;
+// Float button visibility: shown only when the user has scrolled away from
+// the bottom. Kept in sync by onScroll and hidden on click/force-scroll.
+const showScrollButton = ref(false);
 
 const scrollToBottom = async (): Promise<void> => {
   await nextTick();
   if (scroller.value && pinnedToBottom) {
     scroller.value.scrollTop = scroller.value.scrollHeight;
+    showScrollButton.value = false;
   }
 };
 
@@ -119,6 +219,23 @@ const onScroll = (): void => {
   if (!el) return;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   pinnedToBottom = atBottom;
+  showScrollButton.value = !atBottom;
+};
+
+/**
+ * Scroll to the bottom unconditionally (ignores the pinnedToBottom flag).
+ * Used when loading conversation history — the user hasn't scrolled yet, so
+ * we always want to show the latest messages regardless of any prior scroll
+ * position from a previous conversation.
+ */
+const scrollToBottomForce = async (): Promise<void> => {
+  pinnedToBottom = true;
+  await scrollToBottom();
+};
+
+/** Float-button click: jump to the latest message and re-pin auto-scroll. */
+const onScrollButtonClick = (): void => {
+  void scrollToBottomForce();
 };
 
 const onGrantPermission = (
@@ -130,6 +247,13 @@ const onGrantPermission = (
 
 const onDenyPermission = (message: ChatV2MessageView): void => {
   emit("deny-permission", message);
+};
+
+const onRetryGeneratedImageBatch = (payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void => {
+  emit("retry-generated-image-batch", payload);
 };
 
 onMounted(scrollToBottom);
@@ -145,14 +269,26 @@ watch(
   },
   scrollToBottom
 );
+
+defineExpose({ scrollToBottomForce });
 </script>
 
 <style scoped>
-.v2-messages {
+.v2-messages__wrapper {
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
+}
+.v2-messages {
+  height: 100%;
   overflow-y: auto;
   padding: 12px 16px;
+}
+.v2-messages__scroll-down {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  z-index: 10;
 }
 .v2-messages__empty {
   height: 100%;

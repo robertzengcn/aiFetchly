@@ -58,6 +58,13 @@ describe("OpenAIStreamAccumulator — reasoning", () => {
     expect(r2.reasoningDelta).toBe("C");
   });
 
+  it("falls back to a plain reasoning string when alias fields are absent", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(chunk({ reasoning: "step by step" }));
+    expect(r.reasoningDelta).toBe("step by step");
+    expect(acc.state.reasoningContent).toBe("step by step");
+  });
+
   it("returns empty deltas on usage-only chunks but still captures usage", () => {
     const acc = new OpenAIStreamAccumulator();
     const r = acc.ingest({
@@ -109,5 +116,35 @@ describe("OpenAIStreamAccumulator — reasoning", () => {
     const r = acc.ingest(chunk({ reasoning_content: { bad: true } } as never));
     expect(r.reasoningDelta).toBe("");
     expect(acc.state.reasoningContent).toBe("");
+  });
+
+  it("extracts Ollama-style thinking strings", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(chunk({ thinking: "step one" }));
+    expect(r.reasoningDelta).toBe("step one");
+    expect(acc.state.reasoningContent).toBe("step one");
+  });
+
+  it("flattens structured reasoning summary objects", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(
+      chunk({
+        reasoning: {
+          summary: [{ type: "summary_text", text: "Inspect the contract." }],
+        },
+      } as never)
+    );
+    expect(r.reasoningDelta).toBe("Inspect the contract.");
+    expect(acc.state.reasoningContent).toBe("Inspect the contract.");
+  });
+
+  it("flattens OpenRouter reasoning_details parts", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(
+      chunk({
+        reasoning_details: [{ type: "reasoning.text", text: "Plan A." }],
+      } as never)
+    );
+    expect(r.reasoningDelta).toBe("Plan A.");
   });
 });

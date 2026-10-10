@@ -21,6 +21,21 @@ import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWa
 import type { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import type { WorkspaceModule } from "@/modules/WorkspaceModule";
 
+/**
+ * Optional hook after an approved workspace watch is acquired. Wired by the
+ * IPC composition root so this module does not import portable-memory
+ * services (keeps the watch IPC unit test graph small).
+ */
+export type ApprovedWorkspaceAcquireHook = (workspaceRoot: string) => void;
+
+let approvedWorkspaceAcquireHook: ApprovedWorkspaceAcquireHook | null = null;
+
+export function setApprovedWorkspaceAcquireHook(
+  hook: ApprovedWorkspaceAcquireHook | null
+): void {
+  approvedWorkspaceAcquireHook = hook;
+}
+
 /** Phase 14 trust scope (TRS-03). Forward-compat: Phase 17 adds per-capability. */
 export type WorkspaceTrustScope = "instructions" | "all";
 
@@ -122,6 +137,7 @@ export class WorkspaceWatchModule {
     // trustResolver sees approved=true on subsequent worker events. The
     // resolver only returns approved workspaces, so this is safe.
     this.approvalSink?.(workspaceId);
+    approvedWorkspaceAcquireHook?.(resolved.rootPath);
     return { workspaceId };
   }
 

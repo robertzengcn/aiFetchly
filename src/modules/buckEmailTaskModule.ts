@@ -1,6 +1,6 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { Token } from "@/modules/token";
-import { log } from "@/modules/Logger";
-import { USERSDBPATH } from "@/config/usersetting";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
@@ -15,10 +15,11 @@ import {
   EmailServiceEntitydata,
   Buckemailremotedata,
 } from "@/entityTypes/emailmarketingType";
-import { EmailMarketingTemplateApi } from "@/api/emailMarketingTemplateApi";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
-import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
-import { EmailServiceApi } from "@/api/emailServiceApi";
+import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
+import { EmailFilterModule } from "@/modules/EmailFilterModule";
+import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import {
   WriteLog,
   getApplogspath,
@@ -26,10 +27,10 @@ import {
   getRecorddatetime,
 } from "@/modules/lib/function";
 import { v4 as uuidv4 } from "uuid";
+import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import { SendStatus } from "@/model/emailMarketingSendLog.model";
@@ -52,9 +53,6 @@ import { dedupeEmailList } from "@/service/EmailMarketingAiTools";
 export class BuckEmailTaskModule extends BaseModule {
   //private dbpath: string
   private buckEmailTaskModel: BuckEmailTaskModel;
-  private emailtemAPI: EmailMarketingTemplateApi;
-  private emailfilterAPI: EmailMarketingFilterApi;
-  private emailserviceAPI: EmailServiceApi;
   private emailMarketingSendlogModule: EmailMarketingSendLogModule;
   private emailTemplateTaskRelationModule: EmailTemplateTaskRelationModule;
   private emailFilterTaskRelationModule: EmailFilterTaskRelationModule;
@@ -68,9 +66,6 @@ export class BuckEmailTaskModule extends BaseModule {
     super();
     // this.dbpath = dbpath
     this.buckEmailTaskModel = new BuckEmailTaskModel(this.dbpath);
-    this.emailtemAPI = new EmailMarketingTemplateApi();
-    this.emailfilterAPI = new EmailMarketingFilterApi();
-    this.emailserviceAPI = new EmailServiceApi();
     this.emailMarketingSendlogModule = new EmailMarketingSendLogModule();
     this.emailTemplateTaskRelationModule =
       new EmailTemplateTaskRelationModule();
@@ -119,14 +114,14 @@ export class BuckEmailTaskModule extends BaseModule {
     try {
       parsed = JSON.parse(emailListJson);
     } catch {
-      log.warn(
+      console.warn(
         "parseEmailListJson: failed to parse email_list_json, returning empty list"
       );
       return [];
     }
 
     if (!Array.isArray(parsed)) {
-      log.warn(
+      console.warn(
         "parseEmailListJson: email_list_json is not an array, returning empty list"
       );
       return [];
@@ -142,7 +137,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     }
     if (droppedCount > 0) {
-      log.warn(
+      console.warn(
         `parseEmailListJson: dropped ${droppedCount} invalid email item(s) from stored JSON`
       );
     }
@@ -157,8 +152,28 @@ export class BuckEmailTaskModule extends BaseModule {
       `Title: ${result.title}`,
       `Error: ${result.info ?? ""}`,
     ];
+    if (result.failureCode) {
+      lines.push(`Failure code: ${result.failureCode}`);
+    }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Copy the non-secret identity metadata carried on the child-process send
+   * result (FR-014) onto the send-log row: which email-service record sent
+   * and the From / SMTP username / Reply-To it presented. Never copies a
+   * password — the result type carries none. Legacy results without the
+   * fields leave the columns null.
+   */
+  private applySendLogIdentity(
+    log: EmailMarketingSendLogEntity,
+    result: EmailSendResult
+  ): void {
+    log.email_service_id = result.emailServiceId ?? null;
+    log.from_address = result.fromAddress ?? null;
+    log.smtp_username = result.smtpUsername ?? null;
+    log.reply_to = result.replyTo ?? null;
   }
 
   //convert local number array to list
@@ -188,48 +203,95 @@ export class BuckEmailTaskModule extends BaseModule {
       throw new Error("email list is empty");
     }
 
-    //get email template list (optional when using inline email_content)
-    const emailTemplateList =
-      await this.emailTemplateTaskRelationModule.getEmailTemplatesByBuckemailTaskId(
+    // Load templates from the local email_template table (same source as
+    // list_email_templates). Empty is allowed when the task uses inline
+    // email_subject / email_html_content instead of stored templates.
+    const templateIds =
+      await this.emailTemplateTaskRelationModule.getEmailTemplateIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailTemplateList.length; i++) {
-      const element = emailTemplateList[i];
-      const res = await this.emailtemAPI.readTemplate(
-        element.emailTemplateId.toString()
-      );
-      if (res.data) {
-        emailtemplist.push(res.data);
+    const emailTemplateModule = new EmailTemplateModule();
+    for (const templateId of templateIds) {
+      const template = await emailTemplateModule.read(templateId);
+      if (!template) {
+        continue;
       }
+      emailtemplist.push({
+        TplId: template.id,
+        TplTitle: template.title,
+        TplContent: template.content,
+        TplDescription: template.description ?? "",
+        Status: template.status,
+      });
     }
 
-    //get email filter list
-    const emailFilterList =
-      await this.emailFilterTaskRelationModule.getEmailFiltersByBuckemailTaskId(
+    // Load filters + regex details from local email_filter tables (same
+    // source as list_email_filters). Missing filters are skipped.
+    const filterIds =
+      await this.emailFilterTaskRelationModule.getEmailFilterIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailFilterList.length; i++) {
-      const element = emailFilterList[i];
-      const res = await this.emailfilterAPI.getEmailFilterById(
-        element.emailFilterId.toString()
-      );
-      if (res.data) {
-        emailfilterlist.push(res.data);
+    const emailFilterModule = new EmailFilterModule();
+    const emailFilterDetailModule = new EmailFilterDetailModule();
+    const filterDetails =
+      await emailFilterDetailModule.getEmailFilterDetailsByFilterIds(filterIds);
+    const detailsByFilterId = new Map<
+      number,
+      Array<{ id: number; content: string }>
+    >();
+    for (const detail of filterDetails) {
+      const mapped = { id: detail.id, content: detail.content };
+      const existing = detailsByFilterId.get(detail.filter_id);
+      if (existing) {
+        existing.push(mapped);
+      } else {
+        detailsByFilterId.set(detail.filter_id, [mapped]);
       }
     }
-    //get email service list
-    const emailServiceList =
-      await this.emailServiceTaskRelationModule.getEmailServicesByTaskId(
+    for (const filterId of filterIds) {
+      const filter = await emailFilterModule.read(filterId);
+      if (!filter) {
+        continue;
+      }
+      emailfilterlist.push({
+        id: filter.id,
+        name: filter.name,
+        description: filter.description ?? "",
+        filter_details: detailsByFilterId.get(filterId) ?? [],
+        created_time: filter.createdAt
+          ? filter.createdAt.toISOString().split("T")[0]
+          : "",
+      });
+    }
+    // Load SMTP senders from the local email_service table (same source as
+    // list_email_services / skip_review start_email_send_task). The remote
+    // /api/emailservice/:id lookup used the local SQLite id, which is not a
+    // remote service id — that left Emailservicelist empty and the worker
+    // reported "No email service is available for this task".
+    const serviceIds =
+      await this.emailServiceTaskRelationModule.getEmailServiceIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailServiceList.length; i++) {
-      const element = emailServiceList[i];
-      const res = await this.emailserviceAPI.getEmailServiceById(
-        element.id.toString()
-      );
-      if (res.data) {
-        emailservicelist.push(res.data);
+    const emailServiceModule = new EmailServiceModule();
+    for (const serviceId of serviceIds) {
+      const decrypted = await emailServiceModule.getEmailService(serviceId);
+      if (!decrypted) {
+        continue;
       }
+      emailservicelist.push({
+        id: decrypted.id,
+        from: decrypted.from,
+        smtpUsername: decrypted.smtpUsername ?? null,
+        replyTo: decrypted.replyTo ?? null,
+        password: decrypted.password,
+        host: decrypted.host,
+        port: decrypted.port,
+        name: decrypted.name,
+        ssl: decrypted.ssl,
+      });
+    }
+    if (emailservicelist.length === 0) {
+      throw new Error("No email service is available for this task");
     }
 
     const notDuplicate = buckemailTaskEntity.notduplicate === 1;
@@ -260,15 +322,9 @@ export class BuckEmailTaskModule extends BaseModule {
     taskId: number
   ): Promise<EmailTemplateRespdata> {
     if (remotedata.Emailtemplist.length > 0) {
-      const templateId =
-        remotedata.Emailtemplist[
-          Math.floor(Math.random() * remotedata.Emailtemplist.length)
-        ].TplId;
-      const res = await this.emailtemAPI.readTemplate(String(templateId));
-      if (!res.data) {
-        throw new Error(`Email template ${templateId} not found`);
-      }
-      return res.data;
+      return remotedata.Emailtemplist[
+        Math.floor(Math.random() * remotedata.Emailtemplist.length)
+      ];
     }
 
     const subject = remotedata.email_subject?.trim() ?? "";
@@ -306,6 +362,45 @@ export class BuckEmailTaskModule extends BaseModule {
   ): Promise<number> {
     const taskId = await this.createBuckEmailTaskFromEntity(param);
     return await this.buckEmailsend(taskId, options);
+  }
+
+  /**
+   * Start a campaign from the full struct so SMTP services, templates, and
+   * filters are persisted as task relations. The entity-only path used by
+   * {@link startBuckEmailTask} drops those lists, leaving the worker with
+   * no senders. waitForExit defaults to false so AI chat / UI return as
+   * soon as the worker is forked instead of blocking until SMTP finishes.
+   */
+  public async startBuckEmailCampaign(
+    param: Buckemailstruct,
+    options?: { waitForExit?: boolean }
+  ): Promise<number> {
+    const taskId = await this.createBuckEmailTask(param);
+    const sendPromise = this.buckEmailsend(taskId, options);
+
+    if (options?.waitForExit === true) {
+      return await sendPromise;
+    }
+
+    void sendPromise.catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `Failed to start background email task ${taskId}: ${message}`
+      );
+      try {
+        await this.updateTaskStatus(taskId, TaskStatus.Error);
+      } catch (statusError: unknown) {
+        const statusMessage =
+          statusError instanceof Error
+            ? statusError.message
+            : String(statusError);
+        console.error(
+          `Failed to mark email task ${taskId} as errored: ${statusMessage}`
+        );
+      }
+    });
+
+    return taskId;
   }
 
   //create buck email task from entity (direct DB entity)
@@ -446,9 +541,12 @@ export class BuckEmailTaskModule extends BaseModule {
         `child js path not exist. Tried: ${candidates.join(", ")}`
       );
     }
-    const { port1, port2 } = new MessageChannelMain();
+    const { port1 } = new MessageChannelMain();
 
-    const child = utilityProcess.fork(childPath, [], {
+    const child = spawnOwned(
+      "bulk-email",
+      () =>
+        utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: buildPackagedWorkerEnv({
@@ -457,10 +555,11 @@ export class BuckEmailTaskModule extends BaseModule {
           ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },
       }),
-    });
+    })
+    );
 
     child.on("spawn", () => {
-      log.info("child process satart, pid is" + child.pid);
+      console.log("child process satart, pid is" + child.pid);
       child.postMessage(JSON.stringify({ action: "sendEmail", data: data }), [
         port1,
       ]);
@@ -484,6 +583,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     });
     const waitForExit = options?.waitForExit === true;
+    let sendFailure: Error | undefined;
     let settled = false;
     let resolveWait: ((taskId: number) => void) | undefined;
     let rejectWait: ((error: Error) => void) | undefined;
@@ -512,7 +612,7 @@ export class BuckEmailTaskModule extends BaseModule {
       : undefined;
 
     child.on("error", (error) => {
-      log.error("Child process failed:", error);
+      console.error("Child process failed:", error);
       WriteLog(errorLogfile, `Child process failed: ${error.message}`);
       this.updateTaskErrorFile(taskId, errorLogfile);
       this.updateTaskStatus(taskId, TaskStatus.Error);
@@ -522,22 +622,27 @@ export class BuckEmailTaskModule extends BaseModule {
     child.on("exit", (code) => {
       if (code !== 0) {
         const message = `Child process exited with code ${code}`;
-        log.error(message);
+        console.error(message);
         WriteLog(errorLogfile, message);
         this.updateTaskErrorFile(taskId, errorLogfile);
         this.updateTaskStatus(taskId, TaskStatus.Error);
         settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
-        log.info("Child process exited successfully");
-        this.updateTaskStatus(taskId, TaskStatus.Complete);
-        settleSuccess();
+        if (sendFailure) {
+          this.updateTaskStatus(taskId, TaskStatus.Error);
+          settleFailure(sendFailure);
+        } else {
+          console.log("Child process exited successfully");
+          this.updateTaskStatus(taskId, TaskStatus.Complete);
+          settleSuccess();
+        }
       }
     });
     child.on("message", async (message: unknown) => {
       try {
         const result = parseChildMessage<EmailSendResult>(message);
         if (result.kind === "error") {
-          log.error(
+          console.error(
             `Invalid message from child process (${result.reason}):`,
             message
           );
@@ -545,8 +650,8 @@ export class BuckEmailTaskModule extends BaseModule {
         }
         const childdata = result.data;
 
-        log.info("get message from child");
-        log.info("Message from child:", childdata);
+        console.log("get message from child");
+        console.log("Message from child:", childdata);
         switch (childdata.action) {
           case "EmailSendSuccess":
             {
@@ -558,7 +663,7 @@ export class BuckEmailTaskModule extends BaseModule {
               //     content: message.data.content,
               // }
               if (!childdata.data) {
-                log.error("EmailSendSuccess: childdata.data is undefined");
+                console.error("EmailSendSuccess: childdata.data is undefined");
                 break;
               }
               const emailMarketLog = new EmailMarketingSendLogEntity();
@@ -570,6 +675,7 @@ export class BuckEmailTaskModule extends BaseModule {
               emailMarketLog.log = childdata.data.info
                 ? childdata.data.info
                 : "";
+              this.applySendLogIdentity(emailMarketLog, childdata.data);
               //update send log
               this.emailMarketingSendlogModule.createItem(emailMarketLog);
             }
@@ -585,9 +691,14 @@ export class BuckEmailTaskModule extends BaseModule {
               //     log: message.data.info
               // }
               if (!childdata.data) {
-                log.error("EmailSendFailure: childdata.data is undefined");
+                console.error("EmailSendFailure: childdata.data is undefined");
                 break;
               }
+              sendFailure ??= new Error(
+                `Email delivery to ${childdata.data.receiver} failed: ${
+                  childdata.data.info || "Unknown SMTP error"
+                }`
+              );
               const emailMarketLog = new EmailMarketingSendLogEntity();
               emailMarketLog.task_id = taskId;
               emailMarketLog.status = SendStatus.Failure;
@@ -597,6 +708,7 @@ export class BuckEmailTaskModule extends BaseModule {
               emailMarketLog.log = childdata.data.info
                 ? childdata.data.info
                 : "";
+              this.applySendLogIdentity(emailMarketLog, childdata.data);
               WriteLog(
                 errorLogfile,
                 this.formatEmailSendFailureLog(childdata.data)
@@ -608,15 +720,20 @@ export class BuckEmailTaskModule extends BaseModule {
             break;
           case "sendEmailEnd":
             {
-              this.updateTaskStatus(taskId, TaskStatus.Complete);
-              settleSuccess();
+              if (sendFailure) {
+                await this.updateTaskStatus(taskId, TaskStatus.Error);
+                settleFailure(sendFailure);
+              } else {
+                await this.updateTaskStatus(taskId, TaskStatus.Complete);
+                settleSuccess();
+              }
             }
             break;
         }
       } catch (error) {
-        log.error("Failed to parse message from child process:", error);
+        console.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          log.error("Error details:", error.message);
+          console.error("Error details:", error.message);
         }
       }
     });
@@ -731,5 +848,43 @@ export class BuckEmailTaskModule extends BaseModule {
    */
   getBuckEmailTypeName(type: BuckEmailType): string {
     return this.buckEmailTaskModel.getBuckEmailTypeName(type);
+  }
+
+  /**
+   * FR-06/AC-09 at-exit reconciliation: map Processing rows to the existing
+   * Error state with an [interrupted] note in the error file. Completed and
+   * not-started rows untouched; nothing is requeued (retry stays a user
+   * action, so uncertain SMTP outcomes are never blindly retried).
+   */
+  public async reconcileInterruptedTasks(reason: string): Promise<number[]> {
+    const {
+      reconcileBulkEmailAtExit,
+    } = await import("@/main-process/communication/durableTaskReconciliation");
+    // T08: the interruption note goes into a real per-task log file whose
+    // PATH is stored — exactly like the normal sender's error handling.
+    return reconcileBulkEmailAtExit(
+      this.buckEmailTaskModel,
+      reason,
+      async (taskId, note) => {
+        let logpath = "";
+        try {
+          logpath = new Token().getValue(USERLOGPATH) || "";
+        } catch {
+          logpath = "";
+        }
+        if (!logpath) {
+          // No configured log dir: fall back to a temp-scoped path so the
+          // entity still stores a PATH, never the message text.
+          logpath = path.join(os.tmpdir(), "aifetchly-bulk-email");
+          fs.mkdirSync(logpath, { recursive: true });
+        }
+        const file = path.join(
+          logpath,
+          `emailsend_interrupted_${taskId}_${Date.now()}.error.log`
+        );
+        WriteLog(file, note);
+        return file;
+      }
+    );
   }
 }

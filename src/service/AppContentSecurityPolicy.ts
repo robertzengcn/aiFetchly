@@ -1,5 +1,20 @@
 import { AI_CHAT_GENERATED_IMAGE_PROTOCOL } from "@/service/AIChatGeneratedImageProtocol";
 
+const APP_CSP_EXEMPT_URL_PREFIXES = [
+  "chrome-extension://",
+  "devtools://",
+  "chrome://",
+] as const;
+
+/**
+ * App CSP is for renderer documents. Injecting it onto extension/devtools
+ * responses makes Chromium fail those loads with ERR_BLOCKED_BY_RESPONSE
+ * (Vue DevTools background.html in development).
+ */
+export function shouldApplyAppContentSecurityPolicy(url: string): boolean {
+  return !APP_CSP_EXEMPT_URL_PREFIXES.some((prefix) => url.startsWith(prefix));
+}
+
 export function buildAppContentSecurityPolicy(isDevelopment: boolean): string {
   const commonDirectives = [
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
@@ -26,6 +41,14 @@ export function buildAppContentSecurityPolicy(isDevelopment: boolean): string {
     isDevelopment
       ? "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*"
       : "script-src 'self'",
+    // Vite's dev server serves `new Worker(new URL(...))` imports as in-memory
+    // blob: workers during HMR. Without an explicit worker-src, workers fall
+    // back to script-src, which has no blob: scheme, so the blob worker is
+    // blocked. Mirror the dev script-src affordances here and add blob:.
+    // Production ships no blob workers, so worker-src stays strict 'self'.
+    isDevelopment
+      ? "worker-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:* blob:"
+      : "worker-src 'self'",
     ...commonDirectives,
   ].join("; ");
 }

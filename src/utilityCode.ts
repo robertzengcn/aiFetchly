@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 export {};
 import {Usersearchdata} from "@/entityTypes/searchControlType"
@@ -34,7 +35,24 @@ const userSer=new UserSearch()
 
 // process.parentPort is available in Worker Threads
 const parentPort = (process as unknown as { parentPort?: { on: (event: string, handler: (e: { data: string; ports?: MessagePort[] }) => void) => void; postMessage: (message: string) => void } }).parentPort;
+
+// §7 graceful shutdown (design §7): ack + prompt clean exit within the
+// parent's budget; the parent observes exit and force-verifies.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
 if (parentPort) {
+  parentPort.on('message', (e) => {
+    let raw: unknown = e.data;
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort.on('message', async (e) => {
     const ports = e.ports || [];
     const [port] = ports;

@@ -51,6 +51,7 @@ import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
 import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
 import { AgentTaskEntity } from "@/entity/AgentTask.entity";
 import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
@@ -59,6 +60,10 @@ import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
 import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
+import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
+import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
+import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
@@ -106,6 +111,33 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 
+import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
+import { AIChatRunEntity } from "@/entity/AIChatRun.entity";
+import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
+import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
+import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
+import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
+import { AIToolOutputReservationEntity } from "@/entity/AIToolOutputReservation.entity";
+import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
+import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
+import { AIToolResultProjectionEntity } from "@/entity/AIToolResultProjection.entity";
+import { AIToolOutputBootstrapEntity } from "@/entity/AIToolOutputBootstrap.entity";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
+import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
+import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
+import { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
+import { OutboundEmailAuditLogEntity } from "@/entity/OutboundEmailAuditLog.entity";
+import { OutboundEmailAuthorizationEntity } from "@/entity/OutboundEmailAuthorization.entity";
+import { OutboundEmailSendAttemptEntity } from "@/entity/OutboundEmailSendAttempt.entity";
+import { OutboundEmailDeliveryOutcomeEntity } from "@/entity/OutboundEmailDeliveryOutcome.entity";
+import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
+import { AIChatArchiveTurnEntity } from "@/entity/AIChatArchiveTurn.entity";
+import { AIChatArchiveEntryEntity } from "@/entity/AIChatArchiveEntry.entity";
+import { AIChatCompactionRunEntity } from "@/entity/AIChatCompactionRun.entity";
+import { AIChatCompactionSectionEntity } from "@/entity/AIChatCompactionSection.entity";
+import { AIChatContextGenerationEntity } from "@/entity/AIChatContextGeneration.entity";
+import { AIChatArchiveSearchFragmentEntity } from "@/entity/AIChatArchiveSearchFragment.entity";
+
 export const DB_ENTITIES = [
   AccountCookiesEntity,
   SearchTaskEntity,
@@ -149,6 +181,7 @@ export const DB_ENTITIES = [
   RAGChunkEntity,
   AIChatMessageEntity,
   AIChatAttachmentEntity,
+  AIChatPendingMessageEntity,
   AIArtifactEntity,
   VectorEntity,
   VectorMetadataEntity,
@@ -199,8 +232,39 @@ export const DB_ENTITIES = [
   AIMemoryConsolidationRunEntity,
   AIWorkspaceMemoryEntity,
   AIWorkspaceMemoryConsolidationRunEntity,
+  AIWorkspaceMemoryScopeEntity,
+  AIWorkspaceMemoryScopePathEntity,
+  AIWorkspaceMemoryPortableStateEntity,
+  AIWorkspaceMemorySyncAuditEntity,
   WorkspaceEntity,
   AIFetchlyWorkspaceTrustEntity,
   HookConfigEntity,
   HookAuditEntryEntity,
+  AIChatConversationEntity,
+  AIChatRunEntity,
+
+  EmailServiceTagEntity,
+  EmailServiceTagRelationEntity,
+  AIToolOutputScopeEntity,
+  AIToolOutputEntity,
+  AIToolOutputReservationEntity,
+  AIToolOutputGrantEntity,
+  AIToolOutputRetrievalBudgetEntity,
+  AIToolResultProjectionEntity,
+  AIToolOutputBootstrapEntity,
+  OutboundEmailIntentEntity,
+  OutboundEmailDraftBatchEntity,
+  OutboundEmailDraftEntity,
+  OutboundEmailDraftRevisionEntity,
+  OutboundEmailAuditLogEntity,
+  OutboundEmailAuthorizationEntity,
+  OutboundEmailSendAttemptEntity,
+  OutboundEmailDeliveryOutcomeEntity,
+  AIChatArchiveStateEntity,
+  AIChatArchiveTurnEntity,
+  AIChatArchiveEntryEntity,
+  AIChatCompactionRunEntity,
+  AIChatCompactionSectionEntity,
+  AIChatContextGenerationEntity,
+  AIChatArchiveSearchFragmentEntity,
 ];

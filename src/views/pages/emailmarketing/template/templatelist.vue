@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-template-list"
+      title-key="route.email_template"
+      content-width="full"
+    >
        
 <EmailresultTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 //import { ref } from 'vue';
 import EmailresultTable from '@/views/pages/emailmarketing/template/widgets/TemplateTable.vue'

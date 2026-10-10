@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 //import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { EmailsearchTaskModel } from "@/model/EmailsearchTask.model";
@@ -176,7 +178,10 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     }
 
-    const child = utilityProcess.fork(childPath, [], {
+    const child = spawnOwned(
+      "email-search",
+      () =>
+        utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: [],
       env: buildPackagedWorkerEnv({
@@ -186,7 +191,8 @@ export class EmailSearchTaskModule extends BaseModule {
           ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },
       }),
-    });
+    })
+    );
     // console.log(path.join(__dirname, 'utilityCode.js'))
     let logpath = tokenService.getValue(USERLOGPATH);
     if (!logpath) {

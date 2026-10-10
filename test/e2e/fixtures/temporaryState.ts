@@ -30,6 +30,16 @@ export interface E2EStateManifestInput {
     string,
     { action: "canceled" | "confirmed"; paths?: readonly string[] }
   >;
+  /**
+   * Optional Token-store overrides applied after the standard seed. The four
+   * recoverable-history rollout flags (technical-design §18) plus the three
+   * tool-result rollout flags (`ai_tool_output_capture_enabled`,
+   * `ai_tool_output_model_refs_enabled`, `ai_tool_output_ui_enabled`) are the
+   * intended use — E2E scenarios assert the flag-gated archive/compaction and
+   * large-tool-result paths. Keys are restricted to those flag names and values
+   * to "true"/"false" by the bootstrap's manifest validation (E2EEnvironment).
+   */
+  readonly tokenOverrides?: Readonly<Record<string, string>>;
 }
 
 /** Write the validated state.json the E2EStateSeeder consumes. */
@@ -47,6 +57,9 @@ export function writeStateManifest(
   };
   if (manifest.dialogResponses) {
     payload.dialogResponses = manifest.dialogResponses;
+  }
+  if (manifest.tokenOverrides) {
+    payload.tokenOverrides = manifest.tokenOverrides;
   }
   fs.writeFileSync(root.stateFilePath, JSON.stringify(payload), "utf8");
 }
@@ -101,6 +114,7 @@ export function createTemporaryRoot(
   const workspacePath = path.join(rootPath, "workspace");
   const downloadsPath = path.join(rootPath, "downloads");
   const logsPath = path.join(rootPath, "logs");
+  const toolOutputRootPath = path.join(rootPath, "tool-outputs");
   const stateFilePath = path.join(rootPath, "state.json");
   const networkViolationsPath = path.join(rootPath, "network-violations.jsonl");
 
@@ -111,6 +125,7 @@ export function createTemporaryRoot(
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
   ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -122,6 +137,7 @@ export function createTemporaryRoot(
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
     stateFilePath,
     networkViolationsPath,
     remove(): void {

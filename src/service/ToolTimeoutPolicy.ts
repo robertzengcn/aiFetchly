@@ -57,7 +57,8 @@ export function inferTimeoutClassByName(name: string): ToolTimeoutClass {
     name.startsWith("file_") ||
     name === "glob_files" ||
     name === "grep_files" ||
-    name === "read_url_content"
+    name === "read_url_content" ||
+    name === "start_email_send_task"
   ) {
     return "fast";
   }

@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * DocSkillScriptRunnerService — runs pre-packaged Python scripts from
  * documentation-only (SKILL.md) skills that ship a `scripts/` directory.
@@ -73,7 +74,16 @@ function runChildProcess(
   timeoutMs: number
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    if (!ownedSpawnAllowed("doc-skill-script")) {
+      resolve({
+        code: 1,
+        stdout: "",
+        stderr: "Application is shutting down; script execution refused",
+      });
+      return;
+    }
     const proc = child_process.spawn(cmd, args, { windowsHide: true });
+    registerOwnedProcess("doc-skill-script", proc);
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (d: Buffer) => {

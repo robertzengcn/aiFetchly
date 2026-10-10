@@ -1,12 +1,11 @@
 import { BaseDb } from "@/model/Basedb";
 import { log } from "@/modules/Logger";
-import { In, Repository } from "typeorm";
+import { FindOptionsOrder, In, QueryDeepPartialEntity, Repository } from "typeorm";
 import {
   ScheduleTaskEntity,
   TaskType,
   ScheduleStatus,
   TriggerType,
-  DependencyCondition,
 } from "@/entity/ScheduleTask.entity";
 import {
   ScheduleCreateRequest,
@@ -32,6 +31,11 @@ export class ScheduleTaskModel extends BaseDb {
 
   constructor(filepath: string) {
     super(filepath);
+    this.repository =
+      this.sqliteDb.connection.getRepository(ScheduleTaskEntity);
+  }
+
+  protected override onSqliteDbRebound(): void {
     this.repository =
       this.sqliteDb.connection.getRepository(ScheduleTaskEntity);
   }
@@ -108,7 +112,7 @@ export class ScheduleTaskModel extends BaseDb {
     id: number,
     scheduleData: ScheduleUpdateRequest
   ): Promise<void> {
-    const updateData: any = {};
+    const updateData: QueryDeepPartialEntity<ScheduleTaskEntity> = {};
 
     if (scheduleData.name !== undefined) updateData.name = scheduleData.name;
     if (scheduleData.description !== undefined)
@@ -162,11 +166,13 @@ export class ScheduleTaskModel extends BaseDb {
             updateData.next_run_time = nextRunTime;
           } else {
             // If calculation fails, set to null
-            updateData.next_run_time = null;
+            updateData.next_run_time =
+              null as unknown as ScheduleTaskEntity["next_run_time"];
           }
         } else {
           // If trigger type is not CRON or cron_expression is empty, set next_run_time to null
-          updateData.next_run_time = null;
+          updateData.next_run_time =
+            null as unknown as ScheduleTaskEntity["next_run_time"];
         }
       }
     }
@@ -216,7 +222,7 @@ export class ScheduleTaskModel extends BaseDb {
     ];
     const allowedSortOrders = ["ASC", "DESC"];
 
-    let orderOptions: any = { id: "DESC" };
+    let orderOptions: FindOptionsOrder<ScheduleTaskEntity> = { id: "DESC" };
 
     if (sort && sort.key && sort.order) {
       const sortKey = sort.key.toLowerCase();
@@ -230,7 +236,9 @@ export class ScheduleTaskModel extends BaseDb {
         throw new Error("Not allowed sort order");
       }
 
-      orderOptions = { [sortKey]: sortOrder };
+      orderOptions = {
+        [sortKey]: sortOrder as "ASC" | "DESC",
+      } as FindOptionsOrder<ScheduleTaskEntity>;
     }
 
     return await this.repository.find({
@@ -312,7 +320,7 @@ export class ScheduleTaskModel extends BaseDb {
    * @param success Whether the execution was successful
    */
   async incrementExecutionCount(id: number, success: boolean): Promise<void> {
-    const updateData: any = {
+    const updateData: QueryDeepPartialEntity<ScheduleTaskEntity> = {
       last_modified: new Date(),
     };
 

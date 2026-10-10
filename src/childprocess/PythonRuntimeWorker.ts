@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 import { spawn } from "child_process";
 import { log } from "@/modules/Logger";
 import {
@@ -42,6 +43,13 @@ interface WorkerParentPort {
 
 const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
   .parentPort;
+// §7 graceful shutdown (design §7): ack, close, exit within the
+// parent's remaining budget. The parent still observes exit and
+// force-verifies — the ack is never treated as exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 const activeRequestIds = new Set<string>();
 const MAX_STDIO = 400_000;
@@ -162,7 +170,18 @@ if (parentPort) {
   log.info(
     `[PythonRuntimeWorker] Utility process worker online (pid=${process.pid})`
   );
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return; // non-JSON is not a shutdown request
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let requestId = "unknown";
     try {
       const parsed = JSON.parse(event.data) as unknown;

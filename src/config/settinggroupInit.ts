@@ -1,4 +1,5 @@
 import { SystemSettingGroupdf } from "@/entityTypes/systemsettingType";
+import { MANAGED_BROWSER_SETTING_KEYS } from "@/config/managedBrowser";
 export const twocaptcha_enabled = "2captcha-enabled";
 export const twocaptchagroup = "2captcha-group";
 export const twocaptchatoken = "2captcha-token";
@@ -29,6 +30,60 @@ export const ai_workspace_manual_memory_enabled =
 /** Desktop completion float (bottom-right). Key matches USER_AI_DESKTOP_NOTIFY. */
 export const ai_desktop_notify_enabled = "user_ai_desktop_notify";
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
+  {
+    // Managed browser + resource cache preferences (PRD §8.9). Both default
+    // ON; the separate application release flag
+    // (featureFlags.isManagedBrowserReleaseFlagEnabled) can suspend new
+    // sessions without rewriting these stored values.
+    name: MANAGED_BROWSER_SETTING_KEYS.group,
+    description: MANAGED_BROWSER_SETTING_KEYS.groupDescription,
+    items: [
+      {
+        key: MANAGED_BROWSER_SETTING_KEYS.browserEnabled,
+        value: "1",
+        description: "managed-browser-enabled-description",
+        type: "toggle",
+      },
+      {
+        key: MANAGED_BROWSER_SETTING_KEYS.cacheEnabled,
+        value: "1",
+        description: "managed-browser-cache-enabled-description",
+        type: "toggle",
+      },
+      {
+        key: MANAGED_BROWSER_SETTING_KEYS.cacheMaxSizeMb,
+        value: "500",
+        description: "managed-browser-cache-max-size-description",
+        type: "input",
+      },
+      {
+        key: MANAGED_BROWSER_SETTING_KEYS.cacheClearOnExit,
+        value: "0",
+        description: "managed-browser-cache-clear-on-exit-description",
+        type: "toggle",
+      },
+      {
+        // CAPTCHA provider gates (GAP-15): every gate defaults DENY. The
+        // token + master toggle reuse the existing 2captcha rows above.
+        key: "managed-browser-2captcha-disclosure",
+        value: "0",
+        description: "managed-browser-2captcha-disclosure-description",
+        type: "toggle",
+      },
+      {
+        key: "managed-browser-2captcha-domains",
+        value: "",
+        description: "managed-browser-2captcha-domains-description",
+        type: "input",
+      },
+      {
+        key: "managed-browser-2captcha-non-login",
+        value: "0",
+        description: "managed-browser-2captcha-non-login-description",
+        type: "toggle",
+      },
+    ],
+  },
   {
     name: twocaptchagroup,
     description: twocaptchadescription,

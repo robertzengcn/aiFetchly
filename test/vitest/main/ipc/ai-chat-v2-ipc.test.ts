@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   setupElectronMocks,
   resetElectronMocks,
@@ -52,27 +53,29 @@ const mockSetToolApprovalMode = vi.hoisted(() =>
 );
 vi.mock("@/modules/token", () => {
   return {
-    Token: vi.fn().mockImplementation(() => ({
-      getValue: vi.fn().mockImplementation((key: string) => {
+    // ES class so `new Token()` works (AIProviderResolver's default ctor arg
+    // and getCurrentUserDbPath both construct it). vi.fn().mockImplementation
+    // produces a plain function that throws "not a constructor" under `new`.
+    Token: class {
+      getValue(key: string): string {
         if (key === "USER_AI_ENABLED") {
           return mockState.aiEnabled;
         }
         return mockState.tokenStore.get(key) ?? "";
-      }),
-      setValue: vi.fn().mockImplementation((key: string, value: string) => {
+      }
+      setValue(key: string, value: string): void {
         mockState.tokenStore.set(key, value);
-      }),
-      deleteValue: vi.fn().mockImplementation((key: string) => {
+      }
+      deleteValue(key: string): void {
         mockState.tokenStore.delete(key);
-      }),
-      hasValue: vi
-        .fn()
-        .mockImplementation(
-          (key: string) =>
-            mockState.tokenStore.has(key) &&
-            (mockState.tokenStore.get(key)?.length ?? 0) > 0
-        ),
-    })),
+      }
+      hasValue(key: string): boolean {
+        return (
+          mockState.tokenStore.has(key) &&
+          (mockState.tokenStore.get(key)?.length ?? 0) > 0
+        );
+      }
+    },
   };
 });
 vi.mock("@/config/usersetting", async (importOriginal) => {
@@ -84,6 +87,25 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
   };
 });
 
+// Spy wrapper over the shared generated-image reference normalizer so tests
+// can assert whether reference parsing ran (delegates to the real impl).
+const mockNormalizeGeneratedImageReferences = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@/service/generatedImageReferenceNormalize",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("@/service/generatedImageReferenceNormalize")
+    >();
+    mockNormalizeGeneratedImageReferences.mockImplementation(
+      actual.normalizeGeneratedImageReferences
+    );
+    return {
+      ...actual,
+      normalizeGeneratedImageReferences: mockNormalizeGeneratedImageReferences,
+    };
+  }
+);
+
 // Mock the v2 module.
 const mockClearConversation = vi.fn().mockResolvedValue(5);
 const mockClearAllV2 = vi.fn().mockResolvedValue(5);
@@ -93,25 +115,30 @@ const mockSaveUserMessage = vi
   .fn()
   .mockResolvedValue({ messageId: "user-test-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
 const mockGetDefaultSystemPrompt = vi
   .fn()
   .mockReturnValue("You are a helpful assistant.");
+// ES class: production code constructs AIChatV2Module with `new`, and Vitest 4
+// mock functions are not constructable — an arrow-factory mock throws
+// "not a constructor" at every handler entry.
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
-    clearConversation: mockClearConversation,
-    clearAllV2History: mockClearAllV2,
-    getConversations: mockGetConversations,
-    createConversationIfNeeded: mockCreateConversationIfNeeded,
-    saveUserMessage: mockSaveUserMessage,
-    getConversationMessages: mockGetConversationMessages,
-    saveAssistantMessage: mockSaveAssistantMessage,
-    saveToolCallMessage: mockSaveToolCallMessage,
-    saveToolResultMessage: mockSaveToolResultMessage,
-    getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+  AIChatV2Module: class {
+    clearConversation = mockClearConversation;
+    clearAllV2History = mockClearAllV2;
+    getConversations = mockGetConversations;
+    createConversationIfNeeded = mockCreateConversationIfNeeded;
+    saveUserMessage = mockSaveUserMessage;
+    getConversationMessages = mockGetConversationMessages;
+    getRecentMessages = mockGetRecentMessages;
+    saveAssistantMessage = mockSaveAssistantMessage;
+    saveToolCallMessage = mockSaveToolCallMessage;
+    saveToolResultMessage = mockSaveToolResultMessage;
+    getDefaultSystemPrompt = mockGetDefaultSystemPrompt;
+  },
 }));
 
 // Mock AiChatApi — openAIChatCompletionStream is controllable per-test.
@@ -119,20 +146,20 @@ const mockOpenAIChatCompletionStream = vi.fn().mockResolvedValue(undefined);
 const mockListOpenAIModels = vi.fn().mockResolvedValue({ data: [] });
 const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
-    Signout: mockUserSignout,
-    removeToken: vi.fn().mockResolvedValue(undefined),
-  })),
+  User: class {
+    Signout = mockUserSignout;
+    removeToken = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
-    AiChatApi: vi.fn().mockImplementation(() => ({
-      openAIChatCompletionStream: mockOpenAIChatCompletionStream,
-      listOpenAIModels: mockListOpenAIModels,
-    })),
+    AiChatApi: class {
+      openAIChatCompletionStream = mockOpenAIChatCompletionStream;
+      listOpenAIModels = mockListOpenAIModels;
+    },
   };
 });
 
@@ -159,19 +186,19 @@ vi.mock("@/service/SkillExecutor", () => ({
 }));
 
 vi.mock("@/modules/AIChatToolApprovalModule", () => ({
-  AIChatToolApprovalModule: vi.fn().mockImplementation(() => ({
-    getMode: mockGetToolApprovalMode,
-    setMode: mockSetToolApprovalMode,
-  })),
+  AIChatToolApprovalModule: class {
+    getMode = mockGetToolApprovalMode;
+    setMode = mockSetToolApprovalMode;
+  },
 }));
 
 // Mock plan module
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
-    getPlanState: vi.fn().mockResolvedValue(null),
-    ensurePlanForConversation: vi.fn().mockResolvedValue(null),
-    clearConversationPlanState: vi.fn().mockResolvedValue({ deleted: 0 }),
-  })),
+  AIChatPlanModule: class {
+    getPlanState = vi.fn().mockResolvedValue(null);
+    ensurePlanForConversation = vi.fn().mockResolvedValue(null);
+    clearConversationPlanState = vi.fn().mockResolvedValue({ deleted: 0 });
+  },
 }));
 
 // Mock plan mode helpers
@@ -188,43 +215,48 @@ vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
 }));
 
 // Mock compact-related modules used by AIChatContextAssembler (T11/T12).
-const mockAIChatSessionMemoryModule = vi.hoisted(() =>
-  vi.fn().mockImplementation(() => ({
-    getByConversation: vi.fn().mockResolvedValue(null),
-  }))
-);
+// ES class: the IPC module constructs it with `new` (Vitest 4 mocks are not
+// constructable — see the AIChatV2Module mock above). Construction count is
+// tracked so the database-switch rebuild test can observe new instances.
+const mockSessionMemoryConstructions = vi.hoisted(() => ({ count: 0 }));
+const mockGetByConversation = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: mockAIChatSessionMemoryModule,
+  AIChatSessionMemoryModule: class {
+    getByConversation = mockGetByConversation;
+    constructor() {
+      mockSessionMemoryConstructions.count += 1;
+    }
+  },
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
-    getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatCompactModule: class {
+    getActiveSummary = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
-    listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+  AgentDefinitionModule: class {
+    listActiveForRuntime = vi.fn().mockResolvedValue([]);
+  },
 }));
 vi.mock("@/modules/SystemSettingModule", () => ({
-  SystemSettingModule: vi.fn().mockImplementation(() => ({
-    getSettingValue: vi.fn().mockResolvedValue(null),
-  })),
+  SystemSettingModule: class {
+    getSettingValue = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
-    resolve: vi.fn().mockResolvedValue(null),
-  })),
+  WorkspaceResolver: class {
+    resolve = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
-  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
-    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
-  })),
+  AIUserMemoryRetrievalService: class {
+    retrieve = vi.fn().mockResolvedValue({ contextBlock: "", memories: [] });
+  },
 }));
 vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
-  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
-    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
-  })),
+  AIWorkspaceMemoryRetrievalService: class {
+    retrieve = vi.fn().mockResolvedValue({ contextBlock: "", memories: [] });
+  },
 }));
 vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
   AIFetchlyContextLoader: class {
@@ -262,6 +294,8 @@ import {
   registerAiChatV2IpcHandlers,
   resetAiChatV2RuntimeForDatabaseSwitch,
 } from "@/main-process/communication/ai-chat-v2-ipc";
+import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
@@ -307,6 +341,12 @@ function resetProviderState(): void {
 
 beforeEach(() => {
   resetProviderState();
+  // The query engine is a module-level singleton shared across every group in
+  // this file, and every test reuses "v2-test-conv". A gate test whose mocked
+  // provider stream ignores the abort signal leaves its activeTurns entry
+  // behind, so the NEXT real submit hits the busy gate ("still working on the
+  // previous message"). Reset the runtime so each test starts turn-free.
+  resetAiChatV2RuntimeForDatabaseSwitch();
 });
 
 describe("AI Chat V2 IPC handlers", () => {
@@ -471,6 +511,87 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     expect(payload?.fullContent).toBe("local pong");
   });
 
+  it("stops emitting when the requesting renderer has been destroyed", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "late response" } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+    const senderSend = vi.fn(() => {
+      throw new TypeError("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        {
+          sender: {
+            isDestroyed: () => true,
+            send: senderSend,
+          },
+        },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+    expect(senderSend).not.toHaveBeenCalled();
+  });
+
+  it("ignores a renderer destroyed between the liveness check and send", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new TypeError("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        {
+          sender: {
+            isDestroyed: () => false,
+            send: senderSend,
+          },
+        },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("accepts Electron's plain Error variant for a destroyed renderer", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new Error("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        { sender: { isDestroyed: () => false, send: senderSend } },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not hide unrelated renderer delivery errors", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new Error("IPC transport failed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        { sender: { isDestroyed: () => false, send: senderSend } },
+        JSON.stringify({ message: "hi" })
+      )
+    ).rejects.toThrow("IPC transport failed");
+  });
+
   it("allows model listing when hosted AI is disabled but local provider config is valid", async () => {
     mockState.aiEnabled = "false";
     enableLocalAiChat();
@@ -574,6 +695,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
 
     // start chunk
+
     const startCall = senderSend.mock.calls.find(
       (call) =>
         call[0] === AI_CHAT_V2_STREAM_CHUNK &&
@@ -605,8 +727,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
       { sender: { send: firstSenderSend } },
       JSON.stringify({ message: "before switch" })
     );
-    const firstRuntimeConstructCount =
-      mockAIChatSessionMemoryModule.mock.calls.length;
+    const firstRuntimeConstructCount = mockSessionMemoryConstructions.count;
 
     resetAiChatV2RuntimeForDatabaseSwitch();
 
@@ -617,7 +738,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
       JSON.stringify({ message: "after switch" })
     );
 
-    expect(mockAIChatSessionMemoryModule.mock.calls.length).toBeGreaterThan(
+    expect(mockSessionMemoryConstructions.count).toBeGreaterThan(
       firstRuntimeConstructCount + 1
     );
   });
@@ -766,6 +887,25 @@ describe("AI Chat V2 — stream lifecycle", () => {
       "An unexpected error occurred. Please try again."
     );
     expect(payload?.errorMessage).not.toContain("stack trace");
+  });
+
+  it("maps HTTP 520 origin failures to the transient-issue message", async () => {
+    mockOpenAIChatCompletionStream.mockRejectedValue(
+      new Error("HTTP 520: <none>")
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi" })
+    );
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
   });
 
   it("sends tools, executes tool calls, and continues to a final answer", async () => {
@@ -1210,6 +1350,13 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     expect(reasoningChunk).toMatchObject({
       reasoningDelta: "Thinking...",
     });
+    expect(mockOpenAIChatCompletionStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoning: { enabled: true, summary: "auto" },
+      }),
+      expect.any(Function),
+      expect.anything()
+    );
 
     // 2. The answer token chunk was sent too, and stays separate.
     const tokenChunks = senderSend.mock.calls
@@ -1218,6 +1365,14 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
       .filter((c) => c.eventType === "token");
     expect(tokenChunks).toHaveLength(1);
     expect(tokenChunks[0].contentDelta).toBe("Answer");
+
+    const completeChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_COMPLETE)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "complete");
+    expect(completeChunk).toMatchObject({
+      reasoningContent: "Thinking...",
+    });
 
     // 3. Reasoning was persisted on the assistant message, separate from content.
     expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
@@ -1303,5 +1458,370 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("error");
     expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+});
+
+/** Helper: extract ALL STREAM_COMPLETE payloads from sender.send mock calls. */
+function collectCompletePayloads(
+  senderSend: ReturnType<typeof vi.fn>
+): Record<string, unknown>[] {
+  return senderSend.mock.calls
+    .filter(([ch]) => ch === AI_CHAT_V2_STREAM_COMPLETE)
+    .map(([, p]) => JSON.parse(p as string) as Record<string, unknown>);
+}
+
+/** Helper: a minimal valid image attachment accepted by upload normalization. */
+function imageUploadAttachment(fileName: string): Record<string, unknown> {
+  const contentBase64 = Buffer.from("hello").toString("base64");
+  return {
+    fileName,
+    mimeType: "image/png",
+    sizeBytes: Buffer.from("hello").length,
+    contentBase64,
+    kind: "image",
+  };
+}
+
+describe("AI Chat V2 — generated-image reference boundary", () => {
+  let submitSpy: MockInstance | undefined;
+
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
+    registerAiChatV2IpcHandlers();
+  });
+  afterEach(() => {
+    submitSpy?.mockRestore();
+    submitSpy = undefined;
+    resetElectronMocks();
+  });
+
+  function spyEngineSubmit(): MockInstance {
+    submitSpy = vi
+      .spyOn(AIChatQueryEngine.prototype, "submitMessage")
+      .mockResolvedValue(undefined);
+    return submitSpy;
+  }
+
+  it("runs the availability gate before generated-image reference parsing", async () => {
+    mockState.aiEnabled = "false";
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "",
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ eventType: "error" });
+    expect(mockNormalizeGeneratedImageReferences).not.toHaveBeenCalled();
+  });
+
+  it("emits one terminal error chunk with errorCode for a malformed reference item", async () => {
+    enableLocalAiChat();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "make it pop",
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 99 },
+        ],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_invalid",
+    });
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("dedupes references first-wins preserving order onto the engine request", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "combine these",
+        generatedImageReferences: [
+          { messageId: "msg-a", imageIndex: 0 },
+          { messageId: "msg-b", imageIndex: 1 },
+          { messageId: "msg-a", imageIndex: 0 },
+          { messageId: "msg-c", imageIndex: 2 },
+          { messageId: "msg-b", imageIndex: 1 },
+        ],
+      })
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { generatedImageReferences?: unknown[] };
+    };
+    expect(input.request.generatedImageReferences).toEqual([
+      { messageId: "msg-a", imageIndex: 0 },
+      { messageId: "msg-b", imageIndex: 1 },
+      { messageId: "msg-c", imageIndex: 2 },
+    ]);
+  });
+
+  it("rejects 2 uploaded images + 2 references with generated_image_reference_limit", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "too many images",
+        uploadedFiles: [
+          imageUploadAttachment("one.png"),
+          imageUploadAttachment("two.png"),
+        ],
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 1 },
+        ],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_limit",
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("forwards normalized references (trimmed, extras stripped) even with blank text", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "   ",
+        generatedImageReferences: [
+          {
+            messageId: "  msg-1  ",
+            imageIndex: 3,
+            url: "generated-image://attacker",
+            localPath: "/etc/passwd",
+            conversationId: "conv-x",
+            userEmail: "attacker@example.com",
+          },
+          { messageId: "msg-2", imageIndex: 0 },
+        ],
+      })
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { generatedImageReferences?: unknown[] };
+    };
+    expect(input.request.generatedImageReferences).toEqual([
+      { messageId: "msg-1", imageIndex: 3 },
+      { messageId: "msg-2", imageIndex: 0 },
+    ]);
+  });
+});
+
+describe("AI Chat V2 — confirmed batch reference staging", () => {
+  let submitSpy: MockInstance | undefined;
+  let stageSpy: MockInstance | undefined;
+
+  const confirmedSet = [
+    { messageId: "m1", imageIndex: 0 },
+    { messageId: "m2", imageIndex: 1 },
+    { messageId: "m3", imageIndex: 2 },
+    { messageId: "m4", imageIndex: 3 },
+  ];
+
+  function registry(): ReturnType<typeof getConfirmedBatchReferenceRegistry> {
+    return getConfirmedBatchReferenceRegistry();
+  }
+
+  function spyEngineSubmit(): MockInstance {
+    submitSpy = vi
+      .spyOn(AIChatQueryEngine.prototype, "submitMessage")
+      .mockResolvedValue(undefined);
+    return submitSpy;
+  }
+
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
+    registerAiChatV2IpcHandlers();
+    registry().clearAll();
+    stageSpy = vi.spyOn(registry(), "stage");
+  });
+
+  afterEach(() => {
+    submitSpy?.mockRestore();
+    submitSpy = undefined;
+    stageSpy?.mockRestore();
+    stageSpy = undefined;
+    registry().clearAll();
+    resetElectronMocks();
+  });
+
+  it("stages a valid confirmed set under the request conversationId and strips the field from the engine request", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    expect(stageSpy).toHaveBeenCalledWith("v2-test-conv", confirmedSet);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { confirmedGeneratedImageBatch?: unknown };
+    };
+    expect(input.request.confirmedGeneratedImageBatch).toBeUndefined();
+  });
+
+  it("rejects a malformed confirmed set with a terminal error chunk and stages nothing", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: {
+          references: [{ messageId: "m1", imageIndex: 99 }],
+        },
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_invalid",
+    });
+    expect(stageSpy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the registry when the AI availability gate denies the request", async () => {
+    mockState.aiEnabled = "false";
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ eventType: "error" });
+    expect(stageSpy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("clears the staged set when the turn is stopped", async () => {
+    spyEngineSubmit();
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+    const payload = JSON.stringify({
+      message: "edit all of these",
+      conversationId: "v2-test-conv",
+      confirmedGeneratedImageBatch: { references: confirmedSet },
+    });
+
+    await mockIpcMain.callHandler(AI_CHAT_V2_STREAM, event, payload);
+    // Sanity: staged after the request.
+    expect(registry().consume("v2-test-conv")).toEqual(confirmedSet);
+
+    // Re-stage, then stop the conversation's turn.
+    await mockIpcMain.callHandler(AI_CHAT_V2_STREAM, event, payload);
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-test-conv" })
+    );
+    expect(registry().consume("v2-test-conv")).toBeNull();
+  });
+
+  it("clears the staged set when a turn completes without any batch call", async () => {
+    // Real engine run: plain-text answer, no tool calls at all.
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "plain answer" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(findCompletePayload(senderSend)?.eventType).toBe("complete");
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    // Turn ended without consuming: the stale set must be gone.
+    expect(registry().consume("v2-test-conv")).toBeNull();
+  });
+
+  it("clears the staged set when the turn fails", async () => {
+    mockOpenAIChatCompletionStream.mockRejectedValue(
+      new Error("Server returned 500: provider exploded")
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(findCompletePayload(senderSend)?.eventType).toBe("error");
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    expect(registry().consume("v2-test-conv")).toBeNull();
   });
 });

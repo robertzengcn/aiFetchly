@@ -67,6 +67,44 @@ const TOKEN_EXPECTATIONS: Array<{ token: string; keys: string[] }> = [
   },
 ];
 
+/**
+ * Preserved tool output keys (recoverable large tool results). Every state a
+ * user can see must be translatable, including the partial/unavailable cases:
+ * a missing translation there would silently fall back to English in a
+ * non-English UI, which is exactly where a "saved" vs "not saved" distinction
+ * matters most.
+ */
+const REQUIRED_TOOL_OUTPUT_KEYS = [
+  "saved",
+  "partial",
+  "unavailable",
+  "preview",
+  "preview_label",
+  "view",
+  "export",
+  "export_cancelled",
+  "export_failed",
+  "size",
+  "records",
+  "search",
+  "search_placeholder",
+  "search_no_matches",
+  "search_incomplete",
+  "search_scan_complete",
+  "source_incomplete",
+  "next_page",
+  "previous_page",
+  "page_of",
+  "copy_page",
+  "copied",
+  "loading",
+  "quota_reached",
+  "deleted",
+  "not_available",
+  "binary_unsupported",
+  "close",
+] as const;
+
 describe("I18-01 — phase-13 i18n groups present across all six languages", () => {
   for (const [code, lang] of Object.entries(LANGS)) {
     describe(`${code}: aifetchlyConfig group`, () => {
@@ -176,6 +214,61 @@ describe("I18-01 — phase-13 i18n groups present across all six languages", () 
           sets[i],
           `language ${Object.keys(LANGS)[i]} aiProvider keys mismatch`
         ).toBe(first);
+      }
+    });
+  });
+
+  describe("aiChatV2.toolOutput (recoverable large tool results)", () => {
+    const names = Object.keys(LANGS);
+
+    it("exists in all six languages", () => {
+      for (const name of names) {
+        const group = (LANGS[name].aiChatV2 as Record<string, unknown>)
+          .toolOutput as Record<string, unknown> | undefined;
+        expect(group, `${name} is missing aiChatV2.toolOutput`).toBeTruthy();
+      }
+    });
+
+    it("defines every required key in every language", () => {
+      for (const name of names) {
+        const group = (LANGS[name].aiChatV2 as Record<string, unknown>)
+          .toolOutput as Record<string, unknown>;
+        for (const key of REQUIRED_TOOL_OUTPUT_KEYS) {
+          expect(
+            group[key],
+            `${name} aiChatV2.toolOutput.${key} is missing`
+          ).toBeTruthy();
+        }
+      }
+    });
+
+    it("has identical key sets across all six languages", () => {
+      const sets = Object.values(LANGS).map((l) =>
+        Object.keys(
+          (l.aiChatV2 as Record<string, unknown>).toolOutput as Record<
+            string,
+            unknown
+          >
+        )
+          .sort()
+          .join(",")
+      );
+      const first = sets[0];
+      for (let i = 1; i < sets.length; i++) {
+        expect(
+          sets[i],
+          `language ${names[i]} aiChatV2.toolOutput keys mismatch`
+        ).toBe(first);
+      }
+    });
+
+    it("preserves the {page} interpolation token in every language", () => {
+      for (const name of names) {
+        const group = (LANGS[name].aiChatV2 as Record<string, unknown>)
+          .toolOutput as Record<string, unknown>;
+        expect(String(group.page_of), `${name} lost the {page} token`).toContain(
+          "{page}"
+        );
       }
     });
   });

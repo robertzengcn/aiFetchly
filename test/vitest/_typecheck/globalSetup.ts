@@ -50,11 +50,19 @@ export default function setup(): void {
   );
 
   try {
-    execFileSync(process.execPath, [tscEntry, "--noEmit", "-p", tsconfig], {
-      cwd: projectRoot,
-      stdio: "pipe", // capture stdout/stderr; we'll format below
-      timeout: 180_000, // hard cap; tsc should finish well under this
-    });
+    // `--incremental false` (dev) makes the gate's verdict DETERMINISTIC —
+    // a stale tsbuildinfo must never flip the answer. Spawn via
+    // process.execPath + tscEntry (branch fix): `node_modules/.bin/tsc` is
+    // an extensionless POSIX shim that cannot spawn on win32.
+    execFileSync(
+      process.execPath,
+      [tscEntry, "--noEmit", "--incremental", "false", "-p", tsconfig],
+      {
+        cwd: projectRoot,
+        stdio: "pipe", // capture stdout/stderr; we'll format below
+        timeout: 180_000, // hard cap; tsc should finish well under this
+      }
+    );
   } catch (err: unknown) {
     const e = err as { stdout?: Buffer; stderr?: Buffer; status?: number };
     const stdout = e.stdout?.toString("utf8") ?? "";

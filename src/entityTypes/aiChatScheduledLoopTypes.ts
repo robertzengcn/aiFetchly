@@ -155,11 +155,17 @@ export interface ChatV2ConversationUpdatedEvent {
   readonly reason:
     | "scheduled_turn_completed"
     | "scheduled_turn_failed"
-    | "scheduled_loop_state_changed";
+    | "scheduled_loop_state_changed"
+    | "scheduled_turn_permission_requested";
   readonly scheduleId: number;
   readonly runId?: number;
   readonly userMessageId?: string;
   readonly assistantMessageId?: string;
+  /** Present only when reason is "scheduled_turn_permission_requested":
+   * identifies the gated tool call that paused the run, so the renderer can
+   * surface which tool is awaiting approval. */
+  readonly toolCallId?: string;
+  readonly toolName?: string;
   readonly occurredAt: string;
 }
 
@@ -170,12 +176,17 @@ export interface ChatV2ConversationUpdatedEvent {
  * assistant bubble only while that conversation is active and no interactive
  * stream is running; the persisted row (reloaded on the terminal
  * conversation-updated event) is always authoritative.
+ *
+ * `start` is emitted when the scheduled turn begins (before the first token),
+ * mirroring the engine's `start` event so the renderer can show an immediate
+ * "Generating…" loading indicator on the optimistic assistant bubble instead of
+ * waiting for the first token to know the run is in flight.
  */
 export interface ChatV2ScheduledStreamEvent {
   readonly conversationId: string;
   readonly runId: number;
   readonly messageId: string;
-  readonly kind: "token" | "done" | "error";
+  readonly kind: "start" | "token" | "done" | "error";
   readonly contentDelta?: string;
   readonly errorMessage?: string;
 }

@@ -83,11 +83,11 @@ export interface ToolCatalogRuntimeContext {
    */
   readonly contextWindowTokens?: number;
   /**
-   * True when the recent conversation history contains AI-generated images
-   * (the `<generated_images>` marker). Used to auto-promote image-editing
-   * tools when the user's message looks like a follow-up edit request
-   * (e.g. "add a tree in front of the house") even though it lacks
-   * image-specific keywords.
+   * True when the recent conversation history contains AI-generated images.
+   * Informational context flag only: the tool-load policy no longer
+   * force-promotes export/attach tools on follow-up edit wording, because a
+   * selected generated image arrives attached to the current user turn and is
+   * edited directly (no workspace round-trip).
    */
   readonly hasRecentGeneratedImages?: boolean;
 }

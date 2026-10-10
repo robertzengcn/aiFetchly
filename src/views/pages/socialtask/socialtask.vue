@@ -1,5 +1,9 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="socialtask-create"
+      title-key="route.create_social_task"
+      content-width="form"
+    >
         <!-- <v-row align="center" no-gutters style="margin: 0 -8px">
             <v-col cols="12" sm="4">
                 <v-card class="elevation-0 tjjj pa-4 mx-2 mb-sm-0 mb-4" append-icon="">
@@ -154,9 +158,11 @@
         </v-dialog> -->
         <!--table end-->
 <SocialtaskTable />
-    </div>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import SocialtaskTable from '@/views/pages/socialtask/widgets/SocialtaskTable.vue'

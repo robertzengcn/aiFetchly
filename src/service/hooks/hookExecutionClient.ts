@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 // src/service/hooks/hookExecutionClient.ts
 // HOK-02 (Phase 17 / Plan 03) — main-side IPC client for the dedicated
 // hook-execution worker. Forks the worker ONCE on the first command-hook
@@ -68,7 +70,11 @@ const defaultUtilityFork = (
   args: readonly string[],
   opts: { env?: NodeJS.ProcessEnv }
 ): WorkerHandle => {
-  const child = utilityProcess.fork(modulePath, [...args], { env: opts.env });
+  const child = spawnOwned(
+    "hooks",
+    () =>
+      utilityProcess.fork(modulePath, [...args], { env: opts.env })
+  );
   return child as unknown as WorkerHandle;
 };
 

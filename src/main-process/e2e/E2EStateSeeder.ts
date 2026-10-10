@@ -83,11 +83,20 @@ export function seedE2EState(environment: E2EEnvironment): void {
     });
     settings.setMode("local");
     token.setValue(USER_AI_ENABLED, "true");
-    return;
+  } else {
+    // hosted-disabled: gate rejects before transport; fake server stays untouched.
+    const settings = new AIProviderSettingsService(token);
+    settings.setMode("hosted");
+    token.setValue(USER_AI_ENABLED, "false");
   }
 
-  // hosted-disabled: gate rejects before transport; fake server stays untouched.
-  const settings = new AIProviderSettingsService(token);
-  settings.setMode("hosted");
-  token.setValue(USER_AI_ENABLED, "false");
+  // Rollout-flag overrides (recoverable-history §18) run LAST so a scenario can
+  // enable e.g. archive reads + new compaction on top of either AI state. Keys
+  // and values are validated by parseStateManifest, so these are safe to apply
+  // verbatim.
+  if (manifest.tokenOverrides) {
+    for (const [key, value] of Object.entries(manifest.tokenOverrides)) {
+      token.setValue(key, value);
+    }
+  }
 }

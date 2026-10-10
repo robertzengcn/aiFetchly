@@ -51,6 +51,13 @@ export interface ToolJobLimits {
 
 export interface ToolJobSpawnHandle {
   readonly onCancel: (handler: () => void) => void;
+  /**
+   * Registry-owned abort signal for this job. `cancel()` and `shutdown()`
+   * abort it so the underlying tool work is actually asked to stop — a job
+   * labelled `cancelled` must never keep consuming model/tool resources
+   * invisibly (message-queue technical design §17.1).
+   */
+  readonly signal: AbortSignal;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: Error) => void;
 }
@@ -74,12 +81,14 @@ interface InternalJob {
   cancelHandlers: Array<() => void>;
   lastPolledAt: number;
   queuedSpawn?: () => void;
+  abortController: AbortController;
 }
 
 export class ToolJobRegistry {
   private jobs = new Map<string, InternalJob>();
   private queue: string[] = [];
   private running = 0;
+  private closed = false;
   private readonly limits: ToolJobLimits;
 
   constructor(limits?: Partial<ToolJobLimits>) {
@@ -96,7 +105,17 @@ export class ToolJobRegistry {
     ctx: { conversationId: string; toolCallId: string },
     spawn: (handle: ToolJobSpawnHandle) => Promise<unknown>
   ): { jobId: string; queued: boolean } {
+    if (this.closed) {
+      // T06/AC-05: no job may be admitted after shutdown seals the registry.
+      throw new Error(
+        "ToolJobRegistry is closed (application shutting down); job refused"
+      );
+    }
     const jobId = randomUUID();
+    // One AbortController per job. Aborting is the authoritative cancellation
+    // request for the underlying tool work; the handlers below only relabel
+    // the registry entry (technical design §17.1).
+    const abortController = new AbortController();
     const job: InternalJob = {
       jobId,
       toolName,
@@ -111,11 +130,13 @@ export class ToolJobRegistry {
       completedAt: null,
       cancelHandlers: [],
       lastPolledAt: 0,
+      abortController,
     };
     this.jobs.set(jobId, job);
 
     const handle: ToolJobSpawnHandle = {
       onCancel: (h) => job.cancelHandlers.push(h),
+      signal: abortController.signal,
       resolve: (result) => {
         if (job.status === "cancelled") return;
         job.status = "completed";
@@ -238,6 +259,10 @@ export class ToolJobRegistry {
       return { cancelled: false, reason: "already_cancelled" };
     const wasRunning = job.status === "running";
     const wasQueued = job.status === "queued";
+    // Request real cancellation of the underlying work BEFORE relabelling the
+    // job. Non-cooperative tools may take time to unwind, but the request must
+    // go out (truthful Stop, technical design §17.1).
+    job.abortController.abort();
     for (const h of job.cancelHandlers) {
       try {
         h();
@@ -275,9 +300,27 @@ export class ToolJobRegistry {
     return count;
   }
 
+  /**
+   * Trustworthy count of currently RUNNING async tool jobs (queued jobs are
+   * not yet active work). Feeds the application close dialog's localized
+   * active-task message (application-exit PRD FR-01: omit rather than report
+   * an untrustworthy count).
+   */
+  getActiveJobCount(): number {
+    let running = 0;
+    for (const job of this.jobs.values()) {
+      if (job.status === "running") {
+        running += 1;
+      }
+    }
+    return running;
+  }
+
   shutdown(): void {
+    this.closed = true; // T06/AC-05: no job may be admitted after freeze
     for (const job of this.jobs.values()) {
       if (job.status === "running" || job.status === "queued") {
+        job.abortController.abort();
         for (const h of job.cancelHandlers) {
           try {
             h();
@@ -292,6 +335,11 @@ export class ToolJobRegistry {
     this.jobs.clear();
     this.queue = [];
     this.running = 0;
+  }
+
+  /** True once shutdown() sealed the registry — start() refuses new jobs (T06). */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   private snapshot(job: InternalJob): ToolJobSnapshot {

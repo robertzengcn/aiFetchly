@@ -1,44 +1,50 @@
-/**
- * Playwright configuration for the AiFetchly Electron E2E suite (design §12).
- *
- * The suite launches the source-built E2E main bundle
- * (.vite/e2e/build/e2e-main.js) via Playwright's `_electron.launch()`. The
- * renderer is served by the existing Vite renderer dev server (port 5173,
- * strictPort) started through `webServer`.
- *
- * Playwright Electron tests use the project's installed Electron binary; no
- * Chromium browser download is required unless browser-only renderer projects
- * are added later (design §17.1).
- */
 import { defineConfig } from "@playwright/test";
 
+/**
+ * Playwright Electron E2E. Two suites share this config:
+ *
+ *  - Workspace-redesign E2E (PRD §34.4) and the source-built ai-chat specs
+ *    launch Electron via Playwright's `_electron` — no downloaded browsers.
+ *  - The ai-chat specs additionally need the Vite renderer dev server, so a
+ *    webServer boots it on 127.0.0.1:5173 (specs that don't use it simply
+ *    ignore it). Live-AI scenarios need AIFETCHLY_E2E_LIVE_AI=1 and a
+ *    configured provider backend.
+ */
 export default defineConfig({
-  testDir: "./test/e2e/specs",
-  fullyParallel: false,
-  // Establish a stable single-worker baseline first; raise only after measuring
-  // memory + SQLite behavior under parallel Electron instances (design §2).
-  workers: process.env.CI ? 1 : undefined,
+  testDir: "./test/e2e",
   timeout: 90_000,
-  expect: { timeout: 10_000 },
-  forbidOnly: Boolean(process.env.CI),
-  // One retry in CI so transient flake is visible as flaky in the report, but
-  // first-attempt failures are still surfaced (design §12, NF-03).
+  expect: { timeout: 15_000 },
+  fullyParallel: false,
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
-  reporter: [
-    ["line"],
-    ["html", { outputFolder: "playwright-report", open: "never" }],
-    ["json", { outputFile: "test-results/playwright-results.json" }],
-  ],
+  reporter: [["list"]],
+  // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
+  // self-contained — one command from a clean checkout starts the renderer,
+  // runs the suite, and shuts everything down. Playwright owns the vite dev
+  // server lifecycle (readiness = HTTP 200 on the renderer origin) and
+  // reuses an already-running server locally for tight inner loops.
   use: {
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
   outputDir: "./test-results/playwright",
+  // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
+  // self-contained — one command from a clean checkout starts the renderer,
+  // runs the suite, and shuts everything down. Playwright owns the vite dev
+  // server lifecycle (readiness = HTTP 200 on the renderer origin), reuses an
+  // already-running server locally, and pins the port so a second server
+  // fails loudly instead of silently double-serving.
   webServer: {
-    command: "yarn dev:renderer --host 127.0.0.1",
-    url: "http://127.0.0.1:5173",
+    command: `yarn dev:renderer --port ${
+      process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
+    } --strictPort --host 127.0.0.1`,
+    url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    // Poll instead of inotify: the worktree's file count can exceed the host's
+    // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
+    // startup. Polling is heavier but never hits the watcher cap.
+    env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
   },
 });

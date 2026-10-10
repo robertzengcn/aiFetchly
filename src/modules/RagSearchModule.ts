@@ -48,6 +48,12 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import { RAGDocumentModel } from "@/model/RAGDocument.model";
+import {
+  buildEmbeddingInput,
+  type EmbeddingHeaderSource,
+} from "@/service/knowledgeMetadataHeader";
+import type { KnowledgeCustomMetadata } from "@/schemas/knowledge/customMetadata";
 import {
   EmbeddingBillingError,
   isEmbeddingBillingError,
@@ -78,6 +84,61 @@ export interface DocumentUploadResponse {
   chunksCreated: number;
   processingTime: number;
   document: RAGDocumentEntity;
+}
+
+function toEmbeddingHeaderSource(doc: {
+  name: string;
+  title?: string | null;
+  author?: string | null;
+  tags?: string | null;
+  description?: string | null;
+  language?: string | null;
+  documentDate?: Date | string | null;
+  customMetadata?: string | null;
+}): EmbeddingHeaderSource {
+  let tags: string[] | undefined;
+  try {
+    const parsed: unknown = doc.tags ? JSON.parse(doc.tags) : undefined;
+    if (Array.isArray(parsed)) {
+      tags = parsed.filter((t: unknown): t is string => typeof t === "string");
+    }
+  } catch {
+    tags = undefined;
+  }
+  // customMetadata is stored as a JSON string; parse it so the header can
+  // include each present key. A failed parse is non-fatal — omit the lines.
+  let customMetadata: KnowledgeCustomMetadata | undefined;
+  if (doc.customMetadata) {
+    try {
+      const parsed: unknown = JSON.parse(doc.customMetadata);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        customMetadata = parsed as KnowledgeCustomMetadata;
+      }
+    } catch {
+      customMetadata = undefined;
+    }
+  }
+  // documentDate may arrive as a Date or ISO string; render as an ISO date
+  // string for the header. A Date is formatted YYYY-MM-DD for readability.
+  let documentDate: string | undefined;
+  if (doc.documentDate instanceof Date && !isNaN(doc.documentDate.getTime())) {
+    documentDate = doc.documentDate.toISOString().slice(0, 10);
+  } else if (
+    typeof doc.documentDate === "string" &&
+    doc.documentDate.length > 0
+  ) {
+    documentDate = doc.documentDate.slice(0, 10);
+  }
+  return {
+    fileName: doc.name,
+    title: doc.title ?? undefined,
+    author: doc.author ?? undefined,
+    tags,
+    description: doc.description ?? undefined,
+    language: doc.language ?? undefined,
+    documentDate,
+    customMetadata,
+  };
 }
 
 /**
@@ -214,7 +275,8 @@ export class RagSearchModule extends BaseModule {
       const embeddingResult = await this.generateChunkEmbeddings(
         chunks,
         modelName,
-        vectorDimensions
+        vectorDimensions,
+        toEmbeddingHeaderSource(document)
       );
 
       if (embeddingResult) {
@@ -316,7 +378,8 @@ export class RagSearchModule extends BaseModule {
   private async generateChunkEmbeddings(
     chunks: RAGChunkEntity[],
     modelName: string,
-    dimension: number
+    dimension: number,
+    headerSource: EmbeddingHeaderSource
   ): Promise<{
     vectorIndexPath: string;
     modelName: string;
@@ -341,7 +404,8 @@ export class RagSearchModule extends BaseModule {
         await this.embedAndStoreChunks(
           chunks,
           (texts: string[]) => provider.embedBatch(texts),
-          requestedIndexPath
+          requestedIndexPath,
+          headerSource
         );
         log.info(
           `[RagSearchModule] Embedded ${chunks.length} chunks locally for document ${documentId}`
@@ -360,7 +424,8 @@ export class RagSearchModule extends BaseModule {
         await this.embedAndStoreChunks(
           chunks,
           (texts: string[]) => retryService.embedBatch(provider, texts),
-          requestedIndexPath
+          requestedIndexPath,
+          headerSource
         );
         log.info(
           `[RagSearchModule] Embedded ${chunks.length} chunks via remote model ${provider.modelName} for document ${documentId}`
@@ -375,7 +440,8 @@ export class RagSearchModule extends BaseModule {
           chunks,
           documentId,
           provider,
-          remoteError
+          remoteError,
+          headerSource
         );
       }
     } catch (error) {
@@ -416,7 +482,8 @@ export class RagSearchModule extends BaseModule {
     chunks: RAGChunkEntity[],
     documentId: number,
     remoteProvider: EmbeddingProvider,
-    remoteError: unknown
+    remoteError: unknown,
+    headerSource: EmbeddingHeaderSource
   ): Promise<{
     vectorIndexPath: string;
     modelName: string;
@@ -452,7 +519,8 @@ export class RagSearchModule extends BaseModule {
       await this.embedAndStoreChunks(
         chunks,
         (texts: string[]) => localProvider.embedBatch(texts),
-        localIndexPath
+        localIndexPath,
+        headerSource
       );
     } catch (localError) {
       const localFailureMessage =
@@ -486,13 +554,21 @@ export class RagSearchModule extends BaseModule {
   private async embedAndStoreChunks(
     chunks: RAGChunkEntity[],
     embedBatchFn: (texts: string[]) => Promise<EmbeddingResult[]>,
-    vectorIndexPath: string
+    vectorIndexPath: string,
+    headerSource: EmbeddingHeaderSource
   ): Promise<void> {
     const batchSize = LOCAL_EMBEDDING_MAX_BATCH_SIZE;
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      const texts = batch.map((chunk) => chunk.content);
+      const texts: string[] = batch.map((chunk) =>
+        buildEmbeddingInput(headerSource, chunk.content)
+      );
       const results = await embedBatchFn(texts);
+      if (results.length !== batch.length) {
+        throw new Error(
+          `Embedding batch returned ${results.length} results for ${batch.length} chunks`
+        );
+      }
       for (let j = 0; j < batch.length; j++) {
         const chunk = batch[j];
         const result = results[j];
@@ -1015,10 +1091,14 @@ export class RagSearchModule extends BaseModule {
 
       // Generate embeddings. The result carries the FINAL model metadata,
       // which may differ from the requested model after a local fallback.
+      const reembedDoc = await this.documentService.findDocumentById(
+        documentId
+      );
       const embeddingResult = await this.generateChunkEmbeddings(
         chunksWithoutEmbeddings,
         modelName,
-        dimension
+        dimension,
+        reembedDoc ? toEmbeddingHeaderSource(reembedDoc) : { fileName: "" }
       );
 
       // Save final vector index path and model metadata to document entity
@@ -1312,14 +1392,28 @@ export class RagSearchModule extends BaseModule {
       // 2. Resolve allowed document IDs from metadata filters
       const allowedDocIds = await this.resolveAllowedDocumentIds(request);
 
+      if (allowedDocIds && allowedDocIds.length === 0) {
+        return {
+          success: true,
+          query: request.query,
+          totalCandidates: 0,
+          rerankUsed: false,
+          truncated: false,
+          results: [],
+          timing: {
+            vectorMs: Date.now() - vectorStart,
+            keywordMs: 0,
+            rerankMs: 0,
+            totalMs: Date.now() - totalStart,
+          },
+        };
+      }
+
       // 3. Collect hybrid candidates
       const candidates = await this.searchService.searchCandidates(
         request.query,
         {
-          documentIds:
-            allowedDocIds && allowedDocIds.length > 0
-              ? allowedDocIds
-              : undefined,
+          documentIds: allowedDocIds,
         }
       );
 
@@ -1385,6 +1479,9 @@ export class RagSearchModule extends BaseModule {
                   documentName: candidate.document.name,
                   title: candidate.document.title,
                   fileType: candidate.document.fileType,
+                  author: candidate.document.author,
+                  tags: candidate.document.tags ?? [],
+                  description: candidate.document.description,
                   chunkId: prev.chunkId,
                   chunkIndex: prev.chunkIndex,
                   score: candidate.combinedScore,
@@ -1404,6 +1501,9 @@ export class RagSearchModule extends BaseModule {
                   documentName: candidate.document.name,
                   title: candidate.document.title,
                   fileType: candidate.document.fileType,
+                  author: candidate.document.author,
+                  tags: candidate.document.tags ?? [],
+                  description: candidate.document.description,
                   chunkId: next.chunkId,
                   chunkIndex: next.chunkIndex,
                   score: candidate.combinedScore,
@@ -1486,77 +1586,78 @@ export class RagSearchModule extends BaseModule {
   private async resolveAllowedDocumentIds(
     request: KnowledgeSearchRequest
   ): Promise<number[] | undefined> {
-    const hasFilters =
-      (request.documentIds && request.documentIds.length > 0) ||
-      (request.documentTypes && request.documentTypes.length > 0) ||
-      (request.tags && request.tags.length > 0) ||
-      request.author ||
-      request.dateRange;
+    const hasAuthor: boolean = (request.author ?? "").trim().length > 0;
+    const hasTags: boolean = (request.tags ?? []).length > 0;
+    const hasIds: boolean = (request.documentIds ?? []).length > 0;
+    const hasTypes: boolean = (request.documentTypes ?? []).length > 0;
+    const hasDates: boolean = request.dateRange !== undefined;
+    const hasLanguage: boolean = (request.language ?? "").trim().length > 0;
+    const hasDocDateRange: boolean = request.documentDateRange !== undefined;
+    const custom = request.customMetadata ?? {};
+    const hasCustom: boolean =
+      (custom.product ?? "").trim().length > 0 ||
+      (custom.customer ?? "").trim().length > 0 ||
+      (custom.campaign ?? "").trim().length > 0 ||
+      (custom.category ?? "").trim().length > 0;
 
-    if (!hasFilters) {
+    if (
+      !hasAuthor &&
+      !hasTags &&
+      !hasIds &&
+      !hasTypes &&
+      !hasDates &&
+      !hasLanguage &&
+      !hasDocDateRange &&
+      !hasCustom
+    ) {
       return undefined;
     }
 
     // If only documentIds are specified, use them directly
     if (
-      request.documentIds &&
-      request.documentIds.length > 0 &&
-      !request.documentTypes &&
-      !request.tags &&
-      !request.author &&
-      !request.dateRange
+      hasIds &&
+      !hasTypes &&
+      !hasTags &&
+      !hasAuthor &&
+      !hasDates &&
+      !hasLanguage &&
+      !hasDocDateRange &&
+      !hasCustom
     ) {
       return request.documentIds;
     }
 
-    // Otherwise, query documents with filters
     try {
-      const documents = await this.documentService.getDocuments({
-        status: "active",
-        processingStatus: "completed",
+      const model = new RAGDocumentModel(this.dbpath);
+      const uploadedFrom: Date | undefined = request.dateRange?.start
+        ? new Date(request.dateRange.start)
+        : undefined;
+      const uploadedTo: Date | undefined = request.dateRange?.end
+        ? new Date(request.dateRange.end)
+        : undefined;
+      const documentDateFrom: Date | undefined = request.documentDateRange
+        ?.start
+        ? new Date(request.documentDateRange.start)
+        : undefined;
+      const documentDateTo: Date | undefined = request.documentDateRange?.end
+        ? new Date(request.documentDateRange.end)
+        : undefined;
+      const ids: number[] = await model.findSearchableDocumentIds({
+        documentIds: request.documentIds,
+        fileTypes: request.documentTypes,
+        author: request.author,
+        tags: request.tags,
+        uploadedFrom,
+        uploadedTo,
+        language: request.language,
+        documentDateFrom,
+        documentDateTo,
+        customProduct: custom.product,
+        customCustomer: custom.customer,
+        customCampaign: custom.campaign,
+        customCategory: custom.category,
       });
-
-      let filtered = documents;
-
-      if (request.documentIds && request.documentIds.length > 0) {
-        const idSet = new Set(request.documentIds);
-        filtered = filtered.filter((d) => idSet.has(d.id));
-      }
-
-      if (request.documentTypes && request.documentTypes.length > 0) {
-        const types = new Set(request.documentTypes);
-        filtered = filtered.filter((d) => types.has(d.fileType));
-      }
-
-      if (request.tags && request.tags.length > 0) {
-        filtered = filtered.filter((d) => {
-          if (!d.tags) return false;
-          try {
-            const docTags = JSON.parse(d.tags) as string[];
-            return request.tags!.some((t) => docTags.includes(t));
-          } catch {
-            return false;
-          }
-        });
-      }
-
-      if (request.author) {
-        const authorLower = request.author.toLowerCase();
-        filtered = filtered.filter(
-          (d) => d.author && d.author.toLowerCase().includes(authorLower)
-        );
-      }
-
-      if (request.dateRange) {
-        const start = new Date(request.dateRange.start);
-        const end = new Date(request.dateRange.end);
-        filtered = filtered.filter((d) => {
-          const uploaded = d.uploadedAt ? new Date(d.uploadedAt) : null;
-          return uploaded && uploaded >= start && uploaded <= end;
-        });
-      }
-
-      return filtered.map((d) => d.id);
+      return ids;
     } catch (error) {
       log.warn("Failed to resolve document filters:", error);
       return undefined;
@@ -1576,6 +1677,9 @@ export class RagSearchModule extends BaseModule {
       documentName: candidate.document.name,
       title: candidate.document.title,
       fileType: candidate.document.fileType,
+      author: candidate.document.author,
+      tags: candidate.document.tags ?? [],
+      description: candidate.document.description,
       chunkId: candidate.chunkId,
       chunkIndex: candidate.metadata.chunkIndex,
       score: candidate.combinedScore,

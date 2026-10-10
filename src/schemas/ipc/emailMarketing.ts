@@ -1,9 +1,31 @@
-import { z } from 'zod'
-import { lazySchema } from '@/utils/lazySchema'
-import { itemSearchParamSchema } from '@/schemas/ipc/_shared/pagination'
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
+import {
+  emailServiceListInputSchema,
+  itemSearchParamSchema,
+} from "@/schemas/ipc/_shared/pagination";
 
 /** LIST handlers (TPL/FILTER/SERVICE): pagination */
-export const emailMarketingListInputSchema = itemSearchParamSchema
+export const emailMarketingListInputSchema = itemSearchParamSchema;
+export { emailServiceListInputSchema };
+
+/**
+ * EMAILSERVICEEXPORT: optional format enum; renderer may send {}.
+ */
+export const emailServiceExportInputSchema = lazySchema(() =>
+  z.strictObject({
+    format: z.enum(["csv", "json"]).optional(),
+  })
+);
+
+/**
+ * EMAILSERVICEIMPORT: the renderer sends no data — the file path is chosen
+ * via the native open dialog in the main process. An empty strict object
+ * validates that no unexpected payload crosses the boundary.
+ */
+export const emailServiceImportInputSchema = lazySchema(() =>
+  z.strictObject({ createMissingTags: z.boolean().optional() })
+);
 
 /**
  * By-id handlers (REMOVE/DETAIL/DELETE).
@@ -14,8 +36,8 @@ export const emailMarketingListInputSchema = itemSearchParamSchema
 export const emailMarketingByIdInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.union([z.number(), z.string().min(1)]),
-  }),
-)
+  })
+);
 
 /**
  * UPDATE handlers — 3 个不同 entity 的 update，统一用 passthrough。
@@ -25,5 +47,97 @@ export const emailMarketingByIdInputSchema = lazySchema(() =>
  * schema 只保证对象非空，透传给 controller 内部消费。
  */
 export const emailMarketingUpdateInputSchema = lazySchema(() =>
-  z.object({}).passthrough(),
-)
+  z.object({}).passthrough()
+);
+
+/**
+ * EMAILSERVICEUPDATE — dedicated schema bounding the security-relevant
+ * identity fields (§12.4). The shared passthrough schema above stays for
+ * TEMPUPDATE/FILTERUPDATE; the email-service update must NOT rely on
+ * `.passthrough()` for smtpUsername/from/replyTo.
+ *
+ * NOTE on CR/LF (§7.2): this schema bounds LENGTH only (`.max(...)`). It
+ * does NOT reject `\r`/`\n` in smtpUsername/from/replyTo — that header-
+ * injection defense lives in `EmailServiceModule.validateEmailService` via
+ * `containsEmailHeaderBreak`. The EMAILSERVICEUPDATE handler now calls
+ * `EmailMarketingController.validateEmailServiceForSave` (which delegates to
+ * `validateEmailService`) before persistence on both create and update
+ * paths, so a CR/LF value in an identity field is rejected before any row
+ * is written. The schema remains a length-bound guard, not the complete
+ * security boundary; `validateEmailService` is the authoritative check.
+ */
+/**
+ * Port fields are stored as VARCHAR(10) but the renderer form uses
+ * <v-number-input v-model="port">, which emits a number (e.g. 465) instead
+ * of a string. Accept both and normalize numbers to strings so numeric
+ * payloads don't fail validation before reaching the handler.
+ */
+const portStringSchema = z.union([
+  z.string().max(10),
+  z.number().int().min(1).max(65535).transform((n) => String(n)),
+]);
+
+export const emailServiceUpdateInputSchema = lazySchema(() =>
+  z.object({
+    id: z.union([z.number(), z.string().min(1)]).optional(),
+    /**
+     * Tag IDs to assign. Absent = preserve existing tags; `[]` = clear all;
+     * `[...]` = replace. (Mirrors the password sentinel convention.)
+     */
+    tagIds: z.array(z.number().int().positive()).optional(),
+    /**
+     * Tag names typed in the autocomplete that don't correspond to an existing
+     * tag. Auto-created on save so the user never has to leave the service form
+     * to make a tag. Merged into the resolved set alongside `tagIds`.
+     */
+    tagNames: z.array(z.string().max(64)).optional(),
+    name: z.string().max(255).optional(),
+    smtpUsername: z.string().max(255).nullable().optional(),
+    from: z.string().min(1).max(255),
+    replyTo: z.string().max(320).nullable().optional(),
+    password: z.string().optional(),
+    host: z.string().max(255).optional(),
+    port: portStringSchema.optional(),
+    ssl: z.number().optional(),
+    receiveProtocol: z.string().max(10).optional(),
+    imapHost: z.string().max(255).nullable().optional(),
+    imapPort: portStringSchema.nullable().optional(),
+    imapSsl: z.number().optional(),
+    pop3Host: z.string().max(255).nullable().optional(),
+    pop3Port: portStringSchema.nullable().optional(),
+    pop3Ssl: z.number().optional(),
+    receiveUsername: z.string().max(255).nullable().optional(),
+    receivePassword: z.string().nullable().optional(),
+    receiveFolder: z.string().max(255).optional(),
+    receiveEnabled: z.number().optional(),
+  })
+);
+
+export const emailServiceTagListInputSchema = lazySchema(() =>
+  z.strictObject({
+    search: z.string().max(64).optional(),
+  })
+);
+
+export const emailServiceTagCreateInputSchema = lazySchema(() =>
+  z.strictObject({
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
+    name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
+  })
+);
+
+export const emailServiceTagUpdateInputSchema = lazySchema(() =>
+  z.strictObject({
+    id: z.number().int().positive(),
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
+    name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
+  })
+);
+
+export const emailServiceTagDeleteInputSchema = lazySchema(() =>
+  z.strictObject({
+    id: z.number().int().positive(),
+  })
+);

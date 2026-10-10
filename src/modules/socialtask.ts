@@ -1,3 +1,9 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import * as os from "os";
+import { WriteLog } from "@/modules/lib/function";
+import { USERLOGPATH } from "@/config/usersetting";
+import { Token } from "@/modules/token";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import url from "url";
 //import request from "@/modules/lib/request"
 import { SocialTaskRun } from "@/modules/socialtaskrun";
@@ -25,7 +31,31 @@ import {
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
 // const fileLocation = path.join(__static, 'myText.txt')
+/**
+ * FR-06/AC-09: live social task runs (taskrun_num -> child pid), tracked
+ * from spawn to child exit. SocialTask is instantiated per request, so this
+ * registry is MODULE-level; the SocialTaskRun entity has no status column,
+ * so at-exit reconciliation works from this map and logs an interruption
+ * marker per run (the next run is a NEW taskrun row — nothing auto-retries).
+ */
+const activeSocialRuns = new Map<string, { childPid: number | null }>();
+
+/** Record a live run; auto-removed when its child exits. */
+function trackSocialRun(
+  runNum: string,
+  child: { pid?: number | null; once(event: string, cb: () => void): unknown }
+): void {
+  activeSocialRuns.set(runNum, { childPid: child.pid ?? null });
+  try {
+    child.once("exit", () => activeSocialRuns.delete(runNum));
+  } catch {
+    activeSocialRuns.delete(runNum);
+  }
+}
+
 export class SocialTask {
+
+
   private _httpClient: HttpClient;
   //construct
   constructor() {
@@ -192,7 +222,10 @@ export class SocialTask {
     }
     const { port1, port2 } = new MessageChannelMain();
 
-    const child = utilityProcess.fork(
+    const child = spawnOwned(
+      "social-task",
+      () =>
+        utilityProcess.fork(
       childPath,
       ["-a", "runtask", "-t", entity.taskrun_num],
       {
@@ -205,7 +238,9 @@ export class SocialTask {
           },
         }),
       }
+    )
     );
+    trackSocialRun(entity.taskrun_num, child);
     //console.log(path.join(__dirname, 'utilityCode.js'))
 
     // child.postMessage({ message: 'hello' }, [port1])
@@ -234,4 +269,72 @@ export class SocialTask {
       // Intentionally no console logging here to avoid spamming terminal output.
     });
   }
+
+}
+
+/**
+ * FR-06/AC-09 at-exit reconciliation: log an interruption marker for every
+ * live run and clear the registry (the entity has no status column; the
+ * marker + a fresh taskrun row on the next user-initiated run is the
+ * durable semantics — nothing is auto-retried). Returns interrupted ids.
+ */
+export async function reconcileInterruptedSocialRuns(
+  reason: string
+): Promise<number[]> {
+  const runModel = new SocialTaskRun();
+  const interrupted: number[] = [];
+  for (const runNum of Array.from(activeSocialRuns.keys())) {
+    try {
+      const id = await runModel.TaskidbytaskrunNum(runNum);
+      if (!id) {
+        // Unknown row: still remove the in-memory entry (nothing durable to
+        // write to), but do not count it as reconciled.
+        activeSocialRuns.delete(runNum);
+        continue;
+      }
+      // T08: DURABLE interruption record — append the marker to the run's
+      // own log file (the run entity's log_path), so restart exposes the
+      // uncertainty. Only after a successful write do we clear the entry.
+      const runLogPath = resolveSocialRunLogPath(runNum);
+      WriteLog(
+        runLogPath,
+        `[INTERRUPTED ${new Date().toISOString()}] ${reason}`
+      );
+      activeSocialRuns.delete(runNum);
+      interrupted.push(id.id);
+      log.info(
+        `[social] run ${runNum} (task ${id.task_id}) interrupted: ${reason}`
+      );
+    } catch (err) {
+      log.warn(
+        `[social] failed to reconcile run ${runNum}:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  return interrupted;
+}
+
+/**
+ * T08: the run's durable log file. taskrun_num is unique per run; the runs
+ * log lives under the user log path (same convention as the module's own
+ * task logs). Falls back to the OS temp dir when no log path is set so the
+ * write NEVER silently no-ops.
+ */
+function resolveSocialRunLogPath(runNum: string): string {
+  let base = "";
+  try {
+    base = new Token().getValue(USERLOGPATH) || "";
+  } catch {
+    base = "";
+  }
+  if (!base) {
+    base = path.join(os.tmpdir(), "aifetchly-social-runs");
+    try {
+      fs.mkdirSync(base, { recursive: true });
+    } catch {
+      /* best-effort dir creation */
+    }
+  }
+  return path.join(base, `socialrun_${encodeURIComponent(runNum)}.log`);
 }

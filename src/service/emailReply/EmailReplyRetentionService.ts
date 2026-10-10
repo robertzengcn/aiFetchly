@@ -42,10 +42,12 @@ export class EmailReplyRetentionService {
     // Prefer the caller's dbpath (a BaseModule passes this.dbpath, which
     // already resolved the Token store); fall back to resolving it here.
     const resolved =
-      dbpath && dbpath.length > 0
-        ? dbpath
-        : new Token().getValue(USERSDBPATH);
-    const connection = SqliteDb.getInstance(resolved).connection;
+      dbpath && dbpath.length > 0 ? dbpath : new Token().getValue(USERSDBPATH);
+    const sqliteDb = SqliteDb.getInstance(resolved);
+    // getInstance can have just reset the singleton (path change); the lazy
+    // DataSource must be initialized before any repository work.
+    await SqliteDb.ensureInitialized();
+    const connection = sqliteDb.connection;
 
     return await connection.transaction(async (manager) => {
       const draftsRepo = manager.getRepository(EmailReplyDraftEntity);

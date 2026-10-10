@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-service-editor"
+    title-key="route.email_service_create"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" v-model="validForm" @submit.prevent="onSubmit" class="ml-2 mr-2">
       <v-alert
@@ -17,11 +22,87 @@ v-model="name" :label="t('emailservice.name')" type="input"
         </v-col>
       </v-row>
       <v-row>
+        <v-col cols="12" md="8">
+          <v-autocomplete
+            data-testid="email-service-tag-select"
+            v-model="tagIds"
+            :items="tagOptions"
+            item-title="name"
+            item-value="id"
+            :label="t('emailservice.tags') || 'Tags'"
+            :hint="t('emailservice.tags_hint') || 'Optional reusable labels for selecting this email service.'"
+            multiple
+            chips
+            closable-chips
+            clearable
+            persistent-hint
+            :readonly="loading || tagsLoading"
+            :loading="tagsLoading"
+            v-model:search="tagSearch"
+          >
+            <!-- Auto-create: typed names not yet in the option list surface as
+                 a "Create" chip and are sent to the server as tagNames. -->
+            <template v-if="tagSearch" #prepend-item>
+              <v-list-item @click="addPendingTagName(tagSearch)">
+                <template #prepend>
+                  <v-icon icon="mdi-plus" />
+                </template>
+                <v-list-item-title>
+                  {{ t('emailservice.tag_create_on_save', { name: tagSearch }) || `Create "${tagSearch}"` }}
+                </v-list-item-title>
+              </v-list-item>
+              <v-divider />
+            </template>
+          </v-autocomplete>
+          <!-- Pending tag names (typed but not yet committed) are auto-created
+               on save; each chip is removable until then. -->
+          <div
+            v-if="pendingTagNames.length > 0"
+            data-testid="pending-tag-names"
+            class="d-flex flex-wrap mt-2"
+          >
+            <v-chip
+              v-for="pendingName in pendingTagNames"
+              :key="pendingName"
+              closable
+              size="small"
+              class="ma-1"
+              @click:close="removePendingTagName(pendingName)"
+            >
+              {{ pendingName }}
+            </v-chip>
+          </div>
+        </v-col>
+        <v-col cols="12" md="4" class="d-flex align-center">
+          <v-btn variant="outlined" @click="showTagDialog = true">
+            {{ t("emailservice.manage_tags") || "Manage tags" }}
+          </v-btn>
+        </v-col>
+      </v-row>
+      <v-row>
         <v-col cols="12" md="12">
           <v-text-field
-v-model="from" :label="t('emailservice.from')" type="email"
-            :hint="t('emailservice.from_hint')" :readonly="loading" clearable required
-            :rules="[rules.email]"></v-text-field>
+v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
+            :hint="t('emailservice.smtp_username_hint') || 'The mailbox account used to sign in to your SMTP server.'"
+            :rules="identityRules.smtpUsername"
+            persistent-hint :readonly="loading" clearable></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
+v-model="from" :label="t('emailservice.from') || 'From'" type="email"
+            :hint="t('emailservice.from_hint') || 'The address recipients see. It must be allowed by your email provider.'" :readonly="loading" clearable required
+            :rules="identityRules.from"></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
+v-model="replyTo" :label="t('emailservice.reply_to') || 'Reply-To'" type="email"
+            :hint="t('emailservice.reply_to_hint') || 'Replies go here. Leave empty to reply to the From address.'"
+            :rules="identityRules.replyTo"
+            persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
       <v-row>
@@ -221,18 +302,31 @@ v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input
 :show-dialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
     @dialogclose="showDialog = false" />
   <LoadingDialog :load-dialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
+  <EmailServiceTagDialog v-model="showTagDialog" @changed="loadTags" />
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { getEmailServiceDetail, createupdateEmailService, sendTestemail, receiveEmailsendevent } from "@/views/api/emailservice";
+import {
+  getEmailServiceDetail,
+  createupdateEmailService,
+  sendTestemail,
+  receiveEmailsendevent,
+  getEmailServiceTags,
+} from "@/views/api/emailservice";
 import { testEmailReceiveConnection } from "@/views/api/emailreceive";
 import { EmailServiceEntitydata, EmailSendParam, EmailRequestData } from "@/entityTypes/emailmarketingType"
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 import ErrorDialog from "@/views/components/widgets/errorDialog.vue"
 import LoadingDialog from "@/views/components/widgets/loadingDialog.vue"
+import EmailServiceTagDialog from "@/views/pages/emailservice/widgets/EmailServiceTagDialog.vue";
+import type { EmailServiceTagSummary } from "@/entityTypes/emailmarketingType";
+import { buildIdentityRules } from "./identityValidationRules";
+import { emailServiceTagErrorKey } from "@/views/utils/emailServiceTagError";
 const showDialog = ref<boolean>(false);
 const alertdiatext = ref<string>("")
 const alertdiatitle = ref<string>("")
@@ -250,17 +344,33 @@ watch(loadDialogshow, (newValue) => {
   setTimeout(() => (loadDialogshow.value = false), 10000)
 });
 
+// Generic rules for non-identity fields (name, host, test-email receiver).
 const rules = {
-  required: (value: unknown) => {
+  required: (value: unknown): true | string => {
     if (!value) return "The field is required";
     return true;
   },
-  email: (value: string) => {
+  email: (value: unknown): true | string => {
     if (!value) return "E-mail is required";
-    if (!/.+@.+\..+/.test(value)) return "E-mail must be valid.";
+    if (!/.+@.+\..+/.test(String(value))) return "E-mail must be valid.";
     return true;
   },
 };
+// Identity-field rule sets (P1.1): SMTP username is required (not email-only —
+// some logins aren't addresses); From is a required single address; Reply-To
+// is optional but non-empty must validate. All three reject CR/LF (§7.2).
+const identityRules = buildIdentityRules({
+  required:
+    t("emailservice.identity_missing_smtp_username") ||
+    "An SMTP username is required for this service.",
+  emailRequired:
+    t("emailservice.identity_from_invalid") || "From email is required.",
+  emailInvalid:
+    t("emailservice.identity_from_invalid") || "E-mail must be valid.",
+  noLineBreak:
+    t("emailservice.identity_header_break_forbidden") ||
+    "Line breaks are not allowed.",
+});
 const $route = useRoute();
 const router = useRouter();
 const FakeAPI = {
@@ -272,11 +382,61 @@ const FakeAPI = {
 const form = ref<HTMLFormElement>();
 const testform = ref<HTMLFormElement>();
 const from = ref<string>("");
+const smtpUsername = ref<string>("");
+const replyTo = ref<string>("");
 const password = ref<string>("");
 const host = ref<string>("");
 const port = ref<string>("");
 const name = ref<string>("");
 const ssl = ref<number>(0);
+// Multi-tag selection: selected tag IDs plus any raw strings the user typed
+// that aren't committed options yet (Vuetify keeps typed text in the model).
+// Split by type on submit — numbers → tagIds, strings → tagNames.
+const tagIds = ref<Array<number | string>>([]);
+const tagOptions = ref<EmailServiceTagSummary[]>([]);
+const showTagDialog = ref(false);
+const tagsLoading = ref(false);
+// Pending tag names the user typed that aren't in the option list — auto-
+// created on the server during save. Tracked separately from tagIds so the
+// form never shows a fake chip with a non-existent id.
+const pendingTagNames = ref<string[]>([]);
+// Current search text inside the autocomplete (drives the "Create" prepend-item).
+const tagSearch = ref<string>("");
+
+/**
+ * Add a typed name the user wants to create on save. The name is collected in
+ * pendingTagNames; the server resolves+creates it. Once added it is removed
+ * from the visible search box so the user sees a clean input.
+ */
+function addPendingTagName(rawName: string): void {
+  const trimmed = rawName.trim();
+  if (trimmed.length === 0) return;
+  // Avoid duplicate pending entries and duplicate-of-existing-option.
+  const exists = tagOptions.value.some(
+    (opt) => opt.normalizedName === trimmed.toLocaleLowerCase("en-US")
+  );
+  if (exists) {
+    const existing = tagOptions.value.find(
+      (opt) => opt.normalizedName === trimmed.toLocaleLowerCase("en-US")
+    );
+    if (existing && !tagIds.value.includes(existing.id)) {
+      tagIds.value = [...tagIds.value, existing.id];
+    }
+    tagSearch.value = "";
+    return;
+  }
+  if (!pendingTagNames.value.some((n) => n.toLocaleLowerCase("en-US") === trimmed.toLocaleLowerCase("en-US"))) {
+    pendingTagNames.value = [...pendingTagNames.value, trimmed];
+  }
+  tagSearch.value = "";
+}
+
+/**
+ * Remove a pending tag name (user clicked the close button on its chip).
+ */
+function removePendingTagName(name: string): void {
+  pendingTagNames.value = pendingTagNames.value.filter((n) => n !== name);
+}
 
 // ---- inbound receive settings ----
 const receiveEnabled = ref<number>(0);
@@ -327,6 +487,26 @@ const testemailReceiver = ref<string>("")
 const testemailTitle = ref<string>("")
 const testemailContent = ref<string>("")
 
+async function loadTags(): Promise<void> {
+  tagsLoading.value = true;
+  try {
+    tagOptions.value = await getEmailServiceTags();
+    // Drop any selected IDs that no longer correspond to a real tag (e.g. the
+    // tag was deleted in another tab while this form was open). Raw typed
+    // strings are kept — they are pending creates.
+    const validIds = new Set(tagOptions.value.map((tag) => tag.id));
+    tagIds.value = tagIds.value.filter(
+      (entry) => typeof entry === "string" || validIds.has(entry)
+    );
+  } catch (error: unknown) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = t(emailServiceTagErrorKey(error)) || "Unable to load tags.";
+  } finally {
+    tagsLoading.value = false;
+  }
+}
+
 const initialize = async () => {
   const routeId = Number($route.params.id);
   if (Number.isInteger(routeId) && routeId > 0) {
@@ -342,19 +522,26 @@ const initialize = async () => {
           Id.value = res.id;
         }
         from.value = res.from;
+        // §12.1 legacy fallback: a service created before this feature has no
+        // smtpUsername — prefill the form with From so the user sees a value.
+        smtpUsername.value = res.smtpUsername?.trim() || res.from;
+        replyTo.value = res.replyTo ?? "";
         password.value = res.password;
         host.value = res.host;
-        port.value = res.port;
+        // Ports are VARCHAR in storage but v-number-input emits numbers at
+        // runtime — coerce so the form state stays a string for the contract.
+        port.value = res.port != null ? String(res.port) : "";
         name.value = res.name;
+        tagIds.value = res.tagIds ?? [];
         ssl.value = res.ssl;
         // receive settings (optional)
         receiveEnabled.value = res.receiveEnabled ?? 0;
         receiveProtocol.value = (res.receiveProtocol === "pop3" ? "pop3" : "imap");
         imapHost.value = res.imapHost ?? "";
-        imapPort.value = res.imapPort ?? "";
+        imapPort.value = res.imapPort != null ? String(res.imapPort) : "";
         imapSsl.value = res.imapSsl ?? 1;
         pop3Host.value = res.pop3Host ?? "";
-        pop3Port.value = res.pop3Port ?? "";
+        pop3Port.value = res.pop3Port != null ? String(res.pop3Port) : "";
         pop3Ssl.value = res.pop3Ssl ?? 1;
         receiveUsername.value = res.receiveUsername ?? "";
         receivePassword.value = res.receivePassword ?? "";
@@ -375,7 +562,8 @@ const initialize = async () => {
 /** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
   const missing: string[] = [];
-  const usernameForTest = receiveUsername.value || from.value;
+  const usernameForTest =
+    receiveUsername.value || smtpUsername.value || from.value;
   const passwordForTest = receivePassword.value || password.value;
   const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
@@ -437,7 +625,9 @@ async function onSubmit() {
     loading.value = false;
     return
   } else {
-    if (port.value.length > 5) {
+    // v-number-input emits a number at runtime (port is ref<string> for the
+    // EmailServiceEntitydata contract), so coerce before measuring/sending.
+    if (String(port.value ?? "").length > 5) {
 
       alert.value = true;
       alertcolor.value = "error";
@@ -447,18 +637,31 @@ async function onSubmit() {
     }
     const soacc: EmailServiceEntitydata = {
       name: name.value,
+      // Multi-tag: the autocomplete model may contain both selected IDs and
+      // typed strings (Vuetify keeps uncommitted text in the model in
+      // multi-select mode). Split them: numbers → tagIds, strings → tagNames
+      // for server-side auto-create on save. tagIds is always defined here
+      // (absent would mean "preserve", wrong for a form submit — the form is
+      // the authoritative source).
+      tagIds: tagIds.value.filter((entry): entry is number => typeof entry === "number"),
+      tagNames: [
+        ...pendingTagNames.value,
+        ...tagIds.value.filter((entry): entry is string => typeof entry === "string"),
+      ],
       from: from.value,
+      smtpUsername: smtpUsername.value || null,
+      replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
       password: password.value,
       host: host.value,
-      port: port.value,
+      port: String(port.value ?? ""),
       ssl: ssl.value,
       receiveEnabled: receiveEnabled.value,
       receiveProtocol: receiveProtocol.value,
       imapHost: imapHost.value || null,
-      imapPort: imapPort.value || null,
+      imapPort: imapPort.value != null && String(imapPort.value).length > 0 ? String(imapPort.value) : null,
       imapSsl: imapSsl.value,
       pop3Host: pop3Host.value || null,
-      pop3Port: pop3Port.value || null,
+      pop3Port: pop3Port.value != null && String(pop3Port.value).length > 0 ? String(pop3Port.value) : null,
       pop3Ssl: pop3Ssl.value,
       receiveUsername: receiveUsername.value || null,
       receivePassword: receivePassword.value || null,
@@ -508,9 +711,14 @@ async function onSubmit() {
 
 const openTestDialog = () => {
   const missing: string[] = [];
+  // Editing a saved service: the password field starts empty because
+  // credentials never round-trip to the form (getEmailServiceDetail returns
+  // the "" sentinel). An empty password here means "use the stored one" —
+  // the send resolves it by id server-side — so it is not a missing field.
+  const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!name.value) missing.push(t('emailservice.name'));
   if (!from.value) missing.push(t('emailservice.from'));
-  if (!password.value) missing.push(t('emailservice.password'));
+  if (!password.value && !canUseStoredPassword) missing.push(t('emailservice.password'));
   if (!host.value) missing.push(t('emailservice.host'));
   if (!port.value) missing.push(t('emailservice.port'));
   if (missing.length > 0) {
@@ -535,10 +743,17 @@ const submitTestemail = async () => {
   const emailSetting: EmailServiceEntitydata = {
     name: name.value,
     from: from.value,
+    smtpUsername: smtpUsername.value || null,
+    replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
     password: password.value,
     host: host.value,
-    port: port.value,
+    port: String(port.value ?? ""),
     ssl: ssl.value
+  }
+  // Carry the id so a test send in edit mode can reuse the stored password
+  // when the form still holds the "" credential sentinel.
+  if (isEdit.value && Id.value > 0) {
+    emailSetting.id = Id.value;
   }
   const emailRequestdata: EmailRequestData = {
     From: from.value,
@@ -584,6 +799,7 @@ const receiveMsg = () => {
 
 onMounted(() => {
   initialize();
+  void loadTags();
   receiveMsg()
 });
 

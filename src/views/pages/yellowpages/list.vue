@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="yellowpages-list"
+    title-key="route.yellow_pages_list"
+    content-width="full"
+  >
     <!-- Header with title and actions -->
     <v-row class="mb-4">
       <v-col cols="12" md="8">
@@ -357,10 +361,11 @@
       :type="notification.type"
       :timeout="notification.timeout"
     />
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'

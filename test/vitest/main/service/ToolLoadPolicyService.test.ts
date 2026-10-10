@@ -49,6 +49,7 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("read_attachment_content", "builtin")).toBe("always");
     expect(classify("knowledge_library_search", "builtin")).toBe("always");
     expect(classify("run_subagent", "builtin")).toBe("always");
+    expect(classify("conversation_tool_history", "builtin")).toBe("always");
   });
 
   it("keeps attach_local_images deferred by default (not always-loaded)", () => {
@@ -332,6 +333,43 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes AI message task tools for schedule intent and keeps them deferred otherwise", () => {
+    // Schedule phrasing promotes them (create_schedule needs an existing task
+    // id, so the task tools ride the same intent).
+    expect(
+      classify("list_ai_message_tasks", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("get_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("update_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
+    // Unrelated chat leaves them deferred (discoverable via catalog search).
+    expect(classify("list_ai_message_tasks", "builtin")).toBe("deferred");
+    expect(classify("get_ai_message_task", "builtin")).toBe("deferred");
+    expect(classify("create_ai_message_task", "builtin")).toBe("deferred");
+    expect(classify("update_ai_message_task", "builtin")).toBe("deferred");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "what is the weather today",
+      })
+    ).toBe("deferred");
+  });
+
   it("promotes create_html_artifact for 'show/render/display ... in html' phrasings", () => {
     const phrases = [
       "show result in html",
@@ -451,6 +489,96 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
+  it("promotes outbound email send tools for marketing/send-to-customer intent", () => {
+    const marketingMessage =
+      "Write a marketing email introducing our new product and send it to above customer";
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_services", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_templates", "builtin", {
+        currentUserMessage: "start a bulk email marketing campaign",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "send the emails to these contacts",
+      })
+    ).toBe("contextual");
+    // Inbox/reply tools must stay deferred so the model does not conclude
+    // that empty IMAP inboxes mean it cannot send, or that send_email_reply
+    // is the only send path.
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("send_email_reply", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("create_email_reply_draft", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(classify("start_email_send_task", "builtin")).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "send a reply to this inbound email",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "check my inbox for unread emails",
+      })
+    ).toBe("deferred");
+  });
+
+  it("promotes outbound email send tools on send-them follow-up after marketing intent", () => {
+    const recent = [
+      "Write a marketing email introducing our new product and send it to above customer",
+    ];
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_services", "builtin", {
+        currentUserMessage: "please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("send_email_reply", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
   it("treats plan tools as always only in plan mode", () => {
     expect(classify("AskUserQuestion", "plan", { isPlanMode: true })).toBe(
       "always"
@@ -506,6 +634,42 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes verify_contact_info for lead-research contact gathering", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "get computer wholesale in USA and get their contact method",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "extract contact info from these company websites",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info after plan approval using the original goal", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: [
+          "get computer wholesale in USA and get their contact method",
+        ],
+      })
+    ).toBe("contextual");
+  });
+
+  it("does not promote verify_contact_info on plan approval without contact intent", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
   it("does NOT promote verify_contact_info for generic email questions", () => {
     expect(
       classify("verify_contact_info", "builtin", {
@@ -519,37 +683,46 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
-  describe("hasRecentGeneratedImages promotion", () => {
-    it("promotes export_generated_artifacts when user asks to edit a prior generated image", () => {
+  describe("generated-image followups stay deferred", () => {
+    it("does NOT promote export_generated_artifacts on generated-image edit wording", () => {
       expect(
         classify("export_generated_artifacts", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
+      ).toBe("deferred");
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
     });
 
-    it("promotes attach_local_images when user asks to edit a prior generated image", () => {
+    it("does NOT promote attach_local_images on generated-image edit wording", () => {
       expect(
         classify("attach_local_images", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
-    });
-
-    it("does NOT promote when hasRecentGeneratedImages is false/undefined", () => {
-      expect(
-        classify("export_generated_artifacts", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
-          hasRecentGeneratedImages: false,
-        })
       ).toBe("deferred");
       expect(
         classify("attach_local_images", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
         })
       ).toBe("deferred");
+    });
+
+    it("still promotes export_generated_artifacts for explicit workspace save intent", () => {
+      // CONTEXTUAL_FILE_WRITE_TOOL_NAMES + FILE_WRITE_INTENT_RE path is
+      // untouched: explicit save/copy requests keep the export tool available.
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "save the generated files into my workspace",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
     });
 
     it("does NOT promote when the message has no edit-like verb", () => {

@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   chunkGroupsByBudget,
+  chunkSummariesByBudget,
   computeLightweightBudget,
+  estimateActiveMemoryTokens,
+  estimateAutoDreamPacketTokens,
   groupMessagesAtomically,
+  maxPacketUpdatedAt,
+  reduceAutoDreamPacket,
   CONSERVATIVE_SMALL_CONTEXT_FALLBACK,
 } from "@/service/AIChatPromptBudget";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
@@ -65,7 +70,11 @@ describe("groupMessagesAtomically", () => {
       msg("user", "hi"),
       msg("assistant", "calling", {
         tool_calls: [
-          { id: "call_1", type: "function", function: { name: "f", arguments: "{}" } },
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
         ],
       }),
       msg("tool", "result1", { tool_call_id: "call_1" }),
@@ -82,7 +91,13 @@ describe("groupMessagesAtomically", () => {
   it("does not orphan a tool result whose id does not match the call", () => {
     const messages: OpenAIChatMessage[] = [
       msg("assistant", "calling", {
-        tool_calls: [{ id: "call_1", type: "function", function: { name: "f", arguments: "{}" } }],
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
+        ],
       }),
       msg("tool", "unrelated", { tool_call_id: "call_2" }),
     ];
@@ -98,8 +113,16 @@ describe("groupMessagesAtomically", () => {
     const messages: OpenAIChatMessage[] = [
       msg("assistant", "calling", {
         tool_calls: [
-          { id: "a", type: "function", function: { name: "f", arguments: "{}" } },
-          { id: "b", type: "function", function: { name: "g", arguments: "{}" } },
+          {
+            id: "a",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
+          {
+            id: "b",
+            type: "function",
+            function: { name: "g", arguments: "{}" },
+          },
         ],
       }),
       msg("tool", "ra", { tool_call_id: "a" }),
@@ -144,10 +167,170 @@ describe("chunkGroupsByBudget", () => {
     const groups = groupMessagesAtomically(msgs);
     const a = chunkGroupsByBudget(groups, 15);
     const b = chunkGroupsByBudget(groups, 15);
-    expect(a.map((c) => c.groups.length)).toEqual(b.map((c) => c.groups.length));
+    expect(a.map((c) => c.groups.length)).toEqual(
+      b.map((c) => c.groups.length)
+    );
   });
 
   it("returns an empty array for no groups", () => {
     expect(chunkGroupsByBudget([], 100)).toEqual([]);
+  });
+});
+
+describe("chunkSummariesByBudget", () => {
+  it("packs summaries greedily into bounded batches", () => {
+    const summaries = ["one two three", "four five six", "seven eight nine"];
+    // Each summary ~4 tokens (length/4 + overhead). Cap at 9 -> first two
+    // together (~8) fit, the third starts a new batch.
+    const batches = chunkSummariesByBudget(summaries, 9);
+    expect(batches.length).toBeGreaterThanOrEqual(2);
+    // Every summary appears exactly once across batches.
+    const total = batches.reduce((n, b) => n + b.summaries.length, 0);
+    expect(total).toBe(summaries.length);
+  });
+
+  it("puts an oversized summary alone in its own batch", () => {
+    const big = "x".repeat(2000);
+    const small = "y";
+    const batches = chunkSummariesByBudget([big, small], 10);
+    expect(batches.length).toBeGreaterThanOrEqual(2);
+    expect(batches[0]!.summaries).toEqual([big]);
+  });
+
+  it("is deterministic — identical input yields identical boundaries", () => {
+    const summaries = Array.from({ length: 10 }, (_, i) => `summary ${i}`);
+    const a = chunkSummariesByBudget(summaries, 15);
+    const b = chunkSummariesByBudget(summaries, 15);
+    expect(a.map((c) => c.summaries.length)).toEqual(
+      b.map((c) => c.summaries.length)
+    );
+  });
+
+  it("returns an empty array for no summaries", () => {
+    expect(chunkSummariesByBudget([], 100)).toEqual([]);
+  });
+});
+
+describe("estimateAutoDreamPacketTokens + reduceAutoDreamPacket (SMBW-007)", () => {
+  function packet(opts: { content?: string; msgs?: number; tools?: number }) {
+    const messages = Array.from({ length: opts.msgs ?? 2 }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: opts.content ?? `message ${i}`,
+    }));
+    const toolCalls = Array.from({ length: opts.tools ?? 0 }, (_, i) => ({
+      toolCallId: `c${i}`,
+      toolName: `tool${i}`,
+      status: "success",
+      resultSummary: `summary ${i}`,
+    }));
+    return {
+      sourceKind: "chat_v2",
+      sourceId: "v2-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      title: "t",
+      messages,
+      ...(toolCalls.length ? { toolCalls } : {}),
+    };
+  }
+
+  it("estimateAutoDreamPacketTokens grows with more messages and tools", () => {
+    const small = estimateAutoDreamPacketTokens(packet({ msgs: 1 }));
+    const large = estimateAutoDreamPacketTokens(packet({ msgs: 5, tools: 2 }));
+    expect(large).toBeGreaterThan(small);
+  });
+
+  it("reduceAutoDreamPacket drops tool summaries first", () => {
+    const p = packet({ msgs: 2, tools: 3 });
+    const fullTokens = estimateAutoDreamPacketTokens(p);
+    const reduced = reduceAutoDreamPacket(p, Math.floor(fullTokens * 0.8));
+    expect(reduced.packet.toolCalls).toBeUndefined();
+    expect(reduced.minimumUsefulFits).toBe(true);
+  });
+
+  it("reduceAutoDreamPacket drops oldest messages before clamping the newest", () => {
+    const p = packet({ msgs: 5, tools: 0, content: "x".repeat(100) });
+    // Budget that can fit the identity header + a clamped newest message but
+    // not the full 5-message packet.
+    const fullTokens = estimateAutoDreamPacketTokens(p);
+    const reduced = reduceAutoDreamPacket(p, Math.floor(fullTokens * 0.4));
+    expect(reduced.packet.messages.length).toBeLessThanOrEqual(1);
+    expect(reduced.minimumUsefulFits).toBe(true);
+  });
+
+  it("reduceAutoDreamPacket never mutates the input", () => {
+    const p = packet({ msgs: 3, tools: 1 });
+    const before = JSON.parse(JSON.stringify(p));
+    reduceAutoDreamPacket(p, 5);
+    expect(p).toEqual(before);
+  });
+
+  it("a packet whose identity + newest message cannot fit reports minimumUsefulFits=false", () => {
+    const p = {
+      sourceKind: "chat_v2",
+      sourceId: "v2-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      title: "x".repeat(10),
+      messages: [{ id: "m0", role: "user", content: "y".repeat(10) }],
+    };
+    const reduced = reduceAutoDreamPacket(p, 1);
+    expect(reduced.minimumUsefulFits).toBe(false);
+  });
+
+  it("estimateActiveMemoryTokens measures the index line", () => {
+    const tokens = estimateActiveMemoryTokens({
+      memoryId: "mem-1",
+      type: "preference",
+      title: "Concise",
+      content: "User prefers concise answers.",
+    });
+    expect(tokens).toBeGreaterThan(0);
+  });
+});
+
+describe("maxPacketUpdatedAt", () => {
+  it("returns new Date() for an empty array (defensive fallback)", () => {
+    const before = Date.now();
+    const result = maxPacketUpdatedAt([]);
+    expect(result).toBeInstanceOf(Date);
+    expect(result.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("returns the greatest updatedAt from ISO string packets", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: "2026-01-03T00:00:00.000Z" },
+      { updatedAt: "2026-01-01T00:00:00.000Z" },
+      { updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    expect(result.toISOString()).toBe("2026-01-03T00:00:00.000Z");
+  });
+
+  it("accepts Date objects too (forward-compat)", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: new Date("2026-01-01T00:00:00.000Z") },
+      { updatedAt: new Date("2026-01-05T00:00:00.000Z") },
+    ]);
+    expect(result.toISOString()).toBe("2026-01-05T00:00:00.000Z");
+  });
+
+  it("ignores packets with null/undefined/invalid timestamps and falls back for all-null", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: null },
+      { updatedAt: undefined },
+      { updatedAt: "not-a-date" },
+    ]);
+    expect(result).toBeInstanceOf(Date);
+    // Falls back to now — a real timestamp, not NaN.
+    expect(Number.isNaN(result.getTime())).toBe(false);
+  });
+
+  it("picks the max among mixed valid and invalid timestamps", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: "not-a-date" },
+      { updatedAt: "2026-06-01T00:00:00.000Z" },
+      { updatedAt: undefined },
+      { updatedAt: "2026-03-01T00:00:00.000Z" },
+    ]);
+    expect(result.toISOString()).toBe("2026-06-01T00:00:00.000Z");
   });
 });

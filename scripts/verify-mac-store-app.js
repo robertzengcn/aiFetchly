@@ -4,6 +4,8 @@ const { spawnSync } = require("node:child_process");
 const plist = require("plist");
 
 const EXPECTED_BUNDLE_IDENTIFIER = "com.aifetchly.desktop";
+const EXPECTED_TEAM_IDENTIFIER = "22RY733FNY";
+const EXPECTED_APPLICATION_IDENTIFIER = `${EXPECTED_TEAM_IDENTIFIER}.${EXPECTED_BUNDLE_IDENTIFIER}`;
 const MAIN_REQUIRED_ENTITLEMENTS = [
   "com.apple.security.app-sandbox",
   "com.apple.security.network.client",
@@ -82,6 +84,16 @@ function requireBooleanEntitlement(entitlements, key, targetPath) {
   }
 }
 
+function requireStringEntitlement(entitlements, key, expectedValue, targetPath) {
+  if (entitlements[key] !== expectedValue) {
+    throw new Error(
+      `Expected entitlement ${key}=${expectedValue} on ${targetPath}, received ${String(
+        entitlements[key]
+      )}.`
+    );
+  }
+}
+
 function verifyMacStoreApp(
   appPath,
   dependencies = {
@@ -113,6 +125,18 @@ function verifyMacStoreApp(
   for (const entitlement of MAIN_REQUIRED_ENTITLEMENTS) {
     requireBooleanEntitlement(mainEntitlements, entitlement, appPath);
   }
+  requireStringEntitlement(
+    mainEntitlements,
+    "com.apple.application-identifier",
+    EXPECTED_APPLICATION_IDENTIFIER,
+    appPath
+  );
+  requireStringEntitlement(
+    mainEntitlements,
+    "com.apple.developer.team-identifier",
+    EXPECTED_TEAM_IDENTIFIER,
+    appPath
+  );
 
   const helperApps = findElectronHelperApps(appPath);
   if (helperApps.length === 0) {

@@ -4,7 +4,11 @@ import type {
   OpenAIChatMessage,
   OpenAITool,
 } from "@/api/aiChatApi";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatSafeBoundary,
+  ChatV2DirectionTransition,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
   AIChatPlanStateView,
@@ -42,6 +46,25 @@ export interface AIChatQueryStartEvent {
   type: "start";
   conversationId: string;
   messageId: string;
+  /**
+   * Opaque refs of the archived passages the user selected and the backend
+   * accepted for this turn (technical-design §13.3). The renderer clears only
+   * these chips on `start`; drafts whose source changed or did not fit are
+   * retained so a rejected selection is never silently dropped.
+   */
+  historySelectionAcceptedIds?: readonly string[];
+  /**
+   * Submitted refs whose source revision moved (§4.2, AC-18). The turn quoted
+   * nothing for these; the renderer marks the surviving chips so the user can
+   * explicitly re-confirm the refreshed passage before it is ever quoted.
+   */
+  historySelectionChangedIds?: readonly string[];
+  /**
+   * Submitted refs hard-rejected (unavailable/oversized, not stale) (P2-10,
+   * AC-18). The renderer marks the surviving chips rejected so the user can
+   * remove or replace them.
+   */
+  historySelectionRejectedIds?: readonly string[];
 }
 
 export interface AIChatQueryTokenEvent {
@@ -167,6 +190,8 @@ export interface AIChatQueryCompleteEvent {
   totalTokens?: number;
   promptTokens?: number;
   completionTokens?: number;
+  /** Final accumulated reasoning so the renderer can recover if live deltas were missed. */
+  reasoningContent?: string;
 }
 
 export interface AIChatQueryCancelledEvent {
@@ -181,6 +206,9 @@ export interface AIChatQueryErrorEvent {
   conversationId: string;
   messageId?: string;
   errorMessage: string;
+  /** Renderer-safe machine code (e.g. GeneratedImageReferenceErrorCode) for
+   * localized handling; omitted for unclassified errors. */
+  errorCode?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {
@@ -237,10 +265,25 @@ export type AIChatQueryEvent =
   | AIChatQueryAskUserQuestionEvent
   | AIChatQueryPlanSubmittedEvent
   | AIChatQueryPlanStateEvent
+  | AIChatQueryDirectionUpdatedEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
   | AIChatQueryUsageUpdateEvent;
+
+/**
+ * Emitted when a steering batch is applied at a safe boundary. Carries ids
+ * and offsets only — never steering content (the pending-message event and
+ * history already carry the user-visible text).
+ */
+export interface AIChatQueryDirectionUpdatedEvent {
+  type: "direction_updated";
+  conversationId: string;
+  messageId: string;
+  boundary: AIChatSafeBoundary;
+  pendingMessageIds: readonly string[];
+  contentOffset: number;
+}
 
 /**
  * Result returned by AIChatQueryLoop.run().
@@ -271,6 +314,9 @@ export type AIChatQueryLoopResult =
       /** Recovery metadata accumulated during the turn, if any recovery
        * layers were activated. Persisted on the assistant row metadata. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /** Present when steering was applied mid-turn: offsets where the
+       * visible content changed direction (design §11.6). */
+      directionTransitions?: readonly ChatV2DirectionTransition[];
     }
   | {
       type: "cancelled";
@@ -323,6 +369,38 @@ export interface PendingPermissionTurn {
   toolCallId: string;
   toolName: string;
   toolArguments: Record<string, unknown>;
+  /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
+  /**
+   * Trusted intent context (technical design §9/§14.2): the persisted user
+   * message id + outbound intent decision id from the originating turn. The
+   * permission-resume re-execution must carry them so outbound-email tools
+   * still bind the draft to the exact user message after approval.
+   */
+  sourceUserMessageId?: string;
+  intentDecisionId?: number | null;
+  /**
+   * Trusted outbound-email authorization triple resolved by the tool gate
+   * (§14.2) when it allowed the send. The permission-resume re-execution
+   * must carry it so the send tool claims the batch (§15.1) instead of
+   * silently falling to the legacy send path after the user approves.
+   */
+  outboundAuthorization?: {
+    batchId: number;
+    authorizationId: number;
+    batchHash: string;
+  };
+  /**
+   * Carries the scheduled-loop pre-authorization signal across the permission
+   * pause so a resumed send round still honors `skip_review=true` for blocking
+   * reasonCodes. Mirrors the {@link AIChatQueryLoopInput.outboundSendPreAuthorized}
+   * field; threaded from the originating loop input into the pending turn and
+   * back into the resumed loop input by the engine.
+   */
+  outboundSendPreAuthorized?: boolean;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
   /**
@@ -345,6 +423,11 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user answers the plan question (AC-8). Present only when deferred
@@ -459,6 +542,23 @@ export interface AIChatQueryLoopInput {
     baseDelayMs?: number;
   };
   /**
+   * Optional override for the per-turn model→tool→model round cap.
+   * Tests use a small value; production omits this and uses the default.
+   */
+  maxToolRounds?: number;
+  /**
+   * Optional override for how many hidden continuation cycles may start
+   * after the per-cycle tool-round cap. Tests use a small value.
+   */
+  maxRoundCapContinuations?: number;
+  /**
+   * When true, the hidden round-cap continuation tells the model to keep
+   * going until the goal's completion conditions are met. All chat turns
+   * auto-continue past the cap; this only changes that in-memory prompt.
+   * Engine sets this for chat-mode turns that have a non-terminal goal.
+   */
+  goalAutoContinue?: boolean;
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.
@@ -467,7 +567,91 @@ export interface AIChatQueryLoopInput {
   toolCatalog?: ToolCatalog;
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
+  /**
+   * Generated/edited image descriptors already produced by a tool that
+   * executed OUTSIDE this loop run — used by the engine's permission-resume
+   * path, which re-executes the approved tool directly. The loop folds them
+   * into the turn's result.images (alongside any images harvested from tools
+   * executed inside this run) so the engine persists + renders them.
+   */
+  seededToolImages?: readonly OpenAIChatImage[];
+  /**
+   * Per-turn steering mailbox. When present the loop checks it at the five
+   * safe boundaries and applies committed instructions between tool calls
+   * (message-queue design §11). The loop never imports a Model or Module —
+   * persistence happens inside the control's `consume()`.
+   */
+  steeringControl?: import("@/service/AIChatTurnControl").AIChatTurnControl;
+  /**
+   * Trusted current-turn user message id, supplied by the main process (never
+   * by tool arguments). Threads into OutboundEmailIntentResolver so the intent
+   * decision is bound to the exact user message that requested the work.
+   */
+  sourceUserMessageId?: string;
+  /**
+   * Trusted identity of the agent that owns this turn (main process, never
+   * tool arguments).
+   *
+   * Threaded into `SkillExecutionContext.ownerAgentId` so preserved-output
+   * retrieval scopes its per-turn allowance per agent: a sub-agent cannot spend
+   * the parent's budget, and the two are never silently merged.
+   */
+  ownerAgentId?: string;
+  /**
+   * Persisted outbound-email intent decision id for this turn. Null when the
+   * turn did not resolve an outbound-email intent (e.g. not marketing-related)
+   * or the resolver failed. Supplied by the main process, not tool arguments.
+   */
+  intentDecisionId?: number | null;
+  /**
+   * Turn association (technical-design §4.3). The engine stamps this when it
+   * accepts a user request; the loop threads it into paused-for-permission /
+   * paused-for-plan-question pending state so resumed-flow saves stay
+   * grouped by turn.
+   */
+  turnId?: string;
+  /**
+   * True only for unattended scheduled-loop turns where the user
+   * pre-allowlisted `start_email_send_task` via the typed confirmation at loop
+   * creation. Lets the outbound-email gate honor `skip_review=true` for
+   * blocking reasonCodes (e.g. a dedup negation the pure resolver misreads as
+   * do-not-send) — that typed pre-allowlist is the trusted authorization
+   * AD-003 requires and there is no human present to click Review. Never set
+   * for interactive chat (the renderer cannot forge `scheduledContext`).
+   * Computed by the scheduled runner from the task policy + scheduledContext.
+   */
+  outboundSendPreAuthorized?: boolean;
+  /**
+   * Called once per turn when the serialized request is at or over the
+   * compaction trigger (including when it already exceeds the window).
+   * Should compact, then return a rebuilt message list. Null keeps the
+   * current messages and lets preflight reject.
+   */
+  relieveBudgetPressure?: () => Promise<OpenAIChatMessage[] | null>;
 }
+
+/**
+ * Narrow terminal classification returned by
+ * `AIChatQueryEngine.submitPersistedUserMessage()` after persistence and
+ * terminal event emission are complete (design §9.5). The queue service
+ * drains/pauses on this — the engine never imports the queue service.
+ */
+export type AIChatTurnTerminalEvent =
+  | {
+      readonly type: "completed" | "cancelled" | "failed";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      readonly type: "paused_for_permission" | "paused_for_plan_question";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      /** An active/pending turn already owns the conversation (§12.3). */
+      readonly type: "conversation_busy";
+      readonly conversationId: string;
+    };
 
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {

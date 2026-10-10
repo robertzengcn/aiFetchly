@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 import { MessageType } from "@/modules/interface/IPCMessageProtocol";
 import { log } from "@/modules/Logger";
 import { TaskStatus } from "@/modules/interface/ITaskManager";
@@ -152,7 +153,17 @@ export class YellowPagesScraperProcess {
       return;
     }
 
-    process.on("message", async (raw: unknown) => {
+    process.on("message", (raw: unknown) => {
+  // §7 graceful shutdown (design §7): ack, then exit within the parent's
+  // budget. Parent observes exit + force-verifies (ack is not exit proof).
+  if (shutdownResponder.handle(raw)) return;
+});
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => {
+    process.send?.(message);
+  },
+});
+process.on("message", async (raw: unknown) => {
       const validation = parseWorkerMessage(
         raw,
         yellowPagesScraperProcessInboundSchema()

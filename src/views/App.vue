@@ -1,6 +1,8 @@
 <template>
   <v-app :theme="mainStore.theme">
       <router-view />
+      <!-- Root-level close-choice dialog + shutdown progress (exit & tray PRD). -->
+      <ApplicationCloseDialog />
 </v-app>
 </template>
 <script setup lang="ts">
@@ -12,6 +14,7 @@ import { NATIVATECOMMAND } from '@/config/channellist';
 import { useUserStore } from '@/views/store/modules/userStore';
 import router from '@/views/router';
 import type { NativateDatatype } from '@/entityTypes/commonType';
+import ApplicationCloseDialog from '@/views/components/application/ApplicationCloseDialog.vue';
 
 const mainStore = useMainStore();
 const userStore = useUserStore();

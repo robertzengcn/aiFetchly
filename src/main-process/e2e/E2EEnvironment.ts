@@ -26,6 +26,8 @@
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
+import { TOOL_RESULT_FLAGS } from "@/config/toolResultConfig";
 
 /** The shared run-root segment that every E2E temp root must live under. */
 export const E2E_RUN_ROOT_SEGMENT = "aifetchly-e2e";
@@ -40,6 +42,15 @@ export interface E2EEnvironment {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /**
+   * Per-test root for preserved tool-output artifacts. Derived from the
+   * validated E2E root and contained by it, so large-tool-result captures
+   * never write into the real `~/.aifetchly/tool-outputs`. The bootstrap
+   * creates the directory and exports it via `AIFETCHLY_TOOL_OUTPUT_ROOT` so
+   * production code (`getToolResultStorageRoot`) honors the override without
+   * trusting an arbitrary caller-supplied path.
+   */
+  readonly toolOutputRootPath: string;
   readonly fakeAiBaseUrl: string | null;
   readonly allowedOrigins: readonly string[];
   readonly stateFilePath: string | null;
@@ -57,9 +68,13 @@ export interface E2EStateManifest {
   readonly locale: "en";
   readonly fakeAiBaseUrl: string;
   readonly workspacePath: string;
-  readonly dialogResponses?: Readonly<
-    Record<string, E2EDialogResponse>
-  >;
+  readonly dialogResponses?: Readonly<Record<string, E2EDialogResponse>>;
+  /**
+   * Token-store overrides applied after the standard seed. Keys are restricted
+   * to the recoverable-history rollout flag names and values to "true"/"false"
+   * (E2EStateSeeder applies them verbatim via Token.setValue).
+   */
+  readonly tokenOverrides?: Readonly<Record<string, string>>;
 }
 
 export interface E2EDialogResponse {
@@ -75,6 +90,19 @@ const ALLOWED_MANIFEST_KEYS: ReadonlySet<string> = new Set([
   "fakeAiBaseUrl",
   "workspacePath",
   "dialogResponses",
+  "tokenOverrides",
+]);
+
+/**
+ * Token keys a manifest may override. Restricted to the four recoverable-history
+ * rollout flags plus the three tool-result rollout flags (technical-design §18)
+ * — both sets are boolean feature flags of the same trust class. Restricting
+ * the set keeps a hostile/stale manifest from rewriting arbitrary Token state
+ * (e.g. USERSDBPATH or USER_AI_ENABLED — the standard seed owns those).
+ */
+const ALLOWED_TOKEN_OVERRIDE_KEYS: ReadonlySet<string> = new Set([
+  ...Object.values(AI_CHAT_RECOVERABLE_FLAGS),
+  ...Object.values(TOOL_RESULT_FLAGS),
 ]);
 
 export class E2EEnvironmentError extends Error {
@@ -97,7 +125,9 @@ export function isContainedBy(parent: string, child: string): boolean {
   const resolvedChild = path.resolve(child);
   if (resolvedChild === resolvedParent) return true;
   const relative = path.relative(resolvedParent, resolvedChild);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  );
 }
 
 function assertContained(root: string, p: string, label: string): void {
@@ -157,9 +187,7 @@ function assertRootSafe(root: string): void {
  * Validate and load the E2E environment from a process-env-like map. Accepts
  * `NodeJS.ProcessEnv` directly. Throws E2EEnvironmentError on any violation.
  */
-export function loadE2EEnvironment(
-  env: NodeJS.ProcessEnv
-): E2EEnvironment {
+export function loadE2EEnvironment(env: NodeJS.ProcessEnv): E2EEnvironment {
   if (env.AIFETCHLY_E2E !== "1") {
     throw new E2EEnvironmentError(
       'AIFETCHLY_E2E must equal "1" exactly to enable the test bootstrap'
@@ -177,12 +205,14 @@ export function loadE2EEnvironment(
   const workspacePath = path.join(rootPath, "workspace");
   const downloadsPath = path.join(rootPath, "downloads");
   const logsPath = path.join(rootPath, "logs");
+  const toolOutputRootPath = path.join(rootPath, "tool-outputs");
   for (const [label, p] of [
     ["userDataPath", userDataPath],
     ["databasePath", databasePath],
     ["workspacePath", workspacePath],
     ["downloadsPath", downloadsPath],
     ["logsPath", logsPath],
+    ["toolOutputRootPath", toolOutputRootPath],
   ] as const) {
     assertContained(rootPath, p, label);
   }
@@ -209,7 +239,10 @@ export function loadE2EEnvironment(
   const allowedOrigins: string[] = [];
   const rawOrigins = env.AIFETCHLY_E2E_ALLOWED_ORIGINS;
   if (rawOrigins) {
-    for (const raw of rawOrigins.split(",").map((s) => s.trim()).filter(Boolean)) {
+    for (const raw of rawOrigins
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
       if (!isLoopbackUrl(raw)) {
         throw new E2EEnvironmentError(
           `AIFETCHLY_E2E_ALLOWED_ORIGINS entry must be an http loopback origin: ${raw}`
@@ -232,6 +265,7 @@ export function loadE2EEnvironment(
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
     fakeAiBaseUrl,
     allowedOrigins,
     stateFilePath,
@@ -273,10 +307,15 @@ export function parseStateManifest(stateFilePath: string): E2EStateManifest {
   }
   if (obj.schemaVersion !== 1) {
     throw new E2EEnvironmentError(
-      `state manifest schemaVersion must be 1 (got ${String(obj.schemaVersion)})`
+      `state manifest schemaVersion must be 1 (got ${String(
+        obj.schemaVersion
+      )})`
     );
   }
-  if (obj.authState !== "authenticated" && obj.authState !== "unauthenticated") {
+  if (
+    obj.authState !== "authenticated" &&
+    obj.authState !== "unauthenticated"
+  ) {
     throw new E2EEnvironmentError("state manifest authState is invalid");
   }
   if (obj.aiState !== "hosted-disabled" && obj.aiState !== "local-enabled") {
@@ -287,13 +326,43 @@ export function parseStateManifest(stateFilePath: string): E2EStateManifest {
       `state manifest locale must be "en" (got ${String(obj.locale)})`
     );
   }
-  if (typeof obj.fakeAiBaseUrl !== "string" || !isLoopbackUrl(obj.fakeAiBaseUrl)) {
+  if (
+    typeof obj.fakeAiBaseUrl !== "string" ||
+    !isLoopbackUrl(obj.fakeAiBaseUrl)
+  ) {
     throw new E2EEnvironmentError(
       "state manifest fakeAiBaseUrl must be an http loopback URL"
     );
   }
   if (typeof obj.workspacePath !== "string") {
-    throw new E2EEnvironmentError("state manifest workspacePath must be a string");
+    throw new E2EEnvironmentError(
+      "state manifest workspacePath must be a string"
+    );
+  }
+  if (obj.tokenOverrides !== undefined) {
+    if (
+      obj.tokenOverrides === null ||
+      typeof obj.tokenOverrides !== "object" ||
+      Array.isArray(obj.tokenOverrides)
+    ) {
+      throw new E2EEnvironmentError(
+        "state manifest tokenOverrides must be a string map"
+      );
+    }
+    for (const [key, value] of Object.entries(
+      obj.tokenOverrides as Record<string, unknown>
+    )) {
+      if (!ALLOWED_TOKEN_OVERRIDE_KEYS.has(key)) {
+        throw new E2EEnvironmentError(
+          `state manifest tokenOverrides key is not an allowed rollout flag: "${key}"`
+        );
+      }
+      if (value !== "true" && value !== "false") {
+        throw new E2EEnvironmentError(
+          `state manifest tokenOverrides["${key}"] must be "true" or "false"`
+        );
+      }
+    }
   }
   return obj as unknown as E2EStateManifest;
 }

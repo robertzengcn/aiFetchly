@@ -159,6 +159,13 @@ jobs:
           set -euo pipefail
           yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-wix
 
+      - name: Build EXE for local testing
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-squirrel
+
       - name: Validate master Windows installers
         if: ${{ github.event_name == 'push' }}
         shell: pwsh
@@ -167,11 +174,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $msixFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msix)
           $msiFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msi)
+          $exeFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.exe |
+            Where-Object { $_.Name -notmatch 'uninstall' })
           if ($msixFiles.Count -eq 0) {
             throw "Master build did not produce an MSIX package."
           }
           if ($msiFiles.Count -eq 0) {
             throw "Master build did not produce an MSI package."
+          }
+          if ($exeFiles.Count -eq 0) {
+            throw "Master build did not produce an EXE package."
           }
 
       - name: Upload Windows installers
@@ -376,6 +388,17 @@ jobs:
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
+          # Retry transient Apple timestamp-service failures during codesign.
+          # @electron/osx-sign signs every file with `codesign --timestamp`,
+          # and Apple's timestamp service intermittently returns "The timestamp
+          # service is not available" under runner load — one failure used to
+          # abort the whole ~2h packaging step (runs 09-21, 09-27, 09-28,
+          # 10-02). The shim retries only that error (default 5 attempts, 30s
+          # apart) and passes everything else through; --timestamp stays because
+          # notarization requires it. Prepend to PATH so Node's bare-name
+          # execFile('codesign') resolves to the shim.
+          export PATH="$GITHUB_WORKSPACE/scripts/codesign-retry-shim:$PATH"
+          command -v codesign
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
           if [ "$BUILD_MODE" = "production" ]; then
             NODE_ENV=production node scripts/run-packaging-with-hang-guard.js --platform=darwin
@@ -725,165 +748,16 @@ jobs:
           fi
 
   # ===========================================================================
-  # Downloadable local-AI runtimes (PRD Phase 4, design §25). Builds six
-  # runtime ZIPs on their target OS/arch, verifies each, and generates the
-  # signed-release catalog. Runs alongside the app builds; assets are uploaded
-  # as workflow artifacts for the publish step to attach to a GitHub Release.
-  # ===========================================================================
-  build-local-ai-runtimes:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-    env:
-      RUNTIME_VERSION: "1.0.0"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: win32
-            arch: x64
-            runner: windows-2022
-          - platform: darwin
-            arch: x64
-            runner: macos-13
-          - platform: darwin
-            arch: arm64
-            runner: macos-14
-          - platform: linux
-            arch: x64
-            runner: ubuntu-22.04
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: yarn
-
-      - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Configure node-gyp Python
-        shell: bash
-        run: |
-          set -euo pipefail
-          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
-          echo "Using Python for node-gyp: ${PYTHON_BIN}"
-          python --version
-          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
-          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
-          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
-
-      - name: Install Linux system dependencies for native modules
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
-
-      - name: Install dependencies from lockfile
-        run: yarn install --frozen-lockfile
-
-      - name: Resolve Electron build metadata
-        shell: bash
-        run: node scripts/resolve-electron-build-metadata.mjs --github-env "$GITHUB_ENV"
-
-      - name: Build embedding worker
-        shell: bash
-        run: node node_modules/vite/bin/vite.js build --config vite.localEmbeddingWorker.config.mjs
-
-      - name: Build embedding + voice runtimes
-        shell: bash
-        run: |
-          set -euo pipefail
-          for rt in embedding-xenova voice-sherpa; do
-            node scripts/build-local-ai-runtime.mjs \
-              --runtime "$rt" --runtime-version "$RUNTIME_VERSION" \
-              --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
-              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI" \
-              --output out/local-ai-runtimes \
-              --worker-output dist/childprocess \
-              --commit "${{ github.sha }}" --workflow-run-id "${{ github.run_id }}"
-          done
-
-      - name: Verify runtime archives
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in out/local-ai-runtimes/*.zip; do
-            base="$(basename "$f" .zip)"
-            plat="$(echo "$base" | awk -F- '{print $3}')"
-            arch="$(echo "$base" | awk -F- '{print $4}')"
-            node scripts/verify-local-ai-runtime.mjs \
-              --archive "$f" --platform "$plat" --arch "$arch" \
-              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI"
-          done
-
-      - name: Upload runtime archives
-        uses: actions/upload-artifact@v7
-        with:
-          name: local-ai-runtimes-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            out/local-ai-runtimes/*.zip
-            out/local-ai-runtimes/*.metadata.json
-          if-no-files-found: error
-
-  generate-runtime-catalog:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
-    needs: build-local-ai-runtimes
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      RUNTIME_VERSION: "1.0.0"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-
-      - name: Download runtime archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: local-ai-runtimes-*
-          path: runtime-assets
-          merge-multiple: true
-
-      - name: Generate runtime catalog
-        shell: bash
-        run: |
-          node scripts/generate-local-ai-runtime-catalog.mjs \
-            --input runtime-assets \
-            --release-tag "${{ github.ref_name }}" \
-            --repository "${{ github.repository }}" \
-            --runtime-version "$RUNTIME_VERSION" \
-            --output runtime-assets/local-ai-runtimes.json
-
-      - name: Upload release assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: local-ai-runtime-release-assets
-          path: runtime-assets
-          if-no-files-found: error
-
-  # ===========================================================================
   # Create a draft GitHub Release with all auto-update assets (PRD FR-9.5).
-  # This is the publish step referenced by the build-local-ai-runtimes comment
-  # above. It validates the Windows Squirrel assets (RELEASES / *-full.nupkg /
-  # *.exe) and the macOS signed ZIP, then attaches every distributable — app
-  # installers + local-AI-runtime catalog — to a draft release tagged v<version>.
+  # It validates the Windows Squirrel assets (RELEASES / *-full.nupkg /
+  # *.exe) and the macOS signed ZIP, then attaches app installers to a draft
+  # release tagged v<version>. Downloadable local-AI runtimes are published by
+  # .github/workflows/local-ai-runtime-release.yml, not this workflow.
   # The release stays in DRAFT state for manual review and confirmation on the
   # GitHub UI before going live. Runs only for production builds.
   # ===========================================================================
   publish-github-release:
-    needs: [build-windows, build-macos, generate-runtime-catalog]
+    needs: [build-windows, build-macos]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'production' }}
     runs-on: ubuntu-latest
     permissions:
@@ -912,12 +786,6 @@ jobs:
           name: ${{ needs.build-macos.outputs.artifact_name }}
           path: macos-assets
 
-      - name: Download local-AI-runtime release assets
-        uses: actions/download-artifact@v8
-        with:
-          name: local-ai-runtime-release-assets
-          path: runtime-assets
-
       # Fail closed if required auto-update artifacts are missing (PRD FR-6.7/7.7).
       - name: Validate Windows auto-update artifacts
         shell: bash
@@ -936,14 +804,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Windows Squirrel auto-update assets + installer
-          find windows-assets -type f \( -name 'RELEASES' -o -name '*.nupkg' -o -name '*.exe' \) -exec cp {} release-assets/ \;
+          # Windows Squirrel auto-update assets + installers
+          find windows-assets -type f \( \
+            -name 'RELEASES' -o -name '*.nupkg' -o -name '*.exe' -o -name '*.msi' \
+          \) -exec cp {} release-assets/ \;
           # macOS auto-update ZIP + DMG
           find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
-          # Local-AI-runtime catalog + archives
-          find runtime-assets -type f -exec cp {} release-assets/ \;
           echo "Collected release assets:"
           ls -la release-assets
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-release-checksums.js \
+            --root release-assets \
+            --output release-assets/SHA256SUMS.txt \
+            --notes-file release-notes.md \
+            --title "AiFetchly $VERSION" \
+            --preamble "Production build from workflow_dispatch. Review and publish manually on GitHub."
 
       - name: Create draft GitHub Release
         shell: bash
@@ -959,11 +838,12 @@ jobs:
             fi
             echo "Release $TAG exists as a draft; uploading assets (--clobber)."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file release-notes.md
           else
             gh release create "$TAG" release-assets/* \
               -R "$GITHUB_REPOSITORY" \
               --title "AiFetchly $VERSION" \
-              --generate-notes \
+              --notes-file release-notes.md \
               --draft
           fi
           echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."
@@ -971,12 +851,14 @@ jobs:
   # ===========================================================================
   # Draft GitHub Release on every push to master (PRD FR-9.5 variant).
   # The build jobs above run on push too: build-macos produces a signed
-  # ZIP/DMG and build-windows produces Store-mode MSIX + an MSI. This job
-  # attaches those to a DRAFT GitHub Release tagged v<version>. Drafts never
-  # reach update.electronjs.org, so this is purely for manual review before an
-  # official release is published. The automatic production release path stays
-  # with the manual workflow_dispatch build above; runtime archives are
-  # dispatch-only and are NOT attached here.
+  # ZIP/DMG and build-windows produces Store-mode MSIX plus WiX MSI and
+  # Squirrel Setup.exe. This job attaches those packages, SHA256SUMS.txt,
+  # and a checksum table in the notes to a DRAFT GitHub Release tagged
+  # v<version>. Drafts never reach update.electronjs.org, so this is purely
+  # for manual review before an official release is published. The automatic
+  # production release path stays with the manual workflow_dispatch build
+  # above. Downloadable local-AI runtimes are published by
+  # local-ai-runtime-release.yml and are NOT attached here.
   # ===========================================================================
   draft-release-on-push:
     if: ${{ github.event_name == 'push' }}
@@ -990,6 +872,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
 
       - name: Download Windows build
         uses: actions/download-artifact@v8
@@ -1008,10 +895,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Windows push builds are Store-mode MSIX plus an MSI for local
-          # testing (no Squirrel RELEASES/nupkg, so the Squirrel validation
-          # from the production publish job is intentionally skipped here).
-          find windows-assets -type f \( -name '*.msix' -o -name '*.msi' \) -exec cp {} release-assets/ \;
+          # Windows push builds are Store-mode MSIX plus WiX MSI and Squirrel
+          # Setup.exe (with RELEASES / nupkg) for local testing and GitHub
+          # Releases downloads.
+          find windows-assets -type f \( \
+            -name '*.msix' -o -name '*.msi' -o -name '*.exe' \
+            -o -name 'RELEASES' -o -name '*.nupkg' \
+          \) -exec cp {} release-assets/ \;
           # macOS push builds produce the signed auto-update ZIP and a DMG.
           find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
           if [ -z "$(ls -A release-assets)" ]; then
@@ -1020,6 +910,17 @@ jobs:
           fi
           echo "Collected release assets:"
           ls -la release-assets
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-release-checksums.js \
+            --root release-assets \
+            --output release-assets/SHA256SUMS.txt \
+            --notes-file release-notes.md \
+            --title "AiFetchly $VERSION" \
+            --preamble "Draft release built from a push to master. Review and publish manually on GitHub."
 
       - name: Create draft GitHub Release
         shell: bash
@@ -1035,11 +936,12 @@ jobs:
             fi
             echo "Release $TAG exists as a draft; uploading assets (--clobber)."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file release-notes.md
           else
             gh release create "$TAG" release-assets/* \
               -R "$GITHUB_REPOSITORY" \
               --title "AiFetchly $VERSION" \
-              --notes "Draft release built from a push to master. Review and publish manually on GitHub." \
+              --notes-file release-notes.md \
               --draft
           fi
           echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."

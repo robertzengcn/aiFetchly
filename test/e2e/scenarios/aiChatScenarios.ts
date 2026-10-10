@@ -11,7 +11,9 @@ import {
   textChunk,
   toolCallChunk,
   toolCallFinishChunk,
+  imagesChunk,
   type FakeAiScenarioName,
+  type FakeStreamImage,
   type SseFrame,
 } from "./openAiProtocol";
 
@@ -21,6 +23,8 @@ export type ScenarioPlan =
       readonly kind: "http-error";
       readonly status: number;
       readonly body: string;
+      /** Hold the request before answering (ms) — a failure window. */
+      readonly delayMs?: number;
     }
   | { readonly kind: "raw-bytes"; readonly bytes: string }
   | {
@@ -38,6 +42,33 @@ export const STREAM_TEXT_FINAL = STREAM_TEXT_CHUNKS.join("");
 
 /** A tool the fake server asks the app to approve (workspace-contained). */
 export const FAKE_TOOL_NAME = "list_workspace_files";
+
+/** The visible text of a generated-image turn. */
+export const STREAM_IMAGE_TEXT = "Here is your image.";
+
+/**
+ * The generated image served by "stream-generated-image": a minimal valid
+ * 1x1 transparent PNG (well-known constant bytes). The storage service
+ * persists it locally; specs compare request-side image hashes instead of
+ * raw bytes.
+ */
+export const STREAM_IMAGE_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/** Build the "stream-generated-image" plan (text + one generated image). */
+function streamGeneratedImagePlan(
+  images: readonly FakeStreamImage[],
+  imageFrameDelayMs = 0
+): ScenarioPlan {
+  return {
+    kind: "sse",
+    frames: [
+      frame(0, textChunk(STREAM_IMAGE_TEXT)),
+      frame(imageFrameDelayMs, imagesChunk(images)),
+      frame(0, stopChunk()),
+    ],
+  };
+}
 
 /**
  * Resolve a scenario name into the plan the fake server executes. Delays are
@@ -67,6 +98,20 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         ],
       };
     }
+    case "stream-generated-image":
+      // A normal chat turn whose completion metadata carries one generated
+      // image; the desktop storage service persists it and the renderer maps
+      // it to a generated-image tile with reference actions.
+      return streamGeneratedImagePlan([
+        { type: "image", b64_json: STREAM_IMAGE_B64, mime_type: "image/png" },
+      ]);
+    case "stream-generated-image-delayed":
+      // Same image output, but held behind a bounded delay so a spec can
+      // observe/stop a batch mid-flight before outputs complete.
+      return streamGeneratedImagePlan(
+        [{ type: "image", b64_json: STREAM_IMAGE_B64, mime_type: "image/png" }],
+        4_000
+      );
     case "tool-requires-permission":
       return {
         kind: "sse",
@@ -94,6 +139,16 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         kind: "http-error",
         status: 500,
         body: JSON.stringify({ error: { message: "simulated server error" } }),
+      };
+    case "http-500-delayed":
+      // Hold the request 4s before failing: the turn stays busy (no
+      // transport retries for a definite 5xx), leaving a deterministic
+      // window to queue a follow-up behind the failing turn.
+      return {
+        kind: "http-error",
+        status: 500,
+        body: JSON.stringify({ error: { message: "simulated server error" } }),
+        delayMs: 4_000,
       };
     case "malformed-sse":
       // Not valid SSE data lines — the parser skips them and the stream ends

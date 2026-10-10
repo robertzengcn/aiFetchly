@@ -1,3 +1,6 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Google Maps Module — orchestration layer shared by AI skill and UI page.
  *
@@ -161,6 +164,7 @@ export class GoogleMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
+      let ownedWorkerRecordId: string | null = null;
       const requestId = externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
@@ -187,10 +191,19 @@ export class GoogleMapsModule extends BaseModule {
             workerEnv.NODE_PATH
           )}`
         );
-        worker = spawn(process.execPath, [resolvedWorkerPath], {
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: workerEnv,
-        });
+        const ownedProcess = spawnOwned(
+          "google-maps",
+          () =>
+            spawn(process.execPath, [resolvedWorkerPath], {
+              stdio: ["pipe", "pipe", "pipe", "ipc"],
+              env: workerEnv,
+            })
+        );
+        worker = ownedProcess;
+        ownedWorkerRecordId =
+          getOwnedProcessRegistry()
+            .listByOwner("google-maps")
+            .find((r) => r.pid === ownedProcess.pid)?.id ?? null;
       } catch (err) {
         reject(
           new Error(
@@ -258,6 +271,19 @@ export class GoogleMapsModule extends BaseModule {
           log.warn(
             `[GoogleMaps] Ignoring invalid worker message (${requestId})`
           );
+          return;
+        }
+        if (data.type === "descendant-report") {
+          // T01 (design §7): store the worker-reported browser identity —
+          // ppid-validated by the registry; retained even if this worker
+          // exits first so force verification can reach it.
+          void getOwnedProcessRegistry()
+            .recordDescendantReport(
+              ownedWorkerRecordId ?? "",
+              Number(data.pid),
+              String(data.label ?? "browser")
+            )
+            .catch(() => undefined);
           return;
         }
         if (data.type === "progress" && data.requestId === requestId) {

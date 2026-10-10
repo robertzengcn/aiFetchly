@@ -1,5 +1,10 @@
 <template>
-  <v-stepper alt-labels v-model="thisstep" show-actions>
+  <AppPageShell
+    page-id="email-send-log"
+    title-key="route.email_send_log"
+    content-width="form"
+  >
+    <v-stepper alt-labels v-model="thisstep" show-actions>
     <v-stepper-header>
       <v-stepper-item
 v-for="(step, n) in computedHeaders" :key="step.step" :title="step.title" :value="step.step"
@@ -63,8 +68,10 @@ v-model="useemailsource" :items="marketTypeOption" item-title="tranme" item-valu
     </div>
   </v-stepper>
   <ErrorDialog :show-dialog="showDialog" :alertext="alertext" :alertitle="t('common.error')" @dialogclose="showDialog=false" />
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted } from "vue";
 
 import { useI18n } from "vue-i18n";

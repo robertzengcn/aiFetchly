@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Canonical YellowPages worker-process manager (WS-4 R4.1).
  *
@@ -420,7 +422,10 @@ export class YellowPagesProcessManager extends BaseModule {
       const { port1 } = new MessageChannelMain();
 
       // Fork the child process using Electron utilityProcess
-      const childProcess = utilityProcess.fork(childPath, [], {
+      const childProcess = spawnOwned(
+        "yellow-pages",
+        () =>
+          utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: buildPackagedWorkerEnv({
@@ -429,7 +434,8 @@ export class YellowPagesProcessManager extends BaseModule {
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
           },
         }),
-      });
+      })
+      );
 
       // Set up process info
       const processInfo: ProcessInfo = {

@@ -5,7 +5,9 @@ class="layout-shell"
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
         chatDockOpen: v2ChatPanelOpen,
+        [`shell-mode-${appShell.mode}`]: innerShell.shellEnabled.value,
     }"
+        :data-shell-mode="innerShell.shellEnabled.value ? appShell.mode : undefined"
 :style="{ '--ai-chat-dock-width': chatPanelWidth + 'px' }">
         <v-navigation-drawer
 class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
@@ -83,8 +85,8 @@ target="_blank" href="https://docs.aifetchly.com"
                 </v-menu>
             </v-list>
         </v-navigation-drawer>
-        <main class="app_main">
-            <header class="header">
+        <main ref="mainElement" class="app_main">
+            <header v-if="!innerShell.shellEnabled.value" class="header">
                 <Breadcrumbs v-if="!mainStore.isMobile" />
                 <div v-if="!mainStore.isMobile" class="mt-3 ml-9 gamepad" @click="changeRail">
                     <v-icon v-if="navState.rail" icon="mdi-sort-variant-lock-open" />
@@ -117,7 +119,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" data-testid="ai-chat-toggle" @click="toggleChat">
+                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
                 </div>
@@ -126,7 +128,10 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </header>
             <div class="app_main__body">
-                <div class="router">
+                <div v-if="innerShell.shellEnabled.value" class="router">
+                    <AppCenterRouteHost />
+                </div>
+                <div v-else class="router">
                     <AiArtifactWorkspace
                         v-if="activeArtifact"
                         :artifact="activeArtifact"
@@ -138,6 +143,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <RouterView v-else />
                 </div>
                 <div
+                    v-if="!workspaceRedesignEnabled"
                     class="ai-chat-dock"
                     :class="{ 'dock-open': v2ChatPanelOpen }"
                 >
@@ -156,6 +162,8 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </div>
         </main>
+        <AppNoticeHost v-if="innerShell.shellEnabled.value" />
+        <AppConfirmHost v-if="innerShell.shellEnabled.value" />
 
           <!-- Multiple Messages Display -->
           <div class="messages-container">
@@ -186,26 +194,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
           :timeout="snaptimeout"
         />
 
-        <!-- AI Chat Panel -->
-        <div
-          class="ai-chat-panel"
-          :class="{ 'panel-open': chatPanelOpen }"
-          :style="chatPanelOpen ? { width: chatPanelWidth + 'px' } : {}"
-        >
-          <!-- Resize handle -->
-          <div
-            v-if="chatPanelOpen"
-            class="chat-resize-handle"
-            @mousedown="startResize"
-          ></div>
-        </div>
-
-        <!-- Backdrop overlay -->
-        <div
-          v-if="chatPanelOpen"
-          class="chat-backdrop"
-          @click="toggleChatPanel"
-        ></div>
     </v-layout>
 </template>
 <script setup lang="ts">
@@ -221,8 +209,15 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
-
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
+import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
+import { useInnerPageShellFlag } from '@/views/composables/useInnerPageShellFlag';
+import { authenticatedFeatureRoutes } from '@/views/router/authenticatedFeatureRoutes';
+import { useAppShellStore } from '@/views/store/appShell';
+import { useResponsiveShell } from '@/views/composables/useResponsiveShell';
+import AppCenterRouteHost from '@/views/components/appShell/AppCenterRouteHost.vue';
+import AppNoticeHost from '@/views/components/appShell/AppNoticeHost.vue';
+import AppConfirmHost from '@/views/components/appShell/AppConfirmHost.vue';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
@@ -234,7 +229,8 @@ import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 import { getIpcTransport } from '@/views/utils/ipcTransport'
-import { AI_CHAT_V2_OPEN_FROM_NOTIFY } from '@/config/channellist'
+import { AI_CHAT_V2_OPEN_FROM_NOTIFY, USER_OPEN_PRICING_PLAN } from '@/config/channellist'
+import { useEntitlement } from '@/views/utils/subscriptionEntitlement'
 
 
 // import {ref, watchEffect} from "vue";
@@ -270,17 +266,33 @@ const userEmail=ref('')
 const userPlan=ref('')
 const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
+// Local-cache AI-enabled baseline. Seeded by applyPlans() from the local
+// GetloginUserInfo() read on mount, so useEntitlement can tell a real
+// free→paid transition from a no-op refresh of an already-paid user.
+const aiEnabledBaseline=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
-const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
+/** Workspace redesign rollout flag (PRD §33): hides the dock when enabled.
+ * Default-on for dev preview so the merged redesign is visible without manual
+ * flag toggling. Production will later gate this behind settings. */
+const workspaceRedesignEnabled = ref(true);
+/**
+ * Inner-page convergence shell flag (design §26.2): ON replaces the old fixed
+ * global header with route-owned headers and hosts routes through the center
+ * route host + shared inspector. OFF keeps this layout byte-identical.
+ */
+const innerShell = useInnerPageShellFlag();
+const appShell = useAppShellStore();
+const mainElement = ref<HTMLElement | null>(null);
+useResponsiveShell(() => mainElement.value);
 // AI artifact workspace — layout-owned temporary preview state. When set,
 // it replaces the route view; closing restores the prior route.
 const activeArtifact = ref<AIArtifactRecord | null>(null);
 const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
-const chatPanelWidth = ref(600);
+const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
 const pendingOpenConversationRequest = ref<AiOpenConversationRequest | null>(null);
@@ -293,7 +305,10 @@ const navState = reactive({
     menuVisible: true,
     rail: !mainStore.isMobile,
     isMini: !mainStore.isMobile,
-    routes: router.options.routes,
+    // Chat-first shell: the authenticated groups now live under ONE route
+    // parent, so the legacy drawer reads the exported group records instead
+    // of the top-level router options (which would render an empty nav).
+    routes: authenticatedFeatureRoutes,
 });
 const visibleRouteChildren = (route: RouteRecordRaw): RouteRecordRaw[] => {
     return (route.children ?? []).filter((row) => Boolean(row.meta?.visible));
@@ -326,16 +341,8 @@ const accountPlanIcon = computed(() => {
 const showUpgradePlan = computed(() => {
     return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
 });
-const pricingPlanUrl = computed(() => {
-    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
-    return baseUrl ? `${baseUrl}/pricing-plan` : '';
-});
 const normalizePlanName = (planName: string): string => {
     return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
-};
-const normalizeLoginBaseUrl = (raw: unknown): string => {
-    if (typeof raw !== 'string') return '';
-    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
 };
 const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
     const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
@@ -351,6 +358,20 @@ const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
     const planName = normalizePlanName(plan.planName || '');
     const planId = (plan.planId || '').toUpperCase();
     return planName.includes('community') || planName.includes('free') || planId === 'FREE';
+};
+/** Apply a plan set to the header chrome (label, Plus flag, Upgrade button). */
+const applyPlans = (plans: Array<UserPlanType>): void => {
+    if (plans && plans.length > 0) {
+        const displayPlans = getDisplayPlans(plans);
+        currentPlans.value = displayPlans;
+        isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan);
+        userPlan.value = displayPlans.map(plan => plan.planName).join(', ');
+        // AI-enabled = any active plan that is not free/community. Mirrors
+        // UserController.plansEnableAi for the renderer's local baseline.
+        const activePlans = displayPlans.filter(plan => (plan.status || '').toLowerCase() === 'active');
+        aiEnabledBaseline.value = activePlans.length > 0
+            && activePlans.some(plan => !isFreeSubscriptionPlan(plan));
+    }
 };
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -388,12 +409,14 @@ const gotoSystemsetting=()=>{
 const gotodashborad=()=>{
     router.push('/dashboard/home')
 }
-const openPricingPlan = (): void => {
-    if (!pricingPlanUrl.value) {
+const openPricingPlan = async (): Promise<void> => {
+    // Route through the main process so it records pricingOpenedAt and starts
+    // the retry loop that recovers a missed WebSocket notify (PRD FR-3).
+    // The handler validates VITE_LOGIN_URL and opens the URL via shell.openExternal.
+    const res = await getIpcTransport().invoke(USER_OPEN_PRICING_PLAN)
+    if (!res || !res.status) {
         showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
-        return
     }
-    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -423,22 +446,20 @@ const getTranslatedTitle = (title: string): string => {
     return title;
 }
 
-const toggleChatPanel = () => {
-    chatPanelOpen.value = !chatPanelOpen.value;
-    if (chatPanelOpen.value) {
-        v2ChatPanelOpen.value = false;
-    }
-}
-
 const toggleV2ChatPanel = () => {
     v2ChatPanelOpen.value = !v2ChatPanelOpen.value;
-    if (v2ChatPanelOpen.value) {
-        chatPanelOpen.value = false;
-    }
 }
 
-/** Unified chat toggle: always opens V2 (v1 retired R6.2). */
+/**
+ * Unified chat toggle. When the workspace redesign flag is on (PRD §33), the
+ * chat experience lives on the /aiworkspace route and the legacy dock stays
+ * unmounted; otherwise the dock behaves exactly as before.
+ */
 const toggleChat = () => {
+    if (workspaceRedesignEnabled.value) {
+        void router.push('/aiworkspace');
+        return;
+    }
     toggleV2ChatPanel();
 };
 
@@ -447,12 +468,16 @@ const openAiChatFromDashboard = (event: Event): void => {
     const text = detail?.prompt?.trim();
     if (!text) return;
 
+    if (workspaceRedesignEnabled.value) {
+        void router.push({ path: '/aiworkspace', query: { prompt: text } });
+        return;
+    }
+
     pendingAiPromptRequest.value = {
         id: ++aiPromptRequestId,
         text,
     };
     v2ChatPanelOpen.value = true;
-    chatPanelOpen.value = false;
 }
 
 const handleOpenFromNotify = (raw: unknown): void => {
@@ -465,9 +490,19 @@ const handleOpenFromNotify = (raw: unknown): void => {
             ? payload.conversationId.trim()
             : "";
 
-    // v2 is the sole chat (v1 retired R6.2) — always route to the v2 panel.
+    // When the workspace redesign is enabled, route notification clicks
+    // to /aiworkspace (with optional conversation selection) instead of
+    // opening the legacy dock.
+    if (workspaceRedesignEnabled.value) {
+        if (conversationId) {
+            void router.push({ path: '/aiworkspace', query: { conv: conversationId } });
+        } else {
+            void router.push('/aiworkspace');
+        }
+        return;
+    }
+
     v2ChatPanelOpen.value = true;
-    chatPanelOpen.value = false;
     if (conversationId.length > 0) {
         pendingOpenConversationRequest.value = {
             id: ++openConversationRequestId,
@@ -593,6 +628,21 @@ const showWarningMessage = (content: string) => addMessage('warning', content);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showInfoMessage = (content: string) => addMessage('info', content);
 
+// FR-7.1: subscribe to entitlement broadcasts at top-level setup (not inside
+// onMounted) so onUnmounted registers in the active component instance and
+// the IPC listener is cleaned up on unmount. The baseline is read from
+// aiEnabledBaseline, which applyPlans() seeds from the local cache.
+useEntitlement({
+    readBaselineAiEnabled: () => aiEnabledBaseline.value,
+    onPlansChanged: (plans) => applyPlans(plans),
+    onUpgrade: () => {
+        showSuccessMessage(t('subscriptionEntitlement.unlocked') || 'Your subscription is active. Hosted AI features are unlocked.')
+    },
+    onDowngrade: () => {
+        showInfoMessage(t('subscriptionEntitlement.cancelled') || 'Your subscription has changed. Some AI features may be unavailable.')
+    },
+})
+
 const initializeSavedLanguage = async (): Promise<void> => {
     try {
         const systemLanguage = await getLanguagePreference()
@@ -607,6 +657,14 @@ const initializeSavedLanguage = async (): Promise<void> => {
 }
 
 onMounted(async () => {
+    // Rollout flag (PRD §33): read once per Layout mount; the workspace's
+    // mode toggle re-navigates, so a fresh mount picks up any change.
+    try {
+        workspaceRedesignEnabled.value = await isWorkspaceRedesignEnabled();
+    } catch {
+        workspaceRedesignEnabled.value = true;
+    }
+
     await initializeSavedLanguage()
 
     initializeLanguageDetection(async (selectedLanguage): Promise<void> => {
@@ -622,10 +680,7 @@ onMounted(async () => {
         userName.value = res.name
         userEmail.value = res.email
         if (res.plans && res.plans.length > 0) {
-            const displayPlans = getDisplayPlans(res.plans)
-            currentPlans.value = displayPlans
-            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
-            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+            applyPlans(res.plans)
         }
     } catch (error) {
         console.error('Failed to load login user info:', error)
@@ -761,23 +816,6 @@ const showDialog=(status:boolean, content:string)=>{
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
-/* AI Chat Panel Styles */
-.ai-chat-panel {
-    position: fixed;
-    top: 0;
-    right: -420px;
-    width: 420px;
-    height: 100vh;
-    background-color: #ffffff;
-    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.1);
-    transition: right 0.3s ease-in-out;
-    z-index: 9998;
-}
-
-.ai-chat-panel.panel-open {
-    right: 0;
-}
-
 .ai-chat-dock {
     position: relative;
     align-self: stretch;
@@ -800,38 +838,7 @@ const showDialog=(status:boolean, content:string)=>{
     width: var(--ai-chat-dock-width);
 }
 
-.chat-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.3);
-    z-index: 9997;
-    animation: fadeIn 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-
-
 @media (max-width: 768px) {
-    .ai-chat-panel {
-        width: 100%;
-        right: -100%;
-    }
-
-    .ai-chat-panel.panel-open {
-        right: 0;
-    }
-
     .ai-chat-dock {
         position: fixed;
         top: 0;
@@ -870,11 +877,6 @@ const showDialog=(status:boolean, content:string)=>{
 </style>
 
 <style>
-:root[theme="dark"] .ai-chat-panel {
-    background-color: #1e1e1e;
-    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-}
-
 :root[theme="dark"] .ai-chat-dock {
     background-color: #1e1e1e;
     border-left-color: rgba(255, 255, 255, 0.12);

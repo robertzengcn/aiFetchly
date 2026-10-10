@@ -4,6 +4,7 @@ import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { OpenAITool } from "@/api/aiChatApi";
@@ -16,6 +17,9 @@ import {
 } from "@/service/persistAgentImages";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { AgentTaskModule } from "@/modules/AgentTaskModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
@@ -106,6 +110,15 @@ export interface AgentRuntimeDeps {
   /** Optional parent cancellation signal. Batch coordinators use this to
    * cancel every in-flight item when the user stops the outer tool job. */
   signal?: AbortSignal;
+  /**
+   * Optional preserved-output collaborators (T15b). When provided, the
+   * sub-agent's {@link AIChatQueryLoop} externalizes oversized tool results
+   * to artifacts, and the runtime issues inter-agent handoff grants at the
+   * child terminal so the parent conversation can read them. When absent,
+   * sub-agent tool results stay inline (legacy behavior).
+   */
+  toolResultModule?: ToolResultModule;
+  toolResultStorage?: ToolResultStorageService;
 }
 
 /**
@@ -160,15 +173,20 @@ export class AgentRuntime {
       taskPacket: request.taskPacket,
     });
 
-    const { systemMessage, userMessage } = this.promptBuilder.build({
-      definition,
-      packet: request.taskPacket,
-    });
+    const { systemMessage, userMessage, userMessageText } =
+      this.promptBuilder.build({
+        definition,
+        packet: request.taskPacket,
+        // Trusted runtime-only channel: artifacts ride into the prompt here
+        // and nowhere else. createTask above persists the packet only, and
+        // the transcript below records the text projection (no bytes).
+        initialImageArtifacts: request.initialImageArtifacts,
+      });
     await transcript.appendSystemText(agentTaskId, systemMessage.content);
     await this.taskModule.appendMessage({
       agentTaskId,
       role: "user",
-      content: userMessage.content,
+      content: userMessageText,
     });
 
     await this.taskModule.setStatus(agentTaskId, "running", {
@@ -331,10 +349,56 @@ export class AgentRuntime {
       ((req, onChunk, options) =>
         this.api.openAIChatCompletionStream(req, onChunk, options));
 
+    // Preserved-output collaborators (T15b). Resolve once per run so the
+    // sub-agent's loop externalizes oversized tool results the same way the
+    // main chat loop does. When absent, sub-agent results stay inline.
+    const toolResultModule = deps?.toolResultModule;
+    const toolResultStorage =
+      deps?.toolResultStorage ??
+      (toolResultModule
+        ? new ToolResultStorageService({ root: getToolResultStorageRoot() })
+        : undefined);
+    // Collect the outputIds the child externalized so the terminal can issue
+    // handoff grants to the parent conversation. Parsed from the persisted
+    // receipt content the loop hands to `saveToolResultReceipt`.
+    const externalizedOutputIds: string[] = [];
+
     const loop = new AIChatQueryLoop({
       streamChatCompletion: streamChat,
       executeTool: policyCheckedExecute,
       getSkillDefinition: getSkill,
+      // §8.5 mandatory preflight for isolated subagent consumers (FR-04/FR-08).
+      // Subagent history is never implicitly parent history; the budget guard
+      // still bounds every dispatch within the agent's own conversation.
+      requestBudgetService: new AIChatRequestBudgetService(),
+      // T15b: externalize oversized sub-agent tool results so the parent can
+      // be granted read access instead of receiving the bulk body inline.
+      ...(toolResultModule && toolResultStorage
+        ? {
+            toolResultModule,
+            toolResultStorage,
+            saveToolResultReceipt: async (input: {
+              content: string;
+            }): Promise<void> => {
+              // The content is JSON.stringify(receipt); parse out the
+              // outputIds so the terminal can grant access to each.
+              try {
+                const receipt = JSON.parse(input.content) as {
+                  outputs?: Array<{ outputId?: string }>;
+                };
+                for (const ref of receipt.outputs ?? []) {
+                  if (typeof ref.outputId === "string") {
+                    externalizedOutputIds.push(ref.outputId);
+                  }
+                }
+              } catch {
+                // Swallow: a malformed receipt must not break the turn. The
+                // grant step is best-effort; a missed grant simply means the
+                // parent re-runs the tool, not a crash.
+              }
+            },
+          }
+        : {}),
     });
 
     // 5. Run with abort controller + runtime timeout.
@@ -564,11 +628,50 @@ export class AgentRuntime {
       ...(outputFilePaths ? { outputFilePaths } : {}),
       ...(outputImages ? { outputImages } : {}),
       ...(storageWarning ? { storageWarning } : {}),
+      ...(externalizedOutputIds.length > 0
+        ? { outputIds: externalizedOutputIds }
+        : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
       finishedAt: new Date(),
     });
+
+    // T15b: issue inter-agent handoff grants so the parent conversation can
+    // read the child's externalized outputs instead of re-running the tool.
+    // Best-effort: a grant failure is logged and swallowed because the
+    // parent's retrieval path will surface `OUTPUT_NOT_AVAILABLE` cleanly,
+    // and the child's own result is already durable. Only grant when the
+    // child actually externalized AND a parent conversation is wired.
+    if (
+      externalizedOutputIds.length > 0 &&
+      request.parentConversationId &&
+      toolResultModule
+    ) {
+      for (const outputId of externalizedOutputIds) {
+        try {
+          const grant = await toolResultModule.grantAccess({
+            outputId,
+            ownerProfileId: "default",
+            ownerConversationId: agentConversationId,
+            ownerAgentId: definition.id,
+            granteeConversationId: request.parentConversationId,
+            granteeAgentId: request.parentAgentId ?? "",
+            grantReason: "child-agent-handoff",
+          });
+          if (!grant.granted) {
+            console.warn(
+              `[agent-runtime] handoff grant failed for ${outputId}: ${grant.code ?? "unknown"}`
+            );
+          }
+        } catch (grantErr) {
+          console.error(
+            `[agent-runtime] handoff grant threw for ${outputId}:`,
+            grantErr
+          );
+        }
+      }
+    }
     const snap = await this.taskModule.getSnapshot(agentTaskId);
     result.toolCallsCount = snap?.toolCallsCount ?? 0;
     if (deps?.autoDreamService) {
@@ -576,6 +679,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           log.error("[ai-auto-dream] agent trigger failed:", err)
@@ -586,6 +690,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           log.error("[workspace-auto-dream] agent trigger failed:", err)

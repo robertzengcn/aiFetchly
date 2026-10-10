@@ -1,16 +1,16 @@
 import { BaseModule } from "./baseModule";
 import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import {
   AI_MESSAGE_TASK_DEFAULTS,
   type CreateAiMessageTaskRequest,
   type UpdateAiMessageTaskRequest,
-  type AiMessageTaskStatus,
 } from "@/entityTypes/aiMessageTaskTypes";
-
-function generateConversationId(): string {
-  return `ai-msg-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-}
+import {
+  bindApprovedWorkspace,
+  clearApprovedWorkspace,
+} from "@/service/AiMessageTaskWorkspace";
 
 export class AiMessageTaskModule extends BaseModule {
   private model: AiMessageTaskModel;
@@ -33,13 +33,22 @@ export class AiMessageTaskModule extends BaseModule {
     const allowedTools =
       request.allowedTools ?? AI_MESSAGE_TASK_DEFAULTS.allowedTools;
 
+    const conversationId = new AIChatV2Module().createConversationIfNeeded(
+      request.conversationId
+    );
+
+    const workspacePath = await this.resolveWorkspacePath(
+      conversationId,
+      request.workspacePath
+    );
+
     const entity: Partial<AiMessageTaskEntity> = {
       name: request.name.trim(),
       description: request.description?.trim() ?? undefined,
       message: request.message.trim(),
       system_prompt: request.systemPrompt?.trim() ?? undefined,
       model: request.model ?? undefined,
-      conversation_id: request.conversationId || generateConversationId(),
+      conversation_id: conversationId,
       allowed_tools_json: JSON.stringify(allowedTools),
       auto_approve_tools:
         request.autoApproveTools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools,
@@ -50,6 +59,8 @@ export class AiMessageTaskModule extends BaseModule {
       max_continue_calls:
         request.maxContinueCalls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls,
       status: "active",
+      source_type: "schedule_ui",
+      workspace_path: workspacePath,
     };
 
     return this.model.create(entity);
@@ -85,8 +96,54 @@ export class AiMessageTaskModule extends BaseModule {
     if (request.maxContinueCalls !== undefined)
       updates.max_continue_calls = request.maxContinueCalls;
     if (request.status !== undefined) updates.status = request.status;
+    if (request.workspacePath !== undefined) {
+      const requested = request.workspacePath?.trim() ?? "";
+      const current = existing.workspace_path?.trim() ?? "";
+      if (requested !== current) {
+        const conversationId = this.ensureConversationId(
+          updates.conversation_id ?? existing.conversation_id
+        );
+        updates.conversation_id = conversationId;
+        updates.workspace_path = await this.resolveWorkspacePath(
+          conversationId,
+          request.workspacePath
+        );
+      }
+    }
 
     await this.model.update(request.id, updates);
+  }
+
+  private ensureConversationId(existing: string | null | undefined): string {
+    if (existing && existing.startsWith("v2-")) {
+      return existing;
+    }
+    return new AIChatV2Module().createConversationIfNeeded(
+      existing ?? undefined
+    );
+  }
+
+  /**
+   * Persist and approve a workspace directory for the task conversation.
+   * `undefined` leaves the path unchanged (caller should not call).
+   * `null` or blank clears it.
+   */
+  private async resolveWorkspacePath(
+    conversationId: string,
+    workspacePath: string | null | undefined
+  ): Promise<string | null> {
+    if (workspacePath === undefined || workspacePath === null) {
+      if (workspacePath === null) {
+        await clearApprovedWorkspace(conversationId);
+      }
+      return null;
+    }
+    const trimmed = workspacePath.trim();
+    if (!trimmed) {
+      await clearApprovedWorkspace(conversationId);
+      return null;
+    }
+    return bindApprovedWorkspace(conversationId, trimmed);
   }
 
   async getTask(id: number): Promise<AiMessageTaskEntity | null> {

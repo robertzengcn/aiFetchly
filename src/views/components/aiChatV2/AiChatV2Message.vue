@@ -21,6 +21,17 @@
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
           <strong>{{ t("aiChatV2.tool_call_title") || "Tool Call" }}</strong>
+          <button
+            v-if="batchStopAvailable"
+            type="button"
+            class="v2-message__batch-stop"
+            :aria-label="
+              t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+            "
+            @click="emit('stop-batch')"
+          >
+            {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+          </button>
         </div>
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
@@ -82,6 +93,17 @@
             <strong :class="{ 'v2-message__tool-running': executionPending }">
               {{ executionPending ? t("aiChatV2.tool_running") || "Running..." : t("aiChatV2.tool_result_title") || "Tool Result" }}
             </strong>
+            <button
+              v-if="batchStopAvailable"
+              type="button"
+              class="v2-message__batch-stop"
+              :aria-label="
+                t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+              "
+              @click="emit('stop-batch')"
+            >
+              {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+            </button>
           </div>
           <!-- Skill installation progress card (PRD §22.1): one stable card
                per installer tool result instead of raw tool JSON. -->
@@ -98,6 +120,21 @@
             @open="(id: string) => emit('open-artifact', id)"
             @copy-html="(id: string) => emit('copy-artifact-html', id)"
           />
+          <OutboundEmailBatchCard
+            v-if="outboundBatch"
+            :batch-id="outboundBatch.batchId"
+            :mode="outboundBatch.mode"
+            :recipient-count="outboundBatch.recipientCount"
+            :batch-status="outboundBatch.batchStatus"
+            :reason-code="outboundBatch.reasonCode"
+            :sent-count="outboundBatch.sentCount"
+            @review-requested="reviewOutboundBatchId = $event"
+          />
+          <OutboundEmailReviewDialog
+            v-if="reviewOutboundBatchId !== null"
+            v-model="reviewDialogOpen"
+            :batch-id="reviewOutboundBatchId"
+          />
           <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
             <span>{{ message.metadata.toolName }}</span>
@@ -110,6 +147,128 @@
           </div>
           <div v-if="message.metadata?.summary" class="v2-message__content">
             {{ message.metadata.summary }}
+          </div>
+          <!--
+            Preserved-output state (recoverable large tool results). A storage
+            failure is shown as a preservation state, NEVER as "the tool
+            failed": the command ran, only its output was not kept.
+          -->
+          <div
+            v-if="preservedOutput"
+            class="v2-message__tool-output"
+            data-testid="tool-output-card"
+          >
+            <div class="v2-message__tool-output-state" data-testid="tool-output-state">
+              {{ preservedOutput.stateLabel }}
+            </div>
+            <div class="v2-message__tool-output-meta" data-testid="tool-output-meta">
+              {{ preservedOutput.sizeLabel }}
+            </div>
+            <!--
+              The preview is explicitly labelled as a preview so a small sample
+              is never read as a complete review of the output.
+            -->
+            <div
+              v-if="preservedOutput.preview"
+              class="v2-message__tool-output-preview"
+              data-testid="tool-output-preview"
+            >
+              <div class="v2-message__tool-output-preview-label">
+                {{
+                  t("aiChatV2.toolOutput.preview_label") ||
+                  "Preview only — not the whole result"
+                }}
+              </div>
+              <pre>{{ preservedOutput.preview }}</pre>
+            </div>
+            <div class="v2-message__tool-output-actions">
+              <v-btn
+                size="small"
+                variant="text"
+                data-testid="tool-output-view"
+                @click="onToggleViewer"
+              >
+                {{ t("aiChatV2.toolOutput.view") || "View full result" }}
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="text"
+                data-testid="tool-output-export"
+                @click="onExportPreserved"
+              >
+                {{ t("aiChatV2.toolOutput.export") || "Export result" }}
+              </v-btn>
+            </div>
+            <AiChatToolResultViewer
+              v-if="viewerOpen && preservedOutput.outputId"
+              :conversation-id="String(message.conversationId)"
+              :output-id="preservedOutput.outputId"
+              @close="viewerOpen = false"
+            />
+          </div>
+          <div
+            v-if="batchProgressView"
+            class="v2-message__batch-progress"
+          >
+            <div class="v2-message__batch-summary">
+              <span>{{
+                t("aiChatV2.generatedImageRefs.progressSummary", {
+                  completed: batchProgressView.completedCount,
+                  requested: batchProgressView.requestedCount,
+                  concurrency: batchProgressView.concurrency,
+                }) ||
+                `${batchProgressView.completedCount} of ${batchProgressView.requestedCount} completed`
+              }}</span>
+              <span class="v2-message__batch-status">{{
+                batchProgressView.status
+              }}</span>
+            </div>
+            <div
+              v-if="batchRetryAvailable"
+              class="v2-message__batch-actions"
+            >
+              <button
+                type="button"
+                class="v2-message__batch-retry"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.retryFailed', {
+                    count: batchProgressView.retryableReferences.length,
+                  }) || 'Retry failed items'
+                "
+                :disabled="disabled"
+                @click="emitRetryGeneratedImageBatch"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.retryFailed", {
+                    count: batchProgressView.retryableReferences.length,
+                  }) ||
+                  `Retry failed items (${batchProgressView.retryableReferences.length})`
+                }}
+              </button>
+            </div>
+            <details
+              v-if="batchProgressView.failures.length > 0"
+              class="v2-message__details v2-message__batch-failures"
+            >
+              <summary
+                :title="
+                  t(
+                    'aiChatV2.generatedImageRefs.errors.generated_image_batch_partial'
+                  ) || ''
+                "
+              >
+                <v-icon size="x-small" color="error">mdi-alert-circle-outline</v-icon>
+                {{ batchProgressView.failures.length }}
+              </summary>
+              <div
+                v-for="(failure, failureIndex) in batchProgressView.failures"
+                :key="failureIndex"
+                class="v2-message__batch-failure-row"
+              >
+                <span class="v2-message__batch-item-label">{{ failure.label }}</span>
+                <span class="v2-message__batch-error">{{ failure.errorText }}</span>
+              </div>
+            </details>
           </div>
           <div
             v-if="attachLocalImagesAttachments.length > 0"
@@ -135,22 +294,50 @@
         </template>
       </template>
       <template v-else>
-        <div v-if="message.content" class="v2-message__content">
-          {{ message.content }}
+        <div v-if="displayContent" class="v2-message__content">
+          <template v-if="directionSegments.length > 1">
+            <template
+              v-for="(segment, index) in directionSegments"
+              :key="`dir-seg-${index}`"
+            >
+              <span v-if="index > 0" class="v2-message__direction-marker">
+                <v-icon size="x-small" class="mr-1"
+                  >mdi-directions-fork</v-icon
+                >{{
+                  t("aiChatV2.queue.direction_updated") || "Direction updated"
+                }}
+              </span>
+              <span>{{ segment }}</span>
+            </template>
+          </template>
+          <template v-else>{{ displayContent }}</template>
         </div>
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
+          data-testid="reasoning"
           :open="hasReasoning"
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
-            {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+            {{
+              status === "streaming"
+                ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
+                : t("aiChatV2.reasoning_title") || "Reasoning"
+            }}
           </summary>
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
-          <template v-for="image in generatedImages" :key="image.key">
+          <div
+            v-for="image in generatedImages"
+            :key="image.key"
+            class="v2-message__generated-image"
+          >
+            <span
+              class="v2-message__generated-image-index"
+              aria-hidden="true"
+            >{{ image.imageIndex + 1 }}</span>
             <a
               v-if="image.externalHref"
               :href="image.externalHref"
@@ -181,7 +368,39 @@
                 loading="lazy"
               />
             </button>
-          </template>
+            <div class="v2-message__image-actions">
+              <button
+                type="button"
+                class="v2-message__use-reference-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.useAsReference') || 'Use as reference'"
+                @click="emitUseGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.useAsReference") || "Use as reference" }}
+              </button>
+              <button
+                type="button"
+                class="v2-message__edit-image-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.edit') || 'Edit'"
+                @click="emitEditGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
+              </button>
+              <button
+                type="button"
+                class="v2-message__save-image-btn"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.saveToWorkspace') ||
+                  'Save to workspace'
+                "
+                @click="emitSaveGeneratedImage(image)"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.saveToWorkspace") ||
+                  "Save to workspace"
+                }}
+              </button>
+            </div>
+          </div>
         </div>
         <!-- User-sent attachments: render inline so the user sees what they
              attached, scrolling with the message history. -->
@@ -294,16 +513,40 @@
           </details>
         </span>
       </div>
+      <div v-if="isReportableAssistant" class="v2-message__actions">
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          data-testid="copy-message-btn"
+          :disabled="copied"
+          :aria-label="copyAriaLabel"
+          :title="copied ? copiedLabel : copyLabel"
+          class="v2-message__copy-btn"
+          @click="onCopy"
+        >
+          <v-icon size="x-small">
+            {{ copied ? "mdi-check" : "mdi-content-copy" }}
+          </v-icon>
+        </v-btn>
+        <AIContentReportButton
+          compact
+          :descriptor="reportDescriptor!"
+          :reported="reported"
+          @report="emit('report', reportDescriptor!)"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
+  ChatV2GeneratedImageReference,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
@@ -315,8 +558,22 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 import SkillInstallCard from "./SkillInstallCard.vue";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
+import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
+import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
+import {
+  deriveOutboundBatchCardModel,
+  type OutboundBatchCardModel,
+} from "@/views/components/outboundEmail/outboundBatchCardModel";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AiChatToolResultViewer from "./AiChatToolResultViewer.vue";
+import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
+import {
+  buildPastedContentsFromBlocks,
+  expandPastedTextForDisplay,
+} from "@/service/pastedText/PastedTextDisplay";
 import { windowInvoke } from "@/views/utils/apirequest";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
@@ -337,6 +594,8 @@ const props = defineProps<{
   workspaceRoot?: string;
   /** Global "Show reasoning" preference — gates whether the panel renders. */
   showReasoning?: boolean;
+  /** True when this output was reported this session (parent-owned). */
+  reported?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -350,12 +609,115 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
 }>();
 const { t, te } = useI18n();
 
 const isPlanCard = computed(
   () => props.message.metadata?.planStateView !== undefined
 );
+
+// Report AI output (PRD §8.1). Only completed assistant text/image messages
+// are reportable — not tool calls, tool results, user/system messages,
+// streaming, errors, or EMPTY placeholders (PRD FR-1.2). Requires non-empty
+// text and/or generated images so the action never appears on an empty
+// assistant bubble. The dialog is hosted by the list parent
+// (AiChatV2Messages) so only one instance exists per chat.
+const isReportableAssistant = computed(() => {
+  if (props.message.role !== "assistant") return false;
+  if (props.message.messageType === MessageType.TOOL_CALL) return false;
+  if (props.message.messageType === MessageType.TOOL_RESULT) return false;
+  if (status.value !== "idle") return false;
+  const hasText =
+    typeof props.message.content === "string" && props.message.content.trim().length > 0;
+  const hasImages =
+    Array.isArray(props.message.metadata?.generatedImages) &&
+    (props.message.metadata?.generatedImages as unknown[]).length > 0;
+  return hasText || hasImages;
+});
+const reportDescriptor = computed(() =>
+  isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
+);
+
+// Copy assistant output (mirrors the V1 AiChatBox copy affordance). Shows
+// alongside the report button on completed assistant text/image messages.
+// Flips to a check icon for 2s on success so the user sees confirmation.
+const copied = ref(false);
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+const copyLabel = computed(
+  () => t("aiChatV2.copy_message") || "Copy message"
+);
+const copiedLabel = computed(() => t("aiChatV2.copied") || "Copied");
+const copyAriaLabel = computed(
+  () => t("aiChatV2.copy_message_aria") || "Copy this AI response"
+);
+
+function plainTextFromMessage(content: string): string {
+  // The assistant content may carry inline HTML (e.g. markdown-rendered
+  // artifacts). Strip tags so the clipboard receives readable plain text,
+  // matching the V1 handleCopyMessage behavior.
+  const temp = document.createElement("div");
+  temp.innerHTML = content;
+  return (temp.textContent || temp.innerText || "").trim();
+}
+
+async function onCopy(): Promise<void> {
+  if (copied.value) return;
+  const content = props.message.content ?? "";
+  const text = plainTextFromMessage(content);
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Fallback for environments without the async clipboard API.
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand("copy");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+  copied.value = true;
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+  copyResetTimer = setTimeout(() => {
+    copied.value = false;
+    copyResetTimer = null;
+  }, 2000);
+}
+
+// Clear the pending copy-reset timer when the message bubble unmounts so the
+// callback never touches reactive state of a destroyed component.
+onBeforeUnmount(() => {
+  if (copyResetTimer) {
+    clearTimeout(copyResetTimer);
+    copyResetTimer = null;
+  }
+});
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -377,6 +739,10 @@ const messageTime = computed(() => {
 interface RenderableGeneratedImage {
   key: string;
   src: string;
+  /** Position in `metadata.generatedImages` — the opaque reference index. */
+  imageIndex: number;
+  /** Always `props.message.id` — the opaque reference message id. */
+  messageId: string;
   externalHref?: string;
   localPath?: string;
 }
@@ -389,6 +755,8 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         ? {
             key: `${src}-${index}`,
             src,
+            imageIndex: index,
+            messageId: props.message.id,
             ...(isExternalImageUrl(src) ? { externalHref: src } : {}),
             ...(image.local_path ? { localPath: image.local_path } : {}),
           }
@@ -396,6 +764,27 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
     })
     .filter((image): image is RenderableGeneratedImage => image !== null);
 });
+
+function emitUseGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("use-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitEditGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("edit-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitSaveGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("save-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
 
 interface RenderableAttachment {
   key: string;
@@ -537,6 +926,144 @@ const installSnapshot = computed<InstallSnapshot>(() => {
     ...(raw.errorCode ? { errorCode: String(raw.errorCode) } : {}),
   };
 });
+// ---------------------------------------------------------------------------
+// Preserved tool output (recoverable large tool results).
+//
+// The four states the design requires to stay DISTINCT are surfaced separately:
+// what the operation did, what we managed to preserve, whether the producer
+// itself truncated, and whether the preview is complete. A storage failure is
+// reported as an unavailable output while the tool status stays successful,
+// because "the command ran but its output was not saved" is a different fact
+// from "the command failed".
+// ---------------------------------------------------------------------------
+const viewerOpen = ref(false);
+
+interface PreservedOutputView {
+  readonly outputId: string;
+  readonly stateLabel: string;
+  readonly sizeLabel: string;
+  readonly preview: string;
+}
+
+const preservedOutput = computed<PreservedOutputView | null>(() => {
+  const meta = props.message.metadata;
+  if (!meta) return null;
+  const outputs = Array.isArray(meta.toolOutputRefs)
+    ? (meta.toolOutputRefs as Array<Record<string, unknown>>)
+    : [];
+  const preservation = String(meta.toolOutputPreservation ?? "");
+  const hasOutput = outputs.length > 0;
+  // Only surface the card when the result was actually externalized, or when
+  // preservation was attempted and failed (which is worth telling the user).
+  if (!hasOutput && preservation !== "unavailable" && preservation !== "partial") {
+    return null;
+  }
+
+  const first = outputs[0] ?? {};
+  const outputId = typeof first.outputId === "string" ? first.outputId : "";
+  const capturedBytes =
+    typeof first.capturedBytes === "number" ? first.capturedBytes : 0;
+  // Only report the PRODUCER's truncation when an actual descriptor says so.
+  // With no descriptor at all we know nothing about the producer, and claiming
+  // "the tool stopped early" there would invent a fact.
+  const sourceCompleteness =
+    typeof first.sourceCompleteness === "string"
+      ? first.sourceCompleteness
+      : "complete";
+
+  let stateLabel: string;
+  if (!hasOutput) {
+    stateLabel =
+      t("aiChatV2.toolOutput.unavailable") ||
+      "The full output could not be saved";
+  } else if (preservation === "partial") {
+    stateLabel =
+      t("aiChatV2.toolOutput.partial") || "Part of the output was saved";
+  } else {
+    stateLabel = t("aiChatV2.toolOutput.saved") || "Full output saved";
+  }
+  if (hasOutput && sourceCompleteness !== "complete") {
+    stateLabel +=
+      " · " +
+      (t("aiChatV2.toolOutput.source_incomplete") ||
+        "The tool itself stopped early, so this output may be missing content");
+  }
+
+  const sizeLabel = hasOutput
+    ? `${t("aiChatV2.toolOutput.size") || "Saved size"}: ${formatBytes(capturedBytes)}`
+    : "";
+
+  const preview =
+    typeof meta.toolOutputPreview === "string" ? meta.toolOutputPreview : "";
+
+  return { outputId, stateLabel, sizeLabel, preview };
+});
+
+/**
+ * Open the paged viewer, honouring the `ui` rollout flag.
+ *
+ * The flag is resolved by the MAIN process and reported on the descriptor, not
+ * read from the renderer: the renderer has no Token-store access and must not be
+ * the thing enforcing a rollout gate. When the flag is off the button does
+ * nothing rather than opening a viewer the operator disabled - and the old
+ * bounded content plus export are unaffected.
+ */
+async function onToggleViewer(): Promise<void> {
+  const target = preservedOutput.value;
+  if (!target?.outputId) return;
+  if (viewerOpen.value) {
+    viewerOpen.value = false;
+    return;
+  }
+  try {
+    const { getToolOutput } = await import("@/views/api/aiToolResult");
+    const descriptor = await getToolOutput(
+      String(props.message.conversationId),
+      target.outputId
+    );
+    // A missing descriptor means the output is gone or unauthorized; do not
+    // open an empty viewer.
+    if (!descriptor?.viewerEnabled) return;
+    viewerOpen.value = true;
+  } catch {
+    // Descriptor lookup failed: leave the viewer closed rather than showing an
+    // error state in a button that is only supposed to open a panel.
+  }
+}
+
+
+async function onExportPreserved(): Promise<void> {
+  const target = preservedOutput.value;
+  if (!target?.outputId) return;
+  const { exportToolOutput } = await import("@/views/api/aiToolResult");
+  try {
+    await exportToolOutput(String(props.message.conversationId), target.outputId);
+  } catch {
+    // Export failure is reported by the viewer's own error surface; the card
+    // itself must not claim the export succeeded.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Outbound-email batch summary (§18). When the draft_outbound_email_batch tool
+// succeeds, its returned batch_id surfaces a review card inline in the chat
+// result so the user can review/approve/send or see the direct-send outcome.
+// The derivation is shared with the chat-first workspace transcript.
+// ---------------------------------------------------------------------------
+const outboundBatch = computed<OutboundBatchCardModel | null>(() =>
+  deriveOutboundBatchCardModel(props.message)
+);
+
+const reviewOutboundBatchId = ref<number | null>(null);
+const reviewDialogOpen = ref<boolean>(true);
+
+// When the review dialog closes, clear the batch id so the card can be
+// re-opened (and so a stale dialog does not linger after the batch changes).
+watch(reviewDialogOpen, (open) => {
+  if (!open) {
+    reviewOutboundBatchId.value = null;
+  }
+});
 
 // Map attach_local_images result codes to localized messages. Codes are stable
 // English identifiers (PRD FR12); the UI shows the localized text.
@@ -593,6 +1120,76 @@ const executionPending = computed(
 const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
+
+/**
+ * Display content with pasted-text references expanded (§13.3 preview):
+ * inline blocks render directly; hashed blocks expand once their cached
+ * body loads. The raw placeholder ([Pasted text #N ...]) never shows when
+ * the body is available.
+ */
+const pastedBlocksFromMeta = computed<readonly ChatV2PastedBlockMetadata[]>(
+  () => {
+    if (props.message.role !== "user") return [];
+    const meta = props.message.metadata as
+      | { pastedBlocks?: ChatV2PastedBlockMetadata[] }
+      | undefined;
+    return meta?.pastedBlocks ?? [];
+  }
+);
+const readyPasteByHash = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {};
+  for (const [hash, state] of Object.entries(pastePreviewByHash.value)) {
+    if (state.status === "ready") {
+      out[hash] = state.content;
+    }
+  }
+  return out;
+});
+const displayContent = computed((): string => {
+  const raw = props.message.content ?? "";
+  if (props.message.role !== "user") return raw;
+  return expandPastedTextForDisplay(
+    raw,
+    buildPastedContentsFromBlocks(
+      pastedBlocksFromMeta.value,
+      readyPasteByHash.value
+    )
+  );
+});
+
+// Prefetch hashed paste bodies on mount so the bubble expands without a
+// details toggle (the toggle path still refreshes on demand).
+onMounted(() => {
+  for (const chip of pastedChips.value) {
+    if (!chip.contentHash || chip.inlineContent) continue;
+    void onPasteDetailsToggle(chip, true);
+  }
+});
+/**
+ * Direction marker segments (FR-29/30): the persisted assistant row carries
+ * metadata.directionTransitions[].contentOffset — split the visible content
+ * there and insert a localized marker. Presentation-only: the marker text
+ * never enters model context.
+ */
+const directionSegments = computed<string[]>(() => {
+  const content = props.message.content ?? "";
+  const transitions = props.message.metadata?.directionTransitions;
+  if (!transitions || transitions.length === 0) return [content];
+  const offsets = [...transitions]
+    .map((transition) => transition.contentOffset)
+    .filter((offset) => offset > 0 && offset < content.length)
+    .sort((a, b) => a - b);
+  if (offsets.length === 0) return [content];
+  const segments: string[] = [];
+  let previous = 0;
+  for (const offset of offsets) {
+    segments.push(content.slice(previous, offset));
+    previous = offset;
+  }
+  segments.push(content.slice(previous));
+  return segments;
+});
+
 const hasReasoning = computed(
   () =>
     props.message.role === "assistant" &&
@@ -689,6 +1286,222 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// Batch progress card for process_artifact_batch results. Renders aggregate
+// counters plus an expandable per-item failure list. Trust boundary: only
+// counters, statuses, error strings and safe identity labels are read —
+// outputImages/base64 bytes and absolute paths are never surfaced.
+const BATCH_TOOL_NAME = "process_artifact_batch";
+const GENERATED_IMAGE_ERROR_KEY_PREFIX = "generated_image_";
+const BATCH_RESULT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+]);
+
+interface BatchFailureRowView {
+  readonly label: string;
+  readonly errorText: string;
+}
+
+interface BatchProgressView {
+  readonly status: string;
+  readonly requestedCount: number;
+  readonly completedCount: number;
+  readonly concurrency: number;
+  readonly failures: readonly BatchFailureRowView[];
+  /** Safe instruction echo (≤500 chars) for the Retry-failed action. */
+  readonly instruction: string;
+  /** Failed/cancelled generated-image references, in input order. */
+  readonly retryableReferences: readonly ChatV2GeneratedImageReference[];
+}
+
+function asNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** Workspace-file items are identified by file name only — never the path. */
+function pathBaseName(path: string): string {
+  const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
+  const last = segments[segments.length - 1];
+  return last && last.length > 0 ? last : path;
+}
+
+/**
+ * Safe item label: workspace files show their base name; generated-image
+ * references are opaque, so they fall back to the order position "#N".
+ */
+function batchItemLabel(input: unknown, orderPosition: number): string {
+  if (input && typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    if (
+      record.kind === "workspace_file" &&
+      typeof record.path === "string" &&
+      record.path.length > 0
+    ) {
+      return pathBaseName(record.path);
+    }
+  }
+  return `#${orderPosition}`;
+}
+
+function translatedBatchError(errorCode: string): string {
+  if (!errorCode.startsWith(GENERATED_IMAGE_ERROR_KEY_PREFIX)) return "";
+  const key = `aiChatV2.generatedImageRefs.errors.${errorCode}`;
+  return te(key) ? t(key) : "";
+}
+
+const batchProgressView = computed<BatchProgressView | null>(() => {
+  if (String(props.message.metadata?.toolName || "") !== BATCH_TOOL_NAME) {
+    return null;
+  }
+  const result = toolResult.value;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return null;
+  }
+  const record = result as Record<string, unknown>;
+  const status =
+    typeof record.status === "string" && BATCH_RESULT_STATUSES.has(record.status)
+      ? record.status
+      : null;
+  const requestedCount = asNonNegativeInteger(record.requestedCount);
+  const completedCount = asNonNegativeInteger(record.completedCount);
+  const concurrency = asNonNegativeInteger(record.concurrency);
+  if (
+    status === null ||
+    requestedCount === null ||
+    completedCount === null ||
+    concurrency === null
+  ) {
+    return null;
+  }
+  const items: readonly unknown[] = Array.isArray(record.items)
+    ? record.items
+    : [];
+  const failures: BatchFailureRowView[] = [];
+  const retryableReferences: ChatV2GeneratedImageReference[] = [];
+  items.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const itemRecord = item as Record<string, unknown>;
+    if (
+      itemRecord.status !== "failed" &&
+      itemRecord.status !== "cancelled"
+    ) {
+      return;
+    }
+    // Retry-failed only applies to generated-image inputs: opaque references
+    // can be resubmitted via the trusted batch channel, while workspace files
+    // keep their model-driven flow.
+    const retryReference = retryableReferenceFromInput(itemRecord.input);
+    if (retryReference) {
+      retryableReferences.push(retryReference);
+    }
+    const errorCode =
+      typeof itemRecord.errorCode === "string" ? itemRecord.errorCode : "";
+    let errorText = translatedBatchError(errorCode);
+    if (
+      !errorText &&
+      typeof itemRecord.error === "string" &&
+      itemRecord.error.trim().length > 0
+    ) {
+      errorText = itemRecord.error.trim();
+    }
+    if (!errorText) {
+      errorText = t(
+        `aiChatV2.generatedImageRefs.errors.${
+          itemRecord.status === "cancelled"
+            ? "generated_image_batch_cancelled"
+            : "generated_image_batch_partial"
+        }`
+      );
+    }
+    failures.push({
+      label: batchItemLabel(itemRecord.input, index + 1),
+      errorText,
+    });
+  });
+  const instruction =
+    typeof record.instruction === "string" ? record.instruction.trim() : "";
+  return {
+    status,
+    requestedCount,
+    completedCount,
+    concurrency,
+    failures,
+    instruction,
+    retryableReferences,
+  };
+});
+
+/** Extract a valid opaque reference from a failed item input, or null. */
+function retryableReferenceFromInput(
+  input: unknown
+): ChatV2GeneratedImageReference | null {
+  if (!input || typeof input !== "object") return null;
+  const inputRecord = input as Record<string, unknown>;
+  if (inputRecord.kind !== "generated_image") return null;
+  const reference = inputRecord.reference;
+  if (!reference || typeof reference !== "object") return null;
+  const refRecord = reference as Record<string, unknown>;
+  if (
+    typeof refRecord.messageId !== "string" ||
+    refRecord.messageId.length === 0
+  ) {
+    return null;
+  }
+  if (
+    typeof refRecord.imageIndex !== "number" ||
+    !Number.isInteger(refRecord.imageIndex) ||
+    refRecord.imageIndex < 0
+  ) {
+    return null;
+  }
+  return { messageId: refRecord.messageId, imageIndex: refRecord.imageIndex };
+}
+
+/** True for the batch tool_call card (async execution in flight, carries
+ *  live toolProgress) OR a pending batch tool_result. */
+const isBatchToolCard = computed(
+  () =>
+    (props.message.messageType === MessageType.TOOL_CALL ||
+      props.message.messageType === MessageType.TOOL_RESULT) &&
+    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
+);
+
+/** Stop renders while the batch tool is still executing: either a tool_call
+ *  card with live progress (the async-job phase), or a tool_result card that
+ *  is still pending. NOTE: the card-level `disabled` prop mirrors isStreaming
+ *  — exactly the state in which Stop must stay clickable — so it is
+ *  deliberately NOT part of this condition. */
+const batchStopAvailable = computed(
+  () =>
+    isBatchToolCard.value &&
+    (executionPending.value || toolProgress.value !== null)
+);
+
+/** Retry renders only on a settled batch with retryable generated refs and a
+ * usable instruction echo; successful items are never included. */
+const batchRetryAvailable = computed(() => {
+  const view = batchProgressView.value;
+  return (
+    view !== null &&
+    !executionPending.value &&
+    view.retryableReferences.length > 0 &&
+    view.instruction.length > 0
+  );
+});
+
+function emitRetryGeneratedImageBatch(): void {
+  const view = batchProgressView.value;
+  if (!view || view.retryableReferences.length === 0) return;
+  emit("retry-generated-image-batch", {
+    references: [...view.retryableReferences],
+    instruction: view.instruction,
+  });
 }
 
 interface MentionChip {
@@ -892,6 +1705,11 @@ const pastedChips = computed<PastedChip[]>(() => {
   background: rgba(0, 0, 0, 0.04);
   word-break: break-word;
 }
+.v2-message__report {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+}
 .v2-message--user .v2-message__bubble {
   background: rgba(25, 118, 210, 0.12);
 }
@@ -970,6 +1788,40 @@ const pastedChips = computed<PastedChip[]>(() => {
   max-height: 360px;
   object-fit: contain;
 }
+.v2-message__generated-image {
+  position: relative;
+}
+.v2-message__generated-image-index {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.v2-message__image-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.v2-message__use-reference-btn,
+.v2-message__edit-image-btn {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
 /* User-sent attachment previews. Images use a smaller max-height than
    AI-generated images so multi-attachment user bubbles stay compact. */
 .v2-message__attachments {
@@ -1038,6 +1890,48 @@ const pastedChips = computed<PastedChip[]>(() => {
   margin: 0;
   white-space: pre-wrap;
   font-size: 12px;
+}
+.v2-message__batch-progress {
+  margin-top: 6px;
+}
+.v2-message__batch-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.v2-message__batch-status {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-family: monospace;
+  font-size: 11px;
+}
+.v2-message__batch-failures {
+  margin-top: 4px;
+}
+.v2-message__batch-failures summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.v2-message__batch-failure-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 12px;
+}
+.v2-message__batch-item-label {
+  font-family: monospace;
+  white-space: nowrap;
+}
+.v2-message__batch-error {
+  color: rgb(var(--v-theme-error));
 }
 .v2-message__mentions {
   display: flex;

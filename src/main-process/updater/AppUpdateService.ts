@@ -139,7 +139,13 @@ export function initializeAppUpdates(
       },
       updateInterval: options.updateInterval ?? DEFAULT_UPDATE_INTERVAL,
       logger: createUpdateLogger(),
-      notifyUser: true,
+      // Application-exit design §12: the APP owns the restart prompt and the
+      // restart itself. The library's built-in dialog would restart outside
+      // the coordinated lifecycle exit; with it disabled, discovery and
+      // background download still run here, while ManualUpdateService (same
+      // electron-updater singleton) surfaces ready-to-restart and its
+      // quitAndInstall() routes through the bounded cleanup before install.
+      notifyUser: false,
     });
 
     updateStopper = updater.stopUpdates;

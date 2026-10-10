@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto px-6" rounded>
+  <AppPageShell
+    page-id="search-form"
+    title-key="route.search_scraper"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto px-6" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea
@@ -17,6 +22,12 @@
       >
         {{ t('search.generate_related_keywords') }}
       </v-btn>
+      <AIContentReportButton
+        v-if="lastGeneratedKeywords && lastGeneratedKeywords.length > 0"
+        :descriptor="keywordReportDescriptor"
+        :reported="keywordReported"
+        @report="keywordReportDialog = true"
+      />
       <v-select
 v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
@@ -128,8 +139,17 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
+<!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { useRoute, useRouter } from "vue-router";
 import AccountSelectedTable from "@/views/pages/socialaccount/widgets/AccountSelectedTable.vue";
 
@@ -138,7 +158,7 @@ type SearchOption = {
   name: string;
   index: number;
 };
-import { ref, onMounted, watch } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
@@ -153,6 +173,10 @@ import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.v
 import { ProxyEntity, ProxyListEntity } from "@/entityTypes/proxyType";
 import { LocalBrowerList } from "@/config/searchSetting"
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildKeywordSetDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 const { t } = useI18n({ inheritLocale: true });
 const route = useRoute();
@@ -189,6 +213,17 @@ const proxytableshow = ref(false);
 const accounts = ref<Array<SocialAccountListData>>([])
 const generatingKeywords = ref(false);
 const enableAIRecovery = ref(false);
+
+// AI Content Report state (PRD §8.2 keyword generation). Captures the last
+// AI-generated set so the report action appears only after generation.
+const lastGeneratedKeywords = ref<string[]>([]);
+const keywordReportDialog = ref(false);
+const keywordReported = ref(false);
+const keywordReportDescriptor = computed(() =>
+  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
+    generatedAt: new Date().toISOString(),
+  })
+);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr: string[] = ToArray(SearhEnginer);
@@ -652,6 +687,8 @@ async function onGenerateKeywords() {
     const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
 
     if (generatedKeywords && generatedKeywords.length > 0) {
+      lastGeneratedKeywords.value = generatedKeywords;
+      keywordReported.value = false;
       // Combine original keywords with generated ones, remove duplicates
       const allKeywords = [...currentKeywords, ...generatedKeywords];
       const uniqueKeywords = Array.from(new Set(allKeywords));

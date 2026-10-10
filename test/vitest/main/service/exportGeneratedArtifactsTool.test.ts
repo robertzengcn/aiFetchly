@@ -28,6 +28,11 @@ describe("ExportGeneratedArtifactsService", () => {
   let tempRoot: string;
   let userDataPath: string;
   let workspacePath: string;
+  // FilePathGuard canonicalizes workspace roots (realpathSync), so exported
+  // destinations come back canonical. On macOS, os.tmpdir() returns the
+  // lexical /var/... while its realpath is /private/var/... — assert against
+  // the canonical workspace root, not the lexical one.
+  let canonicalWorkspacePath: string;
 
   beforeEach(async (): Promise<void> => {
     tempRoot = await fs.mkdtemp(
@@ -36,6 +41,7 @@ describe("ExportGeneratedArtifactsService", () => {
     userDataPath = path.join(tempRoot, "user-data");
     workspacePath = path.join(tempRoot, "workspace");
     await fs.mkdir(workspacePath, { recursive: true });
+    canonicalWorkspacePath = await fs.realpath(workspacePath);
   });
 
   afterEach(async (): Promise<void> => {
@@ -102,7 +108,7 @@ describe("ExportGeneratedArtifactsService", () => {
     const result = response.result as ExportGeneratedArtifactsResult;
     expect(result.status).toBe("completed");
     expect(result.items[0].destination).toBe(
-      path.join(workspacePath, "outputs", "white-bg.png")
+      path.join(canonicalWorkspacePath, "outputs", "white-bg.png")
     );
     const exportedPath = result.items[0].destination;
     expect(typeof exportedPath).toBe("string");
@@ -112,7 +118,7 @@ describe("ExportGeneratedArtifactsService", () => {
     expect(exportDeps.trackFileOperation).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "create",
-        filePath: path.join(workspacePath, "outputs", "white-bg.png"),
+        filePath: path.join(canonicalWorkspacePath, "outputs", "white-bg.png"),
         conversationId: "conversation-1",
         skillName: "export_generated_artifacts",
         toolCallId: "call-1:0",
@@ -136,7 +142,7 @@ describe("ExportGeneratedArtifactsService", () => {
     const result = response.result as ExportGeneratedArtifactsResult;
     expect(result.items[0].renamed).toBe(true);
     expect(result.items[0].destination).toBe(
-      path.join(workspacePath, "image-1.png")
+      path.join(canonicalWorkspacePath, "image-1.png")
     );
     expect(
       await fs.readFile(path.join(workspacePath, "image.png"), "utf8")

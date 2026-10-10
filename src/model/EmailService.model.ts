@@ -12,16 +12,41 @@ export class EmailServiceModel extends BaseDb {
       this.sqliteDb.connection.getRepository(EmailServiceEntity);
   }
 
+  protected override onSqliteDbRebound(): void {
+    this.repository = this.sqliteDb.connection.getRepository(EmailServiceEntity);
+  }
+
   async create(entity: EmailServiceEntity): Promise<number> {
     const savedEntity = await this.repository.save(entity);
     return savedEntity.id;
   }
 
   async read(id: number): Promise<EmailServiceEntity | undefined> {
-    const entity = await this.repository.findOne({ where: { id } });
-    if (!entity) return undefined;
+    const entity = await this.repository
+      .createQueryBuilder("service")
+      .where("service.id = :id", { id })
+      .getOne();
+    return entity ?? undefined;
+  }
 
-    return entity;
+  /**
+   * Read the complete effective identity for a service (§22.2). Returns null
+   * when the service does not exist. Does not decrypt passwords.
+   */
+  async readIdentity(id: number): Promise<{
+    smtpUsername: string | null;
+    from: string;
+    replyTo: string | null;
+    receiveUsername: string | null;
+  } | null> {
+    const entity = await this.read(id);
+    if (!entity) return null;
+    return {
+      smtpUsername: entity.smtpUsername ?? null,
+      from: entity.from,
+      replyTo: entity.replyTo ?? null,
+      receiveUsername: entity.receiveUsername ?? null,
+    };
   }
 
   async update(id: number, service: EmailServiceEntity): Promise<void> {
@@ -50,13 +75,27 @@ export class EmailServiceModel extends BaseDb {
     page: number,
     size: number,
     search?: string,
+    tagId?: number,
+    untagged?: boolean,
     sort?: SortBy
   ): Promise<EmailServiceEntity[]> {
     let queryBuilder = this.repository.createQueryBuilder("service");
     if (search) {
-      queryBuilder = queryBuilder.where("service.name LIKE :search", {
+      queryBuilder = queryBuilder.where("(service.name LIKE :search OR service.from LIKE :search)", {
         search: `%${search}%`,
       });
+    }
+    if (tagId !== undefined) {
+      // EXISTS subquery avoids row duplication when a service has many tags.
+      queryBuilder = queryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      );
+    }
+    if (untagged === true) {
+      queryBuilder = queryBuilder.andWhere(
+        `NOT EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id)`
+      );
     }
     if (sort?.key && sort?.order) {
       const lowsersortkey = sort.key.toLowerCase();
@@ -85,8 +124,23 @@ export class EmailServiceModel extends BaseDb {
     return entities;
   }
 
-  async countEmailServices(): Promise<number> {
-    return await this.repository.count();
+  async countEmailServices(tagId?: number, untagged?: boolean, search?: string): Promise<number> {
+    const queryBuilder = this.repository.createQueryBuilder("service");
+    if (search) {
+      queryBuilder.andWhere("(service.name LIKE :search OR service.from LIKE :search)", { search: `%${search}%` });
+    }
+    if (tagId !== undefined) {
+      queryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      );
+    }
+    if (untagged === true) {
+      queryBuilder.andWhere(
+        `NOT EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id)`
+      );
+    }
+    return await queryBuilder.getCount();
   }
 
   async findByName(name: string): Promise<EmailServiceEntity | undefined> {
@@ -94,6 +148,19 @@ export class EmailServiceModel extends BaseDb {
     if (!entity) return undefined;
 
     return entity;
+  }
+
+  async findAllByTagId(tagId: number): Promise<EmailServiceEntity[]> {
+    // Services having this tag via the junction table. Use a subquery on the
+    // junction so each service appears once even if it has many tags.
+    return await this.repository
+      .createQueryBuilder("service")
+      .where(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      )
+      .orderBy("service.id", "DESC")
+      .getMany();
   }
 
   async findByHost(host: string): Promise<EmailServiceEntity[]> {

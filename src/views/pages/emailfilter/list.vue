@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-filter-list"
+      title-key="route.email_filter"
+      content-width="full"
+    >
        
 <EmailFilterTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import { ref } from 'vue';
 import EmailFilterTable from '@/views/pages/emailfilter/widgets/EmailFilterTable.vue'

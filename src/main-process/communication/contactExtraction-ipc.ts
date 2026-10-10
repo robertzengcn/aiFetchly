@@ -27,6 +27,13 @@ import {
   type ContactExtractionWorkerOutbound,
 } from "@/schemas/worker/contactExtraction";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
+import { isSpawnAllowed } from "@/main-process/lifecycle/spawnGate";
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  reconcileInterruptedWork,
+  shutdownContactWorker,
+} from "./contactExtractionShutdown";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 
@@ -137,19 +144,26 @@ function spawnWorker(): ChildProcess {
   // the packaged app.asar/node_modules. Electron API surface is unavailable, so
   // the worker receives auth/AI state via env vars (WORKER_AUTH_TOKEN,
   // WORKER_AI_ENABLED) and communicates over the ipc stdio channel.
-  const worker = spawn(process.execPath, [workerPath], {
-    stdio: ["pipe", "pipe", "pipe", "ipc"],
-    env: buildPackagedWorkerEnv({
-      runAsNode: true,
-      extraEnv: {
-        ELECTRON_APP_NAME: app.getName(),
-        ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-        WORKER_TYPE: "contact-extraction",
-        WORKER_AUTH_TOKEN: workerAuthToken,
-        WORKER_AI_ENABLED: workerAiEnabled,
-      },
-    }),
-  });
+  // AC-05: the LAZY spawn path gates too — IPC can start an extraction after
+  // Exit begins unless refused here. spawnOwned = gate + launch + register
+  // (registry attaches its own exit listener — observation is automatic).
+  const worker = spawnOwned(
+    "contact-extraction",
+    () =>
+      spawn(process.execPath, [workerPath], {
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        env: buildPackagedWorkerEnv({
+          runAsNode: true,
+          extraEnv: {
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+            WORKER_TYPE: "contact-extraction",
+            WORKER_AUTH_TOKEN: workerAuthToken,
+            WORKER_AI_ENABLED: workerAiEnabled,
+          },
+        }),
+      }) as ChildProcess
+  );
 
   // Handle worker output
   worker.stdout?.on("data", (data) => {
@@ -163,6 +177,14 @@ function spawnWorker(): ChildProcess {
   // Handle worker crashes — WS-4 R4.2: bounded restart with exponential backoff + circuit-breaker
   worker.on("exit", (code, signal) => {
     log.info(`Worker exited with code ${code}, signal ${signal}`);
+    // No restarts once a shutdown is in progress (spawn gate, AC-05).
+    if (!isSpawnAllowed("contact-extraction")) {
+      log.info(
+        "[contact-extraction] shutdown in progress; worker will not be restarted"
+      );
+      contactExtractionWorker = null;
+      return;
+    }
     if (code !== 0 && code !== null && contactExtractionWorker) {
       if (shouldRestart()) {
         const delay = getRestartDelay();
@@ -213,6 +235,13 @@ function spawnWorker(): ChildProcess {
 
     const message = parsed.data;
     switch (message.type) {
+      case "shutdown-ack":
+        // Design §7: acknowledgement of our shutdown-request. The parent
+        // still waits for OBSERVED process exit — an ack is not exit proof.
+        log.info(
+          `Contact extraction worker acknowledged shutdown (requestId=${message.requestId})`
+        );
+        break;
       case "worker-ready":
         log.info("Contact extraction worker is ready");
         resetRestartCounter(); // WS-4 R4.2: healthy start clears the restart counter
@@ -492,6 +521,28 @@ function realFailDeps(): FailDeps {
 }
 
 /**
+ * Shutdown-time task reconciliation (PRD FR-06 / AC-09): map every in-flight
+ * extraction row to its existing failed state with an interruption reason so
+ * interrupted work is never silently marked complete or blindly retried —
+ * retry stays a user-initiated action. Called by the lifecycle participant
+ * BEFORE the worker is asked to stop (results that complete before the
+ * worker exits are already terminal and untouched).
+ */
+export async function reconcileInterruptedExtractions(
+  reason: string
+): Promise<number[]> {
+  return reconcileInterruptedWork(
+    realFailDeps(),
+    reason,
+    (message, err) =>
+      log.error(
+        message,
+        err instanceof Error ? err.message : String(err)
+      )
+  );
+}
+
+/**
  * Register IPC handlers for contact extraction
  */
 export function registerContactExtractionHandlers(): void {
@@ -691,12 +742,34 @@ export function registerContactExtractionHandlers(): void {
 }
 
 /**
- * Cleanup function to close worker process
+ * Cleanup function to close worker process.
+ *
+ * @param observeMs when > 0, wait up to this long for OBSERVED exit (a sent
+ *   signal is not exit proof — application-exit design §2/§6). Resolves
+ *   false if the worker is still alive when the budget expires; the
+ *   shutdown force-phase then handles it via the owned-process registry.
  */
-export function cleanupContactExtractionWorker(): void {
-  if (contactExtractionWorker) {
+export async function cleanupContactExtractionWorker(
+  observeMs = 0
+): Promise<boolean> {
+  const worker = contactExtractionWorker;
+  if (worker) {
     log.info("Closing contact extraction worker...");
-    contactExtractionWorker.kill();
     contactExtractionWorker = null;
+    const registry = getOwnedProcessRegistry();
+    const record = registry
+      .listByOwner("contact-extraction")
+      .find((r) => r.pid === worker.pid);
+    return shutdownContactWorker(worker, record, observeMs, {
+      registry,
+      newRequestId: uuidv4,
+      warn: (message, err) =>
+        log.warn(
+          message,
+          err instanceof Error ? err.message : String(err)
+        ),
+      info: (m) => log.info(m),
+    });
   }
+  return true;
 }

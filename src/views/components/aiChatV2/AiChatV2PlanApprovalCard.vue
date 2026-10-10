@@ -70,6 +70,18 @@
         <v-icon start size="small">mdi-check-circle</v-icon>
         {{ t("aiChatV2Plan.approved") || "Approved" }}
       </v-chip>
+      <v-spacer />
+      <AIContentReportButton
+        :descriptor="reportDescriptor"
+        :reported="reportSubmitted"
+        @report="reportDialogOpen = true"
+      />
+      <AIContentReportDialog
+        v-model="reportDialogOpen"
+        :descriptor="reportDescriptor"
+        :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+        @submitted="reportSubmitted = true"
+      />
     </v-card-actions>
 
     <v-card-text v-if="showFeedback" class="v2-plan-card__feedback">
@@ -105,11 +117,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildPlanDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
-defineProps<{
+const props = defineProps<{
   planState: AIChatPlanStateView;
   disabled?: boolean;
 }>();
@@ -123,6 +139,13 @@ const { t } = useI18n();
 const showFeedback = ref(false);
 const feedbackMode = ref<"reject" | "changes">("reject");
 const feedbackText = ref("");
+const reportDialogOpen = ref(false);
+const reportSubmitted = ref(false);
+const reportDescriptor = computed(() =>
+  buildPlanDescriptor(props.planState, {
+    conversationId: props.planState.conversationId,
+  })
+);
 
 const startFeedback = (mode: "reject" | "changes"): void => {
   feedbackMode.value = mode;

@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 /**
  * Local embedding worker.
@@ -57,6 +58,13 @@ interface WorkerParentPort {
 
 const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
   .parentPort;
+// §7 graceful shutdown (design §7): ack, close, exit within the
+// parent's remaining budget. The parent still observes exit and
+// force-verifies — the ack is never treated as exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 // Pipeline is cached after first successful load. Keyed by underlying model so
 // re-initializing with the same model is a no-op.
@@ -278,7 +286,18 @@ async function dispatch(raw: unknown): Promise<void> {
 }
 
 if (parentPort) {
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return; // non-JSON is not a shutdown request
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(event.data);

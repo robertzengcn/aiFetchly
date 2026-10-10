@@ -3,8 +3,17 @@ import { AiChatApi } from "@/api/aiChatApi";
 import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
 // Import the modules to be mocked
-import { HttpClient as _HttpClient } from "@/modules/lib/httpclient";
 import { Token } from "@/modules/token";
+
+/**
+ * Test-only typed view of AiChatApi private helpers. Casting through
+ * `unknown` keeps the private-method access explicit without `any`.
+ */
+interface AiChatApiInternals {
+  sanitizeErrorInfo(input: string): string;
+  validateScreenshot(input: string): void;
+  validatePageSize(input: string): void;
+}
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
 const mockPostJsonShared = vi.fn();
@@ -585,7 +594,9 @@ describe("AiChatApi - Error Sanitization", () => {
     it.each(sanitizeErrorTests)(
       "$name",
       ({ input, shouldNotContain, shouldContain, maxLength }) => {
-        const sanitized = (api as any).sanitizeErrorInfo(input);
+        const sanitized = (
+          api as unknown as AiChatApiInternals
+        ).sanitizeErrorInfo(input);
 
         if (shouldNotContain) {
           shouldNotContain.forEach((str: string) => {
@@ -607,12 +618,16 @@ describe("AiChatApi - Error Sanitization", () => {
   });
 
   it("should handle empty error info", () => {
-    const sanitized = (api as any).sanitizeErrorInfo("");
+    const sanitized = (api as unknown as AiChatApiInternals).sanitizeErrorInfo(
+      ""
+    );
     expect(sanitized).toBe("");
   });
 
   it("should handle error info with only whitespace", () => {
-    const sanitized = (api as any).sanitizeErrorInfo("   \n\t   ");
+    const sanitized = (api as unknown as AiChatApiInternals).sanitizeErrorInfo(
+      "   \n\t   "
+    );
     expect(sanitized).toBe("");
   });
 });
@@ -628,37 +643,49 @@ describe("AiChatApi - Screenshot Validation", () => {
   describe("validateScreenshot", () => {
     it("should accept valid PNG data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/png;base64,iVBORw0KGgo"
+        );
       }).not.toThrow();
     });
 
     it("should accept valid JPEG data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/jpeg;base64,/9j/4AAQ"
+        );
       }).not.toThrow();
     });
 
     it("should accept valid WebP data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/webp;base64,UklGR");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/webp;base64,UklGR"
+        );
       }).not.toThrow();
     });
 
     it("should reject text data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:text/plain;base64,invalid");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:text/plain;base64,invalid"
+        );
       }).toThrow("Invalid screenshot format");
     });
 
     it("should reject malformed data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/png;");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/png;"
+        );
       }).toThrow("Invalid screenshot format");
     });
 
     it("should accept raw base64 string (for wrapping)", () => {
       expect(() => {
-        (api as any).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "iVBORw0KGgoAAAANSUhEUg"
+        );
       }).not.toThrow();
     });
   });
@@ -678,31 +705,31 @@ describe("AiChatApi - Page Size Validation", () => {
     it("should accept page content within limit", () => {
       const content = "x".repeat(49 * 1024); // 49KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should reject page content exceeding limit", () => {
       const content = "x".repeat(51 * 1024); // 51KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow("Page content too large");
     });
 
     it("should accept page content exactly at limit", () => {
       const content = "x".repeat(50 * 1024); // Exactly 50KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should include size information in error", () => {
       const content = "x".repeat(60 * 1024); // 60KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow(/61440/);
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow(/51200/);
     });
   });
@@ -941,6 +968,10 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
           owned_by: "legacy-ai-server",
         },
       ],
+      // The legacy endpoint's default_model recommendation is preserved so
+      // the renderer model selector can still seed itself (small-model
+      // contract tests cover small_model the same way).
+      default_model: "gpt-4o-mini",
     });
   });
 
@@ -1398,6 +1429,167 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       "AI server error code=500: database connection is not open"
     );
   });
+
+  it("surfaces a bare OpenAI-standard {error:{...}} envelope delivered as non-SSE JSON", async () => {
+    // OpenAI's canonical error shape is {"error":{"message","type","param","code"}}.
+    // When the AI server (or an upstream proxy) emits this bare envelope with no
+    // top-level status/code/msg, the SSE consumer must still recognize it as an
+    // error and throw the server's message — not emit zero chunks and let the
+    // accumulator mislabel it as a generic "transient" empty-response failure.
+    const encoder = new TextEncoder();
+    const body = JSON.stringify({
+      error: {
+        message: "Model returned an empty response after tool calls",
+        type: "upstream_error",
+        param: null,
+        code: "empty_stop_after_tools",
+      },
+    });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    await expect(
+      api.openAIChatCompletionStream(
+        {
+          model: "gpt-test",
+          messages: [{ role: "user", content: "Hi" }],
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow(
+      /empty_stop_after_tools|empty response after tool calls/i
+    );
+  });
+
+  it("surfaces a bare {error:{...}} chunk sent inline on the SSE stream with no event header", async () => {
+    // Regression for the exact failure the user saw:
+    //   [ai-chat-v2] openai-stream ignored unrecognized payload:
+    //     event=message keys=[error] choiceKeys=[] deltaKeys=[] contentLen=0
+    // Gemini returns empty STOP after a long tool-calling loop; the server emits
+    // a bare {"error":{...}} payload on the 200 SSE stream with no "event:"
+    // header. Without recognizing the error key the consumer emits zero chunks
+    // (emittedPayloadCount=0), the accumulator reports finishReason=undefined +
+    // fullContent="", and AIChatQueryLoop mislabels it as a transient issue.
+    const encoder = new TextEncoder();
+    const body = [
+      `data: ${JSON.stringify({
+        error: {
+          message: "Gemini produced no content before STOP after tool calls",
+          type: "upstream_error",
+          code: "empty_stop_after_tools",
+        },
+      })}`,
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    await expect(
+      api.openAIChatCompletionStream(
+        {
+          model: "gpt-test",
+          messages: [{ role: "user", content: "Hi" }],
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow(
+      /empty_stop_after_tools|no content before STOP after tool calls/i
+    );
+  });
+
+  it("forwards reasoning onto the hosted stream payload when enabled", async () => {
+    const encoder = new TextEncoder();
+    mockPostStreamShared.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }
+      )
+    );
+
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+        reasoning: { enabled: true, summary: "auto" },
+      },
+      () => undefined
+    );
+
+    expect(mockPostStreamShared).toHaveBeenCalledWith(
+      "/api/ai/v1/chat/completions",
+      expect.objectContaining({
+        stream: true,
+        reasoning: { enabled: true, summary: "auto" },
+      }),
+      {}
+    );
+  });
+
+  it("omits reasoning from the hosted stream payload when disabled", async () => {
+    const encoder = new TextEncoder();
+    mockPostStreamShared.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }
+      )
+    );
+
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+        reasoning: { enabled: false },
+      },
+      () => undefined
+    );
+
+    const payload = mockPostStreamShared.mock.calls[0]?.[1] as
+      | { reasoning?: unknown }
+      | undefined;
+    expect(payload?.reasoning).toBeUndefined();
+  });
 });
 
 describe("AiChatApi - Recovery-driven streaming retry", () => {
@@ -1550,6 +1742,41 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
       await p;
 
       expect(layers).toEqual(["overload_retry"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries when postStream throws an HTTP 520 envelope then succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostStreamShared
+        .mockRejectedValueOnce(new Error("HTTP 520: <none>"))
+        .mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const recoveries: Array<{ reason: string }> = [];
+      const chunks: string[] = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        (chunk) => {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) chunks.push(content);
+        },
+        {
+          retryProfile: "foreground",
+          onRecoveryStatus: (info) => recoveries.push({ reason: info.reason }),
+        }
+      );
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(chunks.join("")).toBe("ok");
+      expect(recoveries).toEqual([{ reason: "server_error" }]);
     } finally {
       vi.useRealTimers();
     }

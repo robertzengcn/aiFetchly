@@ -4,6 +4,8 @@ import {
   countryEvidenceSourceSchema,
   CONTACT_VERIFICATION_TOOL_PARAMETERS,
   CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
+  EXTRACT_CONTACT_VERIFY_NEXT_STEP,
 } from "@/schemas/contactVerification";
 
 describe("contactVerificationInputSchema", () => {
@@ -162,5 +164,17 @@ describe("shared tool constants", () => {
     expect(CONTACT_VERIFICATION_TOOL_DESCRIPTION.toLowerCase()).toContain(
       "ambiguous"
     );
+    expect(CONTACT_VERIFICATION_TOOL_DESCRIPTION).toContain("Standard preview");
+  });
+
+  it("requires extract_contact_info to call verify_contact_info before presenting", () => {
+    expect(EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION).toContain(
+      "MUST call verify_contact_info"
+    );
+    expect(EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION).not.toContain(
+      "Do not call verify_contact_info again"
+    );
+    expect(EXTRACT_CONTACT_VERIFY_NEXT_STEP).toContain("REQUIRED NEXT STEP");
+    expect(EXTRACT_CONTACT_VERIFY_NEXT_STEP).toContain("verify_contact_info");
   });
 });
