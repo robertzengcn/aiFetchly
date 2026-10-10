@@ -18,9 +18,13 @@ describe("nextActionForCode — existing policy codes (FR-033)", () => {
     );
   });
 
-  it("routes already_replied (no existing draft) to no_action", () => {
+  it("routes already_replied (no existing draft) to await_human_review", () => {
+    // already_replied with no reusable draft id: the message is confirmed
+    // replied but no draft was surfaced for reuse. Route to human review so
+    // the operator can locate the existing reply rather than silently
+    // telling the model to do nothing (no_action would hide a real state).
     expect(nextActionForCode("already_replied", undefined)).toBe<EmailReplyNextAction>(
-      "no_action"
+      "await_human_review"
     );
   });
 

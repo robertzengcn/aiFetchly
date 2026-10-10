@@ -29,6 +29,7 @@ export function nextActionForCode(
     return "approve_existing_draft";
   }
   if (
+    code === "already_replied" ||
     code === "needs_human_review" ||
     code === "delivery_unknown" ||
     code === "reply_state_unknown" ||
@@ -40,6 +41,11 @@ export function nextActionForCode(
     code === "ambiguous_match" ||
     code === "identity_conflict"
   ) {
+    // already_replied WITHOUT an existingDraftId: the message is confirmed
+    // replied but no reusable draft id was surfaced. Route to human review so
+    // the operator can locate the existing reply rather than silently telling
+    // the model to do nothing (no_action would hide a real state the operator
+    // needs to act on).
     return "await_human_review";
   }
   if (
