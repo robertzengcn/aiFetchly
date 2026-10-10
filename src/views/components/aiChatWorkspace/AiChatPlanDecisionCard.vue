@@ -24,12 +24,18 @@
       {{ t('workspaceChat.plan.changedSince', { version: plan.version - 1 }) || `Changed since v${plan.version - 1}` }}:
       {{ plan.changeReason }}
     </p>
+    <!-- FR-PLN-005: a null/stale/failed decision keeps the card actionable
+         and explains why the action did not take effect. -->
+    <p v-if="error" class="decision-error" role="alert" data-testid="workspace-plan-decision-error">
+      {{ error }}
+    </p>
 
     <div class="decision-actions" role="group">
       <button
         type="button"
         class="decision-secondary"
         data-testid="workspace-plan-review-full"
+        :disabled="disabled"
         @click="emit('review-full-plan')"
       >
         {{ t('workspaceChat.plan.reviewFullPlan') || 'Review full plan' }}
@@ -38,6 +44,7 @@
         type="button"
         class="decision-secondary"
         data-testid="workspace-plan-request-changes"
+        :disabled="disabled"
         @click="emit('request-changes')"
       >
         {{ t('workspaceChat.plan.requestChanges') || 'Request changes' }}
@@ -47,6 +54,7 @@
         type="button"
         class="decision-primary"
         data-testid="workspace-plan-approve"
+        :disabled="disabled"
         @click="emit('approve')"
       >
         {{ t('workspaceChat.plan.approve') || 'Approve plan' }}
@@ -86,6 +94,10 @@ import type { PlanPresentationView } from "./planPresentationProjection";
 
 const props = defineProps<{
   plan: PlanPresentationView;
+  /** FR-PLN-003: decision actions lock while their request is in flight. */
+  disabled?: boolean;
+  /** Safe retry error for a decision that did not take effect. */
+  error?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -213,5 +225,16 @@ function onDiscard(): void {
 .decision-secondary:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 1px;
+}
+
+.decision-error {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: rgb(var(--v-theme-error));
+}
+
+.decision-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 </style>

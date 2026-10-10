@@ -57,6 +57,8 @@
         :error-message="selectedStore.errorMessage ?? undefined"
         :show-reasoning="true"
         :plan-submit-error="planSubmitError"
+        :plan-decision-in-flight="planDecisionInFlight"
+        :plan-decision-error="planDecisionError"
         @approve-plan="onLegacyPlanAction('approve-plan')"
         @request-plan-changes="onRequestPlanChangesWithFeedback"
         @submit-plan-answers="onPlanAnswers"
@@ -1556,29 +1558,97 @@ async function onRequestPlanChangesWithFeedback(): Promise<void> {
   await onLegacyPlanAction("request-plan-changes", feedback.trim());
 }
 
+/**
+ * FR-PLN-003..008: plan decisions are validated before any continuation.
+ * A null/stale/failed decision keeps the card actionable (safe retry error)
+ * and never tells the model the user approved; a persisted decision starts
+ * exactly ONE continuation turn — through the ordinary send path, which the
+ * durable queue owns when a turn is already active (FR-PLN-008).
+ */
+const planDecisionInFlight = ref(false);
+const planDecisionError = ref<string | null>(null);
+
 async function onLegacyPlanAction(
   action: "approve-plan" | "reject-plan" | "request-plan-changes",
   feedback = ""
 ): Promise<void> {
   if (!conversationId.value) return;
+  // FR-PLN-003: a second click while the decision request is in flight is a
+  // no-op — exactly one IPC per decision.
+  if (planDecisionInFlight.value) return;
   const plan = latestPlanState.value;
   const version = plan?.latestVersion?.version ?? plan?.currentVersion;
   if (!plan?.planId || version === undefined) return;
+  planDecisionInFlight.value = true;
+  planDecisionError.value = null;
   try {
+    let updated: Awaited<ReturnType<typeof approveChatV2Plan>> = null;
     if (action === "approve-plan") {
-      await approveChatV2Plan(conversationId.value, plan.planId, version);
+      updated = await approveChatV2Plan(conversationId.value, plan.planId, version);
     } else if (action === "reject-plan") {
-      await rejectChatV2Plan(conversationId.value, plan.planId, version, feedback);
+      updated = await rejectChatV2Plan(conversationId.value, plan.planId, version, feedback);
     } else {
-      await requestChatV2PlanChanges(
+      updated = await requestChatV2PlanChanges(
         conversationId.value,
         plan.planId,
         version,
         feedback
       );
     }
-  } catch {
-    // Decision cards remain actionable on failure.
+    if (!updated) {
+      // FR-PLN-005: approval did not take effect — do NOT send the
+      // "begin executing" message; the model would execute an unapproved
+      // plan. The card stays actionable for a retry.
+      const errorKeys: Record<typeof action, string> = {
+        "approve-plan": "aiChatV2Plan.approve_failed",
+        "reject-plan": "aiChatV2Plan.reject_failed",
+        "request-plan-changes": "aiChatV2Plan.changes_request_failed",
+      };
+      const fallbacks: Record<typeof action, string> = {
+        "approve-plan": "Plan approval did not complete. Please try again.",
+        "reject-plan": "Plan rejection did not complete. Please try again.",
+        "request-plan-changes":
+          "Requesting plan changes did not complete. Please try again.",
+      };
+      planDecisionError.value = t(errorKeys[action]) || fallbacks[action];
+      return;
+    }
+    // Refresh so the receipt/planStateView reflects the persisted decision.
+    await selectedStore.loadSelection(conversationId.value);
+    // FR-PLN-006/007: start the correct continuation exactly once. The
+    // continuation message keys are shared with Chat V2 (already localized).
+    if (action === "approve-plan") {
+      await performOrdinarySend(
+        t("aiChatV2Plan.approved_continue_message") ||
+          "Plan approved. Please begin executing the plan now.",
+        [],
+        { modeOverride: "chat" }
+      );
+    } else if (action === "reject-plan") {
+      const prefix =
+        t("aiChatV2Plan.rejected_continue_message") ||
+        "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.";
+      await performOrdinarySend(
+        feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
+        [],
+        { modeOverride: "chat" }
+      );
+    } else {
+      const prefix =
+        t("aiChatV2Plan.changes_requested_continue_message") ||
+        "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.";
+      await performOrdinarySend(
+        feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
+        [],
+        { modeOverride: "chat" }
+      );
+    }
+  } catch (err) {
+    // FR-PLN-005: persistence/transport failure keeps the card actionable.
+    planDecisionError.value =
+      err instanceof Error ? err.message : String(err);
+  } finally {
+    planDecisionInFlight.value = false;
   }
 }
 

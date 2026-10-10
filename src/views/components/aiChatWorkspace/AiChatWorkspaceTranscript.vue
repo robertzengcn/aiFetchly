@@ -78,6 +78,8 @@
       <AiChatPlanDecisionCard
         v-else-if="item.kind === 'plan-decision'"
         :plan="item.plan"
+        :disabled="planDecisionInFlight"
+        :error="planDecisionError"
         @approve="onPlanApprove"
         @request-changes="onPlanRequestChanges()"
         @review-full-plan="openActivity"
@@ -146,6 +148,10 @@ const props = defineProps<{
   showReasoning?: boolean;
   /** FR-059: submission error for the active plan-question flow. */
   planSubmitError?: string | null;
+  /** FR-PLN-003: decision actions lock while their request is in flight. */
+  planDecisionInFlight?: boolean;
+  /** FR-PLN-005: safe retry error for a decision that did not take effect. */
+  planDecisionError?: string | null;
   /** Queued rows from the durable pending-message queue (PRD §7). */
   pendingMessages?: readonly AIChatPendingMessageView[];
 }>();

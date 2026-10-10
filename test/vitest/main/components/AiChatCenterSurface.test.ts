@@ -125,6 +125,10 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useAppInspectorStore } from "@/views/store/appInspector";
+import { approveChatV2Plan } from "@/views/api/aiChatV2";
+import { selectConversation } from "@/views/api/aiChatWorkspace";
+import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import { MessageType } from "@/entityTypes/commonType";
 import {
   AI_CHAT_V2_GOAL_CREATE,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
@@ -170,6 +174,11 @@ const i18n = createI18n({
         skillSlash: {
           notFound: "No installed prompt skill matches '{name}'.",
         },
+      },
+      aiChatV2Plan: {
+        approve_failed: "Plan approval did not complete. Please try again.",
+        approved_continue_message:
+          "Plan approved. Please begin executing the plan now.",
       },
     },
   },
@@ -222,6 +231,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         AiChatConversationHeader: HeaderStub,
         AiChatWorkspaceTranscript: defineComponent({
           name: "AiChatWorkspaceTranscript",
+          props: [
+            "messages",
+            "streamStatus",
+            "pendingMessages",
+            "planDecisionInFlight",
+            "planDecisionError",
+          ],
           template: '<div data-testid="transcript-stub" />',
         }),
         AiChatRunStrip: true,
@@ -645,6 +661,152 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(startChatRunMock).toHaveBeenCalledTimes(1);
       const notice = wrapper.get('[data-testid="workspace-command-error"]');
       expect(notice.text()).toContain("Commands are unavailable");
+    });
+  });
+
+  /**
+   * Plan decisions (FR-PLN-003..008): validate the returned plan state
+   * before starting any continuation — a null response must NEVER trigger
+   * the "begin executing" turn, and a successful decision starts exactly
+   * one continuation through the ordinary send path.
+   */
+  describe("plan decisions", () => {
+    const planMessage: ChatV2MessageView = {
+      id: "plan-msg-1",
+      conversationId: "fresh-chat",
+      role: "assistant",
+      content: "plan body",
+      timestamp: "2026-10-11T00:00:00.000Z",
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        planStateView: {
+          planId: "plan-1",
+          conversationId: "fresh-chat",
+          title: "Campaign plan",
+          objective: "Grow the newsletter",
+          currentVersion: 2,
+          latestVersion: {
+            planId: "plan-1",
+            version: 2,
+            planMarkdown: "# Plan",
+            createdAt: "2026-10-11T00:00:00.000Z",
+            createdBy: "user",
+          },
+          status: "awaiting_approval",
+        },
+      },
+    };
+
+    async function mountWithPlan(): Promise<ReturnType<typeof mountSurface>> {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [planMessage],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+      startChatRunMock.mockResolvedValue({
+        conversationId: "fresh-chat",
+        runId: "run-plan",
+        status: "running",
+        acceptedAt: "",
+      });
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("fresh-chat");
+      // The shell owns selection loading in the real app — drive it here so
+      // the store's message window (and planStateView) is populated.
+      await useSelectedConversationStore().loadSelection("fresh-chat");
+      await flushPromises();
+      return wrapper;
+    }
+
+    it("starts exactly one execution continuation after a persisted approval (FR-PLN-006)", async () => {
+      const approveMock = vi.mocked(approveChatV2Plan);
+      approveMock.mockResolvedValueOnce({
+        planId: "plan-1",
+        currentVersion: 2,
+        status: "approved",
+      } as never);
+      const wrapper = await mountWithPlan();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("approve-plan");
+      await flushPromises();
+
+      expect(approveMock).toHaveBeenCalledTimes(1);
+      expect(approveMock.mock.calls[0]).toEqual([
+        "fresh-chat",
+        "plan-1",
+        2,
+      ]);
+      // Exactly one continuation turn, in chat mode, with the shared text.
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+        conversationId: "fresh-chat",
+        mode: "chat",
+        message: "Plan approved. Please begin executing the plan now.",
+      });
+    });
+
+    it("keeps the decision actionable and starts NO continuation on a null approval (FR-PLN-005)", async () => {
+      vi.mocked(approveChatV2Plan).mockResolvedValueOnce(null);
+      const wrapper = await mountWithPlan();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("approve-plan");
+      await flushPromises();
+
+      expect(approveChatV2Plan).toHaveBeenCalledTimes(1);
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      // The safe retry error reaches the decision card through the transcript.
+      expect(transcript.props("planDecisionError")).toBe(
+        "Plan approval did not complete. Please try again."
+      );
+      // In-flight lock released — a retry is possible.
+      expect(transcript.props("planDecisionInFlight")).toBe(false);
+    });
+
+    it("issues exactly one decision IPC for a double click while in flight (FR-PLN-003)", async () => {
+      const approvalResolver: {
+        resolve: ((value: unknown) => void) | null;
+      } = { resolve: null };
+      vi.mocked(approveChatV2Plan).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            approvalResolver.resolve = resolve;
+          }) as never
+      );
+
+      const wrapper = await mountWithPlan();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("approve-plan");
+      await flushPromises();
+      // Second click while the first decision is still in flight.
+      transcript.vm.$emit("approve-plan");
+      await flushPromises();
+      expect(approveChatV2Plan).toHaveBeenCalledTimes(1);
+
+      approvalResolver.resolve?.({
+        planId: "plan-1",
+        currentVersion: 2,
+        status: "approved",
+      });
+      await flushPromises();
+      // The completed decision still starts exactly one continuation.
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
     });
   });
 
