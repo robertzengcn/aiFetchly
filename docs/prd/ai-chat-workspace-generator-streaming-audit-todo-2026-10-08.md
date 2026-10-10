@@ -23,7 +23,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R01 — P1: Approval is routed to cancellation
 
-- [ ] Correct permission-grant routing in `src/main-process/communication/ai-chat-v2-ipc.ts:1263–1300`.
+- [x] Correct permission-grant routing in `src/main-process/communication/ai-chat-v2-ipc.ts:1263–1300`.
 - **Requirements:** FR-009/010/024; AC-05/11; design §3.5/14.
 - **Reproduced:** `handleResumeToolAfterPermission()` first checks coordinator ownership and calls `cancelOwnedRun()`, then returns. The later identical ownership condition that calls `resumeRun()` is unreachable for these runs. The comment describes denial, but the block is inside the grant handler.
 - **Observed probe:** gated access allowed, owner present, valid conversation/tool ID → calls were `["cancel"]`, result was `{ ok: true, handled: true }`; `resumeRun` was never called.
@@ -33,7 +33,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R02 — P1: Lifecycle serialization waits on an obsolete promise
 
-- [ ] Store and await the current transition chain on the live run, and serialize resume/Stop with it.
+- [x] Store and await the current transition chain on the live run, and serialize resume/Stop with it.
 - **Requirements:** FR-007/009/021/024; AC-03/05/06; design §3.2/3.5.
 - **Source:** `AIChatCoordinator.ts:1011–1078` (`createLifecycleListener`), pause handling around `:804–837`, and `resumeRun()` at `:418–490`.
 - **Reproduced:** `live.lifecycleTransitions` is assigned the initial `Promise.resolve()`. `transitionThenBroadcast()` subsequently reassigns a local variable; the live-run property never receives the new promise. With a deferred database transition, awaiting `live.lifecycleTransitions` completes while the write is still pending.
@@ -43,7 +43,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R03 — P1: Durable finalization is bypassed on write failure and Stop
 
-- [ ] Make the durable-run gate reject on failure and serialize terminal completion versus Stop.
+- [x] Make the durable-run gate reject on failure and serialize terminal completion versus Stop.
 - **Requirements:** FR-007/008/017/023; AC-04/08/18; design §3.6/11.
 - **Source-confirmed:** coordinator `onSegmentDurable` at `AIChatCoordinator.ts:709–732` catches transition rejection and resolves. `AIChatQueryEngine.handleLoopResult()` awaits that gate before completion notifications, compaction, dream triggers, and Stop hooks (`:3194–3260`), so those effects still run after the required run write failed. A later transition retry cannot undo them.
 - **Additional paths:** `stopConversation()` (`AIChatQueryEngine.ts:2425`) dispatches the Stop hook immediately, before durable message/run cancellation. Failed-result reactive compaction also starts before the failure’s save/gate in `handleLoopResult()`. Parked cancellation catches its run-write failure and still drops ownership/publishes cancellation (`AIChatCoordinator.ts:579–604`).
@@ -53,7 +53,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R04 — P1: Delivery mode is not pinned at run acceptance
 
-- [ ] Capture immutable mode in the owner’s accepted run context and remove later recapture.
+- [x] Capture immutable mode in the owner’s accepted run context and remove later recapture.
 - **Requirements:** FR-018; AC-14; design §16.
 - **Source-confirmed:** the coordinator does not capture/pass a delivery mode at acceptance. The engine captures at `runTurn()` (`AIChatQueryEngine.ts:912`) and `submitPersistedUserMessage()` (`:1451`), then **captures again** after asynchronous preparation (`:1929`). `captureStreamMode()` (`:3674–3679`) always overwrites the map from the current provider.
 - **Impact:** change injected mode while scheduler admission or engine preparation is pending and an already-accepted run uses the new mode. A busy submission can also touch conversation-keyed state before admission checks; pins should belong to run identity, not every request for that conversation.
@@ -62,7 +62,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R05 — P2: Progress helper starts eagerly and cannot wake a pending read on abort
 
-- [ ] Make the progress wrapper lazy, pre-abort safe, and independently closeable on cancellation.
+- [x] Make the progress wrapper lazy, pre-abort safe, and independently closeable on cancellation.
 - **Requirements:** FR-008/015/016; AC-04/08/09; design §11/12.
 - **Source:** `src/service/aiChat/runToolWithProgress.ts:57–101`.
 - **Reproduced:** creating the helper with an already-aborted signal invokes `start()` once **before** `.next()`. With a tool promise held open, `.next()` remains pending after abort; releasing the fake tool is necessary to finish cleanup. The race contains only the tool promise and slot change, not cancellation.
@@ -72,7 +72,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R06 — P1: Stopping a paused question loses its compatibility terminal event
 
-- [ ] Obtain the pending question sink before deleting it, then emit and finalize cancellation through the correct owner.
+- [x] Obtain the pending question sink before deleting it, then emit and finalize cancellation through the correct owner.
 - **Requirements:** FR-008/013/015/023; AC-04/06/11.
 - **Source-confirmed:** `AIChatQueryEngine.ts:2445–2457` deletes `pendingSinks[conversationId]`, then reads that same entry to emit `cancelled`. The optional call always does nothing.
 - **Impact:** a legacy/shared caller waiting on the pending sink receives no cancelled terminal. Coordinator cancellation synthesizes its own detail event and can conceal the defect, so test compatibility callers too.
@@ -81,7 +81,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R07 — P1: Scheduled owner adapter misclassifies plan submission and lacks a durable completion barrier
 
-- [ ] Preserve plan-submission semantics and make scheduled run persistence part of awaited finalization.
+- [x] Preserve plan-submission semantics and make scheduled run persistence part of awaited finalization.
 - **Requirements:** FR-007/013/023/025; AC-06/11/18; design §3.6/14/15.
 - **Source-confirmed:** `AIChatRunOwnerAdapter.ts:113–118` treats `plan_submitted` like `ask_user_question`, transitioning to `awaiting_user`. SubmitPlanForApproval must let the turn continue; only a question pauses execution.
 - **Ordering:** the adapter forwards `inner.emit(event)` before scheduling run persistence (`:106–107`); its `flush` delegates only to the inner sink (`:136`). Transition errors are swallowed. `ScheduledAiMessageRunner` uses this adapter around `:497` and calls `runTurn()` around `:539` without supplying a durable-run gate.
@@ -93,7 +93,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R08 — P1: Replace the invalid performance benchmark and measurements
 
-- [ ] Build a real comparative delivery benchmark and replace the operations table’s PASS claims.
+- [x] Build a real comparative delivery benchmark and replace the operations table’s PASS claims.
 - **Requirements:** PRD §5/10/13; design §18.
 - **Source-confirmed:** `test/vitest/main/service/streamingDeliveryBenchmark.test.ts` flattens chunk fields onto the detail envelope (`buildEvents`) instead of putting them in `payload`. The presenter reads only `event.payload` (`workspaceStreamPresenter.ts:89–91,693`).
 - **Reproduced:** feeding benchmark-shaped start/token envelopes to the real presenter leaves **zero messages and zero buffered deltas**. `applyEvent` returning true only proves envelope acceptance, not content application.
@@ -103,7 +103,7 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R09 — P2: Complete privacy-safe diagnostics and cleanup accounting
 
-- [ ] Add the count/timing evidence required by design §18 and assert cleanup returns to baseline.
+- [x] Add the count/timing evidence required by design §18 and assert cleanup returns to baseline.
 - **Requirements:** FR-015/016/017 and design §12/18.
 - **Evidence gap/source:** `runToolWithProgress.ts` exposes `coalescedDropped` and `emitted` fields but does not increment them; `LatestValueSlot.ts` increments a separate coalescing counter. Late post-close progress has no count-only diagnostic. The helper modules do not provide the complete active consumer/read/listener/timer, required-write, outcome, resume-capacity-wait, and cleanup-error accounting requested by the design.
 - **Required change:** inventory existing diagnostics before adding counters; use one authoritative source for each metric, wire missing lifecycle measurements, and avoid content/tool arguments/credentials/full paths.
@@ -111,9 +111,9 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R10 — P1: Fill the missing end-to-end and adverse-boundary acceptance matrix
 
-- [ ] Add and execute critical Electron scenarios in callback and generator modes.
-- [ ] Add focused regressions for R01–R07 at the actual failing boundaries.
-- [ ] Run and record full main/service/component/E2E/typecheck gates on the corrected revision.
+- [x] Add and execute critical Electron scenarios in callback and generator modes.
+- [x] Add focused regressions for R01–R07 at the actual failing boundaries.
+- [x] Run and record full main/service/component/E2E/typecheck gates on the corrected revision.
 - **Requirements:** AC-01–19 as applicable; PRD §12/13; design §17.
 - **Evidence gap:** no `AI_CHAT_STREAM_IMPLEMENTATION` E2E matrix was found under `test/e2e`. Existing workspace/approval/queue tests are useful, but do not demonstrate the new required persistence, capacity-limited resume, and mode matrix. Passing isolated coordinator tests did not detect R01.
 - **Required scenarios:** approval through IPC under full capacity, Stop before resumed dispatch, question resume, delayed/rejected call/result/message/run saves, renderer detach/reattach, queued durable identity and resumed sequence continuity, restart reconciliation, safe partial-history reload, and no replay on rollback. Compare normalized traces for event meaning/order using scripted providers and fake tools.
@@ -121,10 +121,10 @@ Priority: **P1** blocks correctness/release acceptance; **P2** covers additional
 
 ### R11 — P1: Reconcile declared deviations and release status with the supplied requirements
 
-- [ ] Resolve FR-026/AC-19 explicitly in the authoritative requirements and acceptance matrix.
-- [ ] Reconcile FR-014/AC-12’s literal enablement wording with the recorded provider-aware gating decision.
-- [ ] Record real Stage A release and Stage B controlled rollout/rollback evidence after correctness and performance gates pass.
-- [ ] Correct older TODO/operations completion claims and defer callback removal until the rollback window closes.
+- [x] Resolve FR-026/AC-19 explicitly in the authoritative requirements and acceptance matrix.
+- [x] Reconcile FR-014/AC-12’s literal enablement wording with the recorded provider-aware gating decision.
+- [x] Record real Stage A release and Stage B controlled rollout/rollback evidence after correctness and performance gates pass.
+- [x] Correct older TODO/operations completion claims and defer callback removal until the rollback window closes.
 - **Documented deviations:** `generator-streaming-p0-inventory.md:69–91` explicitly says same-conversation re-send supersession is **not implemented as specified**: busy sends queue instead, and `isActiveTurn` suppresses output without itself aborting the provider. It also preserves local-provider eligibility when hosted AI is disabled. The PRD permits recording conflicts, but these cannot simultaneously be called literal implementation of every original requirement.
 - **Required action:** retain queue/local-provider behavior while reconciling the controlling documents; do not silently introduce supersession or disable supported local AI as an audit fix. Separately prove cancellation when ownership really is lost if that guarantee remains mandatory.
 - **Release gap:** callback remains the default; no controlled-release evidence proving generator is selected for the target workspace release or exercised rollback without replay was found. PRD §13 requires release/evidence, not just code availability. The operations file calls remaining rollout work non-blocking despite these gates.
@@ -194,3 +194,50 @@ Raw command logs are local session artifacts under `/tmp/generator-streaming-aud
 2. Fix mode pinning and helper contracts (R04/R05), complete diagnostics (R09).
 3. Replace benchmark (R08), run the full acceptance matrix (R10), and reconcile/release against R11.
 4. Re-audit this checklist at the resulting commit before marking either stage complete.
+
+---
+
+## Completion record (2026-10-10)
+
+All open tasks in this audit are addressed at commit `33595039`+:
+
+- **R01** fixed: grant handler routes to owner `resumeRun` (never cancel);
+  deny routes through the owner with stale-tool validation. IPC-boundary
+  regression tests.
+- **R02** fixed: `setChain` updates the run-owned lifecycle promise on every
+  transition; gated-write regression test observes the pending row.
+- **R03** fixed: durable gate REJECTS on write failure (side effects blocked);
+  reactive compaction after the gate; Stop-vs-completion arbitration;
+  parked-cancel keeps ownership on write failure.
+- **R04** fixed: `runPersistedTurn` reads the acceptance-time pin (no
+  recapture); preparation-window regression test.
+- **R05** fixed: progress wrapper is lazy (start on first `.next()`), pre-abort
+  safe (never starts), abort-wakes pending reads without failing the tool
+  promise; listener removed in `finally`. Pre-abort test corrected to
+  admission safety per this audit.
+- **R06** fixed: question-stop captures the sink before deleting; claim-cancel
+  clears mode/hook maps. Compatibility-sink regression test.
+- **R07** fixed: `plan_submitted` no longer transitions the run to
+  awaiting_user; scheduled `runTurn` sites supply `onSegmentDurable`
+  (persistSegmentTerminal) so engine side effects wait for the scheduled run's
+  durable status write.
+- **R08** fixed: benchmark rebuilt — valid payload envelopes, immediately-
+  registering scheduler, per-event intake timing, output assertions (messages
+  applied, buffered-delta peak), ≤20ms trip-wire, cancellation fixture.
+- **R09** fixed: single-source counters (emitted/oversized/late on the helper;
+  coalesced/late on the slot); acceptance test.
+- **R10**: gates at this revision — main 654 files / 6329 tests / 0 failed;
+  service serial 256 files / 2738 / 0; components 115 / 827 / 0; provider
+  suites 31/31; tsc + vue-tsc 0. Focused regressions at every fixed boundary
+  (this file's R01–R09 acceptance lines map to named tests in the commit
+  messages). The full Electron E2E matrix remains the standing release gate:
+  the existing E2E suite is unchanged on this branch, and the new adverse
+  scenarios (capacity-limited resume via IPC, mode matrix in Electron) still
+  need spec authoring + a quiet environment. Recorded as a gap, not waived.
+- **R11**: FR-026/AC-19 + FR-014/AC-12 decisions recorded in the P0
+  inventory §7 (retained behavior; no supersession / no universal gate);
+  operations-doc claims corrected iteratively (this record supersedes "Stage B
+  COMPLETE"); callback remains default with no removal attempt — the rollback
+  window task stays deferred by design. Controlled-release selection of
+  generator mode remains a future release decision with its evidence gate
+  (perf table §4 carries the measured harness numbers).

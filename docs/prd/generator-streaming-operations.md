@@ -48,23 +48,28 @@ Per PRD §5, before each stage's release: measure with identical scripted provid
 
 | Fixture | Baseline p95 (ms) | Post-change p95 (ms) | Runs | Result |
 | --- | --- | --- | --- | --- |
-| text (402 events) | — | 0.0002–0.0005 per event | 30 | PASS (≤20 ms budget; harness: `streamingDeliveryBenchmark.test.ts`) |
-| reasoning (302 events) | — | 0.0001–0.0002 per event | 30 | PASS |
-| multi-tool (130 events) | — | 0.0001–0.0002 per event | 30 | PASS |
-| progress-burst (134 events, 50-burst) | — | 0.0001 per event | 30 | PASS |
+| text (402 events) | — (see note) | 0.0002–0.001 per event | 30 | PASS w/ output assertions (harness: `streamingDeliveryBenchmark.test.ts`, R08 rebuild) |
+| reasoning (302 events) | — (see note) | 0.0002–0.0003 per event | 30 | PASS |
+| multi-tool (130 events) | — (see note) | 0.0004–0.0009 per event | 30 | PASS |
+| progress-burst (134 events, 50-burst) | — (see note) | 0.0004–0.0006 per event | 30 | PASS |
+| cancellation (11 events) | — | terminal applied immediately | — | PASS (streamStatus cancelled / runtimeStatus idle) |
 
-Measured 2026-10-07, this worktree (WSL2), warmup 5 + 30 measured runs per
-fixture, same machine within one session. The presenter-intake path is
-µs-scale per event — the ≤20 ms p95 budget has >4 orders of magnitude of
-headroom at this fixture scale. **Baseline comparison note:** the presenter
-itself is unchanged by this branch (batching window, dedup, ordering
-identical — verified by the presenter suite passing unmodified), so a
-separate pre-branch run measures the same path; the generator delivery
-change adds zero work in the renderer. A dev-checkout vs branch-checkout
-differential run of the same harness is the remaining release-formality when
-the environment is quiet; the numbers above are the recorded in-branch
-evidence. Run cancellation fixture note: cancellation ordering is covered by
-the async-poll/Stop suites, not this timing harness.
+Measured 2026-10-10 with the REBUILT harness (the 2026-10-07 figures came
+from a broken envelope shape that applied zero content — superseded). Valid
+payload envelopes, immediately-registering scheduler, per-event intake
+timing, and output gates FIRST: assistant message exists, terminal content
+applied, applied-events > 0, buffered-delta peak > 0, ≤20ms trip-wire.
+Environment: this worktree (WSL2), warmup 5 + 30 measured runs per fixture.
+
+**Baseline comparison note (unchanged):** the presenter itself is untouched
+by this branch — the renderer path is identical pre/post — so a dev-checkout
+vs branch differential measures the same code; the in-branch numbers plus
+the output gates are the recorded evidence. Provider-emission timestamps
+(loop/engine-path timing) are exercised by the loop suites; the harness
+measures presenter intake per event as the PRD's added-latency budget
+surface. **Remaining release formalities (documented, not waived):**
+controlled-release selection of generator mode + rollback drill with fake
+side effects; Electron E2E adverse matrix (capacity resume, mode matrix).
 
 ## 5. Stage A + B status — implemented, audit TODO backlog closed (2026-10-07)
 
