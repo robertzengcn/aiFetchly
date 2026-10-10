@@ -1389,7 +1389,7 @@ function hasNamespaceConflict(
 const MAX_DETECTION_ERROR_CHARS = 240;
 
 /** Reduce an unknown error to a short, safe string (no stack traces leaked). */
-function sanitizeDetectionError(error: unknown): string {
+export function sanitizeDetectionError(error: unknown): string {
   if (error instanceof Error) {
     const msg = error.message || error.name;
     return msg.length > MAX_DETECTION_ERROR_CHARS

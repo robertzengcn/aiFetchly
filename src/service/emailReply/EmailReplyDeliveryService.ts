@@ -30,6 +30,7 @@ import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuild
 import {
   EmailReplyDetectionService,
   getSharedEmailReplyDetectionService,
+  sanitizeDetectionError,
 } from "@/service/emailReceive/EmailReplyDetectionService";
 import {
   incrementReplyMetric,
@@ -493,8 +494,7 @@ export class EmailReplyDeliveryService {
           );
         } catch (auditError) {
           incrementReplyMetric("audit_failure", { stage: "pre_send" });
-          const auditErrMsg =
-            auditError instanceof Error ? auditError.message : String(auditError);
+          const auditErrMsg = sanitizeDetectionError(auditError);
           throw new SendPolicyRejection(
             `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
             code
@@ -690,9 +690,13 @@ export class EmailReplyDeliveryService {
       });
     } catch (error) {
       // Detection threw — treat as an inconclusive probe failure. The stable
-      // code `probe_failed` routes to discard_and_retry; the sanitized error
-      // text is included for the operator/AI without parsing English.
-      const errMsg = error instanceof Error ? error.message : String(error);
+      // code `probe_failed` routes to discard_and_retry; the error text is
+      // bounded via sanitizeDetectionError (240-char cap, the same helper the
+      // detection service uses at its own checkReply catch boundary) so no
+      // raw provider error text, stack trace, or unbounded buffer content
+      // flows into the audit reason column or the SendPolicyRejection message
+      // that surfaces over IPC to the renderer/AI tool.
+      const errMsg = sanitizeDetectionError(error);
       const code: EmailReplyPolicyCode = "probe_failed";
       incrementReplyMetric("detection_outcome", {
         stage: "pre_send",
@@ -709,8 +713,7 @@ export class EmailReplyDeliveryService {
         );
       } catch (auditError) {
         incrementReplyMetric("audit_failure", { stage: "pre_send" });
-        const auditErrMsg =
-          auditError instanceof Error ? auditError.message : String(auditError);
+        const auditErrMsg = sanitizeDetectionError(auditError);
         throw new SendPolicyRejection(
           `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
           code
@@ -755,8 +758,7 @@ export class EmailReplyDeliveryService {
       );
     } catch (auditError) {
       incrementReplyMetric("audit_failure", { stage: "pre_send" });
-      const auditErrMsg =
-        auditError instanceof Error ? auditError.message : String(auditError);
+      const auditErrMsg = sanitizeDetectionError(auditError);
       throw new SendPolicyRejection(
         `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
         code
