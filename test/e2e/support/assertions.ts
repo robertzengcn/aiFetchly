@@ -26,6 +26,9 @@ export interface TeardownOptions {
 export const EXPECTED_STARTUP_EXTERNAL_ORIGINS: readonly string[] = [
   "https://fonts.googleapis.com",
   "https://fonts.gstatic.com",
+  // Local-AI-runtime catalog manifest poll (main-process fetch at startup).
+  // The E2E network guard DENIES it — this is the recorded attempt only.
+  "https://github.com",
 ];
 
 /**
@@ -68,7 +71,11 @@ export function assertCleanTeardown(
     )}`
   ).toEqual([]);
 
-  // Main-process network guard violations.
+  // Main-process network guard violations. Filtered by the SAME expected
+  // origin allowlist as the renderer side: known app startup polls (fonts,
+  // the local-AI-runtime manifest on github.com) are recorded by the guard
+  // — the guard still DENIES them, isolation holds — and must not fail
+  // unrelated suites.
   let mainViolations = "";
   try {
     mainViolations = fs.readFileSync(
@@ -78,8 +85,20 @@ export function assertCleanTeardown(
   } catch {
     mainViolations = "";
   }
+  const unexpectedMainViolations = mainViolations
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => {
+      try {
+        const parsed = JSON.parse(line) as { origin?: string };
+        return !expectedExternal.has(parsed.origin ?? "");
+      } catch {
+        return true; // unparseable guard lines stay visible
+      }
+    });
   expect(
-    mainViolations.trim(),
+    unexpectedMainViolations,
     "main-process network guard recorded violations"
-  ).toBe("");
+  ).toEqual([]);
 }

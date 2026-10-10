@@ -477,3 +477,190 @@ describe("AIChatQueryLoop tool catalog integration", () => {
     ).toBe(false);
   });
 });
+
+describe("AIChatQueryLoop hydration + permission (FR-28 regression)", () => {
+  it("a hydrated deferred tool that needs permission pauses with the card state intact", async () => {
+    // The model calls a DEFERRED tool DIRECTLY (no tool_catalog_search):
+    // the hydration gate must transparently execute it, and when the tool
+    // is confirmation-gated the turn must PAUSE for permission exactly
+    // like an advertised tool — never stall silently.
+    let call = 0;
+    const fakeStream = vi.fn(
+      async (
+        _req: unknown,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        call += 1;
+        if (call === 1) {
+          onChunk(
+            makeToolCallChunk("direct-call", "mcp_1_secret", JSON.stringify({}))
+          );
+        }
+      }
+    );
+    const execTool = vi.fn(
+      async (name: string): Promise<ToolExecutionResult> => ({
+        tool_call_id: "direct-call",
+        tool_name: name,
+        success: false,
+        execution_time_ms: 0,
+        result: { needsPermissionPrompt: true },
+      })
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: execTool,
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const { input } = buildInput();
+    const result = await loop.run(input);
+
+    expect(result.type).toBe("paused_for_permission");
+    if (result.type === "paused_for_permission") {
+      expect(result.pending.toolName).toBe("mcp_1_secret");
+      expect(result.pending.toolCatalogState?.discoveredToolNames).toContain(
+        "mcp_1_secret"
+      );
+    }
+  });
+});
+
+describe("remaining-context budget wiring (audit R7)", () => {
+  it("tool calls never carry a negative remainingContextTokens estimate", async () => {
+    const contexts: Array<{ remainingContextTokens?: number }> = [];
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: async (
+        _req: unknown,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        onChunk(makeChunk("done", "stop"));
+      },
+      executeTool: vi.fn(async (_name, _args, ctx) => {
+        contexts.push(ctx as { remainingContextTokens?: number });
+        return {
+          tool_call_id: "c1",
+          tool_name: "t",
+          success: true,
+          execution_time_ms: 0,
+          result: {},
+        } as never;
+      }),
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const { input } = buildInput();
+    await loop.run(input);
+    for (const ctx of contexts) {
+      if (ctx.remainingContextTokens !== undefined) {
+        expect(ctx.remainingContextTokens).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+});
+
+describe("AIChatQueryLoop — review ticket P2-8 (handoff after the tool batch)", () => {
+  it("a use_skill + other-tool round keeps tool responses contiguous; the handoff follows the batch", async () => {
+    const capturedMessages: unknown[] = [];
+    let call = 0;
+    const twoCallsChunk = (
+      idx: number,
+      id: string,
+      name: string,
+      finish: string | null
+    ): OpenAIChatCompletionChunk => ({
+      id: "resp-1",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: idx,
+                id,
+                type: "function",
+                function: { name, arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: finish,
+        },
+      ],
+    });
+    const fakeStream = vi.fn(
+      async (
+        req: { messages?: unknown },
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        capturedMessages.push(req.messages);
+        call += 1;
+        if (call === 1) {
+          onChunk(twoCallsChunk(0, "call-skill", "use_skill", null));
+          onChunk(twoCallsChunk(1, "call-other", "get_current_time", "tool_calls"));
+        } else {
+          onChunk(makeChunk("done", "stop"));
+        }
+      }
+    );
+    const executeTool = vi.fn(
+      async (name: string) =>
+        ({
+          success: true,
+          execution_time_ms: 1,
+          result: { needsPermissionPrompt: false },
+          output: "ok",
+          ...(name === "use_skill"
+            ? {
+                promptSkillContext: {
+                  type: "invoked_prompt_skill",
+                  conversationId: "v2-test",
+                  runtimeId: "prompt:user:inst-1",
+                  name: "video-use",
+                  sourceLabel: "video-use",
+                  canonicalRoot: "/skills/video-use",
+                  contentHash: "h",
+                  contextRevision: 1,
+                  normalizedInstructions: "# verified instructions",
+                  tokenEstimate: 12,
+                  invokedAt: "2026-10-05T00:00:00.000Z",
+                },
+              }
+            : {}),
+        }) as unknown as ToolExecutionResult
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool,
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const plainTools = [tool("use_skill"), tool("get_current_time")];
+    const { input } = buildInput({
+      request: { message: "use the video-use skill and tell me the time" },
+      openAITools: plainTools,
+      // Catalog-free mode: every tool is exposed and none hits the
+      // deferred gate or the filesystem workspace gate — the pair runs
+      // through the plain tool path this ticket is about.
+      toolCatalog: undefined,
+      toolCatalogModeDecision: undefined,
+    });
+    await loop.run(input);
+
+    expect(executeTool.mock.calls.map((c) => c[0])).toEqual([
+      "use_skill",
+      "get_current_time",
+    ]);
+    const secondRound = capturedMessages[1] as Array<{
+      role: string;
+      tool_call_id?: string;
+      content?: unknown;
+    }>;
+    const roles = secondRound.map((m) => m.role);
+    const toolIdx = roles.map((r, i) => (r === "tool" ? i : -1)).filter((i) => i >= 0);
+    const firstUserAfterTools = roles.findIndex((r, i) => r === "user" && i > toolIdx[0]);
+    // Every tool response precedes ANY user-role message: the handoff may
+    // only appear after the LAST tool response (Chat Completions contract).
+    expect(firstUserAfterTools).toBeGreaterThan(toolIdx[toolIdx.length - 1]);
+    expect(toolIdx.length).toBe(2);
+  });
+});

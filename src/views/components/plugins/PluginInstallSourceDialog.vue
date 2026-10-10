@@ -49,11 +49,23 @@
             v-model="form.uri"
             :label="t('plugins.install_source.git_url') || 'Git URL (https or ssh)'"
             placeholder="https://github.com/owner/repo.git"
+            aria-describedby="git-local-hint-el"
           />
           <v-text-field
             v-model="form.ref"
             :label="t('plugins.install_source.git_ref') || 'Branch / tag / commit (optional)'"
           />
+          <!-- GF §13.1: a local Git install may be required for THIS source. -->
+          <div
+            id="git-local-hint-el"
+            class="text-caption text-medium-emphasis"
+            data-testid="git-local-hint"
+          >
+            {{
+              t("plugins.install_source.git_helper") ||
+              "A local Git installation may be required for this source. Public GitHub repositories do not need Git — choose GitHub instead."
+            }}
+          </div>
         </div>
 
         <div v-else-if="kind === 'github'" class="mt-3">
@@ -61,11 +73,26 @@
             v-model="form.uri"
             :label="t('plugins.install_source.github_url') || 'GitHub repo or release asset URL'"
             placeholder="https://github.com/owner/repo"
+            :aria-describedby="githubDescribedBy"
           />
           <v-text-field
             v-model="form.ref"
-            :label="t('plugins.install_source.github_ref') || 'Branch / tag (optional)'"
+            :label="t('plugins.install_source.github_ref') || 'Branch / tag / commit (optional)'"
+            :aria-describedby="errorMsg ? 'plugin-install-error' : undefined"
           />
+          <!-- GF PRD §11.1/FR-25: disclose the no-Git/no-token contract, but
+               only while the main process actually has archive install on. -->
+          <div
+            v-if="githubArchiveEnabled"
+            id="github-no-git-hint-el"
+            class="text-caption text-medium-emphasis"
+            data-testid="github-no-git-hint"
+          >
+            {{
+              t("plugins.install_source.github_helper") ||
+              "Public repositories install without Git or a GitHub token. Leave the revision empty for the default branch."
+            }}
+          </div>
         </div>
 
         <div v-else-if="kind === 'npm'" class="mt-3">
@@ -106,12 +133,27 @@
 
         <v-alert
           v-if="errorMsg"
+          id="plugin-install-error"
           type="error"
           variant="tonal"
           class="mt-3"
+          role="alert"
+          data-testid="install-error"
         >
           {{ errorMsg }}
         </v-alert>
+
+        <!-- GF §11.5/NFR-10: polite live region so assistive tech hears the
+             working stage and the cancelled outcome, not just failures. -->
+        <p
+          v-if="working || statusMsg"
+          role="status"
+          aria-live="polite"
+          data-testid="install-status"
+          class="text-caption text-medium-emphasis mt-2 mb-0"
+        >
+          {{ working ? stageText : statusMsg }}
+        </p>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -122,6 +164,7 @@
           color="primary"
           :loading="working"
           :disabled="!canInstall"
+          data-testid="install-btn"
           @click="doInstall"
         >
           {{ t("plugins.install_button") || "Install" }}
@@ -132,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from "vue";
+import { ref, reactive, computed, watch, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { windowInvoke } from "@/views/utils/apirequest";
 import { CHOOSEFILEDIALOG } from "@/config/channellist";
@@ -150,9 +193,38 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const kind = ref<PluginSourceKind>("local-folder");
-const form = reactive<PluginInstallSourceRequest>({ kind: "local-folder" });
+// operationId keys main-process cancellation (GF design §12); regenerated
+// per dialog session.
+const operationId = ref(crypto.randomUUID());
+const form = reactive<PluginInstallSourceRequest>({
+  operationId: "",
+  kind: "local-folder",
+});
+watch(operationId, (id) => {
+  form.operationId = id;
+});
+form.operationId = operationId.value;
 const working = ref(false);
 const errorMsg = ref("");
+/** Polite-status message (cancellation outcome); shown in the live region
+ *  once `working` goes false (GF §11.5, NFR-10). */
+const statusMsg = ref("");
+/** FR-25/GF §13.1: show the no-Git helper only when the main process
+ *  actually has archive install enabled (capability-aware copy). */
+const githubArchiveEnabled = ref(true);
+onMounted(() => {
+  void (async () => {
+    try {
+      const { getPluginInstallCapabilities } = await import(
+        "@/views/api/plugins"
+      );
+      const caps = await getPluginInstallCapabilities();
+      if (caps) githubArchiveEnabled.value = caps.githubArchiveInstallEnabled;
+    } catch {
+      /* keep the default */
+    }
+  })();
+});
 
 const kinds = computed(() => [
   {
@@ -173,6 +245,39 @@ const kinds = computed(() => [
   { label: t("plugins.install_source.kind_npm") || "npm", value: "npm" },
   { label: t("plugins.install_source.kind_url") || "URL", value: "url" },
 ]);
+
+/** §11.2 working-stage copy per source kind (single invoke, no event
+ *  stream — the stage line describes the phase the install is in). */
+const stageText = computed(() => {
+  switch (kind.value) {
+    case "github":
+      return (
+        t("plugins.install_source.working_archive") ||
+        "Resolving the revision and downloading the archive…"
+      );
+    case "git":
+      return t("plugins.install_source.working_clone") || "Cloning the repository…";
+    case "url":
+      return (
+        t("plugins.install_source.working_download") || "Downloading the archive…"
+      );
+    case "npm":
+      return (
+        t("plugins.install_source.working_fetch") || "Fetching the npm package…"
+      );
+    default:
+      return t("plugins.install_source.working_import") || "Importing the plugin…";
+  }
+});
+
+/** GF §11.5: the URL field is described by the no-Git helper (when shown)
+ *  and by the live error alert once one exists. */
+const githubDescribedBy = computed(() => {
+  const ids: string[] = [];
+  if (githubArchiveEnabled.value) ids.push("github-no-git-hint-el");
+  if (errorMsg.value) ids.push("plugin-install-error");
+  return ids.length > 0 ? ids.join(" ") : undefined;
+});
 
 const canInstall = computed(() => {
   switch (kind.value) {
@@ -209,6 +314,7 @@ watch(
         npmAuthToken: undefined,
       });
       errorMsg.value = "";
+      statusMsg.value = "";
     }
   }
 );
@@ -252,6 +358,7 @@ async function doInstall(): Promise<void> {
   if (!canInstall.value) return;
   working.value = true;
   errorMsg.value = "";
+  statusMsg.value = "";
   form.kind = kind.value;
   try {
     const r = await installPluginFromSource({ ...form });
@@ -260,13 +367,39 @@ async function doInstall(): Promise<void> {
         t("plugins.install_source.install_failed") || "Install failed.";
       return;
     }
+    if (!r.success) {
+      // Typed domain failure (GF §13.3): map stable codes to localized
+      // guidance; user cancellation shows no alert.
+      const first = r.errors[0];
+      if (first?.code === "source-cancelled") {
+        // Announce the cancellation politely; no failure alert (GF §13.3).
+        statusMsg.value =
+          t("plugins.install_source.error_source-cancelled") ||
+          "Installation cancelled.";
+        return;
+      }
+      errorMsg.value =
+        (first && installErrorText(first.code)) ||
+        first?.message ||
+        (t("plugins.install_source.install_failed") || "Install failed.");
+      return;
+    }
     emit("imported");
     emit("update:modelValue", false);
   } catch (e: unknown) {
     errorMsg.value = e instanceof Error ? e.message : String(e);
   } finally {
     working.value = false;
+    // A fresh operation id per attempt so a retry gets a fresh controller.
+    operationId.value = crypto.randomUUID();
   }
+}
+
+/** Exhaustive stable-code → localized guidance map (GF §13.3). */
+function installErrorText(code: string): string {
+  const key = `plugins.install_source.error_${code}`;
+  const text = t(key);
+  return text === key ? "" : text;
 }
 
 function close(): void {

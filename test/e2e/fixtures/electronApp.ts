@@ -20,6 +20,11 @@ export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /** Test-steering overrides applied AFTER sanitization (design §13.2 keeps
+   *  the secret filter authoritative; these may only ADD/replace values —
+   *  used for deterministic probes, e.g. a PATH without ffmpeg, or the
+   *  deferred tool-catalog mode). Never used to inject credentials. */
+  readonly extraEnv?: Readonly<Record<string, string>>;
   /**
    * E2E-only (FR-WIN-007/009): launch with the deterministic initial window
    * MAXIMIZED, mirroring a user whose saved choice was maximized. Normal
@@ -156,6 +161,18 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.TOOL_OUTPUT_ROOT] = testRoot.toolOutputRootPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
+  // Skill-installation isolation: enable the installer and confine config
+  // home, staging, and the credential store to the per-run temp root.
+  allowed[E2E_ENV.SKILL_INSTALL_ENABLED] = "true";
+  allowed[E2E_ENV.CONFIG_HOME] = testRoot.rootPath;
+  allowed[E2E_ENV.SKILL_STAGING_ROOT] = path.join(
+    testRoot.rootPath,
+    "skill-staging"
+  );
+  allowed[E2E_ENV.SKILL_CREDENTIAL_STORE] = path.join(
+    testRoot.rootPath,
+    "skill-state"
+  );
   // E2E-only deterministic maximized startup (FR-WIN-007/009).
   if (initialMaximized) {
     allowed.AIFETCHLY_E2E_INITIAL_MAXIMIZED = "1";
@@ -209,6 +226,10 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
+  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  if (options.extraEnv) {
+    Object.assign(env, options.extraEnv);
+  }
   const env = buildSanitizedEnv(
     options.testRoot,
     options.fakeAiBaseUrl,

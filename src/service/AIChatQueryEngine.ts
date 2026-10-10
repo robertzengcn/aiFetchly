@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatGoalModule } from "@/modules/AIChatGoalModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
@@ -58,6 +59,7 @@ import {
   countImageContentParts,
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import {
   userSafeError,
@@ -1120,6 +1122,24 @@ export class AIChatQueryEngine {
       input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
+
+    // FR-31 / NFR-03 (audit finding 8): a pasted credential is rejected at
+    // the ORDINARY CHAT boundary — BEFORE any persistence, provider call,
+    // or conversation creation. The message text never reaches the
+    // transcript; the user gets the typed error with secure-input guidance.
+    if (!scheduledContext) {
+      const credentialCheck = checkChatMessageForCredentials(
+        request.message || ""
+      );
+      if (credentialCheck.rejected) {
+        eventSink.emit({
+          type: "error",
+          conversationId: request.conversationId || "",
+          errorMessage: `${credentialCheck.errorCode}: ${credentialCheck.message}`,
+        });
+        return;
+      }
+    }
 
     // ------------------------------------------------------------------
     // 1. Resolve plan state
@@ -2458,6 +2478,15 @@ export class AIChatQueryEngine {
             originalUserRequest: matchedByToolId.request.message,
             toolCallId: matchedByToolId.toolCallId,
           })
+        );
+      }
+
+      // Prompt-skill hidden context (design §10.5/§17.2): the SAME shared
+      // builder as AIChatQueryLoop so both streaming paths deliver one
+      // short acknowledgement followed by one model-only instruction block.
+      if (toolResult.success && toolResult.promptSkillContext) {
+        matchedByToolId.conversationMessages.push(
+          buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
         );
       }
 

@@ -100,7 +100,14 @@ import {
   stripConsumedImageHandoffs,
   stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
+import {
+  evaluateSkillInstallationToolPolicy,
+  installFirstToolCounterKey,
+  INSTALLER_TOOL_NAMES,
+} from "@/service/SkillInstallationToolPolicy";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import {
@@ -118,6 +125,10 @@ import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import {
+  HydrationReplayLedger,
+  decideDeferredToolHydration,
+} from "@/service/DeferredToolHydrationCoordinator";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
@@ -150,6 +161,9 @@ import { log } from "@/modules/Logger";
  * now injects an in-memory continuation and starts another cycle for
  * every chat turn — no canned pause is shown in the UI. Stop still aborts.
  */
+/** FR-24 completion reserve: tokens held back from the skill-instruction
+ * budget so the model can still answer after the hidden block loads. */
+const COMPLETION_RESERVE_TOKENS = 4_000;
 export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
@@ -1242,6 +1256,104 @@ export class AIChatQueryLoop {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
+  /** One internal replay per call fingerprint, ever (FR-28 §8.7). */
+  private readonly hydrationLedger = new HydrationReplayLedger();
+  /** FR-13 narrowing: active skills' allowed-tools intersection (null = off). */
+  private skillToolAllowlist: Set<string> | null = null;
+  private skillToolAllowlistDirty = true;
+  /** FR-30 boundary: the conversation's persisted active installer session. */
+  private activeInstallSession: {
+    sessionId: string;
+    canonicalUri: string | null;
+  } | null = null;
+  private installBoundaryDirty = true;
+  /** Ticket P2-6: which conversation the cached boundary belongs to —
+   *  one loop instance serves several conversations, and a switch must
+   *  not leak the previous conversation's session or approval. */
+  private installBoundaryConversation: string | null = null;
+  /** FR-30: cached manual-action approval for the active session (fail
+   *  closed until the audit lookup completes). Audit R8: a bound record
+   *  carries the exact approved tool/operation/cwd. */
+  private manualActionApprovedCache: {
+    approved: boolean;
+    target?: string;
+    toolName?: string;
+    operation?: string;
+    cwd?: string;
+  } = { approved: false };
+  /** FR-24 (audit R7): the turn's model context window, resolved once
+   *  from the catalog (0 = unknown — the budget field is omitted and the
+   *  invocation falls back to its documented defaults). */
+  private modelContextWindowTokens = 0;
+
+  /** FR-13: async allowlist refresh — caches the intersection for later
+   *  rounds; never blocks (and never rejects) on the critical path. */
+  private async refreshSkillToolAllowlist(conversationId: string): Promise<void> {
+    try {
+      const { PromptSkillInvocationModule } = await import(
+        "@/modules/PromptSkillInvocationModule"
+      );
+      const active = await new PromptSkillInvocationModule().listActive(
+        conversationId
+      );
+      const { intersectSkillToolAllowlists } = await import(
+        "@/service/PromptSkillToolNarrowing"
+      );
+      const { getDefaultPromptSkillCatalog } = await import(
+        "@/service/PromptSkillCatalog"
+      );
+      const catalog2 = getDefaultPromptSkillCatalog();
+      this.skillToolAllowlist = intersectSkillToolAllowlists(
+        active.map((row) => ({
+          runtimeId: row.runtimeId,
+          ...(catalog2.get(row.runtimeId)?.manifest.allowedTools
+            ? {
+                allowedTools:
+                  catalog2.get(row.runtimeId)!.manifest.allowedTools!,
+              }
+            : {}),
+        }))
+      );
+    } catch (narrowError) {
+      log.warn(
+        "[skill-narrowing] allowlist refresh failed, keeping prior set:",
+        narrowError
+      );
+    }
+  }
+
+  /** FR-30: async boundary refresh — caches the active session + its
+   *  manual-action approval; never blocks the critical path. Ticket P2-6:
+   *  records WHICH conversation the cache now speaks for (failure counts —
+   *  the fail-closed empty result is still scoped, so it is not re-probed
+   *  on every call). */
+  private async refreshInstallBoundary(conversationId: string): Promise<void> {
+    try {
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const module = new SkillInstallationModule();
+      this.activeInstallSession = await module.findActiveSessionRouting(
+        conversationId
+      );
+      this.manualActionApprovedCache = this.activeInstallSession
+        ? await module.hasApprovedManualAction(this.activeInstallSession.sessionId)
+        : { approved: false };
+      this.installBoundaryConversation = conversationId;
+    } catch (boundaryError) {
+      log.warn(
+        "[install-boundary] session lookup failed:",
+        boundaryError
+      );
+      // Review R2-P1: a THROWN refresh must fail closed too — the caches
+      // still held the PREVIOUS conversation's session and manual-action
+      // approval, and tagging the new conversation without clearing them
+      // leaked that authorization across conversations.
+      this.activeInstallSession = null;
+      this.manualActionApprovedCache = { approved: false };
+      this.installBoundaryConversation = conversationId;
+    }
+  }
   private readonly modelCatalogService: AIChatModelCatalogService;
 
   /**
@@ -1569,6 +1681,10 @@ export class AIChatQueryLoop {
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
     let currentMaxTokens = input.request.maxTokens ?? 16384;
+    // Audit R10 (design §19): first-tool-category correlation — the FIRST
+    // tool call of a turn whose user message expresses explicit install
+    // intent is categorized once (installer/shell/file/search/other).
+    let installFirstToolRecorded = false;
 
     // Per-turn seven-layer recovery state. Tracks which layers have
     // already been attempted so the coordinator doesn't loop forever.
@@ -1587,6 +1703,21 @@ export class AIChatQueryLoop {
     let reliefAttemptsThisTurn = 0;
     let reliefThisRound = false;
 
+    // FR-24 (audit R7): resolve the model's context window for the
+    // remaining-context estimate. FIRE-AND-FORGET with a cached value —
+    // an inline await here deadlocks fake-timer environments (the same
+    // hazard the install-boundary refreshes hit); the first turn falls
+    // back to the documented defaults, later turns use the cache.
+    void (async () => {
+      try {
+        this.modelContextWindowTokens =
+          await new (await import("@/service/AIChatModelCatalogService"))
+            .AIChatModelCatalogService()
+            .getContextWindow(input.request.model);
+      } catch {
+        this.modelContextWindowTokens = 0;
+      }
+    })();
     try {
       // Load provider context/output limits before the first preflight.
       // The default resolver is sync and reads the catalog cache; without
@@ -1702,6 +1833,16 @@ export class AIChatQueryLoop {
         // full currentTools set (TR-5, AC-10). currentTools remains the full
         // local executable set regardless.
         let exposedTools: OpenAITool[] = currentTools;
+        // FR-13/NFR-11: invoked skills' declared allowed-tools NARROW the
+        // exposed set (core tools survive; widening is impossible). The
+        // refresh runs OFF the critical path (fire-and-forget): an inline
+        // DB await here deadlocks environments whose persistence cannot
+        // settle (fake-timer tests, DB-less hosts). The apply below uses
+        // whatever the latest completed refresh cached.
+        if (this.skillToolAllowlistDirty) {
+          this.skillToolAllowlistDirty = false;
+          void this.refreshSkillToolAllowlist(input.conversationId);
+        }
         if (catalogActive && catalog && catalogModeDecision) {
           try {
             const filterResult = this.catalogService.filterForRound({
@@ -1726,8 +1867,23 @@ export class AIChatQueryLoop {
               filterError
             );
             toolCatalogCounters.increment("fallback_count");
-            exposedTools = currentTools;
           }
+        }
+        // Ticket P2-7: narrowing applies to the FINAL set — catalog
+        // filtering previously REPLACED the narrowed list with a filtered
+        // copy of the FULL tool set, undoing an invoked skill's
+        // allowed-tools restriction.
+        if (this.skillToolAllowlist) {
+          const { applySkillToolNarrowing } = await import(
+            "@/service/PromptSkillToolNarrowing"
+          );
+          const keep = new Set(
+            applySkillToolNarrowing(
+              exposedTools.map((t) => t.function.name),
+              this.skillToolAllowlist
+            )
+          );
+          exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
         }
         const hasExposedTools = exposedTools.length > 0;
 
@@ -2568,6 +2724,9 @@ export class AIChatQueryLoop {
           });
         }
 
+        // Ticket P2-8: handoff messages collected per tool batch — appended
+        // after the loop so tool responses stay contiguous.
+        const postToolHandoffs: OpenAIChatMessage[] = [];
         for (const call of parsedCalls) {
           if (!call.ok || !call.id || !call.name) {
             continue;
@@ -2799,26 +2958,56 @@ export class AIChatQueryLoop {
                 continue;
               }
 
-              discoveredToolNames.add(call.name);
-              const retryContent = serializeToolResultContent({
-                success: false,
-                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
-              });
-              eventSink.emit({
-                type: "tool_result",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                toolCallId: call.id,
+              // FR-28 transparent one-shot hydration + replay (design §8.7):
+              // hydrate the tool and execute THIS validated call now through
+              // the generic path below — the model never receives a synthetic
+              // "deferred tool loaded; retry" failure. One replay per call
+              // fingerprint, ever (process-wide ledger, independent of the
+              // round-level transient retry counter).
+              const hydrationDecision = decideDeferredToolHydration({
+                catalogActive,
+                catalogEntry: entry,
+                discoveredToolNames,
                 toolName: call.name,
-                fullContent: retryContent,
-                toolResult: { success: false, error: "deferred tool loaded" },
+                callArguments: call.arguments ?? {},
+                conversationId: input.conversationId,
+                ledger: this.hydrationLedger,
               });
-              messages.push({
-                role: "tool",
-                tool_call_id: call.id,
-                content: retryContent,
-              });
-              continue;
+              if (hydrationDecision.action === "execute") {
+                discoveredToolNames.add(call.name);
+                toolCatalogCounters.increment("hydration_replays");
+                log.info(
+                  `[tool-catalog] hydrated deferred tool "${call.name}"; replaying the call internally (FR-28)`
+                );
+                // Fall through: the same call executes in THIS round.
+              } else if (hydrationDecision.action === "exhausted") {
+                toolCatalogCounters.increment("hydration_replay_exhausted");
+                const exhaustedContent = serializeToolResultContent({
+                  success: false,
+                  error:
+                    `Tool "${call.name}" could not be loaded automatically ` +
+                    `(retry budget exhausted). Search the tool catalog first.`,
+                  error_code: "INSTALL_TOOL_LOAD_RETRY_EXHAUSTED",
+                });
+                eventSink.emit({
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: exhaustedContent,
+                  toolResult: {
+                    success: false,
+                    error: "deferred tool load retry exhausted",
+                  },
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: exhaustedContent,
+                });
+                continue;
+              }
             }
           }
 
@@ -3034,6 +3223,126 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
+
+          // Skill-installation tool policy (design §8.6, FR-30): after an
+          // explicit install intent, generic shell/file/catalog tools cannot
+          // substitute for the typed installer on the recognized target.
+          // Unrelated workspace work stays legal; only a typed
+          // manual-action-required transition opens a generic fallback.
+          // FR-30 session-aware boundary: the message's intent OR this
+          // conversation's PERSISTED active installer session activates the
+          // boundary — so follow-up turns ("continue", "now do X on it")
+          // cannot sidestep the typed installer just by omitting the intent
+          // phrases. The session's manual-action approval (when granted)
+          // opens the bounded generic fallback.
+          const skillInstallRouting = classifySkillRequestIntent(
+            input.request.message
+          );
+          // Audit R10: record the first-tool category once per explicit
+          // install REQUEST (the user message itself carries the intent).
+          if (
+            skillInstallRouting.confidence === "explicit" &&
+            !installFirstToolRecorded
+          ) {
+            installFirstToolRecorded = true;
+            toolCatalogCounters.increment(installFirstToolCounterKey(call.name));
+          }
+          let installRouting = skillInstallRouting;
+          // Ticket P2-6: the cached install boundary belongs to ONE
+          // conversation — one loop instance serves several. A conversation
+          // switch invalidates it for THIS call (fail closed: neither the
+          // previous conversation's session nor its manual-action approval
+          // applies) while a fresh resolve runs off the critical path.
+          const boundaryStale =
+            this.installBoundaryConversation !== input.conversationId;
+          if (installRouting.confidence !== "explicit") {
+            if (this.installBoundaryDirty || boundaryStale) {
+              this.installBoundaryDirty = false;
+              // Off the critical path (see the narrowing note): the cached
+              // session binds this and subsequent calls once resolved.
+              void this.refreshInstallBoundary(input.conversationId);
+            }
+            if (this.activeInstallSession && !boundaryStale) {
+              installRouting = {
+                policyVersion: 1,
+                intent: "install-package",
+                confidence: "explicit",
+                ...(this.activeInstallSession.canonicalUri
+                  ? {
+                      source: this.activeInstallSession.canonicalUri,
+                    }
+                  : {}),
+                allowedEntryPoint: "skill_install_prepare",
+                reasonCode: "active-session-binding",
+              };
+            }
+          } else {
+            this.installBoundaryDirty = true;
+          }
+          // Cached by refreshInstallBoundary; false (fail closed) until the
+          // audit lookup completes — never awaited inline. Ticket P2-6: a
+          // boundary cached for a DIFFERENT conversation reads as
+          // not-approved here.
+          const manualActionApproved = boundaryStale
+            ? { approved: false }
+            : this.manualActionApprovedCache;
+          if (
+            installRouting.confidence === "explicit" &&
+            !INSTALLER_TOOL_NAMES.has(call.name)
+          ) {
+            const verdict = evaluateSkillInstallationToolPolicy({
+              routing: installRouting,
+              toolName: call.name,
+              toolArguments: call.arguments ?? {},
+              manualActionApproved: manualActionApproved.approved
+                ? {
+                    target:
+                      manualActionApproved.target ??
+                      installRouting.source ??
+                      "",
+                    // Audit R8: forward the exact approved operation so
+                    // the policy authorizes ONLY it (a target-only record
+                    // keeps the legacy, broader target scope).
+                    ...(manualActionApproved.toolName !== undefined
+                      ? { toolName: manualActionApproved.toolName }
+                      : {}),
+                    ...(manualActionApproved.operation !== undefined
+                      ? { operation: manualActionApproved.operation }
+                      : {}),
+                    ...(manualActionApproved.cwd !== undefined
+                      ? { cwd: manualActionApproved.cwd }
+                      : {}),
+                  }
+                : undefined,
+            });
+            // NFR-12 release metrics (PRD §14): observe the routing
+            // decision + outcome at the enforcement point.
+            toolCatalogCounters.increment("install_routing_explicit");
+            if (!verdict.allowed) {
+              toolCatalogCounters.increment("install_fallback_blocked");
+              await emitToolCall(call.arguments ?? {});
+              const blockedInstallContent = serializeToolResultContent({
+                success: false,
+                error: verdict.message,
+                error_code: verdict.code,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedInstallContent,
+                toolResult: { success: false, error: verdict.message },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedInstallContent,
+              });
+              continue;
+            }
+          }
           const preparedCall = await this.prepareToolCall(
             input,
             executableCall,
@@ -3082,6 +3391,11 @@ export class AIChatQueryLoop {
 
           let toolPayload = normalizeToolResult(toolResult);
           let toolContent = serializeToolResultContent(toolPayload);
+          // FR-13: a (fresh or repeated) skill invocation may change the
+          // active allowed-tools intersection for subsequent rounds.
+          if (call.name === "use_skill") {
+            this.skillToolAllowlistDirty = true;
+          }
 
           // Recoverable large tool results (technical design §9.1). When the
           // rollout flags are off this is a single cheap check and the legacy
@@ -3267,7 +3581,10 @@ export class AIChatQueryLoop {
               pending: {
                 conversationId: input.conversationId,
                 assistantMessageId: input.assistantMessageId,
-                conversationMessages: messages,
+                // Review R2: carry any handoffs queued by EARLIER tools
+                // in this batch through the pause — they were dropped
+                // when the permission return bypassed the batch append.
+                conversationMessages: [...messages, ...postToolHandoffs],
                 abortController: input.abortController,
                 request: input.request,
                 openAITools: currentTools,
@@ -3305,6 +3622,20 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // Prompt-skill hidden context (design §10.5): after the SHORT tool
+          // acknowledgement, append the verified instruction block as a
+          // model-only message. Not persisted, not a user bubble, and marked
+          // as untrusted repository guidance inside the block itself.
+          // Ticket P2-8: handoffs are COLLECTED and appended after the whole
+          // tool batch — a role:user message between two tool responses
+          // violates the Chat Completions contract (all tool responses for
+          // an assistant's tool_calls must precede any user message) and
+          // strict providers reject the next request.
+          if (toolResult.success && toolResult.promptSkillContext) {
+            postToolHandoffs.push(
+              buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
+            );
+          }
           // Transient image handoff: if the tool returned prepared images
           // (attach_local_images), append a model-only role:user multimodal
           // message carrying them as image_url parts. This is NOT persisted as
@@ -3318,7 +3649,7 @@ export class AIChatQueryLoop {
             toolResult.modelArtifacts &&
             toolResult.modelArtifacts.length > 0
           ) {
-            messages.push(
+            postToolHandoffs.push(
               buildImageArtifactHandoffMessage({
                 artifacts: toolResult.modelArtifacts,
                 originalUserRequest: input.request.message,
@@ -3350,6 +3681,9 @@ export class AIChatQueryLoop {
             }
           }
         }
+      // Ticket P2-8: all tool responses are contiguous; the handoff
+      // (model-only role:user) messages follow the batch.
+      messages.push(...postToolHandoffs);
       }
 
       // All tool calls for this round have executed and their results are
@@ -3444,6 +3778,8 @@ export class AIChatQueryLoop {
           totalTokens: estimated.totalTokens,
         });
       }
+      // NFR-12: aggregate counter emission on the turn boundary.
+      toolCatalogCounters.onTurnCompleted();
       return {
         type: "completed",
         conversationId: input.conversationId,
@@ -4219,6 +4555,33 @@ export class AIChatQueryLoop {
     };
   }
 
+  /** ~4-chars-per-token estimate of the assembled transcript (string
+   *  contents only — multimodal parts add conservative slack via the
+   *  reserve). */
+  private estimateTranscriptTokens(
+    messages: ReadonlyArray<{ content?: unknown }>
+  ): number {
+    let chars = 0;
+    for (const m of messages) {
+      if (typeof m.content === "string") chars += m.content.length;
+      else if (Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (
+            part &&
+            typeof part === "object" &&
+            typeof (part as { text?: unknown }).text === "string"
+          ) {
+            chars += ((part as { text: string }).text ?? "").length;
+          } else {
+            // non-text part (e.g. image) — count as the reserve budget
+            chars += COMPLETION_RESERVE_TOKENS * 4;
+          }
+        }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
   private async executePreparedToolWithTimeout(
     input: AIChatQueryLoopInput,
     prepared: PreparedToolCall
@@ -4339,6 +4702,21 @@ export class AIChatQueryLoop {
         // cumulative budget against user-selected AND tool-selected images.
         currentRequestImageCount: countImageContentParts(input.messages),
         currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
+        // FR-24 (audit R7): the REAL remaining-context estimate — the
+        // assembled transcript's token cost subtracted from the model
+        // window, minus a completion reserve. use_skill forwards this to
+        // the invocation budget so hidden instruction blocks are bounded
+        // by what the conversation can actually hold.
+        ...(this.modelContextWindowTokens > 0
+          ? {
+              remainingContextTokens: Math.max(
+                0,
+                this.modelContextWindowTokens -
+                  this.estimateTranscriptTokens(input.messages) -
+                COMPLETION_RESERVE_TOKENS
+              ),
+            }
+          : {}),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({

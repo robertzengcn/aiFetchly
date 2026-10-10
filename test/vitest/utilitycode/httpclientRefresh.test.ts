@@ -7,7 +7,7 @@ const mockTokenGetValue = vi.hoisted(() =>
   vi.fn<(...args: [string]) => string>().mockReturnValue("")
 );
 const mockTokenSetValue = vi.hoisted(() =>
-  vi.fn<(...args: [string, string]) => void>()
+  vi.fn<(key: string, value: string) => void>()
 );
 
 vi.mock("@/modules/token", () => ({
@@ -28,9 +28,7 @@ vi.mock("@/modules/user", () => ({
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
 // through real network code in these HttpClient-level tests.
-const mockRefreshOnce = vi.hoisted(() =>
-  vi.fn<(...args: []) => Promise<unknown>>()
-);
+const mockRefreshOnce = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 
 const MockRefreshTokenInvalidError = vi.hoisted(() => {
   return class extends Error {

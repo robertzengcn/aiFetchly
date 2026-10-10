@@ -20,6 +20,13 @@ export const E2E_ENV = {
   TOOL_OUTPUT_ROOT: "AIFETCHLY_TOOL_OUTPUT_ROOT",
   IS_TEST: "IS_TEST",
   NODE_ENV: "NODE_ENV",
+  // Skill-installation isolation overrides (natural-language-skill-installation):
+  // redirect ~/.aifetchly + staging into the per-run temp root and enable the
+  // installer so E2E never touches real user config or installed skills.
+  SKILL_INSTALL_ENABLED: "AIFETCHLY_SKILL_INSTALL_ENABLED",
+  CONFIG_HOME: "AIFETCHLY_CONFIG_HOME",
+  SKILL_STAGING_ROOT: "AIFETCHLY_SKILL_STAGING_ROOT",
+  SKILL_CREDENTIAL_STORE: "AIFETCHLY_SKILL_CREDENTIAL_STORE",
 } as const;
 
 /** Shared run-root segment the bootstrap requires (mirror E2EEnvironment.ts). */

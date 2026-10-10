@@ -23,6 +23,11 @@ function composer(app: LaunchedApp): Locator {
     .first();
 }
 async function openChat(app: LaunchedApp): Promise<void> {
+  // Chat-first boot race: composer may already be present.
+  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  if (await chatToggle.isVisible().catch(() => false)) {
+    await chatToggle.click();
+  }
   await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }

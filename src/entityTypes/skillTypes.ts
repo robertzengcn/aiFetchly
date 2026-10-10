@@ -31,6 +31,14 @@ export interface SkillExecutionResult {
    * renderer, or passed to hooks.
    */
   readonly modelArtifacts?: readonly ModelArtifact[];
+  /**
+   * Transient prompt-skill instruction block (natural-language-skill-
+   * installation design §10.5). A SIBLING of `result` with the same
+   * non-persistence contract as modelArtifacts: the query loop reads it to
+   * append a model-only handoff message; serializers that spread only
+   * `result` never see it.
+   */
+  readonly promptSkillContext?: import("./promptSkillTypes").PromptSkillContextAttachment;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +233,15 @@ export interface SkillExecutionContext {
 
   /** Chat model selected for the parent turn that invoked this skill. */
   readonly model?: string;
+
+  /**
+   * FR-24 budget input: the caller's estimate of tokens still available in
+   * the active context window. Prompt-skill invocation uses it to bound the
+   * hidden instruction block against the REAL remaining budget instead of a
+   * fixed default. Optional — older callers omit it and the invocation
+   * falls back to its documented defaults.
+   */
+  readonly remainingContextTokens?: number;
 
   /**
    * When true, the caller has already obtained user consent (e.g. via

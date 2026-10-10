@@ -393,6 +393,42 @@ export const AI_CHAT_V2_SCHEDULED_LOOP_RESUME =
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP = "ai-chat-v2:scheduled-loop-stop";
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
   "ai-chat-v2:scheduled-loop-stop-run";
+// Skill installation channels (natural-language-skill-installation design §15.1).
+// PREPARE/APPROVE serve the AI-driven install flow and check USER_AI_ENABLED
+// first; STATUS/CANCEL are plain lifecycle queries. SUBMIT_SECRET is a
+// dedicated secure channel — the value never travels through chat or tool JSON.
+export const SKILL_INSTALL_PREPARE = "skill-install:prepare";
+export const SKILL_INSTALL_APPROVE = "skill-install:approve";
+// Typed dependency-install approval (PRD §18): renderer-only, token-gated
+// like APPROVE; installation runs through the catalog-validated system
+// dependency module, never repository shell text.
+export const SKILL_INSTALL_APPROVE_DEPENDENCY =
+  "skill-install:approve-dependency";
+export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
+export const SKILL_INSTALL_STATUS = "skill-install:status";
+export const SKILL_INSTALL_CANCEL = "skill-install:cancel";
+// Typed retry (FR-20/§10.1): re-run a failed install from the recorded
+// canonical source, enforcing the three-same-cause stop rule.
+export const SKILL_INSTALL_RETRY = "skill-install:retry";
+// Management listing for the skill-management UI (PRD §22.3).
+export const SKILL_INSTALL_LIST = "skill-install:list";
+export const SKILL_INSTALL_PROGRESS = "skill-install:progress";
+// Lifecycle management surface for the skill management UI (PRD §22.3).
+export const SKILL_INSTALL_UPDATE = "skill-install:update";
+export const SKILL_INSTALL_REPAIR = "skill-install:repair";
+export const SKILL_INSTALL_DISABLE = "skill-install:disable";
+export const SKILL_INSTALL_ENABLE = "skill-install:enable";
+export const SKILL_INSTALL_UNINSTALL = "skill-install:uninstall";
+/** Explicit /skill-name invocation (PRD §9.5) — same invocation service as use_skill. */
+export const PROMPT_SKILL_INVOKE = "prompt-skill:invoke";
+/** Renderer-only approval-token channel (review D1) — never a model tool. */
+export const SKILL_INSTALL_APPROVAL_TOKEN = "skill-install:approval-token";
+/** Execute one APPROVED plan command (renderer diagnostics view; TODO 5 / FR-16). */
+export const SKILL_INSTALL_RUN_COMMAND = "skill-install:run-command";
+/** Reveal-source action (audit R9 / PRD §22.3): open the activation
+ *  location in the OS file manager. The path comes from the installation
+ *  row in the main process — the renderer sends only the installation id. */
+export const SKILL_INSTALL_REVEAL_SOURCE = "skill-install:reveal-source";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
@@ -711,6 +747,11 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+// Git-free GitHub plugin installation (design §12.4): renderer-driven
+// cancellation keyed by install operationId + main-process capability flags.
+export const PLUGIN_CANCEL_INSTALL = "plugin:cancel-install";
+export const PLUGIN_GET_INSTALL_CAPABILITIES =
+  "plugin:get-install-capabilities";
 export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
 export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 

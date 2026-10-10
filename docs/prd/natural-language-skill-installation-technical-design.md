@@ -1164,7 +1164,11 @@ Full compaction summarizes ordinary conversation history but does not summarize
 away active skill contracts. After `AIChatCompactSummary` is loaded,
 `AIChatContextAssembler` reattaches active prompt-skill contexts in deterministic
 invocation order. Recovery uses the stored normalized snapshot so a linked file
-that changed or disappeared cannot rewrite past context silently.
+that changed or disappeared cannot rewrite past context silently. A changed
+(hash-mismatched) skill reattaches from the last verified snapshot AND emits
+the structured `SKILL_HASH_CHANGED` diagnostic (PRD §14.6) so the user is
+told to re-invoke for the new instructions; uninstalled, disabled, or missing
+skills are deactivated with their diagnostics instead of restored.
 
 Conversation clear/deletion deactivates or removes its invocation rows through
 `PromptSkillInvocationModule`. Parent and subagent scopes remain separate unless

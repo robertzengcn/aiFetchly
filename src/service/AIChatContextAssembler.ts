@@ -20,6 +20,8 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { PromptSkillInvocationModule } from "@/modules/PromptSkillInvocationModule";
+import { buildPromptSkillCatalogBlock } from "@/service/PromptSkillCatalogPresenter";
 import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import {
   buildToolHistoryIndexBlock,
@@ -451,10 +453,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to resolve active workspace:",
-        err
-      );
+      log.error("[ai-chat-context] failed to resolve active workspace:", err);
     }
 
     // Environment & system context. Informs the model of the OS, app
@@ -464,10 +463,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to build environment context:",
-        err
-      );
+      log.error("[ai-chat-context] failed to build environment context:", err);
     }
 
     // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
@@ -500,10 +496,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] available agents injection failed:",
-        err
-      );
+      log.error("[ai-chat-context] available agents injection failed:", err);
     }
 
     // Built-in tool capabilities guidance (HTML-artifacts design §15,
@@ -526,6 +519,50 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Application-owned skill installation routing policy (design §8.5,
+    // FR-26): injected exactly once per turn as system context, after core
+    // capability guidance and BEFORE any repository-authored or invoked-skill
+    // content. Only while the installer feature flag is enabled; repository
+    // content can never replace or weaken this section.
+    try {
+      const { isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (isSkillInstallerEnabled()) {
+        const { buildSkillInstallationRoutingSection } = await import(
+          "@/service/SkillInstallationRoutingPromptSection"
+        );
+        messages.push({
+          role: "system",
+          content: buildSkillInstallationRoutingSection(),
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] skill installation routing policy injection failed:",
+        err
+      );
+    }
+
+    // Available prompt skills catalog (design §10.3, NFR-09): metadata-only
+    // discovery so the model knows what use_skill can invoke. Instruction
+    // bodies are NEVER injected here — they load lazily after invocation.
+    try {
+      const workspaceResolved = await new WorkspaceResolver().resolve(
+        input.conversationId
+      );
+      const catalogBlock = buildPromptSkillCatalogBlock(
+        workspaceResolved ? { workspaceId: workspaceResolved.workspaceId } : {}
+      );
+      if (catalogBlock.length > 0) {
+        messages.push({ role: "system", content: catalogBlock });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] prompt skill catalog injection failed:",
+        err
+      );
+    }
     // Approved-plan execution context. `buildPlanModeSystemPrompt` (the only
     // other path that inlines planMarkdown into the system prompt) is gated on
     // `mode === "plan"`, but after a user approves the plan the execution round
@@ -587,10 +624,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] workspace memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] workspace memory retrieval failed:", err);
       }
     }
     if (workspaceContextBlock.length > 0) {
@@ -622,10 +656,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] durable memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] durable memory retrieval failed:", err);
       }
     }
     if (durableContextBlock.length > 0) {
@@ -670,6 +701,45 @@ export class AIChatContextAssembler {
           "conflict.\n\n" +
           evidenceBodies.join("\n\n---\n\n"),
       });
+    }
+
+    // Invoked prompt-skill reattachment (design §10.10/§17.2): full
+    // compaction must not summarize away active skill contracts. Reattach
+    // the STORED verified snapshots in deterministic invocation order AFTER
+    // the compact summary and BEFORE recent messages, so recent explicit
+    // user instructions can still refine the task. Recovery never mutates
+    // the stored block — a linked source that changed or vanished cannot
+    // rewrite past context.
+    try {
+      const invocationModule = new PromptSkillInvocationModule();
+      // FR-23 reconciliation: only invocations whose skill is still
+      // installed, enabled, and hash-identical reattach; invalid ones are
+      // deactivated with a bounded structured diagnostic (never silently
+      // restored, never silently dropped).
+      const { reattach, diagnostics } =
+        await invocationModule.reconcileForRecovery(input.conversationId);
+      for (const invocation of reattach) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-reattached]\n` +
+            `The following skill was invoked earlier in this conversation and ` +
+            `remains applicable:\n${invocation.normalizedInstructions}`,
+        });
+      }
+      for (const diagnostic of diagnostics) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-diagnostic code="${diagnostic.code}" runtime_id="${diagnostic.runtimeId}"]\n` +
+            `${diagnostic.message}`,
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] invoked prompt-skill reattachment failed:",
+        err
+      );
     }
 
     // Active composite boundary wins for tool evidence too; a resolved legacy

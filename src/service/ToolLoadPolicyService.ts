@@ -40,6 +40,16 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_attachment_content",
   "knowledge_library_search",
   "run_subagent",
+  // Universal prompt-skill invocation (design §10.4): one stable tool instead
+  // of one documentation tool per skill; the schema is tiny and the model
+  // must be able to invoke installed skills without a catalog search.
+  "use_skill",
+  "skill_resource_list",
+  "skill_resource_read",
+  // Installer entry point (design §8.7): while the feature flag is enabled,
+  // prepare is ALWAYS loaded — the model must never need tool_catalog_search
+  // to discover it. Evaluated dynamically (not at module load) so runtime
+  // flag changes and test setups are respected.
   "conversation_tool_history",
   // The preserved-output readers are ALWAYS in the core tool set, never behind
   // `tool_catalog_search`. They are the only way the model can reach an output
@@ -51,6 +61,18 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_RESULT_READ_TOOL_NAME,
   TOOL_RESULT_SEARCH_TOOL_NAME,
 ]);
+// The installer names live in their own set so the flag check stays dynamic.
+const INSTALLER_ALWAYS_TOOLS: ReadonlySet<string> = new Set([
+  "skill_install_prepare",
+  "skill_install_status",
+  "skill_install_cancel",
+]);
+
+/** Installer feature flag read at classify time (kill-switch pattern). */
+function installerToolsAlwaysLoaded(): boolean {
+  const raw = process.env.AIFETCHLY_SKILL_INSTALL_ENABLED;
+  return raw === "true" || raw === "1";
+}
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "shell_execute",
@@ -300,6 +322,13 @@ export class ToolLoadPolicyService {
 
     // 3. Explicit always-loaded core helpers.
     if (ALWAYS_LOADED_TOOL_NAMES.has(name)) return "always";
+    // 3b. Installer tools are always-loaded while the feature flag is on.
+    if (
+      installerToolsAlwaysLoaded() &&
+      INSTALLER_ALWAYS_TOOLS.has(name)
+    ) {
+      return "always";
+    }
 
     // 4. Explicitly blocked tools are never auto-exposed.
     if (input.context.blockedToolNames?.has(name)) return "deferred";

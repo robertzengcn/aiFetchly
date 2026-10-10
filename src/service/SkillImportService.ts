@@ -404,6 +404,91 @@ function buildSkillMarkdownWrapperCode(
 /** Max characters of SKILL.md guidance included in attachment responses. */
 const SKILL_GUIDANCE_CAP = 8000;
 
+/**
+ * Legacy documentation-skill delegation (design §10.11, FR-25): route the
+ * no-attachment documentation path through the SAME prompt invocation
+ * service use_skill uses, with invocationSource "legacy-adapter". Returns
+ * the short ack + transient promptSkillContext sibling, or null when the
+ * skill is not registered in the prompt catalog (legacy JSON fallback).
+ */
+async function delegateLegacyDocSkillToPromptRuntime(input: {
+  readonly name: string;
+  readonly conversationId: string;
+}): Promise<SkillExecutionResult | null> {
+  try {
+    const { getDefaultPromptSkillInvocationService } = await import(
+      "@/service/PromptSkillInvocationService"
+    );
+    const { getDefaultFilesystemContextService } = await import(
+      "@/service/ConversationFilesystemContextService"
+    );
+    const scope = await getDefaultFilesystemContextService()
+      .resolve(input.conversationId)
+      .then((r) => (r.ok ? r.context : null))
+      .catch(() => null);
+    const outcome = await getDefaultPromptSkillInvocationService().invoke(
+      { skill: input.name },
+      {
+        conversationId: input.conversationId,
+        conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
+        ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
+          ? { workspaceId: scope.workspaceId }
+          : {}),
+        invocationSource: "legacy-adapter",
+      }
+    );
+    if (!outcome.ok) return null;
+    return {
+      success: true,
+      result: { ...outcome.result },
+      ...(outcome.attachment ? { promptSkillContext: outcome.attachment } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Register a documentation-only import into the PromptSkillCatalog so the
+ * legacy adapter (and use_skill) resolve it through ONE runtime. Failures
+ * are non-fatal — the legacy guidance JSON path keeps working.
+ */
+async function registerLegacyDocSkillInPromptCatalog(
+  manifest: SkillManifest,
+  skillDir: string
+): Promise<void> {
+  try {
+    const [{ getDefaultPromptSkillCatalog }, { loadSkillMarkdownFile }] =
+      await Promise.all([
+        import("@/service/PromptSkillCatalog"),
+        import("@/service/PromptSkillLoader"),
+      ]);
+    const loaded = loadSkillMarkdownFile(skillDir);
+    if (!loaded.ok) return;
+    const installationId = `legacy-${manifest.name}`;
+    getDefaultPromptSkillCatalog().replaceSource(
+      `legacy-import:${manifest.name}`,
+      [
+        {
+          runtimeId: `prompt:user:${installationId}`,
+          installationId,
+          sourceId: `legacy-import:${manifest.name}`,
+          scope: "user",
+          name: loaded.file.manifest.name,
+          description: loaded.file.manifest.description,
+          canonicalRoot: skillDir,
+          skillMarkdownPath: path.join(skillDir, "SKILL.md"),
+          contentHash: loaded.file.contentHash,
+          manifest: loaded.file.manifest,
+          enabled: true,
+        },
+      ]
+    );
+  } catch {
+    /* non-fatal: legacy path remains */
+  }
+}
+
 function isSkillMarkdownDocumentationEntry(manifest: SkillManifest): boolean {
   return manifest.documentationOnly === true;
 }
@@ -694,6 +779,116 @@ function getInstalledSkillsDir(): string {
     fs.mkdirSync(skillsDir, { recursive: true });
   }
   return skillsDir;
+}
+
+/**
+ * TODO 3 / FR-07: import an EXECUTABLE skill from a staged local DIRECTORY
+ * (the typed installer's acquisition root) instead of a zip. Mirrors
+ * importFromZip's validation + installed_skills copy + registration steps;
+ * the directory is copied bounded (no traversal — copy only known-safe
+ * files like the zip path does via extractAllTo into a fresh dir).
+ */
+async function importFromDirectory(
+  sourceRoot: string
+): Promise<{ success: true; name: string } | { success: false; error: string }> {
+  if (!fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) {
+    return { success: false, error: `Skill directory not found: ${sourceRoot}` };
+  }
+
+  // Read + validate manifest.json from the directory.
+  const manifestPath = path.join(sourceRoot, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    return { success: false, error: "Missing manifest.json in skill directory" };
+  }
+  let rawManifest: unknown;
+  try {
+    rawManifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+  } catch {
+    return { success: false, error: "manifest.json is not valid JSON" };
+  }
+  const validation = validateManifest(rawManifest);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+  const manifest = validation.manifest;
+
+  const pythonError = validatePythonManifestFields(
+    manifest as unknown as Record<string, unknown>
+  );
+  if (pythonError) return { success: false, error: pythonError };
+
+  const entryAbs = path.join(sourceRoot, manifest.entry);
+  if (
+    manifest.entry.includes("..") ||
+    path.isAbsolute(manifest.entry) ||
+    !fs.existsSync(entryAbs)
+  ) {
+    return {
+      success: false,
+      error: `Entry file "${manifest.entry}" not found in skill directory`,
+    };
+  }
+
+  // Replace a prior installation of the same name BEFORE copying —
+  // uninstallSkill deletes the installed_skills/<name> DIRECTORY, so doing
+  // it after the copy would destroy the fresh files (review fix).
+  const module = new SkillManagementModule();
+  const existing = await module.getSkillByName(manifest.name);
+  if (existing) {
+    await module.uninstallSkill(manifest.name);
+  }
+
+  // Copy into userData/installed_skills/<name>/ (fresh dir, same as zip path).
+  const skillDir = path.join(getInstalledSkillsDir(), manifest.name);
+  fs.rmSync(skillDir, { recursive: true, force: true });
+  fs.mkdirSync(skillDir, { recursive: true });
+  try {
+    copyTreeBounded(sourceRoot, skillDir);
+
+    if (manifest.runtime === "python") {
+      await SkillEnvironmentManager.prepare(skillDir, manifest);
+    }
+
+    // Persist + hot-register through the SAME path as zip imports.
+    await module.installSkill({
+      name: manifest.name,
+      version: manifest.version,
+      source: "user",
+      manifest_json: JSON.stringify(manifest),
+      permissions_json: JSON.stringify(manifest.permissions ?? []),
+      enabled: 1,
+    });
+    registerImportedSkill(manifest, skillDir);
+    return { success: true, name: manifest.name };
+  } catch (error) {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown import error",
+    };
+  }
+}
+
+/**
+ * Bounded directory copy for directory-based imports: files + directories
+ * only (links skipped), depth-capped, .git excluded. The destination is a
+ * FRESH directory so no pre-existing content can survive.
+ */
+function copyTreeBounded(from: string, to: string, depth = 0): void {
+  if (depth > 20) throw new Error("Skill directory exceeds depth 20.");
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const src = path.join(from, entry.name);
+    const dest = path.join(to, entry.name);
+    const stat = fs.lstatSync(src);
+    if (stat.isSymbolicLink()) continue; // links are never staged
+    if (stat.isDirectory()) {
+      copyTreeBounded(src, dest, depth + 1);
+    } else if (stat.isFile()) {
+      fs.copyFileSync(src, dest);
+    }
+  }
 }
 
 async function importFromZip(zipPath: string): Promise<
@@ -1066,6 +1261,19 @@ function registerImportedSkill(
     pluginOwner: options?.pluginOwner,
     execute: buildImportedSkillExecuteHandler(resolvedManifest, skillDir, code),
   });
+
+  // FR-25 / design §10.11: documentation-only imports join the prompt-skill
+  // catalog so the legacy tool delegates to the shared invocation service.
+  // Best-effort and non-blocking — the legacy guidance path keeps working
+  // if registration fails.
+  if (isDocumentationOnly) {
+    void registerLegacyDocSkillInPromptCatalog(
+      resolvedManifest,
+      skillDir
+    ).catch(() => {
+      /* non-fatal */
+    });
+  }
 }
 
 function buildSyntheticPythonManifestForAttachmentExecution(
@@ -1208,19 +1416,6 @@ function buildImportedSkillExecuteHandler(
       const skillMdPath =
         findFirstFileByBasename(capturedSkillDir, "skill.md") ??
         path.join(capturedSkillDir, "SKILL.md");
-      let skillGuidance = "";
-      try {
-        const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
-        skillGuidance =
-          fullGuidance.length > SKILL_GUIDANCE_CAP
-            ? `${fullGuidance.slice(
-                0,
-                SKILL_GUIDANCE_CAP
-              )}\n...[skill guidance truncated]`
-            : fullGuidance;
-      } catch {
-        skillGuidance = "";
-      }
 
       // Discover runnable Python scripts for the AI to call via run_skill_script
       const availableScripts = listAllSkillScriptStemNames(
@@ -1229,6 +1424,46 @@ function buildImportedSkillExecuteHandler(
       );
 
       if (!attachmentRef) {
+        // Legacy documentation-skill delegation (design §10.11, FR-25): the
+        // SAME prompt invocation service as use_skill — short tool
+        // acknowledgement + hidden instruction context via the transient
+        // promptSkillContext sibling. Falls back to the legacy guidance-JSON
+        // result only when the skill is not resolvable in the prompt catalog.
+        const delegated = await delegateLegacyDocSkillToPromptRuntime({
+          name: capturedName,
+          conversationId,
+        });
+        if (delegated) {
+          return {
+            ...delegated,
+            result: {
+              ...delegated.result,
+              mode: "documentation_skill",
+              legacyAdapter: true,
+              ...(availableScripts.length > 0
+                ? {
+                    available_scripts: availableScripts,
+                    run_scripts_hint: `To execute a Python transformation, call run_skill_script with skill_name="${capturedName}" and one of the available script names.`,
+                  }
+                : {}),
+            },
+          };
+        }
+
+        let skillGuidance = "";
+        try {
+          const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
+          skillGuidance =
+            fullGuidance.length > SKILL_GUIDANCE_CAP
+              ? `${fullGuidance.slice(
+                  0,
+                  SKILL_GUIDANCE_CAP
+                )}\n...[skill guidance truncated]`
+              : fullGuidance;
+        } catch {
+          skillGuidance = "";
+        }
+
         return {
           success: true,
           result: {
@@ -1270,6 +1505,23 @@ function buildImportedSkillExecuteHandler(
           ? staged.markdown.slice(0, maxLength)
           : staged.markdown;
 
+        // Attachment results keep the inline guidance hint (the staged
+        // document is the primary content; skills already attached guidance
+        // on the no-attachment round).
+        let attachmentGuidance = "";
+        try {
+          const fullGuidance = fs.readFileSync(skillMdPath, "utf-8");
+          attachmentGuidance =
+            fullGuidance.length > SKILL_GUIDANCE_CAP
+              ? `${fullGuidance.slice(
+                  0,
+                  SKILL_GUIDANCE_CAP
+                )}\n...[skill guidance truncated]`
+              : fullGuidance;
+        } catch {
+          attachmentGuidance = "";
+        }
+
         return {
           success: true,
           result: {
@@ -1278,7 +1530,9 @@ function buildImportedSkillExecuteHandler(
             fileName: staged.fileName,
             content,
             truncated: isTruncated,
-            ...(skillGuidance ? { skillGuidance } : {}),
+            ...(attachmentGuidance
+              ? { skillGuidance: attachmentGuidance }
+              : {}),
             ...(availableScripts.length > 0
               ? {
                   available_scripts: availableScripts,
@@ -1375,6 +1629,7 @@ async function loadPersistedSkills(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const SkillImportService = {
+  importFromDirectory,
   importFromZip,
   loadPersistedSkill,
   loadPersistedSkills,

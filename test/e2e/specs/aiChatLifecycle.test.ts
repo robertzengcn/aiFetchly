@@ -23,6 +23,11 @@ function composer(app: AppLike): import("@playwright/test").Locator {
 /** Open the chat center surface (chat-first shell): New chat creates +
  * selects a conversation, mounting the composer the legacy dock opened. */
 async function openChat(app: AppLike): Promise<void> {
+  // Chat-first boot race: composer may already be present.
+  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  if (await chatToggle.isVisible().catch(() => false)) {
+    await chatToggle.click();
+  }
   await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }

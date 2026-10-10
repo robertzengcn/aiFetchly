@@ -105,6 +105,14 @@
               {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
             </button>
           </div>
+          <!-- Skill installation progress card (PRD §22.1): one stable card
+               per installer tool result instead of raw tool JSON. -->
+          <SkillInstallCard
+            v-if="isSkillInstallResult"
+            :snapshot="installSnapshot"
+            :conversation-id="message.conversationId"
+            @updated="(s: import('@/entityTypes/skillInstallationTypes').InstallSnapshot) => (localInstallSnapshot = s)"
+          />
           <AiArtifactCard
             v-if="message.metadata?.artifact"
             :artifact="message.metadata.artifact"
@@ -548,6 +556,8 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import SkillInstallCard from "./SkillInstallCard.vue";
+import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
 import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
 import {
@@ -885,6 +895,37 @@ const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
 
+// Skill installation card (PRD §22.1): installer tool results carry an
+// InstallSnapshot. A local override shadows the persisted metadata after
+// in-card actions (approve/secret/cancel) so the card reflects the latest
+// state without rewriting history rows.
+const localInstallSnapshot = ref<InstallSnapshot | null>(null);
+const isSkillInstallResult = computed(
+  () =>
+    String(props.message.metadata?.toolName || "").startsWith(
+      "skill_install_"
+    ) && typeof toolResult.value.sessionId === "string"
+);
+const installSnapshot = computed<InstallSnapshot>(() => {
+  if (localInstallSnapshot.value) return localInstallSnapshot.value;
+  const raw = toolResult.value as unknown as Partial<InstallSnapshot>;
+  return {
+    sessionId: String(raw.sessionId ?? ""),
+    installationId:
+      raw.installationId === null || raw.installationId === undefined
+        ? null
+        : String(raw.installationId),
+    state: (raw.state ?? "requested") as InstallSnapshot["state"],
+    nextAction: (raw.nextAction ?? "resume") as InstallSnapshot["nextAction"],
+    planRevision:
+      raw.planRevision === null || raw.planRevision === undefined
+        ? null
+        : String(raw.planRevision),
+    safeSummary: String(raw.safeSummary ?? ""),
+    recoverable: raw.recoverable !== false,
+    ...(raw.errorCode ? { errorCode: String(raw.errorCode) } : {}),
+  };
+});
 // ---------------------------------------------------------------------------
 // Preserved tool output (recoverable large tool results).
 //

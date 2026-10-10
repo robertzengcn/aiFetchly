@@ -4,7 +4,7 @@
  * Tests the SkillRegistry → ToolExecutor → FileToolService dispatch chain
  * to verify the complete integration works end-to-end.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -13,13 +13,44 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 
 const CONVERSATION_ID = "test-conv-001";
 
+// File tools resolve the shared conversation filesystem scope and fail closed
+// without an approved workspace (design §6), so point the conversation at a
+// mutable temp workspace the tests control.
+const holder = vi.hoisted(() => ({ root: "" }));
+
+vi.mock("@/modules/WorkspaceModule", () => {
+  const getActiveWorkspace = vi
+    .fn()
+    .mockImplementation(async (conversationId: string) =>
+      conversationId === "test-conv-001" && holder.root
+        ? {
+            id: 7,
+            conversationId,
+            rootPath: holder.root,
+            approvalState: "approved",
+          }
+        : null
+    );
+  return {
+    WorkspaceModule: vi.fn().mockImplementation(() => ({
+      getActiveWorkspace,
+    })),
+  };
+});
+
 describe("File Tool Integration", () => {
   let tmpDir: string;
 
-  beforeEach(() => {
-    // Use a temp dir under process.cwd() so it's within the default
-    // workspace root used by FileToolService in test environments.
-    tmpDir = fs.mkdtempSync(path.join(process.cwd(), ".fts-integ-"));
+  beforeEach(async () => {
+    // Approved workspace root for this test run — the mocked resolver
+    // returns it for CONVERSATION_ID. Drop any cached scope so each test's
+    // fresh temp root is actually resolved.
+    const { getDefaultFilesystemContextService } = await import(
+      "@/service/ConversationFilesystemContextService"
+    );
+    getDefaultFilesystemContextService().invalidate(CONVERSATION_ID);
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fts-integ-"));
+    holder.root = tmpDir;
   });
 
   afterEach(() => {

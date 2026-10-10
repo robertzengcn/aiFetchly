@@ -1,0 +1,466 @@
+/**
+ * SkillPackageInspectionService — deterministic discovery, classification,
+ * and instruction inspection over an acquired source tree
+ * (design §5.2/§9.3, PRD §11.3/§12).
+ *
+ * Classification order:
+ *   1. plugin descriptor (.claude-plugin/plugin.json etc.) → plugin
+ *   2. valid manifest.json → executable
+ *   3. root SKILL.md → prompt
+ *   4. skills/<name>/SKILL.md children → prompt multi-package
+ *   5. single wrapper directory containing one of the above
+ *   6. conflicting/incomplete → ambiguous (user chooses; never guessed)
+ *
+ * Instruction precedence: user-named file → INSTALL.md variants → README
+ * install section → SKILL.md. Reading an instruction file NEVER authorizes
+ * its commands (§12.1).
+ */
+
+import * as fs from "fs";
+import * as path from "path";
+import type {
+  DiscoveredSkillPackage,
+} from "@/entityTypes/skillInstallationTypes";
+import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
+import { sha256Hex } from "@/utils/contentHash";
+
+const INSTRUCTION_FILE_MAX_BYTES = 512 * 1024;
+/** §12.4 AGGREGATE bound: instruction content sent toward planning, TOTAL. */
+const INSTRUCTION_AGGREGATE_MAX_BYTES = 512 * 1024;
+const HELPER_DIRS = ["helpers", "scripts", "references", "assets"];
+/** Helper files an instruction may reference (names only, §12.3 bounded). */
+const HELPER_REFERENCE_RE = /\b(?:helpers|scripts)\/([\w./-]+\.[A-Za-z0-9]+)/g;
+const MAX_HELPER_REFERENCES = 50;
+
+export interface InspectionResult {
+  readonly rootRelativePath: string;
+  readonly discovered: readonly DiscoveredSkillPackage[];
+  readonly instructionFiles: readonly InstructionFile[];
+  readonly diagnostics: readonly string[];
+  /**
+   * FR-04/NFR-04: helper files the instructions explicitly reference — a
+   * bounded NAME inventory (no content) so planning sees the helper surface
+   * without injecting it (§12.3).
+   */
+  readonly referencedHelpers: readonly string[];
+}
+
+export interface InstructionFile {
+  readonly relativePath: string;
+  readonly precedence: number;
+  readonly content: string;
+  readonly contentHash: string;
+}
+
+export interface UserConstraints {
+  /** Files the user explicitly named, e.g. ["install.md"]. */
+  readonly namedInstructionFiles?: readonly string[];
+}
+
+export class SkillPackageInspectionService {
+  inspect(
+    acquiredRoot: string,
+    subdirectory: string | undefined,
+    constraints: UserConstraints = {}
+  ): InspectionResult {
+    const diagnostics: string[] = [];
+    // Traversal guard (review S2): a model/renderer-supplied subdirectory
+    // must resolve strictly INSIDE the acquired staging root.
+    const root = subdirectory
+      ? resolveInside(acquiredRoot, subdirectory)
+      : acquiredRoot;
+    if (root === null) {
+      return {
+        rootRelativePath: subdirectory ?? ".",
+        discovered: [],
+        instructionFiles: [],
+        diagnostics: ["subdirectory escapes the acquired root"],
+        referencedHelpers: [],
+      };
+    }
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      return {
+        rootRelativePath: subdirectory ?? ".",
+        discovered: [],
+        instructionFiles: [],
+        diagnostics: ["acquired root is not a directory"],
+        referencedHelpers: [],
+      };
+    }
+
+    const discovered = this.discoverAt(root, ".", diagnostics);
+    const referencedHelpers: string[] = [];
+    const instructionFiles = this.readInstructionFiles(
+      root,
+      constraints,
+      diagnostics,
+      referencedHelpers
+    );
+    // Audit R5 + review tickets (nested instruction qualification): read
+    // each DISCOVERED candidate's root for instructions the inspection
+    // root lacks. The merged files carry paths QUALIFIED with the
+    // candidate's root (nested/install.md) — readInstructionFiles returns
+    // paths relative to ITS root argument, so a bare "install.md" from
+    // skills/a and skills/b previously collided in the dedup and the
+    // second candidate's dependencies/commands silently vanished; the
+    // qualified path also tells the planner which directory those
+    // commands run from (D4b per-candidate cwd).
+    const seen = new Set<string>(["."]);
+    const seenQualified = new Set<string>(
+      instructionFiles.map((f) => f.relativePath)
+    );
+    for (const candidate of discovered) {
+      const rel = candidate.rootRelativePath;
+      if (!rel || rel === "." || seen.has(rel)) continue;
+      seen.add(rel);
+      const candidateRoot = path.join(root, rel);
+      if (!fs.existsSync(candidateRoot)) continue;
+      this.readInstructionFiles(
+        candidateRoot,
+        constraints,
+        diagnostics,
+        referencedHelpers
+      ).forEach((f) => {
+        const qualified =
+          rel === "." ? f.relativePath : `${rel}/${f.relativePath}`;
+        if (seenQualified.has(qualified)) return;
+        seenQualified.add(qualified);
+        instructionFiles.push(
+          qualified === f.relativePath
+            ? f
+            : { ...f, relativePath: qualified }
+        );
+      });
+    }
+
+    return {
+      rootRelativePath: subdirectory ?? ".",
+      discovered,
+      instructionFiles,
+      diagnostics,
+      referencedHelpers,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Discovery / classification
+  // -------------------------------------------------------------------------
+
+  private discoverAt(
+    dir: string,
+    relativeRoot: string,
+    diagnostics: string[]
+  ): DiscoveredSkillPackage[] {
+    const out: DiscoveredSkillPackage[] = [];
+
+    // Plugin descriptor wins first (native plugin manifests, then
+    // claude-compatible ones).
+    if (this.hasPluginDescriptor(dir)) {
+      return [
+        {
+          candidateId: `${relativeRoot}:plugin`,
+          rootRelativePath: relativeRoot,
+          kind: "plugin",
+          name: path.basename(dir),
+          description: "Plugin package (routes through PluginInstallService)",
+          helperSummaryCount: this.countHelpers(dir),
+          compatibilityWarnings: [],
+        },
+      ];
+    }
+
+    const hasManifest = fs.existsSync(path.join(dir, "manifest.json"));
+    const manifestValid = hasManifest && this.isValidExecutableManifest(dir);
+
+    if (manifestValid) {
+      const pkg = this.describeExecutable(dir, relativeRoot);
+      // §13.4: both SKILL.md and manifest.json → manifest semantics win for
+      // execution; SKILL.md may remain invocation guidance.
+      const alsoSkillMd = fs.existsSync(path.join(dir, "SKILL.md"));
+      return [
+        {
+          ...pkg,
+          compatibilityWarnings: alsoSkillMd
+            ? [
+                {
+                  code: "ambiguous-manifest-plus-skill-md",
+                  message:
+                    "Directory contains both manifest.json and SKILL.md; " +
+                    "executable manifest semantics take precedence and " +
+                    "SKILL.md is retained as documentation.",
+                },
+              ]
+            : [],
+        },
+      ];
+    }
+
+    if (fs.existsSync(path.join(dir, "SKILL.md"))) {
+      const loaded = loadSkillMarkdownFile(dir);
+      if (loaded.ok) {
+        return [
+          {
+            candidateId: `${relativeRoot}:prompt`,
+            rootRelativePath: relativeRoot,
+            kind: "prompt",
+            name: loaded.file.manifest.name,
+            description: loaded.file.manifest.description,
+            skillMarkdownPath: path.join(dir, "SKILL.md"),
+            helperSummaryCount: this.countHelpers(dir),
+            compatibilityWarnings: [],
+          },
+        ];
+      }
+      diagnostics.push(
+        `SKILL.md at ${relativeRoot} failed validation: ${loaded.message}`
+      );
+    }
+
+    // Recognized skills/<name>/SKILL.md children (multi-skill packages).
+    const skillsDir = path.join(dir, "skills");
+    if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
+      for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+        const child = path.join(skillsDir, entry.name);
+        if (!fs.existsSync(path.join(child, "SKILL.md"))) continue;
+        const loaded = loadSkillMarkdownFile(child);
+        if (loaded.ok) {
+          out.push({
+            candidateId: `skills/${entry.name}:prompt`,
+            rootRelativePath: `skills/${entry.name}`,
+            kind: "prompt",
+            name: loaded.file.manifest.name,
+            description: loaded.file.manifest.description,
+            skillMarkdownPath: path.join(child, "SKILL.md"),
+            helperSummaryCount: this.countHelpers(child),
+            compatibilityWarnings: [],
+          });
+        }
+      }
+      if (out.length > 0) return out;
+    }
+
+    // Single wrapper directory containing one of the above.
+    const subdirs = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== ".git");
+    if (subdirs.length === 1) {
+      const wrapper = path.join(dir, subdirs[0].name);
+      const inner = this.discoverAt(wrapper, `${relativeRoot}/${subdirs[0].name}`, diagnostics);
+      if (inner.length > 0) return inner;
+    }
+
+    // Incomplete/conflicting signals stay ambiguous — never guessed (§11.3).
+    if (hasManifest && !manifestValid) {
+      return [
+        {
+          candidateId: `${relativeRoot}:ambiguous`,
+          rootRelativePath: relativeRoot,
+          kind: "ambiguous",
+          name: path.basename(dir),
+          description: "manifest.json present but not a valid executable manifest",
+          helperSummaryCount: this.countHelpers(dir),
+          compatibilityWarnings: [
+            {
+              code: "manifest-invalid",
+              message: "manifest.json failed executable validation.",
+            },
+          ],
+        },
+      ];
+    }
+    return out;
+  }
+
+  private hasPluginDescriptor(dir: string): boolean {
+    const candidates = [
+      path.join(dir, ".claude-plugin", "plugin.json"),
+      path.join(dir, "plugin.json"),
+    ];
+    return candidates.some((p) => fs.existsSync(p));
+  }
+
+  private isValidExecutableManifest(dir: string): boolean {
+    try {
+      const raw = fs.readFileSync(path.join(dir, "manifest.json"), "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return (
+        typeof parsed.name === "string" &&
+        typeof parsed.version === "string" &&
+        typeof parsed.runtime === "string" &&
+        typeof parsed.entry === "string"
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private describeExecutable(
+    dir: string,
+    relativeRoot: string
+  ): DiscoveredSkillPackage {
+    try {
+      const parsed = JSON.parse(
+        fs.readFileSync(path.join(dir, "manifest.json"), "utf-8")
+      ) as Record<string, unknown>;
+      return {
+        candidateId: `${relativeRoot}:executable`,
+        rootRelativePath: relativeRoot,
+        kind: "executable",
+        name: String(parsed.name ?? path.basename(dir)),
+        description: String(parsed.description ?? "Executable skill"),
+        legacyManifestPath: path.join(dir, "manifest.json"),
+        helperSummaryCount: this.countHelpers(dir),
+        compatibilityWarnings: [],
+      };
+    } catch {
+      return {
+        candidateId: `${relativeRoot}:executable`,
+        rootRelativePath: relativeRoot,
+        kind: "executable",
+        name: path.basename(dir),
+        description: "Executable skill",
+        helperSummaryCount: 0,
+        compatibilityWarnings: [],
+      };
+    }
+  }
+
+  private countHelpers(dir: string): number {
+    let count = 0;
+    for (const name of HELPER_DIRS) {
+      const helperDir = path.join(dir, name);
+      if (!fs.existsSync(helperDir)) continue;
+      try {
+        count += fs
+          .readdirSync(helperDir, { withFileTypes: true })
+          .filter((e) => e.isFile()).length;
+      } catch {
+        /* unreadable helper dir contributes 0 */
+      }
+    }
+    return count;
+  }
+
+  // -------------------------------------------------------------------------
+  // Instruction inspection (§12.1 precedence)
+  // -------------------------------------------------------------------------
+
+  private readInstructionFiles(
+    root: string,
+    constraints: UserConstraints,
+    diagnostics: string[],
+    referencedHelpers: string[]
+  ): InstructionFile[] {
+    const wanted: { file: string; precedence: number }[] = [];
+    // Named files must stay inside the acquired root after normalization —
+    // the old leading-dot strip let 'a/../../b.txt' traverse (review S2).
+    const named = (constraints.namedInstructionFiles ?? [])
+      .map((f) => f.replace(/^[./\\]+/, "").toLowerCase())
+      .filter((f) => {
+        const contained = isRelativeInside(f);
+        if (!contained) {
+          diagnostics.push(`rejected instruction file outside the root: ${f}`);
+        }
+        return contained;
+      });
+    for (const name of named) {
+      wanted.push({ file: name, precedence: 0 });
+    }
+    wanted.push({ file: "install.md", precedence: 1 });
+    wanted.push({ file: "setup.md", precedence: 2 });
+    // Security guidance precedes generic docs (NFR-04): the planner must
+    // see declared constraints before README-driven commands.
+    wanted.push({ file: "security.md", precedence: 3 });
+    wanted.push({ file: "readme.md", precedence: 4 });
+    wanted.push({ file: "skill.md", precedence: 5 });
+
+    const found: InstructionFile[] = [];
+    const seen = new Set<string>();
+    // §12.4 AGGREGATE budget across EVERY instruction file — the per-file
+    // cap alone let N files consume N x 512 KiB toward planning.
+    let aggregateBytes = 0;
+    for (const { file, precedence } of wanted) {
+      if (seen.has(file)) continue;
+      const abs = this.findCaseInsensitive(root, file);
+      if (!abs) continue;
+      seen.add(file);
+      try {
+        const stat = fs.statSync(abs);
+        if (stat.size > INSTRUCTION_FILE_MAX_BYTES) {
+          diagnostics.push(
+            `${file} exceeds the ${INSTRUCTION_FILE_MAX_BYTES}-byte instruction limit; truncated read skipped`
+          );
+          continue;
+        }
+        if (aggregateBytes + stat.size > INSTRUCTION_AGGREGATE_MAX_BYTES) {
+          diagnostics.push(
+            `aggregate instruction content exceeds the ${INSTRUCTION_AGGREGATE_MAX_BYTES}-byte design bound; ${file} and later files skipped`
+          );
+          break;
+        }
+        const content = fs.readFileSync(abs, "utf-8");
+        aggregateBytes += stat.size;
+        // Bounded helper inventory (§12.3): record REFERENCED helper names
+        // only — never their content.
+        for (const match of content.matchAll(HELPER_REFERENCE_RE)) {
+          const name = match[1];
+          if (
+            referencedHelpers.length < MAX_HELPER_REFERENCES &&
+            !referencedHelpers.includes(name)
+          ) {
+            referencedHelpers.push(name);
+          }
+        }
+        found.push({
+          relativePath: path.relative(root, abs).split(path.sep).join("/"),
+          precedence,
+          content,
+          contentHash: sha256Hex(content),
+        });
+      } catch (err) {
+        diagnostics.push(
+          `failed reading ${file}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+    found.sort((a, b) => a.precedence - b.precedence);
+    return found;
+  }
+
+  private findCaseInsensitive(root: string, fileName: string): string | null {
+    const direct = path.join(root, fileName);
+    if (fs.existsSync(direct)) return direct;
+    try {
+      for (const entry of fs.readdirSync(root)) {
+        if (entry.toLowerCase() === fileName) {
+          return path.join(root, entry);
+        }
+      }
+    } catch {
+      /* unreadable root */
+    }
+    return null;
+  }
+}
+
+
+/**
+ * True when a relative path has no '..' segment and is not absolute —
+ * safe to join under a confinement root.
+ */
+function isRelativeInside(relative: string): boolean {
+  if (!relative || path.isAbsolute(relative)) return false;
+  const parts = relative.split(/[\\/]+/);
+  return parts.every((part) => part !== ".." && part !== "");
+}
+
+/** Resolve `relative` under `root`, returning null when it escapes. */
+function resolveInside(root: string, relative: string): string | null {
+  if (!isRelativeInside(relative)) return null;
+  const resolved = path.resolve(root, relative);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  return resolved === root || resolved.startsWith(rootWithSep)
+    ? resolved
+    : null;
+}
