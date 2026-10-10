@@ -3618,6 +3618,10 @@ export default {
     plugins: "Plugins",
     backToApp: "Back to app",
     loadOlder: "Load older messages",
+    command: {
+      busy:
+        "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+    },
     empty: {
       title: "Ask anything, or pick a conversation on the left.",
     },

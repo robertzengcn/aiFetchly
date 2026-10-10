@@ -3446,6 +3446,9 @@ export default {
     plugins: "插件",
     backToApp: "返回应用",
     loadOlder: "加载更早的消息",
+    command: {
+      busy: "当前对话正在运行，暂无法使用命令。请等待其完成或先停止。",
+    },
     empty: {
       title: "随便问点什么，或在左侧选择一个会话。",
     },

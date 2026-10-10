@@ -3651,6 +3651,9 @@ export default {
     plugins: "Complementos",
     backToApp: "Volver a la aplicación",
     loadOlder: "Cargar mensajes anteriores",
+    command: {
+      busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
+    },
     empty: {
       title: "Pregunta lo que quieras o elige una conversación a la izquierda.",
     },

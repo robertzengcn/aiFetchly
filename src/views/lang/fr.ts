@@ -3636,6 +3636,9 @@ export default {
     plugins: "Extensions",
     backToApp: "Retour à l'application",
     loadOlder: "Charger les messages plus anciens",
+    command: {
+      busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
+    },
     empty: {
       title: "Posez une question ou choisissez une conversation à gauche.",
     },

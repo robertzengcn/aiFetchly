@@ -409,6 +409,41 @@ export const useSelectedConversationStore = defineStore(
     // -------------------------------------------------------------------------
 
     /**
+     * Render a local (non-persisted) user/assistant command exchange
+     * (capability-parity FR-CMD-004): slash-command results and command
+     * errors surface as transcript rows with the same lifetime contract as
+     * Chat V2's `appendLocalCommandExchange` — visible until the next
+     * history reload, never persisted, never sent to the model.
+     */
+    function appendLocalCommandExchange(
+      userText: string,
+      assistantText: string
+    ): void {
+      const current = workspaceStore.selectedConversationId;
+      if (!current) return;
+      const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timestamp = new Date().toISOString();
+      presenter.appendLocalUserMessage({
+        id: `local-command-user-${suffix}`,
+        conversationId: current,
+        role: "user",
+        content: userText,
+        timestamp,
+        messageType: MessageType.MESSAGE,
+      });
+      presenter.appendLocalUserMessage({
+        id: `local-command-assistant-${suffix}`,
+        conversationId: current,
+        role: "assistant",
+        content: assistantText,
+        timestamp,
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "slash-command" },
+      });
+      syncFromPresenter();
+    }
+
+    /**
      * Append the durable user row a queue-drained turn just delivered
      * (message-queue §7): the delegated send's optimistic row was swapped for
      * the pending bubble, and the bubble is removed at delivery — without
@@ -589,6 +624,7 @@ export const useSelectedConversationStore = defineStore(
       loadOlder,
       sendMessage,
       appendDeliveredUserRow,
+      appendLocalCommandExchange,
       stopActiveRun,
       grantToolPermission,
       denyToolPermission,

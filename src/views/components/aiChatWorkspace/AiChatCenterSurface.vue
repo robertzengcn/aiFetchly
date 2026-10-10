@@ -244,6 +244,32 @@
       </template>
     </AiChatV2Composer>
 
+    <!-- Command routing error (FR-CMD-004): safe localized explanation with
+         the draft retained for retry; dismissed on the next send. -->
+    <div
+      v-if="commandErrorNotice !== null"
+      class="chat-center__genimg-notice"
+      role="alert"
+      data-testid="workspace-command-error"
+    >
+      <v-icon size="x-small" color="warning" class="mr-1">
+        mdi-alert-circle-outline
+      </v-icon>
+      <span class="chat-center__genimg-notice-text">
+        {{ commandErrorNotice }}
+      </span>
+      <v-btn
+        size="x-small"
+        variant="text"
+        class="ml-1"
+        :aria-label="t('common.close') || 'Close'"
+        data-testid="workspace-command-error-dismiss"
+        @click="commandErrorNotice = null"
+      >
+        {{ t("common.close") || "Close" }}
+      </v-btn>
+    </div>
+
     <!-- Generated-image reference notice (over-limit preflight abort). -->
     <div
       v-if="generatedImageNotice !== null"
@@ -391,6 +417,17 @@
       </v-card>
     </v-dialog>
 
+    <!-- Scheduled-loop tool-policy approval (FR-CMD-007): approval happens
+         once, up front — unattended execution cannot prompt at run time. -->
+    <ScheduledLoopToolApprovalDialog
+      v-if="pendingScheduledLoop"
+      v-model="showScheduledLoopApproval"
+      :raw-command="pendingScheduledLoop.rawCommand"
+      :prompt="pendingScheduledLoop.action.prompt"
+      @confirm="onScheduledLoopApprovalConfirm"
+      @cancel="onScheduledLoopApprovalCancel"
+    />
+
     <!-- In-app prompt surface (Electron has no window.prompt). -->
     <v-dialog
       :model-value="promptDialog !== null"
@@ -461,8 +498,21 @@ import {
   clearChatV2Conversation,
   compactChatV2Conversation,
 } from "@/views/api/aiChatV2";
-import { stopGoalLoop } from "@/views/api/aiChatGoal";
-import { controlScheduledLoop } from "@/views/api/aiChatScheduledLoop";
+import { stopGoalLoop, createGoal, startGoalLoop } from "@/views/api/aiChatGoal";
+import {
+  controlScheduledLoop,
+  createScheduledLoop,
+  getScheduledLoopStatus,
+} from "@/views/api/aiChatScheduledLoop";
+import { invokePromptSkill } from "@/views/api/skillInstallation";
+import { dispatchSlashCommand } from "@/views/api/slashCommands";
+import ScheduledLoopToolApprovalDialog from "@/views/components/aiChatV2/ScheduledLoopToolApprovalDialog.vue";
+import {
+  useChatCommandRouting,
+  type ChatCommandDisposition,
+  type ScheduledLoopApprovalPayload,
+  type StagedScheduledLoop,
+} from "@/views/composables/aiChatWorkspace/useChatCommandRouting";
 import type {
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
@@ -1111,6 +1161,79 @@ async function onComposerSend(
     onAccepted?: () => void;
   }
 ): Promise<void> {
+  // FR-CMD-001: inputs beginning with '/' pass through the shared command
+  // router BEFORE ordinary AI submission — the raw command text never
+  // reaches the model.
+  commandErrorNotice.value = null;
+  const disposition = await commandRouter.routeCommand(text, {
+    pastedContents: options?.pastedContents,
+    hasFiles: files.length > 0,
+  });
+  await applyCommandDisposition(disposition, text, files, options);
+}
+
+async function applyCommandDisposition(
+  disposition: ChatCommandDisposition,
+  text: string,
+  files: File[],
+  options?: {
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  }
+): Promise<void> {
+  if (disposition.kind === "not_command") {
+    await performOrdinarySend(text, files, options);
+    return;
+  }
+  if (disposition.kind === "submit_prompt") {
+    // The command's side effects are done (goal created / skill invoked);
+    // submit the resulting prompt through the ordinary path ONCE with the
+    // command-selected mode (FR-CMD-003: never re-dispatched as a command).
+    const accepted = await performOrdinarySend(disposition.prompt, [], {
+      fromVoice: options?.fromVoice,
+      pastedContents: options?.pastedContents,
+      modeOverride: disposition.mode,
+    });
+    if (accepted) {
+      options?.onAccepted?.();
+    }
+    return;
+  }
+  if (disposition.kind === "needs_scheduled_approval") {
+    // Staged (not persisted): the approval dialog owns the continuation
+    // (FR-CMD-007). The command text is consumed — mirrors the Chat V2
+    // reference, which clears the draft when the staging dialog opens.
+    pendingScheduledLoop.value = disposition;
+    showScheduledLoopApproval.value = true;
+    options?.onAccepted?.();
+    return;
+  }
+  if (disposition.kind === "rejected") {
+    // FR-CMD-004: draft retained; safe localized error above the composer.
+    if (disposition.message) {
+      commandErrorNotice.value = disposition.message;
+    }
+    return;
+  }
+  // completed: local exchange rendered / loop started / clear ran.
+  options?.onAccepted?.();
+}
+
+/**
+ * Ordinary submission path — no command interception (an expanded prompt or
+ * routed turn must never be re-parsed as a command).
+ */
+async function performOrdinarySend(
+  text: string,
+  files: File[],
+  options?: {
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+    modeOverride?: "chat" | "plan";
+  }
+): Promise<boolean> {
   // FR-SUB-004 (capability parity): paste bodies travel as their own bounded
   // map so the engine expands the same content the Chat V2 stream edge
   // receives — the composer's visible text carries only the placeholders.
@@ -1122,7 +1245,7 @@ async function onComposerSend(
     generatedImageNotice.value =
       t("aiChatV2.generatedImageRefs.errors.generated_image_reference_limit") ||
       "Too many referenced images for one request.";
-    return;
+    return false;
   }
   // Empty-state send (no conversation selected): create + select a chat
   // first (legacy-dock parity via ensureWorkspaceConversationId) so the
@@ -1132,7 +1255,7 @@ async function onComposerSend(
   // mints an empty chat; refs were captured above under the pending key.
   if (!conversationId.value) {
     await onNewChat();
-    if (!conversationId.value) return;
+    if (!conversationId.value) return false;
   }
   // Reference-only sends still need a message for the model (legacy parity).
   const messageText =
@@ -1159,7 +1282,8 @@ async function onComposerSend(
   }
   const accepted = await selectedStore.sendMessage(messageText, {
     model: selectedModel.value,
-    mode: mode.value,
+    // A command-derived turn (goal plan prompt) overrides the surface mode.
+    mode: options?.modeOverride ?? mode.value,
     toolApprovalMode: toolApprovalMode.value,
     attachments: uploadedFiles,
     generatedImageReferences:
@@ -1176,7 +1300,95 @@ async function onComposerSend(
   if (accepted) {
     options?.onAccepted?.();
   }
+  return accepted;
 }
+
+// --- Shared command routing (capability parity FR-CMD / FR-SKL-005) --------
+/** Safe localized command error shown above the composer (FR-CMD-004). */
+const commandErrorNotice = ref<string | null>(null);
+/** Staged scheduled loop awaiting the up-front tool-policy approval. */
+const pendingScheduledLoop = ref<{
+  action: StagedScheduledLoop;
+  rawCommand: string;
+} | null>(null);
+const showScheduledLoopApproval = ref(false);
+
+const commandRouter = useChatCommandRouting({
+  isBusy: () => selectedStore.isBusy,
+  ensureConversationId: async () => {
+    if (conversationId.value) return conversationId.value;
+    await onNewChat();
+    return conversationId.value ?? null;
+  },
+  activeGoal: () => {
+    const goal = selectedStore.goal;
+    return goal ? { goalId: goal.goalId } : null;
+  },
+  appendLocalExchange: (userText, assistantText) => {
+    selectedStore.appendLocalCommandExchange(userText, assistantText);
+  },
+  setError: (message) => {
+    commandErrorNotice.value = message;
+  },
+  translate: (key, fallback, vars) =>
+    vars ? t(key, vars) || fallback : t(key) || fallback,
+  createGoal: (input) => createGoal(input),
+  startGoalLoop: async (input) => (await startGoalLoop(input)) !== null,
+  invokePromptSkill: async (input) => (await invokePromptSkill(input)) !== null,
+  createScheduledLoop: (input) => createScheduledLoop(input),
+  controlScheduledLoop: async (id, operation) => {
+    await controlScheduledLoop(id, operation);
+  },
+  getScheduledLoopStatus: (id) => getScheduledLoopStatus(id),
+  dispatchSlashCommand: (input) => dispatchSlashCommand(input),
+  onSlashPromptExpand: async (prompt, pastedContents) => {
+    await performOrdinarySend(prompt, [], { pastedContents });
+  },
+  onClearConversation: async () => {
+    if (!conversationId.value) return;
+    try {
+      await clearChatV2Conversation(conversationId.value);
+      await workspaceStore.bootstrap();
+      await selectedStore.loadSelection(conversationId.value);
+    } catch {
+      // Non-fatal — clearing can be retried.
+    }
+  },
+});
+
+/** Confirm tool approval and persist the staged scheduled loop (FR-CMD-007). */
+async function onScheduledLoopApprovalConfirm(
+  approval: ScheduledLoopApprovalPayload
+): Promise<void> {
+  const staged = pendingScheduledLoop.value;
+  if (!staged) {
+    showScheduledLoopApproval.value = false;
+    return;
+  }
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
+  await commandRouter.confirmScheduledLoop(approval);
+  // The backend persisted the command + confirmation rows — reload history
+  // and sidebar so they render immediately (Chat V2 parity).
+  if (conversationId.value) {
+    await selectedStore.loadSelection(conversationId.value);
+    await workspaceStore.bootstrap();
+  }
+}
+
+/** Cancel staged scheduled-loop creation (user closed the approval dialog). */
+function onScheduledLoopApprovalCancel(): void {
+  pendingScheduledLoop.value = null;
+  commandRouter.cancelScheduledLoop();
+  showScheduledLoopApproval.value = false;
+}
+
+// Conversation-scoped staging never leaks across selections (FR-CMD-008).
+watch(conversationId, () => {
+  commandRouter.resetConversationState();
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
+});
 
 // --- Conversation actions ----------------------------------------------------
 const planSubmitError = ref<string | null>(null);

@@ -125,6 +125,12 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useAppInspectorStore } from "@/views/store/appInspector";
+import {
+  AI_CHAT_V2_GOAL_CREATE,
+  AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+  PROMPT_SKILL_INVOKE,
+  SLASH_COMMAND_DISPATCH,
+} from "@/config/channellist";
 
 const i18n = createI18n({
   legacy: false,
@@ -140,6 +146,10 @@ const i18n = createI18n({
       workspaceChat: {
         newChat: "New chat",
         loadOlder: "Load older messages",
+        command: {
+          busy:
+            "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+        },
         empty: { title: "Ask anything, or pick a conversation on the left." },
         sidebar: { region: "Chat workspaces" },
         inspector: { context: "Context" },
@@ -156,6 +166,9 @@ const i18n = createI18n({
           settings_save_failed: "Couldn't save the spoken-response preference.",
           retry: "Retry",
           open_model_settings: "Open settings",
+        },
+        skillSlash: {
+          notFound: "No installed prompt skill matches '{name}'.",
         },
       },
     },
@@ -246,6 +259,12 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           template: '<div data-testid="voice-toggle-stub" />',
         }),
         AiChatVoiceRuntimeInstallDialog: true,
+        ScheduledLoopToolApprovalDialog: defineComponent({
+          name: "ScheduledLoopToolApprovalDialog",
+          props: ["modelValue", "rawCommand", "prompt"],
+          emits: ["confirm", "cancel", "update:modelValue"],
+          template: '<div data-testid="scheduled-loop-approval-stub" />',
+        }),
         "v-btn": { template: '<button class="stub-btn"><slot /></button>' },
         "v-icon": true,
         "v-dialog": { template: '<div class="stub-dialog"><slot /></div>' },
@@ -432,6 +451,201 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
     expect(acceptedSpy).not.toHaveBeenCalled();
     expect(startChatRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Command routing (capability-parity FR-CMD-001..009, FR-SKL-005): the
+   * workspace routes '/…' input through the shared router BEFORE ordinary
+   * submission — the raw command text never reaches the model.
+   */
+  describe("command routing", () => {
+    type InvokeMock = ReturnType<typeof vi.fn>;
+
+    function invokeMock(): InvokeMock {
+      return window.api.invoke as InvokeMock;
+    }
+
+    /** Route per-channel responses through the global window.api stub. */
+    function mockInvokeByChannel(
+      handlers: Record<string, unknown>
+    ): void {
+      invokeMock().mockImplementation((channel: string) => {
+        if (channel in handlers) {
+          return Promise.resolve(handlers[channel]);
+        }
+        return Promise.resolve(undefined);
+      });
+    }
+
+    it("dispatches a generic slash command through the registry and renders the local exchange (FR-CMD-001)", async () => {
+      mockInvokeByChannel({
+        // windowInvoke unwraps the CommonMessage envelope — return it whole.
+        [SLASH_COMMAND_DISPATCH]: {
+          status: true,
+          data: {
+            status: true,
+            action: "show_result",
+            content: "Review started for Acme.",
+            commandId: "plugin:review",
+          },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/review Acme", []);
+      await flushPromises();
+
+      // The registry handled it; the model never saw the raw command.
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      const dispatchCall = invokeMock().mock.calls.find(
+        (call) => call[0] === SLASH_COMMAND_DISPATCH
+      );
+      // windowInvoke serializes the payload — parse it back for assertion.
+      expect(JSON.parse(String(dispatchCall?.[1]))).toMatchObject({
+        rawInput: "/review Acme",
+      });
+      // The local receipt renders as a non-persisted transcript exchange.
+      const selected = useSelectedConversationStore();
+      const exchange = selected.messages.filter(
+        (m) => m.metadata?.source === "slash-command"
+      );
+      expect(exchange).toHaveLength(1);
+      expect(exchange[0].content).toBe("Review started for Acme.");
+    });
+
+    it("routes /goal to goal creation and submits the plan prompt in plan mode (FR-CMD-005)", async () => {
+      startChatRunMock.mockResolvedValue({
+        conversationId: "fresh-chat",
+        runId: "run-goal",
+        status: "running",
+        acceptedAt: "",
+      });
+      mockInvokeByChannel({
+        [AI_CHAT_V2_GOAL_CREATE]: {
+          status: true,
+          data: {
+            conversationId: "fresh-chat",
+            goalId: "goal-9",
+            planPrompt: "Plan prompt for growing the newsletter",
+          },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/goal grow the newsletter", []);
+      await flushPromises();
+
+      const goalCall = invokeMock().mock.calls.find(
+        (call) => call[0] === AI_CHAT_V2_GOAL_CREATE
+      );
+      expect(JSON.parse(String(goalCall?.[1]))).toMatchObject({
+        objective: "grow the newsletter",
+        replace: true,
+      });
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+        message: "Plan prompt for growing the newsletter",
+        mode: "plan",
+      });
+    });
+
+    it("keeps the draft and shows a safe error when /skill lookup fails (FR-SKL-005)", async () => {
+      // No handler for PROMPT_SKILL_INVOKE → resolves undefined → api maps
+      // to a null ack (skill not found).
+      mockInvokeByChannel({});
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/skill missing-skill do things", [], {
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+
+      // A failed lookup must NOT fall through to ordinary model text.
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      expect(acceptedSpy).not.toHaveBeenCalled();
+      const notice = wrapper.get('[data-testid="workspace-command-error"]');
+      expect(notice.text()).toContain("missing-skill");
+    });
+
+    it("stages a scheduled loop for approval and persists it only on confirm (FR-CMD-007)", async () => {
+      mockInvokeByChannel({
+        [AI_CHAT_V2_SCHEDULED_LOOP_CREATE]: {
+          status: true,
+          data: { conversationId: "fresh-chat" },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 10m summarize emails", []);
+      await flushPromises();
+
+      // Staged, not persisted: no create call until the user approves.
+      const createCallsBefore = invokeMock().mock.calls.filter(
+        (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_CREATE
+      );
+      expect(createCallsBefore).toHaveLength(0);
+      const dialog = wrapper.findComponent({
+        name: "ScheduledLoopToolApprovalDialog",
+      });
+      expect(dialog.exists()).toBe(true);
+      expect(dialog.props("rawCommand")).toBe("/loop 10m summarize emails");
+
+      dialog.vm.$emit("confirm", {
+        allowedTools: ["read_emails"],
+        autoApproveTools: false,
+        allowSkills: false,
+        allowMcp: false,
+        allowSubagents: false,
+      });
+      await flushPromises();
+
+      const createCall = invokeMock().mock.calls.find(
+        (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_CREATE
+      );
+      expect(JSON.parse(String(createCall?.[1]))).toMatchObject({
+        rawCommand: "/loop 10m summarize emails",
+        intervalMs: 600_000,
+        prompt: "summarize emails",
+      });
+      // The dialog closed (and unmounted) after the decision.
+      expect(
+        wrapper.findComponent({ name: "ScheduledLoopToolApprovalDialog" }).exists()
+      ).toBe(false);
+    });
+
+    it("rejects command input while the selected conversation is busy (FR-SUB-009)", async () => {
+      startChatRunMock.mockResolvedValue({
+        conversationId: "fresh-chat",
+        runId: "run-1",
+        status: "running",
+        acceptedAt: "",
+      });
+      mockInvokeByChannel({});
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      // Ordinary text is accepted and the run starts...
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "first message", []);
+      await flushPromises();
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+
+      // ...but commands are blocked while the turn runs.
+      composer.vm.$emit("send", "/loop status", []);
+      await flushPromises();
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      const notice = wrapper.get('[data-testid="workspace-command-error"]');
+      expect(notice.text()).toContain("Commands are unavailable");
+    });
   });
 
   it("shows the workspace chooser above the composer with no conversation selected", async () => {

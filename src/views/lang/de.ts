@@ -3650,6 +3650,9 @@ export default {
     plugins: "Plugins",
     backToApp: "Zurück zur App",
     loadOlder: "Ältere Nachrichten laden",
+    command: {
+      busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
+    },
     empty: {
       title: "Stelle eine Frage oder wähle links eine Unterhaltung.",
     },

@@ -398,13 +398,20 @@ export function useChatCommandRouting(
       if (!conversationId) {
         return { kind: "rejected", code: "no_conversation", message: "" };
       }
-      const ack = await ports.invokePromptSkill({
-        conversationId,
-        skill: skillCmd.name,
-        ...(skillCmd.taskText ? { arguments: skillCmd.taskText } : {}),
-      });
+      // An acknowledgement failure (missing skill OR transport error) must
+      // NOT fall through to ordinary model text — the invoked instructions
+      // would be missing from the turn.
+      let ack = false;
+      try {
+        ack = await ports.invokePromptSkill({
+          conversationId,
+          skill: skillCmd.name,
+          ...(skillCmd.taskText ? { arguments: skillCmd.taskText } : {}),
+        });
+      } catch {
+        ack = false;
+      }
       if (!ack) {
-        // A failed lookup must NOT fall through to ordinary model text.
         const message = ports.translate(
           "aiChatV2.skillSlash.notFound",
           `No installed prompt skill matches '${skillCmd.name}'.`,
