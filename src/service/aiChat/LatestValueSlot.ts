@@ -23,7 +23,10 @@ export class LatestValueSlot<T> {
   private closed = false;
 
   set(value: T): void {
-    if (this.closed) return;
+    if (this.closed) {
+      latestValueSlotDiagnostics.lateDropped += 1;
+      return;
+    }
     if (this.latest !== null) {
       // TODO-14: a coalesced (overwritten) progress update.
       latestValueSlotDiagnostics.coalescedDropped += 1;
@@ -68,4 +71,6 @@ export class LatestValueSlot<T> {
  */
 export const latestValueSlotDiagnostics = {
   coalescedDropped: 0,
-} as { coalescedDropped: number };
+  /** R09: sets ignored after close (count-only diagnostic). */
+  lateDropped: 0,
+} as { coalescedDropped: number; lateDropped: number };

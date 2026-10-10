@@ -413,3 +413,55 @@ describe("R05: progress helper lazy + abort-wake contract", () => {
     expect(step.value).toBe("settled-after-abort");
   });
 });
+
+describe("R09: progress diagnostics are count-only and return to baseline", () => {
+  it("emitted/coalesced/oversized/late counts are correct and slots reset on close", async () => {
+    const { runToolWithProgress, toolProgressDiagnostics } = await import(
+      "@/service/aiChat/runToolWithProgress"
+    );
+    const { latestValueSlotDiagnostics } = await import(
+      "@/service/aiChat/LatestValueSlot"
+    );
+    const before = {
+      emitted: toolProgressDiagnostics.emitted,
+      oversized: toolProgressDiagnostics.oversizedReplaced,
+      late: toolProgressDiagnostics.lateDropped,
+      slotCoalesced: latestValueSlotDiagnostics.coalescedDropped,
+      slotLate: latestValueSlotDiagnostics.lateDropped,
+    };
+    const wrapper = runToolWithProgress<string, TestProgress>(
+      (emit) => {
+        emit(progress(1, "a"));
+        emit(progress(2, "b")); // coalesced
+        return Promise.resolve("ok");
+      },
+      new AbortController().signal
+    );
+    const step = await wrapper.next(); // yields latest (b)
+    expect(step.done).toBe(false);
+    const done = await wrapper.next(); // settles
+    expect(done.done).toBe(true);
+    expect(toolProgressDiagnostics.emitted).toBe(before.emitted + 1);
+    expect(latestValueSlotDiagnostics.coalescedDropped).toBe(
+      before.slotCoalesced + 1
+    );
+    // Slot is closed by the wrapper's finally — its retained reference is
+    // released (R07) and no owned waiters remain.
+    expect(done.value).toBe("ok");
+
+    // Late progress after close is counted, not delivered.
+    let lateEmit: ((e: TestProgress) => void) | undefined;
+    const wrapper2 = runToolWithProgress<string, TestProgress>(
+      (emit) => {
+        lateEmit = emit;
+        return Promise.resolve("ok2");
+      },
+      new AbortController().signal
+    );
+    await wrapper2.next();
+    await wrapper2.next();
+    const lateBefore = toolProgressDiagnostics.lateDropped;
+    lateEmit?.(progress(9, "late"));
+    expect(toolProgressDiagnostics.lateDropped).toBe(lateBefore + 1);
+  });
+});

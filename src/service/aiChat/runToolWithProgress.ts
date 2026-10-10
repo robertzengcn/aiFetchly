@@ -16,12 +16,13 @@ export const TOOL_PROGRESS_MAX_SERIALIZED_BYTES = 64 * 1024;
  */
 export const toolProgressDiagnostics = {
   oversizedReplaced: 0,
-  coalescedDropped: 0,
   emitted: 0,
+  /** R09: progress ignored because the slot was already closed (late). */
+  lateDropped: 0,
 } as {
   oversizedReplaced: number;
-  coalescedDropped: number;
   emitted: number;
+  lateDropped: number;
 };
 
 interface MinimalProgressShape {
@@ -58,6 +59,10 @@ export function runToolWithProgress<ToolResult, Progress extends MinimalProgress
   const slot = new LatestValueSlot<ToolProgressEnvelope<Progress>>();
   const emit = (event: Progress): void => {
     if (signal.aborted) return;
+    if (slot.isClosed) {
+      toolProgressDiagnostics.lateDropped += 1;
+      return;
+    }
     slot.set(applyProgressBudget(event));
   };
   /**
@@ -110,6 +115,7 @@ export function runToolWithProgress<ToolResult, Progress extends MinimalProgress
         ]);
         const latest = slot.take();
         if (latest) {
+          toolProgressDiagnostics.emitted += 1;
           yield latest;
         }
         if (next !== undefined) {
