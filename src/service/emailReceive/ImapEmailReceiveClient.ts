@@ -181,12 +181,20 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     uid: string;
     signal?: AbortSignal;
   }): Promise<RefreshedFlags | null> {
+    // R08: reject already-aborted work BEFORE opening a socket. The deadline
+    // may have elapsed during the mailbox queue wait (R07) — a stale probe
+    // must never open a TCP/TLS connection.
+    if (input.signal?.aborted) return null;
     let client = this.createClient(input.config);
-    let detachAbort: (() => void) | undefined;
+    // R08: attach the abort listener BEFORE connect so a signal that aborts
+    // DURING the (possibly hung) connect() tears down the in-flight socket
+    // immediately — not after connect resolves. The old order (connect then
+    // attach) left a hung connect() unwatched, so the socket lingered until
+    // the server responded.
+    let detachAbort = attachAbortListener(client, input.signal);
     try {
       await client.connect();
       if (abortIfSignaled(client, input.signal)) return null;
-      detachAbort = attachAbortListener(client, input.signal);
       return await this.refreshFlagsFromConnectedClient(
         client,
         input.folder,
@@ -195,15 +203,26 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         input.signal
       );
     } catch (error) {
+      // R08: if the signal aborted during connect, do NOT open a retry socket
+      // — that would spawn a post-cancellation orphan connection. Surface the
+      // abort as null (the caller maps to probe_timeout) without re-connecting.
+      if (input.signal?.aborted) {
+        if (abortIfSignaled(client, input.signal)) return null;
+        throw error;
+      }
       if (!shouldRetryWithImplicitTls(error, input.config)) {
         throw error;
       }
       await closeClient(client);
+      // R08: the implicit-TLS retry must also check the abort signal before
+      // opening a second socket, and attach its own abort listener before
+      // connect (not after).
+      if (input.signal?.aborted) return null;
       client = this.createClient(input.config, "implicitTls");
-      await client.connect();
-      if (abortIfSignaled(client, input.signal)) return null;
       detachAbort?.();
       detachAbort = attachAbortListener(client, input.signal);
+      await client.connect();
+      if (abortIfSignaled(client, input.signal)) return null;
       return await this.refreshFlagsFromConnectedClient(
         client,
         input.folder,
@@ -234,12 +253,15 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     config: EmailReceiveConnectionConfig,
     signal?: AbortSignal
   ): Promise<SentFolder[]> {
+    // R08: reject already-aborted work before opening a socket.
+    if (signal?.aborted) return [];
     const client = this.createClient(config);
-    let detachAbort: (() => void) | undefined;
+    // R08: attach the abort listener BEFORE connect so a hung connect() is
+    // torn down the instant the signal aborts, not after connect resolves.
+    const detachAbort = attachAbortListener(client, signal);
     try {
       await client.connect();
       if (abortIfSignaled(client, signal)) return [];
-      detachAbort = attachAbortListener(client, signal);
       return await this.discoverSentFoldersFromConnectedClient(client, signal);
     } finally {
       detachAbort?.();
@@ -301,12 +323,15 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     cap: number;
     signal?: AbortSignal;
   }): Promise<ReplyHeaderSearchResult | false> {
+    // R08: reject already-aborted work before opening a socket.
+    if (input.signal?.aborted) return false;
     const client = this.createClient(input.config);
-    let detachAbort: (() => void) | undefined;
+    // R08: attach the abort listener BEFORE connect so a hung connect() is
+    // torn down the instant the signal aborts, not after connect resolves.
+    const detachAbort = attachAbortListener(client, input.signal);
     try {
       await client.connect();
       if (abortIfSignaled(client, input.signal)) return false;
-      detachAbort = attachAbortListener(client, input.signal);
       return await this.searchReplyHeadersFromConnectedClient(
         client,
         input.folder,

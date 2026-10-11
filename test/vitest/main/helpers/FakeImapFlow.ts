@@ -70,6 +70,14 @@ export interface FakeImapFlowFixture {
    * tear down the in-flight socket; the test asserts `close` was recorded.
    */
   readonly hangOnMailboxOpen?: string;
+  /**
+   * If true, `connect()` hangs forever (never resolves on its own) — for R08
+   * deadline-abort-during-connect tests. The abort listener must call
+   * `close()` to tear down the hung TCP/TLS socket the instant the deadline
+   * racer aborts; otherwise the socket lingers until the server responds. The
+   * fake records the `close` call so the test can assert no orphan connection.
+   */
+  readonly hangOnConnect?: boolean;
 }
 
 /** Recorded call for assertion in tests. */
@@ -106,6 +114,13 @@ export function fakeImapFlow(
     async connect(): Promise<void> {
       record("connect", []);
       if (fixture.connectThrows) throw fixture.connectThrows;
+      if (fixture.hangOnConnect) {
+        // Hang forever — simulates a hung/slow TCP/TLS handshake or login.
+        // The abort listener (attached BEFORE connect in R08) must call
+        // `close()` to tear down the in-flight socket; this await NEVER
+        // resolves on its own.
+        await new Promise<void>(() => {});
+      }
     },
     async logout(): Promise<void> {
       record("logout", []);

@@ -991,5 +991,164 @@ describe("EmailReplyDetection adversarial matrix (T04 step 9, §12) — full cha
     // No negative was cached despite zero parsed candidates.
     expect(kit.updateCalls.filter((c) => c.replyNegativeCheckAt)).toHaveLength(0);
   });
+
+  // ===========================================================================
+  // R08 — abort listener must be attached BEFORE connect; already-aborted work
+  // must not open a socket; the implicit-TLS retry must not open a post-
+  // cancellation orphan socket. The old order (connect → attachAbortListener)
+  // left a hung connect() unwatched, so the socket lingered until the server
+  // responded while the deadline racer had already logically released.
+  // ===========================================================================
+
+  it("R08: deadline during a hung connect tears down the socket (close recorded, no orphan)", async () => {
+    // connect() hangs forever — a hung/slow TCP/TLS handshake or login. The
+    // abort listener (R08: attached BEFORE connect) must call `close()` the
+    // instant the 15s deadline racer aborts, so the probe resolves
+    // probe_timeout and leaves no lingering socket.
+    vi.useFakeTimers();
+    try {
+      const message = messageFixture();
+      const fixture: FakeImapFlowFixture = {
+        folders: [
+          inboxFolder([inboxMessage(["\\Seen"])]), // not answered → flag side incomplete
+          sentFolder([]),
+        ],
+        hangOnConnect: true,
+      };
+      const kit = buildMatrixKit({ message, fixture });
+
+      const probeP = kit.service.detect({ messageId: message.id });
+      // Drain microtasks so the probe enters flight + the racer arms its
+      // setTimeout + the abort listener is attached to the hung connect().
+      await vi.advanceTimersByTimeAsync(0);
+      // Advance past the 15s deadline — the racer aborts the controller.
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      const r = await probeP;
+      expect(r.state).toBe("unknown");
+      expect(r.reasonCode).toBe("probe_timeout");
+
+      // The abort listener MUST have called `close()` on the hung connection.
+      // Without the R08 before-connect attach, the listener would not exist
+      // during the hung connect() (it was attached AFTER connect resolved, which
+      // never happens) — the socket would linger, unrecorded here.
+      const conn = kit.imapPort.lastConnection as unknown as {
+        calls: Array<{ method: string }>;
+      } | null;
+      expect(conn).not.toBeNull();
+      const closes = conn!.calls.filter((c) => c.method === "close");
+      expect(closes.length).toBeGreaterThanOrEqual(1);
+      // Exactly ONE connect was attempted — no orphan retry socket spawned
+      // (the connect never resolved, so shouldRetryWithImplicitTls never ran;
+      // but the point is no second connection was opened).
+      const connects = conn!.calls.filter((c) => c.method === "connect");
+      expect(connects.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  it("R08: already-aborted work opens NO socket (no connect, no orphan)", async () => {
+    // A probe whose signal is already aborted (e.g. the deadline elapsed
+    // during the mailbox queue wait, R07) must not open a TCP/TLS connection.
+    // The R08 guard rejects already-aborted work before createClient/connect.
+    // Use the ImapEmailReceiveClient directly with a pre-aborted controller so
+    // the guard is exercised at the adapter (not just through the detector).
+    const controller = new AbortController();
+    controller.abort();
+    const connectCalls: number[] = [];
+    const factory = (): ImapFlowConnection => {
+      // A fake that records connect invocations. The R08 guard must prevent
+      // this from ever being called for connect.
+      const base = fakeImapFlowFactory({
+        folders: [
+          inboxFolder([inboxMessage(["\\Seen"])]),
+          sentFolder([]),
+        ],
+      })();
+      return {
+        ...base,
+        connect: async (): Promise<void> => {
+          connectCalls.push(1);
+        },
+      };
+    };
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: factory });
+
+    const r = await client.discoverSentFolders(imapConfig(), controller.signal);
+    expect(r).toEqual([]); // aborted → empty scope, not a negative
+    expect(connectCalls.length).toBe(0); // R08: no socket opened
+
+    // Same for the other two probe methods.
+    const flags = await client.refreshMessageFlags({
+      config: imapConfig(),
+      folder: "INBOX",
+      uidValidity: "424242",
+      uid: "77",
+      signal: controller.signal,
+    });
+    expect(flags).toBeNull();
+    expect(connectCalls.length).toBe(0);
+
+    const search = await client.searchReplyHeaders({
+      config: imapConfig(),
+      folder: "Sent",
+      originalMessageId: ORIGINAL_ID,
+      cap: 10,
+      signal: controller.signal,
+    });
+    expect(search).toBe(false);
+    expect(connectCalls.length).toBe(0);
+  });
+
+  it("R08: the implicit-TLS retry does NOT open a post-cancellation orphan socket", async () => {
+    // The first connect throws a retryable greeting-timeout error. The deadline
+    // racer aborts the signal DURING the first connect's failure (before the
+    // catch block decides to retry). The R08 retry guard must return WITHOUT
+    // opening a second socket — no orphan.
+    const controller = new AbortController();
+    let connectAttempts = 0;
+    const factory = (): ImapFlowConnection => {
+      const base = fakeImapFlowFactory({
+        folders: [
+          inboxFolder([inboxMessage(["\\Seen"])]),
+          sentFolder([]),
+        ],
+      })();
+      return {
+        ...base,
+        connect: async (): Promise<void> => {
+          connectAttempts += 1;
+          if (connectAttempts === 1) {
+            // Simulate the deadline racer firing during the hung/failed connect
+            // — the signal aborts BEFORE the rejection propagates to the catch.
+            controller.abort();
+            const err = Object.assign(new Error("GREETING_TIMEOUT"), {
+              code: "GREETING_TIMEOUT",
+            });
+            throw err;
+          }
+          // Second connect: if reached, would be the orphan. The R08 retry
+          // guard must prevent this because the signal aborted before retry.
+          await new Promise<void>(() => {}); // hang to make any bug obvious
+        },
+      };
+    };
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: factory });
+
+    const r = await client.refreshMessageFlags({
+      config: imapConfig(),
+      folder: "INBOX",
+      uidValidity: "424242",
+      uid: "77",
+      signal: controller.signal,
+    });
+
+    // R08: the retry guard returns null (already-aborted) — no second socket.
+    expect(r).toBeNull();
+    // Exactly ONE connect was attempted (the initial greeting-timeout); the
+    // implicit-TLS retry connect did NOT happen — no orphan socket.
+    expect(connectAttempts).toBe(1);
+  });
 });
 
