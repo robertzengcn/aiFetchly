@@ -2646,6 +2646,14 @@ export default {
       status_waiting_approval: "esperando aprobación",
       status_waiting_external_job: "esperando trabajo externo",
       status_terminal: "completado",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): etiquetas honestas de resultado terminal.
+      outcome_verified_complete: "completado",
+      outcome_incomplete: "incompleto",
+      outcome_needs_user_input: "necesita tu entrada",
+      outcome_blocked_by_policy: "bloqueado por política",
+      outcome_failed: "fallido",
+      outcome_cancelled: "cancelado",
+      outcome_timeout: "expirado",
       actions: {
         continue: "Continuar",
         retry: "Reintentar",

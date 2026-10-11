@@ -2499,6 +2499,14 @@ export default {
       status_waiting_approval: "等待批准",
       status_waiting_external_job: "等待外部任务",
       status_terminal: "已完成",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32)：终端结果的真实标签。
+      outcome_verified_complete: "已完成",
+      outcome_incomplete: "未完成",
+      outcome_needs_user_input: "需要您的输入",
+      outcome_blocked_by_policy: "被策略阻止",
+      outcome_failed: "失败",
+      outcome_cancelled: "已取消",
+      outcome_timeout: "已超时",
       actions: {
         continue: "继续",
         retry: "重试",

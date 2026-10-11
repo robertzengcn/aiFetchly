@@ -2627,6 +2627,14 @@ export default {
       status_waiting_approval: "approbation requise",
       status_waiting_external_job: "tâche externe en attente",
       status_terminal: "terminé",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32) : étiquettes honnêtes de résultat terminal.
+      outcome_verified_complete: "terminé",
+      outcome_incomplete: "incomplet",
+      outcome_needs_user_input: "saisie requise",
+      outcome_blocked_by_policy: "bloqué par stratégie",
+      outcome_failed: "échoué",
+      outcome_cancelled: "annulé",
+      outcome_timeout: "expiré",
       actions: {
         continue: "Continuer",
         retry: "Réessayer",

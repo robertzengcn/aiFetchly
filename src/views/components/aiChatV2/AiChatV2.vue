@@ -15,6 +15,7 @@
         <TaskExecutionStatusBadge
           v-if="activeTaskExecution"
           :status="activeTaskExecution.status"
+          :outcome="activeTaskExecution.outcome"
           :reason-code="activeTaskExecution.reasonCode"
           class="ml-2"
         />

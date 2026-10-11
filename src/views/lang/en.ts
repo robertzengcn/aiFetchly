@@ -2634,6 +2634,16 @@ export default {
       status_waiting_approval: "awaiting approval",
       status_waiting_external_job: "awaiting external job",
       status_terminal: "completed",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): honest terminal-outcome
+      // labels. Only verified_complete reuses the success label; the other
+      // six outcomes describe what actually happened at the terminal gate.
+      outcome_verified_complete: "completed",
+      outcome_incomplete: "incomplete",
+      outcome_needs_user_input: "needs your input",
+      outcome_blocked_by_policy: "blocked by policy",
+      outcome_failed: "failed",
+      outcome_cancelled: "cancelled",
+      outcome_timeout: "timed out",
       actions: {
         continue: "Continue",
         retry: "Retry",

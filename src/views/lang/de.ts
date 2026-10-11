@@ -2636,6 +2636,14 @@ export default {
       status_waiting_approval: "freigabe ausstehend",
       status_waiting_external_job: "externer Vorgang ausstehend",
       status_terminal: "abgeschlossen",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): ehrliche Terminal-Ergebnisbeschriftungen.
+      outcome_verified_complete: "abgeschlossen",
+      outcome_incomplete: "unvollständig",
+      outcome_needs_user_input: "Eingabe erforderlich",
+      outcome_blocked_by_policy: "durch Richtlinie blockiert",
+      outcome_failed: "fehlgeschlagen",
+      outcome_cancelled: "abgebrochen",
+      outcome_timeout: "Zeitüberschreitung",
       actions: {
         continue: "Fortsetzen",
         retry: "Erneut versuchen",

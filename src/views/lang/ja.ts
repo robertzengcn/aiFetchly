@@ -2587,6 +2587,14 @@ export default {
       status_waiting_approval: "承認待ち",
       status_waiting_external_job: "外部ジョブ待ち",
       status_terminal: "完了",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): 端末結果の正直なラベル。
+      outcome_verified_complete: "完了",
+      outcome_incomplete: "不完全",
+      outcome_needs_user_input: "入力が必要",
+      outcome_blocked_by_policy: "ポリシーによりブロック",
+      outcome_failed: "失敗",
+      outcome_cancelled: "キャンセル済み",
+      outcome_timeout: "タイムアウト",
       actions: {
         continue: "続行",
         retry: "再試行",
