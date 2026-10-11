@@ -7,6 +7,35 @@ import type {
   TaskExecutionReasonCode,
 } from "@/entityTypes/aiTaskExecutionTypes";
 
+/**
+ * Legal §10.2 state machine: claimed → failed-before-dispatch fence, the
+ * dispatched → unknown uncertainty branch, and terminal stickiness for
+ * accepted/completed/failed (a settled consequential action never re-opens).
+ * Only listed (from → to) pairs may transition.
+ */
+const OPERATION_STATE_TRANSITIONS: Readonly<
+  Record<AiTaskOperationState, readonly AiTaskOperationState[]>
+> = {
+  pending: ["claimed"],
+  claimed: ["dispatched", "failed"],
+  dispatched: ["accepted", "failed", "unknown"],
+  accepted: [],
+  completed: [],
+  failed: [],
+  unknown: ["dispatched", "accepted", "failed"],
+};
+
+/**
+ * §10.2 terminal states — reaching one stamps `settled_at`. `unknown` is
+ * NOT terminal: §10.2 routes unknown → dispatched/accepted/failed (crash
+ * reconciliation), so entering it must not claim a settlement timestamp.
+ */
+const TERMINAL_STATES: Readonly<Record<string, true>> = {
+  accepted: true,
+  completed: true,
+  failed: true,
+};
+
 export interface CreateOperationInput {
   readonly operationKey: string;
   readonly executionId: string;
@@ -35,25 +64,22 @@ export interface UpdateStateResult {
 /**
  * Data-access layer for `ai_task_operation` (technical-design §6.1/§10).
  *
- * Slice 1 implements create/get/updateState with claim-generation CAS so the
- * schema is stable and the worker guard is enforced. Full receipt
- * reconciliation (FR-11; AC-09/10/13/28) lands in Slice 3.
- *
  * The unique `operation_key` dedups retries — `create` is idempotent and
  * returns `alreadyExists: true` without inserting a duplicate. When an
- * existing row IS found, `create` compares the incoming `intentHash`,
- * `executionId`, and `toolIdentity` against the stored row and returns
- * `INTENT_CONFLICT` if any differ — the entity's canonical `intent_hash`
- * genuinely prevents a changed target from reusing an operation (§10.1).
+ * existing row IS found — pre-checked or via a unique-constraint collision
+ * — `create` reloads the winner and compares the incoming `intentHash`,
+ * `executionId`, and `toolIdentity` against it, returning `INTENT_CONFLICT`
+ * if any differ. The canonical `intent_hash` prevents a changed target from
+ * reusing an operation (§10.1); identical-intent collisions are receipt
+ * reuse (T22).
  *
- * The check-then-insert is vulnerable to a concurrent same-key create: two
- * callers both read null, both insert, and the second hits a raw
- * unique-constraint violation. `create` catches that violation and returns
- * `alreadyExists: true` instead of throwing, so concurrent retries resolve
- * to a typed result either way.
- *
- * CAS on `claim_generation` prevents stale dispatch: a caller holding a
- * stale generation receives `STATE_CONFLICT` and must re-read.
+ * `updateState` (T22) is an atomic conditional UPDATE keyed on
+ * `claim_generation` — no read/check/save race: two claimers of the same
+ * generation race one `UPDATE ... WHERE claim_generation = ?` and exactly
+ * one caller's statement matches (affected = 1); the loser gets
+ * `STATE_CONFLICT`. Illegal transitions (terminal regression, claiming a
+ * terminal op, pending → dispatched skipping the §10.2 claim fence) are
+ * rejected typed before any write.
  *
  * Worker guard: every method calls `assertNotWorker` first — workers must
  * never touch this table directly (NFR-03).
@@ -111,14 +137,42 @@ export class AiTaskOperationModel extends BaseDb {
       await this.repository.save(op);
     } catch (error) {
       // Concurrent same-key create: both callers read null, both insert,
-      // second hits the unique constraint. Resolve to the typed result
-      // instead of surfacing a raw SQLite UNIQUE error.
+      // second hits the unique constraint. Reload the winner and compare
+      // identity — a different intent must surface as INTENT_CONFLICT,
+      // never as a harmless alreadyExists (T22; audit P2).
       if (this.isUniqueConstraintError(error)) {
-        return { ok: false, alreadyExists: true };
+        return this.compareWithExistingWinner(input);
       }
       throw error;
     }
     return { ok: true };
+  }
+
+  /**
+   * Compare a colliding create against the row that actually won the
+   * unique race. Identical identity (intent + execution + tool) is receipt
+   * reuse (`alreadyExists`); any difference is `INTENT_CONFLICT` — the
+   * loser of the race must not silently adopt another operation's receipt.
+   */
+  private async compareWithExistingWinner(
+    input: CreateOperationInput
+  ): Promise<CreateOperationResult> {
+    const winner = await this.repository.findOne({
+      where: { operation_key: input.operationKey },
+    });
+    if (!winner) {
+      // The winner vanished between the constraint violation and this
+      // read (delete window). Fail closed — the caller re-runs create.
+      return { ok: false, reasonCode: "INTENT_CONFLICT" };
+    }
+    if (
+      winner.intent_hash !== input.intentHash ||
+      winner.execution_id !== input.executionId ||
+      winner.tool_identity !== input.toolIdentity
+    ) {
+      return { ok: false, reasonCode: "INTENT_CONFLICT" };
+    }
+    return { ok: false, alreadyExists: true };
   }
 
   async getByKey(
@@ -134,31 +188,100 @@ export class AiTaskOperationModel extends BaseDb {
     input: UpdateStateInput
   ): Promise<UpdateStateResult> {
     assertNotWorker("AiTaskOperation.updateState");
-    const op = await this.getByKey(input.operationKey);
-    if (!op) {
+    // Read-only pre-checks for typed diagnostics. The write below is the
+    // actual gate: a conditional UPDATE that only matches when the row is
+    // still on the expected generation AND on a state that legally
+    // transitions to the requested one. Two concurrent claimers race this
+    // single statement — exactly one UPDATE matches, so exactly one
+    // caller observes a success (T22; audit P1).
+    const current = await this.getByKey(input.operationKey);
+    if (!current) {
       return { ok: false, reasonCode: "OPERATION_NOT_FOUND" };
     }
-    if (op.claim_generation !== input.expectedClaimGeneration) {
+    if (current.claim_generation !== input.expectedClaimGeneration) {
       return { ok: false, reasonCode: "STATE_CONFLICT" };
     }
-    op.operation_state = input.newState;
-    op.claim_generation = input.expectedClaimGeneration + 1;
-    if (input.newState === "claimed") {
-      op.claimed_at = new Date();
-    }
-    if (input.newState === "dispatched") {
-      op.dispatched_at = new Date();
-    }
     if (
-      input.newState === "accepted" ||
-      input.newState === "completed" ||
-      input.newState === "failed" ||
-      input.newState === "unknown"
+      !OPERATION_STATE_TRANSITIONS[current.operation_state]?.includes(
+        input.newState
+      )
     ) {
-      op.settled_at = new Date();
+      return { ok: false, reasonCode: "STATE_CONFLICT" };
     }
-    await this.repository.save(op);
+
+    const affected = await this.conditionalStateUpdate(input);
+    if (affected !== 1) {
+      // Lost the race (another claimer advanced the generation between
+      // the read and the write) or the state moved off the legal path —
+      // either way the caller must re-read before retrying.
+      return { ok: false, reasonCode: "STATE_CONFLICT" };
+    }
     return { ok: true };
+  }
+
+  /**
+   * Single-statement guarded transition. Matches only when the row still
+   * carries the expected generation and sits on a state that legally
+   * transitions to `newState`; bumps the generation and stamps the §10.2
+   * transition timestamps in the same statement.
+   *
+   * Raw driver SQL via the QueryRunner (matching the T11/B2 finalize CAS in
+   * `AiTaskExecution.model.ts`): `manager.query()` drops the
+   * `useStructuredResult` flag, and the QueryBuilder's `.affected` path is
+   * unreliable on better-sqlite3. The WHERE predicate is evaluated
+   * atomically with the SET, so two concurrent claimers race one statement
+   * and exactly one UPDATE matches.
+   */
+  private async conditionalStateUpdate(
+    input: UpdateStateInput
+  ): Promise<number> {
+    const legalSourceStates = (
+      Object.keys(OPERATION_STATE_TRANSITIONS) as AiTaskOperationState[]
+    ).filter((state) =>
+      OPERATION_STATE_TRANSITIONS[state].includes(input.newState)
+    );
+    // Stamp only the timestamp this transition owns — the three target
+    // kinds are mutually exclusive, so at most one clause is added. An
+    // unconditional SET would null timestamps recorded by earlier
+    // transitions (a claimed → failed outcome would wipe claimed_at,
+    // erasing the claim-order trail downstream audits rely on).
+    const timestampClause =
+      input.newState === "claimed"
+        ? "claimed_at = CURRENT_TIMESTAMP"
+        : input.newState === "dispatched"
+          ? "dispatched_at = CURRENT_TIMESTAMP"
+          : input.newState in TERMINAL_STATES
+            ? "settled_at = CURRENT_TIMESTAMP"
+            : null;
+    const setClauses = [
+      "operation_state = ?",
+      "claim_generation = claim_generation + 1",
+      ...(timestampClause ? [timestampClause] : []),
+      "updatedAt = CURRENT_TIMESTAMP",
+    ];
+    const parameters: (string | number)[] = [
+      input.newState,
+      input.operationKey,
+      input.expectedClaimGeneration,
+      ...legalSourceStates,
+    ];
+    const runner = this.sqliteDb.connection.createQueryRunner();
+    try {
+      const result = (await runner.query(
+        `UPDATE ai_task_operation
+            SET ${setClauses.join(", ")}
+          WHERE operation_key = ?
+            AND claim_generation = ?
+            AND operation_state IN (${legalSourceStates
+              .map(() => "?")
+              .join(", ")})`,
+        parameters,
+        true // useStructuredResult — exposes .affected on the driver result
+      )) as { affected?: number };
+      return result.affected ?? 0;
+    } finally {
+      await runner.release();
+    }
   }
 
   private isUniqueConstraintError(error: unknown): boolean {
