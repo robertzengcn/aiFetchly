@@ -120,8 +120,8 @@ export class TestGroundingAdapter implements GroundingModelAdapter {
     } else {
       // Deterministic point from the crop geometry: golden-ratio offsets so
       // tests can assert exact mapped coordinates.
-      const nx = Number(((crop.width * 0.618) / crop.width).toFixed(6));
-      const ny = Number(((crop.height * 0.382) / crop.height).toFixed(6));
+      const nx = 0.618;
+      const ny = 0.382;
       candidates = [
         { nx, ny, score: 0.95, regionWidthNormalized: 0.05, regionHeightNormalized: 0.05 },
         { nx: nx + 0.001, ny, score: 0.3 }, // inside the top region → not ambiguous

@@ -8,8 +8,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import semver from "semver";
+import {
+  LOCAL_AI_MODEL_RUNTIME_IDS,
+  LOCAL_AI_RUNTIME_GROUPS,
+} from "@/entityTypes/localAiRuntimeTypes";
 import type {
   LocalAiRuntimeCatalogEntry,
   LocalAiRuntimeDownloadPhase,
@@ -19,13 +24,20 @@ import type {
   LocalAiRuntimeInstallRequest,
   LocalAiRuntimeInstallResult,
   LocalAiRuntimeRemoveRequest,
+  LocalAiRuntimeGroupId,
+  LocalAiRuntimeInstallSetOffer,
+  LocalAiRuntimeInstallSetRequest,
+  LocalAiRuntimeInstallSetResult,
   LocalAiRuntimeStatus,
   LocalAiRuntimeTarget,
   LocalAiRuntimeUpdateOffer,
+  ModelCatalogEntryV2,
+  NativeRuntimeCatalogEntryV2,
   ResolvedLocalAiRuntime,
 } from "@/entityTypes/localAiRuntimeTypes";
 import { LocalAiRuntimeError } from "@/entityTypes/localAiRuntimeTypes";
 import type { LocalAiRuntimePathService } from "@/service/localAiRuntime/LocalAiRuntimePathService";
+import { groundingModelManifestSchema } from "@/schemas/localAiRuntime";
 import type { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntimeStateStore";
 import type { LocalAiRuntimeCatalogService } from "@/service/localAiRuntime/LocalAiRuntimeCatalogService";
 import type { LocalAiRuntimeCompatibilityService } from "@/service/localAiRuntime/LocalAiRuntimeCompatibilityService";
@@ -39,6 +51,17 @@ import {
 } from "@/service/localAiRuntime/LocalAiRuntimeExtractor";
 import { renameWithRetry } from "@/service/localAiRuntime/renameWithRetry";
 import { RUNTIME_CONSENT_TTL_MS } from "@/service/localAiRuntime/localAiRuntimeConstants";
+
+interface SetConsentGrant {
+  operationId: string;
+  entries: readonly {
+    runtimeId: LocalAiRuntimeId;
+    runtimeVersion: string;
+    identityHash: string;
+  }[];
+  consentToken: string;
+  expiresAt: number;
+}
 
 interface ConsentGrant {
   operationId: string;
@@ -66,17 +89,37 @@ export interface LocalAiRuntimeModuleDeps {
   getModelDirs?: (runtimeId: LocalAiRuntimeId) => string[];
   /** Health-check timeout for install/repair smoke tests. */
   healthCheckTimeoutMs?: number;
+  /** v2 catalog accessor (computer-use §7.3); required for install sets. */
+  getCatalogV2?: () => Promise<import("@/entityTypes/localAiRuntimeTypes").LocalAiRuntimeCatalogV2>;
+  /** Resumable model file-set downloader (§7.5); required for model installs. */
+  fileSetDownload?: LocalAiRuntimeFileSetDownloadServiceLike;
+  /** Total system memory probe (§7.8); defaults to os.totalmem. */
+  totalMemoryBytes?: () => number;
+}
+
+/** Structural seam over LocalAiRuntimeFileSetDownloadService. */
+export interface LocalAiRuntimeFileSetDownloadServiceLike {
+  download(request: {
+    operationId: string;
+    entry: ModelCatalogEntryV2;
+    stagingRoot: string;
+    signal: AbortSignal;
+    onProgress: (progress: LocalAiRuntimeDownloadProgress) => void;
+  }): Promise<{ totalBytes: number; files: readonly { path: string; sha256: string; sizeBytes: number }[] }>;
 }
 
 export class LocalAiRuntimeModule {
   private readonly grants = new Map<string, ConsentGrant>();
+  private readonly setGrants = new Map<string, SetConsentGrant>();
 
   constructor(private readonly deps: LocalAiRuntimeModuleDeps) {}
 
   // ---- status ----
 
-  async listStatuses(): Promise<LocalAiRuntimeStatus[]> {
-    const ids: LocalAiRuntimeId[] = ["embedding-xenova", "voice-sherpa"];
+  async listStatuses(group?: LocalAiRuntimeGroupId): Promise<LocalAiRuntimeStatus[]> {
+    const ids: LocalAiRuntimeId[] = group
+      ? ([...LOCAL_AI_RUNTIME_GROUPS[group]] as LocalAiRuntimeId[])
+      : (["embedding-xenova", "voice-sherpa"] as LocalAiRuntimeId[]);
     return Promise.all(ids.map((id) => this.getStatus(id)));
   }
 
@@ -509,4 +552,337 @@ export class LocalAiRuntimeModule {
   getOperationCoordinator(): LocalAiRuntimeOperationCoordinator {
     return this.deps.coordinator;
   }
+
+  // ---- install sets (computer-use design §7.8, CU-INST-13) ----
+
+  /**
+   * One consent covering the grounding runtime and a model: selects entries
+   * (runtime first, then model), checks target + memory + requiresRuntime,
+   * and returns a single offer with combined sizes.
+   */
+  async prepareInstallSet(
+    runtimeIds: readonly LocalAiRuntimeId[]
+  ): Promise<LocalAiRuntimeInstallSetOffer> {
+    if (!this.deps.getCatalogV2) {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_unavailable",
+        "The v2 runtime catalog is not configured in this build."
+      );
+    }
+    const catalog = await this.deps.getCatalogV2();
+    const modelIds = runtimeIds.filter((id) =>
+      (LOCAL_AI_MODEL_RUNTIME_IDS as readonly string[]).includes(id)
+    );
+    const nativeIds = runtimeIds.filter((id) => !modelIds.includes(id));
+
+    const entries: Array<NativeRuntimeCatalogEntryV2 | ModelCatalogEntryV2> = [];
+    for (const id of nativeIds) {
+      entries.push(this.selectNativeV2(catalog, id));
+    }
+    for (const id of modelIds) {
+      const model = this.selectModelV2(catalog, id);
+      // requiresRuntime: an active grounding runtime of >= minVersion must
+      // be installable in the same set or already active.
+      const runtimeId = model.requiresRuntime.runtimeId;
+      const runtimeInSet = nativeIds.includes(runtimeId)
+        ? this.selectNativeV2(catalog, runtimeId)
+        : null;
+      const active = await this.deps.state.readActive(runtimeId).catch(() => null);
+      const runtimeVersion = runtimeInSet
+        ? runtimeInSet.runtimeVersion
+        : active?.runtimeVersion ?? null;
+      if (
+        !runtimeVersion ||
+        semver.lt(runtimeVersion, model.requiresRuntime.minVersion)
+      ) {
+        throw new LocalAiRuntimeError(
+          "runtime_dependency_missing",
+          `${id} requires ${runtimeId} >= ${model.requiresRuntime.minVersion}; include the runtime in the same install set.`
+        );
+      }
+      // Memory floor (CU-INST-18).
+      const totalMemory = (this.deps.totalMemoryBytes ?? os.totalmem)();
+      if (totalMemory < model.minSystemMemoryBytes) {
+        throw new LocalAiRuntimeError(
+          "runtime_insufficient_memory",
+          `${id} requires at least ${model.minSystemMemoryBytes} bytes of system memory.`
+        );
+      }
+      entries.push(model);
+    }
+
+    const operationId = randomUUID();
+    const consentToken = randomUUID();
+    const expiresAt = Date.now() + RUNTIME_CONSENT_TTL_MS;
+    this.setGrants.set(operationId, {
+      operationId,
+      entries: entries.map((entry) => ({
+        runtimeId: entry.runtimeId,
+        runtimeVersion: entry.runtimeVersion,
+        identityHash:
+          entry.packageKind === "model" ? entry.manifestSha256 : entry.sha256,
+      })),
+      consentToken,
+      expiresAt,
+    });
+    const offers = entries.map((entry) => ({
+      runtimeId: entry.runtimeId,
+      runtimeVersion: entry.runtimeVersion,
+      downloadSizeBytes:
+        entry.packageKind === "model"
+          ? entry.downloadSizeBytes
+          : entry.archiveSizeBytes,
+      installedSizeBytes: entry.installedSizeBytes,
+      identityHash:
+        entry.packageKind === "model" ? entry.manifestSha256 : entry.sha256,
+    }));
+    return {
+      operationId,
+      entries: offers,
+      totalDownloadBytes: offers.reduce((s, o) => s + o.downloadSizeBytes, 0),
+      totalInstalledBytes: offers.reduce((s, o) => s + o.installedSizeBytes, 0),
+      consentToken,
+      expiresAt: new Date(expiresAt).toISOString(),
+    };
+  }
+
+  /**
+   * Install a consented set: runtime first, then model, each pipeline under
+   * its own coordinator operation. If the runtime fails the model is not
+   * attempted; if the model fails the runtime stays installed for reuse.
+   */
+  async installSet(
+    input: LocalAiRuntimeInstallSetRequest
+  ): Promise<LocalAiRuntimeInstallSetResult> {
+    const grant = this.validateSetGrant(input);
+    const installed: Array<{
+      runtimeId: LocalAiRuntimeId;
+      runtimeVersion: string;
+      activated: boolean;
+    }> = [];
+    for (const entryGrant of grant.entries) {
+      const lease = this.deps.coordinator.acquire(
+        entryGrant.runtimeId,
+        grant.operationId
+      );
+      try {
+        if ((LOCAL_AI_MODEL_RUNTIME_IDS as readonly string[]).includes(entryGrant.runtimeId)) {
+          await this.runModelPipeline(
+            entryGrant.runtimeId,
+            entryGrant.runtimeVersion,
+            grant.operationId,
+            lease
+          );
+        } else {
+          const catalog = await this.deps.catalog.getCatalog();
+          const entry = this.deps.compatibility.selectEntry(
+            catalog,
+            entryGrant.runtimeId,
+            this.deps.target
+          );
+          if (entry.runtimeVersion !== entryGrant.runtimeVersion) {
+            throw new LocalAiRuntimeError(
+              "runtime_manifest_invalid",
+              "Catalog changed between consent and install."
+            );
+          }
+          await this.runPipeline(entry, grant.operationId, lease);
+        }
+        installed.push({
+          runtimeId: entryGrant.runtimeId,
+          runtimeVersion: entryGrant.runtimeVersion,
+          activated: true,
+        });
+      } catch (error) {
+        this.setGrants.delete(grant.operationId);
+        return {
+          operationId: grant.operationId,
+          installed,
+          failedRuntimeId: entryGrant.runtimeId,
+          errorCode:
+            error instanceof LocalAiRuntimeError
+              ? error.code
+              : "runtime_unknown_error",
+        };
+      } finally {
+        this.deps.coordinator.release(grant.operationId);
+      }
+    }
+    this.setGrants.delete(grant.operationId);
+    return { operationId: grant.operationId, installed };
+  }
+
+  /** Delete every model version that is neither active, leased, nor pending. */
+  async pruneInactiveVersions(runtimeId: LocalAiRuntimeId): Promise<number> {
+    const active = await this.deps.state.readActive(runtimeId).catch(() => null);
+    const versions = await this.deps.state.listInstalledVersions(runtimeId).catch(() => []);
+    let pruned = 0;
+    for (const version of versions) {
+      if (active?.runtimeVersion === version) continue;
+      if (this.deps.coordinator.isVersionLeased(runtimeId, version)) continue;
+      const { versionRoot } = this.deps.paths.getRuntimePaths(runtimeId, version);
+      if (this.deps.paths.isBeneathRuntimeRoot(versionRoot)) {
+        await fs.rm(versionRoot, { recursive: true, force: true }).catch(() => undefined);
+        pruned += 1;
+      }
+    }
+    return pruned;
+  }
+
+  private selectNativeV2(
+    catalog: import("@/entityTypes/localAiRuntimeTypes").LocalAiRuntimeCatalogV2,
+    runtimeId: LocalAiRuntimeId
+  ): NativeRuntimeCatalogEntryV2 {
+    const entry = catalog.runtimes.find(
+      (e) => e.runtimeId === runtimeId && e.packageKind === "native_runtime"
+    );
+    if (!entry || entry.packageKind !== "native_runtime") {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_target_missing",
+        `No compatible ${runtimeId} entry in the v2 catalog.`
+      );
+    }
+    return entry;
+  }
+
+  private selectModelV2(
+    catalog: import("@/entityTypes/localAiRuntimeTypes").LocalAiRuntimeCatalogV2,
+    runtimeId: LocalAiRuntimeId
+  ): ModelCatalogEntryV2 {
+    const entry = catalog.runtimes.find(
+      (e) => e.runtimeId === runtimeId && e.packageKind === "model"
+    );
+    if (!entry || entry.packageKind !== "model") {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_target_missing",
+        `No ${runtimeId} model entry in the v2 catalog.`
+      );
+    }
+    return entry;
+  }
+
+  private validateSetGrant(
+    input: LocalAiRuntimeInstallSetRequest
+  ): SetConsentGrant {
+    const grant = this.setGrants.get(input.operationId);
+    if (!grant) {
+      throw new LocalAiRuntimeError(
+        "runtime_download_denied",
+        "Unknown or expired install-set offer."
+      );
+    }
+    // Expiry limits when the install may START, not how long a multi-GB
+    // download may take (§7.8).
+    if (Date.now() > grant.expiresAt) {
+      this.setGrants.delete(input.operationId);
+      throw new LocalAiRuntimeError(
+        "runtime_download_denied",
+        "Install-set offer expired."
+      );
+    }
+    if (grant.consentToken !== input.consentToken) {
+      throw new LocalAiRuntimeError(
+        "runtime_download_denied",
+        "Install-set request does not match the offer."
+      );
+    }
+    return grant;
+  }
+
+  /** Model pipeline (§7.5): manifest-first file-set download → validate → activate. */
+  private async runModelPipeline(
+    runtimeId: LocalAiRuntimeId,
+    runtimeVersion: string,
+    operationId: string,
+    lease: { controller: AbortController }
+  ): Promise<void> {
+    if (!this.deps.getCatalogV2 || !this.deps.fileSetDownload) {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_unavailable",
+        "Model installs are not configured in this build."
+      );
+    }
+    const catalog = await this.deps.getCatalogV2();
+    const entry = this.selectModelV2(catalog, runtimeId);
+    if (entry.runtimeVersion !== runtimeVersion) {
+      throw new LocalAiRuntimeError(
+        "runtime_manifest_invalid",
+        "Catalog changed between consent and install."
+      );
+    }
+    await this.deps.paths.ensureOperationDirectories();
+    const { stagingRoot } = this.deps.paths.createOperationPaths(operationId);
+    try {
+      const result = await this.deps.fileSetDownload.download({
+        operationId,
+        entry,
+        stagingRoot,
+        signal: lease.controller.signal,
+        onProgress: (progress) => this.deps.publishProgress(progress),
+      });
+      if (result.files.length !== entry.files.length) {
+        throw new LocalAiRuntimeError(
+          "runtime_manifest_invalid",
+          "Downloaded file set does not match the catalog entry."
+        );
+      }
+      // Validate the producer manifest from staging.
+      const manifestPath = path.join(stagingRoot, "manifest.json");
+      const manifestRaw = JSON.parse(
+        await fs.readFile(manifestPath, "utf8")
+      ) as unknown;
+      const manifest = groundingModelManifestSchema.parse(manifestRaw);
+      if (
+        manifest.runtimeId !== entry.runtimeId ||
+        manifest.runtimeVersion !== entry.runtimeVersion ||
+        manifest.groundingAdapterId !== entry.groundingAdapterId ||
+        manifest.preprocessingRevision !== entry.preprocessingRevision ||
+        manifest.decodingRevision !== entry.decodingRevision ||
+        manifest.calibrationRevision !== entry.calibrationRevision
+      ) {
+        throw new LocalAiRuntimeError(
+          "runtime_model_manifest_invalid",
+          "Model manifest does not match the catalog entry identity."
+        );
+      }
+      // Activate: atomic rename into the version root + active.json flip.
+      const { versionRoot, runtimeDir } = this.deps.paths.getRuntimePaths(
+        entry.runtimeId,
+        entry.runtimeVersion
+      );
+      await fs.mkdir(runtimeDir, { recursive: true });
+      if (this.deps.coordinator.isVersionLeased(entry.runtimeId, entry.runtimeVersion)) {
+        throw new LocalAiRuntimeError(
+          "runtime_busy",
+          "Target model version is in use by a worker.",
+          true
+        );
+      }
+      await fs.rm(versionRoot, { recursive: true, force: true });
+      await renameWithRetry(stagingRoot, versionRoot);
+      await this.deps.state.writePackageManifest(
+        entry.runtimeId,
+        entry.runtimeVersion,
+        manifest as unknown as ResolvedLocalAiRuntime["manifest"]
+      );
+      const previous = await this.deps.state.readActive(entry.runtimeId);
+      await this.deps.state.writeActive({
+        schemaVersion: 1,
+        runtimeId: entry.runtimeId,
+        runtimeVersion: entry.runtimeVersion,
+        activatedAt: new Date().toISOString(),
+        packageSha256: entry.manifestSha256,
+        previousVersion: previous?.runtimeVersion,
+      });
+      // Superseded model versions are pruned after a successful update
+      // (§7.8): rollback means downloading again.
+      await this.pruneInactiveVersions(entry.runtimeId).catch(() => undefined);
+    } catch (error) {
+      await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+      throw error instanceof LocalAiRuntimeError
+        ? error
+        : new LocalAiRuntimeError("runtime_unknown_error", (error as Error).message);
+    }
+  }
+
 }
