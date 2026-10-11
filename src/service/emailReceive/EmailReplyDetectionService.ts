@@ -862,9 +862,10 @@ export class EmailReplyDetectionService {
               answeredCheckedAt,
             });
             if (!persisted) {
-              // D1b: evidence write failed — do NOT return a replied that the
-              // upstream send gate would trust past the pre-send check.
-              return this.unknown("probe_failed");
+              // D1b/R09: evidence write failed or was rejected (0 rows) —
+              // reread the store and return the CURRENT evidence (a concurrent
+              // positive) or unknown. Never a replied the store does not back.
+              return await this.resolveRejectedWrite(message);
             }
             return this.repliedFresh(
               "mailbox_flag",
@@ -902,8 +903,10 @@ export class EmailReplyDetectionService {
         answeredCheckedAt,
       });
       if (!persisted) {
-        // D1b: evidence write failed — surface unknown so the send gate refuses.
-        return this.unknown("probe_failed");
+        // D1b/R09: evidence write failed or was rejected (0 rows) — reread the
+        // store and return the CURRENT evidence (a concurrent positive) or
+        // unknown. Never a replied the store does not back.
+        return await this.resolveRejectedWrite(message);
       }
       return this.repliedFresh(
         "sent_search",
@@ -978,12 +981,14 @@ export class EmailReplyDetectionService {
       answeredCheckedAt,
     });
     if (!persisted) {
-      // D1b: a decisive not_replied whose evidence write failed leaves
-      // replyNegativeCheckAt null, which the claim-side fence (D1a) treat as
-      // stale and fail-closes. Surface unknown(probe_failed) so the upstream
-      // pre-send gate refuses BEFORE the claim, rather than letting the send
-      // proceed to the claim only to hit the fence's delayed-refresh path.
-      return this.unknown("probe_failed");
+      // D1b/R09: the negative write failed OR was rejected by the sticky-
+      // positive guard (0 rows — a concurrent positive landed first). Reread
+      // the store: return the concurrent positive when one exists; otherwise
+      // unknown(probe_failed). The rejected negative must NOT be reported or
+      // cached — it would hide live positive evidence for a full TTL window
+      // and the claim-side fence (D1a) would fail-close on the null
+      // replyNegativeCheckAt anyway.
+      return await this.resolveRejectedWrite(message);
     }
 
     const negative: ReplyDetectionNotReplied = {
@@ -1201,6 +1206,11 @@ export class EmailReplyDetectionService {
    * so the upstream pre-send gate refuses before the claim even opens. A
    * swallowed persist error that returns `replied` defeats the no-duplicate-
    * reply guarantee (the upstream gate trusts the probe's state).
+   *
+   * R09: the conditional write's boolean is honored, not just its throw path.
+   * The positive UPDATE is `COALESCE(replyDetectedAt, :detectedAt)` guarded by
+   * `id = :id` — 0 affected rows means the row was deleted (or otherwise
+   * vanished) mid-probe; the caller then rereads and surfaces unknown.
    */
   private async persistPositive(
     message: EmailReceivedMessageEntity,
@@ -1212,7 +1222,7 @@ export class EmailReplyDetectionService {
     }
   ): Promise<boolean> {
     try {
-      await this.messagePort.updateReplyEvidence({
+      const written = await this.messagePort.updateReplyEvidence({
         id: message.id,
         replyDetectedAt: new Date(this.now()),
         replyDetectionSource: evidence.source,
@@ -1220,6 +1230,17 @@ export class EmailReplyDetectionService {
         isAnswered: evidence.isAnswered,
         answeredFlagCheckedAt: evidence.answeredCheckedAt,
       });
+      if (!written) {
+        // R09: 0 rows affected — the guarded positive write was rejected (the
+        // row is gone). Report failure so the caller rereads the store and
+        // returns the truthful outcome; a silently-successful return here
+        // would claim replied with zero persisted evidence.
+        incrementReplyMetric("detection_persist_failure", {
+          kind: "positive",
+          rejected: true,
+        });
+        return false;
+      }
       return true;
     } catch (error) {
       // Persistence failure does not downgrade a verified-positive observation
@@ -1246,6 +1267,13 @@ export class EmailReplyDetectionService {
    * pre-send gate trusts the probe's state and would let the send proceed to
    * the claim, where the fence then triggers the delayed-refresh path). Surface
    * `unknown(probe_failed)` instead so the gate refuses before the claim.
+   *
+   * R09: the conditional write's boolean is honored, not just its throw path.
+   * The negative UPDATE is guarded by `id = :id AND replyDetectedAt IS NULL`;
+   * 0 affected rows means another request persisted positive evidence between
+   * the probe and this write (the sticky-positive fence rejected the negative).
+   * The caller must NOT report or cache `not_replied` — it rereads the row and
+   * returns the CURRENT evidence (the concurrent positive) or unknown.
    */
   private async persistNegative(
     message: EmailReceivedMessageEntity,
@@ -1253,13 +1281,24 @@ export class EmailReplyDetectionService {
     flags: { isAnswered: number; answeredCheckedAt: Date | null }
   ): Promise<boolean> {
     try {
-      await this.messagePort.updateReplyEvidence({
+      const written = await this.messagePort.updateReplyEvidence({
         id: message.id,
         replyNegativeCheckAt: new Date(this.now()),
         replyNegativeContextHash: contextHash,
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
+      if (!written) {
+        // R09: 0 rows affected — the sticky-positive guard rejected the
+        // negative (a concurrent positive landed first) or the row vanished.
+        // Report failure so the caller rereads; caching/reporting the rejected
+        // negative would hide live positive evidence for a full TTL window.
+        incrementReplyMetric("detection_persist_failure", {
+          kind: "negative",
+          rejected: true,
+        });
+        return false;
+      }
       return true;
     } catch (error) {
       incrementReplyMetric("detection_persist_failure", {
@@ -1271,6 +1310,37 @@ export class EmailReplyDetectionService {
       );
       return false;
     }
+  }
+
+  /**
+   * R09 — resolve the outcome after a REJECTED (0-row) evidence write: reread
+   * the row and return its CURRENT evidence. A concurrent positive wins
+   * (return replied from the persisted sticky positive); a deleted or
+   * unreadable row means no evidence exists — return unknown(probe_failed),
+   * never a decisive state the store does not back.
+   */
+  private async resolveRejectedWrite(
+    message: EmailReceivedMessageEntity
+  ): Promise<ReplyDetectionResult> {
+    const current = await this.messagePort.read(message.id);
+    if (
+      current &&
+      current.replyDetectedAt &&
+      (current.replyDetectionSource === "mailbox_flag" ||
+        current.replyDetectionSource === "sent_search")
+    ) {
+      // A concurrent writer persisted positive evidence — it is authoritative
+      // (§5.1 sticky positive). Return it fresh (fromCache: false — it was
+      // just reread from the store, not served from a cache).
+      return this.repliedFresh(
+        current.replyDetectionSource,
+        current.replyMatchedMessageId ?? null,
+        current.replyDetectedAt
+      );
+    }
+    // Row gone / no positive evidence — the truthful outcome is unknown; the
+    // next probe re-runs from scratch.
+    return this.unknown("probe_failed");
   }
 
   /**

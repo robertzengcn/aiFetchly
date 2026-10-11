@@ -140,6 +140,15 @@ interface FakeMessagePortOptions {
   updateCalls: Array<Record<string, unknown>>;
   /** When set, updateReplyEvidence throws this Error (simulates persistence failure). */
   updateThrows?: Error;
+  /**
+   * R09: when set, its return value becomes the write result instead of
+   * `true` — simulates the conditional evidence UPDATE affecting 0 rows
+   * (rejected write). The callback may mutate the fixture row to simulate a
+   * concurrent writer landing positive evidence first.
+   */
+  updateResult?: (input: Record<string, unknown>) => boolean;
+  /** R09: when it returns true, `read` returns null (row deleted). */
+  readReturnsNull?: () => boolean;
 }
 
 function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePort & {
@@ -148,6 +157,7 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
   const updateCalls = opts.updateCalls;
   return {
     async read(id: number) {
+      if (opts.readReturnsNull?.()) return null;
       return id === opts.message.id ? opts.message : null;
     },
     async findCanonicalEquivalents() {
@@ -156,7 +166,7 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
     async updateReplyEvidence(input) {
       updateCalls.push(input);
       if (opts.updateThrows) throw opts.updateThrows;
-      return true;
+      return opts.updateResult ? opts.updateResult(input) : true;
     },
     updateCalls,
   };
@@ -272,6 +282,10 @@ function buildServiceKit(input: {
   emailServiceOptions: FakeEmailServicePortOptions;
   imapOptions?: FakeImapPortOptions;
   updateThrows?: Error;
+  /** R09: override the write result (conditional UPDATE rejected). */
+  updateResult?: (input: Record<string, unknown>) => boolean;
+  /** R09: when it returns true, subsequent reads return null (row deleted). */
+  readReturnsNull?: () => boolean;
 }): ServiceKit {
   const updateCalls: Array<Record<string, unknown>> = [];
   const nowMs = { value: 1_000_000 };
@@ -280,6 +294,8 @@ function buildServiceKit(input: {
     cluster: input.cluster,
     updateCalls,
     updateThrows: input.updateThrows,
+    updateResult: input.updateResult,
+    readReturnsNull: input.readReturnsNull,
   });
   const draftPort = fakeDraftPort(input.draftsByMessage ?? new Map());
   const attemptPort = fakeAttemptPort(input.attemptsByMessage ?? new Map());
@@ -1049,6 +1065,130 @@ describe("EmailReplyDetectionService — Sent-search matching (§7.1 step 6, §7
     if (result.state !== "unknown") throw new Error("expected unknown, got " + result.state);
     expect(result.reasonCode).toBe("probe_failed");
     expect(kit.messagePort.updateCalls.length).toBe(1);
+  });
+
+  // =========================================================================
+  // R09 — the conditional evidence write's boolean result must be honored.
+  // `updateReplyEvidence` returns false when the guarded UPDATE affected zero
+  // rows: a negative write loses to a concurrent positive (another request
+  // persisted `replyDetectedAt` first — the `replyDetectedAt IS NULL` guard
+  // rejects the negative), and a positive write on a deleted row affects zero
+  // rows. The detector must reread the row and return the CURRENT evidence
+  // (or unknown), never report/caches the rejected outcome.
+  // =========================================================================
+
+  it("R09: a negative write rejected by a concurrent positive rereads and returns the CURRENT positive evidence", async () => {
+    const message = messageFixture();
+    // The concurrent writer: the moment the detector attempts its negative
+    // write, another request persists positive evidence on the row first, so
+    // the `replyDetectedAt IS NULL` guard rejects this write (0 rows → false).
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+      updateResult: (input) => {
+        if (input.replyNegativeCheckAt != null) {
+          // Concurrent positive lands immediately before the negative write.
+          message.replyDetectedAt = new Date(1_000_000);
+          message.replyDetectionSource = "sent_search";
+          message.replyMatchedMessageId = "<sent-501@example.com>";
+          return false; // 0 rows affected — guard rejected
+        }
+        return true;
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    // The rejected negative must NOT be reported as a successful not_replied.
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied, got " + result.state);
+    expect(result.source).toBe("sent_search");
+    expect(result.matchedMessageId).toBe("<sent-501@example.com>");
+    expect(result.fromCache).toBe(false);
+    // And the in-memory cache must NOT hold the rejected negative under this
+    // message's cache key: a second detect call must still see the positive
+    // (served from the persisted sticky-positive path), never a negative.
+    const second = await kit.service.detect({ messageId: 100 });
+    expect(second.state).toBe("replied");
+  });
+
+  it("R09: a negative write rejected with no positive evidence (row deleted mid-probe) surfaces unknown, never a negative", async () => {
+    const message = messageFixture();
+    let rowDeleted = false;
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+      updateResult: (input) => {
+        if (input.replyNegativeCheckAt != null) {
+          rowDeleted = true; // the message store lost the row mid-probe
+          return false;
+        }
+        return true;
+      },
+      readReturnsNull: () => rowDeleted,
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    // The reread finds no row — the detector cannot claim a decisive negative
+    // on a write it did not land. Truthful outcome: unknown.
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown, got " + result.state);
+    expect(result.reasonCode).toBe("probe_failed");
+  });
+
+  it("R09: a positive write rejected because the row was deleted surfaces unknown(probe_failed), never replied", async () => {
+    const message = messageFixture();
+    let rowDeleted = false;
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+      },
+      imapOptions: {
+        // A verified direct Sent match settles replied(sent_search).
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([
+          ["Sent", [candidateFixture({ inReplyTo: "<orig-77@example.com>", from: "me@example.com" })]],
+        ]),
+      },
+      updateResult: (input) => {
+        if (input.replyDetectedAt != null) {
+          rowDeleted = true;
+          return false; // positive write affected 0 rows — row gone
+        }
+        return true;
+      },
+      readReturnsNull: () => rowDeleted,
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    // A replied result with zero persisted evidence would defeat the
+    // no-duplicate-reply guarantee (the claim fence fail-closes on a null
+    // replyDetectedAt, but the upstream pre-send gate trusts the probe's
+    // state). The truthful outcome is unknown(probe_failed).
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown, got " + result.state);
+    expect(result.reasonCode).toBe("probe_failed");
   });
 });
 

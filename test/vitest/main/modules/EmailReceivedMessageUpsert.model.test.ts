@@ -245,6 +245,34 @@ describe("EmailReceivedMessageModel targeted upsert + sticky evidence (T03)", ()
     expect(negAfterPos).toBe(false);
   });
 
+  // R09 — the detector now HONORS this boolean: a rejected (0-row) write must
+  // be reported as false so the caller rereads the store instead of reporting
+  // a decisive outcome the store does not back. Prove both rejection shapes
+  // against the real conditional SQL: a deleted row (positive write) and the
+  // sticky-positive guard (negative write) already covered above.
+  it("updateReplyEvidence on a deleted row returns false (R09 deleted-row positive write)", async () => {
+    const seeded = await seedMessage();
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    await repo.delete({ id: seeded.id });
+
+    const wrote = await model.updateReplyEvidence({
+      id: seeded.id,
+      replyDetectedAt: new Date("2026-10-05T09:00:00Z"),
+      replyDetectionSource: "sent_search",
+      replyMatchedMessageId: "<sent-501@example.com>",
+    });
+    expect(wrote).toBe(false);
+
+    const negWrote = await model.updateReplyEvidence({
+      id: seeded.id,
+      replyNegativeCheckAt: new Date("2026-10-05T09:30:00Z"),
+      replyNegativeContextHash: "ctx-hash-gone",
+    });
+    expect(negWrote).toBe(false);
+  });
+
   it("updateProviderUidNamespacing is a targeted provenance-only update", async () => {
     const bare = `legacy-${Math.floor(Math.random() * 1e9)}`;
     const seeded = await seedMessage({ providerUid: bare });
