@@ -528,118 +528,21 @@
       @cancel="onScheduledLoopApprovalCancel"
     />
 
-    <!-- Ambiguity chooser: several generated images could match the request;
-         the user picks one to proceed as the sole reference. Persistent so an
-         outside click cannot dismiss it and strand a stale pending send. -->
-    <v-dialog
+    <!-- Ambiguity chooser (shared component — capability parity FR-IMG-006). -->
+    <GeneratedImageChooserDialog
       v-model="showGeneratedImageChooser"
-      max-width="420"
-      persistent
-      data-testid="ai-chat-generated-chooser"
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.generatedImageRefs.referenceTrayTitle") ||
-              "Reference images"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t(
-                "aiChatV2.generatedImageRefs.errors.generated_image_ambiguous"
-              ) || "Several images could match your request."
-            }}
-          </p>
-          <div class="d-flex flex-wrap ga-2">
-            <v-btn
-              v-for="(candidate, idx) in ambiguityCandidates"
-              :key="`${candidate.reference.messageId}:${candidate.reference.imageIndex}`"
-              variant="outlined"
-              size="small"
-              :data-testid="`ai-chat-generated-candidate-${idx}`"
-              @click="chooseAmbiguityCandidate(candidate)"
-            >
-              <img
-                v-if="candidate.thumbUrl"
-                :src="candidate.thumbUrl"
-                :alt="
-                  candidate.fileName ||
-                  t('aiChatV2.generatedImageRefs.useAsReference') ||
-                  'Reference image'
-                "
-                class="mr-1"
-                style="max-height: 32px; max-width: 48px; border-radius: 4px"
-              />
-              <v-icon v-else size="small" class="mr-1">mdi-image-outline</v-icon>
-              {{ candidate.fileName || `#${idx + 1}` }}
-            </v-btn>
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            data-testid="ai-chat-generated-chooser-cancel"
-            @click="cancelAmbiguityChooser"
-          >
-            {{ t("aiChatV2.cancel") || "Cancel" }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :candidates="ambiguityCandidates"
+      @select="chooseAmbiguityCandidate"
+      @cancel="cancelAmbiguityChooser"
+    />
 
-    <!-- Batch confirmation: more than 3 images inferred; confirm sends plain
-         text (main process runs them as a batch), decline aborts. -->
-    <v-dialog
+    <!-- Batch confirmation (shared component — capability parity FR-IMG-008). -->
+    <GeneratedImageBatchConfirmDialog
       v-model="showBatchConfirmDialog"
-      max-width="420"
-      persistent
-      data-testid="ai-chat-generated-batch-confirm"
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.generatedImageRefs.batchConfirmTitle") ||
-              "Process as batch?"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t("aiChatV2.generatedImageRefs.batchConfirmBody", {
-                count: pendingGeneratedImageBatchCount,
-              }) ||
-              "Each selected image will be edited independently in a background batch. This may take a while."
-            }}
-          </p>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            data-testid="ai-chat-generated-batch-decline"
-            @click="declineGeneratedImageBatch"
-          >
-            {{ t("aiChatV2.cancel") || "Cancel" }}
-          </v-btn>
-          <v-btn
-            color="primary"
-            data-testid="ai-chat-generated-batch-confirm-accept"
-            @click="confirmGeneratedImageBatch"
-          >
-            {{ t("aiChatV2.generatedImageRefs.send") || "Send" }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :count="pendingGeneratedImageBatchCount"
+      @confirm="confirmGeneratedImageBatch"
+      @decline="declineGeneratedImageBatch"
+    />
 
     <!-- Generated-image preflight errors (fusion limit, reference limit). -->
     <v-snackbar
@@ -908,6 +811,8 @@ import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.vue";
+import GeneratedImageChooserDialog from "./GeneratedImageChooserDialog.vue";
+import GeneratedImageBatchConfirmDialog from "./GeneratedImageBatchConfirmDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";

@@ -1374,6 +1374,192 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  /**
+   * Generated-image inference preflight (FR-IMG-005..009): deterministic
+   * inference over the visible window, ambiguity chooser, and batch
+   * confirmation — mirrors the Chat V2 reference flows through the shared
+   * dialog components.
+   */
+  describe("generated-image inference", () => {
+    function imageAssistantMessage(
+      id: string,
+      count: number
+    ): ChatV2MessageView {
+      return {
+        id,
+        conversationId: "conv-img",
+        role: "assistant",
+        content: "here are the logos",
+        timestamp: "2026-10-11T00:00:00.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: {
+          source: "chat-v2",
+          generatedImages: Array.from({ length: count }, (_, i) => ({
+            type: "image" as const,
+            file_name: `logo-${i + 1}.png`,
+            url: `file://logo-${i + 1}.png`,
+          })),
+        },
+      };
+    }
+
+    async function mountWithImages(
+      imageCount: number
+    ): Promise<ReturnType<typeof mountSurface>> {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [imageAssistantMessage("m-img", imageCount)],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-img",
+        runId: "run-img",
+        status: "running",
+        acceptedAt: "",
+      });
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-img");
+      await useSelectedConversationStore().loadSelection("conv-img");
+      await flushPromises();
+      return wrapper;
+    }
+
+    afterEach(() => {
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+    });
+
+    it("opens the ambiguity chooser for singular wording over multiple images; nothing submits (FR-IMG-006)", async () => {
+      const wrapper = await mountWithImages(3);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "recolor the image", []);
+      await flushPromises();
+
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      const chooser = wrapper.findComponent({
+        name: "GeneratedImageChooserDialog",
+      });
+      expect(chooser.exists()).toBe(true);
+      expect(chooser.props("modelValue")).toBe(true);
+      const candidates = chooser.props("candidates") as Array<{
+        fileName?: string;
+      }>;
+      expect(candidates.map((c) => c.fileName)).toEqual([
+        "logo-1.png",
+        "logo-2.png",
+        "logo-3.png",
+      ]);
+    });
+
+    it("picking a candidate sends it as the sole reference (FR-IMG-006)", async () => {
+      const wrapper = await mountWithImages(3);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "recolor the image", []);
+      await flushPromises();
+
+      const chooser = wrapper.findComponent({
+        name: "GeneratedImageChooserDialog",
+      });
+      const candidates = chooser.props("candidates") as Array<{
+        reference: { messageId: string; imageIndex: number };
+      }>;
+      chooser.vm.$emit("select", candidates[1]);
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+        message: "recolor the image",
+        generatedImageReferences: [{ messageId: "m-img", imageIndex: 1 }],
+      });
+    });
+
+    it("numbered references above the direct limit open batch confirmation, never silent truncation (FR-IMG-008)", async () => {
+      const wrapper = await mountWithImages(4);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "sharpen image 1, image 2, image 3 and image 4", []);
+      await flushPromises();
+
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      const confirmDialog = wrapper.findComponent({
+        name: "GeneratedImageBatchConfirmDialog",
+      });
+      expect(confirmDialog.exists()).toBe(true);
+      expect(confirmDialog.props("count")).toBe(4);
+
+      confirmDialog.vm.$emit("confirm");
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      const payload = startChatRunMock.mock.calls[0][0];
+      expect(payload.message).toBe(
+        "sharpen image 1, image 2, image 3 and image 4"
+      );
+      // Trusted channel, user-selected order preserved.
+      expect(payload.confirmedGeneratedImageBatch?.references).toHaveLength(4);
+      expect(payload.generatedImageReferences).toBeUndefined();
+    });
+
+    it("declining the batch confirmation sends nothing", async () => {
+      const wrapper = await mountWithImages(4);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "sharpen image 1, image 2, image 3 and image 4", []);
+      await flushPromises();
+
+      wrapper
+        .findComponent({ name: "GeneratedImageBatchConfirmDialog" })
+        .vm.$emit("decline");
+      await flushPromises();
+      expect(startChatRunMock).not.toHaveBeenCalled();
+    });
+
+    it("discards a pending chooser send when the conversation switches (FR-IMG-015)", async () => {
+      const wrapper = await mountWithImages(3);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "recolor the image", []);
+      await flushPromises();
+
+      useChatWorkspaceStore().setSelected("conv-other");
+      await flushPromises();
+      const chooser = wrapper.findComponent({
+        name: "GeneratedImageChooserDialog",
+      });
+      const candidates = chooser.props("candidates") as Array<{
+        reference: { messageId: string; imageIndex: number };
+      }>;
+      chooser.vm.$emit("select", candidates[0]);
+      await flushPromises();
+
+      // The stale pick must NOT replay into the newly selected conversation.
+      expect(startChatRunMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves an unambiguous numbered reference directly (FR-IMG-005)", async () => {
+      const wrapper = await mountWithImages(3);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "recolor image 2", []);
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+        generatedImageReferences: [{ messageId: "m-img", imageIndex: 1 }],
+      });
+    });
+  });
+
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();
@@ -1684,7 +1870,13 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     ]);
   });
 
-  it("aborts an over-limit reference send with a dismissible notice and no run", async () => {
+  /**
+   * FR-IMG-008 (capability parity): explicit independent selections above
+   * the direct maximum open BATCH CONFIRMATION rather than hard-blocking —
+   * the pre-parity behavior aborted with a toast only. Decline aborts with
+   * no run and the selection kept; fusion wording still toast-aborts.
+   */
+  it("opens batch confirmation for an over-limit reference send; decline keeps the selection and starts no run", async () => {
     const wrapper = mountSurface();
     await selectConversation("conv-1");
     const transcript = wrapper.findComponent({
@@ -1701,6 +1893,38 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
 
     const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
     composer.vm.$emit("send", "hello", []);
+    await flushPromises();
+
+    // No silent truncation and no toast-abort: the user decides.
+    expect(startChatRunMock).not.toHaveBeenCalled();
+    const confirmDialog = wrapper.findComponent({
+      name: "GeneratedImageBatchConfirmDialog",
+    });
+    expect(confirmDialog.props("modelValue")).toBe(true);
+
+    confirmDialog.vm.$emit("decline");
+    await flushPromises();
+    // The over-limit selection is kept so the user can deselect and retry.
+    expect(trayReferences(wrapper)).toHaveLength(4);
+    expect(startChatRunMock).not.toHaveBeenCalled();
+  });
+
+  it("still toast-aborts fusion wording above the direct limit (FR-IMG-007)", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    for (let i = 0; i < 4; i += 1) {
+      transcript.vm.$emit("use-generated-image", {
+        messageId: `over-${i}`,
+        imageIndex: 0,
+      });
+    }
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "combine all of these please", []);
     await flushPromises();
 
     expect(startChatRunMock).not.toHaveBeenCalled();

@@ -490,6 +490,21 @@
       @navigate="handleHistoryNavigate"
     />
 
+    <!-- Generated-image ambiguity chooser + batch confirmation
+         (FR-IMG-006/008, shared components with Chat V2). -->
+    <GeneratedImageChooserDialog
+      v-model="showGeneratedImageChooser"
+      :candidates="ambiguityCandidates"
+      @select="chooseAmbiguityCandidate"
+      @cancel="cancelAmbiguityChooser"
+    />
+    <GeneratedImageBatchConfirmDialog
+      v-model="showBatchConfirmDialog"
+      :count="pendingGeneratedImageBatchCount"
+      @confirm="confirmGeneratedImageBatch"
+      @decline="declineGeneratedImageBatch"
+    />
+
     <!-- Scheduled-loop tool-policy approval (FR-CMD-007): approval happens
          once, up front — unattended execution cannot prompt at run time. -->
     <ScheduledLoopToolApprovalDialog
@@ -590,6 +605,12 @@ import ManagedBrowserSessionCard from "@/views/components/aiChatV2/ManagedBrowse
 import AiChatHistoryDrawer from "@/views/components/aiChatV2/AiChatHistoryDrawer.vue";
 import AiChatSelectedContext from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
 import AiChatCompactionStatus from "@/views/components/aiChatV2/AiChatCompactionStatus.vue";
+import GeneratedImageChooserDialog from "@/views/components/aiChatV2/GeneratedImageChooserDialog.vue";
+import GeneratedImageBatchConfirmDialog from "@/views/components/aiChatV2/GeneratedImageBatchConfirmDialog.vue";
+import {
+  inferGeneratedImageReferences,
+  isFusionWording,
+} from "@/views/components/aiChatV2/generatedImageReferenceInference";
 import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
@@ -1018,6 +1039,166 @@ function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
     return;
   }
   composerDrafts.setGeneratedImageReferences(key, [...current, reference]);
+}
+
+/**
+ * A send parked behind the ambiguity chooser or the batch-confirmation
+ * dialog (FR-IMG-006/008): captured verbatim and replayed on the user's
+ * choice — decline/cancel discards it and keeps nothing staged.
+ */
+interface PendingGeneratedImageSend {
+  readonly conversationKey: string;
+  readonly text: string;
+  readonly files: File[];
+  readonly options?: {
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+    modeOverride?: "chat" | "plan";
+  };
+  readonly confirmedReferences?: ChatV2GeneratedImageReference[];
+}
+
+const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
+const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
+const showGeneratedImageChooser = ref(false);
+const showBatchConfirmDialog = ref(false);
+const pendingGeneratedImageBatchCount = computed(
+  () => pendingGeneratedImageSend.value?.confirmedReferences?.length ?? 0
+);
+
+/**
+ * FR-IMG-005..008 preflight (Chat V2 parity): resolve which images this
+ * turn references. Returns the effective reference list (empty = plain text
+ * send) or null when the send must abort because a dialog now waits on the
+ * user (ambiguity chooser / batch confirmation) or a guard tripped.
+ */
+function runGeneratedImagePreflight(
+  text: string,
+  files: File[],
+  options?: {
+    confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
+  }
+): ChatV2GeneratedImageReference[] | null {
+  // Trusted resend: the user just approved this exact set — skip every
+  // guard so the confirm path cannot loop.
+  if (options?.confirmedBatchReferences?.length) {
+    return [];
+  }
+  let effective: ChatV2GeneratedImageReference[] = [];
+  const explicit = activeGeneratedImageRefs.value;
+  if (explicit.length > 0) {
+    effective = [...explicit];
+  } else {
+    const result = inferGeneratedImageReferences({
+      text,
+      messages: [...selectedStore.messages],
+      explicitSelection: [],
+    });
+    if (result.kind === "ambiguous") {
+      pendingGeneratedImageSend.value = {
+        conversationKey: composerDraftKey.value,
+        text,
+        files,
+      };
+      ambiguityCandidates.value = result.candidates.map((candidate) => ({
+        reference: candidate.reference,
+        fileName: candidate.fileName,
+        thumbUrl:
+          resolveGeneratedImageViewModel(candidate.reference).thumbUrl ??
+          candidate.thumbUrl,
+      }));
+      showGeneratedImageChooser.value = true;
+      return null;
+    }
+    if (
+      (result.kind === "resolved" || result.kind === "batch_confirmation") &&
+      result.references.length > GENERATED_IMAGE_REFERENCE_LIMIT &&
+      isFusionWording(text)
+    ) {
+      generatedImageNotice.value =
+        t("aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit") ||
+        "Combining images is limited to 3 at a time.";
+      return null;
+    }
+    if (result.kind === "batch_confirmation") {
+      pendingGeneratedImageSend.value = {
+        conversationKey: composerDraftKey.value,
+        text,
+        files,
+        confirmedReferences: [...result.references],
+      };
+      showBatchConfirmDialog.value = true;
+      return null;
+    }
+    if (result.kind === "resolved") {
+      effective = [...result.references];
+    }
+  }
+  if (effective.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
+    if (isFusionWording(text)) {
+      generatedImageNotice.value =
+        t("aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit") ||
+        "Combining images is limited to 3 at a time.";
+      return null;
+    }
+    // Explicit multi-selections above three are paid work: ask for batch
+    // confirmation instead of hard-blocking (FR-IMG-008).
+    pendingGeneratedImageSend.value = {
+      conversationKey: composerDraftKey.value,
+      text,
+      files,
+      confirmedReferences: [...effective],
+    };
+    showBatchConfirmDialog.value = true;
+    return null;
+  }
+  return effective;
+}
+
+/** FR-IMG-006: the picked candidate becomes the sole tray reference. */
+function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  if (!pending || pending.conversationKey !== composerDraftKey.value) {
+    // Stale chooser state (conversation switched) — discard, never replay
+    // into another conversation.
+    return;
+  }
+  composerDrafts.setGeneratedImageReferences(pending.conversationKey, [
+    view.reference,
+  ]);
+  void performOrdinarySend(pending.text, pending.files, pending.options);
+}
+
+function cancelAmbiguityChooser(): void {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+}
+
+/**
+ * FR-IMG-008/009: confirm resends the original text with the EXACT
+ * user-confirmed reference set through the trusted staging channel,
+ * preserving the selected order.
+ */
+function confirmGeneratedImageBatch(): void {
+  const pending = pendingGeneratedImageSend.value;
+  const confirmed = pending?.confirmedReferences;
+  pendingGeneratedImageSend.value = null;
+  showBatchConfirmDialog.value = false;
+  if (!pending || !confirmed || confirmed.length === 0) return;
+  void performOrdinarySend(pending.text, pending.files, {
+    ...pending.options,
+    confirmedBatchReferences: [...confirmed],
+  });
+}
+
+function declineGeneratedImageBatch(): void {
+  pendingGeneratedImageSend.value = null;
+  showBatchConfirmDialog.value = false;
 }
 
 /** "Edit" tile action: exactly this image becomes the tray selection. */
@@ -1455,17 +1636,17 @@ async function performOrdinarySend(
   // Trusted resend channel (FR-IMG-011): a confirmed batch rides outside the
   // explicit tray so re-confirming the same set cannot loop.
   const confirmedBatch = options?.confirmedBatchReferences;
-  // Generated-image preflight: explicit tray selections only (the legacy
-  // ambiguity/inference offer is not part of the shell surface).
-  const generatedImageReferences =
-    confirmedBatch && confirmedBatch.length > 0
-      ? []
-      : activeGeneratedImageRefs.value;
-  if (generatedImageReferences.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
-    generatedImageNotice.value =
-      t("aiChatV2.generatedImageRefs.errors.generated_image_reference_limit") ||
-      "Too many referenced images for one request.";
-    return false;
+  // Generated-image preflight (FR-IMG-005..008): explicit tray selections
+  // win; otherwise deterministic inference runs over the visible window —
+  // an ambiguous match opens the chooser, and selections above the direct
+  // maximum open batch confirmation instead of silently truncating.
+  const generatedImageReferences = runGeneratedImagePreflight(
+    text,
+    files,
+    options
+  );
+  if (generatedImageReferences === null) {
+    return false; // a dialog now waits on the user; the draft is preserved
   }
   // Empty-state send (no conversation selected): create + select a chat
   // first (legacy-dock parity via ensureWorkspaceConversationId) so the
@@ -1710,6 +1891,14 @@ function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
 }
 
 // Conversation switch: swap each chat's chip draft (never leak across chats).
+// A pending generated-image send never replays into the newly selected chat.
+watch(conversationId, () => {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  showBatchConfirmDialog.value = false;
+});
+
 watch(conversationId, (next, previous) => {
   if (previous) {
     selectedContextDrafts.set(previous, [...selectedContextItems.value]);
