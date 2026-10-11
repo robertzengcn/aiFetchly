@@ -129,31 +129,101 @@ describe("EmailReceivedMessageModel targeted upsert + sticky evidence (T03)", ()
     expect(after.replyMatchedMessageId).toBe("<sent-1@example.com>");
   });
 
-  it("answered flag promotion strengthens replyStatus to sent exactly once", async () => {
+  // R11/FR-030 — a freshly-observed \Answered flag is sticky external POSITIVE
+  // EVIDENCE, never an app-delivery promotion. Sync must NOT write replyStatus
+  // or processedAt; it records the positive in the detection-owned evidence
+  // columns (replyDetectedAt + replyDetectionSource) through the same
+  // sticky-positive fence the detector uses.
+  it("existing-row answered flag records sticky external positive without promoting replyStatus (R11)", async () => {
     const seeded = await seedMessage({ isAnswered: 0 });
     const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
       EmailReceivedMessageEntity
     );
 
-    // Sync observes \Answered → projection promoted (historical sent rule).
+    // Sync observes \Answered → sticky external positive recorded, but the app
+    // lifecycle projection (replyStatus) is NOT promoted to sent (FR-030: a
+    // mailbox flag is evidence, not app delivery).
     await seedMessage({
       providerUid: seeded.providerUid,
       isAnswered: 1,
       answeredFlagCheckedAt: new Date(),
     });
-    const promoted = await repo.findOneByOrFail({ id: seeded.id });
-    expect(promoted.replyStatus).toBe("sent");
-    expect(promoted.processedAt).toBeInstanceOf(Date);
+    const observed = await repo.findOneByOrFail({ id: seeded.id });
+    expect(observed.replyStatus).toBe("not_started");
+    expect(observed.processedAt).toBeNull();
+    expect(observed.replyDetectedAt).toBeInstanceOf(Date);
+    expect(observed.replyDetectionSource).toBe("mailbox_flag");
 
-    // A later CLEARED flag sync must not downgrade back (sticky protection).
+    // A later CLEARED flag sync must not erase the sticky positive (protection
+    // retained), and still must not promote replyStatus.
     await seedMessage({
       providerUid: seeded.providerUid,
       isAnswered: 0,
       answeredFlagCheckedAt: new Date(),
     });
     const afterClear = await repo.findOneByOrFail({ id: seeded.id });
-    expect(afterClear.replyStatus).toBe("sent");
+    expect(afterClear.replyStatus).toBe("not_started");
     expect(afterClear.isAnswered).toBe(0);
+    expect(afterClear.replyDetectedAt).toBeInstanceOf(Date);
+    expect(afterClear.replyDetectionSource).toBe("mailbox_flag");
+  });
+
+  it("historical sent row stays sent and gains evidence when sync observes answered (R11)", async () => {
+    const seeded = await seedMessage({ isAnswered: 0 });
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    // Local finalization already marked this sent.
+    const sentAt = new Date("2026-10-05T12:00:00Z");
+    await repo.update(
+      { id: seeded.id },
+      { replyStatus: "sent", processedAt: sentAt }
+    );
+
+    // A later sync observes \Answered. replyStatus must STAY sent (historical
+    // projection preserved, never downgraded), and the sticky positive is
+    // recorded — but the app delivery timestamp is not moved.
+    await seedMessage({
+      providerUid: seeded.providerUid,
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date(),
+    });
+    const after = await repo.findOneByOrFail({ id: seeded.id });
+    expect(after.replyStatus).toBe("sent");
+    expect(after.processedAt?.toISOString()).toBe("2026-10-05T12:00:00.000Z");
+    expect(after.replyDetectedAt).toBeInstanceOf(Date);
+    expect(after.replyDetectionSource).toBe("mailbox_flag");
+  });
+
+  it("sync answered positive does not downgrade a more specific detector source (R11)", async () => {
+    const seeded = await seedMessage({ isAnswered: 0 });
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    // The detector already verified a Sent-folder match (more specific than a
+    // raw mailbox flag).
+    const detectedAt = new Date("2026-10-05T09:00:00Z");
+    await repo.update(
+      { id: seeded.id },
+      {
+        replyDetectedAt: detectedAt,
+        replyDetectionSource: "sent_search",
+        replyMatchedMessageId: "<sent-1@example.com>",
+      }
+    );
+
+    // Sync later observes \Answered — the sticky positive is retained (COALESCE
+    // fill, never moved), and the more specific "sent_search" source + matched
+    // id are NOT downgraded to "mailbox_flag".
+    await seedMessage({
+      providerUid: seeded.providerUid,
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date("2026-10-05T11:00:00Z"),
+    });
+    const after = await repo.findOneByOrFail({ id: seeded.id });
+    expect(after.replyDetectedAt?.toISOString()).toBe("2026-10-05T09:00:00.000Z");
+    expect(after.replyDetectionSource).toBe("sent_search");
+    expect(after.replyMatchedMessageId).toBe("<sent-1@example.com>");
   });
 
   it("updateReplyEvidence positive is sticky: later negative does not clear it", async () => {
@@ -337,12 +407,23 @@ describe("EmailReceivedMessageModel targeted upsert + sticky evidence (T03)", ()
     expect(targetRows[0].subject).toBe("already namespaced");
   });
 
-  it("insert path applies the narrowed answered promotion on first sight", async () => {
+  // R11/FR-030 — insert path. A fresh message observed with \Answered at first
+  // sight gains the sticky external positive in evidence columns (replyDetectedAt
+  // + replyDetectionSource "mailbox_flag") WITHOUT promoting replyStatus. The
+  // evidence write happens after save, so re-read from the store to assert it.
+  it("insert path records sticky external positive on first sight without promoting replyStatus (R11)", async () => {
     const seeded = await seedMessage({ isAnswered: 1 });
-    // Fresh insert with the \Answered flag observed → historical promotion
-    // applies at insert time too (the mailbox already knows this answered).
-    expect(seeded.replyStatus).toBe("sent");
-    expect(seeded.processedAt).toBeInstanceOf(Date);
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    const after = await repo.findOneByOrFail({ id: seeded.id });
+    // Lifecycle projection retained (entity default, not promoted to sent).
+    expect(after.replyStatus).toBe("not_started");
+    expect(after.processedAt).toBeNull();
+    // Sticky external positive recorded through the evidence columns.
+    expect(after.replyDetectedAt).toBeInstanceOf(Date);
+    expect(after.replyDetectionSource).toBe("mailbox_flag");
+    expect(after.isAnswered).toBe(1);
   });
 
   it("findLegacyBareUidRow locates only the exact bare-UID row", async () => {

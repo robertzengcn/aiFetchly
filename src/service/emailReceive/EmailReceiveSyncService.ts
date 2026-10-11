@@ -317,9 +317,12 @@ export class EmailReceiveSyncService {
     entity.receivedAt = p.receivedAt;
     entity.isUnread = p.isUnread ? 1 : 0;
     // Raw provider flag observation + provenance (FR-030 §5.1). The
-    // replyStatus projection is NO LONGER derived from the flag here —
-    // historical sent promotion happens only via the model's narrowed
-    // shouldPromoteReplyStatusFromProvider path inside the upsert.
+    // replyStatus projection is NOT derived from the flag here (R11: that
+    // promotion erased the FR-030 distinction between app delivery and
+    // mailbox-positive evidence). Sync writes only the raw flag + provenance;
+    // a freshly-observed \Answered is recorded as sticky external positive
+    // evidence (replyDetectedAt + replyDetectionSource "mailbox_flag") inside
+    // the model's upsert — never as a replyStatus/processedAt promotion.
     entity.isAnswered = p.isAnswered ? 1 : 0;
     entity.answeredFlagCheckedAt = new Date();
     entity.providerFolder = p.providerFolder;

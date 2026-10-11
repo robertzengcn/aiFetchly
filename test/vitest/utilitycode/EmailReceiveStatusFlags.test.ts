@@ -3,7 +3,6 @@ import type { EmailMessage, ParsedMail } from "mailparser";
 import { ImapEmailReceiveClient } from "@/service/emailReceive/ImapEmailReceiveClient";
 import type { ParsedInboundEmail } from "@/service/emailReceive/EmailReceiveClient";
 import { buildNamespacedProviderUid } from "@/service/emailReceive/EmailReplyIdentity";
-import { shouldPromoteReplyStatusFromProvider } from "@/model/EmailReceivedMessage.model";
 
 interface ImapParserProbe {
   toParsedInboundEmail(
@@ -88,17 +87,3 @@ describe("IMAP receive status flags", () => {
   });
 });
 
-describe("provider reply status promotion", () => {
-  it("promotes locally not-started messages when the provider reports answered", () => {
-    expect(shouldPromoteReplyStatusFromProvider("sent", "not_started")).toBe(
-      true
-    );
-  });
-
-  it("does not demote or rewrite existing sent state", () => {
-    expect(shouldPromoteReplyStatusFromProvider("not_started", "sent")).toBe(
-      false
-    );
-    expect(shouldPromoteReplyStatusFromProvider("sent", "sent")).toBe(false);
-  });
-});

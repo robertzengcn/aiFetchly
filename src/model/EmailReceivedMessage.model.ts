@@ -61,52 +61,33 @@ export class EmailReceivedMessageModel extends BaseDb {
 
     if (existing) {
       const providerPatch = this.buildProviderFieldPatch(stripped);
-      // Historical sent promotion stays the ONLY replyStatus write sync may
-      // perform, and only strengthens (never downgrades) — narrowed to also
-      // require the freshly-observed \Answered flag (FR-030).
-      const promote = shouldPromoteReplyStatusFromProvider(
-        stripped.isAnswered === 1 ? "sent" : undefined,
-        existing.replyStatus
-      );
-      // Merge the written fields over the already-loaded row instead of a
-      // second findOne round trip — the update applied exactly these values
-      // (or threw); nothing else writes these columns inside this call. The
-      // merge goes through repository.merge so TypeORM BaseEntity methods
-      // (hasId/reload) stay intact on the returned entity.
-      if (promote) {
-        const processedAt = new Date();
-        await this.repository.update(
-          { id: existing.id },
-          {
-            ...providerPatch,
-            replyStatus: "sent",
-            processedAt,
-          }
-        );
-        return this.repository.merge(
-          existing,
-          providerPatch,
-          { replyStatus: "sent", processedAt } as Partial<EmailReceivedMessageEntity>
-        );
-      }
+      // R11/FR-030: sync owns provider fields ONLY — it never writes
+      // replyStatus or processedAt (those are app-delivery-owned). A
+      // freshly-observed \Answered flag is recorded as sticky external
+      // POSITIVE EVIDENCE (replyDetectedAt + replyDetectionSource) via
+      // recordSyncAnsweredPositive, which COALESCE-fills and never overwrites
+      // a more specific detector source/timestamp. Merge the written fields
+      // over the already-loaded row instead of a second findOne round trip —
+      // the update applied exactly these values (or threw); nothing else
+      // writes these columns inside this call. The merge goes through
+      // repository.merge so TypeORM BaseEntity methods (hasId/reload) stay
+      // intact on the returned entity.
       await this.repository.update({ id: existing.id }, providerPatch);
+      if (stripped.isAnswered === 1) {
+        await this.recordSyncAnsweredPositive(existing.id);
+      }
       return this.repository.merge(existing, providerPatch);
     }
 
     const created = this.repository.create(stripped);
-    // Same narrowed historical promotion on FIRST insert: an inbound message
-    // observed \Answered is already answered in the mailbox (possibly by a
-    // human mail client) — the app must not draft another reply to it.
-    if (
-      shouldPromoteReplyStatusFromProvider(
-        stripped.isAnswered === 1 ? "sent" : undefined,
-        created.replyStatus
-      )
-    ) {
-      created.replyStatus = "sent";
-      created.processedAt = new Date();
+    const saved = await this.repository.save(created);
+    // R11/FR-030: insert-path sticky external positive — same evidence-only
+    // write as the existing-row path. replyStatus keeps its lifecycle default
+    // (not_started); the \Answered observation lands in the evidence columns.
+    if (stripped.isAnswered === 1) {
+      await this.recordSyncAnsweredPositive(saved.id);
     }
-    return await this.repository.save(created);
+    return saved;
   }
 
   /**
@@ -140,6 +121,33 @@ export class EmailReceivedMessageModel extends BaseDb {
       providerFolder: stripped.providerFolder,
       providerUidValidity: stripped.providerUidValidity,
     };
+  }
+
+  /**
+   * R11/FR-030 — sync-side sticky external positive. When sync observes a
+   * freshly-set `\Answered` flag, it records the positive in the
+   * detection-owned evidence columns WITHOUT touching `replyStatus` or
+   * `processedAt` (those are app-delivery-owned). Uses the same
+   * COALESCE-fill fence as `updateReplyEvidence`:
+   *  - `replyDetectedAt`: fill-once (never move, never clear);
+   *  - `replyDetectionSource`: fill-once only when null — a more specific
+   *    detector source (`sent_search`) is NEVER downgraded to `mailbox_flag`.
+   * Sync carries no matched message id, so `replyMatchedMessageId` is left
+   * untouched. The raw flag observation (`isAnswered`/`answeredFlagCheckedAt`)
+   * is already written by the provider patch / insert before this runs.
+   */
+  private async recordSyncAnsweredPositive(id: number): Promise<void> {
+    const observedAt = new Date();
+    await this.repository
+      .createQueryBuilder()
+      .update(EmailReceivedMessageEntity)
+      .set({
+        replyDetectedAt: () => "COALESCE(replyDetectedAt, :detectedAt)",
+        replyDetectionSource: () => "COALESCE(replyDetectionSource, :source)",
+      })
+      .where("id = :id", { id })
+      .setParameters({ detectedAt: observedAt, source: "mailbox_flag" })
+      .execute();
   }
 
   /**
@@ -479,19 +487,4 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     return await qb.getCount();
   }
-}
-
-/**
- * Historical sent promotion (FR-030 narrowing): sync may strengthen the
- * replyStatus projection to `sent` only when the freshly-observed IMAP
- * `\Answered` flag is set (caller passes "sent" only in that case) and the
- * existing projection is not already `sent`. A cleared flag or later
- * zero/negative observation NEVER downgrades — that is the sticky-positive
- * rule enforced by `updateReplyEvidence`.
- */
-export function shouldPromoteReplyStatusFromProvider(
-  incomingStatus: EmailReplyStatus | undefined,
-  existingStatus: EmailReplyStatus
-): boolean {
-  return incomingStatus === "sent" && existingStatus !== "sent";
 }

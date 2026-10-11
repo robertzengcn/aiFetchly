@@ -273,36 +273,4 @@ describe("T11 §5.3 — rollback cannot remove mandatory local duplicate protect
     );
   });
 
-  /**
-   * `shouldPromoteReplyStatusFromProvider` is the sync-side sticky-positive
-   * protection: an inbound `\Answered` flag promotes `replyStatus` to `sent`,
-   * but a cleared flag (or any non-sent incoming status) NEVER downgrades an
-   * existing `sent`. This is a pure function with no feature-flag dependency —
-   * it runs on every sync upsert, regardless of rollout state.
-   */
-  it("shouldPromoteReplyStatusFromProvider never downgrades a sent row (sticky positive, flag-free)", async () => {
-    const { shouldPromoteReplyStatusFromProvider } = await import(
-      "@/model/EmailReceivedMessage.model"
-    );
-    // Incoming sent + existing non-sent → promote (protects against re-drafting).
-    expect(
-      shouldPromoteReplyStatusFromProvider("sent", "not_started")
-    ).toBe(true);
-    expect(shouldPromoteReplyStatusFromProvider("sent", "draft_created")).toBe(
-      true
-    );
-    // Incoming sent + existing sent → no-op (already protected).
-    expect(shouldPromoteReplyStatusFromProvider("sent", "sent")).toBe(false);
-    // A cleared flag (incoming undefined / not_started) NEVER downgrades sent.
-    expect(
-      shouldPromoteReplyStatusFromProvider(undefined, "sent")
-    ).toBe(false);
-    expect(
-      shouldPromoteReplyStatusFromProvider("not_started", "sent")
-    ).toBe(false);
-    // Non-sent incoming on a non-sent row → no promotion (no false positive).
-    expect(
-      shouldPromoteReplyStatusFromProvider("not_started", "draft_created")
-    ).toBe(false);
-  });
 });

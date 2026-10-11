@@ -331,7 +331,7 @@ describe("EmailReceiveSyncService provenance + legacy adoption (T03)", () => {
     expect(refreshed.providerUid).toBe(namespacedUid(601));
   });
 
-  it("answered flag on a namespaced upsert still promotes replyStatus exactly once", async () => {
+  it("answered flag on a namespaced upsert records sticky external positive without promoting replyStatus (R11)", async () => {
     const service = new EmailReceiveSyncService({
       clientFactory: fakeClient([inboundMessage(701, { isAnswered: true })]),
     });
@@ -344,10 +344,13 @@ describe("EmailReceiveSyncService provenance + legacy adoption (T03)", () => {
       emailServiceId: SERVICE_ID,
       providerUid: namespacedUid(701),
     });
-    // Historical promotion (narrowed in step 2): freshly-observed \Answered
-    // strengthens a non-sent projection to sent.
+    // R11/FR-030: a freshly-observed \Answered flag is sticky external positive
+    // evidence, NOT an app-delivery promotion. replyStatus retains its lifecycle
+    // projection (not_started default); the evidence columns carry the positive.
     expect(row.isAnswered).toBe(1);
-    expect(row.replyStatus).toBe("sent");
+    expect(row.replyStatus).toBe("not_started");
+    expect(row.replyDetectedAt).toBeInstanceOf(Date);
+    expect(row.replyDetectionSource).toBe("mailbox_flag");
   });
 
   it("POP3 sync keeps the bare UIDL uid and null provenance", async () => {
