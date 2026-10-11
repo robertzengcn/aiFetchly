@@ -3090,8 +3090,9 @@ describe("FR-039 generation/validation counters", () => {
 // AFTER the pre-draft guard allows and BEFORE classification/model work.
 // Losers pay no model cost: generation_in_progress / reusable / blocked are
 // decided in the acquire transaction. The reservation is released on every
-// failure path and bound to the committed draft on success (interim
-// commitDraftToGuard transition until the Step-4 atomic commit).
+// failure path and transitions to draft_ready inside the same atomic commit
+// transaction that persists the draft (fenced by ownerToken — see the
+// "fenced commit" test below).
 // ---------------------------------------------------------------------------
 describe("createDraft acquires the generation reservation (T07)", () => {
   const messageModule = new EmailReceivedMessageModule();

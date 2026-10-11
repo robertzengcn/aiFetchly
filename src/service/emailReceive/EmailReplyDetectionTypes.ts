@@ -101,20 +101,6 @@ export interface CheckEmailRepliedResult {
   readonly coverage: "local_only" | "configured_imap" | "partial";
 }
 
-/** Type-guard: a detection result settles a positive reply. */
-export function isRepliedResult(
-  result: ReplyDetectionResult
-): result is ReplyDetectionReplied {
-  return result.state === "replied";
-}
-
-/** Type-guard: a detection result is a complete negative. */
-export function isNotRepliedResult(
-  result: ReplyDetectionResult
-): result is ReplyDetectionNotReplied {
-  return result.state === "not_replied";
-}
-
 /**
  * Map a {@link ReplyDetectionResult} to the snake_case tool/IPC DTO
  * (FR-032). Pure; safe for the renderer (no secrets ever enter a result).

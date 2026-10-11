@@ -11,9 +11,11 @@ import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModu
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
-import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
-import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
-import { parseNamespacedProviderUid } from "@/service/emailReceive/EmailReplyIdentity";
+import { hasNamespaceConflict } from "@/service/emailReceive/EmailReplyIdentity";
+import {
+  isAttemptInFlight,
+  isLiveDraftStatus,
+} from "@/model/replyClusterEvidence";
 
 /**
  * Single authoritative policy gate for the reply pipeline (technical design
@@ -514,64 +516,6 @@ export function isValidReplyAddress(address: string): boolean {
   if (!trimmed || trimmed.length > 320) return false;
   // One local part token, one @, a domain with at least one dot. Conservative.
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
-}
-
-/**
- * Draft statuses that count as "live" (non-terminal) for the message-level
- * guard. A live draft may still be edited/approved/sent, so a second draft for
- * the same message is a conflict.
- *
- * `failed` is NOT live: a failed draft is a dead end that the user discarded or
- * the system abandoned; the message may be regenerated. `delivery_unknown` and
- * `sent` are terminal and handled by their own precedence branches above.
- */
-function isLiveDraftStatus(status: string): boolean {
-  return status === "draft" || status === "approved" || status === "sending";
-}
-
-/**
- * Attempt statuses that represent an in-flight SMTP submission (B02). `claimed`
- * is the atomic pre-SMTP hold; `submitted` is the post-handoff hold. Both mean
- * a send is actively in progress for this message — the guard must refuse a
- * duplicate send (or a duplicate draft) before AI/SMTP work. `sent`,
- * `failed`, and `delivery_unknown` are terminal and handled by their own
- * precedence branches above.
- */
-function isAttemptInFlight(
-  status: EmailReplySendAttemptStatus
-): boolean {
-  return status === "claimed" || status === "submitted";
-}
-
-/**
- * T02/FR-038: detect a provider-UID namespace conflict inside a canonical
- * cluster. A conflict exists when the cluster mixes legacy bare UIDs with
- * namespaced (`imap:<folderHash>:<uidValidity>:<uid>`) UIDs, or when two
- * namespaced rows disagree on folder hash or UIDVALIDITY. Either case means
- * the rows cannot be safely treated as the same underlying message without a
- * verified header match — surface for human reconciliation, never silently
- * merge.
- */
-function hasNamespaceConflict(
-  rows: readonly EmailReceivedMessageEntity[]
-): boolean {
-  const parsed = rows
-    .map((r) => parseNamespacedProviderUid(r.providerUid))
-    .filter((p): p is { folderHash: string; uidValidity: string; uid: string } => p !== null);
-  if (parsed.length === 0) {
-    // All legacy bare UIDs. Safe only as long as the cluster has a single row;
-    // a multi-row all-legacy cluster is itself suspicious (duplicate bare UIDs
-    // in one service is impossible under the unique index).
-    return rows.length > 1;
-  }
-  if (parsed.length < rows.length) {
-    // Mixed legacy + namespaced. Treat as a conflict until reconciled.
-    return true;
-  }
-  // All namespaced: a conflict exists if folder hash or UIDVALIDITY disagree.
-  const folderHashes = new Set(parsed.map((p) => p.folderHash));
-  const uidValidities = new Set(parsed.map((p) => p.uidValidity));
-  return folderHashes.size > 1 || uidValidities.size > 1;
 }
 
 /**

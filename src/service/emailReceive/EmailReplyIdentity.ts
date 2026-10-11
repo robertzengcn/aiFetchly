@@ -137,6 +137,37 @@ export function parseNamespacedProviderUid(
 }
 
 /**
+ * T02/FR-038: detect a provider-UID namespace conflict inside a canonical
+ * cluster. A conflict exists when the cluster mixes legacy bare UIDs with
+ * namespaced (`imap:<folderHash>:<uidValidity>:<uid>`) UIDs, or when two
+ * namespaced rows disagree on folder hash or UIDVALIDITY. Either case means
+ * the rows cannot be safely treated as the same underlying message without a
+ * verified header match — surface for human reconciliation, never silently
+ * merge. Shared by the policy orchestrator and the detection service.
+ */
+export function hasNamespaceConflict(
+  rows: readonly { providerUid: string }[]
+): boolean {
+  const parsed = rows
+    .map((r) => parseNamespacedProviderUid(r.providerUid))
+    .filter((p): p is { folderHash: string; uidValidity: string; uid: string } => p !== null);
+  if (parsed.length === 0) {
+    // All legacy bare UIDs. Safe only as long as the cluster has a single row;
+    // a multi-row all-legacy cluster is itself suspicious (duplicate bare UIDs
+    // in one service is impossible under the unique index).
+    return rows.length > 1;
+  }
+  if (parsed.length < rows.length) {
+    // Mixed legacy + namespaced. Treat as a conflict until reconciled.
+    return true;
+  }
+  // All namespaced: a conflict exists if folder hash or UIDVALIDITY disagree.
+  const folderHashes = new Set(parsed.map((p) => p.folderHash));
+  const uidValidities = new Set(parsed.map((p) => p.uidValidity));
+  return folderHashes.size > 1 || uidValidities.size > 1;
+}
+
+/**
  * Whether a stored provider-uid value fits the column length limit. Exposed so
  * sync can refuse to write a truncated identifier (a truncated namespaced UID
  * would silently collide with another row).

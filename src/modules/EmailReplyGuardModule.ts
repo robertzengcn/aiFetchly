@@ -27,21 +27,6 @@ export class EmailReplyGuardModule extends BaseModule {
     }
   }
 
-  async extendLease(input: {
-    guardId: number;
-    ownerToken: string;
-    newExpiresAt: Date;
-    now: Date;
-  }): Promise<boolean> {
-    try {
-      await this.ensureConnection();
-      return await this.guardModel.extendLease(input);
-    } catch (error) {
-      console.error("Error extending reply guard lease:", error);
-      throw error;
-    }
-  }
-
   async releaseReservation(input: {
     guardId: number;
     ownerToken: string;
@@ -52,21 +37,6 @@ export class EmailReplyGuardModule extends BaseModule {
       await this.guardModel.releaseReservation(input);
     } catch (error) {
       console.error("Error releasing reply guard reservation:", error);
-      throw error;
-    }
-  }
-
-  async commitDraftToGuard(input: {
-    guardId: number;
-    ownerToken: string;
-    now: Date;
-    activeDraftId: number;
-  }): Promise<boolean> {
-    try {
-      await this.ensureConnection();
-      return await this.guardModel.commitDraftToGuard(input);
-    } catch (error) {
-      console.error("Error committing draft to reply guard:", error);
       throw error;
     }
   }
@@ -92,16 +62,6 @@ export class EmailReplyGuardModule extends BaseModule {
       return await this.guardModel.reclaimExpiredReservation(input);
     } catch (error) {
       console.error("Error reclaiming expired reply guard reservation:", error);
-      throw error;
-    }
-  }
-
-  async read(guardId: number): Promise<EmailReplyGuardEntity | null> {
-    try {
-      await this.ensureConnection();
-      return await this.guardModel.read(guardId);
-    } catch (error) {
-      console.error("Error reading reply guard:", error);
       throw error;
     }
   }

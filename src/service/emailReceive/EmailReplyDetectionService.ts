@@ -41,10 +41,15 @@ import type {
   SentFolder,
 } from "@/service/emailReceive/EmailReceiveClient";
 import {
+  hasNamespaceConflict,
   normalizeStoredMessageId,
   normalizedIdsMatch,
   parseNamespacedProviderUid,
 } from "@/service/emailReceive/EmailReplyIdentity";
+import {
+  isAttemptInFlight,
+  isLiveDraftStatus,
+} from "@/model/replyClusterEvidence";
 import {
   normalizeMessageId,
   parseReferenceChain,
@@ -1388,42 +1393,6 @@ function extractAddress(value: string): string | null {
   if (tokenMatch) return tokenMatch[1];
   const bareMatch = value.match(/([^\s<>]+@[^\s<>]+)/);
   return bareMatch ? bareMatch[1] : null;
-}
-
-/** True when the draft is in a live (editable/in-flight) status. */
-function isLiveDraftStatus(status: string): boolean {
-  return status === "draft" || status === "approved" || status === "sending";
-}
-
-/** True when the attempt is in-flight (atomic pre-SMTP or post-handoff hold). */
-function isAttemptInFlight(status: string): boolean {
-  return status === "claimed" || status === "submitted";
-}
-
-/**
- * T02 namespace-conflict detection for a canonical cluster: mixes legacy bare
- * UIDs with namespaced UIDs, or namespaced rows disagree on folder hash or
- * UIDVALIDITY. Such a cluster cannot be safely merged without a verified
- * header match (§4.1, FR-038).
- */
-function hasNamespaceConflict(
-  rows: readonly EmailReceivedMessageEntity[]
-): boolean {
-  const parsed = rows
-    .map((r) => parseNamespacedProviderUid(r.providerUid))
-    .filter(
-      (p): p is { folderHash: string; uidValidity: string; uid: string } =>
-        p !== null
-    );
-  if (parsed.length === 0) {
-    return rows.length > 1;
-  }
-  if (parsed.length < rows.length) {
-    return true;
-  }
-  const folderHashes = new Set(parsed.map((p) => p.folderHash));
-  const uidValidities = new Set(parsed.map((p) => p.uidValidity));
-  return folderHashes.size > 1 || uidValidities.size > 1;
 }
 
 /** Upper bound for sanitized error text persisted to audit/metadata (FR-039). */

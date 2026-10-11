@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, EntityManager } from "typeorm";
+import { Repository } from "typeorm";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { runReplyTxn } from "@/model/replyTxn";
@@ -245,30 +245,6 @@ export class EmailReplyGuardModel extends BaseDb {
   }
 
   /**
-   * Conditionally extend the lease. Returns false when the owner has been
-   * replaced or the lease already expired — the caller must abort (§8.2:
-   * "An expired/replaced owner cannot renew, commit, or release the current
-   * lease").
-   */
-  async extendLease(input: {
-    guardId: number;
-    ownerToken: string;
-    newExpiresAt: Date;
-    now: Date;
-  }): Promise<boolean> {
-    return await runReplyTxn(this.sqliteDb, async (manager) => {
-      const res = await manager.getRepository(EmailReplyGuardEntity).update(
-        {
-          id: input.guardId,
-          ownerToken: input.ownerToken,
-        },
-        { leaseExpiresAt: input.newExpiresAt }
-      );
-      return (res.affected ?? 0) > 0;
-    });
-  }
-
-  /**
    * Release a reservation on generation failure. Fenced by ownerToken so a
    * replaced owner cannot release the current lease (§8.2). 0 rows = another
    * owner already reclaimed — leave the row untouched.
@@ -290,57 +266,6 @@ export class EmailReplyGuardModel extends BaseDb {
         }
       );
     });
-  }
-
-  /**
-   * Fenced commit gate: transition to `draft_ready` and bind the committed
-   * draft. Called INSIDE the commit transaction (the caller already holds the
-   * `runReplyTxn` for draft+revision+projection+audit). Returns false when the
-   * owner has been replaced or the lease expired before commit — the caller
-   * must roll back (no draft persisted). This is the §8.2 fenced late-result
-   * rejection: "Late LLM results from expired owners are discarded."
-   *
-   * NOTE: this method does NOT open its own `runReplyTxn` — it must be called
-   * from within one. Accepting a `manager` keeps the guard transition in the
-   * SAME transaction as the draft/revision/projection/audit commit.
-   */
-  async commitDraftToGuardWithManager(
-    manager: EntityManager,
-    input: {
-      guardId: number;
-      ownerToken: string;
-      now: Date;
-      activeDraftId: number;
-    }
-  ): Promise<boolean> {
-    const res = await manager.getRepository(EmailReplyGuardEntity).update(
-      {
-        id: input.guardId,
-        ownerToken: input.ownerToken,
-      },
-      {
-        phase: "draft_ready" as GuardPhase,
-        activeDraftId: input.activeDraftId,
-        activeAttemptId: null,
-      }
-    );
-    return (res.affected ?? 0) > 0;
-  }
-
-  /**
-   * Own-transaction form of the fenced commit gate, for callers that are NOT
-   * already inside a `runReplyTxn` (the commit transaction itself calls
-   * {@link commitDraftToGuardWithManager} directly with its manager).
-   */
-  async commitDraftToGuard(input: {
-    guardId: number;
-    ownerToken: string;
-    now: Date;
-    activeDraftId: number;
-  }): Promise<boolean> {
-    return await runReplyTxn(this.sqliteDb, (manager) =>
-      this.commitDraftToGuardWithManager(manager, input)
-    );
   }
 
   async read(guardId: number): Promise<EmailReplyGuardEntity | null> {
