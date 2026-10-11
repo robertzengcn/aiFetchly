@@ -90,6 +90,16 @@ export class ToolJobRegistry {
     };
   }
 
+  /**
+   * The registry's minimum poll interval (§10.3). The async poll loop starts
+   * its backoff at this value so it never polls faster than the registry
+   * allows (avoids rate_limited snapshots). Read-only accessor — the limits
+   * object is otherwise private.
+   */
+  get pollMinIntervalMs(): number {
+    return this.limits.pollMinIntervalMs;
+  }
+
   start(
     toolName: string,
     _args: Record<string, unknown>,

@@ -32,8 +32,10 @@ import type {
 import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
 
 /**
- * Poll interval used by AIChatQueryLoop (see ASYNC_POLL_INTERVAL_MS in the
- * source). Tests advance fake timers past this to flush a single poll tick.
+ * Headroom past the largest possible async-poll interval. AIChatQueryLoop now
+ * uses bounded backoff (§10.3: 5s start → ×1.5 growth → 15s cap), so a single
+ * tick waits at most 15s. Tests advance fake timers 20s to flush one tick with
+ * margin, regardless of where the loop is on the backoff curve.
  */
 const ASYNC_POLL_INTERVAL_MS_PLUS = 20_000;
 
@@ -370,5 +372,176 @@ describe("AIChatQueryLoop async poll", () => {
     // renderer inserts an orphan "Turn cancelled" card on the cancel path.
     const resultEvents = events.filter((e) => e.type === "tool_result");
     expect(resultEvents.length).toBe(0);
+  });
+
+  /**
+   * §10.3 — bounded job polling/backoff. "Approved read-only polling
+   * consumes budgets/time with backoff and a minimum one-second interval. No
+   * unbounded internal polling."
+   *
+   * The poll interval starts at the registry's pollMinIntervalMs (5s), grows
+   * ×1.5 each tick, caps at 15s, and never drops below 1s. This test records
+   * the wall-clock time of each getStatus call and asserts the gaps follow
+   * the backoff curve (5s → 7.5s → 11.25s → 15s → 15s ...). It does NOT depend
+   * on the registry's rate_limited branch — the loop schedules its own backoff.
+   */
+  it("polls with backoff: 5s start, ×1.5 growth, 15s cap (§10.3)", async () => {
+    vi.useFakeTimers();
+    const toolCallId = "call-backoff";
+    const events: AIChatQueryEvent[] = [];
+    const abort = new AbortController();
+    const fakeStream = makeFakeStream({
+      toolCallId,
+      toolName: "run_subagent",
+      argsJson: JSON.stringify({
+        agentId: "agent-lead-researcher",
+        prompt: "test",
+        taskPacket: { lead: { industry: "fintech" } },
+      }),
+    });
+
+    // Spy getStatus to record poll timestamps; the job stays running so the
+    // loop keeps polling (we drive it to the cap).
+    //
+    // The first entry seeded into pollTimestamps is the job's startedAt (the
+    // moment start() registered the job). The §10.3 start interval (5s) is the
+    // wait from job-start to poll #1 — NOT the gap between two polls. Without
+    // this baseline, gap[0] would be the GROWN interval (7.5s), hiding the 5s
+    // start. With it, gap[0] = poll1 - startedAt = 5s.
+    const pollTimestamps: number[] = [];
+    let seededBaseline = false;
+    const getStatusSpy = vi.spyOn(fake, "getStatus").mockImplementation(
+      (jobId: string) => {
+        const base = ToolJobRegistry.prototype.getStatus.call(fake, jobId);
+        if (!seededBaseline) {
+          pollTimestamps.push(base.startedAt);
+          seededBaseline = true;
+        }
+        pollTimestamps.push(Date.now());
+        // Force running so the loop keeps polling — the test controls ticks.
+        return {
+          ...base,
+          status: "running" as const,
+          progress: null,
+          partial: null,
+          result: null,
+          error: null,
+        };
+      }
+    );
+
+    const deps = {
+      streamChatCompletion: fakeStream,
+      executeTool: async () => {
+        return { success: true, result: {}, execution_time_ms: 1 };
+      },
+      getSkillDefinition: () => undefined,
+    };
+
+    const loop = new AIChatQueryLoop(deps as never);
+    const input = buildInput(events, abort);
+
+    const promise = loop.run(input);
+    // Advance past the first 4 poll ticks. With backoff (5s, 7.5s, 11.25s, 15s)
+    // the cumulative time through 4 ticks = 5 + 7.5 + 11.25 + 15 = 38.75s.
+    // Advance 40s to flush all four.
+    await vi.advanceTimersByTimeAsync(40_000);
+    // Stop the loop: complete the job on the next tick.
+    getStatusSpy.mockRestore();
+    const jobId = lastStartedJobId();
+    if (jobId) {
+      fake.statusOverrides.set(jobId, "completed");
+      fake.resultOverrides.set(jobId, { output: "ok" });
+    }
+    await vi.advanceTimersByTimeAsync(ASYNC_POLL_INTERVAL_MS_PLUS);
+    const result = await promise;
+
+    expect(result.type).toBe("completed");
+    // We observed at least 4 polls plus the baseline (5 entries → 4 gaps).
+    expect(pollTimestamps.length).toBeGreaterThanOrEqual(5);
+    // Compute the inter-poll gaps and assert the backoff curve.
+    const gaps: number[] = [];
+    for (let i = 1; i < pollTimestamps.length; i++) {
+      gaps.push(pollTimestamps[i] - pollTimestamps[i - 1]);
+    }
+    // First gap ≈ 5s (registry pollMinIntervalMs — the §10.3 start interval;
+    // this is poll1 - startedAt, the wait from job-start to the first poll).
+    expect(gaps[0]).toBeGreaterThanOrEqual(4_900);
+    expect(gaps[0]).toBeLessThanOrEqual(5_100);
+    // Second gap ≈ 7.5s (×1.5 growth — the first grown interval).
+    expect(gaps[1]).toBeGreaterThanOrEqual(7_400);
+    expect(gaps[1]).toBeLessThanOrEqual(7_600);
+    // Third gap ≈ 11.25s (×1.5 again).
+    expect(gaps[2]).toBeGreaterThanOrEqual(11_100);
+    expect(gaps[2]).toBeLessThanOrEqual(11_400);
+    // Fourth gap caps at 15s — no further growth.
+    expect(gaps[3]).toBeGreaterThanOrEqual(14_900);
+    expect(gaps[3]).toBeLessThanOrEqual(15_100);
+  });
+
+  /**
+   * §10.3 — "a minimum one-second interval." Even under aggressive backoff
+   * decay or a tiny registry pollMinIntervalMs, the loop never polls faster
+   * than once per second.
+   */
+  it("never polls faster than once per second (§10.3 floor)", async () => {
+    vi.useFakeTimers();
+    const toolCallId = "call-floor";
+    const events: AIChatQueryEvent[] = [];
+    const abort = new AbortController();
+    const fakeStream = makeFakeStream({
+      toolCallId,
+      toolName: "run_subagent",
+      argsJson: JSON.stringify({
+        agentId: "agent-lead-researcher",
+        prompt: "test",
+        taskPacket: { lead: { industry: "fintech" } },
+      }),
+    });
+
+    const pollTimestamps: number[] = [];
+    const getStatusSpy = vi.spyOn(fake, "getStatus").mockImplementation(
+      (jobId: string) => {
+        const base = ToolJobRegistry.prototype.getStatus.call(fake, jobId);
+        pollTimestamps.push(Date.now());
+        return {
+          ...base,
+          status: "running" as const,
+          progress: null,
+          partial: null,
+          result: null,
+          error: null,
+        };
+      }
+    );
+
+    const deps = {
+      streamChatCompletion: fakeStream,
+      executeTool: async () => {
+        return { success: true, result: {}, execution_time_ms: 1 };
+      },
+      getSkillDefinition: () => undefined,
+    };
+
+    const loop = new AIChatQueryLoop(deps as never);
+    const input = buildInput(events, abort);
+
+    const promise = loop.run(input);
+    // Advance 20s — enough for ~3 backoff ticks (5 + 7.5 = 12.5s for 2 gaps).
+    await vi.advanceTimersByTimeAsync(20_000);
+    getStatusSpy.mockRestore();
+    const jobId = lastStartedJobId();
+    if (jobId) {
+      fake.statusOverrides.set(jobId, "completed");
+      fake.resultOverrides.set(jobId, { output: "ok" });
+    }
+    await vi.advanceTimersByTimeAsync(ASYNC_POLL_INTERVAL_MS_PLUS);
+    await promise;
+
+    // Every inter-poll gap must be >= 1s (§10.3 minimum interval floor).
+    for (let i = 1; i < pollTimestamps.length; i++) {
+      const gap = pollTimestamps[i] - pollTimestamps[i - 1];
+      expect(gap).toBeGreaterThanOrEqual(1_000);
+    }
   });
 });

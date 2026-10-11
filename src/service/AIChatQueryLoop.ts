@@ -209,11 +209,21 @@ export const TOOL_ROUND_CAP_CONTINUATION_PROMPT =
   "Do not end with an empty reply, and do not ask the user whether to continue.";
 
 /**
- * Polling interval for async tool jobs. The loop sleeps this long between
- * ToolJobRegistry.getStatus() calls. Must be >= the registry's
- * pollMinIntervalMs (5s) to avoid rate_limited snapshots.
+ * §10.3 — bounded job polling backoff. The loop polls async tool jobs with a
+ * growing interval instead of a fixed one: "Approved read-only polling
+ * consumes budgets/time with backoff and a minimum one-second interval. No
+ * unbounded internal polling."
+ *
+ * The first poll tick waits `startMs` (the registry's pollMinIntervalMs, 5s by
+ * default — never faster than the registry allows, avoiding rate_limited
+ * snapshots). Each subsequent tick grows by ×1.5, capped at `MAX_MS`. The 1s
+ * floor is the absolute minimum interval regardless of decay or a tiny
+ * registry pollMinIntervalMs.
  */
-const ASYNC_POLL_INTERVAL_MS = 15_000;
+const ASYNC_POLL_BACKOFF_START_MS = 5_000;
+const ASYNC_POLL_BACKOFF_GROWTH = 1.5;
+const ASYNC_POLL_BACKOFF_MAX_MS = 15_000;
+const ASYNC_POLL_BACKOFF_FLOOR_MS = 1_000;
 
 /**
  * Hard cap on async tool job polling. Jobs that exceed this are almost
@@ -1513,6 +1523,28 @@ export class AIChatQueryLoop {
    * definitive claim failure → no_effect (nothing left the process);
    * timeout or any uncertain shape → unknown (§10.2: never terminal,
    * reconcilable via native status lookup).
+   *
+   * §10.3 start-vs-completion is NOT enforced here. `start_email_send_task`
+   * calls `OutboundEmailDeliveryService.claim()`, which is synchronous and
+   * returns at job-START — the envelope only ever carries `claimed`/
+   * `already_processed` (success) or `claim_failed`/`mixed_version_batch`/
+   * `worker_start_failed`/`legacy_identity_requires_review`/
+   * `sender_identity_changed` (failure). `completed`/`partially_completed`
+   * (terminal delivery outcomes) and `sent` (a recipient-outcome status, not
+   * a send-attempt status) can never reach this classifier through the
+   * authorization path.
+   *
+   * The start-vs-completion distinction lives at the criterion-threshold
+   * layer: `TaskCriteriaResolver` compiles every send to `operation_receipt`
+   * with `requiredState: "completed"`, and `meetsOperationThreshold` ranks
+   * `pending < claimed < dispatched < accepted < completed`. A claimed send
+   * lands `accepted` (§10.2 confirmed) — it satisfies a start-only criterion
+   * (`accepted ≥ accepted`) but FAILS the completion criterion
+   * (`accepted < completed`), exactly as §10.3 prescribes ("Accepted receipt
+   * satisfies a start-only criterion; completion requires actual confirmed
+   * completion"). Resolving `accepted` → `completed` is the deferred
+   * terminology-reconciliation gap (TASK-COMPLETION-POLICY-TODO §F), not a
+   * classifySendOutcome concern.
    */
   private static classifySendOutcome(toolResult: ToolExecutionResult): {
     readonly outcome: "confirmed" | "no_effect" | "unknown";
@@ -4189,9 +4221,26 @@ export class AIChatQueryLoop {
         });
       });
 
+    /**
+     * §10.3 backoff state. The first poll waits `currentIntervalMs`, which
+     * starts at the registry's pollMinIntervalMs (the §10.3 start interval —
+     * never faster than the registry allows). Each subsequent tick grows by
+     * ×1.5, capped at 15s, with a 1s floor. The registry's rate_limited
+     * snapshot's `retryAfterMs` overrides the next interval when present
+     * (polling too fast; back off to what the registry asks for).
+     */
+    const registryMinInterval =
+      typeof registry.pollMinIntervalMs === "number"
+        ? registry.pollMinIntervalMs
+        : ASYNC_POLL_BACKOFF_START_MS;
+    let currentIntervalMs = Math.max(
+      ASYNC_POLL_BACKOFF_FLOOR_MS,
+      registryMinInterval
+    );
+
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
     while (true) {
-      await sleepUntilAbortOrTimeout(ASYNC_POLL_INTERVAL_MS);
+      await sleepUntilAbortOrTimeout(currentIntervalMs);
 
       if (input.abortController.signal.aborted) {
         try {
@@ -4299,6 +4348,29 @@ export class AIChatQueryLoop {
         };
       }
       // status === "running" | "queued" | "rate_limited" -> keep polling.
+      //
+      // §10.3 backoff: grow the next interval by ×1.5, capped at 15s, with a
+      // 1s floor. If the registry returned a rate_limited snapshot with
+      // retryAfterMs, honor that as the next interval (it tells us exactly
+      // how long until the registry will accept another poll without
+      // rate-limiting) — but still respect the 1s floor and 15s cap so a
+      // misbehaving registry cannot cause a hot loop or a stall.
+      if (
+        snap.status === "rate_limited" &&
+        typeof snap.retryAfterMs === "number" &&
+        snap.retryAfterMs > 0
+      ) {
+        currentIntervalMs = Math.min(
+          ASYNC_POLL_BACKOFF_MAX_MS,
+          Math.max(ASYNC_POLL_BACKOFF_FLOOR_MS, snap.retryAfterMs)
+        );
+      } else {
+        const grown = Math.round(currentIntervalMs * ASYNC_POLL_BACKOFF_GROWTH);
+        currentIntervalMs = Math.min(
+          ASYNC_POLL_BACKOFF_MAX_MS,
+          Math.max(ASYNC_POLL_BACKOFF_FLOOR_MS, grown)
+        );
+      }
     }
   }
 

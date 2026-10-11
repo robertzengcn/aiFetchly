@@ -296,8 +296,17 @@ terminal identity, no schedule accounting for manual).
       replay. (NFR-05; `getUnfinalizedExecutions` exists, no consumer.)
 - [ ] **[GAP-S3] Crash/finalization fault-injection tests** (reservation↔dispatch crash, dispatch↔receipt crash,
       restart-before-notification dedup, zero duplicate effects, single schedule-count increment).
-- [ ] **[GAP-S3] Background-job semantics**: start-receipt vs completion distinction, bounded read-only polling
-      (backoff, ≥1s interval), no unbounded internal polling. (§10.3)
+- [x] **[GAP-S3] Background-job semantics**: start-receipt vs completion distinction, bounded read-only polling
+      (backoff, ≥1s interval), no unbounded internal polling. (§10.3) — bounded polling landed (T23e):
+      async poll loop now grows the interval ×1.5 from the registry's `pollMinIntervalMs` (5s) to a 15s cap
+      with a 1s floor, honoring `rate_limited.retryAfterMs` (`ToolJobRegistry.pollMinIntervalMs` accessor).
+      The start-vs-completion distinction is enforced at the criterion-threshold layer, not in
+      `classifySendOutcome`: `TaskCriteriaResolver` compiles every send to `operation_receipt`
+      `requiredState="completed"`, and `meetsOperationThreshold` ranks
+      `pending<claimed<dispatched<accepted<completed`, so a claimed send lands `accepted` — it satisfies a
+      start-only criterion but fails the completion criterion, exactly as §10.3 prescribes. Resolving
+      `accepted`→`completed` (native delivery-status reconciliation) is the open terminology item below.
+      2 backoff tests in `AIChatQueryLoopAsyncPoll.test.ts`.
 - [ ] **[GAP-S3] Terminology reconciliation**: entity/types use `pending…accepted/completed`, design §10.2
       diagram uses `prepared…confirmed` — pick one before receipt reconciliation lands.
 
