@@ -239,14 +239,19 @@ export class EmailReplyDetectionService {
   > = new Map();
 
   /**
-   * One active IMAP probe per mailbox (§7.3): key = `emailServiceId`. A
-   * second probe for the same mailbox WAITS (queued behind the deadline,
-   * not concurrently opening a second connection). A probe for a different
-   * mailbox proceeds without waiting.
+   * One active IMAP probe per mailbox (§7.3): key = `emailServiceId`. The
+   * value is a **release token** (`Promise<void>`), NOT a result promise — it
+   * resolves when the current lock holder's mailbox work is fully done, so the
+   * next queued caller may begin. Each caller installs its OWN token
+   * synchronously (before any await) so the next caller chains onto THIS token,
+   * forming an unbreakable A→B→C chain (R07: the old snapshot-await pattern
+   * awaited the predecessor before installing a node, so B and C both observed
+   * A and fanned out together when A settled). A probe for a different mailbox
+   * proceeds without waiting.
    */
   private readonly mailboxInFlight: Map<
     number,
-    Promise<ReplyDetectionResult>
+    Promise<void>
   > = new Map();
 
   constructor(options?: {
@@ -514,31 +519,45 @@ export class EmailReplyDetectionService {
     deadline: GenerationDeadline
   ): Promise<ReplyDetectionResult> {
     const mailboxId = normalizedConfig.emailServiceId;
-    // Queue behind a prior probe on the same mailbox. The deadline was
-    // started before this call, so queue wait is counted against the 15s.
-    const prior = this.mailboxInFlight.get(mailboxId);
-    if (prior) {
+    // R07 — synchronously-chained mailbox queue (no fan-out). Each caller
+    // installs its OWN release token into the map BEFORE awaiting anything, so
+    // the next caller chains onto THIS token, forming an unbreakable A→B→C
+    // chain. The previous snapshot-await pattern read the predecessor and
+    // awaited it before installing a node — so B and C both observed A and
+    // fanned out together when A settled (max active probes > 1). Here the
+    // token is installed synchronously; a concurrent C reads B's token, not
+    // A's. The deadline was started before this call, so queue wait is counted
+    // against the 15s budget.
+    let releaseToken!: () => void;
+    const myTurn = new Promise<void>((resolve) => {
+      releaseToken = resolve;
+    });
+    const predecessor = this.mailboxInFlight.get(mailboxId);
+    // Install synchronously — the next caller for this mailbox chains onto
+    // `myTurn`, never `predecessor`.
+    this.mailboxInFlight.set(mailboxId, myTurn);
+    if (predecessor) {
       try {
-        await prior;
+        await predecessor;
       } catch {
-        // A prior probe's failure must not abort this one; the deadline is
+        // A predecessor's failure must not abort this probe; the deadline is
         // the only thing that decides whether THIS probe proceeds.
       }
-      // Re-check the deadline after the queue wait — if exhausted, the
-      // caller gets probe_timeout without opening a connection.
+      // Re-check the deadline after the queue wait — if exhausted, the caller
+      // gets probe_timeout without opening a connection. The token is still
+      // released below so the chain does not stall.
       if (deadline.expired()) {
         incrementReplyMetric("detection_outcome", {
           state: "unknown",
           reason: "probe_timeout",
           stage: "queue_wait",
         });
+        releaseToken();
         return this.unknown("probe_timeout");
       }
     }
 
-    // Run the probe under a per-mailbox lock so a second probe for the same
-    // mailbox queues. The lock promise resolves with this probe's result.
-    const run = (async (): Promise<ReplyDetectionResult> => {
+    try {
       // If the deadline already elapsed during queue wait, do not open a
       // connection — return probe_timeout immediately.
       if (deadline.expired()) {
@@ -585,18 +604,15 @@ export class EmailReplyDetectionService {
         });
       }
       return result;
-    })();
-
-    this.mailboxInFlight.set(mailboxId, run);
-    try {
-      const result = await run;
-      return result;
     } finally {
-      // Only clear the mailbox lock if this probe IS the lock holder. A
-      // later probe for the same mailbox may have already replaced this
-      // entry; deleting it would drop that probe's lock. Use a sentinel
-      // comparison instead.
-      if (this.mailboxInFlight.get(mailboxId) === run) {
+      // Release the mailbox lock so the next queued caller may begin. Always
+      // release — even on timeout/exception — so the chain never stalls. A
+      // successor that installed its own token while this holder was running
+      // is already chained onto `myTurn`; releasing here wakes it.
+      releaseToken();
+      // If no successor installed a token, drop the stale entry so the next
+      // caller does not await an already-resolved token unnecessarily.
+      if (this.mailboxInFlight.get(mailboxId) === myTurn) {
         this.mailboxInFlight.delete(mailboxId);
       }
     }

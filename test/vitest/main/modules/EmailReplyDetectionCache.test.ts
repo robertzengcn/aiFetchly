@@ -503,6 +503,202 @@ describe("EmailReplyDetection cache (T05 step 10, §7.3)", () => {
     expect(rA.state).toBe("not_replied");
   });
 
+  // -------------------------------------------------------------------------
+  // R07 — Queued mailbox probes must NOT fan out after one predecessor.
+  // The old snapshot-await pattern read the predecessor and awaited it before
+  // installing a node in the mailbox map, so distinct-message B and C both
+  // observed A and started together when A settled (max active probes > 1).
+  // The chained release-token fix installs each caller's own token
+  // synchronously, so C chains onto B, not A.
+  // -------------------------------------------------------------------------
+
+  it("R07 — concurrent B and C on the same mailbox do NOT fan out after A; max one active probe", async () => {
+    const clock = manualClock();
+    const messageA = messageFixture({
+      id: 100,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:77",
+    });
+    const messageB = messageFixture({
+      id: 200,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:78",
+    });
+    const messageC = messageFixture({
+      id: 300,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:79",
+    });
+
+    // Concurrency tracker wrapping the fake IMAP port. `active` counts
+    // probes currently INSIDE discoverSentFolders; `maxActive` is the
+    // high-water mark. A one-shot `enteredA` signal tells the test when A has
+    // actually reached the mailbox probe (so we don't have to guess microtask
+    // counts). `discoverGate` blocks every probe until the test releases it.
+    let active = 0;
+    let maxActive = 0;
+    let releaseDiscover!: () => void;
+    const discoverGate = new Promise<void>(
+      (resolve) => (releaseDiscover = resolve)
+    );
+    let signalAEntered!: () => void;
+    const aEntered = new Promise<void>(
+      (resolve) => (signalAEntered = resolve)
+    );
+    let aHasEntered = false;
+
+    const kit = buildKit({
+      message: messageA,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const origDiscover = kit.imapPort.discoverSentFolders;
+    kit.imapPort.discoverSentFolders = async (config) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (!aHasEntered) {
+        aHasEntered = true;
+        signalAEntered();
+      }
+      try {
+        // Every probe blocks on the gate. A arrives first and blocks; B and
+        // C must NOT reach here until A releases the mailbox lock (R07).
+        await discoverGate;
+        return origDiscover.call(kit.imapPort, config);
+      } finally {
+        active -= 1;
+      }
+    };
+
+    // Make all three messages resolve to their own rows on the same mailbox.
+    (kit.messagePort as unknown as {
+      read: (id: number) => Promise<EmailReceivedMessageEntity | null>;
+    }).read = async (id: number) => {
+      if (id === messageA.id) return messageA;
+      if (id === messageB.id) return messageB;
+      if (id === messageC.id) return messageC;
+      return null;
+    };
+    (kit.messagePort as unknown as {
+      findCanonicalEquivalents: (seed: EmailReceivedMessageEntity) => Promise<EmailReceivedMessageEntity[]>;
+    }).findCanonicalEquivalents = async (seed: EmailReceivedMessageEntity) =>
+      [seed];
+
+    // Start A on the mailbox. Wait until it actually ENTERS discoverSentFolders
+    // (proves A acquired the lock + reached the mailbox probe) before starting
+    // B and C. This isolates the R07 fan-out question: with A holding the lock,
+    // do B and C start mailbox work concurrently?
+    const pA = kit.service.detect({ messageId: messageA.id });
+    await aEntered;
+    expect(active).toBe(1);
+    expect(maxActive).toBe(1);
+
+    // Start B and C (same mailbox, different messages → different cache keys,
+    // so single-flight does NOT join them; they each reach the mailbox queue).
+    const pB = kit.service.detect({ messageId: messageB.id });
+    const pC = kit.service.detect({ messageId: messageC.id });
+    // Drain the microtask queue so B and C settle into their queue waits
+    // (each installs its own token + awaits the predecessor). A generous
+    // drain guarantees they have had a chance to fan out IF the bug exists.
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
+    // R07: B and C must NOT have entered discoverSentFolders. Only A is
+    // active; maxActive stayed 1. Under the old snapshot-await pattern, B
+    // and C would both observe A's predecessor slot and enter together.
+    expect(active).toBe(1);
+    expect(maxActive).toBe(1);
+
+    // Release the gate. A completes; the chain hands off to B, then C
+    // (strictly serialized, never concurrent). After all settle, maxActive
+    // is still 1 and three probes ran total.
+    releaseDiscover();
+    const [rA, rB, rC] = await Promise.all([pA, pB, pC]);
+    expect(rA.state).toBe("not_replied");
+    expect(rB.state).toBe("not_replied");
+    expect(rC.state).toBe("not_replied");
+    expect(maxActive).toBe(1);
+    // All three eventually probed (one per distinct message/context).
+    expect(kit.imapPort.discoverCalls).toBe(3);
+  });
+
+  it("R07 — queue wait counts against the 15s deadline; a queued probe that exhausts the budget returns probe_timeout without opening a connection", async () => {
+    vi.useFakeTimers();
+    try {
+      const messageA = messageFixture({
+        id: 100,
+        providerUid: "imap:aaaaaaaaaaaaaaaa:424242:77",
+      });
+      const messageB = messageFixture({
+        id: 200,
+        providerUid: "imap:aaaaaaaaaaaaaaaa:424242:78",
+      });
+
+      let resolveA!: () => void;
+      let signalAEntered!: () => void;
+      const aEntered = new Promise<void>(
+        (resolve) => (signalAEntered = resolve)
+      );
+      let aHasEntered = false;
+      const blockA = new Promise<void>((resolve) => (resolveA = resolve));
+      const kit = buildKit({
+        message: messageA,
+        imap: cleanNegativeImap(),
+      });
+      const origDiscover = kit.imapPort.discoverSentFolders;
+      kit.imapPort.discoverSentFolders = async (config) => {
+        if (!aHasEntered) {
+          aHasEntered = true;
+          signalAEntered();
+        }
+        await blockA;
+        return origDiscover.call(kit.imapPort, config);
+      };
+      (kit.messagePort as unknown as {
+        read: (id: number) => Promise<EmailReceivedMessageEntity | null>;
+      }).read = async (id: number) =>
+        id === messageA.id ? messageA : id === messageB.id ? messageB : null;
+      (kit.messagePort as unknown as {
+        findCanonicalEquivalents: (seed: EmailReceivedMessageEntity) => Promise<EmailReceivedMessageEntity[]>;
+      }).findCanonicalEquivalents = async (seed: EmailReceivedMessageEntity) =>
+        [seed];
+
+      // A starts and blocks on discover. B queues behind A on the same
+      // mailbox. The 15s deadline for B was started before queue acquisition,
+      // so the queue wait counts against the budget.
+      const pA = kit.service.detect({ messageId: messageA.id });
+      // Wait for A to actually enter the mailbox probe (hold the lock).
+      await aEntered;
+      const pB = kit.service.detect({ messageId: messageB.id });
+      // Drain so B installs its token + awaits the predecessor (A).
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      // B is queued behind A. Advance past the 15s deadline. B's deadline
+      // expires during the queue wait; when A releases, B must return
+      // probe_timeout WITHOUT opening a connection (no discover call for B).
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      // Release A so the chain hands off to B. B sees the deadline expired
+      // after the queue wait and returns probe_timeout without probing.
+      resolveA();
+
+      const rA = await pA;
+      const rB = await pB;
+      expect(rA.state).toBe("unknown");
+      expect(rA.reasonCode).toBe("probe_timeout");
+      expect(rB.state).toBe("unknown");
+      expect(rB.reasonCode).toBe("probe_timeout");
+
+      // Only A entered discoverSentFolders (B was queued, then found the
+      // deadline expired after the queue wait → returned probe_timeout from
+      // the queue-wait branch without opening a connection). Neither result
+      // was cached (probe_timeout is unknown-state).
+      expect(kit.imapPort.discoverCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
   // -----------------------------------------------------------------------
   // 15s deadline.
   // -----------------------------------------------------------------------
