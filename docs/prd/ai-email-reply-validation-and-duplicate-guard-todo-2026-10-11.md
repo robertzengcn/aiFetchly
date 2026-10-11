@@ -95,12 +95,11 @@ All source line references below describe the reviewed revision. **P1** means fi
 
 ## Other confirmed correctness defects
 
-### R07 — Queued mailbox probes fan out after one predecessor [P2]
+### R07 — Queued mailbox probes fan out after one predecessor [P2] — FIXED (4c5ffcfd)
 
-- [ ] Replace snapshot-await locking with a synchronously chained mailbox queue or ownership-checked semaphore; include queue acquisition in cancellation/deadline accounting.
-- Evidence: `src/service/emailReceive/EmailReplyDetectionService.ts:515–536,540–602`.
-- Trigger/result: probe A is active; distinct-message B and C both await A. When A completes, B and C both start and replace the mailbox map entry. Same-message single-flight does not serialize different messages.
-- Regression: gate A then B; C must make no network call until B releases. Assert maximum active physical probes per mailbox is one, including timeout/queue cancellation.
+- [x] Replace snapshot-await locking with a synchronously chained mailbox queue or ownership-checked semaphore; include queue acquisition in cancellation/deadline accounting.
+- Fix detail: `mailboxInFlight` now holds a **release token** (`Promise<void>`), not a result promise. `runProbeUnderMailboxLock` installs its OWN token into the map BEFORE any `await` — so the next caller for the same mailbox chains onto THIS token, forming a strict A→B→C chain. The old snapshot-await pattern (`const prior = this.mailboxInFlight.get(mailboxId); if (prior) { await prior; }`) read the predecessor and awaited it before installing a node, so distinct-message B and C both observed A and fanned out together when A settled (max active probes > 1). The `finally` always releases the token (even on timeout/exception) so the chain never stalls; a stale entry with no successor is dropped so the next caller does not await an already-resolved token. Queue acquisition stays inside the 15s deadline: a queued probe whose budget exhausts during the wait returns `probe_timeout` from the queue-wait branch WITHOUT opening a connection.
+- Acceptance verification: `test/vitest/main/modules/EmailReplyDetectionCache.test.ts` R07 regressions — gate A on a blocking `discoverSentFolders`; start distinct-message B and C on the same mailbox (same `emailServiceId`, different messages → different cache keys, so single-flight does NOT join them). Assert `maxActive` stays 1 (B and C never enter `discover` concurrently). Verified RED against the pre-fix source: `maxActive` reached 2 (the fan-out). After the gate releases, all three settle strictly serialized, `discoverCalls` = 3, `maxActive` = 1. Secondary regression: a queued probe whose 15s deadline expires during the queue wait returns `probe_timeout` without opening a connection (`discoverCalls` stays 1 — only A probed). Existing single-flight (same-message join) and different-mailbox (no blocking) tests still pass. `tsc --noEmit` clean; the four detection suites (89 tests, +2 R07); full `yarn testmain` 5478 passed, 0 failed.
 
 ### R08 — IMAP abort is attached after connect [P2]
 
