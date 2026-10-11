@@ -47,6 +47,7 @@ interface FakeOp {
     | "unknown";
   claimGeneration: number;
   receiptReference: string | null;
+  failureCode?: string | null;
 }
 
 const TRANSITIONS: Record<string, string[]> = {
@@ -151,7 +152,8 @@ class FakeOperationStore {
         }
         this.rows.set(input.operationKey, {
           ...row,
-          receiptReference: input.receiptReference,
+          receiptReference: input.receiptReference ?? row.receiptReference,
+          failureCode: input.failureCode ?? row.failureCode,
         });
         return true;
       },
@@ -390,5 +392,21 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     const row = store.rows.get("op:exec-A:outbound_batch:11");
     expect(row?.receiptReference).to.equal("attempt:12");
     expect(row?.operationState).to.equal("unknown");
+  });
+
+  it("persists the safe failure code on a no_effect settlement (T23d)", async () => {
+    const guard = guardFor(store, "exec-A");
+    const decision = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: decision.claimGeneration ?? 0,
+      occurrenceOrdinal: decision.occurrenceOrdinal ?? 0,
+      intentHash: decision.intentHash ?? "",
+      outcome: "no_effect",
+      failureCode: "CLAIM_FAILED",
+    });
+    const row = store.rows.get("op:exec-A:outbound_batch:11");
+    expect(row?.operationState).to.equal("failed");
+    expect(row?.failureCode).to.equal("CLAIM_FAILED");
   });
 });

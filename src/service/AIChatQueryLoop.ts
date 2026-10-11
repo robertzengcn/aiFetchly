@@ -134,6 +134,12 @@ import {
   type AggregatedHookResult,
   type HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
+import {
+  TaskOperationGuard,
+  type OperationGuardDescriptor,
+  type OperationGuardDeps,
+} from "@/service/aiTaskExecution/TaskOperationGuard";
+import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
 
 /**
  * Max model→tool→model rounds per cycle inside one user turn. Must be high
@@ -1443,6 +1449,104 @@ export class AIChatQueryLoop {
         `[ai-chat-v2] T05 tool execution budget exhausted for ${toolRequestId} — proceeding (D4 record-but-no-gate)`
       );
     }
+  }
+
+  /**
+   * T23d (§10.2): build the durable operation guard for the send tool's
+   * dispatch. Returns null when the turn is not policy-enrolled (T16 frozen
+   * binding flag) or the executionId is missing — legacy behavior is
+   * byte-identical in that case. The AiTaskOperationModule is constructed
+   * lazily inside this flag-gated path (BaseModule TDZ rule: never at module
+   * top level).
+   */
+  private buildOperationGuardForSend(
+    input: AIChatQueryLoopInput
+  ): TaskOperationGuard | null {
+    const binding = input.taskExecutionBinding;
+    if (!binding?.policyAccepted || !binding.executionId) return null;
+    const operationModule = new AiTaskOperationModule();
+    const deps: OperationGuardDeps = {
+      recordOperation: (record) => operationModule.recordOperation(record),
+      getOperation: (key) => operationModule.getOperation(key),
+      findUnresolvedByIntent: (query) =>
+        operationModule.findUnresolvedByIntent(query),
+      updateState: (update) => operationModule.updateState(update),
+      setReceiptReference: async (input) =>
+        operationModule.setReceipt({
+          operationKey: input.operationKey,
+          expectedClaimGeneration: input.expectedClaimGeneration,
+          receiptReference: input.receiptReference,
+          failureCode: input.failureCode,
+        }),
+    };
+    return new TaskOperationGuard(deps, binding.executionId);
+  }
+
+  /**
+   * T23d (§10.1): the send descriptor — trusted tool identity, the gate's
+   * authorization batchId as the domain target (never model text), and the
+   * stable intent allowlist from bulkEmailTaskInputSchema. Recipients,
+   * subject, and body are NEVER hashed (sensitive-data rule §10.1).
+   */
+  private static buildSendDescriptor(
+    batchId: number,
+    toolArguments: Readonly<Record<string, unknown>>
+  ): OperationGuardDescriptor {
+    return {
+      toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
+      domainTarget: `outbound_batch:${batchId}`,
+      intentFields: [
+        "service_ids",
+        "template_ids",
+        "filter_ids",
+        "not_duplicate",
+        "email_search_task_id",
+      ],
+      intentArguments: toolArguments,
+    };
+  }
+
+  /**
+   * T23d (§10.2): classify a completed send dispatch into the guard's
+   * outcome taxonomy. success + claimed/already_processed → confirmed
+   * (the batch claim produced a native receipt); success:false with a
+   * definitive claim failure → no_effect (nothing left the process);
+   * timeout or any uncertain shape → unknown (§10.2: never terminal,
+   * reconcilable via native status lookup).
+   */
+  private static classifySendOutcome(toolResult: ToolExecutionResult): {
+    readonly outcome: "confirmed" | "no_effect" | "unknown";
+    readonly receiptReference?: string;
+    readonly failureCode?: string;
+  } {
+    if (toolResult.timedOutAfterMs !== undefined) {
+      return { outcome: "unknown" };
+    }
+    const result = toolResult.result as Record<string, unknown> | undefined;
+    const status =
+      result && typeof result.status === "string" ? result.status : undefined;
+    const attemptId =
+      result && typeof result.send_attempt_id === "string"
+        ? result.send_attempt_id
+        : undefined;
+    if (toolResult.success) {
+      const receiptReference = attemptId ? `attempt:${attemptId}` : undefined;
+      if (status === "claimed" || status === "already_processed") {
+        return { outcome: "confirmed", receiptReference };
+      }
+      // A success envelope with an unrecognized status: the claim path may
+      // have taken an unexpected native branch (e.g. legacy identity
+      // review). Treat as unknown rather than guessing a terminal state.
+      return { outcome: "unknown", receiptReference };
+    }
+    if (status === "claim_failed" || status === "mixed_version_batch") {
+      // Definitive before-effect failures: nothing left the process.
+      return {
+        outcome: "no_effect",
+        failureCode: status.toUpperCase(),
+      };
+    }
+    return { outcome: "unknown" };
   }
 
   /**
@@ -3174,6 +3278,103 @@ export class AIChatQueryLoop {
             }
           }
 
+          // T23d (§10.2): durable operation fence for the consequential send.
+          // Runs ONLY for policy-enrolled turns (T16 frozen binding flag) with
+          // a trusted authorization triple (skip_review direct sends have no
+          // batch target and keep legacy behavior byte-identical). Blocked →
+          // the same blocked tool_result shape the intent gate emits above;
+          // allowed → thread the claim into the settle after dispatch.
+          let operationClaim: {
+            readonly descriptor: OperationGuardDescriptor;
+            readonly claimGeneration: number;
+            readonly intentHash: string;
+            readonly occurrenceOrdinal: number;
+          } | null = null;
+          if (
+            call.name === OUTBOUND_EMAIL_SEND_TOOL &&
+            outboundAuthorization
+          ) {
+            const guard = this.buildOperationGuardForSend(input);
+            if (guard) {
+              const descriptor = AIChatQueryLoop.buildSendDescriptor(
+                outboundAuthorization.batchId,
+                call.arguments ?? {}
+              );
+              try {
+                const decision = await guard.prepareDispatch(descriptor);
+                if (!decision.allowed) {
+                  await emitToolCall(call.arguments ?? {});
+                  const blockedContent = serializeToolResultContent({
+                    success: false,
+                    operationGuardBlocked: true,
+                    code: decision.reasonCode,
+                    reason: decision.reason,
+                  });
+                  eventSink.emit({
+                    type: "tool_result",
+                    conversationId: input.conversationId,
+                    messageId: input.assistantMessageId,
+                    toolCallId: call.id,
+                    toolName: call.name,
+                    fullContent: blockedContent,
+                    toolResult: {
+                      success: false,
+                      operationGuardBlocked: true,
+                      code: decision.reasonCode,
+                    },
+                  });
+                  messages.push({
+                    role: "tool",
+                    tool_call_id: call.id,
+                    content: blockedContent,
+                  });
+                  continue;
+                }
+                operationClaim = {
+                  descriptor,
+                  claimGeneration: decision.claimGeneration ?? 0,
+                  intentHash: decision.intentHash ?? "",
+                  occurrenceOrdinal: decision.occurrenceOrdinal ?? 0,
+                };
+              } catch (err) {
+                // Fail-closed on the fence: a broken guard must not wave the
+                // send through (that would replay an operation whose outcome
+                // was never observed). Mirrors the consult fail-closed path.
+                console.error(
+                  "[ai-chat-v2] T23 operation guard prepareDispatch failed:",
+                  err
+                );
+                await emitToolCall(call.arguments ?? {});
+                const blockedContent = serializeToolResultContent({
+                  success: false,
+                  operationGuardBlocked: true,
+                  code: "OPERATION_UNKNOWN_OUTCOME",
+                  reason:
+                    "The operation guard could not be consulted. Dispatch is blocked until reconciliation.",
+                });
+                eventSink.emit({
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: blockedContent,
+                  toolResult: {
+                    success: false,
+                    operationGuardBlocked: true,
+                    code: "OPERATION_UNKNOWN_OUTCOME",
+                  },
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: blockedContent,
+                });
+                continue;
+              }
+            }
+          }
+
           const executableCall = {
             id: call.id,
             name: call.name,
@@ -3223,6 +3424,37 @@ export class AIChatQueryLoop {
                   )
                 : undefined,
             };
+          }
+
+          // T23d (§10.2): settle the claimed operation from the actual send
+          // outcome — confirmed (native receipt), no_effect (definitive
+          // before-effect failure), or unknown (lost response). Never crashes
+          // the turn: a settle error leaves the row claimed (reconcilable).
+          if (operationClaim) {
+            const guardForSettle = this.buildOperationGuardForSend(input);
+            if (guardForSettle) {
+              const classification = AIChatQueryLoop.classifySendOutcome(
+                toolResult
+              );
+              try {
+                await guardForSettle.settleDispatch({
+                  descriptor: operationClaim.descriptor,
+                  claimGeneration: operationClaim.claimGeneration,
+                  intentHash: operationClaim.intentHash,
+                  occurrenceOrdinal: operationClaim.occurrenceOrdinal,
+                  outcome: classification.outcome,
+                  receiptReference: classification.receiptReference,
+                  failureCode: classification.failureCode,
+                });
+              } catch (err) {
+                // The row stays claimed (§10.2 reconcilable) — the next
+                // occurrence of this intent will be fenced by the guard.
+                console.error(
+                  "[ai-chat-v2] T23 operation guard settleDispatch failed:",
+                  err
+                );
+              }
+            }
           }
 
           let toolPayload = normalizeToolResult(toolResult);

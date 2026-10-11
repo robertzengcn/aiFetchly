@@ -138,11 +138,15 @@ export interface OperationGuardDeps {
     readonly expectedClaimGeneration: number;
     readonly newState: AiTaskOperationState;
   }) => Promise<{ ok: boolean; reasonCode?: TaskExecutionReasonCode }>;
-  /** Set the native receipt reference (e.g. attempt id) on the row. */
+  /**
+   * Annotate the row with the native receipt reference (e.g. attempt id)
+   * and/or a safe failure code, CAS-conditional on the claim generation.
+   */
   readonly setReceiptReference?: (input: {
     readonly operationKey: string;
     readonly expectedClaimGeneration: number;
-    readonly receiptReference: string;
+    readonly receiptReference?: string;
+    readonly failureCode?: string;
   }) => Promise<boolean>;
 }
 
@@ -399,11 +403,15 @@ export class TaskOperationGuard {
       input.intentHash,
       input.occurrenceOrdinal ?? 0
     );
-    if (input.receiptReference && this.deps.setReceiptReference) {
+    if (
+      (input.receiptReference || input.failureCode) &&
+      this.deps.setReceiptReference
+    ) {
       await this.deps.setReceiptReference({
         operationKey,
         expectedClaimGeneration: input.claimGeneration,
         receiptReference: input.receiptReference,
+        failureCode: input.failureCode,
       });
     }
     const newState: AiTaskOperationState =
