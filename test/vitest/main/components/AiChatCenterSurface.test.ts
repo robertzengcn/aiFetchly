@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent } from "vue";
 import { createPinia, setActivePinia } from "pinia";
@@ -166,6 +166,8 @@ const i18n = createI18n({
         busyReason: "Available after current run",
       },
       aiChatV2: {
+        permission_resume_failed:
+          "Could not continue the tool after permission was granted.",
         voice: {
           settings_save_failed: "Couldn't save the spoken-response preference.",
           retry: "Retry",
@@ -474,25 +476,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
    * workspace routes '/…' input through the shared router BEFORE ordinary
    * submission — the raw command text never reaches the model.
    */
+  type InvokeMock = ReturnType<typeof vi.fn>;
+
+  function invokeMock(): InvokeMock {
+    return window.api.invoke as InvokeMock;
+  }
+
+  /**
+   * Route per-channel responses through the global window.api stub.
+   * Unmapped channels keep the stub default (undefined envelope) so
+   * capability fetches and other mounts are not poisoned.
+   */
+  function mockInvokeByChannel(handlers: Record<string, unknown>): void {
+    invokeMock().mockImplementation((channel: string) => {
+      if (channel in handlers) {
+        return Promise.resolve(handlers[channel]);
+      }
+      return Promise.resolve(undefined);
+    });
+  }
+
   describe("command routing", () => {
-    type InvokeMock = ReturnType<typeof vi.fn>;
-
-    function invokeMock(): InvokeMock {
-      return window.api.invoke as InvokeMock;
-    }
-
-    /** Route per-channel responses through the global window.api stub. */
-    function mockInvokeByChannel(
-      handlers: Record<string, unknown>
-    ): void {
-      invokeMock().mockImplementation((channel: string) => {
-        if (channel in handlers) {
-          return Promise.resolve(handlers[channel]);
-        }
-        return Promise.resolve(undefined);
-      });
-    }
-
     it("dispatches a generic slash command through the registry and renders the local exchange (FR-CMD-001)", async () => {
       mockInvokeByChannel({
         // windowInvoke unwraps the CommonMessage envelope — return it whole.
@@ -671,6 +675,20 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
    * one continuation through the ordinary send path.
    */
   describe("plan decisions", () => {
+    afterEach(() => {
+      // vi.clearAllMocks() does not reset implementations — restore the
+      // module-factory default so later tests see an empty selection.
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+    });
+
     const planMessage: ChatV2MessageView = {
       id: "plan-msg-1",
       conversationId: "fresh-chat",
@@ -807,6 +825,154 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
       // The completed decision still starts exactly one continuation.
       expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * Permission grant characterization (FR-PER-003/005, design §12.2): the
+   * shared SkillApprovalCard persists the grant through its own
+   * `skill:grant-permission` IPC BEFORE emitting; the surface's job is to
+   * resume the parked tool exactly once. Grant-once and persistent grants
+   * resume identically, and a failed resume keeps the decision actionable
+   * for a retry.
+   */
+  describe("permission grants", () => {
+    afterEach(() => {
+      // Restore the global window.api stub default (undefined envelope) —
+      // clearAllMocks clears calls but not implementations.
+      (window.api.invoke as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        Promise.resolve(undefined)
+      );
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+    });
+
+    const permissionMessage: ChatV2MessageView = {
+      id: "perm-msg-1",
+      conversationId: "fresh-chat",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-10-11T00:00:00.000Z",
+      messageType: MessageType.TOOL_RESULT,
+      metadata: {
+        source: "chat-v2",
+        toolCallId: "tool-77",
+        toolName: "run_command",
+        toolResult: { needsPermissionPrompt: true },
+      },
+    };
+
+    function resumeCalls(): Array<[string, unknown]> {
+      return (window.api.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .filter((call) => call[0] === "ai-chat-v2:resume-tool-after-permission")
+        .map((call) => [call[0] as string, call[1]]) as Array<[string, unknown]>;
+    }
+
+    async function mountWithPermission(): Promise<
+      ReturnType<typeof mountSurface>
+    > {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [permissionMessage],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "running",
+        activeRunId: "run-perm",
+        title: "Selected chat",
+      } as never);
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("fresh-chat");
+      await useSelectedConversationStore().loadSelection("fresh-chat");
+      await flushPromises();
+      return wrapper;
+    }
+
+    it("resumes the parked tool once for a grant-once choice", async () => {
+      mockInvokeByChannel({
+        "ai-chat-v2:resume-tool-after-permission": {
+          status: true,
+          data: { ok: true },
+        },
+      });
+      const wrapper = await mountWithPermission();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("grant-permission", permissionMessage, {
+        persistent: false,
+      });
+      await flushPromises();
+
+      const calls = resumeCalls();
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(String(calls[0][1]))).toEqual({
+        toolId: "tool-77",
+        conversationId: "fresh-chat",
+      });
+    });
+
+    it("resumes the parked tool once for a persistent choice (persistence already happened in-card)", async () => {
+      mockInvokeByChannel({
+        "ai-chat-v2:resume-tool-after-permission": {
+          status: true,
+          data: { ok: true },
+        },
+      });
+      const wrapper = await mountWithPermission();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("grant-permission", permissionMessage, {
+        persistent: true,
+      });
+      await flushPromises();
+
+      // Same single resume as grant-once: the SkillApprovalCard's own
+      // `skill:grant-permission` IPC owns storing the persistent grant
+      // (covered by the SkillApprovalCard suites).
+      expect(resumeCalls()).toHaveLength(1);
+    });
+
+    it("keeps the decision actionable and retries after a failed resume (FR-PER-005/007)", async () => {
+      mockInvokeByChannel({
+        "ai-chat-v2:resume-tool-after-permission": {
+          status: true,
+          data: { ok: false, error: "engine gone" },
+        },
+      });
+      const wrapper = await mountWithPermission();
+      const selected = useSelectedConversationStore();
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("grant-permission", permissionMessage, {
+        persistent: false,
+      });
+      await flushPromises();
+
+      // Failed resume surfaces the safe error on the row (the backend's
+      // user-safe message when provided, else the localized fallback).
+      const row = selected.messages.find((m) => m.id === "perm-msg-1");
+      expect(row?.content).toBe("engine gone");
+      // The in-flight guard released — a retry click resumes again.
+      transcript.vm.$emit("grant-permission", permissionMessage, {
+        persistent: false,
+      });
+      await flushPromises();
+      expect(resumeCalls()).toHaveLength(2);
     });
   });
 

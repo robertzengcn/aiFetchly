@@ -702,10 +702,15 @@ function onGrantPermission(
   message: ChatV2MessageView,
   payload: { persistent: boolean }
 ): void {
-  // The card exposes allow-always via payload.persistent; the resume IPC
-  // keys on tool id + conversation only (parity with the legacy dock).
-  void payload.persistent;
-  void selectedStore.grantToolPermission(message, permissionTexts.value);
+  // FR-PER-003/005 (capability parity, design §12.2 trace): the shared
+  // SkillApprovalCard has ALREADY persisted the grant choice through the
+  // `skill:grant-permission` IPC before emitting `grant` — `persistent` is
+  // informational here. The surface's single job is resuming the parked
+  // tool exactly once; a failed resume keeps the row actionable (store
+  // contract) rather than assuming the grant took effect.
+  selectedStore
+    .grantToolPermission(message, permissionTexts.value)
+    .catch(() => undefined);
 }
 
 function onDenyPermission(message: ChatV2MessageView): void {
