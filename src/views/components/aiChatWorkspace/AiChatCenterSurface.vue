@@ -628,6 +628,7 @@ import {
   getCompactionStatus,
   cancelCompaction,
   subscribeCompactionProgress,
+  unsubscribeCompactionProgress as unsubscribeAllCompactionProgress,
 } from "@/views/api/aiChatV2";
 import { stopGoalLoop, createGoal, startGoalLoop } from "@/views/api/aiChatGoal";
 import {
@@ -2032,9 +2033,17 @@ function onEngineStartAck(chunk: Record<string, unknown>): void {
     Array.isArray(chunk.historySelectionChangedIds) ||
     Array.isArray(chunk.historySelectionRejectedIds);
   if (hasSelectionAcks && selectedContextItems.value.length > 0) {
-    const accepted = new Set<string>(chunk.historySelectionAcceptedIds ?? []);
-    const changed = new Set<string>(chunk.historySelectionChangedIds ?? []);
-    const rejected = new Set<string>(chunk.historySelectionRejectedIds ?? []);
+    const toIdSet = (value: unknown): Set<string> => {
+      if (!Array.isArray(value)) return new Set<string>();
+      const ids: string[] = [];
+      for (const entry of value) {
+        if (typeof entry === "string") ids.push(entry);
+      }
+      return new Set<string>(ids);
+    };
+    const accepted = toIdSet(chunk.historySelectionAcceptedIds);
+    const changed = toIdSet(chunk.historySelectionChangedIds);
+    const rejected = toIdSet(chunk.historySelectionRejectedIds);
     selectedContextItems.value = selectedContextItems.value
       .filter((item) => !accepted.has(item.sourceId))
       .map((item) =>
@@ -2412,9 +2421,12 @@ onMounted(async () => {
     // never reach this sink.
     void handleAiNavigationToolResult(router, chunk.toolResult);
   });
-  unsubscribeCompactionProgress = subscribeCompactionProgress(
-    handleCompactionProgressEvent
-  );
+  subscribeCompactionProgress(handleCompactionProgressEvent);
+  // The shared-channel contract removes ALL compaction listeners at once
+  // (same call Chat V2 makes in its unmount path).
+  unsubscribeCompactionProgress = () => {
+    unsubscribeAllCompactionProgress();
+  };
   void refreshCompactionStatus();
   if (conversationId.value) {
     void loadApprovalMode(conversationId.value);

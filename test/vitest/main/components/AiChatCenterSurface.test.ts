@@ -164,6 +164,10 @@ import {
   SLASH_COMMAND_DISPATCH,
 } from "@/config/channellist";
 
+interface RouterLike {
+  push: (location: unknown) => Promise<unknown> | unknown;
+}
+
 const i18n = createI18n({
   legacy: false,
   locale: "en",
@@ -1606,7 +1610,8 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       },
     });
 
-    const pushSpy = vi.spyOn(wrapper.vm.$router, "push");
+    const router = (wrapper.vm as unknown as { $router: RouterLike }).$router;
+    const pushSpy = vi.spyOn(router, "push");
     selected.applyDetailEvent(navEvent(1, "conv-nav") as never);
     await flushPromises();
     // The trusted handler pushed the validated route exactly once.
