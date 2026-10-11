@@ -537,6 +537,99 @@ describe("AiTaskOperationModule scaffolding (Slice 3 prep)", function () {
     expect(op?.claimed_at).to.not.equal(null);
   });
 
+  it("setReceipt stores the native receipt reference on the current generation (T23d)", async () => {
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-receipt",
+      executionId: "exec-rc",
+      toolIdentity: "start_email_send_task",
+      domainTarget: "outbound_batch:11",
+      intentHash: "sha256:rc",
+    });
+    await mod.updateState({
+      operationKey: "op-receipt",
+      expectedClaimGeneration: 0,
+      newState: "claimed",
+    });
+    const stored = await mod.setReceipt({
+      operationKey: "op-receipt",
+      expectedClaimGeneration: 1,
+      receiptReference: "attempt:42",
+    });
+    expect(stored).to.equal(true);
+    const op = await mod.getOperation("op-receipt");
+    expect(op?.receipt_reference).to.equal("attempt:42");
+    // Annotation only: state and generation are untouched by a receipt set.
+    expect(op?.operation_state).to.equal("claimed");
+    expect(op?.claim_generation).to.equal(1);
+  });
+
+  it("setReceipt stores a safe failure code without touching state (T23d)", async () => {
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-failcode",
+      executionId: "exec-fc",
+      toolIdentity: "start_email_send_task",
+      domainTarget: "outbound_batch:12",
+      intentHash: "sha256:fc",
+    });
+    await mod.updateState({
+      operationKey: "op-failcode",
+      expectedClaimGeneration: 0,
+      newState: "claimed",
+    });
+    const stored = await mod.setReceipt({
+      operationKey: "op-failcode",
+      expectedClaimGeneration: 1,
+      failureCode: "CLAIM_FAILED",
+    });
+    expect(stored).to.equal(true);
+    const op = await mod.getOperation("op-failcode");
+    expect(op?.failure_code).to.equal("CLAIM_FAILED");
+    expect(op?.operation_state).to.equal("claimed");
+  });
+
+  it("setReceipt loses the CAS race on a stale generation (T23d)", async () => {
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-receipt-stale",
+      executionId: "exec-rcs",
+      toolIdentity: "start_email_send_task",
+      domainTarget: "outbound_batch:13",
+      intentHash: "sha256:rcs",
+    });
+    await mod.updateState({
+      operationKey: "op-receipt-stale",
+      expectedClaimGeneration: 0,
+      newState: "claimed",
+    });
+    // Generation is now 1; a setter pinned to 0 must not overwrite.
+    const stored = await mod.setReceipt({
+      operationKey: "op-receipt-stale",
+      expectedClaimGeneration: 0,
+      receiptReference: "attempt:stale",
+    });
+    expect(stored).to.equal(false);
+    const op = await mod.getOperation("op-receipt-stale");
+    expect(op?.receipt_reference).to.equal(null);
+  });
+
+  it("setReceipt with neither reference nor failure code is a no-op (T23d)", async () => {
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-receipt-empty",
+      executionId: "exec-rce",
+      toolIdentity: "start_email_send_task",
+      domainTarget: "outbound_batch:14",
+      intentHash: "sha256:rce",
+    });
+    const stored = await mod.setReceipt({
+      operationKey: "op-receipt-empty",
+      expectedClaimGeneration: 0,
+    });
+    expect(stored).to.equal(false);
+  });
+
   it("refuses DB access from a worker process (NFR-03, assertNotWorker)", async () => {
     // The worker guard must throw under process.env.WORKER_TYPE so a worker
     // process can never corrupt the task-operation tables directly.

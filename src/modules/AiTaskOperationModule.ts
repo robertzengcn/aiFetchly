@@ -3,6 +3,7 @@ import { AiTaskOperationModel } from "@/model/AiTaskOperation.model";
 import type {
   CreateOperationInput,
   CreateOperationResult,
+  SetReceiptInput,
   UpdateStateInput,
   UpdateStateResult,
 } from "@/model/AiTaskOperation.model";
@@ -11,8 +12,9 @@ import type { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 /**
  * Consequential-action operation guard scaffolding (technical-design §10).
  *
- * Slice 1: create/get/updateState with claim-generation CAS. Full receipt
- * reconciliation (FR-11; AC-09/10/13/28) lands in Slice 3.
+ * create/get/updateState/setReceipt with claim-generation CAS. Full receipt
+ * reconciliation (FR-11; AC-09/10/13/28) lands with the TaskOperationGuard
+ * loop wiring.
  *
  * Workers must never access this table directly (NFR-03).
  */
@@ -56,5 +58,14 @@ export class AiTaskOperationModule extends BaseModule {
   ): Promise<UpdateStateResult> {
     await this.ensureConnection();
     return this.model.updateState(input);
+  }
+
+  /**
+   * Set the native receipt reference / safe failure code on an operation row
+   * (§10.2 settlement annotation) — passthrough to the model's CAS setter.
+   */
+  async setReceipt(input: SetReceiptInput): Promise<boolean> {
+    await this.ensureConnection();
+    return this.model.setReceipt(input);
   }
 }

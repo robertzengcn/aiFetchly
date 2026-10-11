@@ -56,6 +56,15 @@ export interface UpdateStateInput {
   readonly newState: AiTaskOperationState;
 }
 
+export interface SetReceiptInput {
+  readonly operationKey: string;
+  readonly expectedClaimGeneration: number;
+  /** Native receipt reference (e.g. `attempt:<send_attempt_id>`). */
+  readonly receiptReference?: string;
+  /** Safe failure code for a no-effect outcome (never raw error text). */
+  readonly failureCode?: string;
+}
+
 export interface UpdateStateResult {
   readonly ok: boolean;
   readonly reasonCode?: TaskExecutionReasonCode;
@@ -254,6 +263,50 @@ export class AiTaskOperationModel extends BaseDb {
       return { ok: false, reasonCode: "STATE_CONFLICT" };
     }
     return { ok: true };
+  }
+
+  /**
+   * Set the native receipt reference and/or a safe failure code on the row,
+   * CAS-conditional on `claim_generation` (same single-statement pattern as
+   * `conditionalStateUpdate` — no read/check/save race with a concurrent
+   * settler). Does NOT change `operation_state` or the generation: the
+   * receipt annotates the CURRENT settlement, it is not a transition.
+   * §10.1: receipt references are opaque native identifiers (attempt ids) —
+   * raw error text or sensitive data must never land here.
+   */
+  async setReceipt(input: SetReceiptInput): Promise<boolean> {
+    assertNotWorker("AiTaskOperation.setReceipt");
+    if (
+      input.receiptReference === undefined &&
+      input.failureCode === undefined
+    ) {
+      return false;
+    }
+    const setClauses = ["updatedAt = CURRENT_TIMESTAMP"];
+    const parameters: (string | number)[] = [];
+    if (input.receiptReference !== undefined) {
+      setClauses.push("receipt_reference = ?");
+      parameters.push(input.receiptReference);
+    }
+    if (input.failureCode !== undefined) {
+      setClauses.push("failure_code = ?");
+      parameters.push(input.failureCode);
+    }
+    parameters.push(input.operationKey, input.expectedClaimGeneration);
+    const runner = this.sqliteDb.connection.createQueryRunner();
+    try {
+      const result = (await runner.query(
+        `UPDATE ai_task_operation
+            SET ${setClauses.join(", ")}
+          WHERE operation_key = ?
+            AND claim_generation = ?`,
+        parameters,
+        true // useStructuredResult — exposes .affected on the driver result
+      )) as { affected?: number };
+      return (result.affected ?? 0) === 1;
+    } finally {
+      await runner.release();
+    }
   }
 
   /**
