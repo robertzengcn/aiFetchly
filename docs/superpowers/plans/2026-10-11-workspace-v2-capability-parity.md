@@ -1,12 +1,24 @@
 # AI Chat Workspace Capability Parity — Implementation Plan
 
-> **STATUS (2026-10-11): Tasks 1–9 COMPLETE** — 9 commits on branch
+> **STATUS (2026-10-11): Tasks 1–14 COMPLETE** — 16 commits on branch
 > `workspace-v2-capability-parity` (worktree `.worktrees/workspace-parity`).
-> Gates: `yarn test:components` 962/962, `tsc --noEmit` 0 errors,
-> `vue-tsc --noEmit` 0 errors, `testmain` 6863 passed (16 failures are
-> pre-existing on base dev — FileToolIntegration / shell-integration /
-> ToolExecutor, verified identical on the dev checkout). Deferred items
-> below remain the follow-up backlog.
+>
+> Gates: `yarn test:components` 979/979, `tsc --noEmit` 0 errors,
+> `vue-tsc --noEmit` 0 errors, `testmain` 6863 passed / 6875 (16 failures
+> are pre-existing on base dev — FileToolIntegration / shell-integration /
+> ToolExecutor, verified identical on the dev checkout; 1-3 additional
+> SqliteDb/SearchModule failures occasionally appear and pass in
+> isolation — suite-order DB flakes).
+>
+> Second batch (capability-parity continuation): T10 FR-HIS history
+> drawer + context chips + compaction controls; T11 FR-IMG-005..009
+> inference/chooser/batch-confirm (dialogs extracted as shared components,
+> V2 rewired); T12 FR-INT-003 trusted navigation; T13 FR-INT-004/005
+> reasoning preference + agent-task dialog; T14 FR-REC retry/recovery
+> detail. Remaining backlog: the AD-001..004 all-sends pending bridge
+> (separate backend migration by design §19), default-route E2E
+> certification, soak/accessibility/security reviews (require packaged
+> environments and human sign-off).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
