@@ -615,6 +615,7 @@ import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSele
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
+import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import {
   useChatCommandRouting,
   type ChatCommandDisposition,
@@ -1826,6 +1827,7 @@ let pendingHistorySubmissionId: string | null = null;
 const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
 let unsubscribeCompactionProgress: (() => void) | null = null;
 let unsubscribeStartAck: (() => void) | null = null;
+let unsubscribeLiveToolResult: (() => void) | null = null;
 
 function syncActiveHistoryDraft(): void {
   const id = conversationId.value;
@@ -2293,6 +2295,12 @@ onMounted(async () => {
     })
     .catch(() => undefined);
   unsubscribeStartAck = selectedStore.onStartAck(onEngineStartAck);
+  unsubscribeLiveToolResult = selectedStore.onLiveToolResult((chunk) => {
+    // FR-INT-003: trusted navigation for the SELECTED conversation's live
+    // results, exactly once; history seeding and background conversations
+    // never reach this sink.
+    void handleAiNavigationToolResult(router, chunk.toolResult);
+  });
   unsubscribeCompactionProgress = subscribeCompactionProgress(
     handleCompactionProgressEvent
   );
@@ -2326,6 +2334,8 @@ onUnmounted(() => {
   deliveredRowsUnsubscribe = null;
   unsubscribeStartAck?.();
   unsubscribeStartAck = null;
+  unsubscribeLiveToolResult?.();
+  unsubscribeLiveToolResult = null;
   unsubscribeCompactionProgress?.();
   unsubscribeCompactionProgress = null;
   pendingMessages.teardown();

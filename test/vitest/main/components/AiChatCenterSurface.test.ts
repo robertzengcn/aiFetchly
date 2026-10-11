@@ -1560,6 +1560,55 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  /**
+   * FR-INT-003 (capability parity): a live tool result carrying a navigation
+   * command routes through the trusted renderer handler exactly once for
+   * the SELECTED conversation; foreign-conversation events and sequence
+   * replays never navigate.
+   */
+  it("navigates once for a live selected-conversation navigation result and never for replays", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-nav");
+    await flushPromises();
+    const selected = useSelectedConversationStore();
+
+    // Exact open_app_page navigate-result contract (success + action +
+    // routeName), targeting the test router's registered workspace route.
+    const navigationResult = {
+      success: true,
+      action: "navigate",
+      routeName: "AI_Chat_Workspace",
+    };
+    const navEvent = (sequence: number, conversationId: string): unknown => ({
+      sequence,
+      runId: "run-nav",
+      conversationId,
+      eventType: "tool_result",
+      emittedAt: "2026-10-11T00:00:00.000Z",
+      payload: {
+        eventType: "tool_result",
+        toolCallId: "tc-nav",
+        toolResult: navigationResult,
+      },
+    });
+
+    const pushSpy = vi.spyOn(wrapper.vm.$router, "push");
+    selected.applyDetailEvent(navEvent(1, "conv-nav") as never);
+    await flushPromises();
+    // The trusted handler pushed the validated route exactly once.
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+    expect(pushSpy.mock.calls[0][0]).toEqual({ name: "AI_Chat_Workspace" });
+    pushSpy.mockClear();
+
+    // Sequence replay of the same event must not re-navigate or throw.
+    selected.applyDetailEvent(navEvent(1, "conv-nav") as never);
+    await flushPromises();
+    expect(pushSpy).not.toHaveBeenCalled();
+  });
+
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();

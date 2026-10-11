@@ -81,6 +81,12 @@ export interface StreamPresenterOptions {
    * surface can clear exactly the context chips the backend accepted.
    */
   readonly onStartAck?: (chunk: Record<string, unknown>) => void;
+  /**
+   * Invoked once per LIVE tool_result chunk (FR-INT-003) — never for
+   * seeded/persisted history — after sequence dedupe, so navigation results
+   * route exactly once for the selected conversation.
+   */
+  readonly onLiveToolResult?: (chunk: Record<string, unknown>) => void;
 }
 
 const DEFAULT_BATCH_MS = 50;
@@ -151,6 +157,7 @@ export function createWorkspaceStreamPresenter(
   const scheduleFlush = options?.scheduleFlush ?? defaultScheduleFlush;
   const notifyMutate = options?.onMutate;
   const startAckSink = options?.onStartAck;
+  const liveToolResultSink = options?.onLiveToolResult;
 
   let messages: ChatV2MessageView[] = [];
   let activeAssistantMessageId: string | null = null;
@@ -438,6 +445,9 @@ export function createWorkspaceStreamPresenter(
         if (artifact?.openImmediately === true) {
           pendingArtifactOpen = { artifactId: artifact.id };
         }
+        // FR-INT-003: live tool results reach the owning surface exactly
+        // once (sequence-deduped, selected-conversation only, never history).
+        liveToolResultSink?.(chunk);
         break;
       }
       case "ask_user_question":

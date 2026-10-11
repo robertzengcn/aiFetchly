@@ -110,11 +110,19 @@ export const useSelectedConversationStore = defineStore(
     // onStartAck fans engine `start` acknowledgements out to registered
     // surfaces (FR-HIS-003: history-selection accepted/changed/rejected ids).
     const startAckListeners = new Set<(chunk: Record<string, unknown>) => void>();
+    const liveToolResultListeners = new Set<
+      (chunk: Record<string, unknown>) => void
+    >();
     const presenter = markRaw(
       createWorkspaceStreamPresenter({
         onMutate: () => syncFromPresenter(),
         onStartAck: (chunk) => {
           for (const listener of startAckListeners) {
+            listener(chunk);
+          }
+        },
+        onLiveToolResult: (chunk) => {
+          for (const listener of liveToolResultListeners) {
             listener(chunk);
           }
         },
@@ -610,6 +618,19 @@ export const useSelectedConversationStore = defineStore(
       };
     }
 
+    /**
+     * Subscribe to LIVE tool results (FR-INT-003) — selected conversation
+     * only, never history seeding. Returns an unsubscribe function.
+     */
+    function onLiveToolResult(
+      listener: (chunk: Record<string, unknown>) => void
+    ): () => void {
+      liveToolResultListeners.add(listener);
+      return () => {
+        liveToolResultListeners.delete(listener);
+      };
+    }
+
     const isBusy = computed(
       () =>
         runtimeStatus.value === "running" ||
@@ -651,6 +672,7 @@ export const useSelectedConversationStore = defineStore(
       denyToolPermission,
       applyDetailEvent,
       onStartAck,
+      onLiveToolResult,
       markReadAfterLoad,
       teardown,
       isBusy,
