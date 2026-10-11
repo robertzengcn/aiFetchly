@@ -166,21 +166,23 @@ describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
     // B12: the generation service now returns a typed failure union carrying
     // code/next_action additively alongside the legacy error string. The AI
     // tool reads the typed fields directly -- no English parsing.
+    // R-5: already_replied WITHOUT an existing_draft_id routes to
+    // await_human_review (not no_action) — the duplicate guard did its job,
+    // but the operator should locate the existing reply rather than the model
+    // silently doing nothing. nextActionForCode is the canonical mapping.
     draftGenStub.createDraft.mockResolvedValue({
       success: false,
       error:
         "[already_replied] Message already has a sent reply; refusing duplicate",
       code: "already_replied",
-      next_action: "no_action",
+      next_action: "await_human_review",
       requestCorrelationId: "erx-req-abc-1",
     });
     const result = await createEmailReplyDraft({ message_id: 1 });
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("already_replied");
-    // already_replied means the duplicate guard did its job — nothing for the
-    // model to do (no second reply), and nothing needs human review.
-    expect(result.next_action).toBe("no_action");
+    expect(result.next_action).toBe("await_human_review");
     expect(result.error).toContain("already has a sent reply");
   });
 
@@ -294,8 +296,11 @@ describe("sendEmailReply — stable refusal envelope (FR-033)", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("already_replied");
-    // The duplicate guard refused before SMTP — no action, nothing to review.
-    expect(result.next_action).toBe("no_action");
+    // R-5: a pre-send already_replied refusal routes to await_human_review
+    // (canonical nextActionForCode(code, undefined)) — the duplicate guard
+    // refused before SMTP, but the operator should locate the existing reply
+    // rather than the model silently doing nothing.
+    expect(result.next_action).toBe("await_human_review");
     expect(result.error).toContain("already has a sent reply");
   });
 
@@ -338,7 +343,10 @@ describe("sendEmailReply — stable refusal envelope (FR-033)", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("already_replied");
-    expect(result.next_action).toBe("no_action");
+    // R-5: already_replied without a reusable draft id routes to
+    // await_human_review (canonical nextActionForCode), consistent with the
+    // SendPolicyRejection path — the operator locates the existing reply.
+    expect(result.next_action).toBe("await_human_review");
   });
 
   it("returns the sent envelope on success", async () => {

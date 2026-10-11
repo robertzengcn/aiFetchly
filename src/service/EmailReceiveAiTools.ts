@@ -401,11 +401,15 @@ export async function sendEmailReply(args: unknown): Promise<
     }
     if (outcome.status === "already_processed") {
       // Stable code (FR-033): distinguish a duplicate submission from a fresh send.
+      // R-5: derive next_action canonically via nextActionForCode — an
+      // already_replied here has no reusable draft id surfaced (the outcome
+      // carries only the attempt, not a fresh draft), so it routes to
+      // await_human_review, consistent with the SendPolicyRejection path.
       return {
         success: false,
         error: "A send was already submitted for this approved revision",
         code: "already_replied",
-        next_action: "no_action",
+        next_action: nextActionForCode("already_replied", undefined),
       };
     }
     // failed: the delivery service surfaces a sanitized transport error string

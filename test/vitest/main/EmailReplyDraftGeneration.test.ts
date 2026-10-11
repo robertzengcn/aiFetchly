@@ -978,9 +978,10 @@ describe("createDraft pre-draft detection (T04 step 7, §8.1)", () => {
     if (result.success) return;
     expect(requests).toHaveLength(0); // NO model call
     expect(result.code).toBe("already_replied");
-    // No existing draft on a clean message → next_action falls through to
-    // no_action (approve_existing_draft requires an existing draft).
-    expect(result.next_action).toBe("no_action");
+    // No existing draft on a clean message → next_action routes to
+    // await_human_review (R-5 canonical mapping — approve_existing_draft
+    // requires an existing draft; no_action would hide the replied state).
+    expect(result.next_action).toBe("await_human_review");
     // One `reply_skipped` audit row, stage pre_draft.
     const { records: auditRecords } = await auditModule.list({
       messageId,
@@ -3406,8 +3407,9 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("already_replied");
-    // already_replied with no surfaced draft id maps to no_action.
-    expect(result.next_action).toBe("no_action");
+    // already_replied with no surfaced draft id maps to await_human_review
+    // (R-5 canonical mapping — the operator locates the existing reply).
+    expect(result.next_action).toBe("await_human_review");
     expect(requests).toHaveLength(0);
 
     const counters = drainCountersForTest();

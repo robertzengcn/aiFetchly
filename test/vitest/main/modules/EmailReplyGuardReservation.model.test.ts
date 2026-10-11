@@ -504,7 +504,9 @@ describe("EmailReplyGuardModel reservation (T07) — DB integration", () => {
 
   // ---------------------------------------------------------------------------
   // D2 (review): the conditional-acquire INSERT path's bare `catch {}` was a
-  // silent swallow. The catch now binds the error and routes it through
+  // silent swallow. The catch now binds the error, rethrows non-unique-constraint
+  // failures (R-2: never mask a persistent DB error as a transient retry
+  // signal), and routes the recoverable unique-constraint collision through
   // console.error (the swallow stays — the reread below is the recovery). The
   // race window between `findOne` and `save` is not reliably reproducible in a
   // single-process test (the second acquire finds the row on the first reread
@@ -521,7 +523,11 @@ describe("EmailReplyGuardModel reservation (T07) — DB integration", () => {
     // console.error — the swallow is no longer silent.
     expect(src).toMatch(/catch\s*\(\s*error\s*\)\s*\{/);
     expect(src).toMatch(/console\.error/);
+    // R-2: non-unique-constraint insert failures must propagate, never be
+    // masked as a transient retry signal.
+    expect(src).toMatch(/isUniqueConstraintInsertError/);
+    expect(src).toMatch(/if\s*\(!isUniqueConstraintInsertError\(error\)\)\s*\{\s*\n\s*throw error/);
     // The recovery comment is preserved so the swallow's intent stays documented.
-    expect(src).toMatch(/Reread and fall through/);
+    expect(src).toMatch(/reread and fall through/i);
   });
 });
