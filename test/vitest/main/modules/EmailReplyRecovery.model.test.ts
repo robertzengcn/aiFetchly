@@ -733,4 +733,72 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
     const row = await guardModel.read(guard.id);
     expect(row?.phase).toBe("draft_ready");
   });
+
+  it("R04: recover→reconcile negative→late success: no second submission, accepted protection preserved", async () => {
+    // The exact todo regression: "hold original SMTP, recover/reconcile
+    // negatively, then deliver late success; no second submission or loss of
+    // accepted protection."
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sending");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    // Original SMTP submitter handed off (submitted) but unresponsive; recovery
+    // will mark it delivery_unknown. The transport is still alive.
+    const attempt = await seedAttempt(msg, draft.id, "submitted", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "sending", attempt.id);
+
+    const recovery = new EmailReplySendRecoveryService();
+
+    // 1. Recovery sweep marks the stale in-flight attempt delivery_unknown
+    //    (FR-019: never failed, never re-submits). Guard follows.
+    const sweep = await recovery.recoverStaleAttempts(5 * 60 * 1000);
+    expect(sweep.recovered).toBe(1);
+    expect(sweep.needsAttention).toBe(true);
+    expect((await attemptModule.read(attempt.id))?.status).toBe(
+      "delivery_unknown"
+    );
+    const guardAfterRecovery = await guardModel.read(guard.id);
+    expect(guardAfterRecovery?.phase).toBe("delivery_unknown");
+    expect(guardAfterRecovery?.activeAttemptId).toBeNull();
+
+    // 2. Operator negatively reconciles the now-eligible delivery_unknown
+    //    target (no sibling in flight). The guard reopens to draft_ready so a
+    //    fresh approval + send can follow.
+    await recovery.reconcileAttempt({
+      attemptId: attempt.id,
+      action: "confirm_not_sent",
+      evidence: "operator verified the mailbox — no reply was sent",
+    });
+    expect((await attemptModule.read(attempt.id))?.status).toBe("failed");
+    expect((await draftModel.read(draft.id))?.status).toBe("draft");
+    const guardAfterReconcile = await guardModel.read(guard.id);
+    expect(guardAfterReconcile?.phase).toBe("draft_ready");
+
+    // 3. The ORIGINAL submitter's late SMTP success arrives. The strict
+    //    finalize fence matches `status IN (claimed, submitted)` — NOT failed
+    //    — so the late `sent` is rejected (0 rows affected). The reconciled
+    //    `failed` outcome stands: NO second submission ledger entry, no guard
+    //    downgrade from the operator's authoritative finding.
+    await draftModel.finalizeSendOutcome({
+      attemptId: attempt.id,
+      draftId: draft.id,
+      approvalId: attempt.approvalId,
+      emailServiceId: SERVICE_ID,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "late-smtp-after-reconcile",
+      failureCode: null,
+      sanitizedError: null,
+      messageReplyStatus: "sent",
+      guardId: guard.id,
+    });
+
+    // The late success did NOT override the reconciled failed attempt, did NOT
+    // write a providerMessageId, did NOT move the guard to sent.
+    const attemptAfterLate = await attemptModule.read(attempt.id);
+    expect(attemptAfterLate?.status).toBe("failed");
+    expect(attemptAfterLate?.providerMessageId).toBeNull();
+    const guardAfterLate = await guardModel.read(guard.id);
+    expect(guardAfterLate?.phase).toBe("draft_ready");
+    expect(guardAfterLate?.activeAttemptId).toBeNull();
+  });
 });
