@@ -95,6 +95,16 @@ export class AiTaskExecutionModule extends BaseModule {
   }
 
   /**
+   * T24 (PRD NFR-05, AC-13): passthrough to the model's stranded-ledger
+   * reconcile. Releases leases whose active owner is finalized or missing;
+   * race-safe against a concurrent Continue claim via the lease predicate.
+   */
+  async releaseStrandedLedgerOwners(): Promise<number> {
+    await this.ensureConnection();
+    return this.model.releaseStrandedLedgerOwners();
+  }
+
+  /**
    * T13 (PRD FR-13/14, AC-16/24/25/27/32): passthrough to the model's
    * latest-by-conversation query. Used by the history-reload IPC to restore
    * the badge from the stored execution row. Never raises to the IPC layer —

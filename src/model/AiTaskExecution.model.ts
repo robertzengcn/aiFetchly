@@ -973,6 +973,7 @@ export class AiTaskExecutionModel extends BaseDb {
                    outcome_reason_code = ?,
                    outcome_summary = ?,
                    final_event_identity = ?,
+                   delivery_state = 'persisted',
                    execution_state_version = execution_state_version + 1,
                    stage = 'terminal',
                    execution_state_json = ?,
@@ -1175,6 +1176,7 @@ export class AiTaskExecutionModel extends BaseDb {
                    outcome_reason_code = ?,
                    outcome_summary = ?,
                    final_event_identity = ?,
+                   delivery_state = 'persisted',
                    execution_state_version = execution_state_version + 1,
                    stage = 'terminal',
                    execution_state_json = ?,
@@ -1338,6 +1340,56 @@ export class AiTaskExecutionModel extends BaseDb {
     return this.executionRepo.find({
       where: { finalized: false },
     });
+  }
+
+  /**
+   * T24 (PRD NFR-05, AC-13): reconcile ledgers a crash left stranded. A
+   * ledger still `status='active'` with a non-null `active_execution_id`
+   * whose execution row is finalized (or missing entirely) can never be
+   * released by its owner — the owner is gone. Stranded leases block the
+   * single-owner lease invariant (§6.2) for every future submission on that
+   * ledger, so the sweep releases them with the same fenced form
+   * finalization uses (`active_execution_id = NULL, status = 'released'`).
+   *
+   * The lease predicate (`active_execution_id = ?`) keeps this race-safe
+   * against a concurrent Continue claiming the ledger between our check and
+   * the release: if the claim landed first, the UPDATE matches zero rows and
+   * we leave it alone. Released-allowance semantics are untouched — no
+   * budget counters change. Returns the number of ledgers released.
+   */
+  async releaseStrandedLedgerOwners(): Promise<number> {
+    assertNotWorker("releaseStrandedLedgerOwners");
+    const ledgers = await this.ledgerRepo.find({ where: { status: "active" } });
+    let released = 0;
+    for (const ledger of ledgers) {
+      const activeId = ledger.active_execution_id;
+      if (!activeId) {
+        continue;
+      }
+      const owner = await this.executionRepo.findOne({
+        where: { execution_id: activeId },
+      });
+      // Still-owned by a live (unfinalized) execution → not stranded.
+      if (owner && !owner.finalized) {
+        continue;
+      }
+      const affected = (await this.ledgerRepo
+        .createQueryBuilder()
+        .update(AiTaskExecutionLedgerEntity)
+        .set({
+          active_execution_id: null,
+          status: "released",
+          execution_state_version: () =>
+            "execution_state_version + 1",
+        })
+        .where("ledger_id = :ledgerId AND active_execution_id = :activeId", {
+          ledgerId: ledger.ledger_id,
+          activeId,
+        })
+        .execute()) as { affected?: number };
+      released += affected.affected ?? 0;
+    }
+    return released;
   }
 
   /**

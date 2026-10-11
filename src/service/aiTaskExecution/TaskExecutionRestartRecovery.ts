@@ -38,6 +38,16 @@ import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
  */
 export const RESTART_INTERRUPTED_REASON = "RESTART_INTERRUPTED";
 
+/**
+ * Stable terminal-event dedup identity (design §6.3 step 4). Written by
+ * finalization in the same transaction as the outcome; a notification
+ * retry reuses this identity instead of minting a second one, so at-most-
+ * once delivery is observable from the row itself.
+ */
+export function buildFinalEventIdentity(executionId: string): string {
+  return `execution-result:${executionId}`;
+}
+
 /** Cap on rows finalized per sweep (bounded startup work). */
 export const RECOVERY_SWEEP_MAX_ROWS = 200;
 
@@ -61,6 +71,8 @@ export interface RestartRecoverySummary {
   readonly overflow: number;
   /** The unfinalized-list read itself failed (nothing was touched). */
   readonly listError: boolean;
+  /** Stranded ledger leases released (active owner finalized/missing). */
+  readonly ledgersReleased: number;
   readonly failures?: readonly RestartRecoveryFailure[];
 }
 
@@ -79,8 +91,9 @@ export class TaskExecutionRestartRecovery {
   }
 
   /**
-   * Sweep unfinalized executions and finalize them as interrupted.
-   * Fire-and-forget safe: never throws. Returns a typed summary.
+   * Sweep unfinalized executions and finalize them as interrupted, then
+   * reconcile ledger leases the crash stranded. Fire-and-forget safe:
+   * never throws. Returns a typed summary.
    */
   async recoverInterruptedExecutions(): Promise<RestartRecoverySummary> {
     const noOp: RestartRecoverySummary = {
@@ -90,6 +103,7 @@ export class TaskExecutionRestartRecovery {
       failed: 0,
       overflow: 0,
       listError: false,
+      ledgersReleased: 0,
     };
     // §17 rollback: flag off → byte-identical legacy behavior (no reads,
     // no writes, unfinalized rows stay visible as unfinished).
@@ -151,14 +165,28 @@ export class TaskExecutionRestartRecovery {
       }
     }
 
+    // T24: stranded ledger leases. Run AFTER finalizations so owners this
+    // sweep just finalized are counted; a failure here is logged and does
+    // not fail the sweep (next startup retries — idempotent).
+    let ledgersReleased = 0;
+    try {
+      ledgersReleased = await this.module.releaseStrandedLedgerOwners();
+    } catch (error) {
+      console.error(
+        "[TaskExecutionRestartRecovery] stranded-ledger reconcile failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
+
     if (
       recovered > 0 ||
       skipped > 0 ||
       failures.length > 0 ||
-      overflow > 0
+      overflow > 0 ||
+      ledgersReleased > 0
     ) {
       console.log(
-        `[TaskExecutionRestartRecovery] sweep: scanned=${scanned} recovered=${recovered} skipped=${skipped} failed=${failures.length} overflow=${overflow}`
+        `[TaskExecutionRestartRecovery] sweep: scanned=${scanned} recovered=${recovered} skipped=${skipped} failed=${failures.length} overflow=${overflow} ledgersReleased=${ledgersReleased}`
       );
     }
     return {
@@ -168,6 +196,7 @@ export class TaskExecutionRestartRecovery {
       failed: failures.length,
       overflow,
       listError: false,
+      ledgersReleased,
       failures,
     };
   }

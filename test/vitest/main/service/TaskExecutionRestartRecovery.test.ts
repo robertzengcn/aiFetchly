@@ -28,21 +28,33 @@ import {
   TaskExecutionRestartRecovery,
   RESTART_INTERRUPTED_REASON,
   RECOVERY_SWEEP_MAX_ROWS,
+  buildFinalEventIdentity,
 } from "@/service/aiTaskExecution/TaskExecutionRestartRecovery";
 
 // ---- Mocks ---------------------------------------------------------------
 
-const { getUnfinalizedExecutionsMock, finalizeManualMock, flagMock } =
-  vi.hoisted(() => {
-    const getUnfinalizedExecutionsMock = vi.fn();
-    const finalizeManualMock = vi.fn();
-    const flagMock = vi.fn(() => true);
-    return { getUnfinalizedExecutionsMock, finalizeManualMock, flagMock };
-  });
+const {
+  getUnfinalizedExecutionsMock,
+  releaseStrandedLedgerOwnersMock,
+  finalizeManualMock,
+  flagMock,
+} = vi.hoisted(() => {
+  const getUnfinalizedExecutionsMock = vi.fn();
+  const releaseStrandedLedgerOwnersMock = vi.fn().mockResolvedValue(0);
+  const finalizeManualMock = vi.fn();
+  const flagMock = vi.fn(() => true);
+  return {
+    getUnfinalizedExecutionsMock,
+    releaseStrandedLedgerOwnersMock,
+    finalizeManualMock,
+    flagMock,
+  };
+});
 
 vi.mock("@/modules/AiTaskExecutionModule", () => ({
   AiTaskExecutionModule: class {
     getUnfinalizedExecutions = getUnfinalizedExecutionsMock;
+    releaseStrandedLedgerOwners = releaseStrandedLedgerOwnersMock;
   },
 }));
 
@@ -112,6 +124,7 @@ describe("TaskExecutionRestartRecovery (T24)", () => {
     vi.clearAllMocks();
     flagMock.mockReturnValue(true);
     getUnfinalizedExecutionsMock.mockResolvedValue([]);
+    releaseStrandedLedgerOwnersMock.mockResolvedValue(0);
     finalizeManualMock.mockResolvedValue(recoveredResult());
     recovery = new TaskExecutionRestartRecovery();
   });
@@ -310,5 +323,43 @@ describe("TaskExecutionRestartRecovery (T24)", () => {
     expect(summary.scanned).toBe(0);
     expect(summary.recovered).toBe(0);
     expect(summary.listError).toBe(true);
+  });
+
+  it("reconciles stranded ledger leases after finalizations (T24c, AC-13)", async () => {
+    // Two owners recovered → both ledgers stranded; the module reports 2
+    // releases and the summary surfaces them.
+    getUnfinalizedExecutionsMock.mockResolvedValue([
+      makeUnfinalizedRow({ execution_id: "exec-l-1" }),
+      makeUnfinalizedRow({ execution_id: "exec-l-2" }),
+    ]);
+    releaseStrandedLedgerOwnersMock.mockResolvedValue(2);
+
+    const summary = await recovery.recoverInterruptedExecutions();
+
+    expect(releaseStrandedLedgerOwnersMock).toHaveBeenCalledTimes(1);
+    expect(summary.ledgersReleased).toBe(2);
+  });
+
+  it("a stranded-ledger reconcile failure is logged, not fatal (next startup retries)", async () => {
+    getUnfinalizedExecutionsMock.mockResolvedValue([
+      makeUnfinalizedRow({ execution_id: "exec-l-3" }),
+    ]);
+    releaseStrandedLedgerOwnersMock.mockRejectedValue(new Error("ledger io"));
+
+    const summary = await recovery.recoverInterruptedExecutions();
+
+    expect(summary.recovered).toBe(1);
+    expect(summary.ledgersReleased).toBe(0);
+    expect(summary.failed).toBe(0);
+  });
+
+  it("builds the stable delivery dedup identity execution-result:<executionId> (design §6.3)", () => {
+    expect(buildFinalEventIdentity("exec-abc")).toBe(
+      "execution-result:exec-abc"
+    );
+    // Stable across calls — a notification retry reuses, never mints.
+    expect(buildFinalEventIdentity("exec-abc")).toBe(
+      buildFinalEventIdentity("exec-abc")
+    );
   });
 });
