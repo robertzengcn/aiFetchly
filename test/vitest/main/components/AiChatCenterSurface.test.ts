@@ -93,6 +93,30 @@ vi.mock("@/views/utils/localAiRuntimeUi", () => ({
   isLocalAiRuntimeUsable: (state: unknown) => state === "installed",
 }));
 
+vi.mock("@/views/api/managedBrowser", () => ({
+  listEligibleAccounts: vi.fn().mockResolvedValue([]),
+  listActiveSessions: vi.fn().mockResolvedValue([]),
+  startManagedBrowser: vi.fn(),
+  getManagedBrowserStatus: vi.fn().mockResolvedValue(null),
+  requestHandoff: vi.fn(),
+  verifyManualLogin: vi.fn(),
+  resumeAfterHandoff: vi.fn(),
+  stopManagedBrowser: vi.fn(),
+  approveBrowserAction: vi.fn(),
+  captureSessionScreenshot: vi.fn(),
+  cancelActiveBrowserRequest: vi.fn(),
+  extendHandoff: vi.fn(),
+  getEffectiveBrowserSettings: vi.fn(),
+  updateBrowserPreferences: vi.fn(),
+  getCacheStatus: vi.fn(),
+  issueClearConfirmation: vi.fn(),
+  clearCache: vi.fn(),
+  onManagedBrowserStatusChanged: vi.fn(() => () => undefined),
+  onManagedBrowserChatNotice: vi.fn(() => () => undefined),
+  onManagedBrowserProgress: vi.fn(() => () => undefined),
+  onManagedBrowserApprovalRequired: vi.fn(() => () => undefined),
+}));
+
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   createWorkspaceConversationId: (...args: unknown[]) =>
     createWorkspaceConversationIdMock(...args),
@@ -1093,6 +1117,39 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     useChatWorkspaceStore().setSelected(conversationId);
     await flushPromises();
   }
+
+  /**
+   * FR-BRW-001..005: the workspace composes the shared managed-browser
+   * panels (start + live session) as a compact region of the center — NOT
+   * inside the inspector, so takeover/approval controls stay reachable with
+   * the inspector closed.
+   */
+  it("renders the managed-browser region with a conversation selected, outside the inspector (FR-BRW)", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    await flushPromises();
+
+    const region = wrapper.get('[data-testid="workspace-browser-region"]');
+    expect(
+      wrapper.findComponent({ name: "ManagedBrowserStartPanel" }).exists()
+    ).toBe(true);
+    expect(
+      wrapper.findComponent({ name: "ManagedBrowserSessionCard" }).exists()
+    ).toBe(true);
+    // The region sits in the center column — reachable while the inspector
+    // is closed (the store defaults to closed).
+    const inspector = useAppInspectorStore();
+    expect(inspector.target).toBeNull();
+    expect(region.element.closest(".chat-center")).not.toBeNull();
+  });
+
+  it("hides the managed-browser region when no conversation is selected", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-browser-region"]').exists()
+    ).toBe(false);
+  });
 
   it("toggles tray selections from use-generated-image events and forwards them as composer props", async () => {
     const wrapper = mountSurface();

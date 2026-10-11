@@ -26,6 +26,22 @@
       @open-details="workspaceStore.openInspector('activity')"
     />
 
+    <!-- Managed-browser region (capability parity FR-BRW-001..005): the
+         shared start panel + live session card compose directly in the
+         center column — handoff, takeover, verify-login, resume/extend/stop
+         stay reachable with the inspector CLOSED, never only in Activity.
+         The panels own their subscriptions and session identity; unmounting
+         this route removes renderer listeners only — the existing Stop
+         action terminates a session. -->
+    <div
+      v-if="conversationId"
+      class="chat-center__browser-region"
+      data-testid="workspace-browser-region"
+    >
+      <ManagedBrowserStartPanel />
+      <ManagedBrowserSessionCard />
+    </div>
+
     <div class="chat-center__messages">
       <p v-if="selectedStore.loading" class="center-state">
         {{ t("common.loading") || "Loading…" }}
@@ -509,6 +525,8 @@ import {
 import { invokePromptSkill } from "@/views/api/skillInstallation";
 import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import ScheduledLoopToolApprovalDialog from "@/views/components/aiChatV2/ScheduledLoopToolApprovalDialog.vue";
+import ManagedBrowserStartPanel from "@/views/components/aiChatV2/ManagedBrowserStartPanel.vue";
+import ManagedBrowserSessionCard from "@/views/components/aiChatV2/ManagedBrowserSessionCard.vue";
 import {
   useChatCommandRouting,
   type ChatCommandDisposition,
@@ -1783,6 +1801,14 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding-top: 6px;
+}
+
+.chat-center__browser-region {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 4px;
 }
 
 .center-state {
