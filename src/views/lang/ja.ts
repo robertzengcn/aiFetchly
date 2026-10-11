@@ -8,6 +8,11 @@
 
 // Japanese translations
 export default {
+  computerUse: {
+    title: "コンピューター操作",
+    status: { desktop_busy: "デスクトップは別のセッションに制御されています", stop_hotkey_unavailable: "停止ホットキーを登録できませんでした。別の組み合わせを選択してください", host_elevated: "AiFetchly が管理者として実行中です。通常モードで再起動してください", model_not_ready: "ローカルビジョンコンポーネントの準備ができていません", backend_unavailable: "デスクトップバックエンドが未インストールです" },
+    settings: { localVision: "ローカルビジョン", visualPlanner: "ビジュアルプランナーモード", stopHotkey: "停止ホットキー", debugCapture: "デバッグキャプチャ", save: "保存" },
+  },
   common: {
     more: "もっと",
     actions: "操作",

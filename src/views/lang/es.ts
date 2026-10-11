@@ -8,6 +8,11 @@
 
 // Spanish translations
 export default {
+  computerUse: {
+    title: "Uso del equipo",
+    status: { desktop_busy: "El escritorio está controlado por otra sesión", stop_hotkey_unavailable: "No se pudo registrar el atajo de parada; elige otra combinación", host_elevated: "AiFetchly se ejecuta como administrador; reinícialo normalmente", model_not_ready: "Los componentes de visión local no están listos", backend_unavailable: "El backend de escritorio no está instalado" },
+    settings: { localVision: "Visión local", visualPlanner: "Modo planificador visual", stopHotkey: "Atajo de parada", debugCapture: "Captura de depuración", save: "Guardar" },
+  },
   common: {
     more: "Más",
     actions: "Acciones",

@@ -8,6 +8,11 @@
 
 // French translations
 export default {
+  computerUse: {
+    title: "Contrôle de l'ordinateur",
+    status: { desktop_busy: "Le bureau est contrôlé par une autre session", stop_hotkey_unavailable: "Impossible d'enregistrer le raccourci d'arrêt ; choisissez-en un autre", host_elevated: "AiFetchly s'exécute en administrateur ; redémarrez-le normalement", model_not_ready: "Les composants de vision locale ne sont pas prêts", backend_unavailable: "Le backend du bureau n'est pas installé" },
+    settings: { localVision: "Vision locale", visualPlanner: "Mode planificateur visuel", stopHotkey: "Raccourci d'arrêt", debugCapture: "Capture de débogage", save: "Enregistrer" },
+  },
   common: {
     more: "Plus",
     actions: "Actions",

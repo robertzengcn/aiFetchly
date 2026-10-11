@@ -8,6 +8,11 @@
 
 // German translations
 export default {
+  computerUse: {
+    title: "Computersteuerung",
+    status: { desktop_busy: "Der Desktop wird von einer anderen Sitzung gesteuert", stop_hotkey_unavailable: "Stopptastenkombination konnte nicht registriert werden; wähle eine andere", host_elevated: "AiFetchly läuft als Administrator; starte es normal neu", model_not_ready: "Lokale Vision-Komponenten sind nicht bereit", backend_unavailable: "Desktop-Backend ist nicht installiert" },
+    settings: { localVision: "Lokale Bildverarbeitung", visualPlanner: "Visueller Planermodus", stopHotkey: "Stopptastenkombination", debugCapture: "Debug-Aufzeichnung", save: "Speichern" },
+  },
   common: {
     more: "Mehr",
     actions: "Aktionen",

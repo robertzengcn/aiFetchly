@@ -1,4 +1,9 @@
 export default {
+  computerUse: {
+    title: "电脑操控",
+    status: { desktop_busy: "桌面正被另一个会话控制", stop_hotkey_unavailable: "停止热键注册失败，请选择其他组合键", host_elevated: "AiFetchly 正以管理员身份运行，请以普通方式重启", model_not_ready: "本地视觉组件未就绪", backend_unavailable: "桌面后端未安装" },
+    settings: { localVision: "本地视觉", visualPlanner: "视觉规划模式", stopHotkey: "停止热键", debugCapture: "调试采集", save: "保存" },
+  },
   common: {
     more: "更多",
     actions: "操作",

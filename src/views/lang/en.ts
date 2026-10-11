@@ -7,6 +7,11 @@
 // import { upgrade } from "undici";
 
 export default {
+  computerUse: {
+    title: "Computer Use",
+    status: { desktop_busy: "Desktop is controlled by another session", stop_hotkey_unavailable: "Stop hotkey could not be registered; choose another combination", host_elevated: "AiFetchly is running as administrator; restart it normally", model_not_ready: "Local vision components are not ready", backend_unavailable: "Desktop backend is not installed" },
+    settings: { localVision: "Local vision", visualPlanner: "Visual planner mode", stopHotkey: "Stop hotkey", debugCapture: "Debug capture", save: "Save" },
+  },
   common: {
     more: "More",
     actions: "Actions",

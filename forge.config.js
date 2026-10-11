@@ -1152,6 +1152,10 @@ module.exports = {
             config: "vite.skillWorker.config.mjs",
           },
           {
+            entry: "src/childprocess/computer-use/GroundingWorker.ts",
+            config: "vite.groundingWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/managed-browser/index.ts",
             config: "vite.managedBrowserWorker.config.mjs",
           },

@@ -889,6 +889,18 @@ export const LOCAL_AI_RUNTIME_REPAIR = "local-ai-runtime:repair";
 export const LOCAL_AI_RUNTIME_REMOVE = "local-ai-runtime:remove";
 export const LOCAL_AI_RUNTIME_PROGRESS = "local-ai-runtime:progress";
 
+/* Computer Use (computer-use design §7.9, §10) */
+export const COMPUTER_USE_STATUS = "computer-use:status";
+export const COMPUTER_USE_LIST_WINDOWS = "computer-use:list-windows";
+export const COMPUTER_USE_SESSION_START = "computer-use:session-start";
+export const COMPUTER_USE_SESSION_STOP = "computer-use:session-stop";
+export const COMPUTER_USE_SESSION_PAUSE = "computer-use:session-pause";
+export const COMPUTER_USE_SESSION_RESUME = "computer-use:session-resume";
+export const COMPUTER_USE_SETTINGS_GET = "computer-use:settings-get";
+export const COMPUTER_USE_SETTINGS_SET = "computer-use:settings-set";
+export const COMPUTER_USE_VALIDATE_HOTKEY = "computer-use:validate-hotkey";
+export const COMPUTER_USE_GROUNDING_READINESS = "computer-use:grounding-readiness";
+
 // Hooks system — Phase 4 management UI channels.
 export const HOOKS_LIST = "hooks:list";
 export const HOOKS_CREATE = "hooks:create";
