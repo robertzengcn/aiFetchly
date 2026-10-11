@@ -226,8 +226,8 @@ function mountChat() {
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2PlanStatusBadge: true,
         TaskExecutionStatusBadge: {
-          props: ["status", "reasonCode"],
-          template: `<span data-testid="task-badge" :data-status="status" :title="reasonCode ?? ''" />`,
+          props: ["status", "outcome", "reasonCode"],
+          template: `<span data-testid="task-badge" :data-status="status" :data-outcome="outcome ?? ''" :title="reasonCode ?? ''" />`,
         },
         AiChatV2ContextBadge: true,
         AiChatCompactionStatus: true,

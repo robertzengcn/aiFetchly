@@ -240,8 +240,8 @@ function mountChat() {
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2PlanStatusBadge: true,
         TaskExecutionStatusBadge: {
-          props: ["status", "reasonCode"],
-          template: `<span data-testid="task-badge" :data-status="status" :title="reasonCode ?? ''" />`,
+          props: ["status", "outcome", "reasonCode"],
+          template: `<span data-testid="task-badge" :data-status="status" :data-outcome="outcome ?? ''" :title="reasonCode ?? ''" />`,
         },
         AiChatV2ContextBadge: true,
         AiChatCompactionStatus: true,
@@ -394,6 +394,7 @@ describe("AiChatV2 T13 — task state reconstruction + executionId dedup", () =>
     await selectConversation(wrapper);
     expect(badge(wrapper).exists()).toBe(true);
     expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    expect(badge(wrapper).attributes("data-outcome")).toBe("incomplete");
     expect(badge(wrapper).attributes("title")).toBe("NO_PROGRESS");
   });
 
