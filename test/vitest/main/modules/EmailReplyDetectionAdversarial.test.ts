@@ -142,14 +142,19 @@ function inboxMessage(flags: string[]): FakeMailboxFolder["messages"][number] {
 function realClientImapPort(fixture: FakeImapFlowFixture): ReplyDetectionImapPort & {
   /** The most recently created fake connection (for call assertions). */
   readonly lastConnection: ImapFlowConnection | null;
+  /** Every connection created during the kit's lifetime, oldest first. */
+  readonly allConnections: ImapFlowConnection[];
 } {
+  const allConnections: ImapFlowConnection[] = [];
   let lastConnection: ImapFlowConnection | null = null;
   const factory = fakeImapFlowFactory(fixture);
   // The factory is called per client method (each method builds its own
-  // connection); capture the latest so tests can inspect calls.
+  // connection); capture every one so tests can assert cross-folder totals
+  // (e.g. "at most 5 folder searches / 200 header fetches", R05).
   const wrappedFactory = () => {
     const conn = factory();
     lastConnection = conn;
+    allConnections.push(conn);
     return conn;
   };
   const client = new ImapEmailReceiveClient({ imapFlowFactory: wrappedFactory });
@@ -165,6 +170,9 @@ function realClientImapPort(fixture: FakeImapFlowFixture): ReplyDetectionImapPor
     },
     get lastConnection() {
       return lastConnection;
+    },
+    get allConnections() {
+      return allConnections;
     },
   };
 }
@@ -705,5 +713,283 @@ describe("EmailReplyDetection adversarial matrix (T04 step 9, §12) — full cha
       vi.useRealTimers();
     }
   }, 15_000);
+
+  // =========================================================================
+  // R05 — adapter/folder truncation must yield unknown(probe_limit_exceeded),
+  // never a cached complete negative. Both todo triggers run through the REAL
+  // ImapEmailReceiveClient so the adapter's silent-truncation hole is closed
+  // at the adapter layer, not only in detector bookkeeping.
+  // =========================================================================
+
+  it("R05 trigger A: six Sent folders, verified reply only in the sixth -> probe_limit_exceeded, no negative cache", async () => {
+    const message = messageFixture();
+    // Six verified \\Sent folders; the first five are EMPTY, the reply lives
+    // only in the sixth. The detector's MAX_SENT_FOLDERS=5 bound drops the
+    // sixth folder — the old code searched five empty folders and cached a
+    // complete negative; the reply sat unexamined in the dropped sixth.
+    const verifiedReply = {
+      uid: 501,
+      flags: new Set(["\\Seen"]),
+      headers: sentReplyHeaders({}),
+    };
+    const sentFolderAt = (path: string): FakeMailboxFolder => ({
+      path,
+      specialUse: "\\Sent",
+      uidValidity: BigInt(999),
+      messages: path === "Sent-6" ? [verifiedReply] : [],
+    });
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        sentFolderAt("Sent-1"),
+        sentFolderAt("Sent-2"),
+        sentFolderAt("Sent-3"),
+        sentFolderAt("Sent-4"),
+        sentFolderAt("Sent-5"),
+        sentFolderAt("Sent-6"),
+      ],
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    // Unexamined folders ⇒ unknown, never a negative.
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_limit_exceeded");
+    // No negative evidence write, no context-hash cache entry.
+    expect(kit.updateCalls.filter((c) => c.replyNegativeCheckAt)).toHaveLength(0);
+    // Bounds held: at most 5 folder searches (flag refresh uses its own
+    // connection; searches live on their own connections).
+    const searches = kit.imapPort.allConnections.flatMap(
+      (c) => (c as unknown as { calls: Array<{ method: string }> }).calls
+        .filter((call) => call.method === "search")
+    );
+    expect(searches.length).toBeLessThanOrEqual(5);
+  });
+
+  it("R05 trigger B: 201 candidates, first 200 false, #201 verified -> probe_limit_exceeded, no negative cache", async () => {
+    const message = messageFixture();
+    // One Sent folder where the substring search returns 201 candidates: the
+    // first 200 are false matches and #201 is the verified direct reply. The
+    // old adapter sliced to the first 200 (cap) WITHOUT reporting overflow and
+    // the detector cached a complete negative — the verified reply sat in the
+    // silently-dropped 201st slot.
+    const falseCandidates = Array.from({ length: 200 }, (_, i) => ({
+      uid: 1000 + i,
+      flags: new Set(["\\Seen"]),
+      headers: sentReplyHeaders({
+        messageId: `<false-${1000 + i}@example.com>`,
+        inReplyTo: "<unrelated@example.com>",
+        references: "<unrelated@example.com>",
+      }),
+    }));
+    // The false candidates' headers do NOT contain the search needle, so the
+    // fake's default substring search would never surface them — pin the exact
+    // candidate list: 200 false matches, then the verified reply at #201.
+    const searchResultUids = [...falseCandidates.map((c) => c.uid), 2001];
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        sentFolder([
+          ...falseCandidates,
+          {
+            uid: 2001, // last in the pinned search-result order
+            flags: new Set(["\\Seen"]),
+            headers: sentReplyHeaders({}),
+          },
+        ]),
+      ],
+      searchOverrides: new Map([["Sent", { result: searchResultUids }]]),
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    // Exactly exhausting the last batch with overflow remaining is a limit
+    // breach, not a complete negative (R05: "exactly exhausting the last
+    // batch falls through to no_match" was the defect).
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_limit_exceeded");
+    expect(kit.updateCalls.filter((c) => c.replyNegativeCheckAt)).toHaveLength(0);
+    // Bounds held: at most 200 header fetch attempts in the Sent connection.
+    const sentFetches = kit.imapPort.allConnections.flatMap(
+      (c) => (c as unknown as { calls: Array<{ method: string; args: ReadonlyArray<unknown> }> }).calls
+        .filter((call) => call.method === "fetchOne")
+    );
+    // flag refresh (1) + 200 candidate fetches; never 201+ candidate fetches.
+    expect(sentFetches.length).toBeLessThanOrEqual(201);
+  });
+
+  it("R05: a verified direct match within the bounded scope still settles replied despite truncation", async () => {
+    const message = messageFixture();
+    // 201 candidates again, but this time the VERIFIED direct reply sits in
+    // the FIRST batch — a positive settles the outcome within the searched
+    // scope even though the folder was truncated (R05 fix clause: "A verified
+    // direct positive can settle the outcome within the searched scope").
+    const verifiedFirst = {
+      uid: 100,
+      flags: new Set(["\\Seen"]),
+      headers: sentReplyHeaders({}),
+    };
+    const falseCandidates = Array.from({ length: 210 }, (_, i) => ({
+      uid: 1000 + i,
+      flags: new Set(["\\Seen"]),
+      headers: sentReplyHeaders({
+        messageId: `<false-${1000 + i}@example.com>`,
+        inReplyTo: "<unrelated@example.com>",
+        references: "<unrelated@example.com>",
+      }),
+    }));
+    // Pin the full 211-UID candidate list (the false candidates' headers lack
+    // the needle, so the default substring search would not surface them): the
+    // verified reply is #1, the folder still overflows the 200 cap.
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        sentFolder([verifiedFirst, ...falseCandidates]),
+      ],
+      searchOverrides: new Map([
+        ["Sent", { result: [verifiedFirst.uid, ...falseCandidates.map((c) => c.uid)] }],
+      ]),
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    expect(result.state).toBe("replied");
+    if (result.state !== "replied") throw new Error("expected replied");
+    expect(result.source).toBe("sent_search");
+    expect(result.matchedMessageId).toBe("sent-501@example.com");
+  });
+
+  // =========================================================================
+  // R06 — failed/unreadable candidate fetches are incomplete coverage, and
+  // they consume the shared 200-fetch budget (attempted fetches, not parsed
+  // candidates).
+  // =========================================================================
+
+  it("R06: a UID whose header fetch fails yields unknown (probe_failed), never a cached negative", async () => {
+    const message = messageFixture();
+    // The Sent folder contains one message, but the fetch returns NO readable
+    // headers (empty header block — the malformed/unreadable half of R06; the
+    // expunged-mid-probe half is covered by the adapter suite). The candidate
+    // MAY be the verified reply; unreadable must stay unknown, not negative.
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        sentFolder([
+          {
+            uid: 501,
+            flags: new Set(["\\Seen"]),
+            // Empty header block: the old adapter pushed an all-null
+            // candidate the detector silently skipped as no_match.
+            headers: Buffer.from("", "utf8"),
+          },
+        ]),
+      ],
+      // The empty header block contains no needle, so pin the candidate list —
+      // the search claims this UID is a reply candidate.
+      searchOverrides: new Map([["Sent", { result: [501] }]]),
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_failed");
+    expect(kit.updateCalls.filter((c) => c.replyNegativeCheckAt)).toHaveLength(0);
+  });
+
+  it("R06: a verified direct positive settles replied even when other fetches failed", async () => {
+    const message = messageFixture();
+    // Mixed folder: one unreadable candidate + one verified direct reply. The
+    // verified positive settles the outcome; the failed fetch is only book-
+    // keeping (incomplete coverage that the settled positive supersedes).
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        sentFolder([
+          {
+            uid: 500,
+            flags: new Set(["\\Seen"]),
+            headers: Buffer.from("", "utf8"), // unreadable — fetch "succeeds" but no headers
+          },
+          {
+            uid: 501,
+            flags: new Set(["\\Seen"]),
+            headers: sentReplyHeaders({}),
+          },
+        ]),
+      ],
+      // The unreadable candidate's empty headers lack the needle — pin both
+      // UIDs so the probe attempts the failed fetch BEFORE the verified one.
+      searchOverrides: new Map([["Sent", { result: [500, 501] }]]),
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    expect(result.state).toBe("replied");
+    expect(result.source).toBe("sent_search");
+    expect(result.matchedMessageId).toBe("sent-501@example.com");
+  });
+
+  it("R06: failed fetches across multiple folders consume the shared budget — total attempts never exceed 200", async () => {
+    const message = messageFixture();
+    // Three Sent folders, each returning 120 substring candidates whose
+    // header fetches ALL fail (expunged mid-probe). Old behavior: failed
+    // fetches returned no candidate DTOs, so nothing decremented the budget
+    // and the probe attempted 360 network fetches (180% of the cap). Now the
+    // budget counts ATTEMPTED fetches: folder 2 starts with 80 remaining, and
+    // folder 3 starts with the budget exhausted → probe_limit_exceeded.
+    const unreadableFolder = (path: string, base: number): FakeMailboxFolder => ({
+      path,
+      specialUse: "\\Sent",
+      uidValidity: BigInt(997),
+      messages: Array.from({ length: 120 }, (_, i) => ({
+        uid: base + i,
+        flags: new Set(["\\Seen"]),
+        headers: Buffer.from("", "utf8"), // fetchOne returns false → failed fetch
+      })),
+    });
+    const uidsFor = (base: number): number[] =>
+      Array.from({ length: 120 }, (_, i) => base + i);
+    const fixture: FakeImapFlowFixture = {
+      folders: [
+        inboxFolder([inboxMessage(["\\Seen"])]),
+        unreadableFolder("Sent-1", 1000),
+        unreadableFolder("Sent-2", 2000),
+        unreadableFolder("Sent-3", 3000),
+      ],
+      // The unreadable candidates' empty headers lack the needle — pin each
+      // folder's 120-UID candidate list so the probe really attempts them.
+      searchOverrides: new Map([
+        ["Sent-1", { result: uidsFor(1000) }],
+        ["Sent-2", { result: uidsFor(2000) }],
+        ["Sent-3", { result: uidsFor(3000) }],
+      ]),
+    };
+    const kit = buildMatrixKit({ message, fixture });
+
+    const result = await kit.service.detect({ messageId: message.id });
+
+    // Budget exhausted by ATTEMPTED fetches → unknown, never a negative.
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("probe_limit_exceeded");
+    // Total header fetch attempts across every folder ≤ 200 (R06 bound).
+    const fetches = kit.imapPort.allConnections.flatMap(
+      (c) => (c as unknown as { calls: Array<{ method: string }> }).calls
+        .filter((call) => call.method === "fetchOne")
+    );
+    // flag refresh contributes 1 fetch (flags query) — candidate attempts ≤ 200.
+    expect(fetches.length).toBeLessThanOrEqual(201);
+    expect(fetches.length).toBeGreaterThan(200); // prove attempts actually ran past naive parsed-candidate counting (0)
+    // No negative was cached despite zero parsed candidates.
+    expect(kit.updateCalls.filter((c) => c.replyNegativeCheckAt)).toHaveLength(0);
+  });
 });
 

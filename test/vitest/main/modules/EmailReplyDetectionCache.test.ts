@@ -21,6 +21,7 @@ import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity
 import type {
   RefreshedFlags,
   ReplyHeaderCandidate,
+  ReplyHeaderSearchResult,
   SentFolder,
 } from "@/service/emailReceive/EmailReceiveClient";
 import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
@@ -126,7 +127,9 @@ function preProbeContextHash(
 interface FakeImapOptions {
   flags?: RefreshedFlags | null;
   sentFolders?: SentFolder[];
-  candidatesByFolder?: Map<string, ReplyHeaderCandidate[] | false>;
+  /** Per-folder search result; `false` = failed/incomplete search. A bare
+   * candidate array is wrapped as a complete, untruncated result. */
+  candidatesByFolder?: Map<string, ReplyHeaderSearchResult | ReplyHeaderCandidate[] | false>;
 }
 
 interface FakeKit {
@@ -243,7 +246,13 @@ function buildKit(opts: {
       });
       const v = imap.candidatesByFolder?.get(input.folder);
       if (v === false) return false;
-      return v ?? [];
+      if (v === undefined) {
+        return { candidates: [], truncated: false, failedFetchCount: 0 };
+      }
+      if (Array.isArray(v)) {
+        return { candidates: v, truncated: false, failedFetchCount: 0 };
+      }
+      return v;
     },
   };
   const service = new EmailReplyDetectionService({

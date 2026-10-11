@@ -25,6 +25,7 @@ import type { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt
 import type {
   RefreshedFlags,
   ReplyHeaderCandidate,
+  ReplyHeaderSearchResult,
   SentFolder,
 } from "@/service/emailReceive/EmailReceiveClient";
 import {
@@ -208,7 +209,10 @@ interface FakeImapPortOptions {
   flagsThrows?: boolean;
   sentFolders?: SentFolder[];
   sentFoldersThrow?: boolean;
-  candidatesByFolder?: Map<string, ReplyHeaderCandidate[] | false>;
+  /** Per-folder search result; `false` = failed/incomplete search. A bare
+   * candidate array is wrapped as a complete, untruncated, no-failed-fetch
+   * result (the common in-test shape). */
+  candidatesByFolder?: Map<string, ReplyHeaderSearchResult | ReplyHeaderCandidate[] | false>;
   candidatesThrow?: boolean;
 }
 
@@ -231,7 +235,15 @@ function fakeImapPort(opts: FakeImapPortOptions = {}): ReplyDetectionImapPort & 
     async searchReplyHeaders(input) {
       searchCalls.push({ folder: input.folder, originalMessageId: input.originalMessageId, cap: input.cap });
       if (opts.candidatesThrow) throw new Error("imap search failed");
-      return opts.candidatesByFolder?.get(input.folder) ?? [];
+      const stored = opts.candidatesByFolder?.get(input.folder);
+      if (stored === undefined) {
+        return { candidates: [], truncated: false, failedFetchCount: 0 };
+      }
+      if (Array.isArray(stored)) {
+        // Bare candidate array = complete search, no truncation, no failed fetches.
+        return { candidates: stored, truncated: false, failedFetchCount: 0 };
+      }
+      return stored;
     },
     refreshCalls,
     searchCalls,

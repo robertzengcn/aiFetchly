@@ -123,6 +123,30 @@ export interface ReplyHeaderCandidate {
 }
 
 /**
+ * Result of a Sent-folder reply-header search (R05/R06). Carries the parsed
+ * candidates AND completeness signals the detector needs to avoid false
+ * complete negatives:
+ *   - `truncated`: the server returned more UIDs than `cap` — at least one
+ *     candidate was silently dropped. The search is INCOMPLETE; the detector
+ *     must never cache a negative when this is true.
+ *   - `failedFetchCount`: the number of UIDs whose header fetch returned
+ *     nothing (expunged/malformed mid-probe). These are attempted fetches that
+ *     yielded no candidate DTO — they count toward the shared budget even
+ *     though no candidate was parsed, so the detector accounts for them
+ *     separately (R06: failed fetches = incomplete coverage, not free).
+ */
+export interface ReplyHeaderSearchResult {
+  readonly candidates: ReplyHeaderCandidate[];
+  /** True when `uids.length > cap` — the server had more candidates than the
+   * budget allowed. The dropped candidates may include the verified direct
+   * reply; the outcome is unknown, never a negative. */
+  readonly truncated: boolean;
+  /** Number of UIDs whose `fetchOne` returned null/false — attempted but
+   * unparseable. Counts toward the shared candidate budget (R06). */
+  readonly failedFetchCount: number;
+}
+
+/**
  * Parse a raw RFC-5322 header block (as returned by imapflow's `headers`
  * fetch) into a lowercased-key → trimmed-value map, unfolding continuation
  * lines per RFC 5322 §2.2.3. Pure; used by the Sent-search reply-header

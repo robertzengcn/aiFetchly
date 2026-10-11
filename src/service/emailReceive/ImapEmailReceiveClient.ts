@@ -19,6 +19,7 @@ import {
   ParsedInboundEmail,
   RefreshedFlags,
   ReplyHeaderCandidate,
+  ReplyHeaderSearchResult,
   SentFolder,
   addressListToStrings,
   firstAddress,
@@ -288,6 +289,10 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
    * Returns false when the search itself fails/incompletes (imapflow's
    * `false`), which callers must map to `unknown` — NOT to no-matches.
    * Candidates are capped at `cap` (bounding the header fetches, FR-039).
+   * The result carries `truncated` (uids.length > cap — at least one candidate
+   * was silently dropped, so the search is INCOMPLETE and must never yield a
+   * negative) and `failedFetchCount` (UIDs whose header fetch returned nothing
+   * — attempted fetches that count toward the shared budget, R05/R06).
    */
   async searchReplyHeaders(input: {
     config: EmailReceiveConnectionConfig;
@@ -295,7 +300,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
-  }): Promise<ReplyHeaderCandidate[] | false> {
+  }): Promise<ReplyHeaderSearchResult | false> {
     const client = this.createClient(input.config);
     let detachAbort: (() => void) | undefined;
     try {
@@ -321,7 +326,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     originalMessageId: string,
     cap: number,
     signal?: AbortSignal
-  ): Promise<ReplyHeaderCandidate[] | false> {
+  ): Promise<ReplyHeaderSearchResult | false> {
     // Open the Sent folder before searching — imapflow requires a selected
     // mailbox before `search`/`fetchOne` (omitting `mailboxOpen` runs the
     // search against whatever folder was last selected, or none, yielding
@@ -347,8 +352,19 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     );
     if (uids === false) return false;
 
-    const bounded = uids.slice(0, Math.max(0, cap));
+    // R05: report truncation. When the server returned more UIDs than the
+    // budget (`cap`) allows, the dropped candidates may include the verified
+    // direct reply. The detector must treat a truncated search as INCOMPLETE —
+    // never a complete negative. `truncated` is true iff uids.length > cap.
+    const effectiveCap = Math.max(0, cap);
+    const bounded = uids.slice(0, effectiveCap);
+    const truncated = uids.length > effectiveCap;
     const candidates: ReplyHeaderCandidate[] = [];
+    // R06: count attempted fetches that returned nothing (expunged/malformed
+    // mid-probe). These consumed a network round-trip but yielded no candidate
+    // DTO — the detector accounts for them toward the shared budget so the
+    // total attempted fetches never silently exceeds the cap.
+    let failedFetchCount = 0;
     for (const uid of bounded) {
       // Review D9.2: check the deadline between candidate fetches — a 200-
       // candidate probe can take long enough that the deadline elapses mid-
@@ -363,8 +379,20 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         },
         { uid: true }
       );
-      if (!msg) continue;
+      if (!msg) {
+        failedFetchCount += 1;
+        continue;
+      }
       const headers = parseHeaderBlock(msg.headers);
+      if (headers.size === 0) {
+        // R06: the fetch succeeded at the protocol level but none of the
+        // requested headers were returned/readable — the candidate cannot be
+        // verified. Counted as a failed fetch (incomplete coverage), never
+        // pushed as an all-null candidate that the detector would silently
+        // skip as a non-match.
+        failedFetchCount += 1;
+        continue;
+      }
       candidates.push({
         folder,
         uid,
@@ -376,7 +404,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         date: headers.get("date") ?? null,
       });
     }
-    return candidates;
+    return { candidates, truncated, failedFetchCount };
   }
 
   private async refreshFlagsFromConnectedClient(

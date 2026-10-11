@@ -35,13 +35,13 @@ function fakeImapConnection(input: {
   headersByUid?: Record<number, Buffer>;
 }): ImapFlowConnection & {
   readonly calls: {
-    fetchOneQueries: Array<{ query: FetchQueryObject; uidOption?: boolean }>;
+    fetchOneQueries: Array<{ query: FetchQueryObject; uidOption?: boolean; uid: number }>;
     searchQueries: SearchObject[];
     logouts: number;
   };
 } {
   const calls = {
-    fetchOneQueries: [] as Array<{ query: FetchQueryObject; uidOption?: boolean }>,
+    fetchOneQueries: [] as Array<{ query: FetchQueryObject; uidOption?: boolean; uid: number }>,
     searchQueries: [] as SearchObject[],
     logouts: 0,
   };
@@ -79,6 +79,7 @@ function fakeImapConnection(input: {
       calls.fetchOneQueries.push({
         query,
         uidOption: options?.uid === true,
+        uid: Number(seq),
       });
       const headers = input.headersByUid?.[Number(seq)];
       if (!headers) return false;
@@ -117,6 +118,20 @@ function config(): EmailReceiveConnectionConfig {
 }
 
 const ORIGINAL_ID = "<orig-77@example.com>";
+
+/**
+ * Narrow `false | ReplyHeaderSearchResult` for assertions. Use ONLY after the
+ * caller has already asserted `result !== false` — this throws instead of
+ * silently asserting against `false`.
+ */
+type ReplySearchOutcome = Awaited<ReturnType<ImapEmailReceiveClient["searchReplyHeaders"]>>;
+
+function searchResult(
+  result: ReplySearchOutcome
+): Exclude<ReplySearchOutcome, false> {
+  if (result === false) throw new Error("searchReplyHeaders returned false");
+  return result;
+}
 
 describe("discoverSentFolders (T04 step 5)", () => {
   it("returns server-advertised \\Sent special-use folders as verified", async () => {
@@ -223,9 +238,13 @@ describe("searchReplyHeaders (T04 step 5)", () => {
     });
 
     expect(result).not.toBe(false);
-    expect(result).toHaveLength(2);
+    const search = searchResult(result);
+    expect(search.candidates).toHaveLength(2);
+    // No truncation and no failed fetches in a fully successful probe.
+    expect(search.truncated).toBe(false);
+    expect(search.failedFetchCount).toBe(0);
 
-    const first = result?.[0];
+    const first = search.candidates[0];
     expect(first?.folder).toBe("Sent");
     expect(first?.uid).toBe(501);
     expect(first?.messageId).toBe("<reply-1@example.com>");
@@ -288,8 +307,40 @@ describe("searchReplyHeaders (T04 step 5)", () => {
       cap: 3,
     });
     expect(result).not.toBe(false);
-    expect(result).toHaveLength(3);
+    // R05: cap exhaustion IS truncation — the adapter must report it so the
+    // detector can never treat the bounded portion as complete coverage.
+    const boundedSearch = searchResult(result);
+    expect(boundedSearch.candidates).toHaveLength(3);
+    expect(boundedSearch.truncated).toBe(true);
+    expect(boundedSearch.failedFetchCount).toBe(0);
     expect(fake.calls.fetchOneQueries).toHaveLength(3);
+  });
+
+  it("reports truncation without silently dropping overflow candidates", async () => {
+    const fake = fakeImapConnection({
+      searchResults: () => [1, 2, 3, 4],
+      headersByUid: {
+        1: replyHeaderBlock(),
+        2: replyHeaderBlock(),
+        3: replyHeaderBlock(),
+        4: replyHeaderBlock(),
+      },
+    });
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: () => fake });
+
+    const result = await client.searchReplyHeaders({
+      config: config(),
+      folder: "Sent",
+      originalMessageId: ORIGINAL_ID,
+      cap: 2,
+    });
+    // Only the first `cap` UIDs are fetched (memory/footprint bound), and the
+    // overflow is surfaced instead of being silently dropped (R05).
+    const truncatedSearch = searchResult(result);
+    expect(truncatedSearch.candidates).toHaveLength(2);
+    expect(truncatedSearch.truncated).toBe(true);
+    expect(fake.calls.fetchOneQueries).toHaveLength(2);
+    expect(fake.calls.fetchOneQueries.map((f) => f.uid)).toEqual([1, 2]);
   });
 
   it("skips candidates whose header fetch returns nothing", async () => {
@@ -306,8 +357,63 @@ describe("searchReplyHeaders (T04 step 5)", () => {
       cap: 10,
     });
     expect(result).not.toBe(false);
-    expect(result).toHaveLength(1);
-    expect(result?.[0].uid).toBe(2);
+    const failedSearch = searchResult(result);
+    expect(failedSearch.candidates).toHaveLength(1);
+    expect(failedSearch.candidates[0].uid).toBe(2);
+    // R06: the attempted-but-failed fetch is reported so the detector counts
+    // it toward the shared budget — attempted fetches, not parsed candidates.
+    expect(failedSearch.failedFetchCount).toBe(1);
+    expect(failedSearch.truncated).toBe(false);
+  });
+
+  it("counts failed fetches toward the cap, not past it", async () => {
+    const fake = fakeImapConnection({
+      searchResults: () => [1, 2, 3, 4],
+      headersByUid: {
+        3: replyHeaderBlock(),
+        4: replyHeaderBlock(),
+      }, // UIDs 1 and 2 expunged mid-probe
+    });
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: () => fake });
+
+    const result = await client.searchReplyHeaders({
+      config: config(),
+      folder: "Sent",
+      originalMessageId: ORIGINAL_ID,
+      cap: 4,
+    });
+    // All four UIDs were ATTEMPTED (2 failed + 2 parsed) — the adapter never
+    // fetches past the cap even when fetches fail (R06).
+    expect(fake.calls.fetchOneQueries).toHaveLength(4);
+    const attemptedSearch = searchResult(result);
+    expect(attemptedSearch.candidates).toHaveLength(2);
+    expect(attemptedSearch.failedFetchCount).toBe(2);
+    expect(attemptedSearch.truncated).toBe(false);
+  });
+
+  it("counts a fetch with NO readable headers as a failed fetch, not a candidate (R06)", async () => {
+    const fake = fakeImapConnection({
+      searchResults: () => [1, 2],
+      headersByUid: {
+        1: Buffer.from("", "utf8"), // fetch succeeded, zero requested headers returned
+        2: replyHeaderBlock(),
+      },
+    });
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: () => fake });
+
+    const result = await client.searchReplyHeaders({
+      config: config(),
+      folder: "Sent",
+      originalMessageId: ORIGINAL_ID,
+      cap: 10,
+    });
+    const emptyHeaderSearch = searchResult(result);
+    // The headerless candidate is NOT pushed as an all-null candidate DTO the
+    // detector would silently skip — it is reported as a failed fetch, so the
+    // coverage is incomplete (R06: malformed/unreadable requested-header read).
+    expect(emptyHeaderSearch.candidates).toHaveLength(1);
+    expect(emptyHeaderSearch.candidates[0].uid).toBe(2);
+    expect(emptyHeaderSearch.failedFetchCount).toBe(1);
   });
 
   it("propagates search failures (auth/permission) instead of returning false/[]", async () => {

@@ -38,6 +38,7 @@ import type { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt
 import type {
   RefreshedFlags,
   ReplyHeaderCandidate,
+  ReplyHeaderSearchResult,
   SentFolder,
 } from "@/service/emailReceive/EmailReceiveClient";
 import {
@@ -183,7 +184,7 @@ export interface ReplyDetectionImapPort {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
-  }): Promise<ReplyHeaderCandidate[] | false>;
+  }): Promise<ReplyHeaderSearchResult | false>;
 }
 
 /** What a candidate-matching pass concluded about one candidate. */
@@ -716,14 +717,22 @@ export class EmailReplyDetectionService {
       return this.unknownLocal("identity_conflict");
     }
 
-    // R03: aggregate row-level positive evidence across EVERY cluster row,
+    // R03: aggregate row-level positive evidence across every cluster row,
     // not just the seed. A sibling row may carry `replyDetectedAt` (sticky
     // mailbox flag / verified Sent search) or `replyStatus=sent` (historical
     // app delivery) that the seed's own columns do not reflect. Without this,
     // local-first detection returns eligible/negative for the same inbound
     // identity that already has authoritative reply history on a sibling.
+    //
+    // The SEED's own `replyDetectedAt` is deliberately EXCLUDED here: step 2
+    // (sticky-positive reuse) owns it and preserves the persisted fidelity —
+    // recorded source (`mailbox_flag`/`sent_search`), `matchedMessageId`, and
+    // the `persisted_positive` cache metric. Intercepting it at step 1 would
+    // downgrade a verified Sent-search positive to an anonymous `local_state`.
+    // The seed's own `replyStatus=sent` IS still settled here (checked
+    // directly below), so only the sticky-positive column is seed-excluded.
     const clusterHasPositive =
-      clusterRows.some((r) => r.replyDetectedAt != null) ||
+      clusterRows.some((r) => r.id !== seed.id && r.replyDetectedAt != null) ||
       clusterRows.some((r) => r.replyStatus === "sent");
     const replyStatus = seed.replyStatus;
 
@@ -1003,6 +1012,11 @@ export class EmailReplyDetectionService {
     if (folders.length === 0) {
       return { kind: "unavailable" };
     }
+    // R05: slicing to the folder bound leaves Sent folders unexamined — the
+    // probe can never settle a complete negative in that case (the reply may
+    // live in a dropped folder). A verified direct match found in the
+    // searched scope still settles `replied`.
+    const foldersTruncated = folders.length > MAX_SENT_FOLDERS;
     const boundedFolders = folders.slice(0, MAX_SENT_FOLDERS);
     const sentScope = boundedFolders
       .map((f) => f.folder)
@@ -1012,6 +1026,7 @@ export class EmailReplyDetectionService {
     const senderLower = configuredSender.toLowerCase();
     let allComplete = true;
     let ambiguity = false;
+    let candidatesTruncated = false;
     let fetchesRemaining = MAX_CANDIDATE_FETCHES;
 
     for (const f of boundedFolders) {
@@ -1020,6 +1035,8 @@ export class EmailReplyDetectionService {
         return { kind: "limit_exceeded" };
       }
       let candidates: ReplyHeaderCandidate[];
+      let folderTruncated = false;
+      let failedFetchCount = 0;
       try {
         const result = await this.imapPort.searchReplyHeaders({
           config,
@@ -1033,10 +1050,27 @@ export class EmailReplyDetectionService {
           allComplete = false;
           continue;
         }
-        candidates = result;
+        candidates = result.candidates;
+        folderTruncated = result.truncated;
+        failedFetchCount = result.failedFetchCount;
       } catch {
         allComplete = false;
         continue;
+      }
+
+      // R06: attempted-but-failed fetches (expunged/malformed mid-probe)
+      // consumed a network round-trip. They count toward the shared budget
+      // even though no candidate DTO was parsed — total attempted header
+      // fetches can never silently exceed the cap — and they mark this
+      // folder's coverage incomplete.
+      fetchesRemaining -= failedFetchCount;
+      if (failedFetchCount > 0) {
+        allComplete = false;
+      }
+      // R05: the server returned more candidates than the remaining budget
+      // allowed — at least one candidate was never examined.
+      if (folderTruncated) {
+        candidatesTruncated = true;
       }
 
       for (const c of candidates) {
@@ -1049,7 +1083,9 @@ export class EmailReplyDetectionService {
         fetchesRemaining -= 1;
         const match = classifyCandidate(c, originalMessageId, senderLower);
         if (match.kind === "direct") {
-          // Verified direct match takes precedence over any ambiguity (§7.2).
+          // Verified direct match takes precedence over any ambiguity,
+          // truncation, or incompleteness (§7.2) — a settled positive is
+          // valid within the searched scope.
           return { kind: "replied", matchedMessageId: match.matchedMessageId };
         }
         if (match.kind === "ambiguous") {
@@ -1061,6 +1097,14 @@ export class EmailReplyDetectionService {
       }
     }
 
+    // R05: unexamined folders or candidates mean the probe cannot settle a
+    // complete negative — the unexamined set may contain the verified direct
+    // reply. Bounds-exhaustion precedes ambiguity (§7.3): an ambiguous
+    // candidate is unknown either way, and the truncation code is the more
+    // actionable signal for operators.
+    if (foldersTruncated || candidatesTruncated) {
+      return { kind: "limit_exceeded" };
+    }
     if (ambiguity) return { kind: "ambiguous" };
     return { kind: "no_match", allFoldersComplete: allComplete, sentScope };
   }
@@ -1510,7 +1554,7 @@ class DefaultImapPort implements ReplyDetectionImapPort {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
-  }): Promise<ReplyHeaderCandidate[] | false> {
+  }): Promise<ReplyHeaderSearchResult | false> {
     return this.client.searchReplyHeaders(input);
   }
 }
