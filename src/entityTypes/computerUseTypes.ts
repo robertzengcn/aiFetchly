@@ -446,3 +446,87 @@ export interface GroundingAdapterCapabilities {
   readonly maxImagePixels: number;
   readonly requiredFiles: readonly string[];
 }
+
+/* ------------------------------------------------------------------------- */
+/* Host-side controller/adapter seams. Implementations live in the services; */
+/* these interfaces keep the supervisor testable without a desktop.          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Desktop backend seam (Windows-MCP now, macOS helper in Phase 3). The
+ * adapter observes the OS and executes authorized input; it is stateless
+ * with respect to authority (design §10.1).
+ */
+export interface ComputerUseDesktopAdapter {
+  listWindows(): Promise<ComputerUseWindowInfo[]>;
+  observe(targetWindowId: string): Promise<ComputerUseObservation>;
+  dispatchInput(
+    action: ComputerUseActionRequest,
+    context: {
+      readonly sessionId: string;
+      readonly generation: ComputerUseSessionGeneration;
+      readonly actionId: string;
+    }
+  ): Promise<{ readonly dispatchedAt: number }>;
+  /** Optional post-action state check (adapter/verification service). */
+  verify?(
+    action: ComputerUseActionRequest,
+    generation: ComputerUseSessionGeneration
+  ): Promise<boolean>;
+  /** Release backend resources on session stop. */
+  dispose?(): Promise<void>;
+}
+
+/** Stop-hotkey lifecycle seam (design §10.5.1). */
+export interface ComputerUseStopController {
+  /**
+   * Register the session's stop hotkey. Returns the registered accelerator,
+   * or null when registration failed (session must not start).
+   */
+  register(sessionId: string): Promise<string | null>;
+  unregister(sessionId: string): Promise<void>;
+  /** Trigger the stop path as the hotkey callback would. */
+  triggerStop(sessionId: string): void;
+}
+
+/** Pre-dispatch safety verdict (design §10.5.3/§10.5.4). */
+export interface ComputerUseSafetyVerdict {
+  readonly allowed: boolean;
+  readonly errorCode?: ComputerUseErrorCode;
+  readonly reason?: string;
+}
+
+/** Safety pre-check seam: own-window, elevation, focus, hotkey-chord rules. */
+export interface ComputerUseSafetyController {
+  preDispatchCheck(input: {
+    readonly sessionId: string;
+    readonly generation: ComputerUseSessionGeneration;
+    readonly request: ComputerUseActionRequest;
+    readonly target: ComputerUseResolvedTarget;
+  }): Promise<ComputerUseSafetyVerdict>;
+}
+
+/** Grant authority seam (host-minted grants only). */
+export interface ComputerUseActionAuthorizationLike {
+  mint(input: {
+    sessionId: string;
+    generation: ComputerUseSessionGeneration;
+    request: ComputerUseActionRequest;
+    actionClass: ComputerUseActionClass;
+    observationId: string;
+    /** Host-generated action id; the service rejects duplicates. */
+    actionId?: string;
+    now?: number;
+  }): ComputerUseActionGrant;
+  validate(
+    actionId: string,
+    expected: {
+      sessionId: string;
+      generation: ComputerUseSessionGeneration;
+      request: ComputerUseActionRequest;
+    },
+    now?: number
+  ): ComputerUseActionGrant;
+  consume(actionId: string): void;
+  invalidateGeneration(generation: ComputerUseSessionGeneration): number;
+}
