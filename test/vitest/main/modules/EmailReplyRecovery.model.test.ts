@@ -583,4 +583,154 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
     expect(row?.phase).toBe("draft_ready");
     expect(row?.activeAttemptId).toBeNull();
   });
+
+  // ---- R04 adversarial regressions ----
+
+  it("R04: confirm_not_sent on a still-claimed attempt is refused; late success is still recorded", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sending");
+    // The original SMTP submitter is STILL RUNNING: attempt is `claimed`, not
+    // yet recovered to `delivery_unknown`. Reconciliation must refuse — the
+    // submitter may yet succeed and its success would be lost if the attempt
+    // were downgraded to `failed` (finalize cannot match `failed`).
+    const attempt = await seedAttempt(msg, draft.id, "claimed", new Date());
+    const guard = await seedSendingGuard(msg, attempt.id, "sending", attempt.id);
+
+    const service = new EmailReplySendRecoveryService();
+    await expect(
+      service.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator checked the mailbox",
+      })
+    ).rejects.toThrow(/still claimed/);
+
+    // Nothing was written: the attempt stays claimed, the draft stays sending,
+    // the guard stays sending bound to the live attempt.
+    expect((await attemptModule.read(attempt.id))?.status).toBe("claimed");
+    expect((await draftModel.read(draft.id))?.status).toBe("sending");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sending");
+    expect(row?.activeAttemptId).toBe(attempt.id);
+
+    // The late success is NOT lost — finalize can still upgrade the live
+    // attempt (it matches `claimed`).
+    await draftModel.finalizeSendOutcome({
+      attemptId: attempt.id,
+      draftId: draft.id,
+      approvalId: attempt.approvalId,
+      emailServiceId: SERVICE_ID,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "late-smtp-r04-a",
+      failureCode: null,
+      sanitizedError: null,
+      messageReplyStatus: "sent",
+      guardId: guard.id,
+    });
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    const guardAfter = await guardModel.read(guard.id);
+    expect(guardAfter?.phase).toBe("sent");
+  });
+
+  it("R04: confirm_not_sent on a sent attempt is refused; terminal accepted evidence is preserved", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sent");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    // The attempt already succeeded (`sent`). The operator must NOT be able to
+    // downgrade it to `failed` — that would lose accepted evidence and could
+    // permit a duplicate send.
+    const attempt = await seedAttempt(msg, draft.id, "sent", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "sent", null);
+
+    const service = new EmailReplySendRecoveryService();
+    await expect(
+      service.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator mistakenly rechecked",
+      })
+    ).rejects.toThrow(/already sent/);
+
+    // Terminal accepted evidence preserved: attempt, draft, guard all stay
+    // sent.
+    expect((await attemptModule.read(attempt.id))?.status).toBe("sent");
+    expect((await draftModel.read(draft.id))?.status).toBe("sent");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sent");
+  });
+
+  it("R04: confirm_not_sent on a submitted attempt is refused (original submitter still running)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "sending");
+    // `submitted` = the SMTP transport was handed the message but no response
+    // yet. The original submitter is still alive and may succeed.
+    const attempt = await seedAttempt(msg, draft.id, "submitted", new Date());
+    const guard = await seedSendingGuard(msg, attempt.id, "sending", attempt.id);
+
+    const service = new EmailReplySendRecoveryService();
+    await expect(
+      service.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator checked the mailbox",
+      })
+    ).rejects.toThrow(/still submitted/);
+
+    expect((await attemptModule.read(attempt.id))?.status).toBe("submitted");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("sending");
+    expect(row?.activeAttemptId).toBe(attempt.id);
+  });
+
+  it("R04: confirm_not_sent refuses when the cluster already has a reply (sibling positive)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "delivery_unknown", null);
+    // A sibling message in the same canonical cluster carries a sticky
+    // positive `replyDetectedAt` — the canonical identity already has a reply.
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update(msg.id, { replyDetectedAt: new Date() });
+
+    const service = new EmailReplySendRecoveryService();
+    await expect(
+      service.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator checked the mailbox",
+      })
+    ).rejects.toThrow(/already has a reply/);
+
+    // Nothing was written: the attempt stays delivery_unknown, the guard stays
+    // delivery_unknown.
+    expect((await attemptModule.read(attempt.id))?.status).toBe(
+      "delivery_unknown"
+    );
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("delivery_unknown");
+  });
+
+  it("R04: confirm_not_sent on a delivery_unknown target with no sibling proceeds (happy path retained)", async () => {
+    const msg = await seedMessage();
+    const draft = await seedDraft(msg.id, "delivery_unknown");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const attempt = await seedAttempt(msg, draft.id, "delivery_unknown", old);
+    const guard = await seedSendingGuard(msg, attempt.id, "delivery_unknown", null);
+
+    const service = new EmailReplySendRecoveryService();
+    await service.reconcileAttempt({
+      attemptId: attempt.id,
+      action: "confirm_not_sent",
+      evidence: "operator checked the mailbox, no reply found",
+    });
+
+    // The eligible delivery_unknown target IS downgraded and the guard reopened.
+    expect((await attemptModule.read(attempt.id))?.status).toBe("failed");
+    expect((await draftModel.read(draft.id))?.status).toBe("draft");
+    const row = await guardModel.read(guard.id);
+    expect(row?.phase).toBe("draft_ready");
+  });
 });

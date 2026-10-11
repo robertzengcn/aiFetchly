@@ -1051,11 +1051,20 @@ export class EmailReplyDraftModel extends BaseDb {
 
   /**
    * Operator-driven manual reconciliation of an ambiguous delivery (P0.6,
-   * FR-019, technical design §16). UNCONDITIONAL transactional update (the
-   * operator is the trusted authority here, unlike the conditional auto-finalize):
+   * FR-019, technical design §16). CONDITIONAL transactional update — the
+   * operator is the trusted authority, but only over eligible `delivery_unknown`
+   * attempts (R04):
    *   - confirm_sent: attempt -> 'sent', draft -> 'sent', message -> 'sent'.
-   *   - confirm_not_sent: attempt -> 'failed', draft -> 'draft' (re-editable;
-   *     the user's next edit creates a fresh revision via materializeRevision1).
+   *     Always safe (terminal upgrade; preserves accepted evidence).
+   *   - confirm_not_sent: REFUSED unless the target attempt is
+   *     `delivery_unknown` AND the canonical cluster has no positive evidence
+   *     and no in-flight sibling. A `claimed`/`submitted` target means the
+   *     original SMTP submitter is still running — reopening the guard would
+   *     permit a fresh submission that races it, and its late success would be
+   *     lost (finalize cannot match `failed`). A `sent` target cannot be
+   *     downgraded (terminal accepted evidence, §9). When eligible, the
+   *     attempt -> 'failed', draft -> 'draft' (re-editable; the user's next
+   *     edit creates a fresh revision via materializeRevision1).
    *   - leave_unresolved: no state change (audit only).
    * Always writes a reconciliation audit row with the supplied evidence.
    */
@@ -1070,9 +1079,10 @@ export class EmailReplyDraftModel extends BaseDb {
     /**
      * T08/FR-036: guard row bound to this attempt. When non-null, the guard
      * transitions alongside the reconciliation. `confirm_not_sent` is REFUSED
-     * while a `sending` attempt is in flight on a different attempt id (§9:
-     * "While an original submitter could still be running, reconciliation
-     * cannot authorize retry").
+     * unless the target attempt is `delivery_unknown` AND the canonical cluster
+     * has no positive evidence and no in-flight sibling (R04/§9: "While an
+     * original submitter could still be running, reconciliation cannot
+     * authorize retry; terminal accepted evidence cannot be downgraded").
      */
     guardId?: number | null;
   }): Promise<void> {
@@ -1084,21 +1094,92 @@ export class EmailReplyDraftModel extends BaseDb {
       const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const now = new Date();
 
-      // T08/§9: refuse `confirm_not_sent` while a `sending` guard is bound to a
-      // DIFFERENT in-flight attempt. The original submitter could still be
-      // running and may yet succeed; reconciliation must not authorize a
-      // retry that races it. `confirm_sent` and `leave_unresolved` are always
-      // safe (terminal / no-op).
-      if (input.action === "confirm_not_sent" && input.guardId !== null && input.guardId !== undefined) {
-        const guardRow = await guardRepo.findOne({ where: { id: input.guardId } });
+      // R04/§9: `confirm_not_sent` is a destructive downgrade (attempt →
+      // failed, draft → draft, guard → draft_ready). It is REFUSED unless ALL
+      // of the following hold:
+      //   (a) The target attempt is `delivery_unknown`. A `claimed`/`submitted`
+      //       target means the original SMTP submitter is still running —
+      //       reopening the guard authorizes a fresh submission that races it,
+      //       and its late success is lost (finalize cannot match `failed`). A
+      //       `sent` target is terminal accepted evidence and must not be
+      //       downgraded.
+      //   (b) The canonical cluster has no positive evidence (sibling
+      //       `replyDetectedAt`/`replyStatus=sent`/sent draft or attempt) —
+      //       accepted reply history is preserved.
+      //   (c) No in-flight sibling attempt/draft on a different draft is live
+      //       on the cluster — the original submitter (or a sibling send) must
+      //       quiesce first.
+      // `confirm_sent` (terminal upgrade) and `leave_unresolved` (no-op) are
+      // always safe and skip this gate.
+      if (input.action === "confirm_not_sent") {
+        const targetAttempt = await attemptRepo.findOne({
+          where: { id: input.attemptId },
+        });
+        if (!targetAttempt) {
+          throw new Error(
+            `Reconciliation refused: send attempt ${input.attemptId} not found`
+          );
+        }
         if (
-          guardRow &&
-          guardRow.phase === "sending" &&
-          guardRow.activeAttemptId !== null &&
-          guardRow.activeAttemptId !== input.attemptId
+          targetAttempt.status === "claimed" ||
+          targetAttempt.status === "submitted"
         ) {
           throw new Error(
-            `Reconciliation refused: a different send attempt (${guardRow.activeAttemptId}) is in flight on this message (§9)`
+            `Reconciliation refused: attempt ${input.attemptId} is still ${targetAttempt.status} — the original submitter may still be running (§9)`
+          );
+        }
+        if (targetAttempt.status === "sent") {
+          throw new Error(
+            `Reconciliation refused: attempt ${input.attemptId} is already sent — terminal accepted evidence cannot be downgraded (§9)`
+          );
+        }
+        if (targetAttempt.status === "failed") {
+          // Already downgraded — idempotent: no state change, still audit.
+        } else if (targetAttempt.status !== "delivery_unknown") {
+          throw new Error(
+            `Reconciliation refused: attempt ${input.attemptId} is in unexpected status ${targetAttempt.status}`
+          );
+        }
+
+        // Canonical-cluster eligibility (R03/R04): a sibling positive or
+        // in-flight attempt blocks the downgrade. Reconcile has different
+        // semantics from commit/claim — the target's OWN `delivery_unknown`
+        // status is the eligible state here, so `classifyClusterEligibility`
+        // (which returns `delivery_unknown` for the target's own records) cannot
+        // be reused directly. Instead inspect the cluster evidence for the
+        // reconcile-specific conditions:
+        //   (b) No cluster positive evidence (sibling `replyDetectedAt`/
+        //       `replyStatus=sent`/sent draft/sent attempt) — preserve accepted
+        //       reply history.
+        //   (c) No in-flight sibling: any `claimed`/`submitted` attempt with a
+        //       DIFFERENT id (same OR different draft — two attempts on one
+        //       draft is still a live submitter), or a `sending` draft on a
+        //       different draft. The original submitter must quiesce first.
+        const evidence = await readClusterEvidence(manager, {
+          emailServiceId: input.emailServiceId,
+          normalizedMessageId: null,
+          seedMessageId: input.messageId,
+        });
+        if (
+          evidence.clusterReplyDetectedAt !== null ||
+          evidence.clusterHasRowLevelSent ||
+          evidence.replyStatus === "sent" ||
+          evidence.sentDrafts.length > 0 ||
+          evidence.sentAttempts.length > 0
+        ) {
+          throw new Error(
+            `Reconciliation refused: canonical cluster already has a reply (§9)`
+          );
+        }
+        const inFlightSibling = evidence.inFlightAttempts.some(
+          (a) => a.id !== input.attemptId
+        );
+        const sendingSiblingDraft = evidence.sendingDrafts.some(
+          (d) => d.id !== input.draftId
+        );
+        if (inFlightSibling || sendingSiblingDraft) {
+          throw new Error(
+            `Reconciliation refused: a different send is in flight on this message (§9)`
           );
         }
       }
@@ -1148,8 +1229,12 @@ export class EmailReplyDraftModel extends BaseDb {
           { status: "draft", sendError: input.evidence ?? null }
         );
         // Guard → `draft_ready` (reopens the draft for a fresh approval +
-        // send). Same fence — `sending` is only reachable here after the
-        // in-flight refusal above confirmed no DIFFERENT attempt is running.
+        // send). The eligibility gate above already confirmed the target is
+        // `delivery_unknown` and no sibling is in flight, so a guard in
+        // `delivery_unknown` (the normal post-recovery phase) or a stale
+        // `sending` bound to this same attempt may safely reopen. A guard in
+        // any other phase (`sent`/`idle`/`generating`/`conflict`) is a no-op
+        // (0 rows) — defense-in-depth, not the authority.
         if (input.guardId !== null && input.guardId !== undefined) {
           await guardRepo.update(
             {
