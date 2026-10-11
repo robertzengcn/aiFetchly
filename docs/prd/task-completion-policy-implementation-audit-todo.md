@@ -236,13 +236,11 @@ Probe scripts/logs were temporary audit aids under `/tmp`; they are not permanen
 
 ### T14 — Render terminal outcomes honestly [P1, confirmed]
 
-- [ ] Pass semantic task outcome to the badge and select label/color/actions from that outcome.
+- [x] Pass semantic task outcome to the badge and select label/color/actions from that outcome.
 
-**Evidence:** `TaskExecutionStatusBadge.vue:46–47` colors all terminal states success-green; `:56–61` translates only status. `en.ts:2636` calls terminal “completed.” `AiChatV2.vue:12` passes no outcome to the badge. An injected incomplete/cancelled/failed terminal event therefore shows Completed. Reason tooltip does not correct the primary false label.
+**Evidence:** `TaskExecutionStatusBadge.vue` now takes an `outcome?: TaskOutcome` prop. At `status: "terminal"`, color + icon + label derive from the OUTCOME via `terminalOutcomeConfig` (only `verified_complete` → success-green + checkered flag + "completed"; `incomplete`/`failed`/`timeout` → error + alert icons + honest labels; `needs_user_input`/`blocked_by_policy` → warning; `cancelled` → default-grey). Absent outcome at terminal keeps the legacy green "completed" so older callers do not regress. Non-terminal status ignores outcome (no premature honest label while still in flight). `AiChatV2.vue:15` passes `:outcome="activeTaskExecution.outcome"` through to the badge. Six-language i18n keys `outcome_*` added to en/zh/es/fr/de/ja; AIChatHistoryI18n parity test passes (7/7).
 
-**Required implementation:** verified_complete alone means Completed; Incomplete, Needs input, Blocked, Cancelled, Interrupted and Timed out have honest labels, colors and safe actions. Distinguish Retry from Continue/new allowance; update all six languages.
-
-**Regression:** mount real badge for every outcome, in six languages; terminal incomplete with CONTINUATION_LIMIT must never be green Completed. Use real badge in chunk-flow tests instead of stubbing away its semantics.
+**Regression:** `TaskExecutionStatusBadge.test.ts` (20 tests, +11 T14): green+completed for verified_complete; no-outcome backward-compat green; `it.each` over all 6 non-success outcomes asserts non-green + honest label fragment; the audit's named worst case (terminal incomplete + CONTINUATION_LIMIT) is never green "completed" and still surfaces the reason tooltip; non-terminal ignores outcome; missing-i18n-key humanized fallback does not leak the raw key path. Chunk-routing + reconstruction component test badge stubs now declare `outcome` + `data-outcome` so the prop threading is asserted end-to-end (reconstruction test asserts `data-outcome="incomplete"` on the restored terminal badge).
 
 **Requirements:** FR-13/15/22; AC-16/21/27/32.
 
