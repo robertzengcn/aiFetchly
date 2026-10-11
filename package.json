@@ -110,6 +110,7 @@
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
     "@mdi/font": "7.4.47",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@napi-rs/canvas": "^0.1.82",
     "@rollup/plugin-alias": "^5.1.0",
     "@types/better-sqlite3": "^7.6.9",
@@ -203,7 +204,7 @@
     "write-file-atomic": "^5.0.1",
     "ws": "^8.21.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.24.0",
+    "zod": "^3.25.76",
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
