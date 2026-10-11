@@ -74,6 +74,16 @@
         :message="item.message"
       />
 
+      <!-- Skill installation (FR-SKL-001): the shared install card with plan
+           approval, dependencies, credentials, retry and cancel — mounted
+           through AiChatV2Message so the exact SkillInstallCard branch
+           (session identity + conversation binding) renders. -->
+      <AiChatV2Message
+        v-else-if="item.kind === 'skill-install'"
+        :message="item.message"
+        :show-reasoning="false"
+      />
+
       <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
       <AiChatPlanDecisionCard
         v-else-if="item.kind === 'plan-decision'"
@@ -198,7 +208,8 @@ type ProjectedItem =
   | { kind: "plan-receipt"; key: string; plan: PlanPresentationView }
   | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView }
   | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
-  | { kind: "outbound-batch"; key: string; message: ChatV2MessageView };
+  | { kind: "outbound-batch"; key: string; message: ChatV2MessageView }
+  | { kind: "skill-install"; key: string; message: ChatV2MessageView };
 
 /**
  * Project the raw message list into the workspace transcript:
@@ -266,6 +277,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             message: msg,
           });
         }
+        // FR-SKL-001: installation results render the shared install card
+        // (approvals, dependencies, credentials) outside the collapsed group.
+        if (isSkillInstallResult(messages[i])) {
+          result.push({
+            kind: "skill-install",
+            key: `skill-install-${messages[i].id}`,
+            message: messages[i],
+          });
+        }
         // Skip all consecutive tool messages.
         i += 1;
         while (
@@ -290,6 +310,13 @@ const projectedItems = computed<ProjectedItem[]>(() => {
               message: messages[i],
             });
           }
+          if (isSkillInstallResult(messages[i])) {
+            result.push({
+              kind: "skill-install",
+              key: `skill-install-${messages[i].id}`,
+              message: messages[i],
+            });
+          }
           i += 1;
         }
       } else if (isPermissionPrompt(msg)) {
@@ -298,6 +325,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         result.push({
           kind: "permission-prompt",
           key: `permission-${msg.id}`,
+          message: msg,
+        });
+        i += 1;
+      } else if (isSkillInstallResult(msg)) {
+        // FR-SKL-001: unpaired (historical) installation result — the
+        // interactive install card IS the surface, never a collapsed receipt.
+        result.push({
+          kind: "skill-install",
+          key: `skill-install-${msg.id}`,
           message: msg,
         });
         i += 1;
@@ -403,6 +439,22 @@ function streamStatusForMessage(
     return props.streamStatus;
   }
   return undefined;
+}
+
+/**
+ * FR-SKL-001: an installer tool result carrying an install session — the
+ * shared AiChatV2Message branch mounts SkillInstallCard for exactly this
+ * predicate (toolName prefix + sessionId), so reuse it rather than
+ * fabricating a snapshot from arbitrary structured text.
+ */
+function isSkillInstallResult(message: ChatV2MessageView): boolean {
+  return (
+    message.messageType === ("tool_result" as MessageType) &&
+    String(message.metadata?.toolName || "").startsWith("skill_install_") &&
+    typeof (
+      message.metadata?.toolResult as { sessionId?: unknown } | undefined
+    )?.sessionId === "string"
+  );
 }
 
 /** A gated tool result parked on the permission card (design §15.5). */

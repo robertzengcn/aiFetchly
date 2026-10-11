@@ -431,6 +431,79 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(review[0].attributes("data-batch-id")).toBe("42");
   });
 
+  /**
+   * FR-SKL-001 (capability parity): installation tool results must render
+   * the shared interactive SkillInstallCard OUTSIDE collapsed generic
+   * execution receipts — for both live and historical (persisted) rows.
+   */
+  it("FR-SKL-001: skill-install result paired in a group surfaces the interactive install card", async () => {
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "Installing the skill."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-skill",
+        toolName: "skill_install_prepare",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-skill",
+        toolName: "skill_install_prepare",
+        toolResult: {
+          sessionId: "sess-install-1",
+          state: "awaiting_approval",
+          nextAction: "resume",
+          recoverable: true,
+          success: true,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The execution group still renders for the paired call/result…
+    const groups = wrapper.findAllComponents({ name: "AiChatExecutionGroup" });
+    expect(groups.length).toBeGreaterThanOrEqual(1);
+    // …and the install session ALSO renders its interactive card, carried on
+    // the source message identity so approvals/credentials stay reachable.
+    const installCards = wrapper.findAllComponents({
+      name: "SkillInstallCard",
+    });
+    expect(installCards.length).toBe(1);
+    expect(installCards[0].props("snapshot").sessionId).toBe(
+      "sess-install-1"
+    );
+  });
+
+  it("FR-SKL-001: unpaired historical skill-install result renders the install card, not a receipt", async () => {
+    const messages = [
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-skill-solo",
+        toolName: "skill_install_status",
+        toolResult: {
+          sessionId: "sess-install-2",
+          state: "ready",
+          nextAction: "resume",
+          recoverable: true,
+          success: true,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const installCards = wrapper.findAllComponents({
+      name: "SkillInstallCard",
+    });
+    expect(installCards.length).toBe(1);
+    expect(installCards[0].props("snapshot").sessionId).toBe(
+      "sess-install-2"
+    );
+  });
+
   it("§18: unpaired outbound batch result renders the review card, not a receipt", async () => {
     const messages = [
       msg(MessageType.TOOL_RESULT, {
