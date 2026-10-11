@@ -75,6 +75,11 @@
         :plan-submit-error="planSubmitError"
         :plan-decision-in-flight="planDecisionInFlight"
         :plan-decision-error="planDecisionError"
+        :reported-message-ids="reportedMessageIds"
+        @report="onSingleReportRequest"
+        @save-generated-image="onSaveGeneratedImage"
+        @stop-batch="onStopBatch"
+        @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @approve-plan="onLegacyPlanAction('approve-plan')"
         @request-plan-changes="onRequestPlanChangesWithFeedback"
         @submit-plan-answers="onPlanAnswers"
@@ -411,6 +416,14 @@
       @submitted="onConversationReportSubmitted"
     />
 
+    <!-- Single-output report dialog (FR-RPT-002, design §12.5). -->
+    <AIContentReportDialog
+      v-if="singleReportDialogOpen && activeSingleDescriptor"
+      v-model="singleReportDialogOpen"
+      :descriptor="activeSingleDescriptor"
+      @submitted="onSingleReportSubmitted"
+    />
+
     <!-- Workspace memory dialog (existing surface, fed by the composable). -->
     <v-dialog v-model="showWorkspaceMemory" max-width="760">
       <v-card>
@@ -515,6 +528,7 @@ import {
   answerChatV2Question,
   clearChatV2Conversation,
   compactChatV2Conversation,
+  exportGeneratedImage,
 } from "@/views/api/aiChatV2";
 import { stopGoalLoop, createGoal, startGoalLoop } from "@/views/api/aiChatGoal";
 import {
@@ -556,6 +570,8 @@ import {
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import {
   buildChatV2ConversationSnapshot,
   hasEligibleChatV2Candidate,
@@ -890,10 +906,16 @@ function onConversationReportSubmitted(payload: {
 
 // An open dialog must never describe a conversation the user navigated away
 // from — close without submitting so a later open rebuilds a fresh snapshot.
+// FR-RPT-008: the single-output report dialog rebinds the same way.
 watch(conversationId, () => {
-  if (!conversationReportDialogOpen.value) return;
-  conversationReportDialogOpen.value = false;
-  conversationReportSnapshot.value = null;
+  if (conversationReportDialogOpen.value) {
+    conversationReportDialogOpen.value = false;
+    conversationReportSnapshot.value = null;
+  }
+  if (singleReportDialogOpen.value) {
+    singleReportDialogOpen.value = false;
+    activeSingleDescriptor.value = null;
+  }
 });
 
 watch(
@@ -1003,6 +1025,118 @@ watch(
     }
   }
 );
+
+// --- Per-output reporting + generated-image batch actions (FR-RPT/FR-IMG) ---
+/** FR-RPT-009: session-only reported ids (never persisted). */
+const reportedMessageIds = ref(new Set<string>());
+const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
+const singleReportDialogOpen = ref(false);
+
+/** FR-RPT-002: a reportable tile's action opens the real single-output dialog. */
+function onSingleReportRequest(descriptor: ReportableOutputDescriptor): void {
+  activeSingleDescriptor.value = descriptor;
+  singleReportDialogOpen.value = true;
+}
+
+function onSingleReportSubmitted(): void {
+  const id = activeSingleDescriptor.value?.context.messageId;
+  if (id) {
+    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+  }
+}
+
+/** Exports queued while no approved workspace existed (FR-IMG-013/FR-INT-002). */
+const pendingImageExports = ref<Map<string, ChatV2GeneratedImageReference[]>>(
+  new Map()
+);
+
+function enqueuePendingImageExport(
+  conversation: string,
+  reference: ChatV2GeneratedImageReference
+): void {
+  const current = pendingImageExports.value.get(conversation) ?? [];
+  if (current.some((r) => sameGeneratedImageRef(r, reference))) return;
+  pendingImageExports.value = new Map(pendingImageExports.value).set(
+    conversation,
+    [...current, reference]
+  );
+}
+
+async function attemptGeneratedImageExport(
+  conversation: string,
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  try {
+    const result = await exportGeneratedImage(conversation, reference);
+    if (result.status === "workspace_required") {
+      // Keep the export queued; the SAME request-workspace flow runs and the
+      // queued export retries automatically once a workspace is approved.
+      enqueuePendingImageExport(conversation, reference);
+      onRequestWorkspaceSetup();
+      generatedImageNotice.value =
+        t("aiChatV2.imageTool.errors.workspaceRequired") ||
+        "An approved workspace is required first.";
+      return;
+    }
+    generatedImageNotice.value =
+      t("aiChatV2.artifactExport.savedToWorkspace", {
+        fileName: result.fileName ?? "",
+      }) || `Saved ${result.fileName ?? ""} to your workspace.`;
+  } catch (err) {
+    generatedImageNotice.value =
+      err instanceof Error && err.message
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${err.message})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+          "Could not save to workspace.";
+  }
+}
+
+// Drain queued exports once the conversation gains an approved workspace.
+watch(
+  () => conversationWorkspace.workspace.value?.approvalState,
+  (state, previous) => {
+    if (state !== "approved" || state === previous) return;
+    const conversation = conversationId.value;
+    if (!conversation) return;
+    const queued = pendingImageExports.value.get(conversation) ?? [];
+    if (queued.length === 0) return;
+    pendingImageExports.value = new Map(pendingImageExports.value).set(
+      conversation,
+      []
+    );
+    for (const reference of queued) {
+      void attemptGeneratedImageExport(conversation, reference);
+    }
+  }
+);
+
+/** FR-IMG-013: save one generated image into the trusted workspace. */
+async function onSaveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  const conversation = conversationId.value;
+  if (!conversation) return;
+  await attemptGeneratedImageExport(conversation, reference);
+}
+
+/** FR-IMG-012: stop preserves completed outputs; the run cancel owns the rest. */
+function onStopBatch(): void {
+  void selectedStore.stopActiveRun();
+}
+
+/**
+ * FR-IMG-011: retry ONLY the eligible failed references with the original
+ * shared instruction, through the trusted confirmed-batch channel.
+ */
+function onRetryGeneratedImageBatch(payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void {
+  if (payload.references.length === 0) return;
+  void performOrdinarySend(payload.instruction, [], {
+    confirmedBatchReferences: [...payload.references],
+  });
+}
 
 // --- Next-message settings (owned here, rendered below the textarea) --------
 const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
@@ -1257,15 +1391,23 @@ async function performOrdinarySend(
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
     modeOverride?: "chat" | "plan";
+    /** Trusted channel: the user-confirmed batch reference set (FR-IMG-004). */
+    confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
   }
 ): Promise<boolean> {
   // FR-SUB-004 (capability parity): paste bodies travel as their own bounded
   // map so the engine expands the same content the Chat V2 stream edge
   // receives — the composer's visible text carries only the placeholders.
   const pastedContents = options?.pastedContents;
+  // Trusted resend channel (FR-IMG-011): a confirmed batch rides outside the
+  // explicit tray so re-confirming the same set cannot loop.
+  const confirmedBatch = options?.confirmedBatchReferences;
   // Generated-image preflight: explicit tray selections only (the legacy
   // ambiguity/inference offer is not part of the shell surface).
-  const generatedImageReferences = activeGeneratedImageRefs.value;
+  const generatedImageReferences =
+    confirmedBatch && confirmedBatch.length > 0
+      ? []
+      : activeGeneratedImageRefs.value;
   if (generatedImageReferences.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
     generatedImageNotice.value =
       t("aiChatV2.generatedImageRefs.errors.generated_image_reference_limit") ||
@@ -1317,6 +1459,7 @@ async function performOrdinarySend(
       pastedContents && Object.keys(pastedContents).length > 0
         ? pastedContents
         : undefined,
+    confirmedBatchReferences: confirmedBatch,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
   // clears only when THIS send was accepted — keying on shared run state

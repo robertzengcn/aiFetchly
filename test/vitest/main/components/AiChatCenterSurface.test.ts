@@ -18,6 +18,7 @@ const getVoiceStatusMock = vi.fn();
 const getLocalAiRuntimeStatusMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const startChatRunMock = vi.fn();
+const exportGeneratedImageMock = vi.fn();
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...args: unknown[]) => getWorkspaceMock(...args),
@@ -65,6 +66,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
   // Pending-message queue store contract (message-queue §7)
   listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
+  exportGeneratedImage: (...args: unknown[]) =>
+    exportGeneratedImageMock(...args),
 }));
 
 vi.mock("@/views/api/aiChatV2Voice", () => ({
@@ -200,6 +203,15 @@ const i18n = createI18n({
         skillSlash: {
           notFound: "No installed prompt skill matches '{name}'.",
         },
+        artifactExport: {
+          savedToWorkspace: "Saved {fileName} to your workspace.",
+          saveFailed: "Could not save to workspace.",
+        },
+        imageTool: {
+          errors: {
+            workspaceRequired: "An approved workspace is required first.",
+          },
+        },
       },
       aiChatV2Plan: {
         approve_failed: "Plan approval did not complete. Please try again.",
@@ -263,6 +275,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
             "pendingMessages",
             "planDecisionInFlight",
             "planDecisionError",
+            "reportedMessageIds",
           ],
           template: '<div data-testid="transcript-stub" />',
         }),
@@ -301,6 +314,12 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           template: '<div data-testid="voice-toggle-stub" />',
         }),
         AiChatVoiceRuntimeInstallDialog: true,
+        AIContentReportDialog: defineComponent({
+          name: "AIContentReportDialog",
+          props: ["modelValue", "descriptor"],
+          emits: ["submitted", "update:modelValue"],
+          template: '<div data-testid="single-report-dialog-stub" />',
+        }),
         ScheduledLoopToolApprovalDialog: defineComponent({
           name: "ScheduledLoopToolApprovalDialog",
           props: ["modelValue", "rawCommand", "prompt"],
@@ -997,6 +1016,143 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       await flushPromises();
       expect(resumeCalls()).toHaveLength(2);
+    });
+  });
+
+  /**
+   * Per-output reporting + generated-image batch actions (FR-RPT-001/002/009,
+   * FR-IMG-011/012/013): the transcript forwards report, save, stop-batch,
+   * and retry-batch tile events; the center owns the dialogs and flows.
+   */
+  describe("report and generated-image actions", () => {
+    async function mountWithSelection(): Promise<
+      ReturnType<typeof mountSurface>
+    > {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-1");
+      await flushPromises();
+      return wrapper;
+    }
+
+    it("opens the single-output report dialog and marks the output reported (FR-RPT-002/009)", async () => {
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      const descriptor = {
+        context: { conversationId: "conv-1", messageId: "m-report" },
+        kind: "text",
+      };
+      transcript.vm.$emit("report", descriptor);
+      await flushPromises();
+
+      const dialog = wrapper.findComponent({ name: "AIContentReportDialog" });
+      expect(dialog.exists()).toBe(true);
+      expect(dialog.props("descriptor")).toEqual(descriptor);
+
+      dialog.vm.$emit("submitted");
+      await flushPromises();
+      // Session-only reported set flows back to reportable tiles.
+      expect(transcript.props("reportedMessageIds")?.has("m-report")).toBe(
+        true
+      );
+    });
+
+    it("saves a generated image to the trusted workspace (FR-IMG-013)", async () => {
+      exportGeneratedImageMock.mockResolvedValue({
+        status: "saved",
+        fileName: "image-1.png",
+      });
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("save-generated-image", {
+        messageId: "m1",
+        imageIndex: 0,
+      });
+      await flushPromises();
+
+      expect(exportGeneratedImageMock).toHaveBeenCalledWith("conv-1", {
+        messageId: "m1",
+        imageIndex: 0,
+      });
+      const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+      expect(notice.text()).toContain("image-1.png");
+    });
+
+    it("routes a workspace_required save into the workspace setup flow (FR-INT-002)", async () => {
+      exportGeneratedImageMock.mockResolvedValue({
+        status: "workspace_required",
+      });
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("save-generated-image", {
+        messageId: "m1",
+        imageIndex: 0,
+      });
+      await flushPromises();
+
+      expect(
+        wrapper.find('[data-testid="workspace-load-error"]').exists()
+      ).toBe(false);
+      const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+      expect(notice.text()).toContain("approved workspace");
+      // Setup surfaced: the required card opens for the conversation.
+      await flushPromises();
+      expect(
+        wrapper.find('[data-testid="workspace-required-stub"]').exists()
+      ).toBe(true);
+    });
+
+    it("stops a running batch through the active-run cancel (FR-IMG-012)", async () => {
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("stop-batch");
+      await flushPromises();
+      // selectedStore.stopActiveRun() -> cancelChatRun IPC (module mock).
+      const { cancelChatRun } = await import("@/views/api/aiChatWorkspace");
+      expect(vi.mocked(cancelChatRun)).toHaveBeenCalled();
+    });
+
+    it("retries only the failed references through the trusted confirmed-batch channel (FR-IMG-011)", async () => {
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-1",
+        runId: "run-retry",
+        status: "running",
+        acceptedAt: "",
+      });
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("retry-generated-image-batch", {
+        references: [
+          { messageId: "m2", imageIndex: 0 },
+          { messageId: "m3", imageIndex: 1 },
+        ],
+        instruction: "Regenerate both logos",
+      });
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      const payload = startChatRunMock.mock.calls[0][0];
+      expect(payload.message).toBe("Regenerate both logos");
+      expect(payload.confirmedGeneratedImageBatch).toEqual({
+        references: [
+          { messageId: "m2", imageIndex: 0 },
+          { messageId: "m3", imageIndex: 1 },
+        ],
+      });
+      // The direct reference channel stays empty for a trusted resend.
+      expect(payload.generatedImageReferences).toBeUndefined();
     });
   });
 

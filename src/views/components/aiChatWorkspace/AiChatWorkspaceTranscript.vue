@@ -29,6 +29,9 @@
         :show-reasoning="false"
         @use-generated-image="(ref) => emit('use-generated-image', ref)"
         @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
+        @save-generated-image="(ref) => emit('save-generated-image', ref)"
+        @stop-batch="emit('stop-batch')"
+        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
       />
 
       <!-- Assistant messages render normally (content + reasoning). -->
@@ -37,8 +40,13 @@
         :message="item.message"
         :status="streamStatusForMessage(item.message)"
         :show-reasoning="showReasoning"
+        :reported="reportedMessageIds?.has(item.message.id) === true"
         @use-generated-image="(ref) => emit('use-generated-image', ref)"
         @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
+        @save-generated-image="(ref) => emit('save-generated-image', ref)"
+        @stop-batch="emit('stop-batch')"
+        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+        @report="(d) => emit('report', d)"
       />
 
       <!-- Execution groups: one compact section per assistant response. -->
@@ -149,6 +157,7 @@ import type {
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
 import type { MessageType } from "@/entityTypes/commonType";
 import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 const props = defineProps<{
   messages: readonly ChatV2MessageView[];
@@ -164,6 +173,11 @@ const props = defineProps<{
   planDecisionError?: string | null;
   /** Queued rows from the durable pending-message queue (PRD §7). */
   pendingMessages?: readonly AIChatPendingMessageView[];
+  /**
+   * FR-RPT-009: session-only reported output ids (parent-owned) so reportable
+   * tiles stay visibly marked for the current renderer session.
+   */
+  reportedMessageIds?: ReadonlySet<string>;
 }>();
 
 const emit = defineEmits<{
@@ -197,6 +211,23 @@ const emit = defineEmits<{
   (e: "steer-pending", pendingMessageId: string): void;
   (e: "cancel-pending", pendingMessageId: string): void;
   (e: "resume-pending", conversationId: string): void;
+  /** FR-RPT-001/002: per-output report action from a reportable tile. */
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
+  /** FR-IMG-013: save one generated image to the trusted workspace. */
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  /** FR-IMG-012: stop a running generated-image batch. */
+  (e: "stop-batch"): void;
+  /** FR-IMG-011: retry only the eligible failed batch references. */
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
 }>();
 
 type ProjectedItem =
