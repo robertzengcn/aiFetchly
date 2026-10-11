@@ -38,6 +38,19 @@ export class AiTaskOperationModule extends BaseModule {
     return this.model.getByKey(operationKey);
   }
 
+  /**
+   * §10.2 cross-execution unresolved lookup — passthrough to the model query.
+   */
+  async findUnresolvedByIntent(input: {
+    readonly toolIdentity: string;
+    readonly domainTarget: string | null;
+    readonly intentHash: string;
+    readonly limit?: number;
+  }): Promise<AiTaskOperationEntity[]> {
+    await this.ensureConnection();
+    return this.model.findUnresolvedByIntent(input);
+  }
+
   async updateState(
     input: UpdateStateInput
   ): Promise<UpdateStateResult> {

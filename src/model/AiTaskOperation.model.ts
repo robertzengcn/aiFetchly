@@ -184,6 +184,43 @@ export class AiTaskOperationModel extends BaseDb {
     });
   }
 
+  /**
+   * §10.2 cross-execution unresolved-operations lookup: any prior operation
+   * for the same domain intent (tool + target, or the same intent hash) that
+   * has not reached a terminal state. `unknown` rows are the critical case —
+   * a new execution ID or conversation must not bypass an earlier send whose
+   * outcome was never observed. Backed by the `intent_hash` and
+   * `operation_state` indexes; bounded by `limit` (oldest first).
+   */
+  async findUnresolvedByIntent(input: {
+    readonly toolIdentity: string;
+    readonly domainTarget: string | null;
+    readonly intentHash: string;
+    readonly limit?: number;
+  }): Promise<AiTaskOperationEntity[]> {
+    assertNotWorker("AiTaskOperation.findUnresolvedByIntent");
+    const unresolvedStates: AiTaskOperationState[] = [
+      "pending",
+      "claimed",
+      "dispatched",
+      "unknown",
+    ];
+    const qb = this.repository
+      .createQueryBuilder("op")
+      .where("op.operation_state IN (:...states)", { states: unresolvedStates })
+      .andWhere(
+        "((op.tool_identity = :toolIdentity AND op.domain_target = :domainTarget) OR op.intent_hash = :intentHash)",
+        {
+          toolIdentity: input.toolIdentity,
+          domainTarget: input.domainTarget,
+          intentHash: input.intentHash,
+        }
+      )
+      .orderBy("op.id", "ASC")
+      .limit(input.limit ?? 50);
+    return qb.getMany();
+  }
+
   async updateState(
     input: UpdateStateInput
   ): Promise<UpdateStateResult> {

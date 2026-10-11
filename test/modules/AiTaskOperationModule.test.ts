@@ -563,4 +563,176 @@ describe("AiTaskOperationModule scaffolding (Slice 3 prep)", function () {
       else process.env.WORKER_TYPE = previous;
     }
   });
+
+  describe("findUnresolvedByIntent (T23b, §10.2 cross-execution)", () => {
+    interface SeedInput {
+      operationKey: string;
+      executionId: string;
+      toolIdentity: string;
+      domainTarget: string | null;
+      intentHash: string;
+    }
+
+    async function seed(input: SeedInput): Promise<void> {
+      const mod = new AiTaskOperationModule();
+      const r = await mod.recordOperation(input);
+      expect(r.ok || r.alreadyExists).to.equal(true);
+    }
+
+    async function advance(
+      operationKey: string,
+      states: Array<"claimed" | "dispatched" | "accepted" | "failed" | "unknown">
+    ): Promise<void> {
+      const mod = new AiTaskOperationModule();
+      let generation = 0;
+      for (const newState of states) {
+        const r = await mod.updateState({
+          operationKey,
+          expectedClaimGeneration: generation,
+          newState,
+        });
+        expect(r.ok, `${operationKey} -> ${newState}: ${r.reasonCode ?? "ok"}`)
+          .to.equal(true);
+        generation += 1;
+      }
+    }
+
+    it("returns an unknown earlier operation from a DIFFERENT execution (the §10.2 bypass case)", async () => {
+      // The critical §10.2 case: execution A dispatched a send and its
+      // outcome went unknown (lost response/crash). A NEW execution B asking
+      // to send to the same target must see the unresolved earlier op.
+      await seed({
+        operationKey: "op:exec-u1:send-email",
+        executionId: "exec-u1",
+        toolIdentity: "send_email",
+        domainTarget: "batch:11",
+        intentHash: "sha256:send-batch-11",
+      });
+      await advance("op:exec-u1:send-email", [
+        "claimed",
+        "dispatched",
+        "unknown",
+      ]);
+
+      const mod = new AiTaskOperationModule();
+      const unresolved = await mod.findUnresolvedByIntent({
+        toolIdentity: "send_email",
+        domainTarget: "batch:11",
+        intentHash: "sha256:send-batch-11-other-execution",
+      });
+      expect(unresolved.map((op) => op.execution_id)).to.include("exec-u1");
+    });
+
+    it("does NOT return terminal operations (accepted/failed/completed are settled)", async () => {
+      await seed({
+        operationKey: "op:exec-acc:send-email",
+        executionId: "exec-acc",
+        toolIdentity: "send_email",
+        domainTarget: "batch:12",
+        intentHash: "sha256:send-batch-12",
+      });
+      await advance("op:exec-acc:send-email", [
+        "claimed",
+        "dispatched",
+        "accepted",
+      ]);
+      await seed({
+        operationKey: "op:exec-fail:send-email",
+        executionId: "exec-fail",
+        toolIdentity: "send_email",
+        domainTarget: "batch:12",
+        intentHash: "sha256:send-batch-12",
+      });
+      await advance("op:exec-fail:send-email", ["claimed", "failed"]);
+
+      const mod = new AiTaskOperationModule();
+      const unresolved = await mod.findUnresolvedByIntent({
+        toolIdentity: "send_email",
+        domainTarget: "batch:12",
+        intentHash: "sha256:send-batch-12",
+      });
+      expect(unresolved).to.have.length(0);
+    });
+
+    it("matches by tool+target pair OR by intent hash (either channel)", async () => {
+      // Same tool+target but different hash (should match via target pair).
+      await seed({
+        operationKey: "op:exec-t1:send-email",
+        executionId: "exec-t1",
+        toolIdentity: "send_email",
+        domainTarget: "batch:13",
+        intentHash: "sha256:hash-a",
+      });
+      // Different target but same hash (should match via hash channel).
+      await seed({
+        operationKey: "op:exec-t2:send-email",
+        executionId: "exec-t2",
+        toolIdentity: "send_email",
+        domainTarget: "batch:99",
+        intentHash: "sha256:hash-shared",
+      });
+      // Unrelated op on both channels (should NOT match).
+      await seed({
+        operationKey: "op:exec-t3:other-tool",
+        executionId: "exec-t3",
+        toolIdentity: "other_tool",
+        domainTarget: "batch:777",
+        intentHash: "sha256:hash-unrelated",
+      });
+
+      const mod = new AiTaskOperationModule();
+      const unresolved = await mod.findUnresolvedByIntent({
+        toolIdentity: "send_email",
+        domainTarget: "batch:13",
+        intentHash: "sha256:hash-shared",
+      });
+      const executions = unresolved.map((op) => op.execution_id).sort();
+      expect(executions).to.have.members(["exec-t1", "exec-t2"]);
+      expect(executions).to.not.include("exec-t3");
+    });
+
+    it("returns oldest-first and respects the limit", async () => {
+      for (let i = 0; i < 3; i += 1) {
+        const executionId = `exec-lim-${i}`;
+        await seed({
+          operationKey: `op:${executionId}:send-email`,
+          executionId,
+          toolIdentity: "send_email",
+          domainTarget: "batch:14",
+          intentHash: "sha256:send-batch-14",
+        });
+      }
+      const mod = new AiTaskOperationModule();
+      const first = await mod.findUnresolvedByIntent({
+        toolIdentity: "send_email",
+        domainTarget: "batch:14",
+        intentHash: "sha256:send-batch-14",
+        limit: 2,
+      });
+      expect(first).to.have.length(2);
+    });
+
+    it("refuses DB access from a worker process (NFR-03)", async () => {
+      const previous = process.env.WORKER_TYPE;
+      process.env.WORKER_TYPE = "test-worker";
+      try {
+        const mod = new AiTaskOperationModule();
+        let threw = false;
+        try {
+          await mod.findUnresolvedByIntent({
+            toolIdentity: "send_email",
+            domainTarget: "batch:1",
+            intentHash: "sha256:x",
+          });
+        } catch (e) {
+          threw = true;
+          expect(String(e)).to.match(/worker/i);
+        }
+        expect(threw).to.equal(true);
+      } finally {
+        if (previous === undefined) delete process.env.WORKER_TYPE;
+        else process.env.WORKER_TYPE = previous;
+      }
+    });
+  });
 });
