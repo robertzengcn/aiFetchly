@@ -1263,6 +1263,31 @@ function initialize() {
         );
       }
 
+      // Task completion policy (T24, PRD NFR-05/AC-13): finalize executions
+      // left unfinalized by a crash/kill as interrupted. Runs BEFORE the
+      // schedulers start so no recovered row can race a fresh dispatch, and
+      // preserves checkpoints/receipts without replaying actions (§3.3).
+      // Pure no-op when the completion-policy flag is off (§17 rollback);
+      // fire-and-forget and never fatal.
+      try {
+        const { TaskExecutionRestartRecovery } = await import(
+          "@/service/aiTaskExecution/TaskExecutionRestartRecovery"
+        );
+        void new TaskExecutionRestartRecovery()
+          .recoverInterruptedExecutions()
+          .catch((err: unknown) => {
+            log.warn(
+              "[task-recovery] sweep failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+      } catch (err) {
+        log.warn(
+          "[task-recovery] startup sweep failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Preserved tool outputs: install the persistent cursor key and run the
       // reconciliation sweep (technical design §12.2). Without this the cursor
       // key is ephemeral per process, so every cursor a model received before a
