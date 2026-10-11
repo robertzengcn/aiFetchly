@@ -1,28 +1,41 @@
 # Task Completion Policy — PRD Coverage TODO
 
-Source PRDs (both `Proposed`, implementation has now **started in Slice 1 only**):
+Source PRDs (both `Proposed`; **Slices 1–3 are implemented** — see headline verdict below):
 
 - `docs/prd/scheduled-loop-premature-stop-recovery-advice.md` (v3.0) — FR-01…FR-24, NFR-01…NFR-12, AC-01…AC-32
 - `docs/prd/scheduled-loop-premature-stop-recovery-technical-design.md` (v2.0) — §§1…18, delivery slices §16
 
-Branch: `worktree-task-completion-policy-v1-slice1` (26 commits on top of `7ce133b2`,
-`+8306/−10`, confined to `src/{entity,entityTypes,model,modules,service/aiTaskExecution,config}` + tests).
+Branch: `worktree-task-completion-policy-v1-slice1` (92 commits on top of `7ce133b2`,
+`+39898/−81` across 109 files — no longer confined to the original Slice 1 scope:
+`src/{entity,entityTypes,model,modules,service,service/aiTaskExecution,config,main-process,views}`
++ `test/{vitest,modules,e2e}` + docs).
 
-**Headline verdict**
+**Headline verdict** (updated 2026-10-12, T27 reconciliation)
 
-- Slice 1 foundation is landed as library code and **all Slice 1 tests pass**: 115 tests
-  across 12 files (58 + 27 vitest via `vitest.service.config.mjs`, 30 Mocha via
-  `scripts/run-module-tests.js`); `tsc --noEmit` clean.
+- **Slices 1–3 are implemented and wired behind the flag** (`isAiTaskCompletionPolicyV1Enabled()`,
+  `src/config/featureFlags.ts:213`, DEFAULT OFF). 15 flag call sites across
+  `AIChatQueryEngine`, `ScheduledAiMessageRunner`, `ScheduledExecutionEnroller`,
+  `TaskLoopConsult`, `TaskExecutionRestartRecovery`, `ai-chat-v2-ipc.ts`. The formerly
+  "untouched" live files are now the heaviest-modified: `AIChatQueryLoop` (+715),
+  `AIChatQueryEngine` (+1526), `ScheduledLoopEventSink` (+542), `ScheduledAiMessageRunner` (+420).
 - **All 10 audit bugs (B1–B10) + R1 are fixed** — see checkboxes below for commit SHAs.
   The "missing unit tests for landed fixes" gap (structuredClone, verifyHash, NaN/Infinity,
   true-concurrent CAS) is also closed.
-- **Nothing is wired into the live loop**: the gate `isAiTaskCompletionPolicyV1Enabled()`
-  (`src/config/featureFlags.ts:213`) has zero production call sites; `AIChatQueryLoop`,
-  `AIChatQueryEngine`, `ScheduledLoopEventSink`, `ScheduledAiMessageRunner` are untouched
-  (old `goalTextStop` / `shouldAutoContinueGoal` / `complete→completed` still live).
-  That is *correct* for Slice 1 (shadow-only by design, B10 decision), but it means
-  **every AC that requires live recovery still fails**, and the shadow evaluation itself
-  is never invoked. Slice 2 owns the live wiring.
+- **Live wiring landed across Slices 2–3**: enrollment + contract freeze + budget gating +
+  four loop consult sites (`AIChatQueryLoop.maybeConsultPolicy` → `TaskLoopConsult`),
+  engine complete-gate + scheduled finalization (multi-statement txn), cancel/Continue/Retry
+  + `AI_CHAT_V2_TASK_CONTINUE/RETRY` IPC, renderer badge/chunk routing + 6-language i18n,
+  task lifecycle emitters + history reconstruction, restart recovery sweep + delivery dedup,
+  `TaskOperationGuard` at the send dispatch site, bounded async-poll backoff. Legacy nudges
+  (`goalTextStop`, `shouldAutoContinueGoal`, `complete→completed`) are retained **for
+  non-enrolled runs only** — flag-off is byte-identical to pre-policy behavior.
+- **Test state**: service vitest suite 2800 passed / 6 skipped (243 files) via
+  `vitest.service.config.mjs`; component suite 472+ via `yarn test:components`; Mocha 46+ via
+  `scripts/run-module-tests.js`; E2E recovery specs pass on real Electron; `tsc --noEmit` clean.
+- **Remaining open work**: Slice 4 (legacy schedule-page + non-Chat-V2 adapters,
+  `finalizeStandaloneRun`), scheduled-runner `task_execution_state` push, terminology
+  reconciliation (§F Slice 3 last open item), server diagnostics (GAP-SRV, separate repo),
+  and the §C rollout gates (T26: real-flow AC evidence + metrics/rollback verification).
 
 How to use this file: `[BUG]` = fix in landed code. `[GAP-Sn]` = unimplemented work
 belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
@@ -275,13 +288,16 @@ Renderer / i18n / tests:
       recovery IPC fails closed). E2E for the full scheduled badge loop + stale-event filtering lands with
       the emitter (renderer-ahead note above). PRD: FR-15, §15 (test table), AC-24/25/27/28/29–32.
 
-Acceptance mapping (all currently failing live; Slice 2 gate requires all green):
+Acceptance mapping (wiring complete; live flag-on verification owned by T26 — see §C):
 AC-01 (54/100 continue), AC-02 (first-response no-tool recovery), AC-03 (genuine completion, no extra maker
 call), AC-04 (observation occurrence), AC-05 (no-progress incomplete), AC-06 (permission resume counters),
 AC-07 (denial honored), AC-08 (budget exhaustion), AC-11 (checker-invented evidence rejected), AC-15
 (persistence failure → no success), AC-16 (history reload all languages), AC-17–27, AC-29 (monotonic counters
 through compaction/fallback), AC-30 (recoverable pre-decision error stays non-terminal), AC-32 (idempotent
-terminal identity, no schedule accounting for manual).
+terminal identity, no schedule accounting for manual). All of these now have live code paths wired behind
+the flag with unit/component/E2E coverage at the seams (see the [GAP-S2] entries above); what remains is
+real-flow, flag-on verification of the full §15 AC table plus rollout metrics/rollback evidence — tracked
+as T26 in §C below, NOT yet closed.
 
 ### Slice 3 — Guarded effects (gate: FR-11, NFR-05/07; AC-09/10/13/28)
 
@@ -349,7 +365,7 @@ Desktop completion control must work without server metadata; all fields optiona
 
 ---
 
-## C. Regression & rollout gates (PRD §12, design §17/§18)
+## C. Regression & rollout gates (PRD §12, design §17/§18) — scope of pending task T26
 
 - [ ] All AC-01–32 pass assigned test layers, incl. manually typed tasks with no `/goal`, schedule, or toggle.
 - [ ] Zero enrolled non-verified runs recorded successful; zero duplicate effects in fault-injection tests.
@@ -381,3 +397,14 @@ Desktop completion control must work without server metadata; all fields optiona
   `ad3141c8` (B7), `bd332e26` (R1), `399d8f8c` (concurrent CAS + worker-guard tests),
   `ab9caf7c` (HARD_CAPS + policy_limits_json), `b872f221` (scoped submission uniqueness AC-26),
   `4521ff44` (B10 decision). B10 call-site wiring explicitly deferred to Slice 2 per §17.
+- **T27 coverage-claim reconciliation (2026-10-12)**: header, headline verdict, and the Slice 2
+  acceptance mapping were rewritten to match the current tree — the old "Slice 1 only / 26
+  commits / +8306−10 / zero call sites / untouched live files" claims predated Slices 2–3.
+  Re-verified by direct measurement: `git log --oneline 7ce133b2..HEAD | wc -l` = 92 commits;
+  `git diff --shortstat 7ce133b2..HEAD` = 109 files +39898/−81; flag grep = 15 call sites in 6
+  consumer files (`featureFlags.ts:213` definition); per-file diffstat confirms the four "untouched"
+  files are now the heaviest-modified (Loop +715, Engine +1526, Sink +542, Runner +420); legacy
+  nudges retained for non-enrolled runs only (Loop `goalTextStop` at :2640, Engine
+  `shouldAutoContinueGoal` at :548, sink `verified_complete→completed` mapping :299).
+  Open items unchanged: Slice 4, scheduled-runner `task_execution_state` push, §F terminology
+  reconciliation, GAP-SRV, §C rollout gates (T26).
