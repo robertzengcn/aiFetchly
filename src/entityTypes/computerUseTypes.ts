@@ -391,10 +391,14 @@ export interface GroundingWorkerGroundRequest {
   readonly requestKey: string;
   readonly generation: ComputerUseSessionGeneration;
   readonly observationId: ComputerUseObservationId;
+  /** Raw image bytes, transferred (never copied, never logged). */
+  readonly imageBytes: ArrayBuffer;
   readonly imageWidth: number;
   readonly imageHeight: number;
   readonly targetDescription: string;
   readonly crop?: ComputerUseRect;
+  /** Runtime pixel budget for this call (latency lever, not identity). */
+  readonly maxPixels: number;
 }
 
 /** Typed worker failures (shared error meanings across OS adapters). */
