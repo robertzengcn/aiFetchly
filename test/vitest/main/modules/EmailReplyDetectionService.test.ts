@@ -193,10 +193,19 @@ interface FakeEmailServicePortOptions {
   identity: { smtpUsername: string; fromAddress: string; replyToAddress: string | null; receiveUsername: string } | null;
   /** Return a different config on the SECOND getEmailServiceReceiveConfig call (mid-probe reconfig). */
   reconfiguredConfig?: EmailReceiveConnectionConfig | null;
+  /** R10: return a different identity on the SECOND readIdentity call
+   * (mid-probe reconfig of the configured sender). The fence rereads the
+   * identity alongside the config, so a fresh probe sees two identity
+   * reads; the reconfig lands on the fence's read. */
+  reconfiguredIdentity?: { smtpUsername: string; fromAddress: string; replyToAddress: string | null; receiveUsername: string } | null;
 }
 
-function fakeEmailServicePort(opts: FakeEmailServicePortOptions): ReplyDetectionEmailServicePort & { callCount: number } {
+function fakeEmailServicePort(opts: FakeEmailServicePortOptions): ReplyDetectionEmailServicePort & {
+  callCount: number;
+  identityCallCount: number;
+} {
   let callCount = 0;
+  let identityCallCount = 0;
   return {
     async getEmailServiceReceiveConfig() {
       callCount += 1;
@@ -206,10 +215,17 @@ function fakeEmailServicePort(opts: FakeEmailServicePortOptions): ReplyDetection
       return opts.config;
     },
     async readIdentity() {
+      identityCallCount += 1;
+      if (identityCallCount === 2 && opts.reconfiguredIdentity !== undefined) {
+        return opts.reconfiguredIdentity;
+      }
       return opts.identity;
     },
     get callCount() {
       return callCount;
+    },
+    get identityCallCount() {
+      return identityCallCount;
     },
   };
 }
@@ -1242,6 +1258,71 @@ describe("EmailReplyDetectionService — context-change guard (§7.1 step 7)", (
         config: imapConfig(),
         identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
         reconfiguredConfig: null, // account disabled/deleted during I/O
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("identity_conflict");
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+  });
+
+  // R10 — the closing fence rereads the CONFIG but hashed with the ORIGINAL
+  // configuredSender; a mid-probe readIdentity().fromAddress change (same
+  // receive host/login) was invisible, so the negative was checked against
+  // the old sender and persisted. The fence must reread the identity too.
+  it("returns unknown(identity_conflict) and does NOT persist a negative when only the configured sender changes mid-probe (R10)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(), // receive host/login/port UNCHANGED
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+        reconfiguredIdentity: {
+          smtpUsername: "me@example.com",
+          fromAddress: "newme@example.com", // only the configured From changed
+          replyToAddress: null,
+          receiveUsername: "me@example.com",
+        },
+      },
+      imapOptions: {
+        flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },
+        sentFolders: [{ folder: "Sent", verified: true }],
+        candidatesByFolder: new Map([["Sent", []]]),
+      },
+    });
+
+    const result = await kit.service.detect({ messageId: 100 });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("identity_conflict");
+    // The negative MUST NOT have been persisted or reported.
+    expect(kit.messagePort.updateCalls.length).toBe(0);
+    // The fence reread the identity (fresh probe: initial read + fence read).
+    expect(kit.emailServicePort.identityCallCount).toBeGreaterThanOrEqual(2);
+
+    // The unknown is never cached — a second detect re-probes (mailbox I/O
+    // happens again) instead of serving the rejected negative from memory.
+    await kit.service.detect({ messageId: 100 });
+    expect(kit.imapPort.refreshCalls.length).toBe(2);
+  });
+
+  it("returns unknown(identity_conflict) when the sender identity vanishes mid-probe (R10)", async () => {
+    const message = messageFixture();
+    const kit = buildServiceKit({
+      message,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: { smtpUsername: "me@example.com", fromAddress: "me@example.com", replyToAddress: null, receiveUsername: "me@example.com" },
+        reconfiguredIdentity: null, // identity row deleted during I/O
       },
       imapOptions: {
         flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date(1_000_000) },

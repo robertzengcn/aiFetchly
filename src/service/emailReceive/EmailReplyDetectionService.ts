@@ -940,26 +940,40 @@ export class EmailReplyDetectionService {
     }
 
     // Step 7 — before persisting a negative, confirm the account context is
-    // unchanged since the probe began (§7.1 step 7). A context change means
-    // the configured sender / scope the probe reasoned under may no longer be
-    // current; the safe outcome is `identity_conflict` (review, not negative).
-    const freshConfig = await this.emailServicePort.getEmailServiceReceiveConfig(
-      normalizedConfig.emailServiceId
-    );
+    // unchanged since the probe began (§7.1 step 7). Reread BOTH the receive
+    // config AND the sender identity (R10): the probe matched candidates
+    // against `configuredSender`, so a mid-probe readIdentity().fromAddress
+    // change invalidates the comparison even when the receive host/login are
+    // untouched. A context change means the negative is not safely
+    // attributable — the safe outcome is `identity_conflict` (review, not
+    // negative).
+    const [freshConfig, freshIdentity] = await Promise.all([
+      this.emailServicePort.getEmailServiceReceiveConfig(
+        normalizedConfig.emailServiceId
+      ),
+      this.emailServicePort.readIdentity(normalizedConfig.emailServiceId),
+    ]);
     if (!freshConfig) {
       // Config vanished during I/O — the account was reconfigured or disabled.
+      return this.unknown("identity_conflict");
+    }
+    if (!freshIdentity) {
+      // Identity row vanished during I/O — the configured sender is no longer
+      // resolvable, so the probe's sender matching cannot be trusted.
       return this.unknown("identity_conflict");
     }
     const freshNormalized = normalizeReceiveConnectionConfig(freshConfig);
     const probeEndContextHash = this.hashContext(
       freshNormalized,
-      configuredSender,
+      freshIdentity.fromAddress,
       sentResult.sentScope
     );
     // The probe-start hash used an empty sentScope (scope unknown until
-    // discoverSentFolders resolved). Compare the non-scope fields by
-    // recomputing the start hash with the SAME (now-known) scope — isolating
-    // account/sender changes from scope changes.
+    // discoverSentFolders resolved) and the ORIGINAL identity. Compare the
+    // non-scope fields by recomputing the start hash with the SAME (now-
+    // known) scope — isolating account/sender changes from scope changes.
+    // `configuredSender` is the identity the probe actually matched against;
+    // `freshIdentity.fromAddress` is what the account resolves to now.
     const probeStartRehashed = this.hashContext(
       normalizedConfig,
       configuredSender,
