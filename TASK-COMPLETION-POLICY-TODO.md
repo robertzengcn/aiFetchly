@@ -285,17 +285,30 @@ terminal identity, no schedule accounting for manual).
 
 ### Slice 3 — Guarded effects (gate: FR-11, NFR-05/07; AC-09/10/13/28)
 
-- [ ] **[GAP-S3] `TaskOperationGuard`** (§10): stable operation keys (execution/lineage + domain + target +
+- [x] **[GAP-S3] `TaskOperationGuard`** (§10): stable operation keys (execution/lineage + domain + target +
       intent hash + contract-permitted ordinal only), native receipt preference, claim→dispatch→confirm/unknown
       state machine with transition validation, pending/unknown query, no-effect-evidence-gated retry only.
-- [ ] **[GAP-S3] Cross-execution same-intent lookup**: new execution/conversation must not bypass an
+      — T23a (canonical intent hashing + `guardOperationKey`), T22 (atomic CAS state machine +
+      `OPERATION_STATE_TRANSITIONS` + winner validation in `AiTaskOperation.model.ts`), T23c (fault matrix),
+      T23d (wired at send dispatch site). `TaskOperationGuard.ts` + `AiTaskOperation.model.ts`.
+- [x] **[GAP-S3] Cross-execution same-intent lookup**: new execution/conversation must not bypass an
       unresolved earlier send/job (domain/target/intent/state index or native job lookup); `UNKNOWN_ACTION_OUTCOME`
       blocks replay, requires reconciliation, pauses schedule (FR-12).
-- [ ] **[GAP-S3] Startup recovery**: mark unfinished executions/occurrences interrupted, preserve
+      — T23b: `findUnresolvedByIntent` (model + module) + `prepareDispatch` foreign-unresolved fence
+      (`OPERATION_UNRESOLVED_EARLIER`) before the in-execution row check.
+- [x] **[GAP-S3] Startup recovery**: mark unfinished executions/occurrences interrupted, preserve
       checkpoints/receipts, invalidate callbacks/handles, reconcile uncertain operations — no automatic action
       replay. (NFR-05; `getUnfinalizedExecutions` exists, no consumer.)
-- [ ] **[GAP-S3] Crash/finalization fault-injection tests** (reservation↔dispatch crash, dispatch↔receipt crash,
+      — T24a–T24d: `TaskExecutionRestartRecovery.recoverInterruptedExecutions()` sweeps
+      `getUnfinalizedExecutions()` → finalizes each `incomplete`/`RESTART_INTERRUPTED` via coordinator CAS
+      (checkpoint preserved, ledger released in-txn, no auto-replay), idempotent + bounded (200 cap) + flag-off
+      no-op; wired fire-and-forget in `background.ts` after `ensureInitialized` + before `startSchedulers`.
+      Delivery dedup stamps `delivery_state='persisted'` in-txn + `releaseStrandedLedgerOwners()`.
+- [x] **[GAP-S3] Crash/finalization fault-injection tests** (reservation↔dispatch crash, dispatch↔receipt crash,
       restart-before-notification dedup, zero duplicate effects, single schedule-count increment).
+      — T23c fault matrix (`TaskOperationGuard.test.ts`: true-concurrent CAS race, claim fence, stickiness,
+      timestamp preservation, intent-race winner validation) + T24d (`TaskExecutionRestartRecovery.test.ts`:
+      restart sweep, idempotency, delivery dedup, stranded-ledger reconcile).
 - [x] **[GAP-S3] Background-job semantics**: start-receipt vs completion distinction, bounded read-only polling
       (backoff, ≥1s interval), no unbounded internal polling. (§10.3) — bounded polling landed (T23e):
       async poll loop now grows the interval ×1.5 from the registry's `pollMinIntervalMs` (5s) to a 15s cap
