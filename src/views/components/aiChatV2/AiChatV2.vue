@@ -921,7 +921,11 @@ import {
   startGoalLoop,
   stopGoalLoop,
 } from "@/views/api/aiChatGoal";
-import { continueTask, retryTask } from "@/views/api/aiChatTaskExecution";
+import {
+  continueTask,
+  retryTask,
+  getChatV2TaskExecutionState,
+} from "@/views/api/aiChatTaskExecution";
 import {
   parseAiGoalCommand,
   isValidLoopCount,
@@ -1599,6 +1603,37 @@ async function refreshActiveGoal(): Promise<void> {
   }
 }
 
+/**
+ * T13 (PRD FR-13/14, AC-16/24/25/27/32): restore the task-execution badge from
+ * the latest stored execution row for the active conversation. Used on
+ * conversation switch and after history reload so a terminal or in-flight
+ * execution survives navigation/restart (NFR-10: one terminal state per
+ * execution, derived from durable row state). Returns null for response-only
+ * answers that never enrolled — no badge in that case. Renderer display only;
+ * the main process is authoritative.
+ */
+async function restoreActiveTaskExecution(): Promise<void> {
+  const id = activeConversationId.value;
+  if (!id) {
+    activeTaskExecution.value = null;
+    return;
+  }
+  try {
+    const state = await getChatV2TaskExecutionState(id);
+    activeTaskExecution.value = state
+      ? {
+          executionId: state.executionId,
+          conversationId: state.conversationId,
+          status: state.status,
+          reasonCode: state.reasonCode,
+          outcome: state.outcome,
+        }
+      : null;
+  } catch {
+    activeTaskExecution.value = null;
+  }
+}
+
 /** Continue an incomplete task: same lineage ledger, resurrected budget
  * (PRD FR-14, AC-27). Reuses the parent's frozen contract — never re-freezes
  * from renderer input. Renders as a normal assistant turn once the
@@ -2243,8 +2278,11 @@ watch(activeConversationId, (id, previousId) => {
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
-  // Task execution state is per-conversation; clear on switch (PRD FR-13).
-  activeTaskExecution.value = null;
+  // T13 (PRD FR-13): restore the task badge from the stored latest execution
+  // row instead of clearing, so a terminal or in-flight execution survives a
+  // conversation switch. The restore fetch is AI-gated main-side; null when the
+  // conversation has no enrolled execution (response-only answer → no badge).
+  void restoreActiveTaskExecution();
   if (id) {
     void refreshScheduledLoopStatus();
   }
@@ -3532,6 +3570,11 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       if (activeConversationId.value !== conversationId) return;
       applyPlanState(nextPlanState);
       void refreshActiveGoal();
+      // T13 (PRD FR-13, AC-16/25/27/32): restore the task badge from the latest
+      // stored execution row after history loads so reload/restart shows the
+      // real terminal outcome or in-flight state. The guard above already
+      // pinned the active conversation; restoreActiveTaskExecution re-checks it.
+      void restoreActiveTaskExecution();
       void refreshScheduledLoopStatus();
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
@@ -4773,18 +4816,45 @@ const onSend = async (
           chunk.eventType === "task_execution_state" &&
           chunk.taskExecutionState
         ) {
-          // Task completion policy (PRD FR-13): keep the badge in sync with
-          // main-process authoritative state. Continue/Retry use the
+          // Task completion policy (PRD FR-13, NFR-10): keep the badge in sync
+          // with main-process authoritative state. Continue/Retry use the
           // executionId once the run reaches a terminal outcome.
           const te = chunk.taskExecutionState;
-          activeTaskExecution.value = {
-            executionId: te.executionId,
-            conversationId: te.conversationId,
-            status: te.status,
-            reasonCode: te.reasonCode,
-            outcome: te.outcome,
-            remainingWork: te.remainingWork,
-          };
+          // T13 Piece C — executionId dedup:
+          //  (a) A late chunk from an OLD execution (stale callback racing a
+          //      Continue/Retry successor) must NOT overwrite the badge of the
+          //      currently-tracked newer execution. The tracked executionId is
+          //      the most recent by construction (Continue/Retry adopt the
+          //      successor id before attaching its stream), so any incoming
+          //      chunk for a different execution on the same conversation is
+          //      stale — drop it.
+          //  (b) NFR-10: one terminal event per execution. A terminal chunk
+          //      for an execution already in terminal state is a replay —
+          //      drop it so the badge does not flicker or re-fire actions.
+          const tracked = activeTaskExecution.value;
+          const isTerminal = te.status === "terminal";
+          const sameExecution = tracked?.executionId === te.executionId;
+          const staleOldExecution =
+            tracked !== null &&
+            !sameExecution &&
+            te.conversationId === tracked.conversationId;
+          const duplicateTerminal =
+            tracked !== null &&
+            sameExecution &&
+            isTerminal &&
+            tracked.status === "terminal";
+          if (staleOldExecution || duplicateTerminal) {
+            // drop — keep the newer / already-applied tracked state
+          } else {
+            activeTaskExecution.value = {
+              executionId: te.executionId,
+              conversationId: te.conversationId,
+              status: te.status,
+              reasonCode: te.reasonCode,
+              outcome: te.outcome,
+              remainingWork: te.remainingWork,
+            };
+          }
         } else if (chunk.eventType === "goal_state" && chunk.goalState) {
           // Loop engine (later phase) pushes goal status; keep display in sync.
           const g = chunk.goalState;

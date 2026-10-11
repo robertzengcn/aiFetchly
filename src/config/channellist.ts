@@ -426,6 +426,13 @@ export const AI_CHAT_V2_TASK_CONTINUE = "ai-chat-v2:task-continue";
  * parent recorded for lineage. AI-gated + flag-gated.
  */
 export const AI_CHAT_V2_TASK_RETRY = "ai-chat-v2:task-retry";
+/**
+ * Renderer->Main: read the latest task execution for a conversation (PRD
+ * FR-13/14, AC-16/24/25/27/32). Used by history reload to restore the badge
+ * from the stored execution row instead of clearing it. AI-gated. Returns
+ * null for response-only answers (no enrolled execution → no badge).
+ */
+export const AI_CHAT_V2_TASK_STATE_GET = "ai-chat-v2:task-state-get";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

@@ -30,6 +30,7 @@ import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoo
 // T12: TaskOutcome carried on the complete event so terminal delivery is
 // bound to a durable finalization decision, not to a generic stream-end.
 import type {
+  AiTaskExecutionStatus,
   TaskExecutionRoute,
   TaskOutcome,
 } from "@/entityTypes/aiTaskExecutionTypes";
@@ -297,6 +298,31 @@ export interface AIChatQueryRecoveryStatusEvent {
   message?: string;
 }
 
+/**
+ * T13 (PRD FR-13/14, NFR-10/11, AC-16/24/25/27/32): task-execution lifecycle
+ * state chunk. Emitted at enrollment (active), at the durable finalization
+ * gate (terminal + outcome + reasonCode), and at intermediate consult-derived
+ * transitions (verifying/continuing/waiting_*). One terminal event per
+ * execution, fired AFTER durable finalization so a stale callback cannot
+ * affect a newer execution (NFR-10). The renderer dedups by executionId and
+ * ignores late chunks for a superseded execution.
+ */
+export interface AIChatQueryTaskExecutionStateEvent {
+  type: "task_execution_state";
+  conversationId: string;
+  /** The execution this state describes. The renderer keys badge identity by
+   * this id so a late chunk for a prior execution cannot overwrite a newer
+   * one (NFR-10/11, AC-32). */
+  executionId: string;
+  status: AiTaskExecutionStatus;
+  /** Terminal reason code (TASK_EXECUTION_REASON_CODES) when status is terminal. */
+  reasonCode?: string;
+  /** Honest outcome (TaskOutcome) when finalized. */
+  outcome?: TaskOutcome;
+  /** Human-readable remaining work / blocker summary (PRD FR-13). */
+  remainingWork?: string;
+}
+
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
@@ -313,7 +339,8 @@ export type AIChatQueryEvent =
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
-  | AIChatQueryUsageUpdateEvent;
+  | AIChatQueryUsageUpdateEvent
+  | AIChatQueryTaskExecutionStateEvent;
 
 /**
  * Result returned by AIChatQueryLoop.run().

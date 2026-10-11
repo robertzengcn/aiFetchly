@@ -122,6 +122,7 @@ import {
   readCurrentLeaseGeneration,
 } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import type { TaskExecutionBinding } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type {
@@ -310,6 +311,25 @@ export interface AIChatQuerySubmitInput {
    * `scheduledContext` is present.
    */
   taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T09 (FR-14/21/22, AC-16/27/28): trusted Continue/Retry successor context.
+   * The recovery IPC handler creates the successor execution via the
+   * coordinator (T08) and dispatches the engine with the coordinator's
+   * created binding + the parent's parsed route. The engine ADOPTS that
+   * binding exactly like a scheduled caller-supplied binding: no
+   * re-classification, no re-enrollment (startManual never runs — the row
+   * already exists), maps + decision slot keyed by the successor executionId
+   * so Stop/finalization find it. `route` is threaded into `taskRoute` so
+   * goal consults route correctly.
+   *
+   * Main-process-only trusted signal: submitMessage is only called with this
+   * field from `ai-chat-v2-ipc.ts` (the same trust boundary as
+   * `scheduledContext`); the renderer cannot forge it.
+   */
+  successorContext?: {
+    binding: TaskExecutionBinding;
+    route: TaskExecutionRoute;
+  };
 }
 
 export interface AIChatQueryEngineDeps {
@@ -1020,8 +1040,13 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
-      input;
+    const {
+      eventSink,
+      request,
+      scheduledContext,
+      outboundSendPreAuthorized,
+      successorContext,
+    } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -1092,6 +1117,14 @@ export class AIChatQueryEngine {
       | { kind: "conflict"; executionId: string }
       | { kind: "denied"; reasonCode: string }
       | undefined;
+    /**
+     * T09 (AC-28): the successor executionId adopted this turn from a trusted
+     * `successorContext` (the coordinator already created the successor row
+     * before dispatching this engine turn). Set only when the adoption block
+     * ran (flag-on + successorContext). The pre-stream catch cancels this
+     * execution when startup fails so no orphan active row remains.
+     */
+    let adoptedSuccessorExecutionId: string | undefined;
     /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
     let historySelectionAcceptedIds: readonly string[] = [];
     /** Submitted refs whose source moved (§4.2), reported on `start`. */
@@ -1128,6 +1161,158 @@ export class AIChatQueryEngine {
             recordedDecision = d;
           },
         });
+      }
+      // T09 (FR-14/21/22, AC-16/27/28): a Continue/Retry successor turn
+      // arrives with a trusted `successorContext` — the IPC handler already
+      // created the successor execution via the coordinator
+      // (continueExecution/retryExecution) BEFORE dispatching this engine
+      // turn. Adopt the coordinator's binding exactly like the scheduled
+      // caller-supplied binding above: no re-classification and no
+      // re-enrollment (startManual must never run — the successor row already
+      // exists). Build the full LoopTaskExecutionBinding mirroring the manual
+      // created-branch below (fresh expectedStateVersion, lease guard,
+      // evidence stack, progress tracker, budget closures delegating to the
+      // coordinator's live budget — the ORIGINAL remaining limits for
+      // Continue, never renewed), write the maps + decision slot keyed by the
+      // successor executionId, and thread the parent's parsed route into the
+      // outer `taskRoute`. No replacement fencing: this turn is the lineage
+      // successor, not a replacement submission.
+      if (isAiTaskCompletionPolicyV1Enabled() && successorContext) {
+        try {
+          const created = successorContext.binding;
+          const execModule = new AiTaskExecutionModule();
+          const { evidenceService, checkerDispatch, observationProvider, operationReceiptProvider, artifactBaseDir } =
+            buildEvidenceService({
+              executionId: created.executionId,
+              execModule,
+              operationModule: new AiTaskOperationModule(),
+              searchModule: new SearchModule(),
+              contactInfoRepository,
+            });
+          // One tracker per execution closing over the SAME budget the
+          // controller consults (FR-09 / §7.2 step 7). BaseModule TDZ —
+          // never constructed at module top level.
+          const progressTracker = new TaskProgressTracker({
+            budget: created.budget,
+          });
+          // Per-turn decision slot keyed by the successor executionId (the
+          // finalization gate reads it back — same contract as the manual
+          // created-branch below).
+          let recordedDecision: TaskCompletionDecision | null = null;
+          taskExecutionBinding = {
+            executionId: created.executionId,
+            policyAccepted: true,
+            getAbortSignal: () =>
+              this.activeTurns.get(conversationId)?.abortController.signal,
+            consult: async (candidate) => {
+              // Read the CAS token fresh per consult so evidence writes
+              // persist (AC-32) — identical to the manual created-branch.
+              const exec = await execModule.getExecution(created.executionId);
+              const expectedStateVersion = exec?.execution_state_version;
+              // T15b lease guard: reject the consult when this execution no
+              // longer holds the lineage lease (a further successor may have
+              // superseded it). Fail-closed on a missing ledger.
+              if (
+                created.ledgerId !== undefined &&
+                created.leaseGeneration !== undefined
+              ) {
+                const currentGen = await readCurrentLeaseGeneration(
+                  (id) => execModule.getLedgerById(id),
+                  created.ledgerId as string
+                );
+                const ownership = assertOwnership(
+                  { leaseGeneration: created.leaseGeneration },
+                  currentGen ?? -1
+                );
+                if (!ownership.ok) {
+                  console.error(
+                    `[ai-chat-v2] successor consult rejected — stale lease (executionId=${created.executionId}, bindingGen=${created.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
+                  );
+                  return {
+                    type: "yield_owner" as const,
+                    owner: "goal" as const,
+                    result: "maker_iteration_ended" as const,
+                  };
+                }
+              }
+              return created.controller.decide(candidate, {
+                route: created.route,
+                contract: created.contract ?? undefined,
+                evidenceService,
+                evidenceContext: {
+                  content: candidate.content,
+                  source: "loop_consult",
+                  sourceRevision: "slice2-t03-manual",
+                  checkerDispatch,
+                  observationProvider,
+                  operationReceiptProvider,
+                  artifactBaseDir: artifactBaseDir ?? undefined,
+                  abortSignal: this.activeTurns.get(conversationId)
+                    ?.abortController.signal,
+                  expectedStateVersion,
+                },
+                budget: created.budget,
+              });
+            },
+            reserveContinuation: (continuationId) =>
+              created.budget.reserveContinuation(continuationId),
+            reserveProviderAttempt: (requestId) =>
+              created.budget.reserveProviderAttempt(requestId),
+            reserveToolExecution: (toolRequestId) =>
+              created.budget.reserveToolExecution(toolRequestId),
+            reconcileTokens: (requestId, actualTokens) =>
+              created.budget.reconcileTokens(requestId, actualTokens),
+            addActiveRuntime: (ms) => created.budget.addActiveRuntime(ms),
+            ledgerId: created.ledgerId,
+            leaseGeneration: created.leaseGeneration,
+            persistBudget: (delta) =>
+              execModule.persistBudgetConsumption({
+                ledgerId: created.ledgerId,
+                expectedOwnerGeneration: created.leaseGeneration,
+                activeExecutionId: created.executionId,
+                delta,
+              }),
+            recordDecision: (decision) => {
+              recordedDecision = decision;
+            },
+            recordToolRoundProgress: (observation) => {
+              progressTracker.recordToolRound(observation);
+            },
+            recordAssistantTextProgress: (content) => {
+              progressTracker.recordAssistantTextRound(content);
+            },
+          };
+          this.taskDecisionSlots.set(created.executionId, {
+            get: () => recordedDecision,
+            set: (d: TaskCompletionDecision | null) => {
+              recordedDecision = d;
+            },
+          });
+          this.taskExecutionBindings.set(conversationId, created.executionId);
+          this.policyAcceptedConversations.add(conversationId);
+          // Route: the parent's parsed route (re-classification would risk
+          // demoting a task continuation to response_only).
+          taskRoute = successorContext.route;
+          adoptedSuccessorExecutionId = created.executionId;
+          // T13 (PRD FR-13, NFR-10/11, AC-16): emit the active lifecycle state
+          // for the successor so the badge tracks the new executionId as soon
+          // as Continue/Retry enrollment commits, before the successor stream
+          // attaches. The renderer's executionId dedup (Piece C) drops any late
+          // terminal chunk from the parent execution in favor of this one.
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId,
+            executionId: created.executionId,
+            status: "active",
+          });
+        } catch (err) {
+          console.error(
+            "[ai-chat-v2] successor binding adoption failed:",
+            err
+          );
+          taskExecutionBinding = undefined;
+          adoptedSuccessorExecutionId = undefined;
+        }
       }
       // Generate the turn id once, at accept time (technical-design §4.3).
       // Scheduled turns reuse the stable scheduled id so a crash-retry stamps
@@ -1420,7 +1605,11 @@ export class AIChatQueryEngine {
       // `pendingPermissions` is the runtime map of conversations
       // mid-permission-prompt.
       // ------------------------------------------------------------------
-      if (isAiTaskCompletionPolicyV1Enabled() && !scheduledContext) {
+      if (
+        isAiTaskCompletionPolicyV1Enabled() &&
+        !scheduledContext &&
+        !successorContext
+      ) {
         const pendingPlanApproval = planState?.status === "awaiting_approval";
         const pendingPermission = this.pendingPermissions.has(conversationId);
         const hasApprovedTaskTemplate = planState?.status === "approved";
@@ -1448,7 +1637,11 @@ export class AIChatQueryEngine {
       // whole block is skipped, `taskExecutionBinding` stays undefined, and
       // the loop's consult guards no-op.
       // ------------------------------------------------------------------
-      if (isAiTaskCompletionPolicyV1Enabled() && !scheduledContext) {
+      if (
+        isAiTaskCompletionPolicyV1Enabled() &&
+        !scheduledContext &&
+        !successorContext
+      ) {
         try {
           // Only enroll routes that can do work OR wait on preparation.
           // response_only turns end naturally and never need a completion
@@ -1790,6 +1983,17 @@ export class AIChatQueryEngine {
                   progressTracker.recordAssistantTextRound(content);
                 },
               };
+              // T13 (PRD FR-13, NFR-10/11, AC-16): emit the active lifecycle
+              // state once the binding is fully constructed and registered.
+              // The renderer shows the badge immediately (no waiting for the
+              // first consult) and the executionId is stable for dedup. A
+              // terminal event for THIS execution later replaces this state.
+              eventSink.emit({
+                type: "task_execution_state",
+                conversationId,
+                executionId: created.executionId,
+                status: "active",
+              });
             } else if (startResult.status === "reused") {
               // T10 (FR-17/21, AC-26): transport retry of the same accepted
               // submission. The DB dedup recorded the existing execution — but
@@ -1876,6 +2080,27 @@ export class AIChatQueryEngine {
       };
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
+      // T09 (AC-28): the successor execution row was created before this
+      // dispatch; a startup failure would leave it active forever. Cancel it
+      // through the coordinator (fire-and-forget) so no orphan active row
+      // remains, then surface the terminal error to the renderer.
+      if (adoptedSuccessorExecutionId) {
+        void new TaskExecutionCoordinator()
+          .cancel(adoptedSuccessorExecutionId)
+          .then((cancelResult) => {
+            if (!cancelResult.ok && !cancelResult.alreadyFinalized) {
+              console.error(
+                `[ai-chat-v2] orphan successor cancel failed (executionId=${adoptedSuccessorExecutionId}): ${cancelResult.reasonCode ?? "unknown"}`
+              );
+            }
+          })
+          .catch((cancelErr: unknown) =>
+            console.error(
+              `[ai-chat-v2] orphan successor cancel threw (executionId=${adoptedSuccessorExecutionId}):`,
+              cancelErr
+            )
+          );
+      }
       this.clearActiveTurnState(request.conversationId ?? "");
       void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
@@ -3097,6 +3322,23 @@ export class AIChatQueryEngine {
           taskExecutionId,
           taskReasonCode,
         });
+        // T13 (PRD FR-13/14, NFR-10, AC-16/24/25/27/32): emit ONE terminal
+        // task_execution_state event AFTER durable finalization committed the
+        // row's outcome, so the renderer badge reflects authoritative state
+        // — never a speculative pre-finalization value. Only enrolled turns
+        // (taskExecutionId set) emit; response-only answers never enrolled and
+        // never get a badge. The renderer dedups by executionId + drops a
+        // terminal replay (NFR-10: one terminal event per execution).
+        if (taskExecutionId && taskOutcome) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId,
+            executionId: taskExecutionId,
+            status: "terminal",
+            outcome: taskOutcome,
+            reasonCode: taskReasonCode,
+          });
+        }
         // Post-turn compaction. The durable incremental coordinator (§11) takes
         // precedence when injected — it dedups concurrent requests, acquires a
         // durable claim with fence/lease, and atomically saves/publishes the
@@ -3241,6 +3483,17 @@ export class AIChatQueryEngine {
           taskExecutionId: cancelledTaskExecutionId,
           taskReasonCode: cancelledTaskReasonCode,
         });
+        // T13: terminal state after durable finalization (cancelled path).
+        if (cancelledTaskExecutionId && cancelledTaskOutcome) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId,
+            executionId: cancelledTaskExecutionId,
+            status: "terminal",
+            outcome: cancelledTaskOutcome,
+            reasonCode: cancelledTaskReasonCode,
+          });
+        }
         this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
@@ -3318,6 +3571,17 @@ export class AIChatQueryEngine {
           taskExecutionId: failedTaskExecutionId,
           taskReasonCode: failedTaskReasonCode,
         });
+        // T13: terminal state after durable finalization (failed path).
+        if (failedTaskExecutionId && failedTaskOutcome) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId,
+            executionId: failedTaskExecutionId,
+            status: "terminal",
+            outcome: failedTaskOutcome,
+            reasonCode: failedTaskReasonCode,
+          });
+        }
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
         break;

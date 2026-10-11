@@ -76,6 +76,7 @@ import {
   AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_TASK_CONTINUE,
   AI_CHAT_V2_TASK_RETRY,
+  AI_CHAT_V2_TASK_STATE_GET,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -719,6 +720,24 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             promptTokens: e.promptTokens,
             completionTokens: e.completionTokens,
             totalTokens: e.totalTokens,
+          });
+          break;
+        case "task_execution_state":
+          // T13 (FR-13/14, NFR-10/11): forward authoritative task-execution
+          // lifecycle state to the renderer badge. Non-terminal chunk on the
+          // shared STREAM_CHUNK channel; the terminal variant is emitted AFTER
+          // durable finalization at the engine complete/cancelled/failed gates.
+          sendChunk(event, {
+            eventType: "task_execution_state",
+            conversationId: e.conversationId,
+            taskExecutionState: {
+              executionId: e.executionId,
+              conversationId: e.conversationId,
+              status: e.status,
+              reasonCode: e.reasonCode,
+              outcome: e.outcome,
+              remainingWork: e.remainingWork,
+            },
           });
           break;
         case "complete":
@@ -2045,12 +2064,51 @@ async function loadParentExecution(
 }
 
 /**
+ * T13 (PRD FR-13/14, AC-16/24/25/27/32): read the latest execution row for a
+ * conversation so history reload can restore the badge honestly. Mirrors
+ * `handleGoalGet`: AI-gate first, parse payload, delegate to the module, never
+ * touches a repository. Returns the row projection the renderer needs to badge
+ * (or null for response-only answers that never enrolled — no badge shown).
+ */
+async function handleTaskStateGet(
+  data: unknown
+): Promise<CommonMessage<unknown>> {
+  // AI-feature IPC rule: check AI enable FIRST.
+  if (!(await ensureHostedAiEnabled())) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  try {
+    const p = parseObjectPayload(data);
+    if (!p) return denied("Invalid request payload");
+    const conversationId =
+      typeof p.conversationId === "string" ? p.conversationId : "";
+    if (!conversationId) return denied("conversationId is required");
+    const module = new AiTaskExecutionModule();
+    const exec = await module.getLatestByConversation(conversationId);
+    if (!exec) return ok(null);
+    return ok({
+      executionId: exec.execution_id,
+      conversationId: exec.conversation_id ?? conversationId,
+      status: exec.stage,
+      reasonCode: exec.outcome_reason_code ?? undefined,
+      outcome: exec.task_outcome ?? undefined,
+    });
+  } catch (err) {
+    // Malformed JSON payload or module failure — never leak the raw error
+    // to the renderer, never throw out of the IPC handler (the renderer
+    // would see a hung invoke). userSafeError sanitizes internals.
+    return denied(userSafeError(err));
+  }
+}
+
+/**
  * Shared successor handler body: gates, parent load, coordinator call.
  * `mode` selects Continue (shared lineage ledger) vs Retry (new ledger).
  */
 async function handleTaskSuccessor(
   data: string,
-  mode: "continue" | "retry"
+  mode: "continue" | "retry",
+  event: IpcEventLike
 ): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
   // AI-feature IPC rule: check AI enable FIRST.
   if (!(await ensureHostedAiEnabled())) {
@@ -2171,8 +2229,43 @@ async function handleTaskSuccessor(
           })
         : await coordinator.retryExecution(baseInput);
     if (result.status === "created") {
+      // T09 (FR-14/21/22, AC-16/27/28): the created successor must actually
+      // RUN. Dispatch a real engine turn carrying the trusted
+      // `successorContext` (the coordinator's binding + the parent's parsed
+      // route) through the singleton engine, with an event sink bound to THIS
+      // renderer so the successor's chunks stream. Fire-and-forget: the
+      // invoke resolves with the successor identity immediately (the
+      // renderer attaches its successor-stream listeners before the
+      // engine's first chunk); a dispatch failure sends a terminal error
+      // completion so the renderer's badge never hangs on "continuing".
+      const successorExecutionId = result.binding.executionId;
+      const dispatchMessage = parsed.message || contract?.objective || "";
+      void getQueryEngine()
+        .submitMessage({
+          request: {
+            conversationId,
+            message: dispatchMessage,
+            submissionId,
+          },
+          eventSink: createEventSink(event),
+          successorContext: {
+            binding: result.binding,
+            route,
+          },
+        })
+        .catch((dispatchErr: unknown) => {
+          console.error(
+            `[ai-chat-v2] successor dispatch failed (executionId=${successorExecutionId}):`,
+            dispatchErr
+          );
+          sendComplete(event, {
+            eventType: "error",
+            conversationId,
+            errorMessage: userSafeError(dispatchErr),
+          });
+        });
       return ok({
-        executionId: result.binding.executionId,
+        executionId: successorExecutionId,
         status: "created",
       });
     }
@@ -2193,15 +2286,17 @@ async function handleTaskSuccessor(
 }
 
 async function handleTaskContinue(
-  data: string
+  data: string,
+  event: IpcEventLike
 ): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
-  return handleTaskSuccessor(data, "continue");
+  return handleTaskSuccessor(data, "continue", event);
 }
 
 async function handleTaskRetry(
-  data: string
+  data: string,
+  event: IpcEventLike
 ): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
-  return handleTaskSuccessor(data, "retry");
+  return handleTaskSuccessor(data, "retry", event);
 }
 
 export function registerAiChatV2IpcHandlers(): void {
@@ -2282,10 +2377,16 @@ export function registerAiChatV2IpcHandlers(): void {
   // the handler — registered before STREAM so they exist when the renderer
   // probes them.
   ipcMain.handle(AI_CHAT_V2_TASK_CONTINUE, async (_e, data: unknown) =>
-    handleTaskContinue((data as string) ?? "")
+    handleTaskContinue((data as string) ?? "", _e as IpcEventLike)
   );
   ipcMain.handle(AI_CHAT_V2_TASK_RETRY, async (_e, data: unknown) =>
-    handleTaskRetry((data as string) ?? "")
+    handleTaskRetry((data as string) ?? "", _e as IpcEventLike)
+  );
+  // T13 (FR-13/14, AC-16/24/25/27/32): read-only latest-execution query for
+  // history reload. AI-gated inside the handler. No DB access in the handler —
+  // delegates to AiTaskExecutionModule.
+  ipcMain.handle(AI_CHAT_V2_TASK_STATE_GET, async (_e, data: unknown) =>
+    handleTaskStateGet(data)
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

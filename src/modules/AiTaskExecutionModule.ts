@@ -95,6 +95,19 @@ export class AiTaskExecutionModule extends BaseModule {
   }
 
   /**
+   * T13 (PRD FR-13/14, AC-16/24/25/27/32): passthrough to the model's
+   * latest-by-conversation query. Used by the history-reload IPC to restore
+   * the badge from the stored execution row. Never raises to the IPC layer —
+   * returns null when the conversation has no enrolled execution.
+   */
+  async getLatestByConversation(
+    conversationId: string
+  ): Promise<AiTaskExecutionEntity | null> {
+    await this.ensureConnection();
+    return this.model.getLatestByConversation(conversationId);
+  }
+
+  /**
    * Scheduled finalization (FR-12/13/15/17/18, §6.3). Runs the multi-statement
    * transaction in the model: CAS-finalize the execution + release the ledger
    * + update the run row + update schedule counters + pause-if-needed, all

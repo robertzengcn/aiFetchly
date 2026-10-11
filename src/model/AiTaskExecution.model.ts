@@ -1341,6 +1341,24 @@ export class AiTaskExecutionModel extends BaseDb {
   }
 
   /**
+   * T13 (PRD FR-13/14, AC-16/24/25/27/32): load the latest execution row for a
+   * conversation so history reload can restore the badge honestly. Orders by
+   * `createdAt` DESC (AuditableEntity) and returns the single newest row —
+   * finalized or not — so the renderer shows the most recent execution's
+   * outcome/state. Returns null when the conversation has no executions
+   * (response-only answers never enroll, so no badge is shown for them).
+   */
+  async getLatestByConversation(
+    conversationId: string
+  ): Promise<AiTaskExecutionEntity | null> {
+    assertNotWorker("getLatestByConversation");
+    return this.executionRepo.findOne({
+      where: { conversation_id: conversationId },
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  /**
    * Persist an already-loaded execution entity (e.g. after mutating
    * `execution_state_json` for a shadow decision). Used by the module's
    * `recordShadowDecision` so it does not need bracket-access to a private
