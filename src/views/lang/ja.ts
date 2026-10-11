@@ -3578,6 +3578,10 @@ export default {
     command: {
       busy: "このチャットの実行中はコマンドを使用できません。完了を待つか、先に停止してください。",
     },
+    recovery: {
+      retry: "再接続中… 試行 {attempt}/{max}（約 {seconds} 秒待機）",
+      recovering: "{layer} で復旧中：{reason}",
+    },
     empty: {
       title: "何でも質問するか、左の会話を選択してください。",
     },

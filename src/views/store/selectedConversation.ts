@@ -12,6 +12,7 @@ import {
   type WorkspaceStreamStatus,
   type GoalRunInfo,
   type RecoveryInfo,
+  type RetryInfo,
 } from "@/views/utils/workspaceStreamPresenter";
 import {
   cancelChatRun,
@@ -136,6 +137,7 @@ export const useSelectedConversationStore = defineStore(
 
     const messages = ref<readonly ChatV2MessageView[]>([]);
     const recovery = ref<RecoveryInfo | null>(null);
+    const retry = ref<RetryInfo | null>(null);
     const goal = ref<GoalRunInfo | null>(null);
     const activeAssistantMessageId = ref<string | null>(null);
     const streamStatus = ref<WorkspaceStreamStatus>("idle");
@@ -162,6 +164,7 @@ export const useSelectedConversationStore = defineStore(
       runtimeStatus.value = state.runtimeStatus;
       activeRunId.value = state.activeRunId;
       recovery.value = state.recovery;
+      retry.value = state.retry;
       goal.value = state.goal;
     }
 
@@ -650,6 +653,7 @@ export const useSelectedConversationStore = defineStore(
     return {
       messages,
       recovery,
+      retry,
       goal,
       scheduledLoop,
       activeAssistantMessageId,

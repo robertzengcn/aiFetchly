@@ -3639,6 +3639,10 @@ export default {
     command: {
       busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
     },
+    recovery: {
+      retry: "Reconnexion… tentative {attempt} sur {max} (attente ~{seconds} s)",
+      recovering: "Récupération via {layer} : {reason}",
+    },
     empty: {
       title: "Posez une question ou choisissez une conversation à gauche.",
     },

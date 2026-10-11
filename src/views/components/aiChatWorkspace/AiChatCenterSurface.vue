@@ -26,6 +26,20 @@
       @open-details="workspaceStore.openInspector('activity')"
     />
 
+    <!-- Retry/recovery detail (FR-REC-001..003): the run strip keeps the
+         high-level state; this line exposes attempt/max, bounded delay, and
+         the current recovery layer + reason when they are live. -->
+    <div
+      v-if="retryDetailText !== null || recoveryDetailText !== null"
+      class="chat-center__recovery-detail"
+      role="status"
+      aria-live="polite"
+      data-testid="workspace-recovery-detail"
+    >
+      <v-icon size="x-small" class="mr-1">mdi-progress-clock</v-icon>
+      <span>{{ retryDetailText ?? recoveryDetailText }}</span>
+    </div>
+
     <!-- Managed-browser region (capability parity FR-BRW-001..005): the
          shared start panel + live session card compose directly in the
          center column — handoff, takeover, verify-login, resume/extend/stop
@@ -801,6 +815,36 @@ const activeGoalObjective = computed(() => {
 });
 
 const activeLoopStatus = computed(() => selectedStore.scheduledLoop?.status ?? null);
+
+/** FR-REC-002: transport retry — attempt, maximum, bounded delay. */
+const retryDetailText = computed<string | null>(() => {
+  const info = selectedStore.retry;
+  if (!info) return null;
+  return (
+    t("workspaceChat.recovery.retry", {
+      attempt: info.attempt,
+      max: info.maxAttempts,
+      seconds: Math.max(1, Math.round(info.delayMs / 1000)),
+    }) ||
+    `Reconnecting… attempt ${info.attempt} of ${info.maxAttempts} (waiting ~${Math.max(
+      1,
+      Math.round(info.delayMs / 1000)
+    )}s)`
+  );
+});
+
+/** FR-REC-003: recovery — current layer, reason, attempt, safe message. */
+const recoveryDetailText = computed<string | null>(() => {
+  const info = selectedStore.recovery;
+  if (!info) return null;
+  return (
+    t("workspaceChat.recovery.recovering", {
+      layer: info.layer,
+      reason: info.reason,
+    }) ||
+    `Recovering via ${info.layer}: ${info.reason}`
+  );
+});
 
 /** One primary stop action (PRD §13.3): goal → loop → active run. */
 async function onStopFromStrip(): Promise<void> {
@@ -2489,6 +2533,15 @@ onUnmounted(() => {
 .chat-center__history-toggle:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 1px;
+}
+
+.chat-center__recovery-detail {
+  display: flex;
+  align-items: center;
+  padding: 2px 12px;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  flex-shrink: 0;
 }
 
 .chat-center__browser-region {

@@ -3654,6 +3654,10 @@ export default {
     command: {
       busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
     },
+    recovery: {
+      retry: "Reconectando… intento {attempt} de {max} (esperando ~{seconds} s)",
+      recovering: "Recuperando vía {layer}: {reason}",
+    },
     empty: {
       title: "Pregunta lo que quieras o elige una conversación a la izquierda.",
     },

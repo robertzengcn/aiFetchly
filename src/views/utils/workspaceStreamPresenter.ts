@@ -34,6 +34,13 @@ export interface RecoveryInfo {
   readonly message?: string;
 }
 
+/** Transport-retry status (FR-REC-002): attempt/max/bounded delay. */
+export interface RetryInfo {
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly delayMs: number;
+}
+
 /** Live goal-loop state tracked from goal_* detail events (PRD §13.3). */
 export interface GoalRunInfo {
   readonly goalId: string;
@@ -50,6 +57,7 @@ export interface WorkspaceStreamState {
   readonly activeRunId: string | null;
   readonly runtimeStatus: ConversationRuntimeStatus;
   readonly recovery: RecoveryInfo | null;
+  readonly retry: RetryInfo | null;
   readonly goal: GoalRunInfo | null;
   readonly pendingArtifactOpen: { artifactId: string } | null;
   readonly unflushedDeltaCount: number;
@@ -166,6 +174,7 @@ export function createWorkspaceStreamPresenter(
   let activeRunId: string | null = null;
   let runtimeStatus: ConversationRuntimeStatus = "idle";
   let recovery: RecoveryInfo | null = null;
+  let retry: RetryInfo | null = null;
   let goal: GoalRunInfo | null = null;
   let pendingArtifactOpen: { artifactId: string } | null = null;
 
@@ -195,6 +204,9 @@ export function createWorkspaceStreamPresenter(
     },
     get recovery() {
       return recovery;
+    },
+    get retry() {
+      return retry;
     },
     get goal() {
       return goal;
@@ -293,6 +305,11 @@ export function createWorkspaceStreamPresenter(
       }
       case "token": {
         const delta = str(chunk.contentDelta) ?? "";
+        if (delta) {
+          // Real response data resolves any in-flight retry/recovery state.
+          retry = null;
+          recovery = null;
+        }
         if (messageId && delta) {
           ensureAssistantView(messageId);
           appendDelta(messageId, "content", delta);
@@ -495,8 +512,25 @@ export function createWorkspaceStreamPresenter(
             : runtimeStatus;
         break;
       }
+      case "retry_connect": {
+        bufferedOnly = false;
+        if (
+          typeof chunk.retryAttempt === "number" &&
+          typeof chunk.retryMaxAttempts === "number"
+        ) {
+          retry = {
+            attempt: chunk.retryAttempt,
+            maxAttempts: chunk.retryMaxAttempts,
+            delayMs:
+              typeof chunk.retryDelayMs === "number" ? chunk.retryDelayMs : 0,
+          };
+        }
+        break;
+      }
       case "recovery_status": {
         bufferedOnly = false;
+        // The recovery layer supersedes the raw transport-retry line.
+        retry = null;
         recovery = {
           layer: str(chunk.recoveryLayer) ?? "",
           reason: str(chunk.recoveryReason) ?? "",
@@ -593,6 +627,8 @@ export function createWorkspaceStreamPresenter(
         runtimeStatus = "idle";
         activeAssistantMessageId = null;
         errorMessage = null;
+        retry = null;
+        recovery = null;
         break;
       }
       case "error": {
@@ -601,6 +637,7 @@ export function createWorkspaceStreamPresenter(
         streamStatus = "error";
         runtimeStatus = "idle";
         errorMessage = str(chunk.errorMessage) ?? "Unknown error";
+        retry = null;
         break;
       }
       case "cancelled": {
@@ -608,6 +645,7 @@ export function createWorkspaceStreamPresenter(
         flushNow();
         streamStatus = "cancelled";
         runtimeStatus = "idle";
+        retry = null;
         break;
       }
       default:

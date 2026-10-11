@@ -178,6 +178,11 @@ const i18n = createI18n({
       workspaceChat: {
         newChat: "New chat",
         loadOlder: "Load older messages",
+        recovery: {
+          retry:
+            "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
+          recovering: "Recovering via {layer}: {reason}",
+        },
         command: {
           busy:
             "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
@@ -1652,6 +1657,71 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       wrapper.findComponent({ name: "AgentTaskListDialog" }).exists()
     ).toBe(true);
+  });
+
+  /**
+   * FR-REC-001..003: the run strip keeps the high-level state; the center
+   * exposes transport-retry (attempt/max/bounded delay) and recovery
+   * (layer/reason) detail, and both clear once real content arrives.
+   */
+  it("surfaces retry and recovery detail from live stream events (FR-REC-002/003)", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-rec");
+    await flushPromises();
+    const selected = useSelectedConversationStore();
+
+    const detailEvent = (
+      sequence: number,
+      eventType: string,
+      payload: Record<string, unknown>
+    ): unknown => ({
+      sequence,
+      runId: "run-rec",
+      conversationId: "conv-rec",
+      eventType,
+      emittedAt: "2026-10-11T00:00:00.000Z",
+      payload: { eventType, ...payload },
+    });
+
+    // Transport retry: attempt 2 of 5 with a bounded delay.
+    selected.applyDetailEvent(
+      detailEvent(1, "retry_connect", {
+        retryAttempt: 2,
+        retryMaxAttempts: 5,
+        retryDelayMs: 3000,
+      }) as never
+    );
+    await flushPromises();
+    const detail = wrapper.get('[data-testid="workspace-recovery-detail"]');
+    expect(detail.text()).toContain("attempt 2 of 5");
+    expect(detail.text()).toContain("~3s");
+
+    // Recovery layer takes over the line once retry stops reporting.
+    selected.applyDetailEvent(
+      detailEvent(2, "recovery_status", {
+        recoveryLayer: "fallback_model",
+        recoveryReason: "primary provider rate limited",
+      }) as never
+    );
+    await flushPromises();
+    expect(wrapper.get('[data-testid="workspace-recovery-detail"]').text()).toContain(
+      "Recovering via fallback_model: primary provider rate limited"
+    );
+
+    // Real content resolves both — the detail line disappears.
+    selected.applyDetailEvent(
+      detailEvent(3, "token", {
+        messageId: "a-rec",
+        contentDelta: "hello",
+      }) as never
+    );
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-recovery-detail"]').exists()
+    ).toBe(false);
   });
 
   it("shows the workspace chooser above the composer with no conversation selected", async () => {

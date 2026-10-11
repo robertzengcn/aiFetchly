@@ -3449,6 +3449,10 @@ export default {
     command: {
       busy: "当前对话正在运行，暂无法使用命令。请等待其完成或先停止。",
     },
+    recovery: {
+      retry: "正在重新连接… 第 {attempt}/{max} 次尝试（等待约 {seconds} 秒）",
+      recovering: "正在通过 {layer} 恢复：{reason}",
+    },
     empty: {
       title: "随便问点什么，或在左侧选择一个会话。",
     },

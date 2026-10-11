@@ -3653,6 +3653,10 @@ export default {
     command: {
       busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
     },
+    recovery: {
+      retry: "Verbinde erneut… Versuch {attempt} von {max} (wartet ~{seconds} s)",
+      recovering: "Wiederherstellung über {layer}: {reason}",
+    },
     empty: {
       title: "Stelle eine Frage oder wähle links eine Unterhaltung.",
     },

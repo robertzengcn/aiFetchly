@@ -3622,6 +3622,10 @@ export default {
       busy:
         "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
     },
+    recovery: {
+      retry: "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
+      recovering: "Recovering via {layer}: {reason}",
+    },
     empty: {
       title: "Ask anything, or pick a conversation on the left.",
     },
