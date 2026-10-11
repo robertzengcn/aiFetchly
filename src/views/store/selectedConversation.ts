@@ -107,9 +107,17 @@ export const useSelectedConversationStore = defineStore(
     // Flush-time sync (design §13): onMutate fires on real state mutations
     // — never per buffered token — so one reactive update lands per flush
     // window, terminal, or seed instead of per stream chunk.
+    // onStartAck fans engine `start` acknowledgements out to registered
+    // surfaces (FR-HIS-003: history-selection accepted/changed/rejected ids).
+    const startAckListeners = new Set<(chunk: Record<string, unknown>) => void>();
     const presenter = markRaw(
       createWorkspaceStreamPresenter({
         onMutate: () => syncFromPresenter(),
+        onStartAck: (chunk) => {
+          for (const listener of startAckListeners) {
+            listener(chunk);
+          }
+        },
       })
     );
     // Re-create presenter with options indirection for tests.
@@ -589,6 +597,19 @@ export const useSelectedConversationStore = defineStore(
       syncFromPresenter();
     }
 
+    /**
+     * Subscribe to engine start acknowledgements (FR-HIS-003). Returns an
+     * unsubscribe function; the surface cleans up on unmount.
+     */
+    function onStartAck(
+      listener: (chunk: Record<string, unknown>) => void
+    ): () => void {
+      startAckListeners.add(listener);
+      return () => {
+        startAckListeners.delete(listener);
+      };
+    }
+
     const isBusy = computed(
       () =>
         runtimeStatus.value === "running" ||
@@ -629,6 +650,7 @@ export const useSelectedConversationStore = defineStore(
       grantToolPermission,
       denyToolPermission,
       applyDetailEvent,
+      onStartAck,
       markReadAfterLoad,
       teardown,
       isBusy,

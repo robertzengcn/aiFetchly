@@ -68,6 +68,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
   subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   exportGeneratedImage: (...args: unknown[]) =>
     exportGeneratedImageMock(...args),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("@/views/api/aiChatV2Voice", () => ({
@@ -152,7 +153,7 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useAppInspectorStore } from "@/views/store/appInspector";
-import { approveChatV2Plan } from "@/views/api/aiChatV2";
+import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
@@ -314,6 +315,24 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           template: '<div data-testid="voice-toggle-stub" />',
         }),
         AiChatVoiceRuntimeInstallDialog: true,
+        AiChatHistoryDrawer: defineComponent({
+          name: "AiChatHistoryDrawer",
+          props: ["modelValue", "conversationId"],
+          emits: ["select", "navigate", "update:modelValue"],
+          template: '<div data-testid="history-drawer-stub" />',
+        }),
+        AiChatSelectedContext: defineComponent({
+          name: "AiChatSelectedContext",
+          props: ["selections"],
+          emits: ["remove", "clear"],
+          template: '<div data-testid="selected-context-stub" />',
+        }),
+        AiChatCompactionStatus: defineComponent({
+          name: "AiChatCompactionStatus",
+          props: ["status", "busy"],
+          emits: ["retry", "cancel", "openHistory"],
+          template: '<div data-testid="compaction-status-stub" />',
+        }),
         AIContentReportDialog: defineComponent({
           name: "AIContentReportDialog",
           props: ["modelValue", "descriptor"],
@@ -1176,6 +1195,183 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       wrapper.find('[data-testid="workspace-required-stub"]').exists()
     ).toBe(true);
+  });
+
+  /**
+   * Recoverable history + compaction (FR-HIS-001..005): under the rollout
+   * flag the center exposes the archive drawer, per-conversation context
+   * chips, opaque-reference submission, and compaction controls; with the
+   * flag off, none of the surfaces mount and no references submit.
+   */
+  describe("recoverable history", () => {
+    afterEach(() => {
+      // clearAllMocks does not reset implementations — restore the
+      // fail-closed default for tests after this describe.
+      vi.mocked(isHistoryUiEnabled).mockResolvedValue(false);
+    });
+
+    async function mountWithHistory(
+      conversation: string
+    ): Promise<ReturnType<typeof mountSurface>> {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      vi.mocked(isHistoryUiEnabled).mockResolvedValue(true);
+      startChatRunMock.mockResolvedValue({
+        conversationId: conversation,
+        runId: "run-his",
+        status: "running",
+        acceptedAt: "",
+      });
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected(conversation);
+      await flushPromises();
+      return wrapper;
+    }
+
+    function emitDrawerSelect(
+      wrapper: ReturnType<typeof mountSurface>,
+      sourceId: string,
+      text: string
+    ): void {
+      wrapper.findComponent({ name: "AiChatHistoryDrawer" }).vm.$emit("select", {
+        sourceId,
+        messageId: `msg-${sourceId}`,
+        role: "user",
+        timestamp: "2026-10-11T00:00:00.000Z",
+        text,
+        exact: true,
+        redacted: false,
+        hasMore: false,
+      });
+    }
+
+    it("hides every history surface when the rollout flag is off (FR-HIS-001 fail-closed)", async () => {
+      vi.mocked(isHistoryUiEnabled).mockResolvedValue(false);
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const wrapper = mountSurface(pinia);
+      useChatWorkspaceStore().setSelected("conv-his");
+      await flushPromises();
+
+      expect(
+        wrapper.find('[data-testid="workspace-history-toggle"]').exists()
+      ).toBe(false);
+      expect(
+        wrapper.findComponent({ name: "AiChatHistoryDrawer" }).exists()
+      ).toBe(false);
+      expect(
+        wrapper.findComponent({ name: "AiChatSelectedContext" }).exists()
+      ).toBe(false);
+    });
+
+    it("mounts the drawer toggle and drawer under the flag (FR-HIS-001)", async () => {
+      const wrapper = await mountWithHistory("conv-his");
+      expect(
+        wrapper.get('[data-testid="workspace-history-toggle"]')
+      ).toBeTruthy();
+      expect(
+        wrapper.findComponent({ name: "AiChatHistoryDrawer" }).props(
+          "conversationId"
+        )
+      ).toBe("conv-his");
+    });
+
+    it("submits opaque historySelectionIds with a stable submissionId (FR-HIS-002)", async () => {
+      const wrapper = await mountWithHistory("conv-his");
+      emitDrawerSelect(wrapper, "src-1", "the original passage text");
+      await flushPromises();
+
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "summarize the selected passage", []);
+      await flushPromises();
+
+      const payload = startChatRunMock.mock.calls[0][0];
+      expect(payload.historySelectionIds).toEqual(["src-1"]);
+      expect(typeof payload.submissionId).toBe("string");
+      expect(payload.submissionId.length).toBeGreaterThanOrEqual(8);
+      // Never the passage body.
+      expect(JSON.stringify(payload)).not.toContain("the original passage");
+    });
+
+    it("clears only ACCEPTED chips on the engine start ack (FR-HIS-003)", async () => {
+      const wrapper = await mountWithHistory("conv-his");
+      const selected = useSelectedConversationStore();
+      emitDrawerSelect(wrapper, "src-accepted", "accepted passage");
+      emitDrawerSelect(wrapper, "src-changed", "changed passage");
+      emitDrawerSelect(wrapper, "src-rejected", "rejected passage");
+      await flushPromises();
+
+      // Engine start ack routed through the store's presenter sink.
+      selected.applyDetailEvent({
+        sequence: 1,
+        runId: "run-his",
+        conversationId: "conv-his",
+        eventType: "start",
+        emittedAt: "2026-10-11T00:00:00.000Z",
+        payload: {
+          eventType: "start",
+          messageId: "a-1",
+          historySelectionAcceptedIds: ["src-accepted"],
+          historySelectionChangedIds: ["src-changed"],
+          historySelectionRejectedIds: ["src-rejected"],
+        },
+      });
+      await flushPromises();
+
+      const chips = wrapper
+        .findComponent({ name: "AiChatSelectedContext" })
+        .props("selections") as Array<{
+        sourceId: string;
+        refreshed?: boolean;
+        rejected?: boolean;
+      }>;
+      expect(chips.map((c) => c.sourceId).sort()).toEqual([
+        "src-changed",
+        "src-rejected",
+      ]);
+      expect(chips.find((c) => c.sourceId === "src-changed")?.refreshed).toBe(
+        true
+      );
+      expect(chips.find((c) => c.sourceId === "src-rejected")?.rejected).toBe(
+        true
+      );
+    });
+
+    it("keeps each conversation's chip draft isolated across switches (FR-HIS-002/004)", async () => {
+      const wrapper = await mountWithHistory("conv-a");
+      emitDrawerSelect(wrapper, "src-a", "passage a");
+      await flushPromises();
+
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-b");
+      await flushPromises();
+      let chips = wrapper
+        .findComponent({ name: "AiChatSelectedContext" })
+        .props("selections") as Array<{ sourceId: string }>;
+      expect(chips).toEqual([]);
+
+      chatWorkspace.setSelected("conv-a");
+      await flushPromises();
+      chips = wrapper
+        .findComponent({ name: "AiChatSelectedContext" })
+        .props("selections") as Array<{ sourceId: string }>;
+      expect(chips.map((c) => c.sourceId)).toEqual(["src-a"]);
+    });
+
+    it("surfaces compaction controls under the flag (FR-HIS-005)", async () => {
+      const wrapper = await mountWithHistory("conv-his");
+      const compaction = wrapper.findComponent({
+        name: "AiChatCompactionStatus",
+      });
+      expect(compaction.exists()).toBe(true);
+      expect(compaction.props("busy")).toBe(false);
+
+      compaction.vm.$emit("cancel");
+      await flushPromises();
+      const { cancelCompaction } = await import("@/views/api/aiChatV2");
+      expect(vi.mocked(cancelCompaction)).toHaveBeenCalledWith("conv-his");
+    });
   });
 
   it("shows the workspace chooser above the composer with no conversation selected", async () => {

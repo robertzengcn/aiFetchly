@@ -75,6 +75,12 @@ export interface StreamPresenterOptions {
    * store sync one reactive update per flush window (design §13).
    */
   readonly onMutate?: () => void;
+  /**
+   * Invoked once per engine `start` acknowledgement (FR-HIS-003) with the
+   * raw chunk — carries historySelectionAccepted/Changed/RejectedIds so the
+   * surface can clear exactly the context chips the backend accepted.
+   */
+  readonly onStartAck?: (chunk: Record<string, unknown>) => void;
 }
 
 const DEFAULT_BATCH_MS = 50;
@@ -144,6 +150,7 @@ export function createWorkspaceStreamPresenter(
     options?.maxBufferedChars ?? DEFAULT_MAX_BUFFERED_CHARS;
   const scheduleFlush = options?.scheduleFlush ?? defaultScheduleFlush;
   const notifyMutate = options?.onMutate;
+  const startAckSink = options?.onStartAck;
 
   let messages: ChatV2MessageView[] = [];
   let activeAssistantMessageId: string | null = null;
@@ -274,6 +281,7 @@ export function createWorkspaceStreamPresenter(
         runtimeStatus = "running";
         errorMessage = null;
         if (messageId) ensureAssistantView(messageId);
+        startAckSink?.(chunk);
         break;
       }
       case "token": {

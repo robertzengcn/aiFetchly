@@ -130,6 +130,28 @@
           compact
           @open="onOpenConversationReport"
         />
+        <!-- FR-HIS-001/005 (history rollout flag): archive search entry and
+             compaction progress/retry/cancel, reachable while the inspector
+             is closed. -->
+        <button
+          v-if="historyUiEnabled"
+          type="button"
+          class="chat-center__history-toggle"
+          data-testid="workspace-history-toggle"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+          :aria-label="t('aiChatHistory.drawer_title') || 'Conversation History'"
+          @click="showHistoryDrawer = true"
+        >
+          <v-icon size="small">mdi-book-search-outline</v-icon>
+        </button>
+        <AiChatCompactionStatus
+          v-if="historyUiEnabled"
+          :status="compactionStatus"
+          :busy="compactionBusyGuard"
+          @retry="onCompact"
+          @cancel="onCompactionCancel"
+          @open-history="showHistoryDrawer = true"
+        />
         <!-- Refresh failure: sanitized localized message + retry (FR-WS-002
              error state). The raw exception never reaches the DOM. -->
         <p
@@ -194,6 +216,15 @@
         />
       </template>
     </div>
+
+    <!-- Selected archive-context chips (FR-HIS-002, rollout flag): removable
+         per conversation; sending carries opaque ids only. -->
+    <AiChatSelectedContext
+      v-if="historyUiEnabled"
+      :selections="selectedContextItems"
+      @remove="removeSelectedContext"
+      @clear="clearSelectedContext"
+    />
 
     <!-- Composer with next-message controls BELOW the textarea (design §10):
          mode/model/tool approval/context live in the lower `controls` slot,
@@ -449,6 +480,16 @@
       </v-card>
     </v-dialog>
 
+    <!-- Recoverable-history drawer (FR-HIS-001, rollout flag): archive
+         search/browse + passage selection; no drawer when the stage is off. -->
+    <AiChatHistoryDrawer
+      v-if="conversationId && historyUiEnabled"
+      v-model="showHistoryDrawer"
+      :conversation-id="conversationId"
+      @select="handleHistorySelect"
+      @navigate="handleHistoryNavigate"
+    />
+
     <!-- Scheduled-loop tool-policy approval (FR-CMD-007): approval happens
          once, up front — unattended execution cannot prompt at run time. -->
     <ScheduledLoopToolApprovalDialog
@@ -497,7 +538,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
@@ -530,6 +571,10 @@ import {
   clearChatV2Conversation,
   compactChatV2Conversation,
   exportGeneratedImage,
+  isHistoryUiEnabled,
+  getCompactionStatus,
+  cancelCompaction,
+  subscribeCompactionProgress,
 } from "@/views/api/aiChatV2";
 import { stopGoalLoop, createGoal, startGoalLoop } from "@/views/api/aiChatGoal";
 import {
@@ -542,6 +587,13 @@ import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import ScheduledLoopToolApprovalDialog from "@/views/components/aiChatV2/ScheduledLoopToolApprovalDialog.vue";
 import ManagedBrowserStartPanel from "@/views/components/aiChatV2/ManagedBrowserStartPanel.vue";
 import ManagedBrowserSessionCard from "@/views/components/aiChatV2/ManagedBrowserSessionCard.vue";
+import AiChatHistoryDrawer from "@/views/components/aiChatV2/AiChatHistoryDrawer.vue";
+import AiChatSelectedContext from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
+import AiChatCompactionStatus from "@/views/components/aiChatV2/AiChatCompactionStatus.vue";
+import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
+import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import {
   useChatCommandRouting,
   type ChatCommandDisposition,
@@ -1448,6 +1500,16 @@ async function performOrdinarySend(
   if (generatedImageReferences.length > 0) {
     pendingDraftClearKey.value = composerDraftKey.value;
   }
+  // FR-HIS-002/004: drafted history selections submit as OPAQUE archive
+  // references with a retry-stable submission identity; the chips clear only
+  // on the engine's start acknowledgement (accepted ids only).
+  const historySelectionIds =
+    historyUiEnabled.value && selectedContextItems.value.length > 0
+      ? selectedContextItems.value.map((item) => item.sourceId)
+      : undefined;
+  if (historySelectionIds && !pendingHistorySubmissionId) {
+    pendingHistorySubmissionId = crypto.randomUUID();
+  }
   const accepted = await selectedStore.sendMessage(messageText, {
     model: selectedModel.value,
     // A command-derived turn (goal plan prompt) overrides the surface mode.
@@ -1461,6 +1523,10 @@ async function performOrdinarySend(
         ? pastedContents
         : undefined,
     confirmedBatchReferences: confirmedBatch,
+    historySelectionIds,
+    submissionId: historySelectionIds
+      ? (pendingHistorySubmissionId ?? undefined)
+      : undefined,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
   // clears only when THIS send was accepted — keying on shared run state
@@ -1558,6 +1624,176 @@ watch(conversationId, () => {
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
 });
+
+// --- Recoverable history + compaction (FR-HIS-001..005) ----------------------
+/**
+ * History-UI rollout flag (fail-closed: false until the main-process flag
+ * read resolves true). When false the drawer toggle, selected-context chips,
+ * and compaction controls stay hidden so no passage can be selected that
+ * backend resolution would no-op.
+ */
+const historyUiEnabled = ref(false);
+const showHistoryDrawer = ref(false);
+const selectedContextItems = ref<SelectedContextItem[]>([]);
+/** Per-conversation selection drafts (§13.3): switching preserves each chat's chips. */
+const selectedContextDrafts = new Map<string, SelectedContextItem[]>();
+/**
+ * Stable submission identity (§13.3): reused across transport retries so the
+ * backend reuses the same user-turn metadata; resolved on the start ack.
+ */
+let pendingHistorySubmissionId: string | null = null;
+const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+let unsubscribeCompactionProgress: (() => void) | null = null;
+let unsubscribeStartAck: (() => void) | null = null;
+
+function syncActiveHistoryDraft(): void {
+  const id = conversationId.value;
+  if (id) {
+    selectedContextDrafts.set(id, [...selectedContextItems.value]);
+  }
+}
+
+/**
+ * Build a chip from a resolved excerpt (§13.3): the preview text is
+ * display-only — the backend re-resolves the opaque sourceId on submit.
+ */
+function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  // Fail-closed when the history-UI stage is off: ignore drawer selections.
+  if (!historyUiEnabled.value) return;
+  if (selectedContextItems.value.some((i) => i.sourceId === excerpt.sourceId)) {
+    return; // dedup: a passage can be selected only once
+  }
+  const preview =
+    excerpt.text.length > 80 ? excerpt.text.slice(0, 77) + "…" : excerpt.text;
+  selectedContextItems.value = [
+    ...selectedContextItems.value,
+    {
+      sourceId: excerpt.sourceId,
+      preview,
+      estimatedTokens: Math.ceil(excerpt.text.length / 4),
+    },
+  ];
+  syncActiveHistoryDraft();
+}
+
+function removeSelectedContext(sourceId: string): void {
+  selectedContextItems.value = selectedContextItems.value.filter(
+    (i) => i.sourceId !== sourceId
+  );
+  syncActiveHistoryDraft();
+}
+
+function clearSelectedContext(): void {
+  selectedContextItems.value = [];
+  syncActiveHistoryDraft();
+}
+
+/**
+ * Source navigation from the drawer (§13.2): close and scroll to the message
+ * — viewing never mutates the next model request.
+ */
+function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
+  showHistoryDrawer.value = false;
+  if (!excerpt) return;
+  void nextTick(() => {
+    const el = document.querySelector(
+      `[data-message-id="${excerpt.messageId}"]`
+    );
+    if (!(el instanceof HTMLElement)) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const previous = el.style.outline;
+    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+    window.setTimeout(() => {
+      el.style.outline = previous;
+    }, 1_600);
+  });
+}
+
+// Conversation switch: swap each chat's chip draft (never leak across chats).
+watch(conversationId, (next, previous) => {
+  if (previous) {
+    selectedContextDrafts.set(previous, [...selectedContextItems.value]);
+  }
+  selectedContextItems.value = next
+    ? [...(selectedContextDrafts.get(next) ?? [])]
+    : [];
+  showHistoryDrawer.value = false;
+  compactionStatus.value = null;
+  void refreshCompactionStatus();
+});
+
+/**
+ * FR-HIS-003: the engine start acknowledgement reports which opaque
+ * references were accepted, changed, or rejected. Only ACCEPTED chips clear;
+ * changed survivors flag for explicit re-confirmation and rejected stay
+ * visible so the user is not silently charged for context they did not get.
+ */
+function onEngineStartAck(chunk: Record<string, unknown>): void {
+  const hasSelectionAcks =
+    Array.isArray(chunk.historySelectionAcceptedIds) ||
+    Array.isArray(chunk.historySelectionChangedIds) ||
+    Array.isArray(chunk.historySelectionRejectedIds);
+  if (hasSelectionAcks && selectedContextItems.value.length > 0) {
+    const accepted = new Set<string>(chunk.historySelectionAcceptedIds ?? []);
+    const changed = new Set<string>(chunk.historySelectionChangedIds ?? []);
+    const rejected = new Set<string>(chunk.historySelectionRejectedIds ?? []);
+    selectedContextItems.value = selectedContextItems.value
+      .filter((item) => !accepted.has(item.sourceId))
+      .map((item) =>
+        changed.has(item.sourceId)
+          ? { ...item, refreshed: true }
+          : rejected.has(item.sourceId)
+            ? { ...item, rejected: true }
+            : item
+      );
+    syncActiveHistoryDraft();
+  }
+  // Acceptance resolves the stable submission identity (§13.3).
+  pendingHistorySubmissionId = null;
+}
+
+/** FR-HIS-005: compaction progress/retry/cancel, independent of run recovery. */
+function handleCompactionProgressEvent(
+  event: ChatV2CompactionProgressEvent
+): void {
+  if (event.conversationId !== conversationId.value) return;
+  compactionStatus.value = {
+    state: event.state,
+    runId: event.runId,
+    generationId: event.generationId,
+    sectionsPacked: event.sectionsPacked,
+  };
+}
+
+/** FR-HIS-005: compaction controls respect the current busy restrictions. */
+const compactionBusyGuard = computed(() => selectedStore.isBusy);
+
+async function refreshCompactionStatus(): Promise<void> {
+  const id = conversationId.value;
+  if (!id) {
+    compactionStatus.value = null;
+    return;
+  }
+  try {
+    const status = await getCompactionStatus(id);
+    // Ignore stale responses when the user switched conversations mid-flight.
+    if (conversationId.value === id) {
+      compactionStatus.value = status;
+    }
+  } catch {
+    // Non-fatal — the progress subscription reconciles on the next event.
+  }
+}
+
+async function onCompactionCancel(): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    await cancelCompaction(conversationId.value);
+    await refreshCompactionStatus();
+  } catch {
+    // Non-fatal — the progress subscription reconciles.
+  }
+}
 
 // --- Conversation actions ----------------------------------------------------
 const planSubmitError = ref<string | null>(null);
@@ -1860,6 +2096,18 @@ onMounted(async () => {
   void loadModels();
   void voice.loadSettings();
   ensureDeliveredRowsSubscription();
+  // FR-HIS-001: fail-closed rollout flag + start-ack routing + compaction
+  // progress subscription (one per owning surface).
+  isHistoryUiEnabled()
+    .then((enabled) => {
+      historyUiEnabled.value = enabled;
+    })
+    .catch(() => undefined);
+  unsubscribeStartAck = selectedStore.onStartAck(onEngineStartAck);
+  unsubscribeCompactionProgress = subscribeCompactionProgress(
+    handleCompactionProgressEvent
+  );
+  void refreshCompactionStatus();
   if (conversationId.value) {
     void loadApprovalMode(conversationId.value);
     // Focus transfer (PRD §19.1): mounting with a conversation already
@@ -1887,6 +2135,10 @@ onMounted(async () => {
 onUnmounted(() => {
   deliveredRowsUnsubscribe?.();
   deliveredRowsUnsubscribe = null;
+  unsubscribeStartAck?.();
+  unsubscribeStartAck = null;
+  unsubscribeCompactionProgress?.();
+  unsubscribeCompactionProgress = null;
   pendingMessages.teardown();
   voice.dispose();
   // Release the conversation's filesystem-watch claim (review fix): this
@@ -1945,6 +2197,28 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding-top: 6px;
+}
+
+.chat-center__history-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+}
+
+.chat-center__history-toggle:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.chat-center__history-toggle:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
 }
 
 .chat-center__browser-region {
