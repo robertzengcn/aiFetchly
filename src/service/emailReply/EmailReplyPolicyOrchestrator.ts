@@ -199,9 +199,25 @@ export class EmailReplyPolicyOrchestrator {
       );
     }
 
-    // 1. Already replied: explicit message state OR a sent draft OR a sent
-    //    attempt (the ledger is authoritative even if the draft row is gone).
-    if (replyStatus === "sent" || sentDrafts.length > 0 || sentAttempts.length > 0) {
+    // R03: aggregate row-level positive evidence across EVERY cluster row. A
+    // sibling row may carry `replyDetectedAt` (sticky mailbox flag / verified
+    // Sent search) or `replyStatus=sent` (historical app delivery) that the
+    // seed's own columns do not reflect. Without this, local policy returns
+    // eligible for the same inbound identity that already has authoritative
+    // reply history on a sibling (R03 Trigger B).
+    const clusterHasRowPositive =
+      clusterRows.some((r) => r.replyDetectedAt != null) ||
+      clusterRows.some((r) => r.replyStatus === "sent");
+
+    // 1. Already replied: explicit message state OR a cluster row positive OR
+    //    a sent draft OR a sent attempt (the ledger is authoritative even if
+    //    the draft row is gone).
+    if (
+      replyStatus === "sent" ||
+      clusterHasRowPositive ||
+      sentDrafts.length > 0 ||
+      sentAttempts.length > 0
+    ) {
       return deny(
         "already_replied",
         "Message already has a sent reply; refusing duplicate"

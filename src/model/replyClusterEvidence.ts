@@ -3,6 +3,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { normalizeStoredMessageId } from "@/service/emailReceive/EmailReplyIdentity";
 import type {
   EmailReplySendAttemptStatus,
   GuardPhase,
@@ -15,9 +16,30 @@ import type {
  * (T08) so every mutation reconciles against the SAME cluster read. Lives in
  * its own module (like `replyTxn.ts`) so `EmailReplyGuardModel` and
  * `EmailReplyDraftModel` never import one another.
+ *
+ * R03: the cluster aggregate now carries row-level positive evidence across
+ * every equivalent row — `clusterReplyDetectedAt` (earliest non-null
+ * `replyDetectedAt` across the cluster) and `clusterHasRowLevelSent` (any row
+ * whose `replyStatus === "sent"`). These let every gate detect authoritative
+ * reply history on a sibling row that the seed's own `replyStatus` does not
+ * reflect.
  */
 export interface ClusterEvidence {
   readonly replyStatus: string | null;
+  /**
+   * R03: the earliest non-null `replyDetectedAt` across every cluster row
+   * (sticky positive — mailbox flag or verified Sent search). Null when no row
+   * has a persisted positive. A non-null value means the canonical identity
+   * has a known reply and every gate must refuse new work.
+   */
+  readonly clusterReplyDetectedAt: Date | null;
+  /**
+   * R03: true when ANY cluster row has `replyStatus === "sent"` (historical
+   * app delivery projection). The seed's own `replyStatus` alone is
+   * insufficient — a legacy/normalized sibling may carry the sent projection
+   * the seed does not.
+   */
+  readonly clusterHasRowLevelSent: boolean;
   readonly liveDrafts: EmailReplyDraftEntity[];
   readonly sentDrafts: EmailReplyDraftEntity[];
   readonly sendingDrafts: EmailReplyDraftEntity[];
@@ -33,13 +55,24 @@ export interface ClusterEvidence {
  * inside the caller's transaction `manager` so the read is consistent with
  * the mutation in the same transaction (no TOCTOU between read and write).
  *
- * The cluster is resolved from the seed message row: the row itself plus every
- * row sharing its `normalizedMessageId` (§4.1). A row without an RFC id forms
- * a singleton cluster (the `row:` replyKey fallback).
+ * R03 — the canonical resolver. Always includes the seed row, then safely
+ * normalizes legacy raw IDs to join equivalent rows. A legacy seed whose
+ * `normalizedMessageId` column is NULL is NOT omitted from its own cluster
+ * when a newer normalized sibling exists: the seed is pushed unconditionally
+ * (the bug was that the module layer returned `equivalents` without the seed
+ * when equivalents were non-empty). Each equivalent row's historical sent
+ * projection (`replyStatus === "sent"`) and sticky positive
+ * (`replyDetectedAt`) is aggregated so a gate inspecting the seed sees
+ * authoritative reply history living on a sibling. Mailbox isolation is
+ * retained: the join is `(emailServiceId, normalizedMessageId)` so the same
+ * RFC ID in two different services is never merged (§4.1).
  *
- * When `normalizedMessageId` is supplied it overrides the seed row's own value
- * (the acquire path passes the caller-resolved id). The
- * (emailServiceId, normalizedMessageId) join is authoritative.
+ * When `normalizedMessageId` is supplied it overrides the seed row's own
+ * value (the acquire path passes the caller-resolved id). When it is null
+ * the resolver normalizes the seed's raw `messageId` header on the fly via
+ * {@link normalizeStoredMessageId} so legacy rows join the right cluster. A
+ * row with no usable RFC ID forms a singleton cluster (the `row:` replyKey
+ * fallback) — it is never merged with another missing-id row.
  */
 export async function readClusterEvidence(
   manager: EntityManager,
@@ -57,8 +90,13 @@ export async function readClusterEvidence(
   const clusterRows: EmailReceivedMessageEntity[] = [];
   if (seed) {
     clusterRows.push(seed);
+    // R03: prefer the caller-supplied id, then the seed's stored normalized
+    // column, then normalize the seed's raw `messageId` header on the fly so a
+    // legacy row whose column was never populated still joins its cluster.
     const normalizedId =
-      opts.normalizedMessageId ?? seed.normalizedMessageId ?? null;
+      opts.normalizedMessageId ??
+      seed.normalizedMessageId ??
+      normalizeStoredMessageId(seed.messageId);
     if (normalizedId) {
       const equivalents = await messageRepo.find({
         where: {
@@ -77,6 +115,8 @@ export async function readClusterEvidence(
   if (clusterRowIds.length === 0) {
     return {
       replyStatus: null,
+      clusterReplyDetectedAt: null,
+      clusterHasRowLevelSent: false,
       liveDrafts: [],
       sentDrafts: [],
       sendingDrafts: [],
@@ -102,9 +142,32 @@ export async function readClusterEvidence(
     order: { id: "ASC" },
   });
 
+  // R03: aggregate row-level positive evidence across every cluster row.
+  // `clusterReplyDetectedAt` = earliest non-null `replyDetectedAt` (sticky
+  // positive — mailbox flag or verified Sent search). `clusterHasRowLevelSent`
+  // = any row whose `replyStatus === "sent"` (historical app delivery
+  // projection living on a sibling the seed does not reflect).
+  let clusterReplyDetectedAt: Date | null = null;
+  let clusterHasRowLevelSent = false;
+  for (const r of clusterRows) {
+    if (r.replyDetectedAt) {
+      if (
+        clusterReplyDetectedAt === null ||
+        r.replyDetectedAt.getTime() < clusterReplyDetectedAt.getTime()
+      ) {
+        clusterReplyDetectedAt = r.replyDetectedAt;
+      }
+    }
+    if (r.replyStatus === "sent") {
+      clusterHasRowLevelSent = true;
+    }
+  }
+
   const replyStatus = seed?.replyStatus ?? null;
   return {
     replyStatus,
+    clusterReplyDetectedAt,
+    clusterHasRowLevelSent,
     liveDrafts: drafts.filter((d) => isLiveDraftStatus(d.status)),
     sentDrafts: drafts.filter((d) => d.status === "sent"),
     sendingDrafts: drafts.filter((d) => d.status === "sending"),
@@ -131,7 +194,12 @@ export function isAttemptInFlight(status: EmailReplySendAttemptStatus): boolean 
  * apply the SAME precedence ladder — never trust `idle` while a related
  * sent/unknown/in-flight record exists.
  *
- *   - sent attempt / sent draft / replyStatus=sent → `sent`
+ * R03: cluster-level positive evidence (a sibling row's `replyDetectedAt` or
+ * `replyStatus=sent`) is authoritative at the SAME precedence as a sent
+ * draft/attempt — the canonical identity has a known reply, regardless of
+ * which row carries the projection.
+ *
+ *   - sent attempt / sent draft / replyStatus=sent / cluster positive → `sent`
  *   - delivery_unknown draft / attempt            → `delivery_unknown`
  *   - sending draft / in-flight attempt            → `sending`
  *   - live draft (otherwise clean)                 → `draft_ready`
@@ -144,6 +212,8 @@ export function evidenceToPhase(evidence: ClusterEvidence): {
 } {
   if (
     evidence.replyStatus === "sent" ||
+    evidence.clusterHasRowLevelSent ||
+    evidence.clusterReplyDetectedAt !== null ||
     evidence.sentDrafts.length > 0 ||
     evidence.sentAttempts.length > 0
   ) {
@@ -185,6 +255,13 @@ export function evidenceToPhase(evidence: ClusterEvidence): {
  * terminal or in-flight on a sibling blocks. A clean cluster (only the
  * claiming draft itself) does not block.
  *
+ * R03: cluster-level positive evidence (a sibling row's `replyDetectedAt` or
+ * `replyStatus=sent`) blocks unconditionally — it is not the claiming draft's
+ * own send, it is the canonical identity's authoritative reply history. This
+ * closes the R02 hole where a fresh positive timestamp was accepted as
+ * "freshness" inside the claim: a positive now blocks regardless of which
+ * row carries it or how recently it was observed.
+ *
  * Attempts are scoped by `draftId`: an in-flight/terminal attempt on the
  * CLAIMING draft is not sibling evidence — it is this draft's own send (a
  * concurrent replay of the same approval, which the B04 idempotency lookup
@@ -195,6 +272,14 @@ export function clusterEvidenceBlocksSend(
   evidence: ClusterEvidence,
   claimingDraftId: number
 ): boolean {
+  // R03: any cluster row carries authoritative reply history → block.
+  if (
+    evidence.clusterReplyDetectedAt !== null ||
+    evidence.clusterHasRowLevelSent ||
+    evidence.replyStatus === "sent"
+  ) {
+    return true;
+  }
   for (const a of evidence.sentAttempts) {
     if (a.draftId !== claimingDraftId) return true;
   }
@@ -254,4 +339,75 @@ export async function bindGuardToSendPhase(
     }
   );
   return (res.affected ?? 0) > 0;
+}
+
+/**
+ * R01/R02/R04 — the single canonical eligibility contract every gate
+ * (commit-time, claim-time, reconciliation) reconciles against. Maps cluster
+ * evidence to a typed refusal reason or `eligible` BEFORE any write. Returns
+ * a stable reason string so the caller can surface a typed refusal without
+ * writing a draft/attempt or downgrading lifecycle state.
+ *
+ * Precedence (highest first):
+ *  1. `already_replied` — any cluster positive (sibling `replyDetectedAt`,
+ *     `replyStatus=sent`, sent draft, or sent attempt). The canonical
+ *     identity has a known reply.
+ *  2. `delivery_unknown` — a `delivery_unknown` draft/attempt (ambiguous
+ *     prior send). Must not commit new work or claim a new send.
+ *  3. `reply_in_progress` — a `sending` draft or in-flight attempt on a
+ *     DIFFERENT draft (for claim) / any (for commit). The live submitter
+ *     must quiesce first.
+ *  4. `reply_state_conflict` — more than one live (editable, non-sent)
+ *     draft across the cluster with no namespace resolution. Human review.
+ *  5. `eligible` — clean cluster; the gate may proceed.
+ *
+ * The `actingDraftId` parameter excludes the calling draft's OWN in-flight
+ * send (claim path): a concurrent replay of the same approval resolves via
+ * the B04 idempotency lookup, not here. Pass `null` for the commit path
+ * (no existing draft yet).
+ */
+export type ClusterEligibilityReason =
+  | "already_replied"
+  | "delivery_unknown"
+  | "reply_in_progress"
+  | "reply_state_conflict"
+  | "eligible";
+
+export function classifyClusterEligibility(
+  evidence: ClusterEvidence,
+  actingDraftId: number | null
+): { reason: ClusterEligibilityReason } {
+  // 1. Any cluster positive → already_replied.
+  if (
+    evidence.clusterReplyDetectedAt !== null ||
+    evidence.clusterHasRowLevelSent ||
+    evidence.replyStatus === "sent" ||
+    evidence.sentDrafts.length > 0 ||
+    evidence.sentAttempts.length > 0
+  ) {
+    return { reason: "already_replied" };
+  }
+  // 2. Ambiguous prior delivery.
+  if (
+    evidence.unknownDrafts.length > 0 ||
+    evidence.unknownAttempts.length > 0
+  ) {
+    return { reason: "delivery_unknown" };
+  }
+  // 3. A live submitter on a different draft (claim path excludes its own).
+  const sendingOnOtherDraft =
+    evidence.sendingDrafts.some(
+      (d) => actingDraftId === null || d.id !== actingDraftId
+    ) ||
+    evidence.inFlightAttempts.some(
+      (a) => actingDraftId === null || a.draftId !== actingDraftId
+    );
+  if (sendingOnOtherDraft) {
+    return { reason: "reply_in_progress" };
+  }
+  // 4. Contradictory records: multiple live drafts, no namespace resolution.
+  if (evidence.liveDrafts.length > 1) {
+    return { reason: "reply_state_conflict" };
+  }
+  return { reason: "eligible" };
 }

@@ -6,12 +6,28 @@ import { runReplyTxn } from "@/model/replyTxn";
 import {
   readClusterEvidence,
   evidenceToPhase,
+  classifyClusterEligibility,
+  type ClusterEligibilityReason,
 } from "@/model/replyClusterEvidence";
 import { pickReusableDraft } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import type {
   GuardPhase,
   EmailReplyPolicyCode,
 } from "@/entityTypes/emailReplyReliabilityTypes";
+
+/**
+ * Map a {@link ClusterEligibilityReason} to its surface policy code. The four
+ * non-eligible reasons are valid `EmailReplyPolicyCode` literals, but TypeScript
+ * does not narrow the union automatically (the values overlap); the exhaustive
+ * ternary keeps the mapping 1:1 and forces a compile error here if a fifth
+ * reason is ever added without updating the call sites.
+ */
+function eligibilityReasonToCode(reason: ClusterEligibilityReason): EmailReplyPolicyCode {
+  return reason === "already_replied" ? "already_replied"
+    : reason === "delivery_unknown" ? "delivery_unknown"
+    : reason === "reply_in_progress" ? "reply_in_progress"
+    : "reply_state_conflict";
+}
 
 /**
  * Result of attempting to acquire a generation reservation (T07/FR-035,
@@ -106,27 +122,28 @@ export class EmailReplyGuardModel extends BaseDb {
         seedMessageId: input.messageId,
       });
 
-      // 1. Already replied (sent draft OR sent attempt OR replyStatus=sent).
-      if (evidence.replyStatus === "sent" || evidence.sentDrafts.length > 0 || evidence.sentAttempts.length > 0) {
-        return { status: "blocked", code: "already_replied" };
-      }
-      // 2. Ambiguous delivery on a prior attempt.
-      if (evidence.unknownDrafts.length > 0 || evidence.unknownAttempts.length > 0) {
-        return { status: "blocked", code: "delivery_unknown" };
-      }
-      // 3. In-flight send.
-      if (evidence.sendingDrafts.length > 0 || evidence.inFlightAttempts.length > 0) {
-        return { status: "blocked", code: "reply_in_progress" };
-      }
-      // 4. Multiple live drafts across the cluster → conflict.
-      if (evidence.liveDrafts.length > 1) {
-        return { status: "blocked", code: "reply_state_conflict" };
+      // R03: the canonical eligibility contract — ONE precedence ladder shared
+      // by acquire, commit (R01), and claim (R02). The acquire layer previously
+      // inspected `replyStatus === "sent"` (seed-only) and cluster-wide draft/
+      // attempt arrays but NOT `clusterReplyDetectedAt` or
+      // `clusterHasRowLevelSent`, so a sibling sticky positive or sibling
+      // row-level `replyStatus=sent` passed acquire and was only caught by
+      // R01's commit-time backstop. Routing both gates through the same helper
+      // closes the hole at the source (and is a no-op for the cases the old
+      // ladder already caught). `actingDraftId = null` because acquire has no
+      // draft yet.
+      const eligibility = classifyClusterEligibility(evidence, null);
+      if (eligibility.reason !== "eligible") {
+        return {
+          status: "blocked",
+          code: eligibilityReasonToCode(eligibility.reason),
+        };
       }
 
-      // 5. An eligible draft already exists (draft/approved preferred, then a
-      //    definitely-failed draft per B08) — the caller reuses it by ID with
-      //    no model work, mirroring the orchestrator's `pickReusableDraft`
-      //    (stage 2c). Only reached when the cluster is otherwise clean.
+      // An eligible draft already exists (draft/approved preferred, then a
+      // definitely-failed draft per B08) — the caller reuses it by ID with
+      // no model work, mirroring the orchestrator's `pickReusableDraft`
+      // (stage 2c). Only reached when the cluster is otherwise clean.
       const reusableDraft = pickReusableDraft([
         ...evidence.liveDrafts,
         ...evidence.failedDrafts,

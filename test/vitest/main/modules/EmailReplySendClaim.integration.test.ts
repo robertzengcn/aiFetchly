@@ -831,15 +831,18 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
 });
 
 // ---------------------------------------------------------------------------
-// T05 step 11 (FR-031 §9.3): forced-freshness fence at the model layer. The
-// claim transaction's first action reads the seed message's
-// replyNegativeCheckAt (or replyDetectedAt for a positive); if the observation
-// is older than FORCED_FRESHNESS_WINDOW_MS (5s) it returns `freshness_stale`
-// with NO write. The delivery service (covered in EmailReplyDeliveryFakeSmtp)
-// reruns detection outside the transaction and re-claims once. These tests
-// prove the fence semantics directly against the model: the read is non-
-// writing, the timestamp comparison is correct, and the sibling check remains
-// authoritative when a sibling sends during the refresh window.
+// T05 step 11 + R02 (FR-031 §9.3): forced-freshness fence at the model layer.
+// The claim transaction's first action reads the seed message's
+// replyNegativeCheckAt; only a complete, context-matching fresh NEGATIVE
+// satisfies it. A positive (`replyDetectedAt`) is NEVER permission to send —
+// the fence treats a null `replyNegativeCheckAt` as stale (freshness_stale,
+// NO write) regardless of how fresh any positive is. If the observation is
+// older than FORCED_FRESHNESS_WINDOW_MS (5s) it returns `freshness_stale`. The
+// delivery service (covered in EmailReplyDeliveryFakeSmtp) reruns detection
+// outside the transaction and re-claims once. These tests prove the fence
+// semantics directly against the model: the read is non-writing, the timestamp
+// comparison is correct, a positive never permits the claim, and the sibling
+// check remains authoritative when a sibling sends during the refresh window.
 // ---------------------------------------------------------------------------
 describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)", () => {
   let dbpath: string;
@@ -1037,10 +1040,18 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
     }
   });
 
-  it("a sticky positive (replyDetectedAt) within the window -> claim proceeds", async () => {
-    // A sticky positive observation (replyDetectedAt) is also accepted by the
-    // fence when fresh. (In production, runPreSendDetection refuses a positive
-    // BEFORE the claim — this test isolates the fence's timestamp logic only.)
+  it("a sticky positive (replyDetectedAt) is NEVER permission to send (R02)", async () => {
+    // R02: a positive is never permission to send. The freshness fence
+    // requires a complete, context-matching fresh NEGATIVE
+    // (`replyNegativeCheckAt`); a sticky positive (`replyDetectedAt`) with no
+    // negative on file is rejected at the fence (null negative →
+    // freshness_stale, NO write). The previous behavior accepted a fresh
+    // positive as "fresh enough" and let the claim proceed to SMTP despite
+    // known reply evidence — the canonical identity had a reply and we sent
+    // anyway. The delivery service reruns detection outside the transaction;
+    // the positive is then refused upstream by runPreSendDetection. This test
+    // isolates the fence's negative-only logic: the fence refuses before any
+    // write, regardless of how fresh the positive is.
     const msg = await seedMessage();
     const seed = await seedApprovedDraft(
       { draftModel, approvalModel },
@@ -1057,7 +1068,13 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
       claimInputFor(seed, msg.id)
     );
 
-    expect(result.status).toBe("claimed");
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.reason).toBe("freshness_stale");
+    }
+    // No attempt was inserted and the draft stayed approved (no write).
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts.length).toBe(0);
   });
 
   it("sibling sent during the freshness refresh window -> re-claim refused by the sibling check", async () => {

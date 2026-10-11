@@ -26,6 +26,8 @@ import {
   clusterEvidenceBlocksSend,
   bindGuardToSendPhase,
   evidenceToPhase,
+  classifyClusterEligibility,
+  type ClusterEligibilityReason,
 } from "@/model/replyClusterEvidence";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
@@ -435,6 +437,46 @@ export class EmailReplyDraftModel extends BaseDb {
         return { status: "fenced" };
       }
 
+      // R01: cluster-evidence reconciliation BEFORE the draft insert. The
+      // owner/lease fence above proves THIS invocation owns the generation
+      // lease, but it does NOT prove the canonical identity is still eligible
+      // for a new draft. Between the reservation acquire (outside this txn)
+      // and the commit, reply evidence may have appeared on the seed or a
+      // sibling row: a `\Answered` flag landed (sticky positive), a sent/
+      // unknown attempt landed on another draft, or a parallel generation
+      // committed a conflicting draft. The previous code went straight from
+      // the owner/lease check to the draft insert, persisting a new draft on
+      // top of authoritative reply history.
+      //
+      // Resolve the canonical cluster (R03: always includes the seed,
+      // aggregates sibling positives + sent projections) and classify
+      // eligibility. A non-`eligible` reason is a typed refusal with NO
+      // write — no draft insert, no revision, no message-status update, no
+      // guard transition, no audit. The caller releases the reservation and
+      // surfaces the policy code (`already_replied`/`delivery_unknown`/
+      // `reply_in_progress`/`reply_state_conflict`). The acting-draft id is
+      // null (no existing draft yet at commit time).
+      //
+      // The guard-phase precondition (expected `generating`) is checked
+      // here too: a guard that already moved to `draft_ready`/`sending`/sent
+      // means a prior commit already bound a draft for this lease — the
+      // late output is stale and must not write a second draft. This is the
+      // "expected generating phase and binding" part of the R01 acceptance.
+      if (
+        guard.phase !== "generating"
+      ) {
+        return { status: "fenced" };
+      }
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null, // resolved from the seed row inside the resolver
+        seedMessageId: input.messageId,
+      });
+      const eligibility = classifyClusterEligibility(evidence, null);
+      if (eligibility.reason !== "eligible") {
+        return { status: "refused", reason: eligibility.reason };
+      }
+
       // 2. Draft insert.
       const strippedDraft = parseAndStrip(
         input.rawDraft,
@@ -620,10 +662,24 @@ export class EmailReplyDraftModel extends BaseDb {
           reason: FRESHNESS_STALE,
         };
       }
-      const observedAt =
-        seedMessage.replyNegativeCheckAt ?? seedMessage.replyDetectedAt;
+      // R02: a positive is NEVER permission to send. The freshness fence
+      // requires a complete, context-matching fresh NEGATIVE — only
+      // `replyNegativeCheckAt` satisfies it. A sticky positive
+      // (`replyDetectedAt`) means the canonical identity has a known reply;
+      // the sibling check below refuses with `already_replied` (it now
+      // aggregates cluster-level positives). The previous
+      // `replyNegativeCheckAt ?? replyDetectedAt` accepted a fresh positive as
+      // "fresh enough" and let the claim proceed to SMTP despite known reply
+      // evidence.
+      const observedAt = seedMessage.replyNegativeCheckAt;
       if (observedAt === null) {
-        // Fail-closed: missing observation → force the delayed refresh.
+        // Fail-closed: missing negative observation → force the delayed
+        // refresh. A null `replyNegativeCheckAt` means either detection never
+        // ran, its persistence failed silently (D1b), or a positive was
+        // recorded without a prior negative — in all cases the send must NOT
+        // proceed on a missing negative. Treat null as stale → freshness_stale
+        // → the delivery service reruns detection outside the transaction and
+        // re-claims once (§9.3).
         return {
           status: "precondition_failed",
           reason: FRESHNESS_STALE,
@@ -1328,4 +1384,20 @@ export type CommitGeneratedDraftResult =
       readonly revisionNumber: number;
       readonly contentHash: string;
     }
-  | { readonly status: "fenced" };
+  | { readonly status: "fenced" }
+  | {
+      /**
+       * R01: the canonical cluster carries reply evidence that makes this
+       * generation ineligible to commit — a sibling (or the seed itself) is
+       * already replied, delivery-unknown, in-flight on another draft, or in
+       * a contradictory multi-draft state. Returned BEFORE any draft insert,
+       * revision, message-status update, guard transition, or audit write —
+       * the transaction performs NO write and the caller must release the
+       * reservation and surface a typed refusal. Distinct from `fenced`
+       * (owner/lease failure) so the caller can map to the right policy code
+       * (`already_replied`/`delivery_unknown`/`reply_in_progress`/
+       * `reply_state_conflict`) instead of a generic transport-error.
+       */
+      readonly status: "refused";
+      readonly reason: ClusterEligibilityReason;
+    };

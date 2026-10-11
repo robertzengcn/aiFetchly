@@ -240,6 +240,14 @@ export class EmailReceivedMessageModule extends BaseModule {
    * duplicate key; only the normalized RFC Message-ID (or the `row:<id>`
    * singleton fallback when no RFC ID exists).
    *
+   * R03: the seed row is ALWAYS included in the result, even when normalized
+   * equivalents exist. The previous `if (equivalents.length > 0) return
+   * equivalents` branch omitted the seed itself when a newer normalized
+   * sibling existed — a legacy seed with a valid raw RFC ID and sent/unknown
+   * history became invisible to its own cluster. Now the seed is merged into
+   * the equivalents list (deduplicated by id) so the guard's cluster read
+   * always includes it.
+   *
    * Legacy rows whose `normalizedMessageId` column was never populated are
    * normalized on the fly from the raw stored `messageId` header so they join
    * the right cluster. An incomplete legacy identity scan surfaces as a
@@ -253,18 +261,25 @@ export class EmailReceivedMessageModule extends BaseModule {
       const normalizedId =
         seedRow.normalizedMessageId ??
         normalizeStoredMessageId(seedRow.messageId);
+      if (!normalizedId) {
+        // No RFC id → singleton. Return the seed row alone as a `row:<id>`
+        // singleton so the guard still inspects its own drafts/attempts.
+        const self = await this.messageModel.read(seedRow.id);
+        return self ? [self] : [];
+      }
       const equivalents = await this.messageModel.findCanonicalEquivalents({
         emailServiceId: seedRow.emailServiceId,
         normalizedMessageId: normalizedId,
       });
-      if (equivalents.length > 0) {
+      // R03: always include the seed row (deduplicated by id). A legacy seed
+      // whose column was never populated must not disappear from its own
+      // cluster when a newer normalized sibling exists.
+      const hasSeed = equivalents.some((r) => r.id === seedRow.id);
+      if (hasSeed) {
         return equivalents;
       }
-      // No RFC-id cluster (missing/malformed id, or legacy row that did not
-      // normalize). Return the seed row alone as a `row:<id>` singleton so the
-      // guard still inspects its own drafts/attempts.
-      const self = await this.messageModel.read(seedRow.id);
-      return self ? [self] : [];
+      const seed = await this.messageModel.read(seedRow.id);
+      return seed ? [seed, ...equivalents] : equivalents;
     } catch (error) {
       console.error("Error resolving canonical equivalents:", error);
       throw error;

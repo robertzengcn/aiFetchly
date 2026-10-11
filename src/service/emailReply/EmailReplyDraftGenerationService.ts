@@ -1201,6 +1201,69 @@ export class EmailReplyDraftGenerationService {
           requestCorrelationId,
         };
       }
+      if (commitResult.status === "refused") {
+        // R01: the canonical cluster carries reply evidence that makes this
+        // generation ineligible (a sibling/seed positive, an unknown prior
+        // send, an in-flight submitter on another draft, or a multi-draft
+        // conflict). The commit transaction performed NO write — no draft,
+        // revision, message-status, guard, or audit row. Release the
+        // reservation and surface the typed policy code so the AI tool/UI
+        // can route correctly. The four `ClusterEligibilityReason` values
+        // map 1:1 to `EmailReplyPolicyCode` members; the switch exhaustively
+        // narrows so a future fifth reason becomes a compile error here.
+        const reason = commitResult.reason;
+        const code: EmailReplyPolicyCode =
+          reason === "already_replied"
+            ? "already_replied"
+            : reason === "delivery_unknown"
+            ? "delivery_unknown"
+            : reason === "reply_in_progress"
+            ? "reply_in_progress"
+            : "reply_state_conflict";
+        await this.releaseReservationSafely();
+        // Surface an existing live draft when one is present (so the UI can
+        // route the user to approve it) — bounded read, never blocks the
+        // refusal.
+        let existingDraftId: number | undefined;
+        try {
+          const drafts = await this.draftModule.listByMessage(message.id);
+          const reusable = pickReusableDraft(drafts);
+          existingDraftId = reusable?.id;
+        } catch {
+          existingDraftId = undefined;
+        }
+        // ONE reply_skipped audit row (stage pre_draft, code = reason). The
+        // commit txn wrote no audit (it wrote nothing), so the outer service
+        // owns this refusal audit (one-audit-owner rule §9.2/§10). An audit
+        // persistence failure stops the work and surfaces as a failed outcome
+        // (an unrecorded refusal must never be reported as success).
+        try {
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            `[${code}] Commit-time cluster reconciliation refused generation; no draft persisted`,
+            { stage: "pre_draft", code }
+          );
+        } catch (auditError) {
+          incrementReplyMetric("audit_failure", { stage: "pre_draft" });
+          const auditErrMsg =
+            auditError instanceof Error ? auditError.message : String(auditError);
+          return {
+            success: false,
+            error: `Commit refusal audit persistence failed: ${auditErrMsg}`,
+            requestCorrelationId,
+          };
+        }
+        return {
+          success: false,
+          error: `[${code}] Commit-time cluster reconciliation refused generation; no draft persisted`,
+          requestCorrelationId,
+          code,
+          existing_draft_id: existingDraftId,
+          next_action: nextActionForCode(code, undefined),
+        };
+      }
       savedDraftId = commitResult.draftId;
       // The reservation is now bound to the guard row as draft_ready — clear
       // the in-memory hold so it is not double-released.
