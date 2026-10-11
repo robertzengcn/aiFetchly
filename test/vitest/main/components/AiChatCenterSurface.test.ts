@@ -1156,6 +1156,28 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  /**
+   * FR-INT-002 / FR-WSP-003: a filesystem-dependent tool with no usable
+   * workspace asks the composer for one — the request must reach the
+   * existing workspace setup flow, and the FR-WS-007 busy gate still holds.
+   */
+  it("routes composer request-workspace events into the workspace setup flow (FR-INT-002)", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-ws");
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("request-workspace");
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="workspace-required-stub"]').exists()
+    ).toBe(true);
+  });
+
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();

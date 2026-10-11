@@ -218,6 +218,7 @@
       :generated-image-focus-signal="composerFocusSignal"
       @send="onComposerSend"
       @stop="selectedStore.stopActiveRun()"
+      @request-workspace="onRequestWorkspaceSetup"
       @remove-generated-image="onRemoveGeneratedImage"
       @clear-generated-images="onClearGeneratedImages"
       @reorder-generated-images="onReorderGeneratedImages"
