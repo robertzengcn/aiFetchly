@@ -71,7 +71,7 @@
         :active-assistant-message-id="selectedStore.activeAssistantMessageId"
         :stream-status="streamStatusForMessages"
         :error-message="selectedStore.errorMessage ?? undefined"
-        :show-reasoning="true"
+        :show-reasoning="showReasoning"
         :plan-submit-error="planSubmitError"
         :plan-decision-in-flight="planDecisionInFlight"
         :plan-decision-error="planDecisionError"
@@ -133,6 +133,27 @@
         <!-- FR-HIS-001/005 (history rollout flag): archive search entry and
              compaction progress/retry/cancel, reachable while the inspector
              is closed. -->
+        <button
+          type="button"
+          class="chat-center__history-toggle"
+          data-testid="toggle-reasoning"
+          :title="
+            showReasoning
+              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
+              : t('aiChatV2.show_reasoning') || 'Show reasoning'
+          "
+          :aria-label="
+            showReasoning
+              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
+              : t('aiChatV2.show_reasoning') || 'Show reasoning'
+          "
+          :aria-pressed="showReasoning"
+          @click="toggleReasoningVisible"
+        >
+          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
+            mdi-brain
+          </v-icon>
+        </button>
         <button
           v-if="historyUiEnabled"
           type="button"
@@ -480,6 +501,9 @@
       </v-card>
     </v-dialog>
 
+    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). -->
+    <AgentTaskListDialog @cancel-task="handleAgentTaskCancel" />
+
     <!-- Recoverable-history drawer (FR-HIS-001, rollout flag): archive
          search/browse + passage selection; no drawer when the stage is off. -->
     <AiChatHistoryDrawer
@@ -616,6 +640,13 @@ import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
+import {
+  readAiChatReasoningVisible,
+  writeAiChatReasoningVisible,
+  AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+  type AiChatReasoningVisibilityChangedDetail,
+} from "@/views/utils/aiChatReasoningPreference";
+import AgentTaskListDialog from "@/views/components/aiChatV2/AgentTaskListDialog.vue";
 import {
   useChatCommandRouting,
   type ChatCommandDisposition,
@@ -1807,6 +1838,38 @@ watch(conversationId, () => {
   showScheduledLoopApproval.value = false;
 });
 
+// --- Reasoning visibility preference + agent tasks (FR-INT-004/005) ---------
+/**
+ * FR-INT-005: user-controlled reasoning display (shared preference with
+ * Chat V2 — persisted + cross-surface change event). The selected-
+ * conversation preference changes presentation only; main-process
+ * authorization and execution are untouched.
+ */
+const showReasoning = ref<boolean>(readAiChatReasoningVisible());
+
+function onReasoningVisibilityChanged(
+  event: Event
+): void {
+  const detail = (
+    event as CustomEvent<AiChatReasoningVisibilityChangedDetail>
+  ).detail;
+  if (typeof detail?.visible === "boolean") {
+    showReasoning.value = detail.visible;
+  }
+}
+
+function toggleReasoningVisible(): void {
+  writeAiChatReasoningVisible(!showReasoning.value);
+}
+
+/**
+ * FR-INT-004: agent-task status/cancellation through the shared dialog.
+ * Cancellation is a later-milestone wiring point (V2 parity).
+ */
+function handleAgentTaskCancel(_agentTaskId: string): void {
+  // Agent task cancellation is wired in a later milestone.
+}
+
 // --- Recoverable history + compaction (FR-HIS-001..005) ----------------------
 /**
  * History-UI rollout flag (fail-closed: false until the main-process flag
@@ -2294,6 +2357,10 @@ onMounted(async () => {
       historyUiEnabled.value = enabled;
     })
     .catch(() => undefined);
+  window.addEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    onReasoningVisibilityChanged
+  );
   unsubscribeStartAck = selectedStore.onStartAck(onEngineStartAck);
   unsubscribeLiveToolResult = selectedStore.onLiveToolResult((chunk) => {
     // FR-INT-003: trusted navigation for the SELECTED conversation's live
@@ -2332,6 +2399,10 @@ onMounted(async () => {
 onUnmounted(() => {
   deliveredRowsUnsubscribe?.();
   deliveredRowsUnsubscribe = null;
+  window.removeEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    onReasoningVisibilityChanged
+  );
   unsubscribeStartAck?.();
   unsubscribeStartAck = null;
   unsubscribeLiveToolResult?.();

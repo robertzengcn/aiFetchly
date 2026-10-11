@@ -277,6 +277,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
             "planDecisionInFlight",
             "planDecisionError",
             "reportedMessageIds",
+            "showReasoning",
           ],
           template: '<div data-testid="transcript-stub" />',
         }),
@@ -326,6 +327,11 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           props: ["selections"],
           emits: ["remove", "clear"],
           template: '<div data-testid="selected-context-stub" />',
+        }),
+        AgentTaskListDialog: defineComponent({
+          name: "AgentTaskListDialog",
+          emits: ["cancel-task"],
+          template: '<div data-testid="agent-task-dialog-stub" />',
         }),
         AiChatCompactionStatus: defineComponent({
           name: "AiChatCompactionStatus",
@@ -1607,6 +1613,45 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     selected.applyDetailEvent(navEvent(1, "conv-nav") as never);
     await flushPromises();
     expect(pushSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * FR-INT-004/005: the shared reasoning-visibility preference drives the
+   * transcript (persisted + cross-surface change event), and the shared
+   * agent-task dialog mounts from the default surface.
+   */
+  it("toggles reasoning visibility through the shared persisted preference (FR-INT-005)", async () => {
+    localStorage.setItem("aiChatV2.showReasoning", "true");
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-reasoning");
+    await flushPromises();
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    expect(transcript.props("showReasoning")).toBe(true);
+
+    await wrapper.get('[data-testid="toggle-reasoning"]').trigger("click");
+    await flushPromises();
+    expect(transcript.props("showReasoning")).toBe(false);
+    expect(localStorage.getItem("aiChatV2.showReasoning")).toBe("false");
+
+    // The cross-surface change event updates the workspace too.
+    window.dispatchEvent(
+      new CustomEvent("aifetchly:ai-chat-reasoning-visibility-changed", {
+        detail: { visible: true },
+      })
+    );
+    await flushPromises();
+    expect(transcript.props("showReasoning")).toBe(true);
+    localStorage.removeItem("aiChatV2.showReasoning");
+  });
+
+  it("mounts the shared agent-task dialog (FR-INT-004)", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "AgentTaskListDialog" }).exists()
+    ).toBe(true);
   });
 
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
