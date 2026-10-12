@@ -60,10 +60,8 @@ import {
   registerComputerUseIpcHandlers,
   setComputerUseSettingsStore,
 } from "@/main-process/communication/computer-use-ipc";
-import {
-  ComputerUseError,
-  DEFAULT_COMPUTER_USE_SETTINGS,
-} from "@/entityTypes/computerUseTypes";
+import { ComputerUseError } from "@/entityTypes/computerUseTypes";
+import { TokenComputerUseSettingsStore } from "@/service/computerUse/ComputerUseSettingsStore";
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
@@ -184,14 +182,14 @@ export function registerCommunicationIpcHandlers(
         throw new ComputerUseError("session_invalid", "No session is active");
       },
       listWindows: async () => [],
-      groundingReadiness: () => "not_installed",
+      // Grounding is Windows-only in this release; on other platforms the
+      // components cannot be offered at all (PRD §5.2 platform matrix).
+      groundingReadiness: () =>
+        process.platform === "win32" ? "not_installed" : "unsupported_target",
     });
-    // In-memory defaults until the ComputerUseModule persistence entity
-    // lands (plan follow-up D2-A).
-    setComputerUseSettingsStore({
-      read: () => DEFAULT_COMPUTER_USE_SETTINGS,
-      write: () => undefined,
-    });
+    // Audit A21: writes are persisted through the Token-backed store (validated
+    // on write AND on load); readiness is derived, not hardcoded.
+    setComputerUseSettingsStore(new TokenComputerUseSettingsStore());
     registerAIProviderIpcHandlers();
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();

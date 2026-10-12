@@ -196,3 +196,69 @@ describe("ComputerUseClipboardService", () => {
     expect(clipboard.text).toBe("intermediate");
   });
 });
+
+describe("audit A20 regressions", () => {
+  it("an embedded newline cannot smuggle a second row or a formula", () => {
+    // Audit repro: TSV with embedded newline previously produced
+    // "Alice\n=1+1" — a second row starting with an unguarded formula.
+    const mapping = new Map([["name", 0]] as const);
+    const tsv = buildTsvRows([{ name: "Alice\n=1+1" }], mapping, 1);
+    expect(tsv).toBe("Alice =1+1");
+    expect(tsv.split("\n")).toHaveLength(1);
+  });
+
+  it("strips tabs and control characters from cells", () => {
+    const mapping = new Map([["name", 0], ["email", 1]] as const);
+    const tsv = buildTsvRows(
+      [{ name: "A\tB\r\u0007C", email: "x@y.z" }],
+      mapping,
+      2
+    );
+    expect(tsv).toBe("A B C\tx@y.z");
+    expect(tsv.split("\t")).toHaveLength(2);
+  });
+
+  it("an extra readback row is a reported mismatch, never accepted", () => {
+    // Audit repro: "extra readback row accepted: true".
+    const result = verifyReadback(
+      [{ email: "a@b.c", name: "A", phone: "1" }],
+      new Map([["email", 0]] as const),
+      ["Email"],
+      [["a@b.c"], ["unexpected-extra@row"]]
+    );
+    expect(result.ok).toBe(false);
+    expect(
+      result.mismatches.some((m) => m.header === "(row count)")
+    ).toBe(true);
+  });
+
+  it("a missing readback row is also reported", () => {
+    const result = verifyReadback(
+      [
+        { email: "a@b.c", name: "A", phone: "1" },
+        { email: "d@e.f", name: "D", phone: "2" },
+      ],
+      new Map([["email", 0]] as const),
+      ["Email"],
+      [["a@b.c"]]
+    );
+    expect(result.ok).toBe(false);
+    expect(result.mismatches.some((m) => m.header === "(row count)")).toBe(true);
+  });
+
+  it("Chinese phone/postal/ID headers are flagged for Text format", () => {
+    const columns = detectTextFormatColumns(
+      ["姓名", "手机", "邮编", "身份证号"],
+      [[], [], [], []]
+    );
+    expect(columns).toEqual([1, 2, 3]);
+  });
+
+  it("substring matches become questions, never silent assignments", () => {
+    const mapping = mapColumns(["Contact Name (Primary)", "Email Address"]);
+    expect(mapping.assignments.get("email")).toBe(1);
+    const nameQuestion = mapping.questions.find((q) => q.field === "name");
+    expect(nameQuestion?.kind).toBe("ambiguous");
+    expect(nameQuestion?.candidates).toContain("Contact Name (Primary)");
+  });
+});

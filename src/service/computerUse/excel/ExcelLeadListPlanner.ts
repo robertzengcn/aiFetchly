@@ -94,7 +94,9 @@ export function mapColumns(
     }
   }
 
-  // Pass 2: substring matches for still-unassigned fields.
+  // Pass 2: substring matches for still-unassigned fields. A substring
+  // match is a SEMANTIC GUESS, never an assignment (audit A20): every
+  // candidate becomes an ambiguity question for the user to confirm.
   for (const field of LEAD_FIELD_NAMES) {
     if (assignments.has(field)) continue;
     if (questions.some((q) => q.field === field)) continue;
@@ -108,10 +110,7 @@ export function mapColumns(
         ) &&
         h.normalized.length >= 3
     );
-    if (partial.length === 1) {
-      assignments.set(field, partial[0].index);
-      usedColumns.add(partial[0].index);
-    } else if (partial.length > 1) {
+    if (partial.length >= 1) {
       questions.push({
         kind: "ambiguous",
         field,
@@ -126,8 +125,24 @@ export function mapColumns(
 }
 
 /**
+ * Excel-safe cell sanitization (audit A20): tabs, CR, LF, and other control
+ * characters are removed BEFORE the formula guard so a value like
+ * "Alice\n=1+1" can never smuggle a second row or a leading formula marker.
+ * Also strips NUL and non-tab C0 controls; keeps everything else verbatim.
+ */
+export function sanitizeLeadCell(value: string): string {
+  // Replace newline-ish separators with a space so multi-line content stays
+  // single-cell, then drop remaining control characters.
+  const flattened = value.replace(/[\r\n\t]+/g, " ");
+  // eslint-disable-next-line no-control-regex
+  return flattened.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+}
+
+/**
  * Formula-injection guard (design §6.3): cells starting with =, +, -, or @
  * get an apostrophe prefix so pasted lead data can never become a formula.
+ * Apply AFTER sanitizeLeadCell so an embedded newline cannot dodge the
+ * leading-character check (audit A20).
  */
 export function guardFormulaInjection(value: string): string {
   if (/^[=+\-@]/.test(value)) {
@@ -136,11 +151,20 @@ export function guardFormulaInjection(value: string): string {
   return value;
 }
 
+/** Full cell pipeline: sanitize structure, then guard formulas. */
+export function prepareLeadCell(value: string): string {
+  return guardFormulaInjection(sanitizeLeadCell(value));
+}
+
 /** Column header names that must be set to Text format before entry (W1-4). */
 const TEXT_FORMAT_HEADER_PATTERNS: readonly RegExp[] = [
   /phone|tel|mobile/i,
   /postal|zip/i,
   /\bid\b|identifier| guid$/i,
+  // Simplified-Chinese headers for the same sensitive columns.
+  /电话|手机| mobile|^手机号/,
+  /邮编|邮政/,
+  /身份证|编号|工号/,
 ];
 
 /** Value shapes that betray Excel auto-formatting damage (W1-4 risk table). */
@@ -190,7 +214,7 @@ export function buildTsvRows(
       columnFields
         .map((field) =>
           field && lead[field] !== undefined
-            ? guardFormulaInjection(String(lead[field]))
+            ? prepareLeadCell(String(lead[field]))
             : ""
         )
         .join("\t")
@@ -224,6 +248,17 @@ export function verifyReadback(
   actualCells: readonly (readonly string[])[]
 ): { ok: boolean; mismatches: readonly ReadbackMismatch[] } {
   const mismatches: ReadbackMismatch[] = [];
+  // Row-count integrity (audit A20): extra or missing rows are reported,
+  // never silently accepted.
+  if (actualCells.length !== expectedLeads.length) {
+    mismatches.push({
+      rowIndex: expectedLeads.length,
+      columnIndex: 0,
+      header: "(row count)",
+      expected: `${expectedLeads.length} rows`,
+      actual: `${actualCells.length} rows`,
+    });
+  }
   const columnFields: (LeadField | null)[] = new Array(headers.length).fill(null);
   for (const [field, index] of mapping) {
     if (index < headers.length) columnFields[index] = field;
