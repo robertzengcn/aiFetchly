@@ -1955,6 +1955,36 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
    * conversation switch that happens while files encode — the message
    * belongs to the conversation selected when the user pressed Send.
    */
+  /**
+   * T8/D5 (audit): a REJECTED send removes its optimistic transcript row —
+   * the draft stays in the composer, so keeping the row showed the text
+   * twice. The error bubble alone remains.
+   */
+  it("removes the optimistic transcript row when the send is rejected (T8/D5)", async () => {
+    startChatRunMock.mockRejectedValue(new Error("AI features are disabled"));
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-reject");
+    await flushPromises();
+    const selected = useSelectedConversationStore();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "retry me later", []);
+    await flushPromises();
+
+    const userRows = selected.messages.filter(
+      (m: ChatV2MessageView) =>
+        m.role === "user" && m.content === "retry me later"
+    );
+    expect(userRows).toHaveLength(0);
+    // The denial bubble is still visible (pre-V2 parity).
+    expect(
+      selected.messages.some(
+        (m: ChatV2MessageView) =>
+          m.role === "assistant" && m.content.includes("AI features are disabled")
+      )
+    ).toBe(true);
+  });
+
   it("aborts an attachment send when the selection changes during file encoding (T7/D3)", async () => {
     const wrapper = mountSurface();
     useChatWorkspaceStore().setSelected("conv-a");

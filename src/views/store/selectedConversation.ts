@@ -85,6 +85,12 @@ export interface SendOptions {
    */
   readonly historySelectionIds?: readonly string[];
   readonly submissionId?: string;
+  /**
+   * T8/T2 (audit): request identity. Defaults to a fresh random id; plan
+   * continuations pass the AD-007 deterministic hash so a reload or replay
+   * resubmits the SAME job identity instead of minting a duplicate.
+   */
+  readonly clientRequestId?: string;
 }
 
 /**
@@ -354,10 +360,14 @@ export const useSelectedConversationStore = defineStore(
       });
       syncFromPresenter();
 
+      // T8/D5 (audit): the optimistic row is the request's identity holder —
+      // a REJECTION removes it so the draft (still in the composer) is not
+      // duplicated in the transcript; the error bubble alone remains.
+      const clientRequestId = options?.clientRequestId ?? createClientRequestId();
       try {
         const response = await startChatRun({
           conversationId,
-          clientRequestId: createClientRequestId(),
+          clientRequestId,
           message: text,
           model: options?.model,
           mode: options?.mode,
@@ -390,6 +400,10 @@ export const useSelectedConversationStore = defineStore(
         }
         return true;
       } catch (err) {
+        // T8/D5: rejected — drop the optimistic row (the draft stays in the
+        // composer for retry; keeping both showed the text twice).
+        presenter.removeMessage(optimisticId);
+        syncFromPresenter();
         const messageText: string =
           err instanceof Error ? err.message : "Failed to start the run";
         // Pre-V2 parity (AiChatBox + AiChatV2.showAssistantError): surface the
