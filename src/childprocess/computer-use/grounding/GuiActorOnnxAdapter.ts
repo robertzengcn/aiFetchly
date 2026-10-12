@@ -17,7 +17,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ComputerUseError,
   type GroundingAdapterCapabilities,
   type GroundingCandidate,
   type GroundingModelIdentity,
@@ -365,4 +364,3 @@ export class GuiActorOnnxAdapter implements GroundingModelAdapter {
   }
 }
 
-export { ComputerUseError };

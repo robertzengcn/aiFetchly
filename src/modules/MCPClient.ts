@@ -124,8 +124,12 @@ export class MCPClient {
       );
     });
 
+    // Keep a handle on the raced-away connect attempt: when the timeout wins,
+    // its eventual rejection must not surface as an unhandled rejection.
+    const connectPromise = this.doConnect();
+    connectPromise.catch(() => undefined);
     try {
-      await Promise.race([this.doConnect(), timeoutPromise]);
+      await Promise.race([connectPromise, timeoutPromise]);
     } catch (err) {
       if (err instanceof Error && err.message === "MCP connection timeout") {
         // Force cleanup — disconnect() would no-op because this.connected is
@@ -222,10 +226,15 @@ export class MCPClient {
       { name: "aiFetchly", version: "1.0.0" },
       { capabilities: {} }
     );
+    // Assign BEFORE the handshake: a connect() timeout must be able to close
+    // this client (and through it the transport, which owns and kills the
+    // spawned server child). Leaving it null here leaks the child process.
+    this.sdk = client;
 
     try {
       await client.connect(transport);
     } catch (error) {
+      this.sdk = null;
       await client.close().catch(() => {
         /* best-effort */
       });

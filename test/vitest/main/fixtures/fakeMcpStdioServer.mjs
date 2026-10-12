@@ -76,6 +76,9 @@ function handleMessage(line) {
   const { id, method, params } = message;
   switch (method) {
     case "initialize":
+      if (behaviors.has("--never-initialize")) {
+        return; // never answer: connect-timeout tests
+      }
       send({
         jsonrpc: "2.0",
         id,

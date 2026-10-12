@@ -6,6 +6,7 @@
  * the same runtime return `runtime_busy`; voice and embedding may run
  * concurrently. A version with an active worker lease cannot be removed.
  */
+import { log } from "@/modules/Logger";
 import {
   LocalAiRuntimeError,
   type LocalAiRuntimeId,
@@ -145,8 +146,14 @@ export class LocalAiRuntimeOperationCoordinator {
     this.pendingActivations.delete(runtimeId);
     try {
       await pending.apply();
-    } catch {
-      // A failed deferred activation keeps the previous working version.
+    } catch (error) {
+      // A failed deferred activation keeps the previous working version
+      // (safe default), but it must be visible: the prepared update silently
+      // never lands otherwise.
+      log.warn(
+        `[local-ai-runtime] deferred activation of ${runtimeId}@${pending.version} failed; previous version stays active:`,
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
 

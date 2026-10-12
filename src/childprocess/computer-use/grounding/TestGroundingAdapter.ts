@@ -13,7 +13,6 @@
  *                             derived from the image dimensions.
  */
 import {
-  ComputerUseError,
   type GroundingAdapterCapabilities,
   type GroundingModelIdentity,
 } from "@/entityTypes/computerUseTypes";
@@ -181,4 +180,3 @@ export class TestGroundingAdapter implements GroundingModelAdapter {
   }
 }
 
-export { ComputerUseError };
