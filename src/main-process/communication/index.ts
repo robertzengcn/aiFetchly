@@ -25,6 +25,7 @@ import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerToolResultIpcHandlers } from "@/main-process/communication/tool-result-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
+import { registerAiTaskRolloutMetricsIpcHandlers } from "@/main-process/communication/aiTaskRolloutMetrics-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
@@ -108,6 +109,7 @@ export function registerCommunicationIpcHandlers(
     registerAiChatGoalIpcHandlers();
     registerToolResultIpcHandlers();
     registerAiChatScheduledLoopIpcHandlers();
+    registerAiTaskRolloutMetricsIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();
