@@ -21,6 +21,7 @@
  */
 import {
   type ComputerUseActionRequest,
+  type ComputerUseWindowInfo as ComputerUseTargetWindowInfo,
   type ComputerUseRect,
   type ComputerUseResolvedTarget,
   type ComputerUseSafetyController,
@@ -63,6 +64,12 @@ export function pointInRect(
 export interface ComputerUseSafetyProviders {
   /** Visible AiFetchly window rects in physical screen pixels. */
   ownWindowScreenRects(): ComputerUseRect[];
+  /**
+   * Foreground window id, or null when unknown (audit A05): keyboard input
+   * is refused when the foreground is provably neither the target nor
+   * unknown — typing into a third app is a focus/scope violation.
+   */
+  foregroundWindowId?(): string | null;
   /** Whether an AiFetchly window currently has keyboard focus. */
   ownWindowFocused(): boolean;
   /** Target process id for elevation checks. */
@@ -84,6 +91,33 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
     this.providers = providers;
   }
 
+  /**
+   * Session-start gate (audit A05): host elevation refuses the session
+   * outright; a target owned by AiFetchly's own process set is rejected
+   * (the picker must never list own windows, and a raced selection loses).
+   */
+  async preStartCheck(
+    target: ComputerUseTargetWindowInfo
+  ): Promise<ComputerUseSafetyVerdict> {
+    try {
+      await this.providers.elevation.assertHostNotElevated();
+    } catch {
+      return {
+        allowed: false,
+        errorCode: "host_elevated",
+        reason: "AiFetchly is elevated or its integrity level is unverifiable",
+      };
+    }
+    if (this.isOwnProcess(target.processId)) {
+      return {
+        allowed: false,
+        errorCode: "own_window",
+        reason: "Target window belongs to AiFetchly's own process set",
+      };
+    }
+    return { allowed: true };
+  }
+
   /** Full pre-dispatch verdict (design §10.5.3 steps 1–3 + chord rule). */
   async preDispatchCheck(input: {
     sessionId: string;
@@ -102,25 +136,37 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
       };
     }
 
-    // Elevation: unknown integrity fails closed (§10.5.4).
+    // Elevation: unknown integrity fails closed (§10.5.4), including a
+    // MISSING pid — an unidentifiable target is not provably safe (audit A05).
     const targetPid = this.providers.targetProcessId();
-    if (targetPid !== null) {
-      if (await this.providers.elevation.isTargetElevatedOrUnknown(targetPid)) {
-        return {
-          allowed: false,
-          errorCode: "elevated_window",
-          reason: "target runs above AiFetchly's integrity level or unknown",
-        };
-      }
+    if (
+      targetPid === null ||
+      (await this.providers.elevation.isTargetElevatedOrUnknown(targetPid))
+    ) {
+      return {
+        allowed: false,
+        errorCode: "elevated_window",
+        reason: "target identity or integrity level could not be verified",
+      };
     }
 
     if (KEYBOARD_ACTIONS.has(request.actionKind)) {
-      // Keyboard input is refused while AiFetchly has focus (§10.5.3).
+      // Keyboard input is refused while AiFetchly has focus (§10.5.3)…
       if (this.providers.ownWindowFocused()) {
         return {
           allowed: false,
           errorCode: "own_window",
           reason: "an AiFetchly window has keyboard focus",
+        };
+      }
+      // …or while the foreground is provably a different application
+      // (audit A05: focus/scope check beyond own windows; unknown passes).
+      const foreground = this.providers.foregroundWindowId?.() ?? null;
+      if (foreground !== null && input.target && foreground !== input.generation.toString() && this.knownForeignForeground(foreground)) {
+        return {
+          allowed: false,
+          errorCode: "unsupported_target",
+          reason: "another application has keyboard focus",
         };
       }
       return { allowed: true };
@@ -157,6 +203,19 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
       errorCode: "unsupported_target",
       reason: `unknown action kind ${request.actionKind}`,
     };
+  }
+
+  /**
+   * Whether the foreground window id names a window we can positively
+   * identify as NOT the session target. Providers that only know
+   * "foreground id or null" cannot prove foreignness — this hook lets a
+   * richer provider supply target-vs-foreground knowledge later.
+   */
+  private knownForeignForeground(_foregroundWindowId: string): boolean {
+    // With the current provider set the foreground id is opaque; treat it
+    // as unknown (pass). A provider-aware comparison lands with the real
+    // desktop adapter (B01), which knows the target's window id.
+    return false;
   }
 
   /**

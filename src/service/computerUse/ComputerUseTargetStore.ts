@@ -1,10 +1,12 @@
 /**
- * Computer Use target store (design §9.2, §10.2).
+ * Computer Use target store (design §9.2, §10.2; audit A04).
  *
- * Bounded in-memory store of host-minted target handles. Native identifiers,
- * transforms, coordinates, generation, expiry, and grants stay here — they
- * are never accepted as model-supplied authority fields and never persisted
- * into ordinary tool JSON.
+ * Bounded in-memory store of host-minted target handles. Every record is
+ * bound to its owning session, generation, and observation; a handle from
+ * another session, an older generation, or a superseded observation never
+ * resolves. Native identifiers, transforms, coordinates, and grants stay
+ * here — they are never accepted as model-supplied authority fields and
+ * never persisted into ordinary tool JSON.
  */
 import { randomUUID } from "crypto";
 import {
@@ -24,7 +26,7 @@ export class ComputerUseTargetStore {
     ComputerUseResolvedTarget
   >();
 
-  /** Mint a fresh opaque handle for a resolved target. */
+  /** Mint a fresh opaque handle for a resolved target (session-bound). */
   create(
     target: Omit<ComputerUseResolvedTarget, "handle" | "createdAt">
   ): ComputerUseTargetHandle {
@@ -39,20 +41,29 @@ export class ComputerUseTargetStore {
   }
 
   /**
-   * Resolve a handle against generation + staleness rules. A moved window,
-   * changed display, expired observation, or generation mismatch never
-   * produces a usable target (CU-VISION-05).
+   * Resolve a handle against session + generation + staleness rules
+   * (CU-VISION-05, audit A04). A handle minted by another session, an older
+   * generation, or an expired target never produces a usable target.
    */
   resolve(
     handle: ComputerUseTargetHandle,
-    generation: ComputerUseSessionGeneration,
+    expected: {
+      sessionId: string;
+      generation: ComputerUseSessionGeneration;
+    },
     now = Date.now()
   ): ComputerUseResolvedTarget {
     const target = this.targets.get(handle);
     if (!target) {
       throw new ComputerUseError("target_stale", "Unknown target handle");
     }
-    if (target.generation !== generation) {
+    if (target.sessionId !== expected.sessionId) {
+      throw new ComputerUseError(
+        "target_stale",
+        "Target handle belongs to another session"
+      );
+    }
+    if (target.generation !== expected.generation) {
       throw new ComputerUseError(
         "target_stale",
         "Target handle belongs to an older session generation"
@@ -77,7 +88,7 @@ export class ComputerUseTargetStore {
     return removed;
   }
 
-  /** Drop targets bound to a specific observation. */
+  /** Drop targets bound to a specific observation (one action per cycle). */
   invalidateObservation(observationId: ComputerUseObservationId): number {
     let removed = 0;
     for (const [handle, target] of this.targets) {

@@ -249,6 +249,7 @@ function makeSafetyProviders(
 
 const TARGET = {
   handle: "cut_1",
+  sessionId: "s1",
   generation: 1,
   observationId: "obs-1",
   capturePoint: { x: 100, y: 100 },

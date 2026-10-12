@@ -30,6 +30,18 @@ export type ComputerUseSessionGeneration = number;
 /** Opaque host-minted handle. Model-visible; never convertible back to authority. */
 export type ComputerUseTargetHandle = string;
 
+/**
+ * Shared session-id contract (audit A07): the supervisor mints
+ * `cus_<uuid>`; every IPC schema validates against this exact pattern so a
+ * start result round-trips through Stop/Pause/Resume and UI calls.
+ */
+export const COMPUTER_USE_SESSION_ID_PATTERN =
+  /^cus_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function isComputerUseSessionId(value: string): boolean {
+  return COMPUTER_USE_SESSION_ID_PATTERN.test(value);
+}
+
 /** Opaque observation id bound to a capture and a generation. */
 export type ComputerUseObservationId = string;
 
@@ -224,6 +236,8 @@ export type GroundingOutcome =
 /** Host-resolved target stored in the supervisor's target store. */
 export interface ComputerUseResolvedTarget {
   readonly handle: ComputerUseTargetHandle;
+  /** Owning session: a handle minted by one session is foreign to another. */
+  readonly sessionId: string;
   readonly generation: ComputerUseSessionGeneration;
   readonly observationId: ComputerUseObservationId;
   /** Resolved point in capture pixels. */
@@ -502,6 +516,11 @@ export interface ComputerUseSafetyVerdict {
 
 /** Safety pre-check seam: own-window, elevation, focus, hotkey-chord rules. */
 export interface ComputerUseSafetyController {
+  /**
+   * Session-start gate (audit A05): host elevation, own-window target, and
+   * any other release-critical precondition. Rejection blocks the session.
+   */
+  preStartCheck(target: ComputerUseWindowInfo): Promise<ComputerUseSafetyVerdict>;
   preDispatchCheck(input: {
     readonly sessionId: string;
     readonly generation: ComputerUseSessionGeneration;

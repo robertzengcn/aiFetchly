@@ -7,9 +7,16 @@
  */
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
+import { COMPUTER_USE_SESSION_ID_PATTERN } from "@/entityTypes/computerUseTypes";
 
 const uuidSchema = z.string().uuid();
-const sessionIdSchema = uuidSchema;
+/** Session ids are the supervisor-minted `cus_<uuid>` (audit A07). */
+const sessionIdSchema = z
+  .string()
+  .regex(
+    COMPUTER_USE_SESSION_ID_PATTERN,
+    "Expected a Computer Use session id (cus_<uuid>)."
+  );
 
 const windowIdSchema = z.string().min(1).max(256);
 

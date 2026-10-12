@@ -83,6 +83,7 @@ function stopController(
 }
 
 const safetyAllow: ComputerUseSafetyController = {
+  preStartCheck: async () => ({ allowed: true }),
   preDispatchCheck: async () => ({ allowed: true }),
 };
 
@@ -111,6 +112,7 @@ describe("ComputerUseTargetStore", () => {
     const store = new ComputerUseTargetStore();
     const now = Date.now();
     const handle = store.create({
+      sessionId: "s1",
       generation: 1,
       observationId: "obs-1",
       capturePoint: { x: 10, y: 10 },
@@ -118,16 +120,24 @@ describe("ComputerUseTargetStore", () => {
       source: "accessibility",
       expiresAt: now + 1_000,
     });
-    expect(store.resolve(handle, 1, now).capturePoint).toEqual({ x: 10, y: 10 });
-    expect(() => store.resolve(handle, 2, now)).toThrowError(ComputerUseError);
-    expect(() => store.resolve(handle, 1, now + 2_000)).toThrowError(
-      ComputerUseError
-    );
+    expect(
+      store.resolve(handle, { sessionId: "s1", generation: 1 }, now).capturePoint
+    ).toEqual({ x: 10, y: 10 });
+    expect(() =>
+      store.resolve(handle, { sessionId: "s1", generation: 2 }, now)
+    ).toThrowError(ComputerUseError);
+    expect(() =>
+      store.resolve(handle, { sessionId: "other", generation: 1 }, now)
+    ).toThrowError(ComputerUseError);
+    expect(() =>
+      store.resolve(handle, { sessionId: "s1", generation: 1 }, now + 2_000)
+    ).toThrowError(ComputerUseError);
   });
 
   it("invalidateGeneration drops only matching targets", () => {
     const store = new ComputerUseTargetStore();
     store.create({
+      sessionId: "s1",
       generation: 1,
       observationId: "obs-1",
       capturePoint: { x: 1, y: 1 },
@@ -136,6 +146,7 @@ describe("ComputerUseTargetStore", () => {
       expiresAt: Date.now() + 10_000,
     });
     store.create({
+      sessionId: "s1",
       generation: 2,
       observationId: "obs-2",
       capturePoint: { x: 2, y: 2 },
@@ -342,7 +353,9 @@ describe("ComputerUseSupervisor", () => {
       },
       "within_task"
     );
-    expect(outcome.outcome).toBe("failed");
+    // Resume cleared the observation currency: the request no longer names
+    // the session's CURRENT observation, so it is rejected before the store.
+    expect(outcome.outcome).toBe("rejected");
     expect(outcome.errorCode).toBe("target_stale");
     expect(adapter.dispatchCalls).toHaveLength(0);
     await supervisor.stopSession(session.sessionId);
@@ -390,6 +403,7 @@ describe("ComputerUseSupervisor", () => {
       adapter,
       stopController: stopController(),
       safety: {
+        preStartCheck: async () => ({ allowed: true }),
         preDispatchCheck: async () => ({
           allowed: false,
           errorCode: "own_window",
