@@ -170,7 +170,7 @@ AI Chat は hosted aiFetchly AI またはユーザー設定の OpenAI 互換 Pro
 
 完全なドキュメントは [docs.aifetchly.com](https://docs.aifetchly.com) で確認できます。
 
-アプリケーションの公式 Web サイトは [sellart-online.com](https://www.sellart-online.com) です。
+アプリケーションの公式 Web サイトは [aifetchly.com](https://www.aifetchly.com) です。
 
 ## aiFetchly を支援する
 
