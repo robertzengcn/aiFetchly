@@ -26,6 +26,7 @@ import { MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/budgetDefaults
 import type { BudgetLimitsInput } from "@/service/aiTaskExecution/budgetDefaults";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
+import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConflictMetrics";
 import {
   TaskCompletionContractService,
 } from "@/service/aiTaskExecution/TaskCompletionContractService";
@@ -313,12 +314,34 @@ export class TaskExecutionCoordinator {
       return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
     }
     if (exec.finalized) {
+      // §17 "finalization conflicts" monitor: ALREADY_FINALIZED is the
+      // benign second-finalizer race — logged, not an error (§6.3: the
+      // terminal outcome is immutable). Conflicts are CAS-loss RETURN
+      // VALUES, not durable rows, so the §17 monitor line is emitted at
+      // each conflict surface rather than aggregated from a table.
+      logFinalizationConflict({
+        surface: "manual_finalize",
+        executionId,
+        origin: "manual",
+        route: exec.route,
+        reasonCode: "ALREADY_FINALIZED",
+        attempt: 0,
+      });
       return { ok: true, alreadyFinalized: true };
     }
 
     const first = await attempt(exec.execution_state_version);
     if (first.ok || first.alreadyFinalized) return first;
     if (first.reasonCode !== "STATE_CONFLICT") return first;
+
+    logFinalizationConflict({
+      surface: "manual_finalize",
+      executionId,
+      origin: "manual",
+      route: exec.route,
+      reasonCode: "STATE_CONFLICT",
+      attempt: 0,
+    });
 
     // STATE_CONFLICT: a concurrent finalizer bumped the version between our
     // read and the UPDATE. Re-read and retry ONCE — the row was not finalized
@@ -330,9 +353,28 @@ export class TaskExecutionCoordinator {
       return { ok: false, reasonCode: "MISSING_TASK_OUTCOME" };
     }
     if (fresh.finalized) {
+      logFinalizationConflict({
+        surface: "manual_finalize",
+        executionId,
+        origin: "manual",
+        route: exec.route,
+        reasonCode: "ALREADY_FINALIZED",
+        attempt: 1,
+      });
       return { ok: true, alreadyFinalized: true };
     }
-    return attempt(fresh.execution_state_version);
+    const second = await attempt(fresh.execution_state_version);
+    if (!second.ok && !second.alreadyFinalized && second.reasonCode === "STATE_CONFLICT") {
+      logFinalizationConflict({
+        surface: "manual_finalize",
+        executionId,
+        origin: "manual",
+        route: exec.route,
+        reasonCode: "STATE_CONFLICT",
+        attempt: 1,
+      });
+    }
+    return second;
   }
 
   /**

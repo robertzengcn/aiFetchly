@@ -148,6 +148,20 @@ export interface OperationGuardDeps {
     readonly receiptReference?: string;
     readonly failureCode?: string;
   }) => Promise<boolean>;
+  /**
+   * §17 "finalization conflicts" monitor hook (T26a). The guard surfaces
+   * every CAS loss as a blocked/failed RETURN VALUE — nothing durable is
+   * written by the loser, so the monitor line must be emitted at the
+   * conflict branch itself. The loop supplies the §17 segmentation context
+   * (origin/route/executionId) when building the guard; the callback never
+   * throws and never changes guard behavior (fire-and-forget). Optional so
+   * tests and non-monitor deployments can omit it.
+   */
+  readonly notifyConflict?: (input: {
+    readonly surface: "operation_dispatch";
+    readonly reasonCode: string;
+    readonly stage: "prepare" | "settle";
+  }) => void;
 }
 
 const TERMINAL_STATES: ReadonlySet<string> = new Set([
@@ -161,6 +175,29 @@ export class TaskOperationGuard {
     private readonly deps: OperationGuardDeps,
     private readonly executionId: string
   ) {}
+
+  /**
+   * Emit one §17 conflict line for a CAS loss at this dispatch surface.
+   * Never throws — a monitor emission must not change guard behavior. A
+   * no-op when no `notifyConflict` dep was supplied (tests and non-monitor
+   * deployments stay byte-identical to legacy).
+   */
+  private notifyConflict(
+    reasonCode: string,
+    stage: "prepare" | "settle"
+  ): void {
+    if (!this.deps.notifyConflict) return;
+    try {
+      this.deps.notifyConflict({
+        surface: "operation_dispatch",
+        reasonCode,
+        stage,
+      });
+    } catch {
+      // Fire-and-forget by contract: a logging failure never changes
+      // guard behavior.
+    }
+  }
 
   /**
    * §10.2 pre-dispatch fence. Order of checks:
@@ -217,6 +254,7 @@ export class TaskOperationGuard {
         // Same key, changed intent — §10.1: a changed target must not
         // reuse the operation (this is the maker-invented-ordinal evasion
         // the design forbids). Fail closed.
+        this.notifyConflict("INTENT_CONFLICT", "prepare");
         return {
           allowed: false,
           reasonCode: "OPERATION_UNKNOWN_OUTCOME",
@@ -229,6 +267,11 @@ export class TaskOperationGuard {
           existingReceipt.operation_state === "accepted" ||
           existingReceipt.operation_state === "completed"
         ) {
+          // §17 conflict monitor: a second occurrence raced an
+          // already-confirmed receipt — the duplicate-effect signal. The
+          // guard's job is to block it (and reuse the receipt), so the
+          // emission is informational, never an error.
+          this.notifyConflict("OPERATION_ALREADY_CONFIRMED", "prepare");
           return {
             allowed: false,
             reasonCode: "OPERATION_ALREADY_CONFIRMED",
@@ -315,7 +358,13 @@ export class TaskOperationGuard {
     });
     if (!claim.ok) {
       // Lost the claim race (a concurrent occurrence holds the claim) — the
-      // caller must reconcile rather than double-dispatch.
+      // caller must reconcile rather than double-dispatch. This is the
+      // unambiguous prepare-stage CAS loss: the fence worked, and the §17
+      // conflict line records the race for the rollout monitor.
+      this.notifyConflict(
+        claim.reasonCode ?? "CLAIM_CAS_CONFLICT",
+        "prepare"
+      );
       return {
         allowed: false,
         reasonCode: "OPERATION_UNKNOWN_OUTCOME",
@@ -434,18 +483,31 @@ export class TaskOperationGuard {
         newState: "dispatched",
       });
       if (!stamped.ok) {
+        // §17 conflict monitor: the settle lost the claim-generation CAS
+        // (a reconciler or a concurrent settle moved the row). The row
+        // stays claimed/unresolved — reconcilable, but the race is a
+        // monitor signal.
+        this.notifyConflict(stamped.reasonCode ?? "SETTLE_CAS_CONFLICT", "settle");
         return stamped;
       }
-      return this.deps.updateState({
+      const settled = await this.deps.updateState({
         operationKey,
         expectedClaimGeneration: input.claimGeneration + 1,
         newState,
       });
+      if (!settled.ok) {
+        this.notifyConflict(settled.reasonCode ?? "SETTLE_CAS_CONFLICT", "settle");
+      }
+      return settled;
     }
-    return this.deps.updateState({
+    const direct = await this.deps.updateState({
       operationKey,
       expectedClaimGeneration: input.claimGeneration,
       newState,
     });
+    if (!direct.ok) {
+      this.notifyConflict(direct.reasonCode ?? "SETTLE_CAS_CONFLICT", "settle");
+    }
+    return direct;
   }
 }

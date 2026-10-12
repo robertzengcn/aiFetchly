@@ -43,6 +43,8 @@ import type { FinalizeScheduledInput } from "@/model/AiTaskExecution.model";
 import { buildScheduledBudgetLimits } from "@/service/aiTaskExecution/budgetDefaults";
 import { enrollScheduledExecution } from "@/service/aiTaskExecution/ScheduledExecutionEnroller";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConflictMetrics";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -966,6 +968,29 @@ export class ScheduledAiMessageRunner {
         finalizeInput
       );
       if (!result.ok) {
+        // §17 "finalization conflicts" monitor: a scheduled CAS loss
+        // (STATE_CONFLICT / ALREADY_FINALIZED / MISSING_TASK_OUTCOME) is a
+        // return value, not a durable row — emit the structured conflict
+        // line here so rollout operators can grep the rate (the manual seam
+        // emits the same event from TaskExecutionCoordinator). The route
+        // comes from the execution row (authoritative), read on this error
+        // path only so the happy path stays a single finalize round-trip.
+        if (
+          result.reasonCode === "STATE_CONFLICT" ||
+          result.reasonCode === "ALREADY_FINALIZED"
+        ) {
+          const execRow = await new AiTaskExecutionModule()
+            .getExecution(policyExecution.executionId)
+            .catch(() => null);
+          logFinalizationConflict({
+            surface: "scheduled_finalize",
+            executionId: policyExecution.executionId,
+            origin: "scheduled",
+            route: execRow?.route ?? "task_best_effort",
+            reasonCode: result.reasonCode,
+            attempt: 0,
+          });
+        }
         console.error(
           `[scheduled-loop] scheduled finalization not applied (runId=${runId}):`,
           result.reasonCode

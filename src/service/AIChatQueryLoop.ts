@@ -140,6 +140,8 @@ import {
   type OperationGuardDeps,
 } from "@/service/aiTaskExecution/TaskOperationGuard";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConflictMetrics";
 
 /**
  * Max model→tool→model rounds per cycle inside one user turn. Must be high
@@ -1488,6 +1490,27 @@ export class AIChatQueryLoop {
           receiptReference: input.receiptReference,
           failureCode: input.failureCode,
         }),
+      // T26a (§17 "finalization conflicts" monitor): the guard emits one
+      // structured line per CAS loss at this dispatch surface. The origin
+      // comes from the binding's enrollment kind; the route is read from
+      // the execution row LAZILY on the conflict path only (the happy path
+      // must not pay an extra round-trip), falling back to best_effort if
+      // the row cannot be read.
+      notifyConflict: (conflict) => {
+        void (async () => {
+          const execRow = await new AiTaskExecutionModule()
+            .getExecution(binding.executionId)
+            .catch(() => null);
+          logFinalizationConflict({
+            surface: conflict.surface,
+            executionId: binding.executionId,
+            origin: binding.executionKind === "scheduled" ? "scheduled" : "manual",
+            route: execRow?.route ?? "task_best_effort",
+            reasonCode: conflict.reasonCode,
+            attempt: conflict.stage === "prepare" ? 0 : 1,
+          });
+        })();
+      },
     };
     return new TaskOperationGuard(deps, binding.executionId);
   }
