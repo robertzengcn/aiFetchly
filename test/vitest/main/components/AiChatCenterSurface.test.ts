@@ -1950,6 +1950,28 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     });
   });
 
+  /**
+   * T7/D3 (audit): an ordinary send with attachments must not follow a
+   * conversation switch that happens while files encode — the message
+   * belongs to the conversation selected when the user pressed Send.
+   */
+  it("aborts an attachment send when the selection changes during file encoding (T7/D3)", async () => {
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-a");
+    await flushPromises();
+    const file = new File(["hello"], "note.txt", { type: "text/plain" });
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "see the attached note", [file]);
+    // Switch mid-encode: the emit handler already suspended at the first
+    // encode await, so this runs before sendMessage resolves the target.
+    useChatWorkspaceStore().setSelected("conv-b");
+    await flushPromises();
+
+    expect(startChatRunMock).not.toHaveBeenCalled();
+    const notice = wrapper.get('[data-testid="workspace-command-error"]');
+    expect(notice.text()).toContain("Selection changed");
+  });
+
   it("shows the workspace chooser above the composer with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();

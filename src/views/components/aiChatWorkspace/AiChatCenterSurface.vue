@@ -1709,18 +1709,22 @@ async function onComposerSend(
   // router BEFORE ordinary AI submission — the raw command text never
   // reaches the model.
   commandErrorNotice.value = null;
-  // Codex P1 (round 2): /goal and /skill await IPC before their prompt
-  // submits — capture the conversation the command was issued in so a
-  // mid-dispatch selection change can never deliver the prompt to chat B.
+  // T7/D3 + Codex P1: capture the conversation the user pressed Send in
+  // BEFORE the first await (command routing / file encoding both suspend).
+  // A later selection change can never attach this submission to chat B.
   const commandConversationId = conversationId.value;
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,
     onAccepted: options?.onAccepted,
   });
-  await applyCommandDisposition(disposition, text, files, options, {
-    commandConversationId,
-  });
+  await applyCommandDisposition(
+    disposition,
+    text,
+    files,
+    options,
+    { commandConversationId }
+  );
 }
 
 async function applyCommandDisposition(
@@ -1735,7 +1739,9 @@ async function applyCommandDisposition(
   context?: { commandConversationId?: string | null }
 ): Promise<void> {
   if (disposition.kind === "not_command") {
-    await performOrdinarySend(text, files, options);
+      await performOrdinarySend(text, files, options, {
+      targetConversationId: context?.commandConversationId,
+    });
     return;
   }
   if (disposition.kind === "submit_prompt") {
@@ -1762,6 +1768,7 @@ async function applyCommandDisposition(
       pastedContents: options?.pastedContents,
       modeOverride: disposition.mode,
       onAccepted: options?.onAccepted,
+      targetConversationId: context?.commandConversationId,
     });
     return;
   }
@@ -1803,7 +1810,13 @@ async function performOrdinarySend(
     modeOverride?: "chat" | "plan";
     /** Trusted channel: the user-confirmed batch reference set (FR-IMG-004). */
     confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
-  }
+  },
+  /**
+   * T7/D3: the conversation this send was issued in (captured before the
+   * first await by the caller). When provided, a selection change during
+   * any later await aborts the send instead of retargeting it.
+   */
+  sendTarget?: { readonly targetConversationId?: string | null }
 ): Promise<boolean> {
   // FR-SUB-004 (capability parity): paste bodies travel as their own bounded
   // map so the engine expands the same content the Chat V2 stream edge
@@ -1834,6 +1847,11 @@ async function performOrdinarySend(
     await onNewChat();
     if (!conversationId.value) return false;
   }
+  // T7/D3 (audit): the conversation this send belongs to is fixed BEFORE
+  // any await below (file encoding can take seconds). A selection change
+  // during encoding must abort — never attach the message to chat B.
+  const sendConversationId =
+    sendTarget?.targetConversationId ?? conversationId.value;
   // Reference-only sends still need a message for the model (legacy parity)
   // — including a user-confirmed batch whose instruction text is empty
   // (Codex P2: without this the confirmed dialog closes and sends nothing).
@@ -1850,6 +1868,14 @@ async function performOrdinarySend(
             item !== null
         )
       : undefined;
+  if (conversationId.value !== sendConversationId) {
+    // Selection changed while attachments encoded (audit T7/D3): keep the
+    // draft, keep the message out of the newly selected chat, explain.
+    commandErrorNotice.value =
+      t("workspaceChat.command.staleAborted") ||
+      "Selection changed — the command was not run.";
+    return false;
+  }
   if (selectedModel.value) {
     try {
       localStorage.setItem(LAST_MODEL_STORAGE_KEY, selectedModel.value);
