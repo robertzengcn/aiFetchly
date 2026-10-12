@@ -112,3 +112,40 @@ export const markPermissionPromptExecuting = (
 
   return changed ? nextMessages : messages;
 };
+
+/**
+ * T4/D1 (capability-parity audit): restore a permission prompt after a
+ * FAILED resume, so the decision card stays mounted and actionable instead
+ * of vanishing into a dead receipt. Reverses
+ * {@link markPermissionPromptExecuting} and keeps the safe error visible on
+ * the row's content for screen-reader announcement.
+ */
+export const restorePermissionPromptAfterFailure = (
+  messages: ChatV2MessageView[],
+  messageId: string,
+  errorMessage: string
+): ChatV2MessageView[] => {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+    changed = true;
+    const restored: ChatV2MessageView = {
+      ...message,
+      content: errorMessage,
+      metadata: {
+        ...message.metadata,
+        source: message.metadata?.source ?? "chat-v2",
+        toolResult: {
+          ...message.metadata?.toolResult,
+          needsPermissionPrompt: true,
+          executionPending: false,
+        },
+      },
+    };
+    return restored;
+  });
+
+  return changed ? nextMessages : messages;
+};

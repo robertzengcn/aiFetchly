@@ -1055,6 +1055,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         (m: ChatV2MessageView) => m.id === "perm-msg-1"
       );
       expect(row?.content).toBe("engine gone");
+      // T4/D1 (audit): the failed resume RESTORES the prompt metadata — the
+      // rendered-card proof lives in AiChatWorkspaceTranscript.test.ts (the
+      // center stubs the transcript; asserting the DOM here would be vacuous).
+      expect(row?.metadata?.toolResult?.needsPermissionPrompt).toBe(true);
+      expect(row?.metadata?.toolResult?.executionPending).toBe(false);
       // The in-flight guard released — a retry click resumes again.
       transcript.vm.$emit("grant-permission", permissionMessage, {
         persistent: false,

@@ -26,7 +26,10 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { windowInvoke } from "@/views/utils/apirequest";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
-import { markPermissionPromptExecuting } from "@/views/components/aiChatV2/toolExecutionStateUtil";
+import {
+  markPermissionPromptExecuting,
+  restorePermissionPromptAfterFailure,
+} from "@/views/components/aiChatV2/toolExecutionStateUtil";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import {
   emitShellDiagnostic,
@@ -555,22 +558,23 @@ export const useSelectedConversationStore = defineStore(
         const res = raw as { ok: boolean; error?: string } | null;
         if (!res?.ok) {
           const errMsg = res?.error || texts.resumeFailedText;
-          presenter.rewriteMessage(message.id, (m) => ({
-            ...m,
-            content: errMsg,
-            metadata: {
-              ...m.metadata,
-              source: "chat-v2",
-              toolResult: { error: errMsg, success: false },
-              success: false,
-              error: errMsg,
-            },
-          }));
+          // T4/D1 (audit): a failed resume RESTORES the prompt — Grant/Deny
+          // stay mounted and actionable (FR-PER-007); the safe error rides
+          // the row content so it is announced without stealing focus.
+          presenter.rewriteMessage(message.id, (m) =>
+            restorePermissionPromptAfterFailure([m], message.id, errMsg)[0]
+          );
+          syncFromPresenter();
           errorMessage.value = errMsg;
         }
       } catch (error) {
-        errorMessage.value =
+        const errMsg =
           error instanceof Error ? error.message : String(error);
+        presenter.rewriteMessage(message.id, (m) =>
+          restorePermissionPromptAfterFailure([m], message.id, errMsg)[0]
+        );
+        syncFromPresenter();
+        errorMessage.value = errMsg;
       } finally {
         permissionResumeInFlightToolIds.delete(toolId);
       }

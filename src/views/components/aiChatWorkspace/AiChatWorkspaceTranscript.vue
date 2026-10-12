@@ -320,6 +320,17 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             message: messages[i],
           });
         }
+        // T4/D1 (audit): an ANCHOR message can itself be a permission prompt
+        // (a failed-resume restored row, or a historical prompt whose paired
+        // call sits outside the mounted window) — surface it too, mirroring
+        // the in-loop branch, or the decision card silently disappears.
+        if (isPermissionPrompt(messages[i])) {
+          result.push({
+            kind: "permission-prompt",
+            key: `permission-${messages[i].id}`,
+            message: messages[i],
+          });
+        }
         // Skip all consecutive tool messages.
         i += 1;
         while (

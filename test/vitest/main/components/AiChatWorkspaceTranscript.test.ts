@@ -396,6 +396,39 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(plain?.props("group").defaultExpanded).toBe(false);
   });
 
+  it("T4/D1: a failed-resume RESTORED prompt still renders the interactive decision card", async () => {
+    // The store's restore path (restorePermissionPromptAfterFailure) yields
+    // exactly this shape: prompt flag back on, executing flag off, safe
+    // error as content. The card must mount — not vanish into a receipt.
+    const restored = msg(MessageType.TOOL_RESULT, {
+      toolCallId: "tc-perm-restored",
+      toolName: "run_command",
+      toolResult: {
+        needsPermissionPrompt: true,
+        success: false,
+        error: "engine gone",
+      },
+    });
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [restored],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-testid="ai-chat-permission-card"]');
+    expect(cards).toHaveLength(1);
+    expect(
+      wrapper.find('[data-testid="ai-chat-permission-allow-once"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="ai-chat-permission-deny"]').exists()
+    ).toBe(true);
+  });
+
   it("§18: outbound batch result paired in a group surfaces the interactive review card", async () => {
     const messages = [
       msg(MessageType.MESSAGE, {}, "assistant", "Drafting the batch."),
