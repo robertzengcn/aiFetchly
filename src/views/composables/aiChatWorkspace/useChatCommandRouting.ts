@@ -125,7 +125,8 @@ export interface ChatCommandRoutingPorts {
   readonly onSlashPromptExpand: (
     prompt: string,
     pastedContents?: Record<string, string>,
-    conversationId?: string
+    conversationId?: string,
+    onAccepted?: () => void
   ) => Promise<boolean>;
   /** Built-in `/clear` handler (clear + reload). */
   /** Built-in `/clear` — receives the conversation the command was issued in. */
@@ -136,6 +137,12 @@ export interface RouteCommandOptions {
   readonly pastedContents?: Record<string, string>;
   /** Attachments present — generic slash interception is skipped (V2 parity). */
   readonly hasFiles?: boolean;
+  /**
+   * The composer's acceptance callback (Codex P2): threaded through to the
+   * expanded-prompt send so a parked (image dialog) or rejected expansion
+   * keeps the draft and the replayed send clears it exactly once.
+   */
+  readonly onAccepted?: () => void;
 }
 
 export interface ScheduledLoopApprovalPayload {
@@ -259,7 +266,8 @@ export function useChatCommandRouting(
    */
   async function dispatchGenericSlash(
     rawInput: string,
-    pastedContents?: Record<string, string>
+    pastedContents?: Record<string, string>,
+    onAccepted?: () => void
   ): Promise<boolean | null> {
     const conversationId = await ports.ensureConversationId();
     if (!conversationId) {
@@ -298,7 +306,8 @@ export function useChatCommandRouting(
         return await ports.onSlashPromptExpand(
           result.prompt,
           pastedContents,
-          conversationId
+          conversationId,
+          onAccepted
         );
       } catch {
         return false;
@@ -465,7 +474,8 @@ export function useChatCommandRouting(
     ) {
       const handled = await dispatchGenericSlash(
         text.trim(),
-        options.pastedContents
+        options.pastedContents,
+        options.onAccepted
       );
       if (handled !== null) {
         return { kind: "completed", acceptedSend: handled };

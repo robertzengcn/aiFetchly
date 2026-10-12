@@ -19,6 +19,7 @@ import {
 } from "@/modules/AIChatPendingMessageModule";
 import { log } from "@/modules/Logger";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 
 /**
  * Main-process queue orchestration (message-queue technical design §9).
@@ -615,6 +616,16 @@ export class AIChatTurnQueueService {
       let terminal: AIChatTurnTerminalEvent;
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
+        // Codex P1: stage the user-confirmed batch at DISPATCH — the row's
+        // own turn is about to run, so the entry can be consumed only by it
+        // (a receive-time entry would have been eaten by the running turn
+        // or cleared at its terminal).
+        if (turnInputs.confirmedBatchReferences) {
+          getConfirmedBatchReferenceRegistry().stage(
+            conversationId,
+            turnInputs.confirmedBatchReferences
+          );
+        }
         terminal = await this.deps.engine.submitPersistedUserMessage({
           eventSink: this.deps.streamSinkFactory(),
           request: turnInputs.request,

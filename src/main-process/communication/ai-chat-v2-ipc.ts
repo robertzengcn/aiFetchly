@@ -1047,7 +1047,8 @@ export type GeneratedImageValidationResult =
  */
 export function validateAndStageGeneratedImageFields(
   uploadedFiles: readonly { kind: string }[],
-  req: ChatV2StreamRequest
+  req: ChatV2StreamRequest,
+  opts?: { readonly stage?: boolean }
 ): GeneratedImageValidationResult {
   const uploadedImageCount = uploadedFiles.filter(
     (file) => file.kind === "image"
@@ -1126,10 +1127,30 @@ export function validateAndStageGeneratedImageFields(
             GENERATED_IMAGE_REFERENCE_INVALID_CODE,
       };
     }
-    getConfirmedBatchReferenceRegistry().stage(
-      req.conversationId,
-      normalizedConfirmed.references
-    );
+    if (opts?.stage !== false) {
+      getConfirmedBatchReferenceRegistry().stage(
+        req.conversationId,
+        normalizedConfirmed.references
+      );
+    } else {
+      // Deferred staging (Codex P1): the caller stages at DISPATCH — a
+      // receive-time entry under a busy conversation would be consumed by
+      // the running turn or cleared by its terminal. Keep the NORMALIZED
+      // set on the returned request so the dispatch owner can stage it.
+      return {
+        ok: true,
+        request: {
+          ...req,
+          generatedImageReferences:
+            normalizedReferences.references.length > 0
+              ? normalizedReferences.references
+              : undefined,
+          confirmedGeneratedImageBatch: {
+            references: normalizedConfirmed.references,
+          },
+        },
+      };
+    }
   }
 
   return {

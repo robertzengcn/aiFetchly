@@ -421,7 +421,13 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // stores or forwards it.
       const validated = validateAndStageGeneratedImageFields(
         parsed.data.uploadedFiles ?? [],
-        parsed.data
+        parsed.data,
+        // Codex P1: DO NOT stage at receive time — the coordinator stages
+        // when it owns the dispatch, and the durable queue stages when the
+        // queued turn dispatches. A receive-time entry under a busy
+        // conversation would be consumed by the running turn or cleared by
+        // its terminal before the queued turn executes.
+        { stage: false }
       );
       if (!validated.ok) {
         return denied(validated.errorMessage);

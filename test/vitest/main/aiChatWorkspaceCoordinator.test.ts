@@ -359,7 +359,15 @@ describe("AIChatCoordinator", () => {
     await waitFor(() => fake.turns.length === 1);
     const engineRequest = fake.turns[0].input.request;
     expect(engineRequest.pastedContents).toEqual({ "1": "pasted body text" });
-    expect(engineRequest.confirmedGeneratedImageBatch?.references).toEqual([
+    // Codex P1: the confirmed batch travels via ConfirmedBatchReferenceRegistry
+    // (staged at dispatch ownership), NEVER on the engine request (strip
+    // contract) — assert both sides.
+    expect(engineRequest.confirmedGeneratedImageBatch).toBeUndefined();
+    const { getConfirmedBatchReferenceRegistry } = await import(
+      "@/service/ConfirmedBatchReferenceRegistry"
+    );
+    const staged = getConfirmedBatchReferenceRegistry().consume("v2-test-6");
+    expect(staged?.map((r) => ({ messageId: r.messageId, imageIndex: r.imageIndex }))).toEqual([
       { messageId: "m1", imageIndex: 0 },
       { messageId: "m2", imageIndex: 1 },
     ]);

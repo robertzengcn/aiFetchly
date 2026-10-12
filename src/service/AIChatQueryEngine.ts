@@ -1719,13 +1719,43 @@ export class AIChatQueryEngine {
       log.error("[outbound-email-intent] queued resolve failed:", err);
     }
 
+    // Codex P2: queued turns resolve selected archive passages IDENTICALLY
+    // to the direct path (§13.3) — opaque ids re-validate here (ownership/
+    // epoch/budget), accepted excerpts fold into the model message, and the
+    // ack ids ride the start event so the renderer's chips clear.
+    let historySelectionAcceptedIds: readonly string[] = [];
+    let historySelectionChangedIds: readonly string[] = [];
+    let historySelectionRejectedIds: readonly string[] = [];
+    let assemblyContent = modelContent;
+    try {
+      const selectionResolution = await this.resolveSelectedHistory(
+        conversationId,
+        savedUser.messageId,
+        request.historySelectionIds ?? []
+      );
+      const selectedHistoryBlock = buildSelectedHistoryContextBlock(
+        selectionResolution.excerpts
+      );
+      if (selectedHistoryBlock.length > 0) {
+        assemblyContent = `${modelContent}\n\n${selectedHistoryBlock}`;
+      }
+      historySelectionAcceptedIds = selectionResolution.metadata.map(
+        (m) => m.sourceId
+      );
+      historySelectionChangedIds = selectionResolution.changedIds;
+      historySelectionRejectedIds = selectionResolution.rejectedIds;
+    } catch (err) {
+      // Selection resolution never blocks the turn (§13.3).
+      log.error("[ai-chat-v2] queued history-selection resolve failed:", err);
+    }
+
     let messages: OpenAIChatMessage[];
     try {
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: modelContent,
+        currentUserMessage: assemblyContent,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
@@ -1759,7 +1789,7 @@ export class AIChatQueryEngine {
             if (compacted) {
               const reassembled = await this.contextAssembler.assemble({
                 conversationId,
-                currentUserMessage: modelContent,
+                currentUserMessage: assemblyContent,
                 currentUserMessageId: savedUser.messageId,
                 baseSystemPrompt: basePrompt,
                 mode: isPlanMode ? "plan" : "chat",
@@ -1794,6 +1824,9 @@ export class AIChatQueryEngine {
       `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     return await this.runPersistedTurn({
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
       conversationId,
       assistantMessageId,
       messages,

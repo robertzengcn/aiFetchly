@@ -52,6 +52,16 @@ interface AIChatPendingRequestOptions {
    */
   readonly historySelectionIds?: readonly string[];
   readonly submissionId?: string;
+  /**
+   * Codex P1: the user-confirmed generated-image batch rides with the row
+   * (normalized, validated at the IPC edge) and the queue STAGES it at
+   * dispatch — a receive-time registry entry would be consumed by the
+   * running turn or cleared by its terminal before the queued turn runs.
+   */
+  readonly confirmedBatchReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
 }
 
 /** Non-null pending row (the Model's lookups return `| null`). */
@@ -426,6 +436,16 @@ export class AIChatPendingMessageModule extends BaseModule {
     readonly contentParts:
       | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
       | undefined;
+    /**
+     * Codex P1: the user-confirmed generated-image batch for THIS row —
+     * returned SEPARATELY from the engine request (the strip contract keeps
+     * it off the request); the queue stages it into the trusted registry at
+     * dispatch time.
+     */
+    readonly confirmedBatchReferences?: readonly {
+      messageId: string;
+      imageIndex: number;
+    }[];
   }> {
     await this.ensureConnection();
     const options = this.parseRequestOptions(row);
@@ -460,6 +480,13 @@ export class AIChatPendingMessageModule extends BaseModule {
         ? { submissionId: options.submissionId }
         : {}),
     };
+    // Codex P1: the confirmed batch is returned SEPARATELY (strip contract:
+    // the engine request never carries it); the queue stages it at dispatch.
+    const confirmedBatchReferences =
+      options.confirmedBatchReferences !== undefined &&
+      options.confirmedBatchReferences.length > 0
+        ? [...options.confirmedBatchReferences]
+        : undefined;
     const images = await this.attachmentModule.getByMessageId(
       row.userMessageId
     );
@@ -480,7 +507,9 @@ export class AIChatPendingMessageModule extends BaseModule {
         })),
       ];
     }
-    return { request, contentParts };
+    return confirmedBatchReferences
+      ? { request, contentParts, confirmedBatchReferences }
+      : { request, contentParts };
   }
 
   // -------------------------------------------------------------------------
@@ -605,6 +634,13 @@ export class AIChatPendingMessageModule extends BaseModule {
         : {}),
       ...(request.submissionId !== undefined
         ? { submissionId: request.submissionId }
+        : {}),
+      ...(request.confirmedGeneratedImageBatch?.references
+        ? {
+            confirmedBatchReferences: [
+              ...request.confirmedGeneratedImageBatch.references,
+            ],
+          }
         : {}),
     };
   }

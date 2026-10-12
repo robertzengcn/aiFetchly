@@ -1709,11 +1709,18 @@ async function onComposerSend(
   // router BEFORE ordinary AI submission — the raw command text never
   // reaches the model.
   commandErrorNotice.value = null;
+  // Codex P1 (round 2): /goal and /skill await IPC before their prompt
+  // submits — capture the conversation the command was issued in so a
+  // mid-dispatch selection change can never deliver the prompt to chat B.
+  const commandConversationId = conversationId.value;
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,
+    onAccepted: options?.onAccepted,
   });
-  await applyCommandDisposition(disposition, text, files, options);
+  await applyCommandDisposition(disposition, text, files, options, {
+    commandConversationId,
+  });
 }
 
 async function applyCommandDisposition(
@@ -1724,24 +1731,38 @@ async function applyCommandDisposition(
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
-  }
+  },
+  context?: { commandConversationId?: string | null }
 ): Promise<void> {
   if (disposition.kind === "not_command") {
     await performOrdinarySend(text, files, options);
     return;
   }
   if (disposition.kind === "submit_prompt") {
+    if (
+      context?.commandConversationId !== undefined &&
+      context.commandConversationId !== null &&
+      conversationId.value !== context.commandConversationId
+    ) {
+      // The goal/skill IPC awaited — the user switched chats. Abort the
+      // prompt send entirely (the goal/skill state lives in chat A).
+      commandErrorNotice.value =
+        t("workspaceChat.command.staleAborted") ||
+        "Selection changed — the command was not run.";
+      return;
+    }
     // The command's side effects are done (goal created / skill invoked);
     // submit the resulting prompt through the ordinary path ONCE with the
     // command-selected mode (FR-CMD-003: never re-dispatched as a command).
-    const accepted = await performOrdinarySend(disposition.prompt, [], {
+    // onAccepted rides INSIDE the send options so an image-dialog park
+    // keeps the draft and the replayed send clears it exactly once
+    // (Codex P2; no double-fire with the branch-level acceptance).
+    await performOrdinarySend(disposition.prompt, [], {
       fromVoice: options?.fromVoice,
       pastedContents: options?.pastedContents,
       modeOverride: disposition.mode,
+      onAccepted: options?.onAccepted,
     });
-    if (accepted) {
-      options?.onAccepted?.();
-    }
     return;
   }
   if (disposition.kind === "needs_scheduled_approval") {
@@ -1813,9 +1834,13 @@ async function performOrdinarySend(
     await onNewChat();
     if (!conversationId.value) return false;
   }
-  // Reference-only sends still need a message for the model (legacy parity).
+  // Reference-only sends still need a message for the model (legacy parity)
+  // — including a user-confirmed batch whose instruction text is empty
+  // (Codex P2: without this the confirmed dialog closes and sends nothing).
   const messageText =
-    generatedImageReferences.length > 0 && text.trim().length === 0
+    (generatedImageReferences.length > 0 ||
+      (confirmedBatch && confirmedBatch.length > 0)) &&
+    text.trim().length === 0
       ? GENERATED_IMAGE_FALLBACK_PROMPT
       : text;
   const uploadedFiles =
@@ -1896,6 +1921,14 @@ const commandRouter = useChatCommandRouting({
     return goal ? { goalId: goal.goalId } : null;
   },
   appendLocalExchange: (userText, assistantText) => {
+    // Codex P2: on the empty state the store drops local exchanges
+    // silently — create the chat first so command receipts always render.
+    if (!conversationId.value) {
+      void onNewChat().then(() => {
+        selectedStore.appendLocalCommandExchange(userText, assistantText);
+      });
+      return;
+    }
     selectedStore.appendLocalCommandExchange(userText, assistantText);
   },
   setError: (message) => {
@@ -1903,19 +1936,54 @@ const commandRouter = useChatCommandRouting({
   },
   translate: (key, fallback, vars) =>
     vars ? t(key, vars) || fallback : t(key) || fallback,
-  createGoal: (input) => createGoal(input),
+  createGoal: async (input) => {
+    const created = await createGoal(input);
+    // Codex P2: seed the created goal immediately so a following /loop N
+    // finds it without waiting for a reselection.
+    if (created) {
+      void hydrateActiveGoal(input.conversationId);
+    }
+    return created;
+  },
   startGoalLoop: async (input) => (await startGoalLoop(input)) !== null,
   invokePromptSkill: async (input) => (await invokePromptSkill(input)) !== null,
   createScheduledLoop: (input) => createScheduledLoop(input),
   controlScheduledLoop: async (id, operation) => {
-    await controlScheduledLoop(id, operation);
+    const loop = await controlScheduledLoop(id, operation);
+    // Codex P2: the control response is authoritative — apply it to the run
+    // strip when the conversation still owns the command.
+    if (
+      loop &&
+      typeof loop === "object" &&
+      "status" in loop &&
+      conversationId.value === id
+    ) {
+      authoritativeLoopStatus.value = String(
+        (loop as { status: unknown }).status
+      );
+    }
+    return loop;
   },
-  getScheduledLoopStatus: (id) => getScheduledLoopStatus(id),
+  getScheduledLoopStatus: async (id) => {
+    const loop = await getScheduledLoopStatus(id);
+    if (
+      loop &&
+      typeof loop === "object" &&
+      "status" in loop &&
+      conversationId.value === id
+    ) {
+      authoritativeLoopStatus.value = String(
+        (loop as { status: unknown }).status
+      );
+    }
+    return loop;
+  },
   dispatchSlashCommand: (input) => dispatchSlashCommand(input),
   onSlashPromptExpand: async (
     prompt,
     pastedContents,
-    targetConversationId
+    targetConversationId,
+    onAccepted
   ): Promise<boolean> => {
     if (targetConversationId && conversationId.value !== targetConversationId) {
       // Codex High (cross-conversation command): a selection change during
@@ -1925,7 +1993,7 @@ const commandRouter = useChatCommandRouting({
         "Selection changed — the command was not run.";
       return false;
     }
-    return performOrdinarySend(prompt, [], { pastedContents });
+    return performOrdinarySend(prompt, [], { pastedContents, onAccepted });
   },
   onClearConversation: async (targetConversationId): Promise<void> => {
     // Codex High (cross-conversation /clear): only clear when the command
@@ -2466,6 +2534,14 @@ async function onLegacyPlanAction(
     // Still on the deciding conversation: refresh so the
     // receipt/planStateView reflects the persisted decision.
     await selectedStore.loadSelection(targetConversationId);
+    // Codex P1 (round 2): the reload AWAITS — a selection change during it
+    // must abort here too, or the continuation fires into chat B.
+    if (conversationId.value !== targetConversationId) {
+      planDecisionError.value =
+        t("workspaceChat.plan.continuationAborted") ||
+        "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.";
+      return;
+    }
     // FR-PLN-006/007: start the correct continuation exactly once. The
     // continuation message keys are shared with Chat V2 (already localized).
     if (action === "approve-plan") {

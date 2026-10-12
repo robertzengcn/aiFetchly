@@ -9,6 +9,7 @@ import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
 import type { StartChatRunRequestPayload } from "@/schemas/ipc/aiChatWorkspace";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 import { normalizeChatV2UploadedFiles } from "@/main-process/communication/ai-chat-v2-ipc";
 import type { ChatV2UploadedAttachment } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -152,6 +153,16 @@ export class AIChatCoordinator {
         message:
           "A run is already active for this conversation. Wait for it to finish or stop it first.",
       };
+    }
+
+    // Codex P1: the idle path owns the dispatch — stage the user-confirmed
+    // batch set NOW (just-in-time for this turn's execution; the entry
+    // cannot be consumed or cleared by any other turn first).
+    if (request.confirmedGeneratedImageBatch) {
+      getConfirmedBatchReferenceRegistry().stage(
+        request.conversationId,
+        request.confirmedGeneratedImageBatch.references
+      );
     }
 
     const run = await this.deps.runModule.createRun({
@@ -600,7 +611,9 @@ export class AIChatCoordinator {
       // and the Chat V2 stream edge — pasted bodies, the trusted confirmed
       // image batch, opaque archive references, and the retry-stable id.
       pastedContents: request.pastedContents,
-      confirmedGeneratedImageBatch: request.confirmedGeneratedImageBatch,
+      // The confirmed batch travels via ConfirmedBatchReferenceRegistry only
+      // (staged at dispatch ownership); the engine request never carries it
+      // (trusted-channel strip contract, ai-chat-v2-ipc.ts:1043).
       historySelectionIds: request.historySelectionIds,
       submissionId: request.submissionId,
     };
