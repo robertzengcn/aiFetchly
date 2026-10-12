@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { SendPolicyRejection } from "@/service/emailReply/EmailReplySendBinding";
@@ -939,4 +941,421 @@ describe("sendApprovedReply pre_send audit-failure telemetry (T12/FR-039)", () =
     const counters = drainCountersForTest();
     expect(counters.get("audit_failure{stage=pre_send}")).toBe(1);
   });
+});
+
+// ---------------------------------------------------------------------------
+// R12 (§9.4 item 4) — Recheck freshness after claim and intervening awaits,
+// retaining exact-attempt ownership for one bounded refresh. The freshness
+// fence today exists ONLY at claim time (claimApprovedRevisionForSend reads
+// replyNegativeCheckAt; null→stale fail-closed D1a, age>5s→stale). After the
+// claim succeeds and markSubmitted (527) runs, the flow proceeds to SMTP (560)
+// with NO further age check. A DB/queue delay after claim exceeding the 5s
+// FORCED_FRESHNESS_WINDOW_MS → SMTP submits using a stale observation.
+//
+// §9.4 item 4 prescription: "Submit SMTP immediately after the successful
+// claim... If execution is delayed past the five-second observation window
+// before SMTP starts, rerun detection outside the transaction while retaining
+// the send claim. A refusal before SMTP finalizes that unsent claim safely;
+// it must not manufacture an accepted/unknown send. Recognize only this
+// operation's exact attempt as the current owner during that refresh; every
+// other pending/sent/unknown record still blocks. This internal ownership
+// handle is never a tool/IPC bypass parameter. Allow one delayed refresh;
+// further delay refuses with no SMTP submission."
+//
+// Todo regression requirement (verbatim): "hold submission persistence for
+// six seconds, then reveal positive/unknown on refresh; assert zero SMTP and
+// retained protection. Verify normal exact-attempt replay is unaffected."
+//
+// The 6-second hold is simulated by spying EmailReplySendAttemptModule
+// .prototype.markSubmitted BEFORE constructing the delivery service (the
+// BaseDb.installConnectionGuards landmine: it copies every async prototype
+// method onto the instance at construction, so a spy installed after
+// construction is bypassed by the instance-own guarded method). The hold
+// lets real wall-clock advance past the 5s FORCED_FRESHNESS_WINDOW_MS after
+// the claim succeeds but before SMTP starts — the exact post-claim gap §9.4
+// item 4 closes. Each test has an explicit vitest timeout >6s (the default
+// 5s per-test timeout would abort the hold).
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+  const approvalModule = new EmailReplyApprovalModule();
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  async function refusalAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  async function finalizeAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "delivery_unknown");
+  }
+
+  // The markSubmitted prototype spy leaks across tests (it replaces the
+  // prototype method, which every subsequent EmailReplySendAttemptModule
+  // instance inherits until restored). Restore all mocks after each test so
+  // the 6s hold does not deadlock later tests in the describe.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Build a delivery service whose detection spy writes a fresh
+   * replyNegativeCheckAt (so the claim-time fence passes) and returns
+   * not_replied. `markSubmittedSpy` is installed on the prototype BEFORE
+   * construction so it survives BaseDb's instance-own guarded-method copy.
+   * The spy holds submission persistence for `holdMs` (real wall-clock) to
+   * push the post-claim moment past the 5s freshness window, then calls the
+   * real markSubmitted so the attempt reaches `submitted` (the state the §9.4
+   * safe-finalize matches).
+   *
+   * `refreshResult` is the detection result the gate refresh must reveal.
+   */
+  function buildR12Delivery(opts: {
+    holdMs: number;
+    refreshResult: ReplyDetectionResult;
+  }): {
+    delivery: EmailReplyDeliveryService;
+    smtpCalls: { count: number };
+    detectCalls: { count: number };
+    markSubmittedSpy: ReturnType<typeof vi.spyOn>;
+  } {
+    const smtpCalls = { count: 0 };
+    const detectCalls = { count: 0 };
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        smtpCalls.count += 1;
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-${smtpCalls.count}@x>`,
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(
+        async (input: {
+          messageId: number;
+          forceRefresh?: boolean;
+          excludeDraftId?: number;
+          excludeAttemptId?: number;
+        }) => {
+          detectCalls.count += 1;
+          // The pre-send probe (step 5b) and any §9.3 claim-time refresh
+          // write a fresh observation so the claim-time fence passes.
+          // The post-claim gate refresh (R12) reveals refreshResult WITHOUT
+          // persisting a fresh negative — it surfaces the stale reality.
+          const isPostClaimRefresh =
+            input.excludeAttemptId !== undefined &&
+            input.excludeDraftId !== undefined;
+          if (!isPostClaimRefresh) {
+            await messageModule.updateReplyEvidence({
+              id: input.messageId,
+              replyNegativeCheckAt: new Date(),
+              replyNegativeContextHash: "r12-context-hash",
+              isAnswered: 0,
+              answeredFlagCheckedAt: new Date(),
+            });
+          }
+          return isPostClaimRefresh ? opts.refreshResult : NOT_REPLIED_DETECTION;
+        }
+      );
+      return svc;
+    };
+    // BaseDb landmine: install the spy on the prototype BEFORE constructing
+    // the delivery service. installConnectionGuards copies every async
+    // prototype method onto the instance at construction; a spy installed
+    // after construction is bypassed by the instance-own guarded method.
+    const realMarkSubmitted = attemptModule.markSubmitted.bind(attemptModule);
+    const markSubmittedSpy = vi
+      .spyOn(EmailReplySendAttemptModule.prototype, "markSubmitted")
+      .mockImplementation(async (id: number, at: Date) => {
+        // Hold real wall-clock past FORCED_FRESHNESS_WINDOW_MS (5s) so the
+        // post-claim gate sees a stale observation, then call the real
+        // markSubmitted so the attempt reaches `submitted` (the state the
+        // §9.4 safe-finalize matches: failed/delivery_unknown match only
+        // claimed|submitted).
+        await new Promise((resolve) => setTimeout(resolve, opts.holdMs));
+        await realMarkSubmitted(id, at);
+      });
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+    return { delivery, smtpCalls, detectCalls, markSubmittedSpy };
+  }
+
+  it("6s hold + refresh reveals `replied` -> ZERO SMTP, claim finalized delivery_unknown, protection retained, ONE reply_skipped audit", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const refreshRevealed: ReplyDetectionResult = {
+      state: "replied",
+      replied: true,
+      source: "local_state",
+      matchedMessageId: null,
+      reasonCode: "already_replied",
+      checkedAt: new Date().toISOString(),
+      fromCache: true,
+      coverage: "local_only",
+    };
+    const { delivery, smtpCalls, detectCalls, markSubmittedSpy } =
+      buildR12Delivery({ holdMs: 6_000, refreshResult: refreshRevealed });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+
+    // §9.4: the post-claim refresh found a reply → refuse BEFORE SMTP.
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    // ZERO SMTP — the unsent claim was finalized safely, not submitted.
+    expect(smtpCalls.count).toBe(0);
+    // markSubmitted WAS held + called (the claim succeeded, then the gate
+    // refused on the stale refresh). This proves the gap is AFTER claim, the
+    // exact spot §9.4 item 4 closes.
+    expect(markSubmittedSpy).toHaveBeenCalled();
+
+    // Retained protection: the attempt is finalized `delivery_unknown` (not
+    // sent/claimed), the draft is `delivery_unknown` (not sent/approved), the
+    // approval is consumed (one-time token invalidated), and the message
+    // replyStatus is UNTOUCHED (no EmailReplyStatus for ambiguous delivery —
+    // finalizeSendOutcome omits messageReplyStatus for delivery_unknown).
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("delivery_unknown");
+    const attempts = await attemptModule.listByDraft(draftId);
+    const ourAttempt = attempts.find((a) => a.id > 0);
+    expect(ourAttempt?.status).toBe("delivery_unknown");
+    const message = await messageModule.read(messageId);
+    expect(message?.replyStatus).toBe("not_started");
+    expect(message?.processedAt).toBeNull();
+    const approval = await approvalModule.findActiveByDraft(draftId, 0);
+    // The one-time approval is consumed by the safe finalize (invalidatedAt
+    // IS NULL fence).
+    expect(approval).toBeNull();
+
+    // Exactly ONE reply_skipped audit (stage pre_send, code already_replied)
+    // for the gate refusal. The finalize also writes ONE delivery_unknown
+    // audit (action delivery_unknown) — both audits present, distinct.
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[already_replied]");
+    const refusalMeta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      source?: string;
+    };
+    expect(refusalMeta.stage).toBe("pre_send");
+    expect(refusalMeta.code).toBe("already_replied");
+    const finalizeAudits = await finalizeAuditsFor(messageId);
+    expect(finalizeAudits).toHaveLength(1);
+
+    // The post-claim gate refresh ran exactly ONE excluded detect call (in
+    // addition to the pre-send probe). This proves §9.4: "Allow one delayed
+    // refresh."
+    expect(detectCalls.count).toBeGreaterThanOrEqual(2);
+    drainCountersForTest();
+  }, 20_000);
+
+  it("6s hold + refresh reveals `unknown` (delivery_unknown) -> ZERO SMTP, claim finalized delivery_unknown, protection retained", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const refreshRevealed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "local_state",
+      matchedMessageId: null,
+      reasonCode: "delivery_unknown",
+      checkedAt: new Date().toISOString(),
+      fromCache: true,
+      coverage: "local_only",
+    };
+    const { delivery, smtpCalls, markSubmittedSpy } = buildR12Delivery({
+      holdMs: 6_000,
+      refreshResult: refreshRevealed,
+    });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    // The typed unknown reasonCode flows through SendPolicyRejection so the
+    // B12 IPC envelope surfaces it machine-readably.
+    expect(rejection?.code).toBe("delivery_unknown");
+    expect(smtpCalls.count).toBe(0);
+    expect(markSubmittedSpy).toHaveBeenCalled();
+
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("delivery_unknown");
+    const attempts = await attemptModule.listByDraft(draftId);
+    const ourAttempt = attempts.find((a) => a.id > 0);
+    expect(ourAttempt?.status).toBe("delivery_unknown");
+    const message = await messageModule.read(messageId);
+    expect(message?.replyStatus).toBe("not_started");
+    expect(message?.processedAt).toBeNull();
+    const approval = await approvalModule.findActiveByDraft(draftId, 0);
+    expect(approval).toBeNull();
+
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[delivery_unknown]");
+    const refusalMeta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(refusalMeta.stage).toBe("pre_send");
+    expect(refusalMeta.code).toBe("delivery_unknown");
+    const finalizeAudits = await finalizeAuditsFor(messageId);
+    expect(finalizeAudits).toHaveLength(1);
+    drainCountersForTest();
+  }, 20_000);
+
+  it("fresh observation at gate (no 6s delay) -> no extra detect, SMTP fires once, draft -> sent", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // holdMs=0 means markSubmitted returns immediately — the observation is
+    // still fresh (<5s) when the gate runs, so NO post-claim refresh.
+    const refreshRevealed: ReplyDetectionResult = {
+      state: "replied",
+      replied: true,
+      source: "local_state",
+      matchedMessageId: null,
+      reasonCode: "already_replied",
+      checkedAt: new Date().toISOString(),
+      fromCache: true,
+      coverage: "local_only",
+    };
+    const { delivery, smtpCalls, detectCalls } = buildR12Delivery({
+      holdMs: 0,
+      refreshResult: refreshRevealed,
+    });
+
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    // No post-claim refresh: only the pre-send probe (1 detect call).
+    expect(detectCalls.count).toBe(1);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+    drainCountersForTest();
+  }, 20_000);
+
+  it("6s hold + refresh reveals `not_replied` -> SMTP fires once, draft -> sent (stale-but-still-eligible proceeds)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const refreshRevealed: ReplyDetectionResult = {
+      state: "not_replied",
+      replied: false,
+      source: "sent_search",
+      matchedMessageId: null,
+      reasonCode: "no_reply_observed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "configured_imap",
+    };
+    const { delivery, smtpCalls, detectCalls } = buildR12Delivery({
+      holdMs: 6_000,
+      refreshResult: refreshRevealed,
+    });
+
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    // The post-claim gate refresh ran (≥2 detect calls) but found
+    // not_replied → SMTP proceeds.
+    expect(detectCalls.count).toBeGreaterThanOrEqual(2);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+    drainCountersForTest();
+  }, 20_000);
+
+  it("normal exact-attempt replay is unaffected — same approval replay returns already_processed with one SMTP", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // No 6s hold; a plain accept sender. R12 must not break the B04
+    // idempotency replay path.
+    const smtpCalls = { count: 0 };
+    let releaseFirst: () => void = () => {};
+    const firstSendHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        smtpCalls.count += 1;
+        if (smtpCalls.count === 1) {
+          await firstSendHeld;
+        }
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-${smtpCalls.count}@x>`,
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(async (input) => {
+        await messageModule.updateReplyEvidence({
+          id: input.messageId,
+          replyNegativeCheckAt: new Date(),
+          replyNegativeContextHash: "r12-replay-hash",
+          isAnswered: 0,
+          answeredFlagCheckedAt: new Date(),
+        });
+        return NOT_REPLIED_DETECTION;
+      });
+      return svc;
+    };
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+
+    const first = delivery.sendApprovedReply({ draftId, approvalToken: token });
+    await new Promise((r) => setTimeout(r, 30));
+    const replay = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(replay.status).toBe("already_processed");
+    expect(replay.attemptId).toBeGreaterThan(0);
+    releaseFirst();
+    const firstOutcome = await first;
+    expect(firstOutcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+    void messageId;
+    drainCountersForTest();
+  }, 20_000);
 });

@@ -436,6 +436,177 @@ describe("EmailReplyDetectionService — local-first short-circuits (§7.1 step 
 });
 
 // ===========================================================================
+// R12 (§9.4 item 4) — exact-attempt ownership exclusion for the delayed
+// pre-SMTP refresh. After claim+markSubmitted the seed's OWN draft is
+// `sending` and the OWN attempt is `submitted` (in-flight). A naive
+// post-claim detect() refresh would short-circuit at inspectLocalState
+// step 3 (reply_in_progress) WITHOUT ever reaching the mailbox probe —
+// defeating the §9.4 delayed refresh. The detector's detect() input gains
+// an exclusion handle so the refresh recognizes ONLY this operation's exact
+// attempt as the current owner and proceeds to the mailbox; every OTHER
+// pending/sent/unknown record on the cluster still blocks.
+//
+// The test stubs (draftEntity/attemptEntity) carry ONLY id/messageId/status
+// (no draftId), so the exclusion must key on draft.id + attempt.id —
+// mirroring how clusterEvidenceBlocksSend excludes the claiming draft's own
+// records by id.
+// ===========================================================================
+describe("EmailReplyDetectionService — R12 exact-attempt exclusion (§9.4 item 4)", () => {
+  // A probe fixture that reaches the mailbox (refresh + sent-folder search),
+  // returning not_replied. Used to prove the excluded refresh did NOT
+  // short-circuit at local-state.
+  const probeImapOptions = (): Parameters<typeof fakeImapPort>[0] => ({
+    flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\seen"], checkedAt: new Date() },
+    sentFolders: [{ folder: "Sent", verified: true }],
+    candidatesByFolder: new Map([["Sent", []]]),
+  });
+
+  it("excluded refresh proceeds past own sending draft + own submitted attempt to the mailbox probe", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    // OWN draft is `sending`, OWN attempt is `submitted` (in-flight) — exactly
+    // the post-claim+markSubmitted state.
+    const drafts = new Map([[100, [draftEntity(7, 100, "sending")]]]);
+    const attempts = new Map([[100, [attemptEntity(9, 100, "submitted")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      attemptsByMessage: attempts,
+      emailServiceOptions: {
+        config: imapConfig(),
+        identity: {
+          smtpUsername: "me@example.com",
+          fromAddress: "me@example.com",
+          replyToAddress: null,
+          receiveUsername: "me@example.com",
+        },
+      },
+      imapOptions: probeImapOptions(),
+    });
+
+    const result = await kit.service.detect({
+      messageId: 100,
+      forceRefresh: true,
+      excludeDraftId: 7,
+      excludeAttemptId: 9,
+    });
+
+    // The refresh reached the mailbox probe (did NOT short-circuit at
+    // reply_in_progress).
+    expect(kit.imapPort.refreshCalls.length).toBeGreaterThan(0);
+    expect(result.state).toBe("not_replied");
+  });
+
+  it("WITHOUT the exclusion handle, the own sending draft + own submitted attempt still block as reply_in_progress", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const drafts = new Map([[100, [draftEntity(7, 100, "sending")]]]);
+    const attempts = new Map([[100, [attemptEntity(9, 100, "submitted")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+      imapOptions: probeImapOptions(),
+    });
+
+    const result = await kit.service.detect({
+      messageId: 100,
+      forceRefresh: true,
+    });
+
+    // No exclusion → the current ladder short-circuits (protection unchanged).
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("reply_in_progress");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("exclusion does NOT silence a SIBLING sending draft — every other pending record still blocks", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    // OWN draft 7 (sending) + OWN attempt 9 (submitted) are excluded, BUT a
+    // SIBLING draft 8 (sending) on the same message is NOT the current
+    // operation's owner → must still block.
+    const drafts = new Map([
+      [100, [draftEntity(7, 100, "sending"), draftEntity(8, 100, "sending")]],
+    ]);
+    const attempts = new Map([[100, [attemptEntity(9, 100, "submitted")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+      imapOptions: probeImapOptions(),
+    });
+
+    const result = await kit.service.detect({
+      messageId: 100,
+      forceRefresh: true,
+      excludeDraftId: 7,
+      excludeAttemptId: 9,
+    });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("reply_in_progress");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("exclusion does NOT silence a SIBLING sent draft or sent attempt — replied still wins", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    // OWN draft 7 (sending) + OWN attempt 9 (submitted) excluded, but a
+    // SIBLING attempt 10 is already `sent` → replied (local_state), no probe.
+    const drafts = new Map([[100, [draftEntity(7, 100, "sending")]]]);
+    const attempts = new Map([
+      [100, [attemptEntity(9, 100, "submitted"), attemptEntity(10, 100, "sent")]],
+    ]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+      imapOptions: probeImapOptions(),
+    });
+
+    const result = await kit.service.detect({
+      messageId: 100,
+      forceRefresh: true,
+      excludeDraftId: 7,
+      excludeAttemptId: 9,
+    });
+
+    expect(result.state).toBe("replied");
+    expect(result.source).toBe("local_state");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+
+  it("exclusion does NOT silence a SIBLING delivery_unknown draft — still blocks", async () => {
+    const message = messageFixture({ replyStatus: "draft_created" });
+    const drafts = new Map([
+      [100, [draftEntity(7, 100, "sending"), draftEntity(11, 100, "delivery_unknown")]],
+    ]);
+    const attempts = new Map([[100, [attemptEntity(9, 100, "submitted")]]]);
+    const kit = buildServiceKit({
+      message,
+      draftsByMessage: drafts,
+      attemptsByMessage: attempts,
+      emailServiceOptions: { config: imapConfig(), identity: null },
+      imapOptions: probeImapOptions(),
+    });
+
+    const result = await kit.service.detect({
+      messageId: 100,
+      forceRefresh: true,
+      excludeDraftId: 7,
+      excludeAttemptId: 9,
+    });
+
+    expect(result.state).toBe("unknown");
+    if (result.state !== "unknown") throw new Error("expected unknown");
+    expect(result.reasonCode).toBe("delivery_unknown");
+    expect(kit.imapPort.refreshCalls.length).toBe(0);
+  });
+});
+
+// ===========================================================================
 // §7.1 step 2 — sticky positive evidence reuse.
 // ===========================================================================
 

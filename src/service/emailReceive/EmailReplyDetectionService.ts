@@ -281,10 +281,21 @@ export class EmailReplyDetectionService {
    * @param input.messageId stored `email_received_message.id` to check.
    * @param input.forceRefresh delivery (pre-SMTP) checks pass `true` to skip
    *   the 60s negative cache (§7.3). Sticky positives are still honored.
+   * @param input.excludeDraftId R12 §9.4 item 4 — the claiming operation's
+   *   own draft id. Only the excluded draft is ignored in the local-first
+   *   in-flight/sending check so a post-claim refresh can re-probe the
+   *   mailbox instead of short-circuiting on its own `sending` draft. Every
+   *   OTHER pending/sent/unknown record still blocks.
+   * @param input.excludeAttemptId R12 §9.4 item 4 — the claiming operation's
+   *   own attempt id. Only the excluded attempt is ignored in the local-first
+   *   in-flight check. The exact-attempt ownership handle is internal to the
+   *   delivery service; it is never a tool/IPC bypass parameter.
    */
   async detect(input: {
     messageId: number;
     forceRefresh?: boolean;
+    excludeDraftId?: number;
+    excludeAttemptId?: number;
   }): Promise<ReplyDetectionResult> {
     const forceRefresh = input.forceRefresh === true;
     const message = await this.messagePort.read(input.messageId);
@@ -293,7 +304,10 @@ export class EmailReplyDetectionService {
     }
 
     // Step 1 — local-first (no mailbox round trip).
-    const localState = await this.inspectLocalState(message);
+    const localState = await this.inspectLocalState(message, {
+      excludeDraftId: input.excludeDraftId,
+      excludeAttemptId: input.excludeAttemptId,
+    });
     if (localState) return localState;
 
     // Step 2 — sticky positive evidence reuse.
@@ -697,7 +711,8 @@ export class EmailReplyDetectionService {
   // -------------------------------------------------------------------------
 
   private async inspectLocalState(
-    seed: EmailReceivedMessageEntity
+    seed: EmailReceivedMessageEntity,
+    exclude?: { excludeDraftId?: number; excludeAttemptId?: number }
   ): Promise<ReplyDetectionResult | null> {
     const clusterRows = await this.messagePort.findCanonicalEquivalents(seed);
     const rowIds = clusterRows.map((r) => r.id);
@@ -710,8 +725,24 @@ export class EmailReplyDetectionService {
       this.attemptPort.listByMessages(rowIds),
     ]);
 
-    const liveDrafts = drafts.filter((d) =>
-      isLiveDraftStatus(d.status)
+    // R12 §9.4 item 4 — the claiming operation's own draft/attempt are the
+    // current owner during a post-claim refresh. Only the excluded records
+    // are ignored in the in-flight/sending check so the refresh can re-probe
+    // the mailbox instead of short-circuiting on its own `sending` draft /
+    // `submitted` attempt. Every OTHER pending/sent/unknown record still
+    // blocks. This mirrors the production cluster-evidence ownership semantic
+    // (replyClusterEvidence.clusterEvidenceBlocksSend excludes the claiming
+    // draft's own records by draftId). The exclude ids are internal to the
+    // delivery service; they are never a tool/IPC bypass parameter.
+    const isExcludedDraft = (d: { id: number }): boolean =>
+      exclude?.excludeDraftId !== undefined &&
+      d.id === exclude.excludeDraftId;
+    const isExcludedAttempt = (a: { id: number }): boolean =>
+      exclude?.excludeAttemptId !== undefined &&
+      a.id === exclude.excludeAttemptId;
+
+    const liveDrafts = drafts.filter(
+      (d) => isLiveDraftStatus(d.status) && !isExcludedDraft(d)
     );
     const sentDrafts = drafts.filter((d) => d.status === "sent");
     const unknownDrafts = drafts.filter(
@@ -721,8 +752,8 @@ export class EmailReplyDetectionService {
     const unknownAttempts = attempts.filter(
       (a) => a.status === "delivery_unknown"
     );
-    const inFlightAttempts = attempts.filter((a) =>
-      isAttemptInFlight(a.status)
+    const inFlightAttempts = attempts.filter(
+      (a) => isAttemptInFlight(a.status) && !isExcludedAttempt(a)
     );
 
     // Namespace conflict across a multi-row cluster cannot be safely merged.

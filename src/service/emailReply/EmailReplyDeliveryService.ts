@@ -49,7 +49,10 @@ import type {
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import type { EmailReplyStatus } from "@/entityTypes/emailReceiveTypes";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
-import { FRESHNESS_STALE } from "@/model/EmailReplyDraft.model";
+import {
+  FRESHNESS_STALE,
+  FORCED_FRESHNESS_WINDOW_MS,
+} from "@/model/EmailReplyDraft.model";
 
 /**
  * Sender interface the delivery service uses for the SMTP handoff. The default
@@ -526,6 +529,44 @@ export class EmailReplyDeliveryService {
     //    crash here is recoverable to delivery_unknown rather than left claimed.
     await this.attemptModule.markSubmitted(attemptId, new Date(this.nowForInvocation()));
 
+    // 7b. R12 (§9.4 item 4) — recheck freshness immediately before SMTP. The
+    //     freshness fence at claim time (claimApprovedRevisionForSend) reads
+    //     `replyNegativeCheckAt`; after the claim succeeds + markSubmitted runs,
+    //     there is NO further age check before SMTP. A DB/queue delay after
+    //     claim exceeding FORCED_FRESHNESS_WINDOW_MS would let SMTP submit
+    //     using a stale observation. §9.4: "Submit SMTP immediately after the
+    //     successful claim... If execution is delayed past the five-second
+    //     observation window before SMTP starts, rerun detection outside the
+    //     transaction while retaining the send claim. A refusal before SMTP
+    //     finalizes that unsent claim safely; it must not manufacture an
+    //     accepted/unknown send. Recognize only this operation's exact attempt
+    //     as the current owner during that refresh; every other pending/sent/
+    //     unknown record still blocks. Allow one delayed refresh; further delay
+    //     refuses with no SMTP submission."
+    //
+    //     The line-238 message read is stale by gate time — re-read the seed's
+    //     current replyNegativeCheckAt. If the observation is still fresh
+    //     (≤ FORCED_FRESHNESS_WINDOW_MS) proceed to SMTP with NO extra detect
+    //     call (§9.4: "Submit SMTP immediately after the successful claim").
+    //     If stale, ONE excluded forceRefresh detect retaining the claim;
+    //     not_replied proceeds / replied-unknown refuses → safe finalize the
+    //     unsent claim as delivery_unknown + ONE reply_skipped audit +
+    //     SendPolicyRejection with the typed code. A safe finalize is mandatory
+    //     here (unlike the pre-claim refusal): the claim EXISTS, so every gate
+    //     refusal must finalize the unsent claim — it must not manufacture an
+    //     accepted/unknown send. This mirrors the recovery precedent
+    //     (EmailReplySendRecoveryService.recoverStaleAttempts finalizes
+    //     in-flight attempts as delivery_unknown).
+    await this.runPostClaimFreshnessGate({
+      message,
+      draftId: draft.id,
+      approvalId: approval.id,
+      attemptId,
+      emailServiceId,
+      guardId: guardRow?.id ?? null,
+      requestCorrelationId,
+    });
+
     // 8. SMTP submission. classifySubmissionResult turns the raw result into a
     //    certainty; unknown outcomes become delivery_unknown (never retried).
     // Forward the full identity so the SMTP session authenticates with the
@@ -680,13 +721,24 @@ export class EmailReplyDeliveryService {
   private async runPreSendDetection(
     message: { id: number; emailServiceId: number },
     draftId: number,
-    requestCorrelationId: string
+    requestCorrelationId: string,
+    /**
+     * R12 §9.4 item 4 — when set, the detection refresh ignores the claiming
+     * operation's own draft/attempt so a post-claim refresh can re-probe the
+     * mailbox instead of short-circuiting on its own `sending` draft /
+     * `submitted` attempt. Only the excluded records are ignored; every other
+     * pending/sent/unknown record still blocks. Internal ownership handle —
+     * never a tool/IPC bypass parameter.
+     */
+    exclude?: { excludeDraftId?: number; excludeAttemptId?: number }
   ): Promise<void> {
     let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
     try {
       result = await this.detectionServiceForNow().detect({
         messageId: message.id,
         forceRefresh: true,
+        excludeDraftId: exclude?.excludeDraftId,
+        excludeAttemptId: exclude?.excludeAttemptId,
       });
     } catch (error) {
       // Detection threw — treat as an inconclusive probe failure. The stable
@@ -753,6 +805,184 @@ export class EmailReplyDeliveryService {
         message,
         draftId,
         requestCorrelationId,
+        code,
+        reason
+      );
+    } catch (auditError) {
+      incrementReplyMetric("audit_failure", { stage: "pre_send" });
+      const auditErrMsg = sanitizeDetectionError(auditError);
+      throw new SendPolicyRejection(
+        `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
+        code
+      );
+    }
+    throw new SendPolicyRejection(
+      `Send rejected by reply detection: [${code}] ${reason}`,
+      code
+    );
+  }
+
+  /**
+   * R12 (§9.4 item 4) — post-claim freshness gate. After the claim succeeds
+   * and markSubmitted runs, re-read the seed message's current
+   * `replyNegativeCheckAt` (the line-238 read is stale by gate time). If the
+   * observation is still fresh (≤ FORCED_FRESHNESS_WINDOW_MS), proceed to
+   * SMTP with NO extra detect call (§9.4: "Submit SMTP immediately after the
+   * successful claim"). If stale, run ONE excluded `forceRefresh` detection
+   * retaining the claim — the refresh recognizes ONLY this operation's exact
+   * attempt as the current owner (every other pending/sent/unknown record still
+   * blocks).
+   *
+   * - `not_replied` → proceed to SMTP (the stale-but-still-eligible case).
+   * - `replied` / `unknown` → the unsent claim is finalized safely as
+   *   `delivery_unknown` (NOT left claimed, NOT manufactured as sent), ONE
+   *   `reply_skipped` audit (stage pre_send) is written, and a
+   *   `SendPolicyRejection` with the typed detection code is thrown. The safe
+   *   finalize reuses the same `finalizeSendOutcome` path the recovery service
+   *   uses (delivery_unknown matches an attempt at `submitted`, keeps the guard
+   *   protected via the phase `IN ("sending")` fence → `delivery_unknown` +
+   *   `activeAttemptId: null`, consumes the one-time approval, writes the
+   *   delivery_unknown audit, and leaves the message `replyStatus` untouched).
+   *
+   * Exactly one delayed refresh — §9.4: "Allow one delayed refresh; further
+   * delay refuses with no SMTP submission."
+   */
+  private async runPostClaimFreshnessGate(input: {
+    message: { id: number; emailServiceId: number };
+    draftId: number;
+    approvalId: number;
+    attemptId: number;
+    emailServiceId: number;
+    guardId: number | null;
+    requestCorrelationId: string;
+  }): Promise<void> {
+    // Re-read the seed's current observation timestamp. The message read at
+    // the top of sendApprovedReply is stale by gate time (awaited claim +
+    // markSubmitted I/O elapsed).
+    const currentMessage = await this.messageModule.read(input.message.id);
+    if (!currentMessage) {
+      // The message vanished between claim and SMTP — the claim still exists,
+      // so it must be safely finalized rather than left as a phantom
+      // in-flight attempt. delivery_unknown is the safe terminal.
+      await this.refusePostClaimGate(input, "probe_failed", "Original message not found at the post-claim freshness gate");
+      return;
+    }
+    const observedAt = currentMessage.replyNegativeCheckAt;
+    if (observedAt != null) {
+      const ageMs = Date.now() - observedAt.getTime();
+      if (ageMs <= FORCED_FRESHNESS_WINDOW_MS) {
+        // Fresh — proceed to SMTP immediately (§9.4). No extra detect call.
+        incrementReplyMetric("send_claim", {
+          outcome: "post_claim_fresh",
+        });
+        return;
+      }
+    }
+    // Stale (or null) → ONE excluded forceRefresh detection retaining the
+    // claim. The exclude params make the refresh ignore THIS operation's own
+    // sending draft + submitted attempt (the current owner) so it re-probes
+    // the mailbox instead of short-circuiting at reply_in_progress.
+    incrementReplyMetric("send_claim", {
+      outcome: "post_claim_stale_refresh",
+    });
+    let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
+    try {
+      result = await this.detectionServiceForNow().detect({
+        messageId: input.message.id,
+        forceRefresh: true,
+        excludeDraftId: input.draftId,
+        excludeAttemptId: input.attemptId,
+      });
+    } catch (error) {
+      // The refresh threw — treat as an inconclusive probe failure and safely
+      // finalize the unsent claim. Bounded error text (FR-039).
+      const errMsg = sanitizeDetectionError(error);
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        `Post-claim detection probe threw: ${errMsg}`
+      );
+      return;
+    }
+    if (result.state === "not_replied") {
+      // Stale-but-still-eligible: the refresh found no reply. Proceed to SMTP.
+      incrementReplyMetric("detection_outcome", {
+        stage: "pre_send",
+        state: "not_replied",
+        code: "no_reply_observed",
+      });
+      return;
+    }
+    // replied OR unknown → safely finalize the unsent claim + ONE reply_skipped
+    // audit + SendPolicyRejection with the typed code.
+    const code: EmailReplyPolicyCode =
+      result.state === "replied" ? "already_replied" : result.reasonCode;
+    const reason =
+      result.state === "replied"
+        ? "Post-claim freshness refresh found an existing reply before SMTP"
+        : "Post-claim freshness refresh was inconclusive before SMTP";
+    await this.refusePostClaimGate(input, code, reason);
+  }
+
+  /**
+   * R12 §9.4 item 4 — the safe-finalize + refusal path for a post-claim gate
+   * refusal. The claim EXISTS (unlike the pre-claim refusal in
+   * {@link runPreSendDetection}), so the unsent claim MUST be safely finalized
+   * as `delivery_unknown` — it must not be left `claimed`/`submitted` (a
+   * phantom in-flight attempt blocks every future recheck) and must not be
+   * manufactured as `sent`. Then ONE `reply_skipped` audit (stage pre_send) is
+   * written and a `SendPolicyRejection` with the typed detection code is
+   * thrown. Audit persistence failure still stops the work (§9.2) but the
+   * safe finalize has already run, so the claim is not left dangling.
+   */
+  private async refusePostClaimGate(
+    input: {
+      message: { id: number; emailServiceId: number };
+      draftId: number;
+      approvalId: number;
+      attemptId: number;
+      emailServiceId: number;
+      guardId: number | null;
+      requestCorrelationId: string;
+    },
+    code: EmailReplyPolicyCode,
+    reason: string
+  ): Promise<void> {
+    incrementReplyMetric("detection_outcome", {
+      stage: "pre_send",
+      state: code === "already_replied" ? "replied" : "unknown",
+      code,
+    });
+    incrementReplyMetric("send_claim", {
+      outcome: "post_claim_gate_refused",
+    });
+    // Safely finalize the unsent claim as delivery_unknown. This matches the
+    // attempt's `submitted` status (finalizeSendOutcome matches
+    // claimed|submitted for failed|delivery_unknown), keeps the guard
+    // protected (phase IN ("sending") → delivery_unknown + activeAttemptId
+    // null), consumes the one-time approval, writes the delivery_unknown
+    // audit, and leaves the message replyStatus untouched (no
+    // messageReplyStatus for delivery_unknown).
+    await this.draftModule.finalizeSendOutcome({
+      attemptId: input.attemptId,
+      draftId: input.draftId,
+      approvalId: input.approvalId,
+      emailServiceId: input.emailServiceId,
+      messageId: input.message.id,
+      outcome: "delivery_unknown",
+      providerMessageId: null,
+      failureCode: code,
+      sanitizedError: reason,
+      guardId: input.guardId,
+    });
+    // ONE reply_skipped audit (stage pre_send, source reply_detection) for
+    // the refusal. Then throw SendPolicyRejection with the typed code so the
+    // B12 IPC envelope surfaces it machine-readably.
+    try {
+      await this.writeDetectionRefusalAudit(
+        input.message,
+        input.draftId,
+        input.requestCorrelationId,
         code,
         reason
       );
