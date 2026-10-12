@@ -637,3 +637,176 @@ async function vi0(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+describe("ComputerUseGroundingClient correlation (audit A10)", () => {
+  it("a late result for cancelled A cannot resolve or reject a later B", async () => {
+    const { worker, driver } = makeFakeWorkerPair();
+    const client = new ComputerUseGroundingClient(() => worker, {
+      replyTimeoutMs: 5_000,
+      cancelWatchdogMs: 60_000, // watchdog disarmed for the test
+    });
+    await loadFake(client, driver);
+
+    const a = client.ground(groundInput("rk-a", 2));
+    client.cancel("rk-a");
+    await expect(a).rejects.toThrow(/cancelled/);
+
+    // Cancel armed no kill (watchdog long); a NEW request may run.
+    const b = client.ground(groundInput("rk-b", 2));
+    await vi0();
+    // The stale worker eventually answers A — B must stay pending…
+    driver.reply(resultMessage("rk-a", 2));
+    await vi0();
+    // …and only B's own reply settles B.
+    driver.reply(resultMessage("rk-b", 2));
+    const settled = await b;
+    expect(settled.requestKey).toBe("rk-b");
+    expect(settled.outcome).toBe("resolved");
+    client.killNow();
+  });
+
+  it("an exit of a superseded worker does not poison the new worker", async () => {
+    let workerCount = 0;
+    const drivers: ReturnType<typeof makeFakeWorkerPair>[] = [];
+    const factory = () => {
+      const pair = makeFakeWorkerPair();
+      drivers.push(pair);
+      workerCount += 1;
+      return pair.worker;
+    };
+    const client = new ComputerUseGroundingClient(factory, {
+      replyTimeoutMs: 5_000,
+    });
+    {
+      const promise = beginFakeLoad(client);
+      await vi0();
+      drivers[0].driver.reply(FAKE_LOADED_MSG);
+      await promise;
+    }
+    const unloadP = client.unload();
+    await vi0();
+    drivers[0].driver.reply({ type: "unloaded" });
+    await unloadP; // kills worker 1
+    // Worker 1's exit fires late (already handled at unload; simulate a
+    // second, delayed exit notification from the OLD instance).
+    drivers[0].driver.exit(0);
+    expect(client.isLoaded).toBe(false);
+
+    {
+      const promise = beginFakeLoad(client);
+      await vi0();
+      drivers[1].driver.reply(FAKE_LOADED_MSG);
+      await promise;
+    }
+    expect(client.isLoaded).toBe(true);
+    // A late message from worker 1's driver must not disturb worker 2.
+    drivers[0].driver.reply(resultMessage("rk-ghost", 1));
+    const run = client.ground(groundInput("rk-live", 1));
+    await vi0();
+    drivers[1].driver.reply(resultMessage("rk-live", 1));
+    const settled = await run;
+    expect(settled.requestKey).toBe("rk-live");
+    client.killNow();
+    void workerCount;
+  });
+
+  it("malformed worker payloads are ignored, not fatal", async () => {
+    const { worker, driver } = makeFakeWorkerPair();
+    const client = new ComputerUseGroundingClient(() => worker, {
+      replyTimeoutMs: 5_000,
+    });
+    await loadFake(client, driver);
+    driver.reply({ type: "result", payload: "garbage" });
+    driver.reply(null);
+    driver.reply({ type: "nonsense" });
+    const run = client.ground(groundInput("rk-x", 1));
+    await vi0();
+    driver.reply(resultMessage("rk-x", 1));
+    expect((await run).requestKey).toBe("rk-x");
+    client.killNow();
+  });
+});
+
+/** Test helper: begin a load; the caller replies through its own driver. */
+function beginFakeLoad(client: ComputerUseGroundingClient): Promise<unknown> {
+  return client.load({
+    adapterId: "test-fixture",
+    adapterVersion: "1.0.0",
+    runtimeRoot: "/r",
+    runtimeVersion: "1",
+    modelRoot: "/m",
+    modelVersion: "1",
+    preferredProviders: ["cpu"],
+    calibration: { ambiguityRatio: 0.85, absenceThreshold: 0.2 },
+    maxPixels: 2_000_000,
+  });
+}
+
+const FAKE_LOADED_MSG = {
+  type: "loaded" as const,
+  payload: {
+    adapterId: "test-fixture",
+    provider: "cpu",
+    availableProviders: ["cpu"],
+    loadMs: 0,
+    memoryEstimateBytes: 0,
+  },
+};
+
+async function loadFake(
+  client: ComputerUseGroundingClient,
+  driver: ReturnType<typeof makeFakeWorkerPair>["driver"]
+): Promise<void> {
+  const promise = beginFakeLoad(client);
+  await vi0();
+  driver.reply(FAKE_LOADED_MSG);
+  await promise;
+}
+
+function groundInput(requestKey: string, generation: number) {
+  return {
+    requestKey,
+    generation,
+    observationId: `obs-${requestKey}`,
+    imageBytes: new ArrayBuffer(16),
+    imageWidth: 560,
+    imageHeight: 560,
+    targetDescription: "target",
+    maxPixels: 2_000_000,
+  };
+}
+
+function resultMessage(requestKey: string, generation: number) {
+  return {
+    type: "result" as const,
+    payload: {
+      requestKey,
+      generation,
+      observationId: `obs-${requestKey}`,
+      candidates: [{ nx: 0.5, ny: 0.5, score: 0.9 }],
+      transform: {
+        modelWidth: 560,
+        modelHeight: 560,
+        cropX: 0,
+        cropY: 0,
+        scaleX: 1,
+        scaleY: 1,
+        padX: 0,
+        padY: 0,
+      },
+      identity: {
+        adapterId: "test-fixture",
+        adapterVersion: "1",
+        modelArchitecture: "a",
+        runtimeId: "r",
+        runtimeVersion: "1",
+        preprocessingRevision: "p",
+        decodingRevision: "d",
+        calibrationRevision: "c",
+        executionProvider: "cpu",
+      },
+      timings: { preprocessMs: 0, inferenceMs: 0, postprocessMs: 0 },
+      outcome: "resolved" as const,
+    },
+  };
+}

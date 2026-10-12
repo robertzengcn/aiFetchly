@@ -173,8 +173,17 @@ function mapToErrorCode(error: unknown): GroundingWorkerErrorCode {
 
 /* --------------------------- utilityProcess entry --------------------------- */
 
+/**
+ * Electron's utilityProcess parent port delivers MessageEvent envelopes, not
+ * bare payloads: the listener receives `{ data }` (audit A09). Declared
+ * locally like every other worker (PythonRuntimeWorker precedent).
+ */
+interface ParentPortMessageEvent {
+  data: unknown;
+}
+
 type UtilityParentPort = {
-  on(event: "message", listener: (message: unknown) => void): void;
+  on(event: "message", listener: (event: ParentPortMessageEvent) => void): void;
   postMessage(message: unknown): void;
 };
 
@@ -189,14 +198,48 @@ function getUtilityParentPort(): UtilityParentPort | null {
   return port as UtilityParentPort;
 }
 
+/** Runtime shape validation of an inbound host message (audit A09). */
+function parseInboundMessage(raw: unknown): GroundingWorkerInboundMessage | null {
+  if (typeof raw !== "string") {
+    // UtilityProcess.postMessage structured-clones objects directly.
+    if (isInboundMessageShape(raw)) return raw as GroundingWorkerInboundMessage;
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (isInboundMessageShape(parsed)) {
+      return parsed as GroundingWorkerInboundMessage;
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+function isInboundMessageShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.type === "load" &&
+      typeof record.payload === "object" &&
+      record.payload !== null) ||
+    (record.type === "ground" &&
+      typeof record.payload === "object" &&
+      record.payload !== null) ||
+    (record.type === "cancel" && typeof record.requestKey === "string") ||
+    record.type === "unload"
+  );
+}
+
 /** Entry point when spawned as an Electron utilityProcess. */
 const parentPort = getUtilityParentPort();
 if (parentPort) {
   const server = new GroundingWorkerServer((message) => {
     parentPort.postMessage(message);
   });
-  parentPort.on("message", (raw: unknown) => {
-    const message = raw as GroundingWorkerInboundMessage;
+  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    const message = parseInboundMessage(event.data);
+    if (!message) return; // malformed envelope: ignore, never crash the worker
     void server.handle(message).catch(() => undefined);
   });
 }
