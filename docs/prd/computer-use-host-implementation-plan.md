@@ -115,3 +115,31 @@ downloads, and macOS work remain gated on plugin artifacts per PRD §9.
 - Real GUI-Actor weights, export parity, DirectML measurements (plugin repo).
 - macOS helper, CoreML package (Phase 3). Native Excel benchmark runs.
 - E2E specs requiring a real desktop session; benchmark arms (§14.5).
+
+## Delivered vs plan (review D2-A, 2026-10-12)
+
+Recorded as intentionally dropped — each with its reason; re-plan deliberately:
+
+- `GroundingRuntimeProbeWorker` + `DisposableGroundingRuntimeProbe` (Stage E/F):
+  dropped — real probes need the plugin's health fixtures; install-path health
+  for models stays hash-verified until then.
+- `LocalAiRuntimeCatalogService` v2 fetch/cache methods (Stage F): dropped —
+  v2 parsing + cache paths shipped in schemas/PathService; the service-level
+  v2 fetch accessor is injected (`getCatalogV2`) and lands with the release
+  workflow's dual-catalog output.
+- `LocalAiRuntimeResolver` model-kind support (Stage F): dropped — model roots
+  resolve through install-set paths; resolver branching lands with real model
+  packages.
+- `ComputerUseModule` persistence entity + `dbEntities` registration
+  (Stage H): dropped — no session history exists without a backend; audit
+  persistence follows the first real sessions.
+- Control-strip window, settings panel, consent dialog, `views/api` client,
+  component tests (Stage H): dropped — UI is unreachable without the plugin
+  backend; building it now would ship dead surface (review D1 chose a
+  fail-closed registration instead).
+- `vite.groundingWorker.config.mjs` packaged-entry verification
+  (`verify-packaged-childprocess`): follow-up — needs a packaging run.
+
+IPC registration: wired fail-closed in `src/main-process/communication/index.ts`
+(review D1-A) — settings/status/readiness live; sessions return
+`backend_unavailable`.

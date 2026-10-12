@@ -56,6 +56,14 @@ import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communicati
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
+import {
+  registerComputerUseIpcHandlers,
+  setComputerUseSettingsStore,
+} from "@/main-process/communication/computer-use-ipc";
+import {
+  ComputerUseError,
+  DEFAULT_COMPUTER_USE_SETTINGS,
+} from "@/entityTypes/computerUseTypes";
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
@@ -155,6 +163,35 @@ export function registerCommunicationIpcHandlers(
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
     registerLocalAiRuntimeIpcHandlers(() => win);
+    registerComputerUseIpcHandlers({
+      // Until a qualified plugin backend ships, sessions fail closed with
+      // the typed `backend_unavailable` instead of "No handler registered"
+      // (review D1-A). Settings/status/readiness are live.
+      listSessions: () => [],
+      startSession: async () => {
+        throw new ComputerUseError(
+          "backend_unavailable",
+          "No qualified desktop backend is installed"
+        );
+      },
+      stopSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      pauseSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      resumeSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      listWindows: async () => [],
+      groundingReadiness: () => "not_installed",
+    });
+    // In-memory defaults until the ComputerUseModule persistence entity
+    // lands (plan follow-up D2-A).
+    setComputerUseSettingsStore({
+      read: () => DEFAULT_COMPUTER_USE_SETTINGS,
+      write: () => undefined,
+    });
     registerAIProviderIpcHandlers();
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
