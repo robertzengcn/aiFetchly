@@ -688,7 +688,7 @@ export default {
     login: "Iniciar sesión",
     login_out: "Cerrar sesión",
     system_setting: "Configuración del sistema",
-    platform_subtitle: "Agente de marketing con IA",
+    platform_subtitle: "Agente de IA",
     login_title: "Inicio de sesión en AiFetchly",
     login_description:
       "Haga clic en el botón de abajo para iniciar sesión en su cuenta",

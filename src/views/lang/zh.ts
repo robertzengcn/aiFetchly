@@ -655,7 +655,7 @@ export default {
     login: "登录",
     login_out: "退出登录",
     system_setting: "系统设置",
-    platform_subtitle: "AI营销智能体",
+    platform_subtitle: "AI智能体",
     login_title: "AiFetchly 登录",
     login_description: "点击下方按钮登录您的账户",
     login_with_browser: "使用浏览器登录",

@@ -687,7 +687,7 @@ export default {
     login: "Anmelden",
     login_out: "Abmelden",
     system_setting: "Systemeinstellungen",
-    platform_subtitle: "KI-Marketing-Agent",
+    platform_subtitle: "KI-Agent",
     login_title: "AiFetchly Anmeldung",
     login_description:
       "Klicken Sie auf die Schaltfläche unten, um sich anzumelden",
