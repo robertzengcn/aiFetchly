@@ -2510,6 +2510,7 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+    cancel: "Cancel",
     queue: {
       queued: "Queued",
       steering: "Steering…",

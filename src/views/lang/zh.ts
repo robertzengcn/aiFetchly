@@ -2379,6 +2379,7 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+    cancel: "取消",
     queue: {
       queued: "已排队",
       steering: "转向中…",

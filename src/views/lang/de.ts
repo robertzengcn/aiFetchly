@@ -2503,6 +2503,7 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+    cancel: "Abbrechen",
     queue: {
       queued: "In Warteschlange",
       steering: "Lenkung…",

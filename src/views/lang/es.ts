@@ -2511,6 +2511,7 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+    cancel: "Cancelar",
     queue: {
       queued: "En cola",
       steering: "Redirigiendo…",

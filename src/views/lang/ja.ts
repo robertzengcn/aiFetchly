@@ -2461,6 +2461,7 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+    cancel: "キャンセル",
     queue: {
       queued: "待機中",
       steering: "方向転換中…",

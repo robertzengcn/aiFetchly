@@ -2496,6 +2496,7 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+    cancel: "Annuler",
     queue: {
       queued: "En file d'attente",
       steering: "Réorientation…",
