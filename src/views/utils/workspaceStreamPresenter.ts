@@ -132,6 +132,12 @@ export function createWorkspaceStreamPresenter(
   applyEvent(event: ChatRunDetailEvent): boolean;
   /** Seed persisted history (selection snapshot / older page prepend). */
   seedHistory(messages: ChatV2MessageView[]): void;
+  /**
+   * Seed authoritative goal state loaded from the backend (FR-CMD-006 /
+   * review C4: live goal_state events alone miss goals created earlier or
+   * in previous sessions).
+   */
+  setGoal(goal: GoalRunInfo | null): void;
   /** Prepend an older history page, preserving order. */
   prependHistory(messages: ChatV2MessageView[]): void;
   /** Optimistic user message shown while the run request is in flight. */
@@ -728,6 +734,10 @@ export function createWorkspaceStreamPresenter(
       applyChunk(event.runId, chunkOf(event));
       return true;
     },
+    setGoal(nextGoal: GoalRunInfo | null): void {
+      goal = nextGoal;
+      notifyMutate?.();
+    },
     seedHistory(seeded: ChatV2MessageView[]): void {
       flushNow();
       conversationId = seeded[0]?.conversationId ?? conversationId;
@@ -736,6 +746,10 @@ export function createWorkspaceStreamPresenter(
       streamStatus = "idle";
       errorMessage = null;
       runtimeStatus = "idle";
+      // Seeded history is a fresh authoritative snapshot — a retry banner
+      // from the previous live stream must not survive it (review C8).
+      retry = null;
+      recovery = null;
     },
     prependHistory(older: ChatV2MessageView[]): void {
       flushNow();
@@ -806,6 +820,9 @@ export function createWorkspaceStreamPresenter(
       conversationId = null;
       activeRunId = null;
       activeAssistantMessageId = null;
+      // Review C8: transient retry/recovery banners never outlive their run.
+      retry = null;
+      recovery = null;
       streamStatus = "idle";
       errorMessage = null;
       runtimeStatus = "idle";

@@ -3651,7 +3651,12 @@ export default {
     backToApp: "Zurück zur App",
     loadOlder: "Ältere Nachrichten laden",
     command: {
+      staleAborted: "Auswahl geändert — der Befehl wurde nicht ausgeführt.",
+      noConversation: "Kein Chat ausgewählt — der Befehl wurde nicht ausgeführt.",
       busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
+    },
+    history: {
+      selectionLimit: "An eine Nachricht lassen sich maximal 20 Passagen anhängen.",
     },
     recovery: {
       retry: "Verbinde erneut… Versuch {attempt} von {max} (wartet ~{seconds} s)",
@@ -3783,6 +3788,7 @@ export default {
       structuredResult: "Strukturiertes Ergebnis — Details in Aktivität",
     },
     plan: {
+      continuationAborted: "Auswahl geändert — die Planentscheidung wurde gespeichert, die Folgenachricht wurde aber nicht gesendet. Öffne die Unterhaltung erneut, um fortzufahren.",
       version: "Version",
       current: "aktuell",
       changeReason: "Änderungsgrund",

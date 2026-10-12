@@ -3619,8 +3619,13 @@ export default {
     backToApp: "Back to app",
     loadOlder: "Load older messages",
     command: {
+      staleAborted: "Selection changed — the command was not run.",
+      noConversation: "No chat is selected — the command was not run.",
       busy:
         "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+    },
+    history: {
+      selectionLimit: "Up to 20 passages can be attached to one message.",
     },
     recovery: {
       retry: "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
@@ -3749,6 +3754,7 @@ export default {
       structuredResult: "Structured result — see details in Activity",
     },
     plan: {
+      continuationAborted: "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.",
       version: "Version",
       current: "current",
       changeReason: "Change reason",

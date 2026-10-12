@@ -630,7 +630,12 @@ import {
   subscribeCompactionProgress,
   unsubscribeCompactionProgress as unsubscribeAllCompactionProgress,
 } from "@/views/api/aiChatV2";
-import { stopGoalLoop, createGoal, startGoalLoop } from "@/views/api/aiChatGoal";
+import {
+  stopGoalLoop,
+  createGoal,
+  startGoalLoop,
+  getActiveGoal,
+} from "@/views/api/aiChatGoal";
 import {
   controlScheduledLoop,
   createScheduledLoop,
@@ -815,7 +820,41 @@ const activeGoalObjective = computed(() => {
   return activeStatuses.includes(goal.status) ? goal.objective || goal.goalId : null;
 });
 
-const activeLoopStatus = computed(() => selectedStore.scheduledLoop?.status ?? null);
+/**
+ * Authoritative scheduled-loop state from the control/status APIs (review
+ * C6): message-metadata projection only updates when new rows persist, so
+ * `/loop status|pause|resume|stop` responses land here instead.
+ */
+const authoritativeLoopStatus = ref<string | null>(null);
+
+/**
+ * FR-CMD-006 (review C4): hydrate the persisted active goal from the backend
+ * — live goal_state events alone miss goals from previous sessions, so
+ * `/loop N` would wrongly report "no active goal" after a reload.
+ */
+async function hydrateActiveGoal(targetConversationId: string): Promise<void> {
+  try {
+    const goal = await getActiveGoal(targetConversationId);
+    // Ignore stale responses when the user switched conversations mid-flight.
+    if (conversationId.value !== targetConversationId) return;
+    selectedStore.seedGoal(
+      goal
+        ? {
+            goalId: goal.goalId,
+            objective: goal.objective,
+            status: goal.status,
+            iterationCount: goal.iterationCount ?? 0,
+          }
+        : null
+    );
+  } catch {
+    // Non-fatal — goal_state stream events reconcile.
+  }
+}
+
+const activeLoopStatus = computed(
+  () => authoritativeLoopStatus.value ?? selectedStore.scheduledLoop?.status ?? null
+);
 
 /** FR-REC-002: transport retry — attempt, maximum, bounded delay. */
 const retryDetailText = computed<string | null>(() => {
@@ -1155,6 +1194,10 @@ function runGeneratedImagePreflight(
   files: File[],
   options?: {
     confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+    modeOverride?: "chat" | "plan";
   }
 ): ChatV2GeneratedImageReference[] | null {
   // Trusted resend: the user just approved this exact set — skip every
@@ -1173,10 +1216,21 @@ function runGeneratedImagePreflight(
       explicitSelection: [],
     });
     if (result.kind === "ambiguous") {
+      // Snapshot the FULL submission options (review C2/A5): pasted bodies,
+      // voice origin, mode override, and the acceptance callback must
+      // survive the dialog so the replayed send behaves like the original.
       pendingGeneratedImageSend.value = {
         conversationKey: composerDraftKey.value,
         text,
         files,
+        options: options
+          ? {
+              fromVoice: options.fromVoice,
+              pastedContents: options.pastedContents,
+              onAccepted: options.onAccepted,
+              modeOverride: options.modeOverride,
+            }
+          : undefined,
       };
       ambiguityCandidates.value = result.candidates.map((candidate) => ({
         reference: candidate.reference,
@@ -1203,6 +1257,14 @@ function runGeneratedImagePreflight(
         conversationKey: composerDraftKey.value,
         text,
         files,
+        options: options
+          ? {
+              fromVoice: options.fromVoice,
+              pastedContents: options.pastedContents,
+              onAccepted: options.onAccepted,
+              modeOverride: options.modeOverride,
+            }
+          : undefined,
         confirmedReferences: [...result.references],
       };
       showBatchConfirmDialog.value = true;
@@ -1225,6 +1287,14 @@ function runGeneratedImagePreflight(
       conversationKey: composerDraftKey.value,
       text,
       files,
+      options: options
+        ? {
+            fromVoice: options.fromVoice,
+            pastedContents: options.pastedContents,
+            onAccepted: options.onAccepted,
+            modeOverride: options.modeOverride,
+          }
+        : undefined,
       confirmedReferences: [...effective],
     };
     showBatchConfirmDialog.value = true;
@@ -1546,7 +1616,11 @@ async function onNewChat(): Promise<void> {
 watch(conversationId, (id, previous) => {
   if (id && id !== previous) {
     void loadApprovalMode(id);
+    // Review C4: /loop's goal precondition must survive selection reloads.
+    void hydrateActiveGoal(id);
   }
+  // Review C6: control/status responses are per-conversation.
+  authoritativeLoopStatus.value = null;
 });
 
 // --- Spoken-response feed (deltas from the bounded store projection) --------
@@ -1686,8 +1760,12 @@ async function applyCommandDisposition(
     }
     return;
   }
-  // completed: local exchange rendered / loop started / clear ran.
-  options?.onAccepted?.();
+  // completed: local exchange rendered / loop started / clear ran. When the
+  // command expanded into a prompt send, clear the draft ONLY if that send
+  // was accepted (FR-SUB-002: a rejected/parked expanded send keeps it).
+  if (disposition.acceptedSend !== false) {
+    options?.onAccepted?.();
+  }
 }
 
 /**
@@ -1834,15 +1912,35 @@ const commandRouter = useChatCommandRouting({
   },
   getScheduledLoopStatus: (id) => getScheduledLoopStatus(id),
   dispatchSlashCommand: (input) => dispatchSlashCommand(input),
-  onSlashPromptExpand: async (prompt, pastedContents) => {
-    await performOrdinarySend(prompt, [], { pastedContents });
+  onSlashPromptExpand: async (
+    prompt,
+    pastedContents,
+    targetConversationId
+  ): Promise<boolean> => {
+    if (targetConversationId && conversationId.value !== targetConversationId) {
+      // Codex High (cross-conversation command): a selection change during
+      // registry dispatch aborts the expanded send — never into chat B.
+      commandErrorNotice.value =
+        t("workspaceChat.command.staleAborted") ||
+        "Selection changed — the command was not run.";
+      return false;
+    }
+    return performOrdinarySend(prompt, [], { pastedContents });
   },
-  onClearConversation: async () => {
-    if (!conversationId.value) return;
+  onClearConversation: async (targetConversationId): Promise<void> => {
+    // Codex High (cross-conversation /clear): only clear when the command
+    // still owns the CURRENT selection — a switch mid-dispatch aborts
+    // rather than erasing the newly selected conversation.
+    if (!targetConversationId || conversationId.value !== targetConversationId) {
+      commandErrorNotice.value =
+        t("workspaceChat.command.staleAborted") ||
+        "Selection changed — the command was not run.";
+      return;
+    }
     try {
-      await clearChatV2Conversation(conversationId.value);
+      await clearChatV2Conversation(targetConversationId);
       await workspaceStore.bootstrap();
-      await selectedStore.loadSelection(conversationId.value);
+      await selectedStore.loadSelection(targetConversationId);
     } catch {
       // Non-fatal — clearing can be retried.
     }
@@ -1954,6 +2052,15 @@ function handleHistorySelect(excerpt: HistoryExcerpt): void {
   if (selectedContextItems.value.some((i) => i.sourceId === excerpt.sourceId)) {
     return; // dedup: a passage can be selected only once
   }
+  // Review F7: the IPC schema caps historySelectionIds at 20 — selecting a
+  // 21st would make EVERY subsequent send fail validation until chips are
+  // removed manually. Stop at the boundary with a visible reason.
+  if (selectedContextItems.value.length >= 20) {
+    commandErrorNotice.value =
+      t("workspaceChat.history.selectionLimit") ||
+      "Up to 20 passages can be attached to one message.";
+    return;
+  }
   const preview =
     excerpt.text.length > 80 ? excerpt.text.slice(0, 77) + "…" : excerpt.text;
   selectedContextItems.value = [
@@ -1988,7 +2095,7 @@ function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
   if (!excerpt) return;
   void nextTick(() => {
     const el = document.querySelector(
-      `[data-message-id="${excerpt.messageId}"]`
+      `[data-message-id="${CSS.escape(excerpt.messageId)}"]`
     );
     if (!(el instanceof HTMLElement)) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2001,8 +2108,12 @@ function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
 }
 
 // Conversation switch: swap each chat's chip draft (never leak across chats).
-// A pending generated-image send never replays into the newly selected chat.
+// A pending generated-image send never replays into the newly selected chat,
+// and an unresolved submission identity never crosses conversations (Codex
+// adversarial #9: a leaked id would fail the engine's CONVERSATION_MISMATCH
+// dedupe on the next send).
 watch(conversationId, () => {
+  pendingHistorySubmissionId = null;
   pendingGeneratedImageSend.value = null;
   ambiguityCandidates.value = [];
   showGeneratedImageChooser.value = false;
@@ -2019,6 +2130,19 @@ watch(conversationId, (next, previous) => {
   showHistoryDrawer.value = false;
   compactionStatus.value = null;
   void refreshCompactionStatus();
+  // Review F8: exports queued while viewing another conversation (its
+  // workspace_required path) drain when the user returns and the target
+  // workspace is already approved — the approval-change watcher alone
+  // never fires for an already-approved state.
+  if (next && conversationWorkspace.workspace.value?.approvalState === "approved") {
+    const queued = pendingImageExports.value.get(next) ?? [];
+    if (queued.length > 0) {
+      pendingImageExports.value = new Map(pendingImageExports.value).set(next, []);
+      for (const reference of queued) {
+        void attemptGeneratedImageExport(next, reference);
+      }
+    }
+  }
 });
 
 /**
@@ -2289,17 +2413,22 @@ async function onLegacyPlanAction(
   const plan = latestPlanState.value;
   const version = plan?.latestVersion?.version ?? plan?.currentVersion;
   if (!plan?.planId || version === undefined) return;
+  // Codex P1 (cross-conversation continuation): bind the decision AND its
+  // continuation to the conversation the user decided in. A selection change
+  // during the awaited IPC must never deliver "begin executing" to a
+  // different chat.
+  const targetConversationId = conversationId.value;
   planDecisionInFlight.value = true;
   planDecisionError.value = null;
   try {
     let updated: Awaited<ReturnType<typeof approveChatV2Plan>> = null;
     if (action === "approve-plan") {
-      updated = await approveChatV2Plan(conversationId.value, plan.planId, version);
+      updated = await approveChatV2Plan(targetConversationId, plan.planId, version);
     } else if (action === "reject-plan") {
-      updated = await rejectChatV2Plan(conversationId.value, plan.planId, version, feedback);
+      updated = await rejectChatV2Plan(targetConversationId, plan.planId, version, feedback);
     } else {
       updated = await requestChatV2PlanChanges(
-        conversationId.value,
+        targetConversationId,
         plan.planId,
         version,
         feedback
@@ -2323,8 +2452,20 @@ async function onLegacyPlanAction(
       planDecisionError.value = t(errorKeys[action]) || fallbacks[action];
       return;
     }
-    // Refresh so the receipt/planStateView reflects the persisted decision.
-    await selectedStore.loadSelection(conversationId.value);
+    if (conversationId.value !== targetConversationId) {
+      // Codex P1: the user switched chats mid-decision. The decision itself
+      // persisted in its originating conversation, but the continuation must
+      // NOT fire into the newly selected one — and loadSelection(target)
+      // would hijack the selection BACK, so abort before any reload. The
+      // receipt renders the next time that conversation is opened.
+      planDecisionError.value =
+        t("workspaceChat.plan.continuationAborted") ||
+        "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.";
+      return;
+    }
+    // Still on the deciding conversation: refresh so the
+    // receipt/planStateView reflects the persisted decision.
+    await selectedStore.loadSelection(targetConversationId);
     // FR-PLN-006/007: start the correct continuation exactly once. The
     // continuation message keys are shared with Chat V2 (already localized).
     if (action === "approve-plan") {
@@ -2430,6 +2571,7 @@ onMounted(async () => {
   void refreshCompactionStatus();
   if (conversationId.value) {
     void loadApprovalMode(conversationId.value);
+    void hydrateActiveGoal(conversationId.value);
     // Focus transfer (PRD §19.1): mounting with a conversation already
     // selected (New chat from an inner route, reload restore, deep link)
     // lands focus in the composer — the mount never observed the id

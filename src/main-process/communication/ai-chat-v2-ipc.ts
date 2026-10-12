@@ -1020,7 +1020,7 @@ export function normalizeChatV2UploadedFiles(
  *    request with those fields replaced/stripped for engine consumption.
  *  - !ok: a typed error to report on whichever surface the caller owns.
  */
-type GeneratedImageValidationResult =
+export type GeneratedImageValidationResult =
   | {
       ok: true;
       request: ChatV2StreamRequest;
@@ -1045,7 +1045,7 @@ type GeneratedImageValidationResult =
  *
  * Never trusts renderer-supplied shapes; rejects before any provider work.
  */
-function validateAndStageGeneratedImageFields(
+export function validateAndStageGeneratedImageFields(
   uploadedFiles: readonly { kind: string }[],
   req: ChatV2StreamRequest
 ): GeneratedImageValidationResult {

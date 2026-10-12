@@ -159,6 +159,8 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 import {
   AI_CHAT_V2_GOAL_CREATE,
+  AI_CHAT_V2_GOAL_GET,
+  AI_CHAT_V2_GOAL_LOOP_START,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   PROMPT_SKILL_INVOKE,
   SLASH_COMMAND_DISPATCH,
@@ -190,6 +192,12 @@ const i18n = createI18n({
         command: {
           busy:
             "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+          staleAborted: "Selection changed — the command was not run.",
+          noConversation: "No chat is selected — the command was not run.",
+        },
+        plan: {
+          continuationAborted:
+            "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.",
         },
         empty: { title: "Ask anything, or pick a conversation on the left." },
         sidebar: { region: "Chat workspaces" },
@@ -228,6 +236,7 @@ const i18n = createI18n({
         approved_continue_message:
           "Plan approved. Please begin executing the plan now.",
       },
+
     },
   },
 });
@@ -606,7 +615,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       // The local receipt renders as a non-persisted transcript exchange.
       const selected = useSelectedConversationStore();
       const exchange = selected.messages.filter(
-        (m) => m.metadata?.source === "slash-command"
+        (m: ChatV2MessageView) => m.metadata?.source === "slash-command"
       );
       expect(exchange).toHaveLength(1);
       expect(exchange[0].content).toBe("Review started for Acme.");
@@ -1042,7 +1051,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
       // Failed resume surfaces the safe error on the row (the backend's
       // user-safe message when provided, else the localized fallback).
-      const row = selected.messages.find((m) => m.id === "perm-msg-1");
+      const row = selected.messages.find(
+        (m: ChatV2MessageView) => m.id === "perm-msg-1"
+      );
       expect(row?.content).toBe("engine gone");
       // The in-flight guard released — a retry click resumes again.
       transcript.vm.$emit("grant-permission", permissionMessage, {
@@ -1727,6 +1738,211 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       wrapper.find('[data-testid="workspace-recovery-detail"]').exists()
     ).toBe(false);
+  });
+
+  /**
+   * Review-fix regressions (Codex P1/P2 + adversarial): continuations are
+   * bound to the originating conversation; goal state hydrates from the
+   * backend; staged image sends keep their submission options.
+   */
+  describe("review-fix regressions", () => {
+    it("aborts the plan continuation when the selection changes mid-decision (Codex P1)", async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const approveDeferred: {
+        resolve: ((v: unknown) => void) | null;
+      } = { resolve: null };
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [
+          {
+            id: "plan-msg-x",
+            conversationId: "conv-plan-x",
+            role: "assistant",
+            content: "plan",
+            timestamp: "2026-10-12T00:00:00.000Z",
+            messageType: MessageType.MESSAGE,
+            metadata: {
+              source: "chat-v2",
+              planStateView: {
+                planId: "plan-x",
+                conversationId: "conv-plan-x",
+                title: "T",
+                objective: "O",
+                currentVersion: 1,
+                latestVersion: {
+                  planId: "plan-x",
+                  version: 1,
+                  planMarkdown: "# P",
+                  createdAt: "2026-10-12T00:00:00.000Z",
+                  createdBy: "user",
+                },
+                status: "awaiting_approval",
+              },
+            },
+          },
+        ],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+      vi.mocked(approveChatV2Plan).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            approveDeferred.resolve = resolve;
+          }) as never
+      );
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-plan-x");
+      await useSelectedConversationStore().loadSelection("conv-plan-x");
+      await flushPromises();
+
+      wrapper
+        .findComponent({ name: "AiChatWorkspaceTranscript" })
+        .vm.$emit("approve-plan");
+      await flushPromises();
+      // User switches to another conversation while the decision IPC runs.
+      chatWorkspace.setSelected("conv-other");
+      await flushPromises();
+      approveDeferred.resolve?.({
+        planId: "plan-x",
+        currentVersion: 1,
+        status: "approved",
+      });
+      await flushPromises();
+
+      // The decision persisted for conv-plan-x, but the continuation must
+      // NOT fire into the newly selected conversation.
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      expect(transcript.props("planDecisionError")).toContain(
+        "Selection changed"
+      );
+    });
+
+    it("hydrates the persisted goal from the backend so /loop finds it after a reload (Codex P2)", async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      mockInvokeByChannel({
+        [AI_CHAT_V2_GOAL_GET]: {
+          status: true,
+          data: {
+            goalId: "goal-hydrated",
+            conversationId: "conv-goal",
+            objective: "grow",
+            status: "active",
+            iterationCount: 0,
+            criteria: [],
+          },
+        },
+        [AI_CHAT_V2_GOAL_LOOP_START]: { status: true, data: {} },
+      });
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-goal");
+      await flushPromises();
+
+      expect(useSelectedConversationStore().goal?.goalId).toBe("goal-hydrated");
+
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 3", []);
+      await flushPromises();
+      const loopStart = (
+        window.api.invoke as ReturnType<typeof vi.fn>
+      ).mock.calls.find((c) => c[0] === AI_CHAT_V2_GOAL_LOOP_START);
+      expect(loopStart).toBeTruthy();
+      expect(JSON.parse(String(loopStart?.[1]))).toMatchObject({
+        goalId: "goal-hydrated",
+        maxIterations: 3,
+      });
+    });
+
+    it("staged image sends keep pasted contents and acceptance through the chooser (Codex P2)", async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [
+          {
+            id: "m-img-2",
+            conversationId: "conv-img-x",
+            role: "assistant",
+            content: "logos",
+            timestamp: "2026-10-12T00:00:00.000Z",
+            messageType: MessageType.MESSAGE,
+            metadata: {
+              source: "chat-v2",
+              generatedImages: [
+                { type: "image", file_name: "a.png", url: "file://a.png" },
+                { type: "image", file_name: "b.png", url: "file://b.png" },
+              ],
+            },
+          },
+        ],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-img-x",
+        runId: "run-img-x",
+        status: "running",
+        acceptedAt: "",
+      });
+      const wrapper = mountSurface(pinia);
+      const chatWorkspace = useChatWorkspaceStore();
+      chatWorkspace.setSelected("conv-img-x");
+      await useSelectedConversationStore().loadSelection("conv-img-x");
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "recolor the image", [], {
+        pastedContents: { "1": "pasted body" },
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+
+      const chooser = wrapper.findComponent({
+        name: "GeneratedImageChooserDialog",
+      });
+      expect(chooser.props("modelValue")).toBe(true);
+      // The draft is NOT cleared while the dialog waits (FR-SUB-002).
+      expect(acceptedSpy).not.toHaveBeenCalled();
+
+      const candidates = chooser.props("candidates") as Array<{
+        reference: { messageId: string; imageIndex: number };
+      }>;
+      chooser.vm.$emit("select", candidates[0]);
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      const payload = startChatRunMock.mock.calls[0][0];
+      expect(payload.pastedContents).toEqual({ "1": "pasted body" });
+      expect(payload.generatedImageReferences).toEqual([
+        { messageId: "m-img-2", imageIndex: 0 },
+      ]);
+      expect(acceptedSpy).toHaveBeenCalledTimes(1);
+    });
+
+    afterEach(() => {
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+    });
   });
 
   it("shows the workspace chooser above the composer with no conversation selected", async () => {

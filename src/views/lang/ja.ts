@@ -3576,7 +3576,12 @@ export default {
     backToApp: "アプリに戻る",
     loadOlder: "過去のメッセージを読み込む",
     command: {
+      staleAborted: "選択が変更されたため、コマンドは実行されませんでした。",
+      noConversation: "チャットが選択されていないため、コマンドは実行されませんでした。",
       busy: "このチャットの実行中はコマンドを使用できません。完了を待つか、先に停止してください。",
+    },
+    history: {
+      selectionLimit: "1 つのメッセージに添付できる引用は最大 20 件です。",
     },
     recovery: {
       retry: "再接続中… 試行 {attempt}/{max}（約 {seconds} 秒待機）",
@@ -3705,6 +3710,7 @@ export default {
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
     },
     plan: {
+      continuationAborted: "選択が変更されたため、プランの決定は保存されましたが、後続メッセージは送信されませんでした。会話を開き直して続行してください。",
       version: "バージョン",
       current: "現在",
       changeReason: "変更理由",

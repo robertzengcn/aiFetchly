@@ -45,6 +45,7 @@ import {
   canUseChat,
   parseMetadata,
   serializeHistoryTimestamp,
+  validateAndStageGeneratedImageFields,
 } from "@/main-process/communication/ai-chat-v2-ipc";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
@@ -412,9 +413,28 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid start-run request");
       }
-      const result = await getAiChatWorkspaceCoordinator().startRun(
+      // Shared trusted-channel edge (parity with the V2 stream/pending
+      // handlers): validate + normalize generated-image references, STAGE the
+      // user-confirmed batch set into ConfirmedBatchReferenceRegistry (the
+      // registry is what process_artifact_batch consumes — the raw request
+      // field is never read downstream), and strip the field so nothing
+      // stores or forwards it.
+      const validated = validateAndStageGeneratedImageFields(
+        parsed.data.uploadedFiles ?? [],
         parsed.data
       );
+      if (!validated.ok) {
+        return denied(validated.errorMessage);
+      }
+      // The shared validator returns a ChatV2StreamRequest (readonly array
+      // fields); copy them into the coordinator payload's mutable shapes.
+      const result = await getAiChatWorkspaceCoordinator().startRun({
+        ...parsed.data,
+        ...validated.request,
+        historySelectionIds: validated.request.historySelectionIds
+          ? [...validated.request.historySelectionIds]
+          : undefined,
+      });
       if (!result.ok) {
         return denied(result.message);
       }

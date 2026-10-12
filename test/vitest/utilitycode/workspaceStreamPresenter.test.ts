@@ -354,3 +354,48 @@ describe("workspaceStreamPresenter", () => {
     expect(presenter.getState().streamStatus).toBe("cancelled");
   });
 });
+
+
+describe("workspaceStreamPresenter retry-state lifetime (review C8)", () => {
+  function retryEvent(sequence: number): ChatRunDetailEvent {
+    return {
+      sequence,
+      runId: "run-r",
+      conversationId: "v2-r",
+      eventType: "retry_connect",
+      emittedAt: "2026-10-12T00:00:00.000Z",
+      payload: {
+        eventType: "retry_connect",
+        retryAttempt: 1,
+        retryMaxAttempts: 5,
+        retryDelayMs: 2000,
+      },
+    };
+  }
+
+  it("dispose clears an in-flight retry banner", async () => {
+    const presenter = createWorkspaceStreamPresenter();
+    presenter.applyEvent(retryEvent(1));
+    expect(presenter.getState().retry).not.toBeNull();
+    presenter.dispose();
+    expect(presenter.getState().retry).toBeNull();
+  });
+
+  it("seedHistory clears an in-flight retry banner", () => {
+    const presenter = createWorkspaceStreamPresenter();
+    presenter.applyEvent(retryEvent(1));
+    expect(presenter.getState().retry).not.toBeNull();
+    presenter.seedHistory([
+      {
+        id: "m1",
+        conversationId: "v2-r",
+        role: "assistant",
+        content: "seeded",
+        timestamp: "2026-10-12T00:00:00.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2" },
+      },
+    ]);
+    expect(presenter.getState().retry).toBeNull();
+  });
+});

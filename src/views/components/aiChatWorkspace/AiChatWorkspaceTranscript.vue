@@ -22,11 +22,13 @@
     />
 
     <template v-for="item in projectedItems" :key="item.key">
-      <!-- User messages render normally. -->
+      <!-- User messages render normally. data-message-id anchors history
+           navigation (FR-HIS-001 scroll-to-source). -->
       <AiChatV2Message
         v-if="item.kind === 'user-message'"
         :message="item.message"
         :show-reasoning="false"
+        :data-message-id="item.message.id"
         @use-generated-image="(ref) => emit('use-generated-image', ref)"
         @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
         @save-generated-image="(ref) => emit('save-generated-image', ref)"
@@ -40,6 +42,7 @@
         :message="item.message"
         :status="streamStatusForMessage(item.message)"
         :show-reasoning="showReasoning"
+        :data-message-id="item.message.id"
         :reported="reportedMessageIds?.has(item.message.id) === true"
         @use-generated-image="(ref) => emit('use-generated-image', ref)"
         @edit-generated-image="(ref) => emit('edit-generated-image', ref)"

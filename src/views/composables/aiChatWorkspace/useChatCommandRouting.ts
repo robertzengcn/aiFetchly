@@ -37,8 +37,12 @@ export interface StagedScheduledLoop {
 export type ChatCommandDisposition =
   /** Ordinary message — continue the standard submission path. */
   | { readonly kind: "not_command" }
-  /** Command fully handled (local exchange / loop start / clear). */
-  | { readonly kind: "completed" }
+  /**
+   * Command fully handled (local exchange / loop start / clear). When the
+   * command expanded into a prompt send, `acceptedSend` reports that send's
+   * outcome — `false` means the draft must NOT be cleared (FR-SUB-002).
+   */
+  | { readonly kind: "completed"; readonly acceptedSend?: boolean }
   /**
    * The command produced a prompt the caller must submit through its
    * ordinary send path ONCE, marked as an expanded prompt so it is never
@@ -112,13 +116,20 @@ export interface ChatCommandRoutingPorts {
     conversationId: string;
     rawInput: string;
   }) => Promise<SlashCommandDispatchResponse>;
-  /** Submit a registry-expanded prompt through the ordinary send path. */
+  /**
+   * Submit a registry-expanded prompt through the ordinary send path.
+   * Returns whether the send was ACCEPTED (false = rejected/parked — the
+   * caller must keep the draft). Receives the conversation the command was
+   * issued in so a mid-dispatch selection change can abort safely.
+   */
   readonly onSlashPromptExpand: (
     prompt: string,
-    pastedContents?: Record<string, string>
-  ) => Promise<void>;
+    pastedContents?: Record<string, string>,
+    conversationId?: string
+  ) => Promise<boolean>;
   /** Built-in `/clear` handler (clear + reload). */
-  readonly onClearConversation: () => Promise<void>;
+  /** Built-in `/clear` — receives the conversation the command was issued in. */
+  readonly onClearConversation: (conversationId: string) => Promise<void>;
 }
 
 export interface RouteCommandOptions {
@@ -241,15 +252,26 @@ export function useChatCommandRouting(
   }
 
   /**
-   * Generic registry dispatch (FR-CMD-001..004). Returns true when the input
-   * was a command the registry owned (handled or failed-with-exchange).
+   * Generic registry dispatch (FR-CMD-001..004). Returns the acceptance of
+   * the command's send (true for locally-handled commands; the expanded
+   * prompt's actual send outcome otherwise) or null when the input was not
+   * registry-owned.
    */
   async function dispatchGenericSlash(
     rawInput: string,
     pastedContents?: Record<string, string>
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const conversationId = await ports.ensureConversationId();
-    if (!conversationId) return true;
+    if (!conversationId) {
+      // Never a silent vanish (review F4): the user keeps their draft.
+      ports.setError(
+        ports.translate(
+          "workspaceChat.command.noConversation",
+          "No chat is selected — the command was not run."
+        )
+      );
+      return false;
+    }
     let result: SlashCommandDispatchResponse;
     try {
       result = await ports.dispatchSlashCommand({
@@ -270,12 +292,20 @@ export function useChatCommandRouting(
     if (result.action === "submit_prompt") {
       // The expanded prompt is submitted exactly once through the ordinary
       // path; the port marks it as expanded so a body beginning with `/` is
-      // chat content, not a second command (FR-CMD-003).
-      await ports.onSlashPromptExpand(result.prompt, pastedContents);
-      return true;
+      // chat content, not a second command (FR-CMD-003). The port reports
+      // acceptance so a rejected/parked send keeps the draft (FR-SUB-002).
+      try {
+        return await ports.onSlashPromptExpand(
+          result.prompt,
+          pastedContents,
+          conversationId
+        );
+      } catch {
+        return false;
+      }
     }
     if (result.commandId === "built-in:command:clear") {
-      await ports.onClearConversation();
+      await ports.onClearConversation(conversationId);
       return true;
     }
     ports.appendLocalExchange(rawInput, result.content);
@@ -437,7 +467,9 @@ export function useChatCommandRouting(
         text.trim(),
         options.pastedContents
       );
-      if (handled) return { kind: "completed" };
+      if (handled !== null) {
+        return { kind: "completed", acceptedSend: handled };
+      }
     }
 
     return { kind: "not_command" };

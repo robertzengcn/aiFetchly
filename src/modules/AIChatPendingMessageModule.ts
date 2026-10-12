@@ -44,6 +44,14 @@ interface AIChatPendingRequestOptions {
   readonly showReasoning?: boolean;
   readonly reasoning?: ChatV2StreamRequest["reasoning"];
   readonly toolApprovalMode?: ChatV2StreamRequest["toolApprovalMode"];
+  /**
+   * FR-HIS-002 (capability parity, design §12.11): opaque archive
+   * references + the retry-stable submission identity must survive the
+   * deferred dispatch — a queued send carries the same selected context an
+   * idle send does. The engine re-resolves the ids at turn start.
+   */
+  readonly historySelectionIds?: readonly string[];
+  readonly submissionId?: string;
 }
 
 /** Non-null pending row (the Model's lookups return `| null`). */
@@ -444,6 +452,13 @@ export class AIChatPendingMessageModule extends BaseModule {
       ...(options.toolApprovalMode !== undefined
         ? { toolApprovalMode: options.toolApprovalMode }
         : {}),
+      ...(options.historySelectionIds !== undefined &&
+      options.historySelectionIds.length > 0
+        ? { historySelectionIds: [...options.historySelectionIds] }
+        : {}),
+      ...(options.submissionId !== undefined
+        ? { submissionId: options.submissionId }
+        : {}),
     };
     const images = await this.attachmentModule.getByMessageId(
       row.userMessageId
@@ -583,6 +598,13 @@ export class AIChatPendingMessageModule extends BaseModule {
         : {}),
       ...(request.toolApprovalMode !== undefined
         ? { toolApprovalMode: request.toolApprovalMode }
+        : {}),
+      ...(request.historySelectionIds !== undefined &&
+      request.historySelectionIds.length > 0
+        ? { historySelectionIds: [...request.historySelectionIds] }
+        : {}),
+      ...(request.submissionId !== undefined
+        ? { submissionId: request.submissionId }
         : {}),
     };
   }

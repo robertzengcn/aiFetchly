@@ -3652,7 +3652,12 @@ export default {
     backToApp: "Volver a la aplicación",
     loadOlder: "Cargar mensajes anteriores",
     command: {
+      staleAborted: "La selección cambió: el comando no se ejecutó.",
+      noConversation: "No hay chat seleccionado: el comando no se ejecutó.",
       busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
+    },
+    history: {
+      selectionLimit: "Se pueden adjuntar hasta 20 pasajes a un mensaje.",
     },
     recovery: {
       retry: "Reconectando… intento {attempt} de {max} (esperando ~{seconds} s)",
@@ -3783,6 +3788,7 @@ export default {
       structuredResult: "Resultado estructurado — detalles en Actividad",
     },
     plan: {
+      continuationAborted: "La selección cambió: la decisión del plan se guardó, pero su mensaje de seguimiento no se envió. Reabre la conversación para continuar.",
       version: "Versión",
       current: "actual",
       changeReason: "Motivo del cambio",

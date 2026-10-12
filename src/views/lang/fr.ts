@@ -3637,7 +3637,12 @@ export default {
     backToApp: "Retour à l'application",
     loadOlder: "Charger les messages plus anciens",
     command: {
+      staleAborted: "La sélection a changé — la commande n'a pas été exécutée.",
+      noConversation: "Aucune conversation sélectionnée — la commande n'a pas été exécutée.",
       busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
+    },
+    history: {
+      selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",
     },
     recovery: {
       retry: "Reconnexion… tentative {attempt} sur {max} (attente ~{seconds} s)",
@@ -3770,6 +3775,7 @@ export default {
       structuredResult: "Résultat structuré — détails dans Activité",
     },
     plan: {
+      continuationAborted: "La sélection a changé — la décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Rouvrez la conversation pour continuer.",
       version: "Version",
       current: "actuelle",
       changeReason: "Motif de la modification",

@@ -609,6 +609,15 @@ export const useSelectedConversationStore = defineStore(
     }
 
     /**
+     * Seed authoritative goal state from the backend (FR-CMD-006): the
+     * run-strip's /loop precondition must survive selection reloads.
+     */
+    function seedGoal(goal: GoalRunInfo | null): void {
+      presenter.setGoal(goal);
+      syncFromPresenter();
+    }
+
+    /**
      * Subscribe to engine start acknowledgements (FR-HIS-003). Returns an
      * unsubscribe function; the surface cleans up on unmount.
      */
@@ -677,6 +686,7 @@ export const useSelectedConversationStore = defineStore(
       applyDetailEvent,
       onStartAck,
       onLiveToolResult,
+      seedGoal,
       markReadAfterLoad,
       teardown,
       isBusy,

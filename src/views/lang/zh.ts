@@ -3447,7 +3447,12 @@ export default {
     backToApp: "返回应用",
     loadOlder: "加载更早的消息",
     command: {
+      staleAborted: "所选对话已切换——命令未执行。",
+      noConversation: "未选择对话——命令未执行。",
       busy: "当前对话正在运行，暂无法使用命令。请等待其完成或先停止。",
+    },
+    history: {
+      selectionLimit: "一条消息最多可附加 20 段引文。",
     },
     recovery: {
       retry: "正在重新连接… 第 {attempt}/{max} 次尝试（等待约 {seconds} 秒）",
@@ -3574,6 +3579,7 @@ export default {
       structuredResult: "结构化结果 — 详情见“活动”",
     },
     plan: {
+      continuationAborted: "所选对话已切换——计划决策已保存，但后续消息未发送。请重新打开该对话继续。",
       version: "版本",
       current: "当前",
       changeReason: "变更原因",

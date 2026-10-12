@@ -96,10 +96,11 @@ function makePorts(overrides: Partial<ChatCommandRoutingPorts> = {}): {
         commandId: "plugin:echo",
       };
     },
-    onSlashPromptExpand: async (prompt, pastedContents) => {
+    onSlashPromptExpand: async (prompt, pastedContents): Promise<boolean> => {
       state.expandedPrompts.push({ prompt, pastedContents });
+      return true;
     },
-    onClearConversation: async () => {
+    onClearConversation: async (): Promise<void> => {
       state.clears += 1;
     },
     ...overrides,
@@ -396,6 +397,35 @@ describe("useChatCommandRouting.routeCommand", () => {
     const result = await router.routeCommand("/review Acme", { hasFiles: true });
     expect(result.kind).toBe("not_command");
     expect(state.slashDispatches).toHaveLength(0);
+  });
+
+  it("reports acceptedSend=false when the expanded prompt send is rejected (FR-SUB-002)", async () => {
+    const { ports, state } = makePorts({
+      dispatchSlashCommand: async (input) => {
+        state.slashDispatches.push(input.rawInput);
+        return {
+          status: true as const,
+          action: "submit_prompt" as const,
+          prompt: "expanded prompt",
+          commandId: "plugin:x",
+        };
+      },
+      onSlashPromptExpand: async (): Promise<boolean> => false,
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/x", {});
+    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+  });
+
+  it("reports acceptedSend=false with an error when no conversation can be ensured", async () => {
+    const { ports, state } = makePorts({
+      ensureConversationId: async () => null,
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/anything", {});
+    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+    // The silent-vanish fix: a visible error, never nothing.
+    expect(state.errors.at(-1)).toContain("noConversation");
   });
 
   it("does not double-dispatch /goal through the generic registry", async () => {
