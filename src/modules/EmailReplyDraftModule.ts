@@ -290,4 +290,25 @@ export class EmailReplyDraftModule extends BaseModule {
       throw error;
     }
   }
+
+  /**
+   * R13: fenced `failed -> draft` reopen for an explicitly re-approved
+   * definitely-rejected draft. Thin wrapper over the model method (the
+   * cluster fence + conditional UPDATE live in the model transaction). The
+   * approval service calls this BEFORE its normal approval path when the
+   * draft is `failed`.
+   */
+  async reopenFailedDraftForRetry(input: {
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+  }): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.draftModel.reopenFailedDraftForRetry(input);
+    } catch (error) {
+      console.error("Error reopening failed draft for retry:", error);
+      throw error;
+    }
+  }
 }

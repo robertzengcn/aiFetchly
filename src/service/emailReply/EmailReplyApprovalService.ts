@@ -69,11 +69,40 @@ export class EmailReplyApprovalService {
   }
 
   async approveDraft(input: ApproveDraftInput): Promise<ApprovalResult> {
-    const draft = await this.draftModule.readAggregate(input.draftId);
+    let draft = await this.draftModule.readAggregate(input.draftId);
     if (!draft) {
       throw new Error("Cannot approve: draft not found");
     }
-    if (draft.status !== "draft") {
+    // R13: a definite SMTP rejection finalizes the draft as `failed`. The
+    // generation reuse path (B08) hands the failed draft back with
+    // `existing_draft_id`, but nothing could approve/send it. Reopen the
+    // draft for a fresh approval ONLY when retry is safe (fenced: no cluster
+    // positive, no unknown/sent/in-flight sibling, conditional on
+    // `status='failed' + currentRevisionId`). The reopen throws a typed
+    // refusal when the fence fails — surface it; the draft stays `failed`.
+    // Ambiguous (`delivery_unknown`), `sent`, `sending`, `approved`,
+    // `discarded` stay blocked (the reopen refuses non-`failed`).
+    if (draft.status === "failed") {
+      const emailServiceId = draft.emailServiceId;
+      if (emailServiceId == null) {
+        throw new Error(
+          "Cannot approve: failed draft has no bound email service for the reopen fence"
+        );
+      }
+      await this.draftModule.reopenFailedDraftForRetry({
+        draftId: draft.id,
+        messageId: draft.messageId,
+        emailServiceId,
+      });
+      // Reload the reopened draft so the normal path sees `status = "draft"`.
+      const reopened = await this.draftModule.readAggregate(input.draftId);
+      if (!reopened || reopened.status !== "draft") {
+        throw new Error(
+          `Cannot approve: failed-draft reopen did not yield a 'draft' state (current '${reopened?.status ?? "missing"}')`
+        );
+      }
+      draft = reopened;
+    } else if (draft.status !== "draft") {
       throw new Error(
         `Cannot approve: draft must be in 'draft' state (current '${draft.status}')`
       );

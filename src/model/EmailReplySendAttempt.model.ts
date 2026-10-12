@@ -135,11 +135,22 @@ export class EmailReplySendAttemptModel extends BaseDb {
       .getCount();
   }
 
-  /** Count all attempts for a source message (per-thread-limit proxy). */
+  /**
+   * Count SENT attempts for a source message (per-thread-limit proxy, R13).
+   *
+   * A failed attempt delivered no email (definite SMTP rejection), so an
+   * explicit re-approval + retry of the same draft must not consume the
+   * per-thread limit. Mirrors the sent-only daily-limit proxy
+   * {@link countSentByServiceSince}. `delivery_unknown` (ambiguous — might
+   * have delivered) and `claimed`/`submitted` (in-flight) are excluded: an
+   * ambiguous prior send blocks retry through the cluster fence, not here;
+   * an in-flight attempt blocks through the send-claim sibling check.
+   */
   async countAttemptsForMessage(messageId: number): Promise<number> {
     return await this.repository
       .createQueryBuilder("attempt")
       .where("attempt.messageId = :messageId", { messageId })
+      .andWhere("attempt.status = :status", { status: "sent" })
       .getCount();
   }
 }

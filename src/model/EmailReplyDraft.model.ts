@@ -285,6 +285,153 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
+   * R13: fenced `failed -> draft` reopen for an explicitly re-approved
+   * definitely-rejected draft (FR-019 retry path). A definite SMTP rejection
+   * finalizes the draft as `failed`; the generation reuse path (B08) hands the
+   * failed draft back with `existing_draft_id`, but `approveDraft` /
+   * `markApproved` / the `sendEmailReply` tool all refused non-`draft` status,
+   * so the operator/AI could not re-approve and retry the same draft. This
+   * method reopens the draft for a fresh approval ONLY when retry is safe.
+   *
+   * The fence mirrors {@link reconcileDelivery}'s `confirm_not_sent` gate
+   * (R04/§9) but targets a `failed` DRAFT (not a `delivery_unknown` attempt),
+   * so {@link classifyClusterEligibility} — which returns `delivery_unknown`
+   * for a target's own unknown records — cannot be reused directly. Instead
+   * inspect the cluster evidence for the reopen-specific conditions:
+   *
+   *   (a) The target draft is `failed` with a `currentRevisionId` — only a
+   *       definite rejection (no email delivered) is retryable. `delivery_unknown`
+   *       (ambiguous), `sent`, `sending`, `approved`, `discarded` stay blocked.
+   *   (b) No cluster positive evidence (sibling `replyDetectedAt`/
+   *       `replyStatus=sent`/sent draft/sent attempt) — accepted reply history
+   *       is preserved; the canonical identity already has a reply.
+   *   (c) No unknown sibling draft/attempt — an ambiguous prior send on a
+   *       sibling must not be retried past.
+   *   (d) No in-flight sibling attempt (different draft) or sending sibling
+   *       draft — a live submitter must quiesce first.
+   *
+   * When all hold, a conditional UPDATE `WHERE id = :draftId AND status =
+   * 'failed'` transitions the draft to `draft` (0 rows = a concurrent state
+   * change → precondition failure, no write). A `draft_reopened` audit row
+   * records the transition. The caller then runs the SAME normal approval path
+   * (fresh token, unchanged revisionId/contentHash, `markApproved` conditional
+   * now satisfied). The failed attempt on THIS draft does not block the retry's
+   * claim: `clusterEvidenceBlocksSend` scopes attempts by `draftId`.
+   *
+   * @throws Error with a typed reason when any fence condition fails. The
+   *   caller (approval service) surfaces the refusal; the draft stays `failed`.
+   */
+  async reopenFailedDraftForRetry(input: {
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+  }): Promise<void> {
+    await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+
+      const draft = await draftRepo.findOne({
+        where: { id: input.draftId },
+      });
+      if (!draft) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} not found`
+        );
+      }
+      // (a) Only a definite rejection is retryable.
+      if (draft.status !== "failed") {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} is '${draft.status}', not 'failed' (ambiguous/sent/in-flight states stay blocked)`
+        );
+      }
+      if (!draft.currentRevisionId) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} has no current revision to retry`
+        );
+      }
+
+      // (b)/(c)/(d): canonical-cluster eligibility. Reuse the bespoke
+      // reconcileDelivery gate shape (lines 1158-1184): a cluster positive,
+      // an unknown sibling, or an in-flight sibling draft/attempt refuses.
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null,
+        seedMessageId: input.messageId,
+      });
+      if (
+        evidence.clusterReplyDetectedAt !== null ||
+        evidence.clusterHasRowLevelSent ||
+        evidence.replyStatus === "sent" ||
+        evidence.sentDrafts.length > 0 ||
+        evidence.sentAttempts.length > 0
+      ) {
+        throw new Error(
+          `Reopen refused: canonical cluster already has a reply (§9)`
+        );
+      }
+      // Unknown sibling draft/attempt on a DIFFERENT draft: an ambiguous
+      // prior send must not be retried past. The target's own failed status
+      // is the eligible state here (the draft itself is `failed`, not
+      // `delivery_unknown`), so exclude the target draft's own unknown
+      // records defensively (there should be none on a `failed` draft).
+      const unknownSiblingDraft = evidence.unknownDrafts.some(
+        (d) => d.id !== input.draftId
+      );
+      const unknownSiblingAttempt = evidence.unknownAttempts.some(
+        (a) => a.draftId !== input.draftId
+      );
+      if (unknownSiblingDraft || unknownSiblingAttempt) {
+        throw new Error(
+          `Reopen refused: an ambiguous prior delivery exists on this message (§9)`
+        );
+      }
+      const inFlightSibling = evidence.inFlightAttempts.some(
+        (a) => a.draftId !== input.draftId
+      );
+      const sendingSiblingDraft = evidence.sendingDrafts.some(
+        (d) => d.id !== input.draftId
+      );
+      if (inFlightSibling || sendingSiblingDraft) {
+        throw new Error(
+          `Reopen refused: a different send is in flight on this message (§9)`
+        );
+      }
+
+      // Conditional UPDATE: only this exact `failed` draft transitions. A
+      // concurrent edit/state change → 0 rows → precondition failure, no
+      // partial write (the audit row below is NOT written either).
+      const result = await draftRepo
+        .createQueryBuilder()
+        .update(EmailReplyDraftEntity)
+        .set({ status: "draft" as EmailReplyDraftStatus, sendError: null })
+        .where("id = :draftId AND status = :status", {
+          draftId: input.draftId,
+          status: "failed" as EmailReplyDraftStatus,
+        })
+        .execute();
+      if ((result.affected ?? 0) !== 1) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} changed state before reopen committed`
+        );
+      }
+
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = input.emailServiceId;
+      audit.messageId = input.messageId;
+      audit.draftId = input.draftId;
+      audit.action = "draft_reopened";
+      audit.actor = "system";
+      audit.reason = "Fenced failed-draft reopen for explicit retry (R13)";
+      audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(input.messageId),
+        fromStatus: "failed",
+        toStatus: "draft",
+      });
+      await auditRepo.save(audit);
+    });
+  }
+
+  /**
    * Append an immutable revision and update the draft projection in ONE
    * transaction. Any active approval is invalidated and the draft returns to
    * `draft` (FR-014: editing an approved draft invalidates approval).

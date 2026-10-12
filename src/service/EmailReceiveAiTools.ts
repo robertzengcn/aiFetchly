@@ -376,10 +376,14 @@ export async function sendEmailReply(args: unknown): Promise<
     if (!draft) {
       return { success: false, error: "Draft not found" };
     }
-    if (draft.status !== "draft") {
+    // R13: a `failed` draft (definite SMTP rejection) reaches the fenced
+    // reopen inside `approveDraft`; the reopen refuses when retry is unsafe
+    // (cluster positive / unknown / sent / in-flight sibling). Other
+    // non-`draft` states stay refused at this gate.
+    if (draft.status !== "draft" && draft.status !== "failed") {
       return {
         success: false,
-        error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' may be sent (the AI tool approves on confirmed execution)`,
+        error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' (or a definitely-failed draft the approval service reopens) may be sent`,
       };
     }
     const approval = await new EmailReplyApprovalService().approveDraft({

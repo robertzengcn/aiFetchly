@@ -362,6 +362,38 @@ describe("sendEmailReply — stable refusal envelope (FR-033)", () => {
     expect(result.draft_id).toBe(14);
     expect(result.sent_at).toBe("2026-10-05T00:00:00.000Z");
   });
+
+  it("R13: a 'failed' draft reaches the fenced approval instead of the status gate", async () => {
+    // A definite SMTP rejection finalizes the draft as `failed`; the reuse
+    // path hands the same ID back. The tool must let the failed draft reach
+    // `approveDraft` (which performs the fenced failed->draft reopen) rather
+    // than refusing at the status gate.
+    draftModuleStub.read.mockResolvedValue({
+      id: 15,
+      messageId: 1,
+      emailServiceId: 1,
+      subject: "Re: Hi",
+      bodyText: "Hello",
+      bodyHtml: null,
+      status: "failed",
+    });
+    approvalStub.approveDraft.mockResolvedValue({ token: "fresh-tok" });
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "sent",
+      attemptId: 21,
+      sentAt: "2026-10-12T00:00:00.000Z",
+    });
+    const result = await sendEmailReply({ draft_id: 15, email_service_id: 1 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // The approval service was actually invoked (the gate did not short-circuit).
+    expect(approvalStub.approveDraft).toHaveBeenCalledWith({
+      draftId: 15,
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
+    });
+    expect(result.sent_at).toBe("2026-10-12T00:00:00.000Z");
+  });
 });
 
 // ---------------------------------------------------------------------------

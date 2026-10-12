@@ -237,6 +237,59 @@ describe("P0.6 — delivery state machine via fake SMTP", () => {
     expect(sent + already).toBe(2);
     expect(calls).toBeLessThanOrEqual(1);
   });
+
+  it("R13: definite rejection -> explicit re-approval reopens the same draft -> retry succeeds without a sibling", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // 1. Definite SMTP rejection finalizes the draft as `failed`.
+    const failed = await buildDelivery("reject").sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(failed.status).toBe("failed");
+
+    // 2. The reuse path hands the SAME draft id back; the operator explicitly
+    //    re-approves. The fenced reopen transitions failed -> draft and the
+    //    normal approval path mints a fresh token over the SAME revision.
+    const reapproval = await new EmailReplyApprovalService().approveDraft({
+      draftId,
+      approvedByType: "user",
+    });
+    expect(reapproval.revisionId).toBeDefined();
+
+    // 3. Retry with an accepting transport → sent. Exactly one draft row
+    //    exists for the message (no sibling created), and the draft is sent.
+    const retry = await buildDelivery("accept").sendApprovedReply({
+      draftId,
+      approvalToken: reapproval.token,
+    });
+    expect(retry.status).toBe("sent");
+
+    const draftModule = new EmailReplyDraftModule();
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+    const draftsForMessage = await draftModule.listByMessage(messageId);
+    expect(draftsForMessage.length).toBe(1);
+  });
+
+  it("R13: delivery_unknown stays blocked (no reopen through re-approval)", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const outcome = await buildDelivery("disconnect").sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("delivery_unknown");
+
+    // Re-approval must be refused: ambiguous delivery is never a retry
+    // candidate. The reopen fence only accepts `failed`.
+    await expect(
+      new EmailReplyApprovalService().approveDraft({
+        draftId,
+        approvedByType: "user",
+      })
+    ).rejects.toThrow(/'delivery_unknown'/);
+    const after = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(after?.status).toBe("delivery_unknown");
+  });
 });
 
 // ---------------------------------------------------------------------------

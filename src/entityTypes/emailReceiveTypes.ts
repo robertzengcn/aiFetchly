@@ -194,7 +194,8 @@ export type EmailReplyAuditAction =
   | "auto_reply_blocked"
   | "send_failed"
   | "send_claimed"
-  | "delivery_unknown";
+  | "delivery_unknown"
+  | "draft_reopened";
 
 /** Who triggered an audit action. */
 export type EmailReplyAuditActor = "user" | "ai" | "system";
