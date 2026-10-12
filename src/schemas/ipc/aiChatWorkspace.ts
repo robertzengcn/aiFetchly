@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { aiChatHistorySelectionIdsSchema } from "@/schemas/aiChatHistorySelections";
 
 /**
  * Strict Zod v4 schemas for the ai-chat-workspace:* IPC boundary
@@ -129,10 +130,7 @@ export const startChatRunRequestSchema = z
      * bodies) + the retry-stable submission identity. The main process
      * re-resolves each id against ownership/epoch/budget.
      */
-    historySelectionIds: z
-      .array(z.string().min(1).max(100))
-      .max(20)
-      .optional(),
+    historySelectionIds: aiChatHistorySelectionIdsSchema.optional(),
     submissionId: z.string().min(8).max(64).optional(),
     /**
      * FR-IMG-004 trusted channel: the user-confirmed generated-image batch

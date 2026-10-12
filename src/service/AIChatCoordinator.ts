@@ -155,16 +155,6 @@ export class AIChatCoordinator {
       };
     }
 
-    // Codex P1: the idle path owns the dispatch — stage the user-confirmed
-    // batch set NOW (just-in-time for this turn's execution; the entry
-    // cannot be consumed or cleared by any other turn first).
-    if (request.confirmedGeneratedImageBatch) {
-      getConfirmedBatchReferenceRegistry().stage(
-        request.conversationId,
-        request.confirmedGeneratedImageBatch.references
-      );
-    }
-
     const run = await this.deps.runModule.createRun({
       conversationId: request.conversationId,
       owner: "interactive",
@@ -387,11 +377,33 @@ export class AIChatCoordinator {
       live.status = "running";
       void this.broadcastRunSummary(conversationId, "run_started");
 
+      // Codex P2 (round 3): stage the user-confirmed batch IMMEDIATELY
+      // before engine submission — a startRun-time entry leaks when the
+      // scheduler queues the run for capacity and the user cancels it before
+      // dispatch (finalizeAfterTerminal never enters the engine, so nothing
+      // clears the registry; a later process_artifact_batch call in this
+      // conversation would consume the cancelled selection).
+      const stagedBatch = this.startRequests.get(runId)?.confirmedGeneratedImageBatch;
+      if (stagedBatch) {
+        getConfirmedBatchReferenceRegistry().stage(
+          conversationId,
+          stagedBatch.references
+        );
+      }
       const adapter = new AIChatRunEventAdapter(runId, conversationId);
-      await this.deps.engine.submitMessage({
-        request: this.buildEngineRequest(live),
-        eventSink: this.createRunSink(live, adapter),
-      });
+      try {
+        await this.deps.engine.submitMessage({
+          request: this.buildEngineRequest(live),
+          eventSink: this.createRunSink(live, adapter),
+        });
+      } catch (err) {
+        // Pre-turn failure: nothing consumed the staged set — clear it so a
+        // later batch call cannot pick up this cancelled selection.
+        if (stagedBatch) {
+          getConfirmedBatchReferenceRegistry().clear(conversationId);
+        }
+        throw err;
+      }
 
       const terminal = live.terminalChunk;
       if (!terminal) {

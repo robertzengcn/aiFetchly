@@ -1727,13 +1727,14 @@ export class AIChatQueryEngine {
     let historySelectionChangedIds: readonly string[] = [];
     let historySelectionRejectedIds: readonly string[] = [];
     let assemblyContent = modelContent;
+    let selectedHistoryBlock = "";
     try {
       const selectionResolution = await this.resolveSelectedHistory(
         conversationId,
         savedUser.messageId,
         request.historySelectionIds ?? []
       );
-      const selectedHistoryBlock = buildSelectedHistoryContextBlock(
+      selectedHistoryBlock = buildSelectedHistoryContextBlock(
         selectionResolution.excerpts
       );
       if (selectedHistoryBlock.length > 0) {
@@ -1745,10 +1746,29 @@ export class AIChatQueryEngine {
       historySelectionChangedIds = selectionResolution.changedIds;
       historySelectionRejectedIds = selectionResolution.rejectedIds;
     } catch (err) {
-      // Selection resolution never blocks the turn (§13.3).
+      if (err instanceof RecoverableHistoryError) {
+        // Turn-BLOCKING by contract (§13.3): the selected passages cannot fit
+        // the budget — the user must narrow the selection. Re-throw so the
+        // dispatch fails instead of silently running without the context the
+        // chips already acknowledged.
+        throw err;
+      }
+      // Non-capacity failures never block the turn (§13.3).
       log.error("[ai-chat-v2] queued history-selection resolve failed:", err);
     }
 
+    // Codex P2 (round 3): when persisted image contentParts exist, the
+    // assembler uses THEM (not currentUserMessage) — fold the resolved
+    // history block into the leading text part or the model never sees the
+    // selected passages despite the chips acknowledging acceptance.
+    const contentPartsForAssembly =
+      input.contentParts && selectedHistoryBlock.length > 0
+        ? input.contentParts.map((part, index) =>
+            index === 0 && part.type === "text"
+              ? { ...part, text: assemblyContent }
+              : part
+          )
+        : input.contentParts;
     let messages: OpenAIChatMessage[];
     try {
       const basePrompt =
@@ -1762,7 +1782,7 @@ export class AIChatQueryEngine {
         model: request.model,
         maxTokens: request.maxTokens,
         planState,
-        currentUserContentParts: input.contentParts,
+        currentUserContentParts: contentPartsForAssembly,
       });
       messages = [...assembled.messages];
 
@@ -1796,7 +1816,7 @@ export class AIChatQueryEngine {
                 model: request.model,
                 maxTokens: request.maxTokens,
                 planState,
-                currentUserContentParts: input.contentParts,
+                currentUserContentParts: contentPartsForAssembly,
               });
               messages = [...reassembled.messages];
             }
