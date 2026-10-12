@@ -33,12 +33,16 @@ import type { TaskOutcome } from "@/entityTypes/aiTaskExecutionTypes";
  * enums, and durations. It never selects prompt/argument/recipient/summary
  * columns, so a leak through the snapshot is structurally impossible.
  *
- * Datetime note: `createdAt` is a TypeORM `datetime` (SQLite stores it as a
- * `CURRENT_TIMESTAMP` string, "YYYY-MM-DD HH:MM:SS", UTC); `finalized_at` is
- * written by the model as `new Date().toISOString()` ("YYYY-MM-DDTHH:MM:SS.
- * sssZ"). Both are UTC, but the textual shapes differ — the latency
- * aggregation parses BOTH through `Date.parse` in JS rather than comparing
- * raw strings in SQL, so shape drift cannot corrupt the monitor.
+ * Datetime note: the physical timestamp columns differ by origin — the
+ * AuditableEntity-inherited `createdAt` is a TypeORM `datetime` (SQLite
+ * stores it as a `CURRENT_TIMESTAMP` string, "YYYY-MM-DD HH:MM:SS", UTC,
+ * and the PHYSICAL column name is camelCase `createdAt` because
+ * AuditableEntity declares the property camelCase with no naming
+ * strategy); `finalized_at` is an explicit snake_case property written by
+ * the model as `new Date().toISOString()` ("YYYY-MM-DDTHH:MM:SS.sssZ").
+ * Both are UTC, but the textual shapes differ — the latency aggregation
+ * parses BOTH through `Date.parse` in JS rather than comparing raw strings
+ * in SQL, so shape drift cannot corrupt the monitor.
  */
 
 /** Grouped execution row from the outcome/route/reason histogram query. */
@@ -72,7 +76,8 @@ interface OperationGroupRow {
 /** Minimal finalized-row projection for the JS-side latency pass. */
 interface LatencyRow {
   readonly origin_type: string;
-  readonly created_at: string | Date | null;
+  /** Physical AuditableEntity column — camelCase `createdAt`, not `created_at`. */
+  readonly createdAt: string | Date | null;
   readonly finalized_at: string | Date | null;
 }
 
@@ -106,7 +111,7 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
     // runner.query), and better-sqlite3 itself rejects Date bindings.
     // "YYYY-MM-DD HH:MM:SS.SSS" is the same shape TypeORM escapes Dates
     // to, and it compares lexicographically against both the
-    // CURRENT_TIMESTAMP-written `created_at` ("YYYY-MM-DD HH:MM:SS") and
+    // CURRENT_TIMESTAMP-written `createdAt` ("YYYY-MM-DD HH:MM:SS") and
     // millisecond variants — ISO-derived text is order-preserving.
     const sinceText = toSqliteDatetimeText(new Date(query.since));
 
@@ -121,7 +126,7 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
                 finalized,
                 COUNT(*) AS row_count
            FROM ai_task_execution
-          WHERE created_at >= ?
+          WHERE "createdAt" >= ?
           GROUP BY origin_type, route, task_outcome,
                    outcome_reason_code, finalized`,
         [sinceText]
@@ -146,12 +151,12 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
            FROM (
                   SELECT MIN(execution_id) AS anchor_id, lineage_ledger_id
                     FROM ai_task_execution
-                   WHERE created_at >= ?
+                   WHERE "createdAt" >= ?
                    GROUP BY lineage_ledger_id
                 ) anchor
            JOIN ai_task_execution e
              ON e.execution_id = anchor.anchor_id
-            AND e.created_at >= ?
+            AND e."createdAt" >= ?
            LEFT JOIN ai_task_execution_ledger l
              ON l.ledger_id = e.lineage_ledger_id
           GROUP BY e.origin_type`,
@@ -165,7 +170,7 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
       const operationGroups = (await runner.query(
         `SELECT operation_state, COUNT(*) AS row_count
            FROM ai_task_operation
-          WHERE created_at >= ?
+          WHERE "createdAt" >= ?
           GROUP BY operation_state`,
         [sinceText]
       )) as unknown as OperationGroupRow[];
@@ -175,9 +180,9 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
       // The createdAt/finalized_at shapes differ textually (see class doc),
       // so the subtraction happens in JS through Date.parse, not in SQL.
       const latencyRows = (await runner.query(
-        `SELECT origin_type, created_at, finalized_at
+        `SELECT origin_type, "createdAt", finalized_at
            FROM ai_task_execution
-          WHERE created_at >= ? AND finalized = 1`,
+          WHERE "createdAt" >= ? AND finalized = 1`,
         [sinceText]
       )) as unknown as LatencyRow[];
 
@@ -267,7 +272,7 @@ export function buildOriginCohort(input: {
   consumption.executions = executions;
 
   for (const row of input.latencyRows) {
-    const createdMs = parseTimestamp(row.created_at);
+    const createdMs = parseTimestamp(row.createdAt);
     const finalizedMs = parseTimestamp(row.finalized_at);
     if (createdMs === null || finalizedMs === null) continue;
     const latencyMs = Math.max(0, finalizedMs - createdMs);
@@ -326,7 +331,7 @@ function parseTimestamp(value: string | Date | null): number | null {
  * Render a Date as SQLite datetime TEXT ("YYYY-MM-DD HH:MM:SS.SSS") — the
  * shape TypeORM's `escapeParameters` produces for Date values, and the
  * same order-preserving textual shape as `CURRENT_TIMESTAMP`-written
- * columns so `created_at >= ?` compares correctly.
+ * columns so `"createdAt" >= ?` compares correctly.
  */
 function toSqliteDatetimeText(date: Date): string {
   const pad = (n: number, width = 2): string =>
