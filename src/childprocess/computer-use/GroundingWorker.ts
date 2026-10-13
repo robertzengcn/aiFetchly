@@ -48,10 +48,11 @@ export class GroundingWorkerServer {
         await this.handleGround(message.payload);
         return;
       case "cancel":
+        // Audit F09: cancellation does NOT free the busy slot — the native
+        // run may still be executing. The slot stays occupied until the
+        // worker is terminated (the host kills it within the stop budget)
+        // or the run actually completes and its result is discarded below.
         this.adapter?.cancel(message.requestKey);
-        if (this.inFlight === message.requestKey) {
-          this.inFlight = null;
-        }
         return;
       case "unload":
         await this.handleUnload();
@@ -127,7 +128,7 @@ export class GroundingWorkerServer {
     try {
       const result = await this.adapter.ground(payload);
       if (this.inFlight !== payload.requestKey) {
-        return; // cancelled while running — drop the result
+        return; // superseded — drop the result
       }
       this.inFlight = null;
       const identity = this.adapter.identity(this.loadedProvider);
@@ -143,7 +144,12 @@ export class GroundingWorkerServer {
       };
       this.send({ type: "result", payload: groundingResult });
     } catch (error) {
-      this.inFlight = null;
+      // Audit F09: only clear the busy slot for THIS request's failure; a
+      // completed/superseded request's late error must not free a slot the
+      // host already owns differently.
+      if (this.inFlight === payload.requestKey) {
+        this.inFlight = null;
+      }
       this.send({
         type: "error",
         payload: {

@@ -129,8 +129,15 @@ export function validateGroundRequest(
   if (request.imageBytes.byteLength > 64 * 1024 * 1024) {
     fail("image exceeds the 64 MiB transport cap");
   }
-  if (request.imageWidth <= 0 || request.imageHeight <= 0) {
-    fail("image dimensions must be positive");
+  // Audit F08: NaN/Infinity geometry fails closed — comparisons with NaN
+  // are false, so finite checks must come first.
+  if (
+    !Number.isFinite(request.imageWidth) ||
+    !Number.isFinite(request.imageHeight) ||
+    request.imageWidth <= 0 ||
+    request.imageHeight <= 0
+  ) {
+    fail("image dimensions must be finite and positive");
   }
   if (
     request.imageWidth * request.imageHeight >
@@ -141,6 +148,10 @@ export function validateGroundRequest(
   if (request.crop) {
     const { x, y, width, height } = request.crop;
     if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
       x < 0 ||
       y < 0 ||
       width <= 0 ||
@@ -148,7 +159,7 @@ export function validateGroundRequest(
       x + width > request.imageWidth ||
       y + height > request.imageHeight
     ) {
-      fail("crop rect outside image bounds");
+      fail("crop rect must be finite and inside image bounds");
     }
   }
   if (
@@ -178,6 +189,16 @@ export function validateGroundResult(result: AdapterGroundResult): void {
       !Number.isFinite(candidate.score)
     ) {
       fail("candidate geometry/score must be finite");
+    }
+    if (
+      candidate.regionWidthNormalized !== undefined &&
+      (!Number.isFinite(candidate.regionWidthNormalized) ||
+        candidate.regionWidthNormalized < 0) ||
+      candidate.regionHeightNormalized !== undefined &&
+      (!Number.isFinite(candidate.regionHeightNormalized) ||
+        candidate.regionHeightNormalized < 0)
+    ) {
+      fail("candidate region extents must be finite and non-negative");
     }
     if (candidate.nx < 0 || candidate.nx > 1 || candidate.ny < 0 || candidate.ny > 1) {
       fail("candidate normalized coordinates must lie in [0,1]");

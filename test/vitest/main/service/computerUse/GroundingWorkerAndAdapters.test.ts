@@ -651,13 +651,21 @@ describe("ComputerUseGroundingClient correlation (audit A10)", () => {
     client.cancel("rk-a");
     await expect(a).rejects.toThrow(/cancelled/);
 
-    // Cancel armed no kill (watchdog long); a NEW request may run.
-    const b = client.ground(groundInput("rk-b", 2));
-    await vi0();
-    // The stale worker eventually answers A — B must stay pending…
+    // Audit F09: the client is now QUARANTINED — the cancelled worker may
+    // still be mid-native-run, so B is refused until a fresh load.
+    expect(client.isCancelling).toBe(true);
+    await expect(client.ground(groundInput("rk-b", 2))).rejects.toThrow(
+      /terminating/
+    );
+    // The stale worker eventually answers A — nothing is pending, so the
+    // late reply is discarded (it must not throw or poison state).
     driver.reply(resultMessage("rk-a", 2));
     await vi0();
-    // …and only B's own reply settles B.
+    // After the kill (watchdog or explicit), a fresh worker serves B.
+    client.killNow();
+    await loadFake(client, driver);
+    const b = client.ground(groundInput("rk-b", 2));
+    await vi0();
     driver.reply(resultMessage("rk-b", 2));
     const settled = await b;
     expect(settled.requestKey).toBe("rk-b");
@@ -810,3 +818,73 @@ function resultMessage(requestKey: string, generation: number) {
     },
   };
 }
+
+describe("audit F08/F11 regressions (2026-10-13)", () => {
+  it("F08: a mismatched-identity result never resolves a pending request", async () => {
+    const { worker, driver } = makeFakeWorkerPair();
+    const client = new ComputerUseGroundingClient(() => worker, {
+      replyTimeoutMs: 5_000,
+    });
+    await loadFake(client, driver);
+    const run = client.ground(groundInput("rk-x", 5));
+    await vi0();
+    // Right request key, WRONG generation + observation (audit probe).
+    driver.reply(resultMessage("rk-x", 999));
+    // The mismatch rejected the pending run…
+    await expect(run).rejects.toThrow(/identity or shape/);
+    // …and the client is usable again for a correct reply.
+    const retry = client.ground(groundInput("rk-y", 5));
+    await vi0();
+    driver.reply(resultMessage("rk-y", 5));
+    expect((await retry).requestKey).toBe("rk-y");
+    client.killNow();
+  });
+
+  it("F08: NaN image dimensions and crops fail request validation", () => {
+    expect(() =>
+      validateGroundRequest(
+        validRequest({ imageWidth: Number.NaN, imageHeight: 100 }),
+        CAPS
+      )
+    ).toThrow(GroundingAdapterError);
+    expect(() =>
+      validateGroundRequest(
+        validRequest({
+          crop: { x: Number.NaN, y: 0, width: 10, height: 10 },
+        }),
+        CAPS
+      )
+    ).toThrow(GroundingAdapterError);
+    expect(() =>
+      validateGroundRequest(
+        validRequest({
+          crop: { x: Infinity, y: 0, width: 10, height: 10 },
+        }),
+        CAPS
+      )
+    ).toThrow(GroundingAdapterError);
+  });
+
+  it("F08: inherited registry keys never mint adapters", () => {
+    expect(createAdapter("toString")).toBeNull();
+    expect(createAdapter("constructor")).toBeNull();
+    expect(isRegisteredAdapter("hasOwnProperty")).toBe(false);
+  });
+
+  it("F11: two equal separated peaks decode to AMBIGUOUS, not a midpoint", () => {
+    // The audit probe: grid [1,0,0,1] dims [1,4] previously produced a
+    // midpoint (0.5) with invented scores 0.5/0.25 and "resolved". The
+    // peak-decoding adapter now emits the two real peaks; the calibrated
+    // classifier must call them ambiguous.
+    const decoded = [
+      { nx: 0.125, ny: 0.5, score: 1.0, regionWidthNormalized: 0.25, regionHeightNormalized: 1 },
+      { nx: 0.875, ny: 0.5, score: 1.0, regionWidthNormalized: 0.25, regionHeightNormalized: 1 },
+    ];
+    expect(classifyGrounding(decoded).outcome).toBe("target_ambiguous");
+  });
+
+  it("F11: a zero-signal grid classifies as target_not_found (no 0.5 fallback)", () => {
+    const decoded = [{ nx: 0.5, ny: 0.5, score: 0 }]; // zero-signal decode
+    expect(classifyGrounding(decoded).outcome).toBe("target_not_found");
+  });
+});

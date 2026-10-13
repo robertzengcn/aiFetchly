@@ -51,6 +51,9 @@ export interface GroundingClientOptions {
 interface PendingGround {
   readonly requestKey: string;
   readonly workerId: number;
+  /** Identity correlation (audit F08): replies must match ALL of these. */
+  readonly generation: number;
+  readonly observationId: string;
   resolve: (value: GroundingResult) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -93,6 +96,12 @@ export class ComputerUseGroundingClient {
   private readonly cancelWatchdogMs: number;
   /** Results for generations below this are discarded silently (§5.6). */
   private minimumGeneration = 0;
+  /**
+   * Audit F09: after a cancel the worker may still be mid-native-run; the
+   * client is quarantined until the watchdog kills that worker and the
+   * caller loads a fresh one, so no second request can overlap the old run.
+   */
+  private cancelling = false;
 
   constructor(
     private readonly forkWorker: GroundingWorkerFactory,
@@ -109,6 +118,11 @@ export class ComputerUseGroundingClient {
     }
   }
 
+  /** True while a cancelled run's worker is being torn down (audit F09). */
+  get isCancelling(): boolean {
+    return this.cancelling;
+  }
+
   /** Load an adapter in the worker with the leased version roots. */
   async load(
     request: GroundingWorkerLoadRequest
@@ -119,6 +133,7 @@ export class ComputerUseGroundingClient {
     const worker = this.forkWorker();
     const workerId = ++this.workerId;
     this.worker = worker;
+    this.cancelling = false; // fresh worker (audit F09)
     worker.on("message", (raw) => this.handleMessage(raw, workerId));
     worker.once("exit", () => this.handleExit(workerId));
 
@@ -150,6 +165,13 @@ export class ComputerUseGroundingClient {
     if (!worker) {
       throw new ComputerUseError("model_not_ready", "worker is not loaded");
     }
+    if (this.cancelling) {
+      // Audit F09: the previous run may still hold the native engine.
+      throw new ComputerUseError(
+        "model_not_ready",
+        "a cancelled run is still terminating; load a fresh worker first"
+      );
+    }
     if (this.groundReplies.size > 0) {
       // Queue depth 1 (design §5.6): one run at a time, regardless of key.
       throw new ComputerUseError(
@@ -158,7 +180,12 @@ export class ComputerUseGroundingClient {
       );
     }
     const workerId = this.workerId;
-    const reply = this.awaitGroundReply(request.requestKey, workerId);
+    const reply = this.awaitGroundReply(
+      request.requestKey,
+      workerId,
+      request.generation,
+      request.observationId
+    );
     this.groundReplies.set(request.requestKey, reply);
     // Structured-clone copy (Electron postMessage transfer lists accept
     // MessagePortMain only — audit A09).
@@ -192,10 +219,10 @@ export class ComputerUseGroundingClient {
     clearTimeout(reply.timer);
     if (reply.watchdog) clearTimeout(reply.watchdog);
     reply.reject(new ComputerUseError("execution_uncertain", "grounding cancelled"));
-    // Watchdog: the worker's cooperative cancel may not stop a native ONNX
-    // run; kill the process when the stop budget expires (design §5.6).
-    // Only the worker the run belonged to may be killed — a reloaded
-    // successor must survive (audit A10).
+    // Audit F09: quarantine the client — no new native run may start on a
+    // worker whose previous run may still be executing. The watchdog kills
+    // that worker; only an explicit load() of a fresh worker unquarantines.
+    this.cancelling = true;
     const cancelledWorkerId = reply.workerId;
     reply.watchdog = setTimeout(() => {
       if (this.workerId === cancelledWorkerId) {
@@ -258,6 +285,27 @@ export class ComputerUseGroundingClient {
         const reply = this.groundReplies.get(message.payload.requestKey);
         if (!reply || reply.workerId !== workerId) {
           return; // late reply for a finished/cancelled request: discard
+        }
+        // Audit F08: identity correlation — a result must match the
+        // pending request's generation AND observation, and be structurally
+        // valid, before it can resolve anything.
+        if (
+          message.payload.generation !== reply.generation ||
+          message.payload.observationId !== reply.observationId ||
+          !Array.isArray(message.payload.candidates) ||
+          message.payload.candidates.length === 0 ||
+          !isValidTransform(message.payload.transform)
+        ) {
+          this.groundReplies.delete(message.payload.requestKey);
+          clearTimeout(reply.timer);
+          if (reply.watchdog) clearTimeout(reply.watchdog);
+          reply.reject(
+            new ComputerUseError(
+              "unknown_error",
+              "grounding result failed identity or shape validation"
+            )
+          );
+          return;
         }
         this.groundReplies.delete(message.payload.requestKey);
         clearTimeout(reply.timer);
@@ -363,7 +411,12 @@ export class ComputerUseGroundingClient {
     return { workerId, resolve, reject, timer, promise };
   }
 
-  private awaitGroundReply(requestKey: string, workerId: number): PendingGround {
+  private awaitGroundReply(
+    requestKey: string,
+    workerId: number,
+    generation: number,
+    observationId: string
+  ): PendingGround {
     let resolve!: (value: GroundingResult) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<GroundingResult>((res, rej) => {
@@ -379,6 +432,8 @@ export class ComputerUseGroundingClient {
     return {
       requestKey,
       workerId,
+      generation,
+      observationId,
       resolve,
       reject,
       timer,
@@ -406,18 +461,56 @@ export class ComputerUseGroundingClient {
 function parseOutboundMessage(raw: unknown): GroundingWorkerOutboundMessage | null {
   if (typeof raw !== "object" || raw === null) return null;
   const record = raw as Record<string, unknown>;
-  if (record.type === "loaded" && typeof record.payload === "object" && record.payload !== null) {
-    return raw as GroundingWorkerOutboundMessage;
-  }
-  if (record.type === "unloaded") return raw as GroundingWorkerOutboundMessage;
   if (
-    (record.type === "result" || record.type === "error") &&
+    record.type === "loaded" &&
     typeof record.payload === "object" &&
-    record.payload !== null
+    record.payload !== null &&
+    typeof (record.payload as { provider?: unknown }).provider === "string"
   ) {
     return raw as GroundingWorkerOutboundMessage;
   }
+  if (record.type === "unloaded") return raw as GroundingWorkerOutboundMessage;
+  if (record.type === "result") {
+    const payload = record.payload as Record<string, unknown> | null;
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof payload.requestKey === "string" &&
+      typeof payload.observationId === "string" &&
+      typeof payload.generation === "number" &&
+      Array.isArray(payload.candidates) &&
+      typeof payload.transform === "object" &&
+      payload.transform !== null
+    ) {
+      return raw as GroundingWorkerOutboundMessage;
+    }
+    return null;
+  }
+  if (record.type === "error") {
+    const payload = record.payload as Record<string, unknown> | null;
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof payload.requestKey === "string" &&
+      typeof payload.message === "string"
+    ) {
+      return raw as GroundingWorkerOutboundMessage;
+    }
+    return null;
+  }
   return null;
+}
+
+/** Structural transform validation (audit F08). */
+function isValidTransform(transform: unknown): boolean {
+  if (typeof transform !== "object" || transform === null) return false;
+  const t = transform as Record<string, unknown>;
+  return (
+    Number.isFinite(t.modelWidth) && Number.isFinite(t.modelHeight) &&
+    (t.modelWidth as number) > 0 && (t.modelHeight as number) > 0 &&
+    Number.isFinite(t.scaleX) && Number.isFinite(t.scaleY) &&
+    (t.scaleX as number) > 0 && (t.scaleY as number) > 0
+  );
 }
 
 function normalizeSpawnError(error: unknown): ComputerUseError {

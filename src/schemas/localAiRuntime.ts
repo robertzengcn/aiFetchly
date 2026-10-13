@@ -649,6 +649,11 @@ export const groundingModelManifestSchema = z
     calibrationRevision: z.string().min(1).max(120),
     files: z.array(modelPackageFileSchema).min(1),
     license: modelLicenseSchema,
+    // Audit F10: the producer graph/tokenizer contract the host adapter
+    // consumes (graph input names, pointer/attention output tensors).
+    graphInputs: z.record(z.string(), z.string()).optional(),
+    pointerOutput: z.string().min(1).optional(),
+    attentionOutput: z.string().min(1).optional(),
   })
   .strict();
 

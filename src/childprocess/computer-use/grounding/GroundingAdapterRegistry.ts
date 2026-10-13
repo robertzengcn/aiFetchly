@@ -43,11 +43,14 @@ export function capabilitiesOf(
 
 /** Instantiate a registered adapter, or null for an unknown id. */
 export function createAdapter(adapterId: string): GroundingModelAdapter | null {
+  // Audit F08: own-property lookup — an inherited key (e.g. "toString" or
+  // "constructor" from the Object prototype) must never mint an adapter.
+  if (!Object.prototype.hasOwnProperty.call(REGISTRY, adapterId)) return null;
   const constructor = REGISTRY[adapterId as GroundingAdapterId];
   return constructor ? new constructor() : null;
 }
 
-/** Whether this app build knows the adapter at all. */
+/** Whether this app build knows the adapter at all (audit F08: own-property). */
 export function isRegisteredAdapter(adapterId: string): boolean {
-  return adapterId in REGISTRY;
+  return Object.prototype.hasOwnProperty.call(REGISTRY, adapterId);
 }

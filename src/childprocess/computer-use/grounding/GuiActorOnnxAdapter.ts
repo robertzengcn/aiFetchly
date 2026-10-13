@@ -288,10 +288,14 @@ export class GuiActorOnnxAdapter implements GroundingModelAdapter {
   }
 
   /**
-   * Decode pointer-head outputs into ranked candidates. The manifest names
-   * the pointer tensor; its decoded activation grid (merged-patch
-   * granularity, §5.8) is reduced to a weighted centroid plus the runner-up
-   * region. Scores are relative activations — never probabilities.
+   * Decode pointer-head outputs into candidates from DETECTED PEAKS
+   * (audit F11): never a whole-grid centroid and never a manufactured
+   * runner-up. The top local maxima become candidates with their real
+   * activation values; an (optional) second separated peak carries its own
+   * score so the calibrated ambiguity check (§5.7) can classify two
+   * equally strong controls as `target_ambiguous`. A zero/negative signal
+   * grid decodes to a zero-score top candidate, which the absence
+   * threshold turns into `target_not_found` — no artificial 0.5 fallback.
    */
   private decodePointerOutputs(
     outputs: Record<string, unknown>
@@ -314,53 +318,84 @@ export class GuiActorOnnxAdapter implements GroundingModelAdapter {
       });
     }
     const [gridH, gridW] = dims as [number, number];
-    let sum = 0;
-    let sx = 0;
-    let sy = 0;
-    let max = -Infinity;
-    let maxX = 0;
-    let maxY = 0;
-    for (let y = 0; y < gridH; y++) {
-      for (let x = 0; x < gridW; x++) {
-        const value = Number(data[y * gridW + x]) || 0;
-        const clamped = Math.max(0, value);
-        sum += clamped;
-        sx += clamped * (x + 0.5);
-        sy += clamped * (y + 0.5);
-        if (clamped > max) {
-          max = clamped;
-          maxX = x;
-          maxY = y;
-        }
-      }
-    }
-    if (sum <= 0 || !Number.isFinite(sum)) {
+    if (!Number.isFinite(gridH) || !Number.isFinite(gridW) || gridH <= 0 || gridW <= 0) {
       throw new GroundingAdapterError({
         code: "output_invalid",
-        message: "pointer activation grid carried no signal",
+        message: "pointer tensor dimensions must be finite and positive",
       });
     }
-    const centroidX = sx / sum / gridW;
-    const centroidY = sy / sum / gridH;
-    const topScore = Math.min(1, max / (sum / (gridW * gridH)) / (gridW * gridH));
+    // Collect cells with positive signal.
+    const cells: Array<{ x: number; y: number; value: number }> = [];
+    let max = -Infinity;
+    for (let y = 0; y < gridH; y++) {
+      for (let x = 0; x < gridW; x++) {
+        const raw = Number(data[y * gridW + x]);
+        if (!Number.isFinite(raw)) {
+          throw new GroundingAdapterError({
+            code: "output_invalid",
+            message: "pointer activation grid carries a non-finite value",
+          });
+        }
+        if (raw > 0) cells.push({ x, y, value: raw });
+        if (raw > max) max = raw;
+      }
+    }
+    if (cells.length === 0 || !Number.isFinite(max) || max <= 0) {
+      // No positive signal at all: the absence threshold classifies this
+      // as target_not_found — a typed outcome, never an invented peak.
+      return [{ nx: 0.5, ny: 0.5, score: 0 }];
+    }
+    // Local-maximum peaks (strictly greater than 4-neighbours).
+    const at = (x: number, y: number): number =>
+      x < 0 || y < 0 || x >= gridW || y >= gridH
+        ? 0
+        : Number(data[y * gridW + x]) || 0;
+    const peaks = cells
+      .filter(
+        (c) =>
+          c.value >= at(c.x - 1, c.y) &&
+          c.value >= at(c.x + 1, c.y) &&
+          c.value >= at(c.x, c.y - 1) &&
+          c.value >= at(c.x, c.y + 1)
+      )
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 4); // candidate cap; classifyGrounding keeps the meaning
+    const top = peaks[0];
     const candidates: GroundingCandidate[] = [
       {
-        nx: Math.min(1, Math.max(0, centroidX)),
-        ny: Math.min(1, Math.max(0, centroidY)),
-        score: Number(topScore.toFixed(6)) || 0.5,
-        regionWidthNormalized: 1 / gridW,
-        regionHeightNormalized: 1 / gridH,
-      },
-      {
-        // Runner-up: the peak cell when it differs from the centroid.
-        nx: (maxX + 0.5) / gridW,
-        ny: (maxY + 0.5) / gridH,
-        score: Number((topScore * 0.5).toFixed(6)),
+        nx: (top.x + 0.5) / gridW,
+        ny: (top.y + 0.5) / gridH,
+        score: normalizeScore(top.value, max),
         regionWidthNormalized: 1 / gridW,
         regionHeightNormalized: 1 / gridH,
       },
     ];
+    // Real competing peaks only: separated from the top peak and carrying
+    // their own activation (audit F11 — no fabricated half-score runner-up).
+    for (const peak of peaks.slice(1)) {
+      const separated =
+        Math.abs(peak.x - top.x) > 1 || Math.abs(peak.y - top.y) > 1;
+      if (separated) {
+        candidates.push({
+          nx: (peak.x + 0.5) / gridW,
+          ny: (peak.y + 0.5) / gridH,
+          score: normalizeScore(peak.value, max),
+          regionWidthNormalized: 1 / gridW,
+          regionHeightNormalized: 1 / gridH,
+        });
+        break; // one runner-up is enough for the ambiguity classification
+      }
+    }
     return candidates;
   }
 }
 
+/**
+ * Normalize a raw activation against the grid maximum into a bounded
+ * relative score in [0,1] (scores are ranking metadata, never calibrated
+ * probabilities — §5.7).
+ */
+function normalizeScore(value: number, max: number): number {
+  const normalized = max > 0 ? value / max : 0;
+  return Number(Math.min(1, Math.max(0, normalized)).toFixed(6));
+}
