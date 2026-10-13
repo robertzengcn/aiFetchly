@@ -1767,13 +1767,17 @@ async function applyCommandDisposition(
     // onAccepted rides INSIDE the send options so an image-dialog park
     // keeps the draft and the replayed send clears it exactly once
     // (Codex P2; no double-fire with the branch-level acceptance).
-    await performOrdinarySend(disposition.prompt, [], {
-      fromVoice: options?.fromVoice,
-      pastedContents: options?.pastedContents,
-      modeOverride: disposition.mode,
-      onAccepted: options?.onAccepted,
-      targetConversationId: context?.commandConversationId,
-    });
+    await performOrdinarySend(
+      disposition.prompt,
+      [],
+      {
+        fromVoice: options?.fromVoice,
+        pastedContents: options?.pastedContents,
+        modeOverride: disposition.mode,
+        onAccepted: options?.onAccepted,
+      },
+      { targetConversationId: context?.commandConversationId }
+    );
     return;
   }
   if (disposition.kind === "needs_scheduled_approval") {

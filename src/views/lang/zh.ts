@@ -3575,6 +3575,7 @@ export default {
       artifactCreated: "HTML 报告已生成 — 可在“产物”中打开",
       openArtifact: "打开",
       imagesGenerated: "已生成图片",
+      imagesGeneratedCount: "已生成 {count} 张图片",
       filesChanged: "文件已更改 — 见“活动”",
       permissionNeeded: "需要权限决定",
       structuredResult: "结构化结果 — 详情见“活动”",

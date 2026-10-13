@@ -57,6 +57,7 @@
         v-else-if="item.kind === 'execution-group'"
         :group="item.group"
         @reopen-artifact="emit('reopen-artifact', $event)"
+        @use-generated-image="(ref) => emit('use-generated-image', ref)"
       />
 
       <!-- Legacy unpaired tool rows: compact receipts. -->
@@ -75,6 +76,8 @@
           (msg, payload) => emit('grant-permission', msg, payload)
         "
         @deny-permission="(msg) => emit('deny-permission', msg)"
+        @stop-batch="emit('stop-batch')"
+        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
       />
 
       <!-- Outbound-email batch (§18): the review/approve/send card IS the
@@ -93,6 +96,21 @@
         v-else-if="item.kind === 'skill-install'"
         :message="item.message"
         :show-reasoning="false"
+        @stop-batch="emit('stop-batch')"
+        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+      />
+
+      <!-- Generated-image batch (T3/D2, FR-IMG-010..012): live progress,
+           Stop (keeps completed outputs), and Retry-failed — mounted through
+           AiChatV2Message so the exact batch-card branch renders with its
+           events, never a collapsed execution receipt. -->
+      <AiChatV2Message
+        v-else-if="item.kind === 'batch-card'"
+        :message="item.message"
+        :show-reasoning="false"
+        :status="streamStatusForMessage(item.message)"
+        @stop-batch="emit('stop-batch')"
+        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
       />
 
       <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
@@ -243,7 +261,8 @@ type ProjectedItem =
   | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView }
   | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
   | { kind: "outbound-batch"; key: string; message: ChatV2MessageView }
-  | { kind: "skill-install"; key: string; message: ChatV2MessageView };
+  | { kind: "skill-install"; key: string; message: ChatV2MessageView }
+  | { kind: "batch-card"; key: string; message: ChatV2MessageView };
 
 /**
  * Project the raw message list into the workspace transcript:
@@ -331,6 +350,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             message: messages[i],
           });
         }
+        // T3/D2 (audit): generated-image batch cards carry live progress,
+        // Stop, and Retry — they must not collapse into a generic receipt.
+        if (isBatchToolCard(messages[i])) {
+          result.push({
+            kind: "batch-card",
+            key: `batch-card-${messages[i].id}`,
+            message: messages[i],
+          });
+        }
         // Skip all consecutive tool messages.
         i += 1;
         while (
@@ -362,6 +390,13 @@ const projectedItems = computed<ProjectedItem[]>(() => {
               message: messages[i],
             });
           }
+          if (isBatchToolCard(messages[i])) {
+            result.push({
+              kind: "batch-card",
+              key: `batch-card-${messages[i].id}`,
+              message: messages[i],
+            });
+          }
           i += 1;
         }
       } else if (isPermissionPrompt(msg)) {
@@ -379,6 +414,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         result.push({
           kind: "skill-install",
           key: `skill-install-${msg.id}`,
+          message: msg,
+        });
+        i += 1;
+      } else if (isBatchToolCard(msg)) {
+        // T3/D2: an unpaired (live or historical) batch card — progress,
+        // Stop, and Retry stay interactive, never a collapsed receipt.
+        result.push({
+          kind: "batch-card",
+          key: `batch-card-${msg.id}`,
           message: msg,
         });
         i += 1;
@@ -484,6 +528,20 @@ function streamStatusForMessage(
     return props.streamStatus;
   }
   return undefined;
+}
+
+/**
+ * T3/D2 (audit): a process_artifact_batch call/result row — AiChatV2Message
+ * renders live progress, Stop, and Retry-failed for exactly this tool name;
+ * the workspace must surface it outside collapsed execution receipts
+ * (FR-IMG-010..012, presentation §13.2).
+ */
+function isBatchToolCard(message: ChatV2MessageView): boolean {
+  return (
+    (message.messageType === ("tool_call" as MessageType) ||
+      message.messageType === ("tool_result" as MessageType)) &&
+    String(message.metadata?.toolName || "") === "process_artifact_batch"
+  );
 }
 
 /**

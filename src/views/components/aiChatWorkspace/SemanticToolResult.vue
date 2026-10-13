@@ -22,7 +22,41 @@
     </template>
     <template v-else-if="outputKind === 'images'">
       <v-icon icon="mdi-image-multiple-outline" size="14" aria-hidden="true" />
-      {{ t('workspaceChat.execution.imagesGenerated') || 'Images generated' }}
+      {{
+        t('workspaceChat.execution.imagesGeneratedCount', {
+          count: images?.length ?? 0,
+        }) || `${images?.length ?? 0} images generated`
+      }}
+      <!-- D8 (audit §13.2): thumbnails with the allowed tile actions — not a
+           bare count label. Events forward the same reference contract the
+           assistant-message tiles use; the owning surface resolves them. -->
+      <span class="image-tiles">
+        <span
+          v-for="(image, index) in boundedImages"
+          :key="`${image.file_name ?? 'img'}-${index}`"
+          class="image-tile"
+        >
+          <img
+            v-if="image.url"
+            :src="image.url"
+            :alt="image.file_name || `Generated image ${index + 1}`"
+            loading="lazy"
+          />
+          <v-icon v-else icon="mdi-image-outline" size="14" aria-hidden="true" />
+        </span>
+      </span>
+      <button
+        v-for="(image, index) in boundedImages"
+        :key="`use-${index}`"
+        type="button"
+        class="image-action"
+        :aria-label="
+          t('aiChatV2.generatedImageRefs.useAsReference') || 'Use as reference'
+        "
+        @click="emit('use-image', index)"
+      >
+        <v-icon icon="mdi-image-plus" size="12" aria-hidden="true" />
+      </button>
     </template>
     <template v-else-if="outputKind === 'error'">
       <span class="error-summary">{{ displaySummary }}</span>
@@ -46,6 +80,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolOutputKind } from "./toolExecutionProjection";
+import type { ChatV2GeneratedImage } from "@/entityTypes/aiChatV2Types";
 
 const props = defineProps<{
   outputKind: ToolOutputKind;
@@ -53,16 +88,23 @@ const props = defineProps<{
   isError: boolean;
   /** FR-030: persisted artifact ID for reopen from history. */
   artifactId?: string;
+  /** D8: image tiles for the images kind. */
+  images?: readonly ChatV2GeneratedImage[];
 }>();
 
 const emit = defineEmits<{
   /** FR-030: reopen a persisted artifact in the inspector. */
   (e: "reopen-artifact", artifactId: string): void;
+  /** D8: use tile N as a reference (index into the bounded tile list). */
+  (e: "use-image", imageIndex: number): void;
 }>();
 
 const { t } = useI18n();
 
 const displaySummary = computed(() => props.summary ?? "");
+
+/** Bounded tile list — the row is a compact receipt, not a gallery. */
+const boundedImages = computed(() => (props.images ?? []).slice(0, 4));
 </script>
 
 <style scoped>
@@ -104,6 +146,50 @@ const displaySummary = computed(() => props.summary ?? "");
 }
 
 .artifact-reopen:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+
+.image-tiles {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.image-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.image-tile img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: cover;
+}
+
+.image-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+}
+
+.image-action:hover {
+  background: rgba(var(--v-theme-primary), 0.12);
+}
+
+.image-action:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 1px;
 }

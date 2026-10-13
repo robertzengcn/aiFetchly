@@ -1,5 +1,5 @@
 import { MessageType } from "@/entityTypes/commonType";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2GeneratedImage, ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
 
 /**
@@ -43,6 +43,10 @@ export interface ToolExecutionView {
   readonly expectedCount?: number;
   readonly summary?: string;
   readonly outputKind: ToolOutputKind;
+  /** D8: image tiles for the images kind (thumbnails + actions). */
+  readonly images?: readonly ChatV2GeneratedImage[];
+  /** D8: the tool_result message the tiles belong to (reference target). */
+  readonly sourceMessageId?: string | null;
   readonly startedAt?: string;
   readonly finishedAt?: string;
   readonly durationMs?: number;
@@ -104,6 +108,7 @@ function classifyOutput(message: ChatV2MessageView): {
   kind: ToolOutputKind;
   summary?: string;
   artifactId?: string;
+  images?: ChatV2GeneratedImage[];
 } {
   const metadata = message.metadata;
   // FR-047: files (write_file/edit_file/list_files results with file changes)
@@ -133,7 +138,12 @@ function classifyOutput(message: ChatV2MessageView): {
     };
   }
   if (metadata?.generatedImages && metadata.generatedImages.length > 0) {
-    return { kind: "images" };
+    // D8 (audit §13.2): the images row carries the tile metadata so the
+    // semantic surface can render thumbnails + actions, not a count label.
+    return {
+      kind: "images" as const,
+      images: metadata.generatedImages,
+    };
   }
   const summary =
     metadata?.toolResultSummary ?? metadata?.summary ?? message.content;
@@ -226,6 +236,8 @@ export function buildToolExecutionGroups(
             outputKind: classification.kind,
             isError: classification.kind === "error",
             artifactId: classification.artifactId,
+            images: classification.images,
+            sourceMessageId: message.id,
             finishedAt,
             durationMs:
               Number.isNaN(startedMs) || Number.isNaN(finishedMs)
@@ -247,6 +259,8 @@ export function buildToolExecutionGroups(
             summary: classification.summary,
             outputKind: classification.kind,
             isError: classification.kind === "error",
+            images: classification.images,
+            sourceMessageId: message.id,
             finishedAt,
             isLegacyUnpaired: true,
             permissionResumed: metadata?.permissionResumed === true,

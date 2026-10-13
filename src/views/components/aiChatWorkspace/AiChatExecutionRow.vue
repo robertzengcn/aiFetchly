@@ -18,7 +18,20 @@
         :summary="execution.summary"
         :is-error="execution.isError"
         :artifact-id="execution.artifactId"
+        :images="execution.images"
         @reopen-artifact="$emit('reopen-artifact', $event)"
+        @use-image="
+          (index: number) =>
+            $emit(
+              'use-generated-image',
+              execution.sourceMessageId
+                ? {
+                    messageId: execution.sourceMessageId,
+                    imageIndex: index,
+                  }
+                : null
+            )
+        "
       />
     </span>
     <span class="row-meta">
@@ -44,6 +57,15 @@ import { conversationStatusVisual, type ConversationStatusVisual } from "./works
 
 const emit = defineEmits<{
   (e: 'reopen-artifact', artifactId: string): void;
+  /**
+   * D8: the images semantic row's Use-as-reference action, resolved to the
+   * owning message + tile index reference (null when the row has no source
+   * message identity — the parent ignores it).
+   */
+  (
+    e: 'use-generated-image',
+    reference: { messageId: string; imageIndex: number } | null
+  ): void;
 }>();
 void emit;
 

@@ -3706,6 +3706,7 @@ export default {
       artifactCreated: "HTML レポートを作成しました — アーティファクトで開く",
       openArtifact: "開く",
       imagesGenerated: "画像を生成しました",
+      imagesGeneratedCount: "{count} 枚の画像を生成しました",
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
       structuredResult: "構造化された結果 — 詳細はアクティビティ",

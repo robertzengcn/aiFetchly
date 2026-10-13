@@ -3750,6 +3750,7 @@ export default {
       artifactCreated: "HTML report created — open it in Artifacts",
       openArtifact: "Open",
       imagesGenerated: "Images generated",
+      imagesGeneratedCount: "{count} images generated",
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
       structuredResult: "Structured result — see details in Activity",

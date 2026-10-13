@@ -28,7 +28,7 @@
     </button>
     <ul v-if="expanded" class="execution-rows">
       <li v-for="execution in group.executions" :key="execution.key">
-        <AiChatExecutionRow :execution="execution" :with-details="withDetails" @reopen-artifact="$emit('reopen-artifact', $event)" />
+        <AiChatExecutionRow :execution="execution" :with-details="withDetails" @reopen-artifact="$emit('reopen-artifact', $event)" @use-generated-image="(ref) => ref && $emit('use-generated-image', ref)" />
       </li>
     </ul>
   </div>
@@ -42,6 +42,11 @@ import AiChatExecutionRow from "./AiChatExecutionRow.vue";
 
 const emit = defineEmits<{
   (e: 'reopen-artifact', artifactId: string): void;
+  /** D8: images row Use-as-reference, forwarded from the execution row. */
+  (
+    e: 'use-generated-image',
+    reference: { messageId: string; imageIndex: number }
+  ): void;
 }>();
 void emit;
 

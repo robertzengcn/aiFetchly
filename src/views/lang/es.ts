@@ -3784,6 +3784,7 @@ export default {
       artifactCreated: "Informe HTML creado — ábrelo en Artefactos",
       openArtifact: "Abrir",
       imagesGenerated: "Imágenes generadas",
+      imagesGeneratedCount: "{count} imágenes generadas",
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
       structuredResult: "Resultado estructurado — detalles en Actividad",

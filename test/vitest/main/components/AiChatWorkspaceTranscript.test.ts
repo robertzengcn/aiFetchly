@@ -16,6 +16,13 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          progressSummary: "{completed} of {requested} completed",
+          retryFailed: "Retry failed items",
+          stopBatch: "Stop batch",
+          errors: {
+            generated_image_batch_partial: "Some images failed",
+            generated_image_edit_failed: "Edit failed",
+          },
         },
       },
       workspaceChat: {
@@ -427,6 +434,99 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(
       wrapper.find('[data-testid="ai-chat-permission-deny"]').exists()
     ).toBe(true);
+  });
+
+  /**
+   * T3/D2 (audit): a REAL generated-image batch tool_result renders its
+   * interactive card in the DOM — progress counts, Retry-failed with only
+   * the failed references — and the events reach the transcript boundary.
+   * Stop lives on the tool_call card while executing.
+   */
+  it("T3/D2: a batch tool_result card renders progress + Retry in the DOM and emits the retry contract", async () => {
+    const messages = [
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-batch",
+        toolName: "process_artifact_batch",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-batch",
+        toolName: "process_artifact_batch",
+        toolResult: {
+          status: "partial",
+          requestedCount: 3,
+          completedCount: 2,
+          concurrency: 2,
+          instruction: "sharpen all the logos",
+          items: [
+            { status: "completed" },
+            {
+              status: "failed",
+              errorCode: "generated_image_edit_failed",
+              input: {
+                kind: "generated_image",
+                reference: { messageId: "m-img", imageIndex: 1 },
+              },
+            },
+            { status: "completed" },
+          ],
+        },
+        toolResultStatus: "success",
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The batch card renders OUTSIDE the collapsed group (its own item kind).
+    const batchCards = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(batchCards.length).toBeGreaterThanOrEqual(1);
+    // Progress is visible in the DOM.
+    const text = wrapper.text();
+    expect(text).toContain("2 of 3");
+    // Retry-failed button exists in the DOM (not just an event contract).
+    const retryButtons = wrapper.findAll("button.v2-message__batch-retry");
+    expect(retryButtons.length).toBe(1);
+
+    // Clicking retry emits ONLY the failed reference with the instruction.
+    await retryButtons[0].trigger("click");
+    const retryEvents = wrapper.emitted("retry-generated-image-batch");
+    expect(retryEvents).toHaveLength(1);
+    expect(retryEvents?.[0]?.[0]).toEqual({
+      references: [{ messageId: "m-img", imageIndex: 1 }],
+      instruction: "sharpen all the logos",
+    });
+  });
+
+  it("T3/D2: an executing batch tool_call exposes Stop in the DOM", async () => {
+    const messages = [
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-batch-live",
+        toolName: "process_artifact_batch",
+        toolProgress: {
+          phase: "running",
+          progress: 0.4,
+          updatedAt: 123,
+          partialCount: 2,
+          expectedCount: 5,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "streaming",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const stopButtons = wrapper.findAll("button.v2-message__batch-stop");
+    expect(stopButtons.length).toBe(1);
+    await stopButtons[0].trigger("click");
+    expect(wrapper.emitted("stop-batch")).toHaveLength(1);
   });
 
   it("§18: outbound batch result paired in a group surfaces the interactive review card", async () => {

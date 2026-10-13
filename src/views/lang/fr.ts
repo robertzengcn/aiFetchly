@@ -3771,6 +3771,7 @@ export default {
       artifactCreated: "Rapport HTML créé — ouvrez-le dans Artefacts",
       openArtifact: "Ouvrir",
       imagesGenerated: "Images générées",
+      imagesGeneratedCount: "{count} images générées",
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
       structuredResult: "Résultat structuré — détails dans Activité",
