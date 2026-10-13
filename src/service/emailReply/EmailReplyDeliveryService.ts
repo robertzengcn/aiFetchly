@@ -101,6 +101,18 @@ export interface BoundMailbox {
 }
 
 /**
+ * R14: TTL expiry for a token-resolved approval record. Mirrors the expiry
+ * rule in `EmailReplyApprovalModel.findActiveByTokenHash`; kept local because
+ * the delivery path now resolves the record consumed-inclusively and gates
+ * new work itself.
+ */
+function isApprovalExpired(approval: { expiresAt: Date | null }): boolean {
+  return (
+    approval.expiresAt !== null && approval.expiresAt.getTime() < Date.now()
+  );
+}
+
+/**
  * Idempotent approved-send orchestrator (technical design §15, FR-017/018/019,
  * NFR-001). SMTP is outside DB transactions (AD-007): the system commits a
  * `sending` claim + attempt + pre-submit audit BEFORE network submission, then
@@ -219,9 +231,18 @@ export class EmailReplyDeliveryService {
     // boundary. Distinct across two invocations for the same message; all
     // audit events and the returned outcome for THIS invocation carry it.
     const requestCorrelationId = newRequestCorrelationId();
-    // 1. Resolve the opaque one-time approval token to a trusted approval.
+    // 1. Resolve the opaque one-time approval token to a trusted approval
+    //    record — consumed-inclusive (R14). `finalizeSendOutcome` consumes the
+    //    approval (sets invalidatedAt) for EVERY terminal outcome, so a replay
+    //    of a finalized sent/delivery_unknown attempt must still resolve the
+    //    record to reach the B04 idempotency lookup below; the active-only
+    //    filter would refuse before it. A record that resolves proves the
+    //    token existed — it does NOT authorize new work: the active/expiry
+    //    gate runs AFTER the idempotency replay check (consumed token + exact
+    //    existing attempt → already_processed; consumed/expired token without
+    //    an exact attempt → the same unauthorized refusal as before).
     const tokenHash = hashApprovalToken(input.approvalToken);
-    const approval = await this.approvalModule.findActiveByTokenHash(tokenHash);
+    const approval = await this.approvalModule.findByTokenHash(tokenHash);
     if (!approval) {
       throw new Error(
         "Send rejected: approval token is invalid, expired, or already used"
@@ -362,6 +383,20 @@ export class EmailReplyDeliveryService {
         attemptId: existing.id,
         requestCorrelationId,
       };
+    }
+
+    // R14 active/expiry gate — AFTER the idempotency replay check. The token
+    // record resolved at step 1 may be consumed (finalize) or invalidated (an
+    // edit) or expired; that is only acceptable when the lookup above already
+    // recognized the exact existing attempt. Reaching here with a non-active
+    // token means NEW work was requested under a spent/expired/invalidated
+    // token: refuse exactly as before. (An invalidated-but-unconsumed token
+    // also fails the binding checks above when the draft moved on — this gate
+    // keeps the standalone unauthorized error for the no-attempt case.)
+    if (approval.invalidatedAt || isApprovalExpired(approval)) {
+      throw new Error(
+        "Send rejected: approval token is invalid, expired, or already used"
+      );
     }
 
     // 5. Send-time policy (reloaded, never cached). FR-006. Runs only when this

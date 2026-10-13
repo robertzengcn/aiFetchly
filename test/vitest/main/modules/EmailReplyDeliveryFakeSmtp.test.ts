@@ -39,6 +39,7 @@ const FAKE_MAILBOX = {
 async function seedValidApproval(): Promise<{
   draftId: number;
   token: string;
+  approvalId: number;
   messageId: number;
 }> {
   const messageModule = new EmailReceivedMessageModule();
@@ -92,7 +93,55 @@ async function seedValidApproval(): Promise<{
     draftId: savedDraft.id,
     approvedByType: "user",
   });
-  return { draftId: savedDraft.id, token: approval.token, messageId: savedMsg.id };
+  return {
+    draftId: savedDraft.id,
+    token: approval.token,
+    approvalId: approval.approvalId,
+    messageId: savedMsg.id,
+  };
+}
+
+/**
+ * R14 harness: delivery service whose SMTP sender counts calls while behaving
+ * per `behavior`. Used by the finalized-replay tests to assert "no extra SMTP"
+ * on a same-token replay after the approval was consumed by finalize.
+ */
+function buildCountingDelivery(
+  behavior: Behavior
+): { delivery: EmailReplyDeliveryService; smtpCalls: { count: number } } {
+  const smtpCalls = { count: 0 };
+  const senderFactory = () => ({
+    sendReplyEmail: async (): Promise<EmailSendResult> => {
+      smtpCalls.count += 1;
+      if (behavior === "accept") {
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-r14-${smtpCalls.count}@x>`,
+        };
+      }
+      if (behavior === "reject") {
+        return {
+          receiver: "prospect@example.com",
+          status: false,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: "Recipient address rejected: User unknown",
+        };
+      }
+      throw new Error("socket disconnected after possible acceptance");
+    },
+  });
+  return {
+    delivery: new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: detectionFactory(),
+    }),
+    smtpCalls,
+  };
 }
 
 type Behavior = "accept" | "reject" | "disconnect";
@@ -1411,4 +1460,112 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     void messageId;
     drainCountersForTest();
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// R14 — finalized sent/delivery_unknown attempt replay with the exact same
+// token. `finalizeSendOutcome` consumes the one-time approval (sets
+// `invalidatedAt`) for EVERY terminal outcome, and `findActiveByTokenHash`
+// returns null for consumed approvals — so a replay of a FINALIZED attempt
+// dies at step 1 with "approval token is invalid, expired, or already used"
+// and never reaches the B04 idempotency lookup that would return the original
+// attempt. The regression requires: replay a finalized sent and
+// delivery-unknown completion; both return the original attempt/outcome
+// (`already_processed`) with NO extra SMTP, while a different token/draft
+// remains subject to binding/approval rules (edited-draft replays fail
+// approval_stale; consumed-token-without-attempt stays unauthorized).
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply replay of a finalized attempt with the same token (R14)", () => {
+  const draftModule = new EmailReplyDraftModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+
+  it("replay of a finalized SENT attempt returns already_processed with no extra SMTP", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const { delivery, smtpCalls } = buildCountingDelivery("accept");
+
+    const first = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(first.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+
+    // The finalize consumed the approval (invalidatedAt set) — replaying the
+    // SAME token must still resolve the consumed record, pass binding
+    // (finalize preserves currentRevisionId/contentHash), hit the B04
+    // idempotency key, and return the original attempt — NOT throw
+    // "approval token is invalid, expired, or already used".
+    const replay = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(replay.status).toBe("already_processed");
+    expect(replay.attemptId).toBe(first.attemptId);
+    expect(smtpCalls.count).toBe(1); // no extra SMTP submission
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+
+  it("replay of a finalized DELIVERY_UNKNOWN attempt returns already_processed with no extra SMTP", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const { delivery, smtpCalls } = buildCountingDelivery("disconnect");
+
+    const first = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(first.status).toBe("delivery_unknown");
+    expect(smtpCalls.count).toBe(1);
+
+    const replay = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(replay.status).toBe("already_processed");
+    expect(replay.attemptId).toBe(first.attemptId);
+    expect(smtpCalls.count).toBe(1); // no second ambiguous submission
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("delivery_unknown");
+    const attempts = await attemptModule.listByDraft(draftId);
+    expect(attempts).toHaveLength(1);
+  });
+
+  it("replay after the draft was EDITED is refused by binding (approval_stale), not replayed", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const { delivery } = buildCountingDelivery("accept");
+    const first = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(first.status).toBe("sent");
+
+    // Append a new revision: moves currentRevisionId/contentHash AND marks
+    // approvalInvalidatedAt on the draft — the consumed token now binds an OLD
+    // revision, so binding must refuse even though the token resolves. The
+    // edit's invalidate loop finds no ACTIVE approvals (finalize already
+    // consumed this one), so invalidatedApprovals is 0 — the guard is the
+    // revision/hash binding refusal itself. This is the "different token/draft
+    // remains subject to binding/approval rules" half of the regression.
+    const result = await draftModule.appendRevision({
+      draftId,
+      actor: "user",
+      subject: "Re: Pricing (edited)",
+      bodyText: CLEAN_BODY,
+      bodyHtml: null,
+      senderAddress: "owner@svc.com",
+      recipientAddress: "prospect@example.com",
+      contentHash: "r14-edited-hash".padEnd(64, "0"),
+    });
+    expect(result.revision.revisionNumber).toBe(2);
+
+    await expect(
+      delivery.sendApprovedReply({ draftId, approvalToken: token })
+    ).rejects.toThrow(/not bound to the draft's current revision|invalid, expired, or already used/);
+    void messageId;
+  });
+
+  it("a consumed token with NO existing attempt stays unauthorized (no idempotent resurrection)", async () => {
+    const { delivery } = buildCountingDelivery("accept");
+
+    // Seed a second draft + approval, then consume (invalidate) the approval
+    // WITHOUT any send ever running — no attempt row exists for it. The
+    // consumed-inclusive resolution must NOT turn this into a fresh claim:
+    // consumed token + missing exact attempt = still unauthorized.
+    const { draftId, token, approvalId } = await seedValidApproval();
+    const approvalModule = new EmailReplyApprovalModule();
+    await approvalModule.invalidate(
+      approvalId,
+      "R14 test: consumed with no attempt",
+      new Date()
+    );
+
+    await expect(
+      delivery.sendApprovedReply({ draftId, approvalToken: token })
+    ).rejects.toThrow(/invalid, expired, or already used/);
+  });
 });
