@@ -53,7 +53,7 @@ describe("AgentRuntime.cancelTask (T5/D7)", () => {
       agentVersion: 1,
       parentConversationId: "v2-host",
       prompt: "do work",
-      taskPacket: { goal: "do work" },
+      taskPacket: { userGoal: "do work" },
     });
     await module.setStatus("agt-row-1", "running", {});
 
@@ -78,7 +78,7 @@ describe("AgentRuntime.cancelTask (T5/D7)", () => {
       agentVersion: 1,
       parentConversationId: "v2-host",
       prompt: "done work",
-      taskPacket: { goal: "done work" },
+      taskPacket: { userGoal: "done work" },
     });
     await module.setStatus("agt-done-1", "completed", {
       finishedAt: new Date(),
