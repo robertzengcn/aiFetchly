@@ -671,6 +671,7 @@ import {
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import AgentTaskListDialog from "@/views/components/aiChatV2/AgentTaskListDialog.vue";
+import { cancelAgentTask } from "@/views/api/agentRuntime";
 import {
   useChatCommandRouting,
   type ChatCommandDisposition,
@@ -2111,11 +2112,13 @@ function toggleReasoningVisible(): void {
 }
 
 /**
- * FR-INT-004: agent-task status/cancellation through the shared dialog.
- * Cancellation is a later-milestone wiring point (V2 parity).
+ * T5 (audit FR-INT-004): cancel EXACTLY the emitted agent task through the
+ * agent-runtime API — never the conversation run, never a sibling task. A
+ * live task aborts its own loop; a stale non-terminal row flips to
+ * cancelled. Failures are non-fatal (the dialog refresh reconciles).
  */
-function handleAgentTaskCancel(_agentTaskId: string): void {
-  // Agent task cancellation is wired in a later milestone.
+function handleAgentTaskCancel(agentTaskId: string): void {
+  void cancelAgentTask(agentTaskId).catch(() => undefined);
 }
 
 // --- Recoverable history + compaction (FR-HIS-001..005) ----------------------

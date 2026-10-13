@@ -5,6 +5,7 @@ import {
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
   AGENT_TASK_LIST,
+  AGENT_TASK_CANCEL,
 } from "@/config/channellist";
 import type {
   AgentDefinitionView,
@@ -46,4 +47,12 @@ export async function getAgentTaskTranscript(
     messages: AgentTaskMessageRecord[];
     toolCalls: AgentToolCallRecord[];
   } | null;
+}
+
+/** T5 (audit FR-INT-004): cancel exactly one agent task by id. */
+export async function cancelAgentTask(agentTaskId: string): Promise<boolean> {
+  const resp = (await windowInvoke(AGENT_TASK_CANCEL, { agentTaskId })) as {
+    ok?: boolean;
+  } | null;
+  return resp?.ok === true;
 }

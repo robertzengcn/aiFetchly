@@ -682,6 +682,7 @@ export const AGENT_DEFINITION_LIST = "agent-runtime:definition-list";
 export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
 export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
 export const AGENT_TASK_LIST = "agent-runtime:task-list";
+export const AGENT_TASK_CANCEL = "agent-runtime:task-cancel";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 

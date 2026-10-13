@@ -7,8 +7,10 @@ import {
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
   AGENT_TASK_LIST,
+  AGENT_TASK_CANCEL,
   AGENT_RESUME_TOOL_AFTER_PERMISSION,
 } from "@/config/channellist";
+import { AgentRuntimeRegistry } from "@/service/AgentRuntimeRegistry";
 import { lazySchema } from "@/utils/lazySchema";
 import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
@@ -64,6 +66,20 @@ export function registerAgentRuntimeIpcHandlers(): void {
     const module = new AgentTaskModule();
     return module.listRecent(50);
   });
+
+  // T5 (audit FR-INT-004): cancel EXACTLY the emitted agent task — a live
+  // task aborts through its own controller; a non-live non-terminal row
+  // flips to cancelled. Never touches the conversation run or sibling tasks.
+  registerAiValidatedHandler(
+    AGENT_TASK_CANCEL,
+    agentTaskIdInputSchema,
+    async (input) => {
+      const cancelled = await AgentRuntimeRegistry.getRuntime().cancelTask(
+        input.agentTaskId
+      );
+      return { ok: cancelled, agentTaskId: input.agentTaskId };
+    }
+  );
 
   registerAiValidatedHandler(
     AGENT_RESUME_TOOL_AFTER_PERMISSION,

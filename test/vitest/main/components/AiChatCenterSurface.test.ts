@@ -1731,6 +1731,26 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     ).toBe(true);
   });
 
+  it("cancels EXACTLY the emitted agent task through the agent-runtime channel (T5/D7)", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    wrapper
+      .findComponent({ name: "AgentTaskListDialog" })
+      .vm.$emit("cancel-task", "agt-cancel-1");
+    await flushPromises();
+
+    const cancelCall = (
+      window.api.invoke as ReturnType<typeof vi.fn>
+    ).mock.calls.find((c) => c[0] === "agent-runtime:task-cancel");
+    expect(cancelCall).toBeTruthy();
+    expect(JSON.parse(String(cancelCall?.[1]))).toEqual({
+      agentTaskId: "agt-cancel-1",
+    });
+    // The conversation run was NOT cancelled (no cancelChatRun IPC).
+    const { cancelChatRun } = await import("@/views/api/aiChatWorkspace");
+    expect(vi.mocked(cancelChatRun)).not.toHaveBeenCalled();
+  });
+
   /**
    * FR-REC-001..003: the run strip keeps the high-level state; the center
    * exposes transport-retry (attempt/max/bounded delay) and recovery

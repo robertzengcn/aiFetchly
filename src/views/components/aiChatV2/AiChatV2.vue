@@ -812,6 +812,7 @@ import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.vue";
 import GeneratedImageChooserDialog from "./GeneratedImageChooserDialog.vue";
+import { cancelAgentTask } from "@/views/api/agentRuntime";
 import GeneratedImageBatchConfirmDialog from "./GeneratedImageBatchConfirmDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
@@ -1712,8 +1713,9 @@ async function loadToolApprovalMode(conversationId: string | null): Promise<void
 }
 
 function handleAgentTaskCancel(agentTaskId: string): void {
-  // Agent task cancellation is wired in a later milestone.
-  console.log("[AiChatV2] cancel-task requested:", agentTaskId);
+  // T5 (audit FR-INT-004): cancel exactly the emitted task through the
+  // shared agent-runtime API (same handler the workspace center uses).
+  void cancelAgentTask(agentTaskId).catch(() => undefined);
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
