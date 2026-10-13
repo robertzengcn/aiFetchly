@@ -81,6 +81,30 @@ export interface AIChatTurnQueueServiceDeps {
   readonly isAiEnabled: () => boolean;
   readonly isQueueEnabled: () => boolean;
   readonly isSteeringEnabled: () => boolean;
+  /**
+   * T1 (AD-002/003): mints the durable run envelope at the scheduling
+   * claim (sourceId = pendingMessageId) and persists the terminal mapping.
+   * Optional so non-production wiring keeps the pre-bridge behavior.
+   */
+  readonly dispatchBridge?: {
+    schedule(candidate: {
+      readonly pendingMessageId: string;
+      readonly conversationId: string;
+      readonly resourceClass:
+        | "general"
+        | "browser"
+        | "cpu"
+        | "artifact_batch";
+    }): Promise<{ runId: string } | null>;
+    finishRun(
+      runId: string | null,
+      status: "completed" | "failed" | "cancelled" | "interrupted"
+    ): Promise<void>;
+    /** conversation_busy release: running -> queued for the next claim. */
+    releaseToQueued?(runId: string | null): Promise<void>;
+    /** Parked (permission/plan) run: running -> awaiting_*. */
+    parkRun?(runId: string | null): Promise<void>;
+  };
 }
 
 export type AIChatQueueErrorCode =
@@ -561,6 +585,27 @@ export class AIChatTurnQueueService {
       return;
     }
 
+    // T1 (AD-002): the run envelope is minted at the scheduling claim, AFTER
+    // the claim + lease and BEFORE any provider work. A null envelope is a
+    // pre-turn failure: release the claim — no engine call, no orphan run.
+    const bridgeRunId = await this.deps.dispatchBridge?.schedule({
+      pendingMessageId: row.pendingMessageId,
+      conversationId,
+      resourceClass: "general",
+    });
+    if (this.deps.dispatchBridge && bridgeRunId === null) {
+      await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
+        code: "RUN_ENVELOPE_FAILED",
+        message: "Could not mint the run envelope for this dispatch.",
+      });
+      const view = await this.deps.pendingModule.getView(row.pendingMessageId);
+      if (view) {
+        this.emitEvent(view, "failed");
+      }
+      lease.release();
+      return;
+    }
+
     try {
       let savedUser;
       try {
@@ -649,7 +694,12 @@ export class AIChatTurnQueueService {
         };
       }
 
+      // T1 (AD-002): persist the run terminal BEFORE the drain's side
+      // effects settle (the pending row's own transitions stay authoritative
+      // for queue behavior; the envelope records the execution outcome).
+      const bridge = this.deps.dispatchBridge;
       if (terminal.type === "completed") {
+        await bridge?.finishRun(bridgeRunId?.runId ?? null, "completed");
         const done = await this.deps.pendingModule.getView(
           row.pendingMessageId
         );
@@ -666,11 +716,25 @@ export class AIChatTurnQueueService {
       }
       if (terminal.type === "conversation_busy") {
         // Another turn owns the conversation (legacy path race). Put the
-        // row back; a later drain or resume picks it up.
+        // row back; a later drain or resume picks it up. The envelope was
+        // minted for THIS claim — release it to queued so the next claim
+        // can reuse it idempotently.
+        await bridge?.releaseToQueued?.(bridgeRunId?.runId ?? null);
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
         return;
       }
-      // cancelled | failed | paused_for_permission | paused_for_plan_question
+      if (
+        terminal.type === "paused_for_permission" ||
+        terminal.type === "paused_for_plan_question"
+      ) {
+        // Parked turns keep their envelope in the waiting family (§9.1) so
+        // the resume path continues the SAME run.
+        await bridge?.parkRun?.(bridgeRunId?.runId ?? null);
+        await this.holdQueue(conversationId, terminal.type);
+        return;
+      }
+      // cancelled | failed
+      await bridge?.finishRun(bridgeRunId?.runId ?? null, terminal.type);
       await this.holdQueue(conversationId, terminal.type);
     } finally {
       lease.release();

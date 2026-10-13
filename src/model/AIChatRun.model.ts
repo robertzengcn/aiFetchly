@@ -88,6 +88,22 @@ export class AIChatRunModel extends BaseDb {
     return this.repository.findOne({ where: { runId } });
   }
 
+  /**
+   * T1 (AD-003): the interactive run envelope for a pending row, if any.
+   * Used by the run-dispatch bridge's idempotent lookup — one pending id
+   * maps to at most one non-terminal interactive run.
+   */
+  async findBySourceId(
+    owner: string,
+    sourceId: string
+  ): Promise<AIChatRunEntity | null> {
+    this.assertMainProcess();
+    return this.repository.findOne({
+      where: { owner, sourceId },
+      order: { createdAt: "DESC" },
+    });
+  }
+
   /** Newest runs for a conversation (Activity view). */
   async listByConversation(
     conversationId: string,

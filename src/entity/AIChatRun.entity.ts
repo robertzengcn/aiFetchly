@@ -33,9 +33,14 @@ export class AIChatRunEntity extends AuditableEntity {
   @Column("varchar", { length: 20, nullable: false })
   owner!: string;
 
-  /** Domain id from the owning subsystem (schedule id, goal run id, ...). */
+  /**
+   * Domain id from the owning subsystem (schedule id, goal run id, pending
+   * message id, ...). Widened to 100 (AD-003/T1): every valid
+   * pendingMessageId must fit — pending ids are `pending-<uuid>` (44 chars)
+   * but future id families get headroom.
+   */
   @Order(4)
-  @Column("varchar", { length: 64, nullable: true })
+  @Column("varchar", { length: 100, nullable: true })
   sourceId!: string | null;
 
   /** "general" | "browser" | "cpu" | "artifact_batch". */

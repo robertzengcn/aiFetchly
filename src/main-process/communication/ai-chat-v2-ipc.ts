@@ -141,6 +141,7 @@ import {
   GENERATED_IMAGE_REFERENCE_INVALID_CODE,
 } from "@/service/generatedImageReferenceNormalize";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { AIChatWorkspaceRunDispatchBridge } from "@/service/AIChatWorkspaceRunDispatchBridge";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 
 /** Cap for the user-confirmed batch reference set. Matches the batch tool's
@@ -587,6 +588,10 @@ export function getQueueService(): AIChatTurnQueueService {
     queueService = new AIChatTurnQueueService({
       engine: getQueryEngine(),
       pendingModule,
+      // T1 (AD-002/003): queue-backed dispatches mint their run envelopes
+      // through the bridge — sourceId = pendingMessageId, terminal mapping
+      // persisted before the drain's side effects settle.
+      dispatchBridge: new AIChatWorkspaceRunDispatchBridge(),
       eventSink: {
         emit: (event) =>
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),

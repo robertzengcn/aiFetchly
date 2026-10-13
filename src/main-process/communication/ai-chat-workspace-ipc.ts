@@ -108,72 +108,6 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
             );
           });
       },
-      // Busy-conversation send delegation (message-queue §9.2): the send
-      // becomes a durable pending row; the coordinator rejection is kept
-      // only when the queue declines. forceQueue: the coordinator owns the
-      // live turn — its terminal notification drains or holds the row, so
-      // the queue must never auto-dispatch it mid-turn (e.g. while the
-      // engine reports idle between transport retries).
-      busySubmit: async (request) => {
-        try {
-          const receipt = await getQueueService().submit({
-            forceQueue: true,
-            clientRequestId: request.clientRequestId,
-            request: {
-              conversationId: request.conversationId,
-              message: request.message,
-              model: request.model,
-              mode: request.mode,
-              toolApprovalMode: request.toolApprovalMode,
-              showReasoning: request.showReasoning,
-              // Parity with the coordinator path: a delegated send must not
-              // silently drop execution settings the schema accepts.
-              temperature: request.temperature,
-              maxTokens: request.maxTokens,
-              systemPrompt: request.systemPrompt,
-              ...(request.reasoning ? { reasoning: request.reasoning } : {}),
-              uploadedFiles: request.uploadedFiles
-                ? [...request.uploadedFiles]
-                : undefined,
-              generatedImageReferences: request.generatedImageReferences
-                ? [...request.generatedImageReferences]
-                : undefined,
-              // FR-SUB-004/FR-IMG-004/FR-HIS-002 parity: a delegated busy
-              // send must carry the same submission context the idle path
-              // forwards — the pending-queue schema accepts these fields and
-              // `rebuildTurnInputs` replays them at dispatch.
-              pastedContents: request.pastedContents,
-              confirmedGeneratedImageBatch:
-                request.confirmedGeneratedImageBatch,
-              historySelectionIds: request.historySelectionIds,
-              submissionId: request.submissionId,
-            },
-          });
-          if (!receipt.pendingMessage) return null;
-          // The live turn can terminate WHILE the row was being persisted
-          // (submit awaits several DB ops): its terminal notification found
-          // zero rows and returned, and forceQueue suppresses the drain —
-          // the row would sit queued forever. Re-check and reconcile.
-          if (
-            getQueryEngine().getConversationRuntimeStatus(
-              request.conversationId
-            ) === "idle"
-          ) {
-            void getQueueService()
-              .notifyExternalTurnTerminal(request.conversationId, "completed")
-              .catch(() => undefined);
-          }
-          return {
-            pendingRunId: `pending-${receipt.pendingMessage.pendingMessageId}`,
-          };
-        } catch (err) {
-          console.warn(
-            "[ai-chat-workspace] busy-send queue delegation failed:",
-            err
-          );
-          return null;
-        }
-      },
     });
   }
   return coordinatorInstance;
@@ -432,19 +366,43 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!validated.ok) {
         return denied(validated.errorMessage);
       }
-      // The shared validator returns a ChatV2StreamRequest (readonly array
-      // fields); copy them into the coordinator payload's mutable shapes.
-      const result = await getAiChatWorkspaceCoordinator().startRun({
+      // T1 (AD-001/AD-004, audit): EVERY accepted ordinary send becomes a
+      // durable pending row first — idle AND busy. The queue is the single
+      // dispatch authority (claim → bridge envelope → engine); the
+      // coordinator no longer dispatches ordinary prompts, so a message can
+      // never be dispatched twice. forceQueue keeps a busy conversation's
+      // row held until the live turn's terminal re-drains.
+      const request = {
         ...parsed.data,
         ...validated.request,
         historySelectionIds: validated.request.historySelectionIds
           ? [...validated.request.historySelectionIds]
           : undefined,
-      });
-      if (!result.ok) {
-        return denied(result.message);
+      };
+      try {
+        const engineBusy =
+          getQueryEngine().getConversationRuntimeStatus(
+            request.conversationId
+          ) !== "idle";
+        const receipt = await getQueueService().submit({
+          forceQueue: engineBusy,
+          clientRequestId: request.clientRequestId,
+          request,
+        });
+        if (!receipt.pendingMessage) {
+          return denied(
+            "A run is already active for this conversation. Wait for it to finish or stop it first."
+          );
+        }
+        return ok({
+          conversationId: request.conversationId,
+          runId: `pending-${receipt.pendingMessage.pendingMessageId}`,
+          status: "queued",
+          acceptedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        return denied(userSafeError(err));
       }
-      return ok(result.response);
     } catch (err) {
       return denied(userSafeError(err));
     }
