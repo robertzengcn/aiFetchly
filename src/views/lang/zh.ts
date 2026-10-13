@@ -3440,7 +3440,6 @@ export default {
     },
     newChat: "新聊天",
     automations: "自动化任务",
-    customize: "自定义",
     insights: "洞察",
     knowledgeLibrary: "知识库",
     plugins: "插件",

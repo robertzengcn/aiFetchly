@@ -3644,7 +3644,6 @@ export default {
     },
     newChat: "Neuer Chat",
     automations: "Automatisierungen",
-    customize: "Anpassen",
     insights: "Einblicke",
     knowledgeLibrary: "Wissensbibliothek",
     plugins: "Plugins",
