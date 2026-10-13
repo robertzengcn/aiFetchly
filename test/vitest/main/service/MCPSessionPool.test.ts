@@ -244,3 +244,72 @@ describe("audit A18 regressions", () => {
     expect(pool.size).toBe(0);
   });
 });
+
+describe("audit F15 regressions", () => {
+  it("concurrent first pins do not both succeed", async () => {
+    const f = factory();
+    const pool = new MCPSessionPool({ clientFactory: f.factory });
+    const [a, b] = await Promise.allSettled([
+      pool.pinSession(key("s1")),
+      pool.pinSession(key("s1")),
+    ]);
+    const results = [a, b];
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    expect(fulfilled).toHaveLength(1);
+    for (const r of fulfilled) {
+      if (r.status === "fulfilled") r.value.release();
+    }
+    pool.releasePinned(key("s1"));
+    await pool.dispose();
+  });
+
+  it("invalidateServer during connect evicts the late session", async () => {
+    const f = factory();
+    const gate = { release: null as (() => void) | null };
+    const slowFactory = (config: MCPClientConfig) => {
+      const client = f.factory(config);
+      (client as unknown as { connectImpl: () => Promise<void> }).connectImpl =
+        async () => {
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+          });
+        };
+      return client;
+    };
+    const pool = new MCPSessionPool({ clientFactory: slowFactory });
+    const acquirePromise = pool.acquire(key("s1"));
+    await vi.waitFor(() => expect(gate.release).not.toBeNull());
+    await pool.invalidateServer("s1");
+    gate.release?.();
+    await expect(acquirePromise).rejects.toThrow(/invalidated/);
+    expect(pool.size).toBe(0);
+  });
+
+  it("double release and stale-handle release cannot close a successor", async () => {
+    vi.useFakeTimers();
+    try {
+    const f = factory();
+    const pool = new MCPSessionPool({
+      clientFactory: f.factory,
+      idleTimeoutMs: 1_000,
+    });
+    const session = await pool.acquire(key("s1"));
+    session.release();
+    session.release(); // double release: no-op, must not decrement below zero
+    // Idle-close the first, then acquire a replacement.
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(f.created[0].disconnectCalls).toBe(1);
+    const replacement = await pool.acquire(key("s1"));
+    // The STALE handle's release must not touch the replacement's accounting.
+    session.release();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(f.created[1].disconnectCalls).toBe(0); // still borrowed
+    replacement.release();
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(f.created[1].disconnectCalls).toBe(1);
+    await pool.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

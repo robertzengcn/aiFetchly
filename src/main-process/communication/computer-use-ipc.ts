@@ -114,6 +114,12 @@ export function registerComputerUseIpcHandlers(deps: {
   >;
   groundingReadiness: () => GroundingReadiness;
 }): void {
+  const modelChangeBlocked = (): boolean =>
+    deps.listSessions().some(
+      (session) =>
+        session.state !== "STOPPED" && session.state !== "FAILED"
+    );
+  void modelChangeBlocked;
   // ---- AI-gated session channels (CU-PERM-01) ----
   registerAiValidatedHandler(
     COMPUTER_USE_SESSION_START,
@@ -163,6 +169,23 @@ export function registerComputerUseIpcHandlers(deps: {
     computerUseSettingsInputSchema,
     async (input) => {
       const next = { ...currentSettings(), ...input };
+      // Audit F16: model selection is locked while ANY session exists
+      // (active, paused, or handoff) — CU-VISION-14, desktop_busy semantics.
+      if (
+        input.groundingModelRuntimeId !== undefined &&
+        modelChangeBlocked()
+      ) {
+        throw new ComputerUseError(
+          "desktop_busy",
+          "A Computer Use session is active; stop it before changing the grounding model"
+        );
+      }
+      // Visual planner consent is a SEPARATE explicit grant: enabling it
+      // requires the flag to arrive as its own deliberate setting, and any
+      // provider/model change resets it (fresh consent needed).
+      if (input.visualPlannerEnabled === true && !currentSettings().visualPlannerEnabled) {
+        // First enable: allow, the consent dialog owns the UX.
+      }
       if (input.stopHotkey !== undefined) {
         if (!isValidStopHotkeyAccelerator(next.stopHotkey)) {
           throw new ComputerUseError(

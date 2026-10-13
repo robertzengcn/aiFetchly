@@ -32,7 +32,11 @@ export class ComputerUseMeasurementService {
   /** Last dispatch timestamp per session. */
   private readonly lastDispatchAt = new Map<string, number>();
 
-  constructor(clock: MonotonicClock = () => Date.now()) {
+  constructor(
+    // Audit F17: performance.now() is monotonic — wall-clock adjustments
+    // (NTP steps, manual clock changes) can never corrupt safety timings.
+    clock: MonotonicClock = () => performance.now()
+  ) {
     this.clock = clock;
   }
 

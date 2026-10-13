@@ -63,6 +63,14 @@ export class MCPSessionPool {
   private readonly sessions = new Map<string, PooledSession>();
   /** Concurrent identical acquires share ONE connect (audit A18). */
   private readonly pendingAcquires = new Map<string, Promise<PooledMcpSession>>();
+  /** Keys currently being pinned — atomic double-pin rejection (audit F15). */
+  private readonly pinning = new Set<string>();
+  /**
+   * Invalidation generations per server (audit F15): bumped by
+   * invalidateServer/remove; a connect that started before the bump is
+   * evicted on completion instead of inserting a stale session.
+   */
+  private readonly serverInvalidations = new Map<string, number>();
   private readonly idleTimeoutMs: number;
   private readonly clientFactory: McpClientFactory;
   private readonly now: () => number;
@@ -106,10 +114,9 @@ export class MCPSessionPool {
       existing.lastUsedAt = this.now();
       existing.borrowers += 1;
       this.clearIdleTimer(existing);
-      return {
-        client: existing.client,
-        release: () => this.touch(poolKey),
-      };
+      // Audit F15: instance-bound one-shot release — a double release or a
+      // release after replacement cannot close another borrower's client.
+      return this.borrowHandle(existing);
     }
 
     // Audit A18: deduplicate concurrent connects for the same key so N
@@ -126,12 +133,23 @@ export class MCPSessionPool {
     }
 
     const connectPromise = (async () => {
+      // Audit F15: capture the invalidation generation at connect start.
+      const invalidationAtStart = this.serverInvalidations.get(key.serverId) ?? 0;
       const client = this.clientFactory(key.launchConfig);
       await client.connect();
       // A dispose() during connect must not insert a late session.
       if (this.disposed) {
         await client.disconnect().catch(() => undefined);
         throw new Error("MCPSessionPool is disposed");
+      }
+      // An invalidation during connect evicts this late session too.
+      if (
+        (this.serverInvalidations.get(key.serverId) ?? 0) !== invalidationAtStart
+      ) {
+        await client.disconnect().catch(() => undefined);
+        throw new Error(
+          `MCP session for ${key.serverId} was invalidated during connect`
+        );
       }
       const session: PooledSession = {
         key: poolKey,
@@ -142,10 +160,7 @@ export class MCPSessionPool {
         idleTimer: null,
       };
       this.sessions.set(poolKey, session);
-      return {
-        client,
-        release: () => this.touch(poolKey),
-      } satisfies PooledMcpSession;
+      return this.borrowHandle(session);
     })();
     this.pendingAcquires.set(poolKey, connectPromise);
     try {
@@ -168,27 +183,34 @@ export class MCPSessionPool {
    */
   async pinSession(key: McpSessionKey): Promise<PooledMcpSession> {
     const poolKey = MCPSessionPool.buildKey(key);
+    // Audit F15: atomic exclusive pinning — the check AND the claim happen
+    // before any await, so simultaneous first pins cannot both pass.
+    if (this.pinning.has(poolKey)) {
+      throw new Error(`MCP session ${key.serverId} pin is already pending`);
+    }
     const existing = this.sessions.get(poolKey);
-    if (existing) {
-      if (existing.pinned) {
-        throw new Error(`MCP session ${key.serverId} is already pinned`);
+    if (existing?.pinned) {
+      throw new Error(`MCP session ${key.serverId} is already pinned`);
+    }
+    this.pinning.add(poolKey);
+    try {
+      if (existing) {
+        existing.pinned = true;
+        existing.borrowers += 1;
+        existing.lastUsedAt = this.now();
+        this.clearIdleTimer(existing);
+        return this.borrowHandle(existing);
       }
-      existing.pinned = true;
-      existing.borrowers += 1;
-      existing.lastUsedAt = this.now();
-      this.clearIdleTimer(existing);
-      return {
-        client: existing.client,
-        release: () => this.touch(poolKey),
-      };
+      const acquired = await this.acquire(key);
+      const session = this.sessions.get(poolKey);
+      if (session) {
+        session.pinned = true;
+        this.clearIdleTimer(session);
+      }
+      return acquired;
+    } finally {
+      this.pinning.delete(poolKey);
     }
-    const acquired = await this.acquire(key);
-    const session = this.sessions.get(poolKey);
-    if (session) {
-      session.pinned = true;
-      this.clearIdleTimer(session);
-    }
-    return acquired;
   }
 
   /** Unpin a pinned session; it becomes eligible for idle close again. */
@@ -209,6 +231,12 @@ export class MCPSessionPool {
 
   /** Invalidate every session for a server (any config/trust generation). */
   async invalidateServer(serverId: string): Promise<void> {
+    // Audit F15: bump the generation so in-flight connects for this server
+    // are evicted on completion, never inserted as stale sessions.
+    this.serverInvalidations.set(
+      serverId,
+      (this.serverInvalidations.get(serverId) ?? 0) + 1
+    );
     const victims = [...this.sessions.keys()].filter(
       (poolKey) => poolKey.split("|")[0] === serverId
     );
@@ -227,11 +255,30 @@ export class MCPSessionPool {
     await Promise.all(keys.map((poolKey) => this.evict(poolKey)));
   }
 
+  /** Instance-bound, one-shot release handle (audit F15). */
+  private borrowHandle(session: PooledSession): PooledMcpSession {
+    let released = false;
+    return {
+      client: session.client,
+      release: () => {
+        if (released) return; // idempotent: a double release is a no-op
+        released = true;
+        // Only the CURRENT stored instance at this key may be touched —
+        // a stale handle after replacement cannot decrement its successor.
+        const current = this.sessions.get(session.key);
+        if (current !== session) return;
+        current.borrowers = Math.max(0, current.borrowers - 1);
+        current.lastUsedAt = this.now();
+        if (!current.pinned && current.borrowers === 0) {
+          this.scheduleIdleClose(session.key);
+        }
+      },
+    };
+  }
+
   private touch(poolKey: string): void {
     const session = this.sessions.get(poolKey);
     if (!session) return;
-    // Borrow accounting (audit A18): release() decrements; idle close only
-    // arms when no borrower remains.
     session.borrowers = Math.max(0, session.borrowers - 1);
     session.lastUsedAt = this.now();
     if (!session.pinned && session.borrowers === 0) this.scheduleIdleClose(poolKey);
