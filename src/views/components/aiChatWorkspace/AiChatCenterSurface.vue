@@ -661,6 +661,10 @@ import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types"
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import {
+  planContinuationRequestId,
+  type PlanContinuationDecision,
+} from "@/views/utils/planContinuationIdentity";
+import {
   readAiChatReasoningVisible,
   writeAiChatReasoningVisible,
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
@@ -1810,6 +1814,8 @@ async function performOrdinarySend(
     modeOverride?: "chat" | "plan";
     /** Trusted channel: the user-confirmed batch reference set (FR-IMG-004). */
     confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
+    /** T2: deterministic request identity (plan continuations). */
+    clientRequestId?: string;
   },
   /**
    * T7/D3: the conversation this send was issued in (captured before the
@@ -1898,6 +1904,7 @@ async function performOrdinarySend(
     pendingHistorySubmissionId = crypto.randomUUID();
   }
   const accepted = await selectedStore.sendMessage(messageText, {
+    clientRequestId: options?.clientRequestId,
     model: selectedModel.value,
     // A command-derived turn (goal plan prompt) overrides the surface mode.
     mode: options?.modeOverride ?? mode.value,
@@ -2570,12 +2577,21 @@ async function onLegacyPlanAction(
     }
     // FR-PLN-006/007: start the correct continuation exactly once. The
     // continuation message keys are shared with Chat V2 (already localized).
+    // T2/D6 (AD-007): the continuation's clientRequestId derives from the
+    // persisted transition — reloads, replays, and double-clicks resubmit the
+    // SAME identity, so the coordinator cache (idle) / pending unique index
+    // (busy) collapse them into the one accepted continuation.
+    const continuationRequestId = await planContinuationRequestId(
+      plan.planId,
+      version,
+      action as PlanContinuationDecision
+    );
     if (action === "approve-plan") {
       await performOrdinarySend(
         t("aiChatV2Plan.approved_continue_message") ||
           "Plan approved. Please begin executing the plan now.",
         [],
-        { modeOverride: "chat" }
+        { modeOverride: "chat", clientRequestId: continuationRequestId }
       );
     } else if (action === "reject-plan") {
       const prefix =
@@ -2584,7 +2600,7 @@ async function onLegacyPlanAction(
       await performOrdinarySend(
         feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
         [],
-        { modeOverride: "chat" }
+        { modeOverride: "chat", clientRequestId: continuationRequestId }
       );
     } else {
       const prefix =
@@ -2593,7 +2609,7 @@ async function onLegacyPlanAction(
       await performOrdinarySend(
         feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
         [],
-        { modeOverride: "chat" }
+        { modeOverride: "chat", clientRequestId: continuationRequestId }
       );
     }
   } catch (err) {

@@ -148,7 +148,7 @@ describe("selectedConversation permission actions (design §15.5)", () => {
     );
   });
 
-  it("grantToolPermission surfaces a resume failure on the row and as errorMessage", async () => {
+  it("grantToolPermission surfaces a resume failure AND restores the decision card (T4/D1)", async () => {
     const perm = permissionResult("m-perm-3", { toolCallId: "tc-fail" });
     await seedStore([perm]);
     windowInvokeMock.mockResolvedValue({ ok: false, error: "Engine busy" });
@@ -159,9 +159,11 @@ describe("selectedConversation permission actions (design §15.5)", () => {
     const store = useSelectedConversationStore();
     const row = store.messages.find((m) => m.id === "m-perm-3");
     expect(row?.content).toBe("Engine busy");
-    expect(row?.metadata?.toolResult?.error).toBe("Engine busy");
-    expect(row?.metadata?.success).toBe(false);
     expect(store.errorMessage).toBe("Engine busy");
+    // The failed resume RESTORES the prompt (FR-PER-007): Grant/Deny stay
+    // mounted and actionable; the executing flag is cleared.
+    expect(row?.metadata?.toolResult?.needsPermissionPrompt).toBe(true);
+    expect(row?.metadata?.toolResult?.executionPending).toBe(false);
   });
 
   it("grantToolPermission without any resolvable tool id reports and never invokes IPC", async () => {

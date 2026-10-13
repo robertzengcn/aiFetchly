@@ -843,7 +843,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         name: "AiChatWorkspaceTranscript",
       });
       transcript.vm.$emit("approve-plan");
-      await flushPromises();
+      // The continuation id awaits crypto.subtle.digest (macrotask) — poll,
+      // don't flush microtasks, or the continuation leaks into the next test.
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
 
       expect(approveMock).toHaveBeenCalledTimes(1);
       expect(approveMock.mock.calls[0]).toEqual([
@@ -852,12 +856,58 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         2,
       ]);
       // Exactly one continuation turn, in chat mode, with the shared text.
-      expect(startChatRunMock).toHaveBeenCalledTimes(1);
       expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
         conversationId: "fresh-chat",
         mode: "chat",
         message: "Plan approved. Please begin executing the plan now.",
       });
+    });
+
+    it("derives the SAME continuation clientRequestId for a replayed approval (T2/D6, AD-007)", async () => {
+      vi.mocked(approveChatV2Plan).mockResolvedValue({
+        planId: "plan-1",
+        currentVersion: 2,
+        status: "approved",
+      } as never);
+      const wrapper = await mountWithPlan();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+
+      // First approval. The continuation id awaits crypto.subtle.digest,
+      // which resolves on a MACROTASK — drain with a poll, not microtasks.
+      transcript.vm.$emit("approve-plan");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      const firstId = startChatRunMock.mock.calls[0][0].clientRequestId;
+      expect(firstId).toMatch(/^plan-cont-[a-f0-9]{48}$/);
+
+      // A REPLAY (reload + re-click on the persisted approved state, or a
+      // double-fire) must resubmit the identical identity — never mint a
+      // second job.
+      vi.mocked(selectConversation).mockResolvedValue({
+        acceptedGeneration: 1,
+        messages: [planMessage],
+        nextBefore: null,
+        hasOlder: false,
+        runtimeStatus: "idle",
+        activeRunId: null,
+        title: "Selected chat",
+      } as never);
+      await useSelectedConversationStore().loadSelection("fresh-chat");
+      await flushPromises();
+      // loadSelection toggles `loading`, which unmounts/remounts the
+      // transcript stub — re-find the LIVE instance before replaying.
+      wrapper
+        .findComponent({ name: "AiChatWorkspaceTranscript" })
+        .vm.$emit("approve-plan");
+      // Fully drain the replayed continuation BEFORE the test ends so it
+      // cannot leak into the next test's assertions.
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(2);
+      });
+      expect(startChatRunMock.mock.calls[1][0].clientRequestId).toBe(firstId);
     });
 
     it("keeps the decision actionable and starts NO continuation on a null approval (FR-PLN-005)", async () => {
@@ -908,9 +958,10 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         currentVersion: 2,
         status: "approved",
       });
-      await flushPromises();
-      // The completed decision still starts exactly one continuation.
-      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      // Drain the digest macrotask so the continuation cannot leak onward.
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

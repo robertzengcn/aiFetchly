@@ -135,7 +135,7 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.activeRunId).toBe("run-2");
   });
 
-  it("a rejection surfaces the error and keeps the optimistic row for retry", async () => {
+  it("a rejection surfaces the error and REMOVES the optimistic row (T8/D5: no draft duplication)", async () => {
     await seedStore("running");
     startChatRunMock.mockRejectedValue(
       new Error("A run is already active for this conversation.")
@@ -146,7 +146,16 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     await flushPromises();
 
     expect(store.errorMessage).toContain("already active");
-    expect(store.messages.some((m) => m.content === "rejected B")).toBe(true);
+    // The draft stays in the composer — the transcript must not show the
+    // text twice (audit D5). The denial bubble alone marks the failure.
+    expect(store.messages.some((m) => m.content === "rejected B")).toBe(false);
+    expect(
+      store.messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          m.content.includes("already active")
+      )
+    ).toBe(true);
   });
 
   it("an AI-disabled (subscription-required) rejection appends a visible assistant notice", async () => {
@@ -161,12 +170,13 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
 
     expect(accepted).toBe(false);
     expect(store.errorMessage).toContain("subscription");
-    // Optimistic user row is kept for retry after purchasing.
+    // T8/D5: the optimistic user row is REMOVED — the draft stays in the
+    // composer for retry after purchasing (no transcript duplication).
     expect(
       store.messages.some(
         (m) => m.role === "user" && m.content === "hello with no subscription"
       )
-    ).toBe(true);
+    ).toBe(false);
     // Pre-V2 parity: the denial is also an assistant bubble so the transcript
     // shows the purchase notice instead of staying silent.
     const notice = store.messages.find(
