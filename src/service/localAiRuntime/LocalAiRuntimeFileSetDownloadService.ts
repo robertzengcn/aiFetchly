@@ -26,7 +26,7 @@
  */
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { copyFile, link, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -464,10 +464,21 @@ export class LocalAiRuntimeFileSetDownloadService {
       );
     }
     await this.finalizePart(partPath, stagingRoot, file);
+    // Audit F13: the verified bytes STAY in the hash-keyed .part cache.
+    // finalizePart hard-links them into staging (same volume, O(1), zero
+    // copy); the cache name survives app crashes because it is only
+    // removed by an explicit successful-activation cleanup — never by
+    // operation failure paths.
     return sha256;
   }
 
-  /** Rename a verified part into staging at its safe relative path. */
+  /**
+   * Link a verified part into staging at its safe relative path (audit F13).
+   * A HARD LINK keeps the bytes under both names on the same volume at
+   * O(1) cost: the staging copy installs, and the `.part` name remains a
+   * crash-durable cache entry until successful activation deletes it.
+   * Cross-device fallback copies (correct, just not free).
+   */
   private async finalizePart(
     partPath: string,
     stagingRoot: string,
@@ -482,7 +493,23 @@ export class LocalAiRuntimeFileSetDownloadService {
       );
     }
     await mkdir(path.dirname(destination), { recursive: true });
-    await rename(partPath, destination);
+    try {
+      await link(partPath, destination);
+    } catch {
+      await copyFile(partPath, destination);
+    }
+  }
+
+  /**
+   * Successful-activation cleanup (audit F13): drop the cache names for an
+   * entry's files — the staging copies are now the installed bytes.
+   */
+  async dropVerifiedCache(files: readonly ModelPackageFile[]): Promise<void> {
+    for (const file of files) {
+      await rm(this.paths.getResumablePartPath(file.sha256), {
+        force: true,
+      }).catch(() => undefined);
+    }
   }
 
   /**
@@ -515,11 +542,15 @@ export class LocalAiRuntimeFileSetDownloadService {
       const headers: Record<string, string> = {};
       if (startByte > 0) headers.Range = `bytes=${startByte}-`;
       let response: Response;
+      // Audit F14: header waits have their own deadline — a stalled server
+      // before any byte cannot hang the operation past the idle budget.
+      const headerDeadline = AbortSignal.timeout(this.idleTimeoutMs);
+      const headerSignal = AbortSignal.any([signal, headerDeadline]);
       try {
         response = await this.fetchImpl(fetchUrl, {
           method: "GET",
           headers,
-          signal,
+          signal: headerSignal,
           redirect: "manual",
         });
       } catch (error) {
@@ -560,17 +591,16 @@ export class LocalAiRuntimeFileSetDownloadService {
           `Manifest fetch failed with HTTP ${opened.status}.`
         );
       }
-      // Audit A17: the manifest must not be buffered unbounded — the
-      // declared size is the hard cap before any byte is read.
-      const declared = Number(opened.response.headers.get("content-length"));
-      if (Number.isFinite(declared) && declared > file.sizeBytes) {
-        throw new LocalAiRuntimeError(
-          "runtime_download_failed",
-          "Manifest response exceeds its declared catalog size."
-        );
-      }
-      const buffer = Buffer.from(await opened.response.arrayBuffer());
-      if (buffer.length > file.sizeBytes || buffer.length !== file.sizeBytes) {
+      // Audit A17/F14: the manifest is streamed with a HARD byte cap —
+      // neither a lying Content-Length nor a chunked stream may buffer
+      // beyond the catalog size — and an idle deadline bounds a stalled body.
+      const buffer = await readCapped(
+        opened.response,
+        file.sizeBytes,
+        signal,
+        "Manifest"
+      );
+      if (buffer.length !== file.sizeBytes) {
         throw new LocalAiRuntimeError(
           "runtime_manifest_invalid",
           "Manifest size does not match the catalog."
@@ -719,9 +749,11 @@ function normalizeFileSetError(error: unknown): LocalAiRuntimeError {
   if (error instanceof LocalAiRuntimeError) return error;
   const err = error as { name?: string; message?: string };
   if (err?.name === "TimeoutError") {
+    // Audit F14: a deadline expiry is a STALL, not a generic failure —
+    // and never mislabeled as a user cancellation.
     return new LocalAiRuntimeError(
-      "runtime_download_failed",
-      "Model file download timed out."
+      "runtime_download_stalled",
+      "Model transfer stalled past its idle deadline."
     );
   }
   if (err?.name === "AbortError") {
@@ -734,6 +766,69 @@ function normalizeFileSetError(error: unknown): LocalAiRuntimeError {
     "runtime_download_failed",
     `Model download failed: ${err?.message ?? "unknown error"}`
   );
+}
+
+/**
+ * Stream a response body into a Buffer with a hard byte cap and an idle
+ * deadline (audit F14): used for the manifest, whose declared size is the
+ * ceiling. Exceeding the cap fails immediately instead of buffering.
+ */
+async function readCapped(
+  response: Response,
+  capBytes: number,
+  signal: AbortSignal,
+  label: string
+): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new LocalAiRuntimeError(
+      "runtime_download_failed",
+      `${label} response had no body.`
+    );
+  }
+  const chunks: Buffer[] = [];
+  let received = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const stallController = new AbortController();
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      stallController.abort(
+        new LocalAiRuntimeError(
+          "runtime_download_stalled",
+          `${label} body stalled past the idle deadline.`
+        )
+      );
+    }, 60_000);
+  };
+  armIdle();
+  const combined = AbortSignal.any([signal, stallController.signal]);
+  try {
+    for (;;) {
+      if (combined.aborted) {
+        throw normalizeFileSetError(
+          combined.reason instanceof Error ? combined.reason : new Error("aborted")
+        );
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        received += value.byteLength;
+        if (received > capBytes) {
+          throw new LocalAiRuntimeError(
+            "runtime_download_failed",
+            `${label} stream exceeded its ${capBytes}-byte cap.`
+          );
+        }
+        chunks.push(Buffer.from(value));
+        armIdle();
+      }
+    }
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks);
 }
 
 /** Node statfs probe with a @types/node-safe cast. */

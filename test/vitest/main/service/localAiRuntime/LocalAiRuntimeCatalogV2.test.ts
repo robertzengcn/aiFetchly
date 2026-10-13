@@ -211,8 +211,9 @@ describe("LocalAiRuntimeFileSetDownloadService", () => {
     });
     expect(result.files).toHaveLength(2);
     expect(await readFile(path.join(staging, "graph", "decoder.onnx"))).toEqual(WEIGHTS);
-    // Full-size parts are consumed (renamed), not left behind.
-    await expect(stat(paths.getResumablePartPath(entry.files[1].sha256))).rejects.toThrow();
+    // Audit F13: verified bytes STAY in the hash-keyed cache (hard link)
+    // until successful activation drops them — crash-durable by design.
+    await expect(stat(paths.getResumablePartPath(entry.files[1].sha256))).resolves.toBeTruthy();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -456,7 +457,7 @@ describe("audit A13-A17: install-set integrity", () => {
     // repro: prepare with one manifest hash, install against another.
     const { LocalAiRuntimeModule } = await import("@/modules/LocalAiRuntimeModule");
     const coordinator = new LocalAiRuntimeOperationCoordinator();
-    const catalogV2 = parseLocalAiRuntimeCatalogV2(v2Doc([modelEntry()])).catalog;
+    const catalogV2 = parseLocalAiRuntimeCatalogV2(v2Doc([NATIVE_ENTRY, modelEntry()])).catalog;
     // A DIFFERENT but individually valid artifact: same version, new bytes.
     const changedEntry = modelEntry();
     changedEntry.files[0] = {

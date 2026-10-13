@@ -38,6 +38,7 @@ import type {
 import { LocalAiRuntimeError } from "@/entityTypes/localAiRuntimeTypes";
 import type { LocalAiRuntimePathService } from "@/service/localAiRuntime/LocalAiRuntimePathService";
 import { groundingModelManifestSchema } from "@/schemas/localAiRuntime";
+import { isRegisteredAdapter } from "@/childprocess/computer-use/grounding/GroundingAdapterRegistry";
 import type { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntimeStateStore";
 import type { LocalAiRuntimeCatalogService } from "@/service/localAiRuntime/LocalAiRuntimeCatalogService";
 import type { LocalAiRuntimeCompatibilityService } from "@/service/localAiRuntime/LocalAiRuntimeCompatibilityService";
@@ -106,6 +107,10 @@ export interface LocalAiRuntimeFileSetDownloadServiceLike {
     signal: AbortSignal;
     onProgress: (progress: LocalAiRuntimeDownloadProgress) => void;
   }): Promise<{ totalBytes: number; files: readonly { path: string; sha256: string; sizeBytes: number }[] }>;
+}
+
+function grantKeyOf(operationId: string, runtimeId: LocalAiRuntimeId): string {
+  return `${operationId}|${runtimeId}`;
 }
 
 export class LocalAiRuntimeModule {
@@ -674,6 +679,8 @@ export class LocalAiRuntimeModule {
             grant.operationId,
             lease
           );
+          // Audit F12: a deferred activation is PREPARED, not active —
+          // report the truth so readiness/UI can distinguish them.
         } else if (this.deps.getCatalogV2) {
           // Audit A14: install-set natives install from the SAME v2 catalog
           // the consent was prepared from, with identity binding (A13).
@@ -686,6 +693,24 @@ export class LocalAiRuntimeModule {
             entry.runtimeVersion,
             entry.sha256
           );
+          // Audit F12: an identical ALREADY-ACTIVE runtime is skipped — a
+          // code-only set reinstall must not redownload unchanged bytes.
+          const active = await this.deps.state
+            .readActive(entryGrant.runtimeId)
+            .catch(() => null);
+          if (active?.runtimeVersion === entry.runtimeVersion) {
+            const diagnosis = await this.deps.resolver
+              .diagnose(entryGrant.runtimeId)
+              .catch(() => null);
+            if (!diagnosis || diagnosis.state === "ready") {
+              installed.push({
+                runtimeId: entryGrant.runtimeId,
+                runtimeVersion: entry.runtimeVersion,
+                activated: true, // already active and healthy
+              });
+              continue;
+            }
+          }
           // v2 native entries extend the v1 shape; the proven pipeline
           // consumes them directly.
           await this.runPipeline(entry, grant.operationId, lease);
@@ -709,10 +734,12 @@ export class LocalAiRuntimeModule {
         installed.push({
           runtimeId: entryGrant.runtimeId,
           runtimeVersion: entryGrant.runtimeVersion,
-          activated: true,
+          activated: !this.wasActivationDeferred(
+            grant.operationId,
+            entryGrant.runtimeId
+          ),
         });
       } catch (error) {
-        this.setGrants.delete(grant.operationId);
         return {
           operationId: grant.operationId,
           installed,
@@ -790,16 +817,49 @@ export class LocalAiRuntimeModule {
     catalog: import("@/entityTypes/localAiRuntimeTypes").LocalAiRuntimeCatalogV2,
     runtimeId: LocalAiRuntimeId
   ): ModelCatalogEntryV2 {
-    const entry = catalog.runtimes.find(
-      (e) => e.runtimeId === runtimeId && e.packageKind === "model"
+    const candidates = catalog.runtimes.filter(
+      (e): e is ModelCatalogEntryV2 =>
+        e.runtimeId === runtimeId && e.packageKind === "model"
     );
-    if (!entry || entry.packageKind !== "model") {
+    if (candidates.length === 0) {
       throw new LocalAiRuntimeError(
         "runtime_catalog_target_missing",
         `No ${runtimeId} model entry in the v2 catalog.`
       );
     }
-    return entry;
+    // Audit F12: full compatibility — app-version window, built-in adapter
+    // registration, architecture/contract/processing revisions, and an
+    // execution provider supported by the runtime requirement.
+    const target = this.deps.target;
+    const compatible = candidates.filter((entry) => {
+      const appOk =
+        semver.satisfies(target.appVersion, `>=${entry.minAppVersion}`) &&
+        (!entry.maxAppVersion ||
+          semver.satisfies(target.appVersion, `<=${entry.maxAppVersion}`));
+      const adapterOk = isRegisteredAdapter(entry.groundingAdapterId);
+      const runtimeEntry = catalog.runtimes.find(
+        (r) =>
+          r.runtimeId === entry.requiresRuntime.runtimeId &&
+          r.packageKind === "native_runtime" &&
+          semver.gte(r.runtimeVersion, entry.requiresRuntime.minVersion)
+      );
+      const providerOk =
+        !!runtimeEntry &&
+        runtimeEntry.packageKind === "native_runtime" &&
+        entry.supportedExecutionProviders.some((p) =>
+          (runtimeEntry.executionProviders ?? ["cpu"]).includes(p)
+        );
+      return appOk && adapterOk && providerOk;
+    });
+    if (compatible.length === 0) {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_target_missing",
+        `No ${runtimeId} model entry compatible with app ${target.appVersion} ` +
+          `and this build's adapters/execution providers.`
+      );
+    }
+    compatible.sort((a, b) => semver.rcompare(a.runtimeVersion, b.runtimeVersion));
+    return compatible[0];
   }
 
   private validateSetGrant(
@@ -948,6 +1008,7 @@ export class LocalAiRuntimeModule {
             await this.activateModelPointer(entry, manifest);
           }
         );
+        this.deferredActivations.add(grantKeyOf(operationId, entry.runtimeId));
         return; // activated later, when leases drop (CU-INST-16)
       }
       // Audit A15: preserve the working bytes if the swap fails — back up
@@ -977,6 +1038,13 @@ export class LocalAiRuntimeModule {
         manifest as unknown as ResolvedLocalAiRuntime["manifest"]
       );
       await this.activateModelPointer(entry, manifest);
+      // Audit F13: activation succeeded — the installed staging bytes are
+      // authoritative, so drop the crash-durable cache names for them.
+      if (this.deps.fileSetDownload && "dropVerifiedCache" in this.deps.fileSetDownload) {
+        await (this.deps.fileSetDownload as unknown as {
+          dropVerifiedCache(files: readonly { sha256: string }[]): Promise<void>;
+        }).dropVerifiedCache(entry.files).catch(() => undefined);
+      }
       // Superseded model versions are pruned after a successful update
       // (§7.8): rollback means downloading again.
       await this.pruneInactiveVersions(entry.runtimeId).catch(() => undefined);
@@ -992,6 +1060,14 @@ export class LocalAiRuntimeModule {
         ? error
         : new LocalAiRuntimeError("runtime_unknown_error", (error as Error).message);
     }
+  }
+
+  /** Version ids whose activation was deferred this session (audit F12). */
+  private readonly deferredActivations = new Set<string>();
+
+  /** Whether an install-set entry's activation was deferred (audit F12). */
+  wasActivationDeferred(operationId: string, runtimeId: LocalAiRuntimeId): boolean {
+    return this.deferredActivations.has(grantKeyOf(operationId, runtimeId));
   }
 
   /** active.json flip + manifest index write for a model version. */
