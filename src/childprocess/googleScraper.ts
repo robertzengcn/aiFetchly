@@ -862,16 +862,64 @@ export class GoogleScraper extends SearchScrape {
             return "";
         }
 
-        if (trimmedHref.startsWith("/url?") || trimmedHref.startsWith("https://www.google.com/url?")) {
+        const isGoogleRedirect =
+            trimmedHref.startsWith("/url?") || /^https?:\/\/(www\.)?google\.[^/]+\/url\?/i.test(trimmedHref);
+        if (isGoogleRedirect) {
             try {
                 const url = new URL(trimmedHref, "https://www.google.com");
-                return url.searchParams.get("q") || url.searchParams.get("url") || trimmedHref;
+                const target = url.searchParams.get("q") || url.searchParams.get("url");
+                if (target) {
+                    return GoogleScraper.canonicalizeResultLink(target);
+                }
             } catch {
                 return trimmedHref;
             }
         }
 
-        return trimmedHref;
+        return GoogleScraper.canonicalizeResultLink(trimmedHref);
+    }
+
+    /**
+     * Canonicalize an extracted link so dedupe sees identical URLs as one:
+     * - strip a leading "www." on the hostname ("www.example.com" -> "example.com")
+     * - strip a single trailing slash from non-root paths ("/page/" -> "/page")
+     * - treat the root path "/" and an empty path as the same form
+     * The transform happens on the textual href (not a URL round-trip) so bare-domain
+     * links never gain the WHATWG-implied "/" and stay stable in the dataset.
+     */
+    private static canonicalizeResultLink(href: string): string {
+        const stripTrailingSlash = (value: string): string => value.replace(/\/$/, "");
+
+        try {
+            const parsed = new URL(href);
+            if (!parsed.hostname) {
+                return stripTrailingSlash(href);
+            }
+        } catch {
+            // Not an absolute URL (e.g. relative href) — fall back to text-level cleanup.
+            return stripTrailingSlash(href);
+        }
+
+        const schemeMatch = /^([a-z][a-z0-9+.-]*:\/\/)/i.exec(href);
+        if (!schemeMatch) {
+            return stripTrailingSlash(href);
+        }
+        const afterScheme = href.slice(schemeMatch[1].length);
+        const queryIndex = afterScheme.search(/[?#]/);
+        const authorityAndPath = queryIndex === -1 ? afterScheme : afterScheme.slice(0, queryIndex);
+        const suffix = queryIndex === -1 ? "" : afterScheme.slice(queryIndex);
+
+        const slashIndex = authorityAndPath.indexOf("/");
+        const authority = slashIndex === -1 ? authorityAndPath : authorityAndPath.slice(0, slashIndex);
+        let path = slashIndex === -1 ? "" : authorityAndPath.slice(slashIndex);
+        path = path.length > 1 ? stripTrailingSlash(path) : "";
+
+        // Strip a single leading "www." from the host (after any userinfo), preserving port.
+        const atSign = authority.lastIndexOf("@");
+        const userinfo = atSign === -1 ? "" : authority.slice(0, atSign + 1);
+        const host = authority.slice(userinfo.length).replace(/^www\./i, "");
+
+        return schemeMatch[1] + userinfo + host + path + suffix;
     }
 
     private static isOrganicResultLink(href: string): boolean {
@@ -886,8 +934,16 @@ export class GoogleScraper extends SearchScrape {
 
         try {
             const parsed = new URL(normalized);
-            const hostname = parsed.hostname.toLowerCase();
-            return !["google.com", "www.google.com"].includes(hostname);
+            // Any Google-owned host: google.com, subdomains (maps.google.com) and
+            // country TLDs (www.google.co.uk, google.de). Redirect targets that
+            // resolve back to a Google host are rejected here too, because the
+            // normalized link is already unwrapped at this point.
+            const bareHost = parsed.hostname.toLowerCase().replace(/^www\./, "");
+            const isGoogleHost =
+                bareHost === "google.com" ||
+                bareHost.endsWith(".google.com") ||
+                /^google\.[a-z]/i.test(bareHost);
+            return !isGoogleHost;
         } catch {
             return false;
         }
