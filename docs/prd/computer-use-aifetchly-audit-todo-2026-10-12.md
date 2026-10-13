@@ -55,67 +55,67 @@ The reproduction constructs `ComputerUseSupervisor` with an injected adapter, re
 
 ### A01 — P0: Stop can finish before a pending action dispatches
 
-- [ ] **Reproduced.** `src/service/computerUse/ComputerUseSupervisor.ts:382–420`: grant validation precedes the awaited safety check. After that await, the code unconditionally sets `EXECUTING` and calls the adapter, without rechecking state, generation, lease, grant, or target freshness.
+- [x] **Reproduced.** `src/service/computerUse/ComputerUseSupervisor.ts:382–420`: grant validation precedes the awaited safety check. After that await, the code unconditionally sets `EXECUTING` and calls the adapter, without rechecking state, generation, lease, grant, or target freshness.
 - Reproduce: defer `preDispatchCheck`; dispatch; await `stopSession`; resolve safety with `{ allowed: true }`. The adapter receives one input call after stop completed. The later outcome check cannot undo this input.
 - Fix: bind immutable dispatch context to the original generation, revalidate after every asynchronous pre-dispatch operation, and atomically refuse dispatch after revocation. Bound adapter cancellation and prevent queued work from crossing the stop boundary.
 - Acceptance: stop at every await boundary; zero input after acknowledgment, including queued actions, slow integrity checks, and expired grants. Requirements: CU-SESSION-04/06/08/13, design §10.4.
 
 ### A02 — P0: Late completion revives stopped sessions; Pause rejects active work
 
-- [ ] **Reproduced/Static.** `ComputerUseSupervisor.ts:190–250, 426–464`: Pause accepts only `READY`/`PAUSED`. It rejects `OBSERVING`, `AWAITING_AUTHORIZATION`, `EXECUTING`, and `VERIFYING`. Verification completion unconditionally writes `READY`; observation and dispatch catch paths can write `PAUSED` after stop.
+- [x] **Reproduced/Static.** `ComputerUseSupervisor.ts:190–250, 426–464`: Pause accepts only `READY`/`PAUSED`. It rejects `OBSERVING`, `AWAITING_AUTHORIZATION`, `EXECUTING`, and `VERIFYING`. Verification completion unconditionally writes `READY`; observation and dispatch catch paths can write `PAUSED` after stop.
 - Reproduce: defer `adapter.verify`, stop the session, resolve verification. Summary becomes `READY` even though stop released the desktop lease. Pause during verification returns `session_state_invalid`.
 - Fix: make stop terminal for that session generation; guard success and error continuations; invalidate authority on pause/handoff; support takeover during active operations. Do not let a late callback revive an old owner.
 - Acceptance: lifecycle interleavings cover observation, safety, input, verification, pause/handoff, stop, and a subsequent competing session. CU-SESSION-02/04–06.
 
 ### A03 — P0: Grants are minted without a permission decision
 
-- [ ] **Reproduced.** `ComputerUseSupervisor.ts:369–380` calls `authorization.mint` for every request. `ComputerUseActionAuthorization.ts:67` records the supplied class without checking current-task permission. `requiresExplicitAuthorization` exists but has no enforcing call in dispatch.
+- [x] **Reproduced.** `ComputerUseSupervisor.ts:369–380` calls `authorization.mint` for every request. `ComputerUseActionAuthorization.ts:67` records the supplied class without checking current-task permission. `requiresExplicitAuthorization` exists but has no enforcing call in dispatch.
 - A consequential request with no user approval dispatches successfully. Grant hashing protects request identity; it does not establish authority to save, send, delete, share, overwrite, or pay.
 - Fix: implement host-owned task authority, trusted action classification, approval challenges and revocation, distinct capture/input/debug/image-routing grants, and deny-by-default behavior. Never accept a model's classification or observed text as permission.
 - Acceptance: final-action and overwrite tests remain blocked until a matching current-task approval; changed action/target/observation invalidates approval. CU-PERM-02–05/07, W-1 stop point.
 
 ### A04 — P0: Target handles do not enforce observation or window scope
 
-- [ ] **Reproduced/Static.** `ComputerUseSupervisor.ts:258–318, 358–420`; `ComputerUseTargetStore.ts:47`; `ComputerUseSafetyService.ts:109–167`.
+- [x] **Reproduced/Static.** `ComputerUseSupervisor.ts:258–318, 358–420`; `ComputerUseTargetStore.ts:47`; `ComputerUseSafetyService.ts:109–167`.
 - Accessibility targets can be minted without an actual observation and with arbitrary points/regions. The supervisor does not compare `request.observationId` with the stored target, nor require the latest observation. Caller-supplied `request.point` overrides the target point in safety checks and is passed unchanged to the adapter. Targets are reusable after actions until TTL expiry. Store records have no session identity; generations restart at 1 for each session.
 - Fix: store session/window/observation fingerprints and transforms; validate finite, in-bounds points/regions; derive executor coordinates only from the host target; invalidate used observations and handles on state changes; enforce one action per observation. Reject target creation for inactive sessions and late results from a previous session.
 - Acceptance: foreign-session handles, fabricated observations, point overrides, NaN, moved windows, display changes, repeated handles, and stale results never dispatch. CU-VISION-04/05, CU-PERM-03/07, design §9–11.
 
 ### A05 — P0: Required safety checks are optional or incomplete
 
-- [ ] **Static.** `ComputerUseSupervisor.ts:60–93, 101–159` allows startup without safety or a stop controller and only checks that a listed window exists. It does not call `assertHostNotElevated`, reject elevated/own targets at selection, or verify single-display support.
+- [x] **Static.** `ComputerUseSupervisor.ts:60–93, 101–159` allows startup without safety or a stop controller and only checks that a listed window exists. It does not call `assertHostNotElevated`, reject elevated/own targets at selection, or verify single-display support.
 - `ComputerUseSafetyService.ts:109` skips integrity checks when PID is null; keyboard checks only reject AiFetchly focus, not another app's focus. Pointer checks reject rectangles belonging to AiFetchly but do not prove the selected target owns the window at the point. `ComputerUseElevationService` caches process integrity; no production observation path clears that cache.
 - Fix: make release-critical controls mandatory in production composition, refuse unknown target identity, validate foreground/window-at-point ownership immediately before input, and enforce integrity at selection and dispatch.
 - Acceptance: own windows, null/unknown PID, host elevation, elevated target, other foreground apps, occluded targets, and unsupported displays all fail closed. CU-SESSION-08–12, design §10.5.
 
 ### A06 — P1: Stop has unbounded cleanup and incomplete lifecycle ownership
 
-- [ ] **Static.** `ComputerUseSupervisor.ts:115–143, 163–186`: stop awaits adapter disposal without a deadline or forced termination. There is no grounding-worker cancellation, held-key/button release, or clipboard restoration. A thrown hotkey `register` occurs outside startup cleanup and can leak the desktop lease; an unregister failure can prevent stop from releasing it.
+- [x] **Static.** `ComputerUseSupervisor.ts:115–143, 163–186`: stop awaits adapter disposal without a deadline or forced termination. There is no grounding-worker cancellation, held-key/button release, or clipboard restoration. A thrown hotkey `register` occurs outside startup cleanup and can leak the desktop lease; an unregister failure can prevent stop from releasing it.
 - Fix: guaranteed revocation plus bounded cleanup in `finally`, forced process-tree shutdown, worker kill, input release, clipboard restoration, and cleanup for every startup failure. Wire sleep/resume, lock, target closure, disconnect, display change, and app quit.
 - Acceptance: hung disposal still completes within the measured budget; injected register/unregister failures leave no lease/hotkey/process; no automatic input replay. CU-SESSION-03–06/08/13.
 
 ### A07 — P1: Supervisor IDs are rejected by its IPC control schemas
 
-- [ ] **Reproduced.** `ComputerUseSupervisor.ts:103` produces `cus_<uuid>`, but `src/schemas/ipc/computerUse.ts:15` validates the complete session ID as a plain UUID.
+- [x] **Reproduced.** `ComputerUseSupervisor.ts:103` produces `cus_<uuid>`, but `src/schemas/ipc/computerUse.ts:15` validates the complete session ID as a plain UUID.
 - Fix: use one shared session-ID contract for generation, start result, Stop, Pause, Resume, and UI calls.
 - Acceptance: round-trip the actual default start result through every control schema; reject malformed IDs. CU-SESSION-04, design §9.
 
 ### A08 — P1: Successful input is reported without verification; rejected actions can wedge the session
 
-- [ ] **Reproduced/Static.** `ComputerUseSupervisor.ts:382–411, 445–478`: missing `adapter.verify` produces `succeeded`; safety denial leaves state at `AWAITING_AUTHORIZATION`, where neither dispatch nor Pause works. Post-input errors are generic `failed` rather than necessarily uncertain. Early failure/rejection/cancellation outcomes are not appended to the action log.
+- [x] **Reproduced/Static.** `ComputerUseSupervisor.ts:382–411, 445–478`: missing `adapter.verify` produces `succeeded`; safety denial leaves state at `AWAITING_AUTHORIZATION`, where neither dispatch nor Pause works. Post-input errors are generic `failed` rather than necessarily uncertain. Early failure/rejection/cancellation outcomes are not appended to the action log.
 - Fix: explicit verified/uncertain outcomes; state cleanup for every branch; preserve all attempt records; classify post-dispatch timeout/crash as `execution_uncertain` and require fresh observation before retry.
 - Acceptance: absent verification never proves task completion; denial is recoverable; uncertain actions are not automatically repeated. CU-VISION-06/07, design §9.3/10.4/13.4.
 
 ### A09 — P1: Electron grounding transport does not match the actual API
 
-- [ ] **Static, checked against installed Electron types and existing worker patterns.** `src/childprocess/computer-use/GroundingWorker.ts:198` passes the parent-port message event directly to `server.handle`; other utility workers unwrap `event.data`. The switch therefore sees no `type` for real parent-port events.
+- [x] **Static, checked against installed Electron types and existing worker patterns.** `src/childprocess/computer-use/GroundingWorker.ts:198` passes the parent-port message event directly to `server.handle`; other utility workers unwrap `event.data`. The switch therefore sees no `type` for real parent-port events.
 - `ComputerUseGroundingClient.ts:20–22, 117–124` passes an `ArrayBuffer` in the transfer list. Installed `node_modules/electron/electron.d.ts:15877` declares `MessagePortMain[]` for `UtilityProcess.postMessage`, not Web Worker `Transferable[]`.
 - Fix: use Electron's event envelope and supported payload/port transport, with runtime schema validation on both sides. Do not claim zero-copy image transfer through an unsupported API.
 - Acceptance: launch the packaged worker through real `utilityProcess.fork`; load, ground with an image, cancel, unload, malformed-message rejection, and exit all work. Direct calls to `GroundingWorkerServer.handle` do not cover this boundary. CU-VISION-09/12, design §5.6.
 
 ### A10 — P1: Worker replies are not correlated with the pending request
 
-- [ ] **Static.** `ComputerUseGroundingClient.ts:103–141, 168–232, 268`: only one generic pending reply is tracked; results/errors are not matched against request key and observation. Cancel/timeout clears that slot without ensuring the old inference has stopped. A late response for A can resolve/reject a newly submitted B. Old worker exit callbacks can also affect a newly loaded worker.
+- [x] **Static.** `ComputerUseGroundingClient.ts:103–141, 168–232, 268`: only one generic pending reply is tracked; results/errors are not matched against request key and observation. Cancel/timeout clears that slot without ensuring the old inference has stopped. A late response for A can resolve/reject a newly submitted B. Old worker exit callbacks can also affect a newly loaded worker.
 - Fix: correlate worker instance, session, generation, request key, and observation; validate outbound shapes; enforce a watchdog kill after timeout/cancel; prevent concurrent native runs and stale callbacks. Clean pending state when `postMessage` throws.
 - Acceptance: cancel A/start B/late A, timeout A/start B, old-worker exit after reload, invalid payloads, and hung ONNX runs cannot poison B or mint a target. CU-VISION-05/09/12/14.
 
@@ -134,59 +134,59 @@ The reproduction constructs `ComputerUseSupervisor` with an injected adapter, re
 
 ### A13 — P1: Install-set consent is not bound to the installed bytes
 
-- [ ] **Static.** `src/modules/LocalAiRuntimeModule.ts:615–625` stores `identityHash`, but `installSet` and `runModelPipeline` re-fetch entries and compare only runtime version (`:679–692`, `:805–812`). The stored hash is never used to reject a same-version artifact replacement.
+- [x] **Static.** `src/modules/LocalAiRuntimeModule.ts:615–625` stores `identityHash`, but `installSet` and `runModelPipeline` re-fetch entries and compare only runtime version (`:679–692`, `:805–812`). The stored hash is never used to reject a same-version artifact replacement.
 - Fix: consume a one-use offer bound to exact selected IDs/versions/hashes, target and configuration; compare identity before any download. Reject altered native SHA/model manifest SHA and concurrently replayed consent.
 - Acceptance: same version with changed hash fails before network download; cancellation/expiry/replay cases pass. CU-INST-06/13, design §7.8.
 
 ### A14 — P1: Install-set selection uses incompatible catalog paths
 
-- [ ] **Static.** `LocalAiRuntimeModule.ts:563–601, 677–692, 732–762`: native/model v2 selection takes the first matching ID/kind without platform, architecture, Electron ABI, app-version, provider, or adapter compatibility checks. Install then obtains native entries from the existing v1 `catalog.getCatalog()` even though consent was prepared from v2. The intended v1 catalog has no grounding runtime.
+- [x] **Static.** `LocalAiRuntimeModule.ts:563–601, 677–692, 732–762`: native/model v2 selection takes the first matching ID/kind without platform, architecture, Electron ABI, app-version, provider, or adapter compatibility checks. Install then obtains native entries from the existing v1 `catalog.getCatalog()` even though consent was prepared from v2. The intended v1 catalog has no grounding runtime.
 - Fix: complete v2 fetch/cache and compatibility selection end to end; use the consented v2 entry throughout; validate model adapter/contract/processing and provider compatibility before offering installation; skip identical healthy runtime installs.
 - Acceptance: shuffled cross-platform catalogs select correctly; incompatible configurations fail with a reason; runtime+model installation works from v2 alone and leaves v1 publishing unchanged. CU-INST-02/04/09/12/15/18, CU-VISION-13.
 
 ### A15 — P1: Model activation ignores current-version leases and model health
 
-- [ ] **Static.** `LocalAiRuntimeModule.ts:855–891` only tests whether the incoming version is leased, then flips `active.json` even if the old version has live users. No full model health probe runs. `deferActivation` exists in the coordinator but has no production caller. Neither the supervisor nor grounding client acquires runtime/model leases.
+- [x] **Static.** `LocalAiRuntimeModule.ts:855–891` only tests whether the incoming version is leased, then flips `active.json` even if the old version has live users. No full model health probe runs. `deferActivation` exists in the coordinator but has no production caller. Neither the supervisor nor grounding client acquires runtime/model leases.
 - The model pipeline deletes an existing same-version directory before replacing it, risking the working installation on failed repair. Pruning skips active/leased versions but not pending activation; release does not trigger model pruning. Pending activations are in memory only.
 - Fix: pin both resources in session and worker; stage/probe before activation; defer while any current version is used; preserve working bytes on repair failure; persist/reconcile pending activation; prune on lease release and protect pending versions; remove associated partials deliberately.
 - Acceptance: hold old-version leases, install update, restart/stop/release, inject probe/rename failure, then remove/repair. Active resources remain valid until safe activation. CU-INST-08/09/16/17, CU-VISION-14.
 
 ### A16 — P1: Interrupted downloads discard already completed files
 
-- [ ] **Static.** `LocalAiRuntimeFileSetDownloadService.ts:452–466` renames each verified `.part` into staging; `LocalAiRuntimeModule.ts:893–894` deletes staging on failure. If shard A finishes and B fails, retry must download A again because its cached part was moved and then deleted. Restart creates another operation directory without a completed-file reuse mechanism.
+- [x] **Static.** `LocalAiRuntimeFileSetDownloadService.ts:452–466` renames each verified `.part` into staging; `LocalAiRuntimeModule.ts:893–894` deletes staging on failure. If shard A finishes and B fails, retry must download A again because its cached part was moved and then deleted. Restart creates another operation directory without a completed-file reuse mechanism.
 - Fix: durable content-addressed verified files or resumable operation state; retain completed files across network failure, cancellation, and restart, with integrity rechecks before reuse.
 - Acceptance: finish A, interrupt B, restart and resume; A transfers zero bytes and only missing/corrupt files download. CU-INST-14.
 
 ### A17 — P2: Downloader timeout and range validation are incomplete
 
-- [ ] **Static.** `LocalAiRuntimeFileSetDownloadService.ts:309–331, 469–547, 652`: only the Content-Range total is checked, not its start/end. The idle watchdog starts during body streaming, not while waiting for response headers or downloading the whole manifest; manifest `arrayBuffer()` is unbounded until complete. Shared `pendingResponse` can be overwritten by concurrent model downloads.
+- [x] **Static.** `LocalAiRuntimeFileSetDownloadService.ts:309–331, 469–547, 652`: only the Content-Range total is checked, not its start/end. The idle watchdog starts during body streaming, not while waiting for response headers or downloading the whole manifest; manifest `arrayBuffer()` is unbounded until complete. Shared `pendingResponse` can be overwritten by concurrent model downloads.
 - Fix: per-request response ownership, exact Content-Range validation, bounded manifest streaming, header/body deadlines, redirect-body cleanup, and actionable stalled error propagation. Include aggregate disk preflight for the consented install set.
 - Acceptance: stalled headers/manifest, oversized manifest, wrong range start/end, concurrent downloads, and insufficient disk fail promptly without cross-contamination or activation. CU-INST-07/14/18.
 
 ### A18 — P1: MCP session reuse is unintegrated and pool lifecycle is unsafe
 
-- [ ] **Static.** `src/service/MCPSessionPool.ts:94–123` has no pending-acquisition map: simultaneous identical acquires create multiple clients and overwrite the stored one. Idle timers start on acquisition with no borrower count, so active unpinned work can be disconnected. Existing entries are reused without a liveness check; disposal during connect can still insert a late session.
+- [x] **Static.** `src/service/MCPSessionPool.ts:94–123` has no pending-acquisition map: simultaneous identical acquires create multiple clients and overwrite the stored one. Idle timers start on acquisition with no borrower count, so active unpinned work can be disconnected. Existing entries are reused without a liveness check; disposal during connect can still insert a late session.
 - `src/service/MCPToolService.ts:238, 604, 708` still creates and disconnects clients per operation; no production `new MCPSessionPool` call was found.
 - Fix: integrate reuse with owned lifecycle/trust revocation; deduplicate connects, ref-count borrowers, evict dead clients, prevent post-disposal insertion, and isolate pinned Computer Use owners from generic MCP callers.
 - Acceptance: sequential and concurrent reuse, long calls exceeding idle timeout, server death, trust/config changes, stop, and disposal during connect. D-19, CU-SESSION-03, design §4.2.
 
 ### A19 — P1: MCP shutdown/content preservation still fall short of the design
 
-- [ ] **Static.** `src/modules/mcp/SupervisedStdioTransport.ts:doClose/killChild` only signals the direct child. Owned-process registration supports application shutdown, but transport close does not itself invoke tree termination for session stop. Default escalation can also exceed the Computer Use forced-stop target.
+- [x] **Static.** `src/modules/mcp/SupervisedStdioTransport.ts:doClose/killChild` only signals the direct child. Owned-process registration supports application shutdown, but transport close does not itself invoke tree termination for session stop. Default escalation can also exceed the Computer Use forced-stop target.
 - `src/modules/MCPClient.ts:425–493` preserves selected block fields but drops `resource_link` content and annotations/metadata rather than preserving the complete MCP content union.
 - Fix: explicit per-session process-tree termination with bounded force escalation and complete validated content preservation; route sensitive image blocks through the host image policy instead of generic tool persistence/errors.
 - Acceptance: a backend spawning a child cannot leave it running after session close; real stdio integration covers handshake, Unicode chunking, cancellation, death, all block types, and cleanup. D-19, CU-SESSION-03/04, design §4.1/10.4.
 
 ### A20 — P1: Excel TSV breaks cell boundaries and verification misses row-count errors
 
-- [ ] **Reproduced/Static.** `src/service/computerUse/excel/ExcelLeadListPlanner.ts:179–204` joins values without escaping/rejecting tabs, CR, LF, or quotes. A name `Alice\n=1+1` produces a second row starting with an unguarded formula marker. Exact Excel execution is not claimed here; the structural TSV and formula-guard bypass are demonstrated.
+- [x] **Reproduced/Static.** `src/service/computerUse/excel/ExcelLeadListPlanner.ts:179–204` joins values without escaping/rejecting tabs, CR, LF, or quotes. A name `Alice\n=1+1` produces a second row starting with an unguarded formula marker. Exact Excel execution is not claimed here; the structural TSV and formula-guard bypass are demonstrated.
 - `:220–258` checks only expected rows/defined fields, so an extra unexpected row is accepted. Text-format header patterns (`:140`) are English-only; a Chinese postal header with short leading-zero values is not protected by the long-digit fallback. Mapping's substring pass can also guess a semantic match without confirmation.
 - Fix: defined Excel-safe cell serialization/validation before guarding formulas, strict row/column/count verification and cell-value normalization, Chinese phone/postal/ID detection, and explicit ambiguity confirmation. Validate 500×15 limits and duplicate/invalid column assignments.
 - Acceptance: tabs/newlines/quotes, all formula prefixes, Chinese leading zeros, long IDs, extra/missing rows and ambiguous headers are covered; verify clipboard apostrophe/readback behavior in native Excel. W1-3–7, design §6.3.
 
 ### A21 — P1: Settings endpoint reports success but discards changes
 
-- [ ] **Static.** `src/main-process/communication/index.ts:189–194` installs `read: () => DEFAULT_COMPUTER_USE_SETTINGS` and `write: () => undefined`; `computer-use-ipc.ts:164–176` returns updated settings as if saved. The next read immediately returns defaults, even before restart.
+- [x] **Static.** `src/main-process/communication/index.ts:189–194` installs `read: () => DEFAULT_COMPUTER_USE_SETTINGS` and `write: () => undefined`; `computer-use-ipc.ts:164–176` returns updated settings as if saved. The next read immediately returns defaults, even before restart.
 - Fix: persist validated settings using the intended host store; enforce compatible installed model selection only between sessions; separate consent from merely setting visual/debug booleans; support visual mode revocation from the next observation. Explain unsupported readiness instead of always `not_installed`.
 - Acceptance: set/get/restart round trips; live model changes rejected; image-provider changes require fresh consent. CU-VISION-13/14/16, CU-PLAN-01–03/07.
 
@@ -362,3 +362,26 @@ Producer-owned CU-INST-11 and CU-MAC-01/03 are deliberately excluded from the 73
 3. Fix the grounding/runtime/MCP defects and complete B04/B05/B08 for Phase 2; require actual Electron/model/provider tests before marking vision ready.
 4. Complete B09 for Phase 3, then clean-machine/update/repair/compatibility and SLO gates in B10 for release hardening.
 5. Keep later/deferred scope separate. Close a checkbox only with the cited acceptance evidence, not because an interface, stub, translation key, or isolated helper exists.
+
+## E. Remediation status (2026-10-13)
+
+Fixed in this pass (see git log on computer-use-integration):
+
+| Item | Status | Commit |
+| --- | --- | --- |
+| A01-A08 | FIXED | b98f43b8 |
+| A09-A10 | FIXED | 9f477b0d |
+| A13, A14, A16 | FIXED | d9a9d251 |
+| A15, A17 | PARTIALLY FIXED (noted above) | d9a9d251 |
+| A18 | FIXED | ced6ba00 |
+| A19 | PARTIALLY FIXED (noted above) | ced6ba00 |
+| A20 | FIXED | 2f70dc82 |
+| A21 | PARTIALLY FIXED (noted above) | 2f70dc82 |
+
+**Still open (P1):** A11 (executable GUI-Actor inference pipeline — needs
+pinned graph/tokenizer contract), A12 remainder (calibrated candidate
+extraction from the pointer tensor; region mapping already fixed), A15/A17
+remainders (model health probe, session-side leases, header deadline), A19
+remainder (session-stop tree-kill wiring), A21 remainder (selection lock +
+consent coupling). All B-section items remain open; B01 (Windows backend)
+and B09 (macOS) are external-plugin-gated, B10 needs real hardware.
