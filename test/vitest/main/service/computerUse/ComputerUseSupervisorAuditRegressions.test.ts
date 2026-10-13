@@ -378,3 +378,197 @@ describe("audit regressions: supervisor authority and lifecycle", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 });
+
+describe("audit F01-F07 regressions (2026-10-13)", () => {
+  function click(handle: string, observationId: string) {
+    return {
+      actionKind: "click" as const,
+      targetHandle: handle,
+      observationId,
+      point: { x: 100, y: 200 },
+    };
+  }
+
+  it("F01: pause during the awaited safety check revokes the dispatch", async () => {
+    const a = adapter();
+    const { controller, resolveVerdict } = deferredSafety();
+    const { supervisor, session, obs } = await startWith(a, controller);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const outcomePromise = supervisor.dispatch(
+      session.sessionId,
+      click(target.handle, obs.metadata.observationId),
+      "within_task"
+    );
+    await supervisor.pauseSession(session.sessionId, "human_input");
+    resolveVerdict({ allowed: true });
+    const outcome = await outcomePromise;
+    // Whether the dispatch was cancelled mid-flight, rejected at the
+    // generation guard, or failed the state assertion after pause won the
+    // race: ZERO input and a session that stays PAUSED are the invariants.
+    expect(outcome.outcome).not.toBe("succeeded");
+    expect(a.counters.dispatchCalls).toBe(0);
+    expect(supervisor.getSummary(session.sessionId).state).toBe("PAUSED");
+  });
+
+  it("F03: target/grant expiry during safety causes zero input", async () => {
+    const a = adapter();
+    let nowMs = 1_000_000;
+    const { controller, resolveVerdict } = deferredSafety();
+    const supervisor = new ComputerUseSupervisor({
+      adapter: a,
+      stopController: stop,
+      safety: controller,
+      now: () => nowMs,
+    });
+    const session = await supervisor.startSession({
+      targetWindowId: "win-1",
+      plannerMode: "local_only",
+      groundingModelRuntimeId: null,
+    });
+    const obs = await supervisor.observe(session.sessionId);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const outcomePromise = supervisor.dispatch(
+      session.sessionId,
+      click(target.handle, obs.metadata.observationId),
+      "within_task"
+    );
+    // The handle (TTL 10s) and the observation expire while the safety
+    // check is pending; the clock advance is the supervisor's OWN clock.
+    nowMs += 60_000;
+    resolveVerdict({ allowed: true });
+    const outcome = await outcomePromise;
+    expect(outcome.outcome).not.toBe("succeeded");
+    expect(["target_stale", "grant_invalid", "cancelled", "failed"]).toContain(
+      outcome.errorCode ?? "none"
+    );
+    expect(a.counters.dispatchCalls).toBe(0);
+  });
+
+  it("F04: a consumed observation cannot be re-minted for a second action", async () => {
+    const a = adapter();
+    const { supervisor, session, obs } = await startWith(a);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const first = await supervisor.dispatch(
+      session.sessionId,
+      click(target.handle, obs.metadata.observationId),
+      "within_task"
+    );
+    expect(first.outcome).toBe("succeeded");
+    // Observation currency consumed: minting another handle for the SAME
+    // observation id must now fail.
+    expect(() =>
+      supervisor.registerAccessibilityTarget(
+        session.sessionId,
+        obs.metadata.observationId,
+        { x: 100, y: 200 },
+        { x: 90, y: 190, width: 20, height: 20 }
+      )
+    ).toThrowError(ComputerUseError);
+    expect(a.counters.dispatchCalls).toBe(1);
+  });
+
+  it("F05: an input exception reports uncertain and does not wedge EXECUTING", async () => {
+    const a = adapter();
+    const failing: ComputerUseDesktopAdapter = {
+      ...a,
+      dispatchInput: async () => {
+        throw new Error("injection failed mid-way");
+      },
+    };
+    const { supervisor, session, obs } = await startWith(failing);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const outcome = await supervisor.dispatch(
+      session.sessionId,
+      click(target.handle, obs.metadata.observationId),
+      "within_task"
+    );
+    expect(outcome.outcome).toBe("uncertain");
+    expect(outcome.errorCode).toBe("execution_uncertain");
+    const state = supervisor.getSummary(session.sessionId).state;
+    expect(state).not.toBe("EXECUTING"); // not wedged
+    expect(["PAUSED", "READY"]).toContain(state);
+  });
+
+  it("F05: a verifier exception reports uncertain (input already occurred)", async () => {
+    const a = adapter();
+    const throwing: ComputerUseDesktopAdapter = {
+      ...a,
+      verify: async () => {
+        throw new Error("verification crashed");
+      },
+    };
+    const { supervisor, session, obs } = await startWith(throwing);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const outcome = await supervisor.dispatch(
+      session.sessionId,
+      click(target.handle, obs.metadata.observationId),
+      "within_task"
+    );
+    expect(outcome.outcome).toBe("uncertain");
+  });
+
+  it("F06: a within_task label cannot downgrade Ctrl+S — approval still required", async () => {
+    const a = adapter();
+    const { supervisor, session, obs } = await startWith(a);
+    const target = supervisor.registerAccessibilityTarget(
+      session.sessionId,
+      obs.metadata.observationId,
+      { x: 100, y: 200 },
+      { x: 90, y: 190, width: 20, height: 20 }
+    );
+    const outcome = await supervisor.dispatch(
+      session.sessionId,
+      {
+        actionKind: "hotkey",
+        targetHandle: target.handle,
+        observationId: obs.metadata.observationId,
+        key: "s",
+        modifiers: ["Ctrl"],
+      },
+      "within_task" // caller lies about the class
+    );
+    expect(outcome.outcome).toBe("failed");
+    expect(outcome.errorCode).toBe("permission_denied");
+    expect(a.counters.dispatchCalls).toBe(0);
+  });
+
+  it("F07: stop is idempotent — a second stop never re-disposes the adapter", async () => {
+    const a = adapter();
+    let disposals = 0;
+    const counting: ComputerUseDesktopAdapter = {
+      ...a,
+      dispose: async () => {
+        disposals += 1;
+      },
+    };
+    const { supervisor, session } = await startWith(counting);
+    await supervisor.stopSession(session.sessionId);
+    await supervisor.stopSession(session.sessionId);
+    expect(disposals).toBe(1);
+  });
+});

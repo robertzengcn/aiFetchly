@@ -115,15 +115,26 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
         reason: "Target window belongs to AiFetchly's own process set",
       };
     }
+    // Audit F02: an ELEVATED target is refused at selection, not at dispatch.
+    try {
+      await this.providers.elevation.assertTargetNotElevated(target.processId);
+    } catch {
+      return {
+        allowed: false,
+        errorCode: "elevated_window",
+        reason: "Target runs above AiFetchly's integrity level or is unverifiable",
+      };
+    }
     return { allowed: true };
   }
 
-  /** Full pre-dispatch verdict (design §10.5.3 steps 1–3 + chord rule). */
+  /** Full pre-dispatch verdict (design §10.5.3 + audit F02 scope rules). */
   async preDispatchCheck(input: {
     sessionId: string;
     generation: number;
     request: ComputerUseActionRequest;
     target: ComputerUseResolvedTarget;
+    targetWindowId: string;
   }): Promise<ComputerUseSafetyVerdict> {
     const { request, target } = input;
 
@@ -159,14 +170,27 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
           reason: "an AiFetchly window has keyboard focus",
         };
       }
-      // …or while the foreground is provably a different application
-      // (audit A05: focus/scope check beyond own windows; unknown passes).
-      const foreground = this.providers.foregroundWindowId?.() ?? null;
-      if (foreground !== null && input.target && foreground !== input.generation.toString() && this.knownForeignForeground(foreground)) {
+      // …or while the foreground is anything other than the session's
+      // target window (audit F02): a KNOWN different application refuses,
+      // and an UNKNOWN foreground fails closed — typing into an
+      // unidentifiable window is a scope violation.
+      if (this.providers.foregroundWindowId) {
+        const foreground = this.providers.foregroundWindowId();
+        if (foreground !== input.targetWindowId) {
+          return {
+            allowed: false,
+            errorCode: "unsupported_target",
+            reason:
+              foreground === null
+                ? "keyboard focus could not be verified; refusing to type"
+                : "another application has keyboard focus",
+          };
+        }
+      } else {
         return {
           allowed: false,
           errorCode: "unsupported_target",
-          reason: "another application has keyboard focus",
+          reason: "no foreground provider is configured; refusing to type",
         };
       }
       return { allowed: true };
@@ -203,19 +227,6 @@ export class ComputerUseSafetyService implements ComputerUseSafetyController {
       errorCode: "unsupported_target",
       reason: `unknown action kind ${request.actionKind}`,
     };
-  }
-
-  /**
-   * Whether the foreground window id names a window we can positively
-   * identify as NOT the session target. Providers that only know
-   * "foreground id or null" cannot prove foreignness — this hook lets a
-   * richer provider supply target-vs-foreground knowledge later.
-   */
-  private knownForeignForeground(_foregroundWindowId: string): boolean {
-    // With the current provider set the foreground id is opaque; treat it
-    // as unknown (pass). A provider-aware comparison lands with the real
-    // desktop adapter (B01), which knows the target's window id.
-    return false;
   }
 
   /**

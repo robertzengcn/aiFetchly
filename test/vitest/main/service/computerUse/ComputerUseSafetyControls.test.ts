@@ -232,6 +232,7 @@ function makeSafetyProviders(
       { x: 2000, y: 0, width: 400, height: 300 }, // main window (screen px)
     ],
     ownWindowFocused: () => false,
+    foregroundWindowId: () => "win-1",
     targetProcessId: () => 77,
     elevation: new ComputerUseElevationService({
       hostIntegrity: async () => "medium",
@@ -267,6 +268,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 2200, y: 150 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict).toMatchObject({ allowed: false, errorCode: "own_window" });
   });
@@ -278,6 +280,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 500, y: 500 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict.allowed).toBe(true);
   });
@@ -295,6 +298,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 1400, y: 100 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(inside).toMatchObject({ allowed: false, errorCode: "own_window" });
     const outside = await service.preDispatchCheck({
@@ -302,6 +306,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 1000, y: 100 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(outside.allowed).toBe(true);
   });
@@ -313,6 +318,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "type_text", targetHandle: "cut_1", observationId: "obs-1", text: "hi" },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict).toMatchObject({ allowed: false, errorCode: "own_window" });
   });
@@ -324,6 +330,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "type_text", targetHandle: "cut_1", observationId: "obs-1", text: "hi" },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict.allowed).toBe(true);
   });
@@ -337,6 +344,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 10, y: 10 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict).toMatchObject({ allowed: false, errorCode: "coordinates_invalid" });
   });
@@ -353,6 +361,7 @@ describe("ComputerUseSafetyService", () => {
       generation: 1,
       request: { actionKind: "click", targetHandle: "cut_1", observationId: "obs-1", point: { x: 10, y: 10 } },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict).toMatchObject({ allowed: false, errorCode: "elevated_window" });
   });
@@ -376,6 +385,7 @@ describe("ComputerUseSafetyService", () => {
         modifiers: ["Ctrl", "Alt", "Shift"],
       },
       target: TARGET,
+      targetWindowId: "win-1",
     });
     expect(verdict).toMatchObject({ allowed: false, errorCode: "permission_denied" });
   });

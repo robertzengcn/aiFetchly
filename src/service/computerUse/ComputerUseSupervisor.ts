@@ -31,6 +31,7 @@ import {
   type ComputerUseDesktopAdapter,
   type ComputerUseObservation,
   type ComputerUsePlannerMode,
+  type ComputerUseRect as ComputerUseRectLike,
   type ComputerUseResolvedTarget,
   type ComputerUseSafetyController,
   type ComputerUseSessionGeneration,
@@ -51,6 +52,10 @@ import {
   type TaskApprovalRequest,
 } from "@/service/computerUse/ComputerUseTaskAuthority";
 import { mapNormalizedToCapture } from "@/service/computerUse/ComputerUseCoordinateTransforms";
+import {
+  classifyActionClass,
+  mergeActionClasses,
+} from "@/service/computerUse/ComputerUseActionClassifier";
 
 /** Default target-handle lifetime (ms): observations go stale quickly. */
 export const TARGET_TTL_MS = 10_000;
@@ -75,6 +80,10 @@ interface SessionRecord {
   targetWindow: ComputerUseWindowInfo | null;
   /** Observation currency (audit A04): only the latest observation resolves. */
   currentObservationId: string | null;
+  /** Capture expiry of the current observation; handles never outlive it. */
+  currentObservationExpiresAt: number | null;
+  /** Capture-space bounds of the current observation (audit F04). */
+  currentObservationBounds: ComputerUseRectLike | null;
   startedAt: number;
   updatedAt: number;
   stopHotkey: string | null;
@@ -206,6 +215,8 @@ export class ComputerUseSupervisor {
       generation: 1,
       targetWindow,
       currentObservationId: null,
+      currentObservationExpiresAt: null,
+      currentObservationBounds: null,
       startedAt: this.now(),
       updatedAt: this.now(),
       stopHotkey: hotkey,
@@ -223,6 +234,12 @@ export class ComputerUseSupervisor {
    */
   async stopSession(sessionId: string): Promise<ComputerUseSessionSummary> {
     const record = this.getRecord(sessionId);
+    // Audit F07: stop is idempotent — stopping an already-stopped session
+    // is a no-op summary return, never a second shared-adapter disposal
+    // that could hit a NEWER session on the same supervisor.
+    if (record.state === "STOPPED") {
+      return this.summaryOf(record);
+    }
     const revokedGeneration = record.generation;
     record.state = "STOPPING";
     record.updatedAt = this.now();
@@ -234,6 +251,8 @@ export class ComputerUseSupervisor {
     this.taskAuthority.invalidateGeneration(sessionId, revokedGeneration);
     record.generation = revokedGeneration + 1;
     record.currentObservationId = null;
+    record.currentObservationExpiresAt = null;
+    record.currentObservationBounds = null;
 
     try {
       // Bounded disposal: a hung adapter cannot stall stop past the budget
@@ -284,12 +303,16 @@ export class ComputerUseSupervisor {
       record.updatedAt = this.now();
       return this.summaryOf(record);
     }
-    // Invalidate current-observation authority: post-pause dispatches need
-    // a fresh observation (resume bumps the generation for that).
-    if (record.currentObservationId) {
-      this.targetStore.invalidateObservation(record.currentObservationId);
-    }
+    // Audit F01: pause/handoff REVOKE authority for the current generation —
+    // a dispatch already past an await boundary must fail the generation
+    // check at its next guard, never dispatch post-pause.
+    this.targetStore.invalidateGeneration(record.generation);
     this.authorization.invalidateGeneration(record.generation);
+    this.taskAuthority.invalidateGeneration(sessionId, record.generation);
+    record.currentObservationId = null;
+    record.currentObservationExpiresAt = null;
+    record.currentObservationBounds = null;
+    record.generation += 1;
     record.state = reason === "handoff" ? "HANDOFF" : "PAUSED";
     record.updatedAt = this.now();
     return this.summaryOf(record);
@@ -314,6 +337,8 @@ export class ComputerUseSupervisor {
     this.taskAuthority.invalidateGeneration(sessionId, record.generation);
     record.generation += 1;
     record.currentObservationId = null;
+    record.currentObservationExpiresAt = null;
+    record.currentObservationBounds = null;
     record.state = "READY";
     record.updatedAt = this.now();
     return this.summaryOf(record);
@@ -362,6 +387,8 @@ export class ComputerUseSupervisor {
       this.targetStore.invalidateObservation(record.currentObservationId);
     }
     record.currentObservationId = observation.metadata.observationId;
+    record.currentObservationExpiresAt = observation.metadata.expiresAt;
+    record.currentObservationBounds = observation.metadata.targetBounds;
     if (record.state === "OBSERVING") {
       record.state = "READY";
     }
@@ -382,7 +409,10 @@ export class ComputerUseSupervisor {
     region: { x: number; y: number; width: number; height: number }
   ): ComputerUseResolvedTarget {
     const record = this.getRecord(sessionId);
+    // Audit F04: no minting while paused/handoff/stopped or mid-lifecycle.
+    this.assertDispatchableState(record, "register a target on");
     this.assertObservationCurrent(record, observationId);
+    this.assertObservationNotExpired(record);
     this.assertPointInWindow(record, capturePoint);
     this.assertRegionFinite(region);
     const now = this.now();
@@ -393,7 +423,8 @@ export class ComputerUseSupervisor {
       capturePoint,
       region,
       source: "accessibility",
-      expiresAt: now + TARGET_TTL_MS,
+      // Audit F04: a handle can never outlive its observation.
+      expiresAt: this.cappedExpiry(now, record),
     });
     return this.targetStore.resolve(
       handle,
@@ -420,7 +451,9 @@ export class ComputerUseSupervisor {
         "Grounding result belongs to another generation"
       );
     }
+    this.assertDispatchableState(record, "register a grounding target on");
     this.assertObservationCurrent(record, grounding.observationId);
+    this.assertObservationNotExpired(record);
     if (grounding.outcome !== "resolved" || grounding.candidates.length === 0) {
       throw new ComputerUseError(
         grounding.outcome === "target_ambiguous"
@@ -456,7 +489,7 @@ export class ComputerUseSupervisor {
       region,
       source: "grounding",
       grounding,
-      expiresAt: now + TARGET_TTL_MS,
+      expiresAt: this.cappedExpiry(now, record),
     });
     return this.targetStore.resolve(
       handle,
@@ -477,9 +510,13 @@ export class ComputerUseSupervisor {
     actionClass: ComputerUseActionRecord["actionClass"]
   ): Promise<ComputerUseActionOutcome> {
     const record = this.getRecord(sessionId);
+    // Audit F06: the caller's class label is only a LOWER bound. The
+    // host-side trusted classifier decides the effective class; a
+    // "within_task" label can never downgrade a save/close/delete gesture.
+    const effectiveClass = mergeActionClasses(actionClass, classifyActionClass(request));
     const outcome = record.dispatchChain.then(
-      () => this.dispatchNow(record, request, actionClass),
-      () => this.dispatchNow(record, request, actionClass)
+      () => this.dispatchNow(record, request, effectiveClass),
+      () => this.dispatchNow(record, request, effectiveClass)
     );
     // Keep the chain alive even when dispatchNow returns a failed outcome.
     record.dispatchChain = outcome.then(
@@ -638,6 +675,7 @@ export class ComputerUseSupervisor {
         generation: record.generation,
         request,
         target,
+        targetWindowId: record.config.targetWindowId,
       });
       if (!verdict.allowed) {
         this.authorization.consume(actionId);
@@ -660,13 +698,78 @@ export class ComputerUseSupervisor {
       return outcome;
     }
 
-    // Guard 2 (audit A01): a stop/pause during the awaited safety check must
-    // prevent input entirely — revalidate before touching the adapter.
+    // Guard 2 (audits A01/F01/F03): a stop, pause, or authority expiry
+    // during the unbounded safety await must prevent input entirely.
+    // Revalidate EVERYTHING with fresh eyes before touching the adapter.
+    let postSafetyFailure: ComputerUseActionOutcome | null = null;
     if (this.isRevoked(record, generationAtDispatch)) {
       this.authorization.consume(actionId);
-      const outcome = this.outcome(actionId, generationAtDispatch, "cancelled");
-      appendLog(outcome, grantIssuedAt);
-      return outcome;
+      postSafetyFailure = this.outcome(actionId, generationAtDispatch, "cancelled");
+    } else {
+      // Lease still ours (audit F03).
+      if (!this.lease.isHeldBy(record.sessionId)) {
+        this.authorization.consume(actionId);
+        postSafetyFailure = this.outcome(actionId, generationAtDispatch, "cancelled");
+      }
+      // Observation still current and unexpired (F03/F04).
+      if (!postSafetyFailure && (
+        record.currentObservationId !== request.observationId ||
+        (record.currentObservationExpiresAt !== null &&
+          this.now() > record.currentObservationExpiresAt)
+      )) {
+        this.authorization.consume(actionId);
+        postSafetyFailure = this.outcome(
+          actionId,
+          generationAtDispatch,
+          "rejected",
+          undefined,
+          "target_stale"
+        );
+      }
+      // Target still resolvable with fresh clock (F03).
+      if (!postSafetyFailure) {
+        try {
+          this.targetStore.resolve(
+            request.targetHandle,
+            { sessionId: record.sessionId, generation: record.generation },
+            this.now()
+          );
+        } catch {
+          this.authorization.consume(actionId);
+          postSafetyFailure = this.outcome(
+            actionId,
+            generationAtDispatch,
+            "rejected",
+            undefined,
+            "target_stale"
+          );
+        }
+      }
+      // Grant still valid with fresh clock (F03).
+      if (!postSafetyFailure) {
+        try {
+          this.authorization.validate(
+            actionId,
+            {
+              sessionId: record.sessionId,
+              generation: record.generation,
+              request,
+            },
+            this.now()
+          );
+        } catch {
+          this.authorization.consume(actionId);
+          postSafetyFailure = this.failedOutcome(
+            actionId,
+            generationAtDispatch,
+            new ComputerUseError("grant_invalid", "Grant expired during safety checks")
+          );
+        }
+      }
+    }
+    if (postSafetyFailure) {
+      appendLog(postSafetyFailure, grantIssuedAt);
+      return postSafetyFailure;
     }
 
     record.state = "EXECUTING";
@@ -682,15 +785,32 @@ export class ComputerUseSupervisor {
     } catch (error) {
       this.authorization.consume(actionId);
       this.invalidateObservationTargets(record);
-      this.restoreDispatchableState(record, stateBeforeDispatch, "PAUSED");
-      const outcome = this.failedOutcome(actionId, generationAtDispatch, error);
+      record.currentObservationId = null;
+      // Audit F05: input may have partially happened — always uncertain,
+      // never generic "failed", and the session must not wedge in EXECUTING.
+      record.state = "PAUSED";
+      record.updatedAt = this.now();
+      const outcome: ComputerUseActionOutcome = {
+        actionId,
+        generation: generationAtDispatch,
+        dispatchedAt,
+        outcome: "uncertain",
+        errorCode: "execution_uncertain",
+        verification: {
+          verified: false,
+          reason: error instanceof Error ? error.message : "input error",
+        },
+      };
       appendLog(outcome, grantIssuedAt);
       return outcome;
     }
 
     this.authorization.consume(actionId);
-    // One action per observation (audit A04): the handle dies here.
+    // One action per observation (audits A04/F04): the handle AND the
+    // observation currency die here — no second handle can be minted for a
+    // consumed observation.
     this.invalidateObservationTargets(record);
+    record.currentObservationId = null;
 
     // Guard 3: late-revocation — a stop during adapter execution must not be
     // reported as a clean success, and must not resurrect READY.
@@ -704,7 +824,6 @@ export class ComputerUseSupervisor {
     record.updatedAt = this.now();
 
     let verification: ComputerUseActionOutcome["verification"];
-    let verifierThrew = false;
     if (this.adapter.verify) {
       try {
         const verified = await this.adapter.verify(
@@ -715,12 +834,12 @@ export class ComputerUseSupervisor {
           ? { verified: true }
           : { verified: false, reason: "post-action state not observed" };
       } catch (error) {
-        verifierThrew = true;
         verification = {
           verified: false,
           reason: error instanceof Error ? error.message : "verification error",
         };
       }
+
     } else {
       // Audit A08: successful input injection alone is NEVER task
       // completion — without a verifier the outcome is uncertain.
@@ -748,11 +867,9 @@ export class ComputerUseSupervisor {
       actionId,
       generation: generationAtDispatch,
       dispatchedAt,
-      outcome: verification.verified
-        ? "succeeded"
-        : verifierThrew
-        ? "failed"
-        : "uncertain",
+      // Audit F05: input already occurred — a verifier failure is UNCERTAIN,
+      // never a clean "failed".
+      outcome: verification.verified ? "succeeded" : "uncertain",
       verification,
     };
     appendLog(outcome, grantIssuedAt);
@@ -847,8 +964,11 @@ export class ComputerUseSupervisor {
         "Target point must be finite"
       );
     }
-    const bounds = record.targetWindow?.bounds;
-    if (!bounds) return; // no window geometry recorded; skip bounds check
+    // Audit F04: capture-local points compare against the OBSERVATION's
+    // capture bounds (the same coordinate space the point came from), not
+    // the window's original desktop bounds.
+    const bounds = record.currentObservationBounds;
+    if (!bounds) return; // no observation geometry recorded; skip bounds check
     if (
       point.x < bounds.x ||
       point.y < bounds.y ||
@@ -857,7 +977,27 @@ export class ComputerUseSupervisor {
     ) {
       throw new ComputerUseError(
         "coordinates_invalid",
-        "Target point lies outside the target window bounds"
+        "Target point lies outside the observed capture bounds"
+      );
+    }
+  }
+
+  /** A handle never outlives its observation (audit F04). */
+  private cappedExpiry(now: number, record: SessionRecord): number {
+    const ttl = now + TARGET_TTL_MS;
+    return record.currentObservationExpiresAt !== null
+      ? Math.min(ttl, record.currentObservationExpiresAt)
+      : ttl;
+  }
+
+  private assertObservationNotExpired(record: SessionRecord): void {
+    if (
+      record.currentObservationExpiresAt !== null &&
+      this.now() > record.currentObservationExpiresAt
+    ) {
+      throw new ComputerUseError(
+        "target_stale",
+        "The current observation has expired; re-observe"
       );
     }
   }

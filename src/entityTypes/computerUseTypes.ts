@@ -526,6 +526,8 @@ export interface ComputerUseSafetyController {
     readonly generation: ComputerUseSessionGeneration;
     readonly request: ComputerUseActionRequest;
     readonly target: ComputerUseResolvedTarget;
+    /** Session's selected window (audit F02: foreground/scope enforcement). */
+    readonly targetWindowId: string;
   }): Promise<ComputerUseSafetyVerdict>;
 }
 
