@@ -1,6 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { runReplyTxn } from "@/model/replyTxn";
 import {
@@ -51,6 +52,37 @@ export type ReservationAcquireResult =
   | { readonly status: "generation_in_progress" }
   | { readonly status: "reusable"; readonly draftId: number }
   | { readonly status: "blocked"; readonly code: EmailReplyPolicyCode };
+
+/**
+ * Result of re-validating a previously-identified reusable draft (R15).
+ * The reservation's `reusable` verdict is a point-in-time snapshot; between
+ * it and the reuse return, awaited detection/audit work opens a window in
+ * which another request can claim or finalize the draft. Revalidation
+ * re-reads the draft row and the cluster evidence in ONE short transaction
+ * so the reuse decision is coherent:
+ *
+ *   - `eligible` — the draft still exists and the cluster is still clean;
+ *     `draft` is the FRESH row (never the earlier read's snapshot).
+ *   - `blocked` — the cluster has moved to a state that forbids reuse
+ *     (already_replied / delivery_unknown / reply_in_progress /
+ *     reply_state_conflict); `code` is the typed surface code.
+ *   - `missing` — the draft row vanished (deleted/discarded between the
+ *     original read and revalidation); the caller refuses with
+ *     `reply_state_unknown`.
+ */
+export type RevalidatedReusableDraft =
+  | { readonly status: "eligible"; readonly draft: EmailReplyDraftEntity }
+  | { readonly status: "blocked"; readonly code: EmailReplyPolicyCode }
+  | { readonly status: "missing" };
+
+/** Input for {@link EmailReplyGuardModel.revalidateReusableDraft}. */
+export interface RevalidateReusableDraftInput {
+  readonly draftId: number;
+  readonly emailServiceId: number;
+  readonly messageId: number;
+  /** The seed row's normalized RFC id, used to resolve the canonical cluster. */
+  readonly normalizedMessageId: string | null;
+}
 
 /** Input for {@link EmailReplyGuardModel.acquireReservation}. */
 export interface AcquireReservationInput {
@@ -258,6 +290,54 @@ export class EmailReplyGuardModel extends BaseDb {
 
       // Active lease held by a different owner — the caller loses.
       return { status: "generation_in_progress" };
+    });
+  }
+
+  /**
+   * Re-validate a reusable draft at the moment of reuse (R15). The
+   * reservation's `reusable` verdict is read at acquire time; the generation
+   * service then awaits mailbox detection and reuse-audit persistence before
+   * returning the draft. In that window another request can transition the
+   * draft (sending/sent/delivery_unknown) or claim it with an in-flight send
+   * attempt — returning the stale snapshot would hand back a draft that is
+   * no longer eligible as if it were editable.
+   *
+   * One short `runReplyTxn` re-reads BOTH the draft row and the canonical
+   * cluster evidence, so the reuse decision is made against a coherent
+   * state: draft + evidence cannot disagree mid-transaction (the shared
+   * mutex serializes against every draft/attempt mutation).
+   *
+   * `actingDraftId = null` in the classification: the reused draft's OWN
+   * sending/in-flight state must DENY reuse (passing its own id would
+   * exclude exactly the "another request claimed it" scenario we are
+   * guarding against — the mirror image of acquire, where the caller owns
+   * nothing yet).
+   */
+  async revalidateReusableDraft(
+    input: RevalidateReusableDraftInput
+  ): Promise<RevalidatedReusableDraft> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draft = await manager
+        .getRepository(EmailReplyDraftEntity)
+        .findOne({ where: { id: input.draftId } });
+      if (!draft) {
+        return { status: "missing" };
+      }
+
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: input.normalizedMessageId,
+        seedMessageId: input.messageId,
+      });
+      const eligibility = classifyClusterEligibility(evidence, null);
+      if (eligibility.reason !== "eligible") {
+        return {
+          status: "blocked",
+          code: eligibilityReasonToCode(eligibility.reason),
+        };
+      }
+
+      return { status: "eligible", draft };
     });
   }
 

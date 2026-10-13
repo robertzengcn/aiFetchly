@@ -504,73 +504,121 @@ export class EmailReplyDraftGenerationService {
       if (reservation.status === "reusable") {
         // A sibling already holds an eligible draft (B08) — reuse it by ID
         // with NO LLM call, falling through to the existing reuse-audit path.
-        const reusedDraft = await this.draftModule.read(
-          reservation.draftId
-        );
-        if (reusedDraft) {
-          // §8.1: never silently return a newly sent/unknown draft as editable.
-          // Run the same mailbox detection that gates fresh generation; a
-          // positive/inconclusive outcome refuses the reuse with the typed
-          // detection code (the existing reusable draft is surfaced as
-          // existing_draft_id so the UI can route to approval/review). The
-          // reusable branch holds NO reservation lease (it returned `reusable`,
-          // not `acquired`), so releaseReservationSafely is a no-op here.
-          const reuseDetectionRefusal = await this.runPreDraftDetection(
-            message,
-            requestCorrelationId
-          );
-          if (reuseDetectionRefusal !== null) {
-            return reuseDetectionRefusal;
-          }
-          try {
-            await this.writeReuseAudit(
-              message.emailServiceId,
-              message.id,
-              requestCorrelationId,
-              reusedDraft
-            );
-          } catch (auditError) {
-            // B09: audit persistence failure STOPS the work.
-            incrementReplyMetric("audit_failure", { stage: "reuse" });
-            const auditErrMsg =
-              auditError instanceof Error
-                ? auditError.message
-                : String(auditError);
-            return {
-              success: false,
-              error: `Reuse audit persistence failed: ${auditErrMsg}`,
-              requestCorrelationId,
-              existing_draft_id: reusedDraft.id,
-            };
-          }
-          incrementReplyMetric("generation_outcome", { outcome: "reused" });
-          return {
-            success: true,
-            draftId: reusedDraft.id,
-            messageId: message.id,
-            subject: reusedDraft.subject,
-            bodyText: reusedDraft.bodyText,
-            bodyHtml: reusedDraft.bodyHtml,
-            classification: (message.classification ??
-              "unknown") as EmailMessageClassification,
-            knowledgeSources: [],
-            confidence: reusedDraft.confidence ?? null,
-            warnings: decodeStoredWarnings(reusedDraft.warningsJson),
-            reused: true,
-            code: "allowed",
-            requestCorrelationId,
-          };
-        }
-        // The reusable draft vanished between the reservation transaction and
-        // this read — fall through to the blocked outcome below rather than
-        // regenerating into an uncertain cluster state.
-        return {
-          success: false,
+        const vanishedReusableRefusal = {
+          success: false as const,
           error:
             "[reply_state_unknown] Reusable draft disappeared after reservation; requires human triage",
           requestCorrelationId,
-          code: "reply_state_unknown",
+          code: "reply_state_unknown" as const,
           next_action: nextActionForCode("reply_state_unknown", undefined),
+        };
+        const reusedDraftSnapshot = await this.draftModule.read(
+          reservation.draftId
+        );
+        if (!reusedDraftSnapshot) {
+          // The reusable draft vanished between the reservation transaction
+          // and this read — refuse rather than regenerating into an uncertain
+          // cluster state.
+          return vanishedReusableRefusal;
+        }
+        // §8.1: never silently return a newly sent/unknown draft as editable.
+        // Run the same mailbox detection that gates fresh generation; a
+        // positive/inconclusive outcome refuses the reuse with the typed
+        // detection code (the existing reusable draft is surfaced as
+        // existing_draft_id so the UI can route to approval/review). The
+        // reusable branch holds NO reservation lease (it returned `reusable`,
+        // not `acquired`), so releaseReservationSafely is a no-op here.
+        const reuseDetectionRefusal = await this.runPreDraftDetection(
+          message,
+          requestCorrelationId
+        );
+        if (reuseDetectionRefusal !== null) {
+          return reuseDetectionRefusal;
+        }
+        // R15: `reusedDraftSnapshot` was read BEFORE the awaited mailbox probe.
+        // While detection ran, another request could have claimed or finalized
+        // the draft (sending/sent/delivery_unknown) or flipped the cluster
+        // (positive evidence, an in-flight send attempt, a second live draft).
+        // Returning the stale snapshot would hand back a draft that is no
+        // longer eligible as if it were editable. Re-read the draft row and
+        // the canonical cluster evidence in ONE short transaction so the reuse
+        // decision is made against coherent CURRENT state; on denial, return
+        // the current typed code (with exactly one owned refusal audit), never
+        // the earlier snapshot.
+        const revalidated =
+          await this.guardModuleForNow().revalidateReusableDraft({
+            draftId: reservation.draftId,
+            emailServiceId: message.emailServiceId,
+            messageId: message.id,
+            normalizedMessageId: message.normalizedMessageId,
+          });
+        if (revalidated.status === "blocked") {
+          // FR-039: the reuse-time recheck REFUSED after acquire
+          // short-circuited to reusable — guard-conflict counter with a
+          // distinct stage (mirrors the post_generation recheck).
+          incrementReplyMetric("guard_conflict", {
+            stage: "reuse",
+            code: revalidated.code,
+          });
+          const revalCode = revalidated.code;
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            `[${revalCode}] Reusable draft state changed during reuse checks; reuse refused`,
+            { stage: "reuse", code: revalCode }
+          );
+          return {
+            success: false,
+            error: `[${revalCode}] Reusable draft state changed during reuse checks; reuse refused`,
+            requestCorrelationId,
+            code: revalCode,
+            next_action: nextActionForCode(revalCode, undefined),
+          };
+        }
+        if (revalidated.status === "missing") {
+          // The draft vanished while detection ran — same human-triage
+          // refusal as the vanished-before-read case above.
+          return vanishedReusableRefusal;
+        }
+        const reusedDraft = revalidated.draft;
+        try {
+          await this.writeReuseAudit(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            reusedDraft
+          );
+        } catch (auditError) {
+          // B09: audit persistence failure STOPS the work.
+          incrementReplyMetric("audit_failure", { stage: "reuse" });
+          const auditErrMsg =
+            auditError instanceof Error
+              ? auditError.message
+              : String(auditError);
+          return {
+            success: false,
+            error: `Reuse audit persistence failed: ${auditErrMsg}`,
+            requestCorrelationId,
+            existing_draft_id: reusedDraft.id,
+          };
+        }
+        incrementReplyMetric("generation_outcome", { outcome: "reused" });
+        return {
+          success: true,
+          draftId: reusedDraft.id,
+          messageId: message.id,
+          subject: reusedDraft.subject,
+          bodyText: reusedDraft.bodyText,
+          bodyHtml: reusedDraft.bodyHtml,
+          classification: (message.classification ??
+            "unknown") as EmailMessageClassification,
+          knowledgeSources: [],
+          confidence: reusedDraft.confidence ?? null,
+          warnings: decodeStoredWarnings(reusedDraft.warningsJson),
+          reused: true,
+          code: "allowed",
+          requestCorrelationId,
         };
       }
       if (reservation.status === "generation_in_progress") {

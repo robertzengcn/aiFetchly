@@ -134,6 +134,13 @@ function buildService(
   options: ConstructorParameters<typeof EmailReplyDraftGenerationService>[0] & {
     /** Override the default `not_replied` detection outcome. */
     detectionResult?: ReplyDetectionResult;
+    /**
+     * R15: side effect the detection stub performs BEFORE returning —
+     * simulates a sibling request mutating the draft/cluster while the
+     * awaited mailbox probe (or audit write) was in flight ("defer the
+     * detector, transition the draft/attempt, resume").
+     */
+    onDetect?: () => Promise<void> | void;
   } = {}
 ): EmailReplyDraftGenerationService {
   const detectionResult: ReplyDetectionResult =
@@ -147,6 +154,7 @@ function buildService(
       fromCache: false,
       coverage: "configured_imap",
     };
+  const onDetect = options.onDetect;
   // Strip the test-only override before forwarding to the real constructor.
   // replyAuditModuleFactory / autoAuditModuleFactory / now flow through the
   // spread (D7.1/D7.2 seams) — only detectionServiceFactory is overridden.
@@ -157,9 +165,12 @@ function buildService(
     ...forwarded,
     detectionServiceFactory: () => {
       const svc = new EmailReplyDetectionService();
-      const spy = vi
-        .spyOn(svc, "detect")
-        .mockImplementation(async () => detectionResult);
+      const spy = vi.spyOn(svc, "detect").mockImplementation(async () => {
+        if (onDetect) {
+          await onDetect();
+        }
+        return detectionResult;
+      });
       return Object.assign(svc, { detectSpy: spy });
     },
   });
@@ -3753,5 +3764,246 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     );
     expect(guardRow?.phase).toBe("idle");
     expect(guardRow?.ownerToken).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // R15: reuse re-validates the draft/cluster AFTER the awaited detection and
+  // audit work. The reservation's `reusable` verdict is a point-in-time
+  // snapshot; while the mailbox probe runs, another request can claim or
+  // finalize the draft. The service must return the CURRENT denial state —
+  // never the earlier snapshot as an editable reuse.
+  // ---------------------------------------------------------------------------
+  describe("R15: reuse revalidates after awaited checks", () => {
+    it("draft transitioned to sending during detection refuses with reply_in_progress and ONE owned audit", async () => {
+      // "defer detector after its local-state check, transition the draft,
+      // resume": the probe returns not_replied, but while it was awaited a
+      // sibling request claimed the SAME draft for sending.
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "draft");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        onDetect: async () => {
+          await draftModule.updateStatus(draftId, "sending");
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      // The stale snapshot would have been returned as reused:true; the
+      // revalidation returns the CURRENT sending state instead.
+      expect(result.code).toBe("reply_in_progress");
+      expect(result.next_action).toBe("no_action");
+      expect(requests).toHaveLength(0);
+
+      // Exactly ONE owned refusal audit decision (stage reuse), and NO reuse
+      // decision event — the reuse did not happen.
+      const auditModule = new EmailReplyAuditLogModule();
+      const { records } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      const skipped = records.filter((r) => r.action === "reply_skipped");
+      expect(skipped).toHaveLength(1);
+      expect(
+        JSON.parse(skipped[0].metadataJson ?? "{}")
+      ).toMatchObject({ stage: "reuse", code: "reply_in_progress" });
+      expect(
+        records.filter((r) => r.action === "message_read_by_ai")
+      ).toHaveLength(0);
+
+      const counters = drainCountersForTest();
+      expect(
+        counters.get(
+          "guard_conflict{code=reply_in_progress,stage=reuse}"
+        )
+      ).toBe(1);
+    });
+
+    it("draft finalized to sent during detection refuses with already_replied", async () => {
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "draft");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        onDetect: async () => {
+          await draftModule.updateStatus(draftId, "sent");
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("already_replied");
+      expect(requests).toHaveLength(0);
+      const auditModule = new EmailReplyAuditLogModule();
+      const { records } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(
+        1
+      );
+      expect(
+        records.filter((r) => r.action === "message_read_by_ai")
+      ).toHaveLength(0);
+    });
+
+    it("delivery_unknown transition during detection refuses with delivery_unknown", async () => {
+      // Ambiguous delivery outcome — reuse would risk a duplicate send, so
+      // the current state must deny even though the snapshot said `draft`.
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "draft");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        onDetect: async () => {
+          await draftModule.updateStatus(draftId, "delivery_unknown");
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("delivery_unknown");
+      expect(requests).toHaveLength(0);
+      const auditModule = new EmailReplyAuditLogModule();
+      const { records } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      expect(
+        records.filter((r) => r.action === "message_read_by_ai")
+      ).toHaveLength(0);
+    });
+
+    it("in-flight send attempt on the draft during detection refuses with reply_in_progress", async () => {
+      // The sibling path: instead of transitioning the draft, another request
+      // inserted a claimed send attempt against it. actingDraftId=null means
+      // the attempt DENIES (its own draft's in-flight send is not excluded).
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "approved");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        onDetect: async () => {
+          const attempt = new EmailReplySendAttemptEntity();
+          attempt.idempotencyKey = `key-${Math.random()}`;
+          attempt.draftId = draftId;
+          attempt.revisionId = draftId;
+          attempt.approvalId = draftId;
+          attempt.messageId = messageId;
+          attempt.conversationId = null;
+          attempt.emailServiceId = 4252;
+          attempt.senderAddress = "owner@svc.com";
+          attempt.recipientAddress = "person@example.com";
+          attempt.status = "claimed";
+          attempt.claimedAt = new Date();
+          attempt.submittedAt = null;
+          attempt.completedAt = null;
+          attempt.providerMessageId = null;
+          attempt.failureCode = null;
+          attempt.sanitizedError = null;
+          await attemptModule.create(attempt);
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("reply_in_progress");
+      expect(requests).toHaveLength(0);
+    });
+
+    it("draft deleted during detection refuses with reply_state_unknown", async () => {
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "draft");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        onDetect: async () => {
+          const { SqliteDb, getSqliteTestFallbackDir } = await import(
+            "@/config/SqliteDb"
+          );
+          const connection = SqliteDb.getInstance(
+            getSqliteTestFallbackDir()
+          ).connection;
+          await connection
+            .getRepository(EmailReplyDraftEntity)
+            .delete({ id: draftId });
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("reply_state_unknown");
+      expect(result.next_action).toBe("await_human_review");
+      expect(requests).toHaveLength(0);
+      const auditModule = new EmailReplyAuditLogModule();
+      const { records } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      expect(
+        records.filter((r) => r.action === "message_read_by_ai")
+      ).toHaveLength(0);
+    });
+
+    it("clean cluster still reuses after revalidation (happy path intact)", async () => {
+      // The revalidation must be a no-op when nothing changed: the existing
+      // zero-model-call reuse short-circuit keeps working, including the ONE
+      // message_read_by_ai decision event and NO refusal audit.
+      const messageId = await seedMessage();
+      const draftId = await seedDraft(messageId, "draft");
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.reused).toBe(true);
+      expect(result.draftId).toBe(draftId);
+      expect(result.subject).toBe("Re: Hi");
+      expect(requests).toHaveLength(0);
+      const auditModule = new EmailReplyAuditLogModule();
+      const { records } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      const reuses = records.filter(
+        (r) => r.action === "message_read_by_ai"
+      );
+      expect(reuses).toHaveLength(1);
+      expect(
+        JSON.parse(reuses[0].metadataJson ?? "{}")
+      ).toMatchObject({ stage: "reuse", reusedDraftId: draftId });
+      expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(
+        0
+      );
+      const counters = drainCountersForTest();
+      expect(counters.get("reservation_outcome{outcome=reusable}")).toBe(1);
+      expect(counters.get("generation_outcome{outcome=reused}")).toBe(1);
+    });
   });
 });

@@ -3,6 +3,8 @@ import {
   EmailReplyGuardModel,
   ReservationAcquireResult,
   AcquireReservationInput,
+  RevalidatedReusableDraft,
+  RevalidateReusableDraftInput,
 } from "@/model/EmailReplyGuard.model";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 
@@ -62,6 +64,18 @@ export class EmailReplyGuardModule extends BaseModule {
       return await this.guardModel.reclaimExpiredReservation(input);
     } catch (error) {
       console.error("Error reclaiming expired reply guard reservation:", error);
+      throw error;
+    }
+  }
+
+  async revalidateReusableDraft(
+    input: RevalidateReusableDraftInput
+  ): Promise<RevalidatedReusableDraft> {
+    try {
+      await this.ensureConnection();
+      return await this.guardModel.revalidateReusableDraft(input);
+    } catch (error) {
+      console.error("Error revalidating reusable reply draft:", error);
       throw error;
     }
   }
