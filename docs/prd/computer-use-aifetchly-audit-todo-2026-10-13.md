@@ -340,3 +340,37 @@ These probes exercise logic only; they inject no OS input. Reproduction recipes 
 3. Complete runtime delivery, actual local grounding and diagnostic tools, then qualify Phase 2 with real immutable artifacts.
 4. Complete Mac consumer integration and joint release hardening when producer/Hub handoffs exist.
 5. Close a TODO only with its stated acceptance evidence. A helper, interface, comment, translation key or passing mock test does not establish the corresponding user-facing requirement.
+
+## E. Remediation record (2026-10-14)
+
+Code defects F01–F17 are addressed on `computer-use-integration` (see §E in the
+2026-10-12 audit for the earlier A-series). T-series items remain open — they
+are whole-feature builds (Windows backend composition, UI, planner-image
+routing, release tooling, W-1 native execution, persistence, diagnostics,
+macOS, native qualification), most gated on external plugin/Hub artifacts or
+real hardware, and are not claimable from this Linux worktree.
+
+| Item | Status | Commit |
+| --- | --- | --- |
+| F01 pause/handoff revocation | FIXED (generation bump + guards; regressions) | see log |
+| F02 foreground/scope enforcement | PARTIALLY FIXED — target-foreground required for keyboard (fail closed on unknown), elevated targets refused at selection; window-at-point pointer ownership still needs the real adapter (T01) | — |
+| F03 post-safety revalidation | FIXED (lease, observation currency+expiry, target, grant revalidated with fresh clock) | — |
+| F04 observation consumption/geometry | PARTIALLY FIXED — atomic consumption blocks re-minting, TTL capped by observation expiry, capture-space bounds; capture→executor transform identity at dispatch lands with the real adapter | — |
+| F05 input/verifier error transitions | FIXED (execution_uncertain both paths; EXECUTING unwedged) | — |
+| F06 trusted classification | PARTIALLY FIXED — host gesture classifier (Ctrl+S/W/P, Delete, Alt+F4, destructive prefixes, drags) overrides caller labels; full task-scoped policy + credential handoff remain (T01/T03/T06) | — |
+| F07 stop idempotency | PARTIALLY FIXED — idempotent, per-session stop; grounding-kill/clipboard/lifecycle-signal hooks land with the composed backend (T01) | — |
+| F08 boundary identity/validation | FIXED (identity correlation, strict shapes, NaN-proof requests, own-property registry) | — |
+| F09 cancel quarantine | FIXED (client quarantined until fresh worker; worker keeps busy slot) | — |
+| F10 inference pipeline | PARTIALLY FIXED — manifest schema now accepts the graph contract; the executable ONNX pipeline remains plugin-gated | — |
+| F11 ambiguity decoder | FIXED (local-peak detection, real scores, zero-signal ⇒ target_not_found) | — |
+| F12 model compatibility/status | PARTIALLY FIXED — compatible model selection, identical-runtime skip, honest deferred status; health probes + persistent pending reconciliation remain (T04) | — |
+| F13 crash-durable parts | FIXED (hard-linked cache survives kills; dropped only after activation) | — |
+| F14 manifest streaming/deadlines | FIXED (capped streaming read, header deadline, distinct stall errors) | — |
+| F15 pool races | FIXED (atomic pinning, invalidation generations, one-shot instance-bound releases) | — |
+| F16 selection lock | PARTIALLY FIXED — model change refused while any session exists; image-consent coupling remains (T03) | — |
+| F17 monotonic clock | PARTIALLY FIXED — performance.now default; native instrumentation needs real hardware (T10) | — |
+
+Focused suites: 23 files / 276 tests passed; tsc clean. Component suite
+unaffected. The production composition (§B T01) still starts fail-closed
+(`backend_unavailable`) — that is intentional until a qualified Windows
+backend exists.
