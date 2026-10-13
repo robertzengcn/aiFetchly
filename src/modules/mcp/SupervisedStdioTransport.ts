@@ -187,6 +187,16 @@ export class SupervisedStdioTransport implements Transport {
   }
 
   /**
+   * Force close for stop-budget contexts (audit A19): SIGKILL the child
+   * immediately and finish the close. The supervisor's forced-stop path
+   * (≤1 s) uses this instead of waiting out the graceful escalation.
+   */
+  forceClose(): void {
+    this.killChild();
+    this.finishClose();
+  }
+
+  /**
    * Close the transport: drain stdin, wait briefly for a graceful exit, then
    * escalate to SIGTERM and SIGKILL. Idempotent; safe to call from the SDK's
    * close paths and from process supervision.

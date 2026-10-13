@@ -33,6 +33,8 @@ interface PooledSession {
   readonly key: string;
   readonly client: MCPClient;
   pinned: boolean;
+  /** Active borrowers: idle close arms only at zero (audit A18). */
+  borrowers: number;
   lastUsedAt: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -59,6 +61,8 @@ export interface PooledMcpSession {
  */
 export class MCPSessionPool {
   private readonly sessions = new Map<string, PooledSession>();
+  /** Concurrent identical acquires share ONE connect (audit A18). */
+  private readonly pendingAcquires = new Map<string, Promise<PooledMcpSession>>();
   private readonly idleTimeoutMs: number;
   private readonly clientFactory: McpClientFactory;
   private readonly now: () => number;
@@ -100,29 +104,62 @@ export class MCPSessionPool {
     const existing = this.sessions.get(poolKey);
     if (existing) {
       existing.lastUsedAt = this.now();
+      existing.borrowers += 1;
       this.clearIdleTimer(existing);
-      if (!existing.pinned) this.scheduleIdleClose(poolKey);
       return {
         client: existing.client,
         release: () => this.touch(poolKey),
       };
     }
 
-    const client = this.clientFactory(key.launchConfig);
-    await client.connect();
-    const session: PooledSession = {
-      key: poolKey,
-      client,
-      pinned: false,
-      lastUsedAt: this.now(),
-      idleTimer: null,
-    };
-    this.sessions.set(poolKey, session);
-    this.scheduleIdleClose(poolKey);
-    return {
-      client,
-      release: () => this.touch(poolKey),
-    };
+    // Audit A18: deduplicate concurrent connects for the same key so N
+    // simultaneous acquires create exactly one client.
+    const pending = this.pendingAcquires.get(poolKey);
+    if (pending) {
+      const shared = await pending;
+      const session = this.sessions.get(poolKey);
+      if (session) {
+        session.borrowers += 1; // count this borrower
+        this.clearIdleTimer(session);
+      }
+      return shared;
+    }
+
+    const connectPromise = (async () => {
+      const client = this.clientFactory(key.launchConfig);
+      await client.connect();
+      // A dispose() during connect must not insert a late session.
+      if (this.disposed) {
+        await client.disconnect().catch(() => undefined);
+        throw new Error("MCPSessionPool is disposed");
+      }
+      const session: PooledSession = {
+        key: poolKey,
+        client,
+        pinned: false,
+        borrowers: 1, // the acquirer holds it until release()
+        lastUsedAt: this.now(),
+        idleTimer: null,
+      };
+      this.sessions.set(poolKey, session);
+      return {
+        client,
+        release: () => this.touch(poolKey),
+      } satisfies PooledMcpSession;
+    })();
+    this.pendingAcquires.set(poolKey, connectPromise);
+    try {
+      return await connectPromise;
+    } catch (error) {
+      this.pendingAcquires.delete(poolKey);
+      throw error;
+    } finally {
+      // Keep the resolved promise cached for the sharers awaiting it, then
+      // clear once everyone has it (best-effort: clear on next microtask).
+      if (this.pendingAcquires.get(poolKey) === connectPromise) {
+        void connectPromise.then(() => this.pendingAcquires.delete(poolKey));
+      }
+    }
   }
 
   /**
@@ -137,6 +174,7 @@ export class MCPSessionPool {
         throw new Error(`MCP session ${key.serverId} is already pinned`);
       }
       existing.pinned = true;
+      existing.borrowers += 1;
       existing.lastUsedAt = this.now();
       this.clearIdleTimer(existing);
       return {
@@ -192,13 +230,18 @@ export class MCPSessionPool {
   private touch(poolKey: string): void {
     const session = this.sessions.get(poolKey);
     if (!session) return;
+    // Borrow accounting (audit A18): release() decrements; idle close only
+    // arms when no borrower remains.
+    session.borrowers = Math.max(0, session.borrowers - 1);
     session.lastUsedAt = this.now();
-    if (!session.pinned) this.scheduleIdleClose(poolKey);
+    if (!session.pinned && session.borrowers === 0) this.scheduleIdleClose(poolKey);
   }
 
   private scheduleIdleClose(poolKey: string): void {
     const session = this.sessions.get(poolKey);
-    if (!session || session.pinned || this.disposed) return;
+    if (!session || session.pinned || session.borrowers > 0 || this.disposed) {
+      return;
+    }
     this.clearIdleTimer(session);
     session.idleTimer = setTimeout(() => {
       void this.evict(poolKey).catch((error) => {

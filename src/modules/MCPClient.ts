@@ -65,6 +65,14 @@ export type MCPContentBlock =
         readonly blob?: string;
         readonly mimeType?: string;
       };
+    }
+  | {
+      /** Preserved for completeness (audit A19): MCP resource_link blocks. */
+      readonly type: "resource_link";
+      readonly uri: string;
+      readonly name?: string;
+      readonly description?: string;
+      readonly mimeType?: string;
     };
 
 /** Structured tool-call result preserving every content block plus isError. */
@@ -465,6 +473,16 @@ export class MCPClient {
           type: "audio",
           mimeType: typed.mimeType,
           data: typed.data,
+        });
+      } else if (typed.type === "resource_link" && typeof typed.uri === "string") {
+        content.push({
+          type: "resource_link",
+          uri: typed.uri,
+          name: typeof typed.name === "string" ? typed.name : undefined,
+          description:
+            typeof typed.description === "string" ? typed.description : undefined,
+          mimeType:
+            typeof typed.mimeType === "string" ? typed.mimeType : undefined,
         });
       } else if (typed.type === "resource" && typed.resource) {
         const resource = typed.resource as Record<string, unknown>;

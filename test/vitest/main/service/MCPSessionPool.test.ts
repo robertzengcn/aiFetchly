@@ -165,3 +165,82 @@ describe("MCPSessionPool", () => {
     expect(k1.split("|")[0]).toBe("s1");
   });
 });
+
+describe("audit A18 regressions", () => {
+  it("concurrent identical acquires share ONE connect", async () => {
+    const f = factory();
+    let connecting = 0;
+    let maxConcurrent = 0;
+    f.created.forEach(() => undefined);
+    const slowFactory = (config: MCPClientConfig) => {
+      const client = f.factory(config);
+      const orig = (client as unknown as { connectImpl: () => Promise<void> }).connectImpl;
+      (client as unknown as { connectImpl: () => Promise<void> }).connectImpl = async () => {
+        connecting += 1;
+        maxConcurrent = Math.max(maxConcurrent, connecting);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        connecting -= 1;
+        return orig();
+      };
+      return client;
+    };
+    const pool = new MCPSessionPool({ clientFactory: slowFactory });
+    const [a, b, c] = await Promise.all([
+      pool.acquire(key("s1")),
+      pool.acquire(key("s1")),
+      pool.acquire(key("s1")),
+    ]);
+    expect(f.created).toHaveLength(1);
+    expect(maxConcurrent).toBe(1);
+    a.release();
+    b.release();
+    c.release();
+    await pool.dispose();
+  });
+
+  it("an active borrower prevents idle close; close arms only at zero", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = factory();
+      const pool = new MCPSessionPool({
+        clientFactory: f.factory,
+        idleTimeoutMs: 1_000,
+      });
+      const held = await pool.acquire(key("s1"));
+      // Still borrowed: the idle timer must NOT close it.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pool.size).toBe(1);
+      expect(f.created[0].disconnectCalls).toBe(0);
+      held.release();
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(f.created[0].disconnectCalls).toBe(1);
+      expect(pool.size).toBe(0);
+      await pool.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispose during connect evicts the late session", async () => {
+    const f = factory();
+    const gate = { release: null as (() => void) | null };
+    const slowFactory = (config: MCPClientConfig) => {
+      const client = f.factory(config);
+      (client as unknown as { connectImpl: () => Promise<void> }).connectImpl =
+        async () => {
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+          });
+          // connect() returns once the gate opens; no private field writes.
+        };
+      return client;
+    };
+    const pool = new MCPSessionPool({ clientFactory: slowFactory });
+    const acquirePromise = pool.acquire(key("s1"));
+    await vi.waitFor(() => expect(gate.release).not.toBeNull());
+    await pool.dispose();
+    gate.release?.();
+    await expect(acquirePromise).rejects.toThrow(/disposed/);
+    expect(pool.size).toBe(0);
+  });
+});
