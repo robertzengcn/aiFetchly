@@ -14,7 +14,31 @@ vi.mock("@/service/MCPToolService", () => ({
   },
 }));
 
+// The tool-result rollout flags are read live from the Token store. Mock the
+// store so the catalog-honesty tests below can force the flags off without
+// touching real user settings.
+const toolResultFlagStore: Record<string, string> = {};
+
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue(name: string) {
+      return toolResultFlagStore[name] ?? "";
+    }
+    setValue(name: string, value: string) {
+      toolResultFlagStore[name] = value;
+    }
+  },
+}));
+
 import { SkillRegistry } from "@/config/skillsRegistry";
+
+// Wipe the flag store between tests so each starts from the default (flags
+// on, no values) and no test's opt-out leaks into the next.
+afterEach(() => {
+  for (const key of Object.keys(toolResultFlagStore)) {
+    delete toolResultFlagStore[key];
+  }
+});
 
 describe("SkillRegistry", () => {
   describe("isRegistered", () => {
@@ -202,6 +226,39 @@ describe("SkillRegistry", () => {
         };
         expect(params.properties?.task_type?.enum).toEqual(["ai_message"]);
       }
+    });
+
+    test("tool_result retrieval tools are advertised when the rollout flags are on", async () => {
+      // Default state (mocked Token store has no values) = flags on.
+      const tools = await SkillRegistry.getAllToolFunctions();
+      const names = tools.map((t) => t.name);
+      expect(names).toContain("tool_result_read");
+      expect(names).toContain("tool_result_search");
+    });
+
+    test("tool_result retrieval tools are NOT advertised when both rollout flags are off", async () => {
+      // Catalog honesty (TD §13.4 rollback semantics): with capture AND
+      // modelRefs off, the gate would deny every call, so advertising the
+      // tools only invites guaranteed-failing calls. The tools must
+      // disappear from the model-facing catalog instead of being callable
+      // into a dead end.
+      toolResultFlagStore["ai_tool_output_capture_enabled"] = "false";
+      toolResultFlagStore["ai_tool_output_model_refs_enabled"] = "false";
+
+      const tools = await SkillRegistry.getAllToolFunctions();
+      const names = tools.map((t) => t.name);
+      expect(names).not.toContain("tool_result_read");
+      expect(names).not.toContain("tool_result_search");
+    });
+
+    test("tool_result retrieval tools stay advertised when only capture is off", async () => {
+      // modelRefs alone still delivers references, so the tools remain.
+      toolResultFlagStore["ai_tool_output_capture_enabled"] = "false";
+
+      const tools = await SkillRegistry.getAllToolFunctions();
+      const names = tools.map((t) => t.name);
+      expect(names).toContain("tool_result_read");
+      expect(names).toContain("tool_result_search");
     });
   });
 

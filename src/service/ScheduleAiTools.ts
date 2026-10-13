@@ -4,6 +4,7 @@ import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { ScheduleExecutionLogModule } from "@/modules/ScheduleExecutionLogModule";
 import {
+  ScheduleStatus,
   ScheduleTaskEntity,
   TaskType,
   TriggerType,
@@ -924,7 +925,7 @@ export async function runScheduleNowForAi(args: unknown): Promise<
   }
 
   // 3. Check that schedule is active
-  if (!schedule.is_active) {
+  if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
     return toolFailure(
       ScheduleToolErrorCode.EXECUTION_FAILED,
       "Schedule is not active. Resume it before running."

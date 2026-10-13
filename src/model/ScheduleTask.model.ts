@@ -261,7 +261,7 @@ export class ScheduleTaskModel extends BaseDb {
    */
   async getActiveSchedules(): Promise<ScheduleTaskEntity[]> {
     return await this.repository.find({
-      where: { is_active: true },
+      where: { is_active: true, status: ScheduleStatus.ACTIVE },
       order: { next_run_time: "ASC" },
     });
   }
@@ -275,6 +275,7 @@ export class ScheduleTaskModel extends BaseDb {
     return await this.repository
       .createQueryBuilder("schedule")
       .where("schedule.is_active = :isActive", { isActive: true })
+      .andWhere("schedule.status = :status", { status: ScheduleStatus.ACTIVE })
       .andWhere("schedule.next_run_time <= :now", { now })
       .andWhere("schedule.trigger_type = :triggerType", {
         triggerType: TriggerType.CRON,
@@ -507,6 +508,7 @@ export class ScheduleTaskModel extends BaseDb {
     await this.repository.update(
       { id },
       {
+        is_active: false,
         status: ScheduleStatus.PAUSED,
         last_modified: new Date(),
       }
@@ -521,6 +523,7 @@ export class ScheduleTaskModel extends BaseDb {
     await this.repository.update(
       { id },
       {
+        is_active: true,
         status: ScheduleStatus.ACTIVE,
         last_modified: new Date(),
       }
@@ -620,6 +623,7 @@ export class ScheduleTaskModel extends BaseDb {
     return await this.repository
       .createQueryBuilder("schedule")
       .where("schedule.is_active = :isActive", { isActive: true })
+      .andWhere("schedule.status = :status", { status: ScheduleStatus.ACTIVE })
       .andWhere("schedule.trigger_type = :triggerType", {
         triggerType: TriggerType.INTERVAL,
       })

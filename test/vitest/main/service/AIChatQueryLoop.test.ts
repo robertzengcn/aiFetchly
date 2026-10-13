@@ -1007,6 +1007,139 @@ describe("AIChatQueryLoop", () => {
       );
     });
 
+    it("retries when provider emits a hallucinated tool-result placeholder as text", async () => {
+      // Regression: agnes-3.0-flash occasionally responds to a truncated
+      // knowledge_library_search result by emitting a bracketed placeholder
+      // (e.g. "[tool result missing due to content budget; retrying with a
+      // smaller read]") INSTEAD of producing a real progress report, then
+      // stops. The placeholder is a model hallucination — no code in the app
+      // produces it. Detect it and nudge the model to produce a real reply
+      // based on the (truncated) tool result it already received.
+      const events: Array<{ type: string; message?: string }> = [];
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(
+              makeChunk(
+                "[tool result missing due to content budget; retrying with a smaller read]",
+                "stop"
+              )
+            );
+            return;
+          }
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn().mockResolvedValue({
+          tool_call_id: "call-1",
+          tool_name: "noop",
+          success: true,
+          result: { ok: true },
+          execution_time_ms: 10,
+        }),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "search the knowledge library",
+        },
+        openAITools: [tool("noop")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "recovery_status") {
+              events.push({ type: e.type, message: e.message });
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Done");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "recovery_status",
+          message:
+            "Retrying hallucinated tool-result placeholder response",
+        })
+      );
+    });
+
+    it("fails the turn when the provider keeps emitting tool-result placeholders", async () => {
+      // The placeholder retry budget (MAX_TOOL_RESULT_PLACEHOLDER_RETRIES = 1)
+      // bounds the nudge loop: a second consecutive placeholder means the
+      // model cannot produce a real reply, so the turn must fail with a
+      // user-facing error instead of persisting the placeholder or looping.
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(
+              makeChunk(
+                "[tool result missing due to content budget; retrying with a smaller read]",
+                "stop"
+              )
+            );
+            return;
+          }
+          onChunk(
+            makeChunk(
+              "[tool result missing due to content budget; please retry]",
+              "stop"
+            )
+          );
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "search the knowledge library" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("failed");
+      if (result.type === "failed") {
+        expect(result.error).toBeInstanceOf(Error);
+        expect((result.error as Error).message).toContain(
+          "tool-result placeholder"
+        );
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+    });
+
     it("executes Agnes XML-style textual tool calls instead of persisting them as assistant text", async () => {
       const textualToolCalls =
         "¶¶<tool_call>¶<function=tool_catalog_search>¶<parameter=category>¶filesystem¶</parameter>¶</function>¶</tool_call>" +

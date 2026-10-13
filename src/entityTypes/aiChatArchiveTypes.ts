@@ -163,6 +163,7 @@ export type RecoverableHistoryErrorCode =
   | "HISTORY_UNAVAILABLE"
   | "COMPACTION_BUSY"
   | "COMPACTION_OUTPUT_INVALID"
+  | "COMPACTION_OUTPUT_TRUNCATED"
   | "COMPACTION_CONTEXT_REJECTED"
   | "COMPACTION_STALE_CLAIM"
   | "COMPACTION_STORAGE_FAILED"
@@ -188,8 +189,12 @@ export type RecoverableHistoryErrorCode =
 
 export class RecoverableHistoryError extends Error {
   readonly code: RecoverableHistoryErrorCode;
-  constructor(code: RecoverableHistoryErrorCode, message: string) {
-    super(message);
+  constructor(
+    code: RecoverableHistoryErrorCode,
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
     this.name = "RecoverableHistoryError";
     this.code = code;
   }
