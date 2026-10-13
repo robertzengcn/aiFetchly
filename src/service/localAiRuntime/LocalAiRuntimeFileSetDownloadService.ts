@@ -321,6 +321,22 @@ export class LocalAiRuntimeFileSetDownloadService {
             "Server returned 206 for a non-range request."
           );
         }
+        // Exact range validation (audit A17): start/end must match the
+        // request and the file size, not just the declared total.
+        const range = parseContentRange(
+          opened.response.headers.get("content-range")
+        );
+        if (
+          !range ||
+          range.start !== startByte ||
+          range.end !== file.sizeBytes - 1 ||
+          range.total !== file.sizeBytes
+        ) {
+          throw new LocalAiRuntimeError(
+            "runtime_download_failed",
+            "Server Content-Range does not exactly match the requested resume window."
+          );
+        }
         // Resume: seed the running hash with the existing part bytes.
         const hash = createHash("sha256");
         await hashExistingBytes(partPath, hash);
@@ -331,7 +347,8 @@ export class LocalAiRuntimeFileSetDownloadService {
           signal,
           onFileProgress,
           startByte,
-          hash
+          hash,
+          opened.response
         );
       }
 
@@ -344,7 +361,8 @@ export class LocalAiRuntimeFileSetDownloadService {
           signal,
           onFileProgress,
           0,
-          createHash("sha256")
+          createHash("sha256"),
+          opened.response
         );
       }
 
@@ -365,12 +383,13 @@ export class LocalAiRuntimeFileSetDownloadService {
     signal: AbortSignal,
     onFileProgress: (completedBytes: number) => void,
     startByte: number,
-    hash: Hash
+    hash: Hash,
+    response: Response
   ): Promise<string> {
-    const response = this.pendingResponse;
-    this.pendingResponse = null;
-    const body = response?.body;
-    if (!response || !body) {
+    // Audit A17: per-call response ownership — no shared field a concurrent
+    // download can overwrite.
+    const body = response.body;
+    if (!body) {
       throw new LocalAiRuntimeError(
         "runtime_download_failed",
         "Model file response had no body."
@@ -466,8 +485,6 @@ export class LocalAiRuntimeFileSetDownloadService {
     await rename(partPath, destination);
   }
 
-  private pendingResponse: Response | null = null;
-
   /**
    * Open a download response applying the shared URL policy and optional
    * Range header. Stashes the response for the immediately following
@@ -526,7 +543,6 @@ export class LocalAiRuntimeFileSetDownloadService {
         currentUrl = new URL(location, currentUrl).toString();
         continue;
       }
-      this.pendingResponse = response;
       return { status: response.status, response };
     }
   }
@@ -544,8 +560,17 @@ export class LocalAiRuntimeFileSetDownloadService {
           `Manifest fetch failed with HTTP ${opened.status}.`
         );
       }
+      // Audit A17: the manifest must not be buffered unbounded — the
+      // declared size is the hard cap before any byte is read.
+      const declared = Number(opened.response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > file.sizeBytes) {
+        throw new LocalAiRuntimeError(
+          "runtime_download_failed",
+          "Manifest response exceeds its declared catalog size."
+        );
+      }
       const buffer = Buffer.from(await opened.response.arrayBuffer());
-      if (buffer.length !== file.sizeBytes) {
+      if (buffer.length > file.sizeBytes || buffer.length !== file.sizeBytes) {
         throw new LocalAiRuntimeError(
           "runtime_manifest_invalid",
           "Manifest size does not match the catalog."
@@ -649,12 +674,26 @@ function fileListsEqual(
   return true;
 }
 
-function parseContentRangeTotal(contentRange: string | null): number | null {
+interface ContentRange {
+  readonly start: number;
+  readonly end: number;
+  readonly total: number;
+}
+
+function parseContentRange(contentRange: string | null): ContentRange | null {
   if (!contentRange) return null;
-  const match = /bytes\s+\d+-\d+\/(\d+)/i.exec(contentRange);
+  const match = /bytes\s+(\d+)-(\d+)\/(\d+)/i.exec(contentRange);
   if (!match) return null;
-  const total = Number(match[1]);
-  return Number.isFinite(total) ? total : null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (![start, end, total].every(Number.isFinite)) return null;
+  return { start, end, total };
+}
+
+function parseContentRangeTotal(contentRange: string | null): number | null {
+  const range = parseContentRange(contentRange);
+  return range ? range.total : null;
 }
 
 function hashFile(filePath: string): Promise<string> {

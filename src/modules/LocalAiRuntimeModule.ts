@@ -670,10 +670,28 @@ export class LocalAiRuntimeModule {
           await this.runModelPipeline(
             entryGrant.runtimeId,
             entryGrant.runtimeVersion,
+            entryGrant.identityHash,
             grant.operationId,
             lease
           );
+        } else if (this.deps.getCatalogV2) {
+          // Audit A14: install-set natives install from the SAME v2 catalog
+          // the consent was prepared from, with identity binding (A13).
+          const catalogV2 = await this.deps.getCatalogV2();
+          const entry = this.selectNativeV2(catalogV2, entryGrant.runtimeId);
+          this.assertEntryIdentity(
+            entryGrant.runtimeId,
+            entryGrant.runtimeVersion,
+            entryGrant.identityHash,
+            entry.runtimeVersion,
+            entry.sha256
+          );
+          // v2 native entries extend the v1 shape; the proven pipeline
+          // consumes them directly.
+          await this.runPipeline(entry, grant.operationId, lease);
         } else {
+          // No v2 catalog configured (legacy composition): v1 path with
+          // version-only binding.
           const catalog = await this.deps.catalog.getCatalog();
           const entry = this.deps.compatibility.selectEntry(
             catalog,
@@ -733,16 +751,39 @@ export class LocalAiRuntimeModule {
     catalog: import("@/entityTypes/localAiRuntimeTypes").LocalAiRuntimeCatalogV2,
     runtimeId: LocalAiRuntimeId
   ): NativeRuntimeCatalogEntryV2 {
-    const entry = catalog.runtimes.find(
+    const candidates = catalog.runtimes.filter(
       (e) => e.runtimeId === runtimeId && e.packageKind === "native_runtime"
     );
-    if (!entry || entry.packageKind !== "native_runtime") {
+    if (candidates.length === 0) {
       throw new LocalAiRuntimeError(
         "runtime_catalog_target_missing",
-        `No compatible ${runtimeId} entry in the v2 catalog.`
+        `No ${runtimeId} entry in the v2 catalog.`
       );
     }
-    return entry;
+    // Audit A14: full target compatibility (platform, arch, Electron version,
+    // Node ABI, app-version window) — never "first matching id".
+    const target = this.deps.target;
+    const compatible = candidates.filter(
+      (entry): entry is NativeRuntimeCatalogEntryV2 =>
+        entry.platform === target.platform &&
+        entry.arch === target.arch &&
+        entry.electronVersion === target.electronVersion &&
+        entry.nodeModuleAbi === target.nodeModuleAbi &&
+        semver.satisfies(target.appVersion, `>=${entry.minAppVersion}`) &&
+        (!entry.maxAppVersion ||
+          semver.satisfies(target.appVersion, `<=${entry.maxAppVersion}`))
+    );
+    if (compatible.length === 0) {
+      throw new LocalAiRuntimeError(
+        "runtime_catalog_target_missing",
+        `No ${runtimeId} entry compatible with ${target.platform}-${target.arch} ` +
+          `electron ${target.electronVersion} abi ${target.nodeModuleAbi} ` +
+          `app ${target.appVersion}.`
+      );
+    }
+    // Newest compatible version.
+    compatible.sort((a, b) => semver.rcompare(a.runtimeVersion, b.runtimeVersion));
+    return compatible[0];
   }
 
   private selectModelV2(
@@ -786,13 +827,41 @@ export class LocalAiRuntimeModule {
         "Install-set request does not match the offer."
       );
     }
+    // One-use offer (audit A13): consumed at validation so a replayed
+    // consent can never start a second install.
+    this.setGrants.delete(input.operationId);
     return grant;
+  }
+
+  /**
+   * Identity binding (audit A13): the consented entry must match the
+   * catalog's CURRENT artifact byte-for-byte identity — same version with a
+   * changed hash means the artifact was replaced after consent and the
+   * install must fail BEFORE any download.
+   */
+  private assertEntryIdentity(
+    runtimeId: LocalAiRuntimeId,
+    consentedVersion: string,
+    consentedHash: string,
+    currentVersion: string,
+    currentHash: string
+  ): void {
+    if (
+      consentedVersion !== currentVersion ||
+      consentedHash !== currentHash
+    ) {
+      throw new LocalAiRuntimeError(
+        "runtime_manifest_invalid",
+        `Catalog artifact for ${runtimeId} changed between consent and install.`
+      );
+    }
   }
 
   /** Model pipeline (§7.5): manifest-first file-set download → validate → activate. */
   private async runModelPipeline(
     runtimeId: LocalAiRuntimeId,
     runtimeVersion: string,
+    identityHash: string,
     operationId: string,
     lease: { controller: AbortController }
   ): Promise<void> {
@@ -804,12 +873,13 @@ export class LocalAiRuntimeModule {
     }
     const catalog = await this.deps.getCatalogV2();
     const entry = this.selectModelV2(catalog, runtimeId);
-    if (entry.runtimeVersion !== runtimeVersion) {
-      throw new LocalAiRuntimeError(
-        "runtime_manifest_invalid",
-        "Catalog changed between consent and install."
-      );
-    }
+    this.assertEntryIdentity(
+      runtimeId,
+      runtimeVersion,
+      identityHash,
+      entry.runtimeVersion,
+      entry.manifestSha256
+    );
     await this.deps.paths.ensureOperationDirectories();
     const { stagingRoot } = this.deps.paths.createOperationPaths(operationId);
     try {
@@ -858,30 +928,124 @@ export class LocalAiRuntimeModule {
           true
         );
       }
-      await fs.rm(versionRoot, { recursive: true, force: true });
-      await renameWithRetry(stagingRoot, versionRoot);
+      // Audit A15: a worker holding the CURRENT active version must not see
+      // its bytes vanish under a same/new install — defer the activation
+      // until every lease on the runtime is released, staging preserved.
+      const active = await this.deps.state.readActive(entry.runtimeId).catch(() => null);
+      if (
+        active?.runtimeVersion &&
+        this.deps.coordinator.isVersionLeased(entry.runtimeId, active.runtimeVersion)
+      ) {
+        const pendingRoot = path.join(runtimeDir, `.pending-${entry.runtimeVersion}`);
+        await fs.rm(pendingRoot, { recursive: true, force: true });
+        await renameWithRetry(stagingRoot, pendingRoot);
+        this.deps.coordinator.deferActivation(
+          entry.runtimeId,
+          entry.runtimeVersion,
+          async () => {
+            await fs.rm(versionRoot, { recursive: true, force: true });
+            await renameWithRetry(pendingRoot, versionRoot);
+            await this.activateModelPointer(entry, manifest);
+          }
+        );
+        return; // activated later, when leases drop (CU-INST-16)
+      }
+      // Audit A15: preserve the working bytes if the swap fails — back up
+      // the existing version, restore on any error.
+      let backupRoot: string | null = null;
+      const existing = await fs.stat(versionRoot).then(
+        () => true,
+        () => false
+      );
+      if (existing) {
+        backupRoot = path.join(runtimeDir, `.backup-${entry.runtimeVersion}`);
+        await fs.rm(backupRoot, { recursive: true, force: true });
+        await renameWithRetry(versionRoot, backupRoot);
+      }
+      try {
+        await renameWithRetry(stagingRoot, versionRoot);
+      } catch (error) {
+        if (backupRoot) await renameWithRetry(backupRoot, versionRoot).catch(() => undefined);
+        throw error;
+      }
+      if (backupRoot) {
+        await fs.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
+      }
       await this.deps.state.writePackageManifest(
         entry.runtimeId,
         entry.runtimeVersion,
         manifest as unknown as ResolvedLocalAiRuntime["manifest"]
       );
-      const previous = await this.deps.state.readActive(entry.runtimeId);
-      await this.deps.state.writeActive({
-        schemaVersion: 1,
-        runtimeId: entry.runtimeId,
-        runtimeVersion: entry.runtimeVersion,
-        activatedAt: new Date().toISOString(),
-        packageSha256: entry.manifestSha256,
-        previousVersion: previous?.runtimeVersion,
-      });
+      await this.activateModelPointer(entry, manifest);
       // Superseded model versions are pruned after a successful update
       // (§7.8): rollback means downloading again.
       await this.pruneInactiveVersions(entry.runtimeId).catch(() => undefined);
     } catch (error) {
+      // Audit A16: completed verified files survive a failed operation —
+      // rename them back to their content-addressed .part cache so a retry
+      // transfers zero bytes for them.
+      await this.retainedPartsFromStaging(operationId, stagingRoot).catch(
+        () => undefined
+      );
       await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
       throw error instanceof LocalAiRuntimeError
         ? error
         : new LocalAiRuntimeError("runtime_unknown_error", (error as Error).message);
+    }
+  }
+
+  /** active.json flip + manifest index write for a model version. */
+  private async activateModelPointer(
+    entry: ModelCatalogEntryV2,
+    manifest: unknown
+  ): Promise<void> {
+    await this.deps.state.writePackageManifest(
+      entry.runtimeId,
+      entry.runtimeVersion,
+      manifest as ResolvedLocalAiRuntime["manifest"]
+    );
+    const previous = await this.deps.state.readActive(entry.runtimeId);
+    await this.deps.state.writeActive({
+      schemaVersion: 1,
+      runtimeId: entry.runtimeId,
+      runtimeVersion: entry.runtimeVersion,
+      activatedAt: new Date().toISOString(),
+      packageSha256: entry.manifestSha256,
+      previousVersion: previous?.runtimeVersion,
+    });
+  }
+
+  /**
+   * Audit A16: on operation failure, move already-verified files from
+   * staging back to their hash-keyed `.part` locations (O(1) renames on the
+   * same volume) so a retry reuses them instead of re-downloading.
+   */
+  private async retainedPartsFromStaging(
+    operationId: string,
+    stagingRoot: string
+  ): Promise<void> {
+    void operationId;
+    if (!this.deps.getCatalogV2) return;
+    const catalog = await this.deps.getCatalogV2().catch(() => null);
+    if (!catalog) return;
+    // Best-effort for every model entry: match staging files by size.
+    for (const runtimeId of LOCAL_AI_MODEL_RUNTIME_IDS) {
+      const entry = catalog.runtimes.find(
+        (e) => e.runtimeId === runtimeId && e.packageKind === "model"
+      );
+      if (!entry || entry.packageKind !== "model") continue;
+      for (const file of entry.files) {
+        const staged = path.join(stagingRoot, file.path);
+        const size = await fs.stat(staged)
+          .then((s) => s.size)
+          .catch(() => null);
+        if (size === file.sizeBytes) {
+          const partPath = this.deps.paths.getResumablePartPath(file.sha256);
+          await fs.mkdir(path.dirname(partPath), { recursive: true });
+          await fs.rename(staged, partPath).catch(() => undefined);
+        }
+      }
+      return; // only the entry this operation was for (operationId keyed staging)
     }
   }
 

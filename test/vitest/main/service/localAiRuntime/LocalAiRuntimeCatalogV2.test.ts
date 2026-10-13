@@ -407,3 +407,198 @@ describe("LocalAiRuntimeOperationCoordinator version leases", () => {
 });
 
 void LOCAL_AI_MODEL_PACKAGE_LIMITS;
+
+describe("audit A13-A17: install-set integrity", () => {
+  it("A17: a Content-Range with the wrong start/end is rejected", async () => {
+    const { paths, dir } = makePaths();
+    const entry = modelEntry() as never as {
+      files: { path: string; sizeBytes: number; sha256: string }[];
+      runtimeId: string;
+      runtimeVersion: string;
+    };
+    const weightsFile = entry.files[1];
+    const fsp = await import("node:fs/promises");
+    await fsp.mkdir(paths.modelPartsRoot, { recursive: true });
+    await fsp.writeFile(paths.getResumablePartPath(weightsFile.sha256), WEIGHTS.subarray(0, 10));
+    const service = new LocalAiRuntimeFileSetDownloadService(paths, {
+      fetchImpl: (async (url: string | URL) =>
+        String(url).endsWith("manifest.json")
+          ? new Response(streamOf(MANIFEST_BODY), { status: 200 })
+          : new Response(streamOf(WEIGHTS.subarray(10)), {
+              status: 206,
+              headers: { "content-range": `bytes 5-${WEIGHTS.length - 1}/${WEIGHTS.length}` },
+            })) as unknown as typeof fetch,
+      freeSpace: async () => 10 * 1024 * 1024 * 1024,
+    });
+    await expect(
+      service.download({
+        operationId: "op-range",
+        entry: entry as never,
+        stagingRoot: path.join(dir, "staging"),
+        signal: new AbortController().signal,
+        onProgress: () => undefined,
+      })
+    ).rejects.toThrow(/Content-Range/);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const WEIGHTS2 = Buffer.from("replacement-weights-9876543210");
+  const MANIFEST_BODY2 = JSON.stringify({
+    ...JSON.parse(MANIFEST_BODY),
+    files: [
+      { path: "graph/decoder.onnx", url: "https://m.example/decoder.onnx", sizeBytes: WEIGHTS2.length, sha256: sha256(WEIGHTS2) },
+    ],
+  });
+
+  it("A13: model installs verify the consented identity before downloading", async () => {
+    // Direct unit check of the identity predicate via the module is covered
+    // by construction; here the catalog hash changing post-consent is the
+    // repro: prepare with one manifest hash, install against another.
+    const { LocalAiRuntimeModule } = await import("@/modules/LocalAiRuntimeModule");
+    const coordinator = new LocalAiRuntimeOperationCoordinator();
+    const catalogV2 = parseLocalAiRuntimeCatalogV2(v2Doc([modelEntry()])).catalog;
+    // A DIFFERENT but individually valid artifact: same version, new bytes.
+    const changedEntry = modelEntry();
+    changedEntry.files[0] = {
+      ...changedEntry.files[0],
+      sizeBytes: Buffer.byteLength(MANIFEST_BODY2),
+      sha256: sha256(MANIFEST_BODY2),
+    };
+    changedEntry.files[1] = {
+      ...changedEntry.files[1],
+      sizeBytes: WEIGHTS2.length,
+      sha256: sha256(WEIGHTS2),
+    };
+    changedEntry.downloadSizeBytes = changedEntry.files.reduce(
+      (sum: number, f: { sizeBytes: number }) => sum + f.sizeBytes,
+      0
+    );
+    changedEntry.installedSizeBytes = changedEntry.downloadSizeBytes + 1024;
+    (changedEntry as { manifestSha256: string }).manifestSha256 = sha256(MANIFEST_BODY2);
+    const changedCatalog = parseLocalAiRuntimeCatalogV2(v2Doc([NATIVE_ENTRY, changedEntry])).catalog;
+    let downloadStarted = false;
+    // The catalog artifact CHANGES between consent and install.
+    let currentCatalog = catalogV2;
+    const mod = new LocalAiRuntimeModule({
+      paths: new LocalAiRuntimePathService("/tmp/never"),
+      state: {
+        readActive: async (runtimeId: string) =>
+          runtimeId === "grounding-onnxruntime"
+            ? { runtimeId, runtimeVersion: "1.2.0" }
+            : null,
+        writeActive: async () => undefined,
+        writePackageManifest: async () => undefined,
+        listInstalledVersions: async () => [],
+        clearActive: async () => undefined,
+      } as never,
+      catalog: { getCatalog: async () => { throw new Error("v1 must not be used"); } } as never,
+      compatibility: {} as never,
+      download: {} as never,
+      resolver: { diagnose: async () => ({ state: "not_installed" }) } as never,
+      coordinator,
+      health: { check: async () => ({ ok: true }) } as never,
+      target: {
+        platform: "win32",
+        arch: "x64",
+        electronVersion: "43.5.1",
+        nodeModuleAbi: "140",
+        appVersion: "1.1.0",
+      },
+      publishProgress: () => undefined,
+      getCatalogV2: async () => currentCatalog,
+      fileSetDownload: {
+        download: async () => {
+          downloadStarted = true;
+          throw new Error("download must never start on identity mismatch");
+        },
+      } as never,
+    });
+    const offer = await mod.prepareInstallSet(["grounding-model-gui-actor-2b-int4"]);
+    currentCatalog = changedCatalog;
+    const result = await mod.installSet({
+      operationId: offer.operationId,
+      consentToken: offer.consentToken,
+    });
+    // installSet resolves with a failure record; the identity guard fired
+    // BEFORE any download started.
+    expect(downloadStarted).toBe(false);
+    expect(result.failedRuntimeId).toBe("grounding-model-gui-actor-2b-int4");
+    expect(result.errorCode).toBe("runtime_manifest_invalid");
+  });
+
+  it("A14: v2 native selection requires full target compatibility", async () => {
+    const { LocalAiRuntimeModule } = await import("@/modules/LocalAiRuntimeModule");
+    const buildModule = (appVersion: string) =>
+      new LocalAiRuntimeModule({
+        paths: new LocalAiRuntimePathService("/tmp/never"),
+        state: {} as never,
+        catalog: {} as never,
+        compatibility: {} as never,
+        download: {} as never,
+        resolver: {} as never,
+        coordinator: new LocalAiRuntimeOperationCoordinator(),
+        health: {} as never,
+        target: {
+          platform: "darwin" as NodeJS.Platform,
+          arch: "arm64",
+          electronVersion: "43.5.1",
+          nodeModuleAbi: "140",
+          appVersion,
+        },
+        publishProgress: () => undefined,
+        getCatalogV2: async () =>
+          parseLocalAiRuntimeCatalogV2(v2Doc([NATIVE_ENTRY])).catalog,
+      });
+    // win32-x64 entry vs darwin-arm64 target: no compatible entry.
+    await expect(
+      buildModule("1.1.0").prepareInstallSet(["grounding-onnxruntime"])
+    ).rejects.toThrowError(LocalAiRuntimeError);
+  });
+
+  it("A13: an install-set offer is single-use (replay rejected)", async () => {
+    const { LocalAiRuntimeModule } = await import("@/modules/LocalAiRuntimeModule");
+    const mod = new LocalAiRuntimeModule({
+      paths: new LocalAiRuntimePathService("/tmp/never"),
+      state: {
+        readActive: async (runtimeId: string) =>
+          runtimeId === "grounding-onnxruntime"
+            ? { runtimeId, runtimeVersion: "1.2.0" }
+            : null,
+        writeActive: async () => undefined,
+        writePackageManifest: async () => undefined,
+        listInstalledVersions: async () => [],
+        clearActive: async () => undefined,
+      } as never,
+      catalog: { getCatalog: async () => { throw new Error("unused"); } } as never,
+      compatibility: {} as never,
+      download: {} as never,
+      resolver: {} as never,
+      coordinator: new LocalAiRuntimeOperationCoordinator(),
+      health: {} as never,
+      target: {
+        platform: "win32",
+        arch: "x64",
+        electronVersion: "43.5.1",
+        nodeModuleAbi: "140",
+        appVersion: "1.1.0",
+      },
+      publishProgress: () => undefined,
+      getCatalogV2: async () =>
+        parseLocalAiRuntimeCatalogV2(v2Doc([NATIVE_ENTRY, modelEntry()])).catalog,
+      fileSetDownload: {
+        download: async () => {
+          throw new Error("second use must be rejected before download");
+        },
+      } as never,
+    });
+    const offer = await mod.prepareInstallSet(["grounding-model-gui-actor-2b-int4"]);
+    // First use starts (fails in the pipeline for benign reasons or runs).
+    await mod
+      .installSet({ operationId: offer.operationId, consentToken: offer.consentToken })
+      .catch(() => undefined);
+    // Replay: the offer was consumed.
+    await expect(
+      mod.installSet({ operationId: offer.operationId, consentToken: offer.consentToken })
+    ).rejects.toThrowError(LocalAiRuntimeError);
+  });
+});
