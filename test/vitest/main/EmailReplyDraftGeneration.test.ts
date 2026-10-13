@@ -4006,4 +4006,291 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       expect(counters.get("generation_outcome{outcome=reused}")).toBe(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // R16: unexpected exceptions must not leak the generation reservation.
+  // Every explicit failure path releases and the successful commit clears
+  // this.reservation, but an UNEXPECTED exception after acquisition (a
+  // profile/database/envelope lookup throw, or a non-transport error escaping
+  // the LLM attempt) previously skipped every release — the five-minute
+  // lease stayed held and an immediate retry returned generation_in_progress
+  // until it expired. The acquired section is now enclosed in an owner-fenced
+  // try/finally: the finally releases only the CURRENT owner's still-held
+  // reservation (null-swapped first, WHERE id/ownerToken fenced), so a late
+  // older owner's cleanup can never release a newer owner's lease.
+  // -------------------------------------------------------------------------
+  describe("R16: try/finally releases the reservation on unexpected exceptions", () => {
+    it("a profile-lookup rejection after acquisition releases the lease so an immediate retry acquires", async () => {
+      const messageId = await seedMessage();
+      const { factory } = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      // Spy BEFORE buildService: the service's profileModule (and the
+      // connection-guard instance copies BaseDb installs at construction)
+      // close over the prototype method, so a later spy is shadowed.
+      const { EmailReplyIdentityProfileModel } = await import(
+        "@/model/EmailReplyIdentityProfile.model"
+      );
+      const profileSpy = vi
+        .spyOn(
+          EmailReplyIdentityProfileModel.prototype,
+          "getByEmailServiceId"
+        )
+        .mockRejectedValue(new Error("simulated profile lookup failure"));
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      try {
+        await expect(
+          svc.createDraft({ messageId, useKnowledgeLibrary: false })
+        ).rejects.toThrow("simulated profile lookup failure");
+      } finally {
+        profileSpy.mockRestore();
+      }
+
+      // WITHOUT advancing the clock, the lease must already be released:
+      // the guard row is back to idle with no owner.
+      const guardRow = await guardModule.findByReplyKey(
+        4252,
+        `row:${messageId}`
+      );
+      expect(guardRow?.phase).toBe("idle");
+      expect(guardRow?.ownerToken).toBeNull();
+
+      // The immediate retry (no time advance) acquires and succeeds —
+      // pre-R16 this returned generation_in_progress for five minutes.
+      const retryFactory = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const retry = buildService({
+        apiFactory: retryFactory.factory,
+        guardModuleFactory: () => guardModule,
+      });
+      const second = await retry.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+      expect(second.success).toBe(true);
+      const counters = drainCountersForTest();
+      expect(counters.get("reservation_outcome{outcome=acquired}")).toBe(2);
+      expect(
+        counters.get("reservation_outcome{outcome=generation_in_progress}")
+      ).toBeUndefined();
+    });
+
+    it("an envelope-lookup rejection after generation releases the lease so an immediate retry acquires", async () => {
+      const messageId = await seedMessage();
+      const { factory } = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      // The envelope binding resolves the email-service row AFTER the LLM
+      // attempt (site: new EmailServiceModule().getEmailService(...)). Spy
+      // the model's read BEFORE the call so the inline module construction
+      // copies the rejected method.
+      const { EmailServiceModel } = await import("@/model/EmailService.model");
+      const readSpy = vi
+        .spyOn(EmailServiceModel.prototype, "read")
+        .mockRejectedValue(new Error("simulated envelope lookup failure"));
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      try {
+        await expect(
+          svc.createDraft({ messageId, useKnowledgeLibrary: false })
+        ).rejects.toThrow();
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      // No draft persisted (the commit was never reached), and the lease was
+      // released by the finally — the guard row is idle with no owner.
+      const drafts = await draftModule.listByMessage(messageId);
+      expect(drafts).toHaveLength(0);
+      const guardRow = await guardModule.findByReplyKey(
+        4252,
+        `row:${messageId}`
+      );
+      expect(guardRow?.phase).toBe("idle");
+      expect(guardRow?.ownerToken).toBeNull();
+
+      // The immediate retry acquires and succeeds without advancing time.
+      const retryFactory = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const retry = buildService({
+        apiFactory: retryFactory.factory,
+        guardModuleFactory: () => guardModule,
+      });
+      const second = await retry.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+      expect(second.success).toBe(true);
+    });
+
+    it("a non-transport error escaping the LLM attempt releases the lease so an immediate retry acquires", async () => {
+      const messageId = await seedMessage();
+      // attemptLlmGeneration rethrows non-transport errors (a bug or
+      // invariant violation in the submission/validator plumbing). Drive one
+      // by making the metrics emitter throw DURING the generation attempt —
+      // unlike an api.openAIChatCompletion throw, this escapes
+      // callLlmRaw's transport wrapper (the throw happens after it returns).
+      const metrics = await import("@/service/emailReply/EmailReplyMetrics");
+      const metricSpy = vi
+        .spyOn(metrics, "incrementReplyMetric")
+        .mockImplementation((name: string) => {
+          // The generation_outcome{outcome=ok} counter fires exactly once,
+          // right when a winning submission is validated inside the attempt.
+          if (name === "generation_outcome") {
+            throw new Error("simulated non-transport generation failure");
+          }
+        });
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      try {
+        await expect(
+          svc.createDraft({ messageId, useKnowledgeLibrary: false })
+        ).rejects.toThrow("simulated non-transport generation failure");
+      } finally {
+        metricSpy.mockRestore();
+      }
+      // The model call DID happen (the exception was after the transport
+      // wrapper returned, inside the attempt's validation bookkeeping).
+      expect(requests).toHaveLength(1);
+
+      // No draft persisted; the lease was released by the finally.
+      const drafts = await draftModule.listByMessage(messageId);
+      expect(drafts).toHaveLength(0);
+      const guardRow = await guardModule.findByReplyKey(
+        4252,
+        `row:${messageId}`
+      );
+      expect(guardRow?.phase).toBe("idle");
+      expect(guardRow?.ownerToken).toBeNull();
+
+      // The immediate retry acquires and succeeds without advancing time.
+      const retryFactory = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const retry = buildService({
+        apiFactory: retryFactory.factory,
+        guardModuleFactory: () => guardModule,
+      });
+      const second = await retry.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+      expect(second.success).toBe(true);
+    });
+
+    it("an older owner's cleanup release cannot release a newer owner's lease (fence)", async () => {
+      // The R16 finally fences the release on {id, ownerToken}. Simulate the
+      // crash-recovery race directly: owner A's invocation crashed leaving a
+      // generating row; the sweep/retry reclaimed it and owner B now holds
+      // the lease; owner A's delayed finally (or sweep cleanup) then runs
+      // releaseReservation with A's STALE token — it must be a no-op for
+      // B's row.
+      const messageId = await seedMessage();
+      const replyKey = `row:${messageId}`;
+
+      // Owner A: acquire through the service, then let its profile lookup
+      // throw — its finally releases A's row back to idle (this also proves
+      // the finally path end-to-end for a real service-owned token).
+      const staleToken = "a".repeat(128);
+      const { factory } = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const { EmailReplyIdentityProfileModel } = await import(
+        "@/model/EmailReplyIdentityProfile.model"
+      );
+      const profileSpy = vi
+        .spyOn(
+          EmailReplyIdentityProfileModel.prototype,
+          "getByEmailServiceId"
+        )
+        .mockRejectedValue(new Error("simulated crash"));
+      const crashed = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      try {
+        await expect(
+          crashed.createDraft({ messageId, useKnowledgeLibrary: false })
+        ).rejects.toThrow("simulated crash");
+      } finally {
+        profileSpy.mockRestore();
+      }
+      const afterCrash = await guardModule.findByReplyKey(4252, replyKey);
+      expect(afterCrash?.phase).toBe("idle");
+      expect(afterCrash?.ownerToken).toBeNull();
+      if (!afterCrash) throw new Error("guard row missing after crash");
+      const guardId = afterCrash.id;
+
+      // Owner B: a fresh invocation re-acquires the reclaimed row. Its LLM
+      // call is gated so its lease is provably live while A's stale cleanup
+      // fires.
+      const gate: { release: (() => void) | null } = { release: null };
+      const bGate = new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+      const { factory: realBFactory } = fakeApiFactory([
+        completionResponse(validReplyJson, "stop"),
+      ]);
+      const heldFactory: AiChatApiFactory = () => ({
+        openAIChatCompletion: async (req) => {
+          await bGate;
+          return realBFactory().openAIChatCompletion(req);
+        },
+      });
+      const ownerB = buildService({
+        apiFactory: heldFactory,
+        guardModuleFactory: () => guardModule,
+      });
+      const ownerBPromise = ownerB.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+      // Wait until B holds the generating lease.
+      let bRow: EmailReplyGuardEntity | null = null;
+      for (let i = 0; i < 40; i++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        bRow = await guardModule.findByReplyKey(4252, replyKey);
+        if (bRow?.phase === "generating") break;
+      }
+      expect(bRow?.phase).toBe("generating");
+      expect(bRow?.ownerToken).toBeTruthy();
+      const newerToken = bRow?.ownerToken ?? "";
+      expect(newerToken).not.toBe(staleToken);
+
+      // Owner A's delayed cleanup runs NOW, with its stale token — the
+      // fenced release (WHERE id AND ownerToken) matches zero rows and
+      // must NOT disturb B's live lease. This is exactly what the R16
+      // finally would issue for a resurrected/delayed older owner.
+      await guardModule.releaseReservation({
+        guardId,
+        ownerToken: staleToken,
+        now: new Date(),
+      });
+      const duringB = await guardModule.findByReplyKey(4252, replyKey);
+      expect(duringB?.phase).toBe("generating");
+      expect(duringB?.ownerToken).toBe(newerToken);
+
+      // Let B finish: it still owns the lease and commits successfully.
+      if (gate.release) gate.release();
+      const bResult = await ownerBPromise;
+      expect(bResult.success).toBe(true);
+      const finalRow = await guardModule.findByReplyKey(4252, replyKey);
+      expect(finalRow?.phase).toBe("draft_ready");
+      expect(finalRow?.activeDraftId).toBe(
+        bResult.success ? bResult.draftId : null
+      );
+    });
+  });
 });

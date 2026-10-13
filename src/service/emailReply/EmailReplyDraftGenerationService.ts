@@ -646,6 +646,52 @@ export class EmailReplyDraftGenerationService {
     // (Step 4) and release it on every failure path below.
     this.reservation = { guardId: reservation.guardId, ownerToken };
 
+    // R16/§8.2: the reservation lease must not outlive this invocation.
+    // The explicit failure paths below each release via
+    // releaseReservationSafely (which null-swaps first), and the successful
+    // commit clears this.reservation at the success point. But an UNEXPECTED
+    // exception between those awaits (a profile/database/envelope lookup
+    // throw, or a non-transport error escaping the LLM attempt) would skip
+    // every explicit release and leave the five-minute lease held — an
+    // immediate retry would return generation_in_progress until the lease
+    // expired. This finally is the safety net: it releases only when the
+    // reservation is STILL held by this owner. releaseReservationSafely
+    // null-swaps first and fences the release on {guardId, ownerToken, now},
+    // so the success path (already cleared) is a no-op, every explicit
+    // failure release (already null-swapped) is a no-op, an older owner's
+    // cleanup cannot release a newer owner's lease (the WHERE id/ownerToken
+    // match is 0 rows for a replaced owner), and it swallows its own release
+    // failures so it never masks the original exception.
+    try {
+      return await this.runAcquiredGeneration(
+        message,
+        input,
+        requestCorrelationId
+      );
+    } finally {
+      if (this.reservation !== null) {
+        await this.releaseReservationSafely();
+      }
+    }
+  }
+
+  /**
+   * R16: the acquired section of {@link createDraft} — everything after the
+   * reservation is held (detection, reuse re-read, classification, profile
+   * load, knowledge, LLM attempt, post-generation recheck, race-reuse, late-
+   * output guard, envelope binding, and the atomic commit). The caller wraps
+   * this in an owner-fenced `try/finally` so an unexpected exception (a
+   * profile/database/envelope lookup throw, or a non-transport error escaping
+   * the LLM attempt) still releases the held reservation — the lease can
+   * never outlive the invocation (§8.2). Every explicit failure path and the
+   * successful commit already clear `this.reservation`, making the finally a
+   * no-op on those paths.
+   */
+  private async runAcquiredGeneration(
+    message: EmailReceivedMessageEntity,
+    input: CreateDraftInput,
+    requestCorrelationId: string
+  ): Promise<CreateDraftOutcome> {
     // 2c-det. T04/FR-031 §8.1 — fresh mailbox evidence check BEFORE knowledge
     //     retrieval, classification, or any model call. The reservation
     //     guarantees no sibling is generating into the same cluster; this
