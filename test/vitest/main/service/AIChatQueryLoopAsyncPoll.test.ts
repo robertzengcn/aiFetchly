@@ -545,3 +545,174 @@ describe("AIChatQueryLoop async poll", () => {
     }
   });
 });
+
+/**
+ * §10.3 rate_limited branch (D8 review-coverage gap): when the registry
+ * returns a `rate_limited` snapshot carrying `retryAfterMs`, the loop's
+ * next interval must HONOR that value (clamped to [1s floor, 15s cap])
+ * instead of applying the ×1.5 growth. The registry emits this snapshot
+ * when a poll arrives before pollMinIntervalMs has elapsed since
+ * lastPolledAt.
+ */
+describe("AIChatQueryLoop async poll — rate_limited retryAfterMs override", () => {
+  let fake: FakeJobRegistry;
+
+  beforeEach(() => {
+    fake = new FakeJobRegistry();
+    setDefaultToolJobRegistry(fake);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Drive the loop with one async tool call whose getStatus is forced
+   * rate_limited (with the given retryAfterMs) on the FIRST poll only,
+   * then running on subsequent polls. Advances `advanceMs` of fake time,
+   * records the poll timestamps seen in that window, then flushes the
+   * loop by completing the job. Returns the inter-poll gaps: gap[0] is
+   * job-start → poll #1 (the §10.3 start interval — poll #1 happens 5s
+   * AFTER job start because the loop sleeps currentIntervalMs before the
+   * first getStatus), gap[1] is poll #1 → poll #2 (the interval the
+   * rate_limited snapshot's retryAfterMs won over the ×1.5 growth).
+   */
+  async function pollWithRateLimitOnce(
+    retryAfterMs: number,
+    advanceMs: number
+  ): Promise<{ gaps: number[] }> {
+    vi.useFakeTimers();
+    const toolCallId = `call-rl-${retryAfterMs}`;
+    const events: AIChatQueryEvent[] = [];
+    const abort = new AbortController();
+    const fakeStream = makeFakeStream({
+      toolCallId,
+      toolName: "run_subagent",
+      argsJson: JSON.stringify({
+        agentId: "agent-lead-researcher",
+        prompt: "test",
+        taskPacket: { lead: { industry: "fintech" } },
+      }),
+    });
+
+    // Same baseline-seeding trick as the backoff test: the first entry is
+    // the job's startedAt, so gap[0] is the 5s start interval to poll #1
+    // and gap[1] is the interval the rate_limited snapshot chose.
+    const pollTimestamps: number[] = [];
+    let seededBaseline = false;
+    let observedJobId: string | undefined;
+    let rateLimitedSeen = false;
+    const getStatusSpy = vi.spyOn(fake, "getStatus").mockImplementation(
+      (jobId: string) => {
+        const base = ToolJobRegistry.prototype.getStatus.call(fake, jobId);
+        observedJobId = jobId;
+        if (!seededBaseline) {
+          seededBaseline = true;
+          pollTimestamps.push(base.startedAt);
+        }
+        pollTimestamps.push(Date.now());
+        if (!rateLimitedSeen) {
+          rateLimitedSeen = true;
+          return {
+            ...base,
+            status: "rate_limited" as const,
+            progress: null,
+            partial: null,
+            result: null,
+            error: null,
+            retryAfterMs,
+          };
+        }
+        return {
+          ...base,
+          status: "running" as const,
+          progress: null,
+          partial: null,
+          result: null,
+          error: null,
+        };
+      }
+    );
+
+    const deps = {
+      streamChatCompletion: fakeStream,
+      executeTool: async () => {
+        return { success: true, result: {}, execution_time_ms: 1 };
+      },
+      getSkillDefinition: () => undefined,
+    };
+
+    const loop = new AIChatQueryLoop(deps as never);
+    const input = buildInput(events, abort);
+    const promise = loop.run(input);
+
+    // First poll fires at the 5s §10.3 start interval; the second honors
+    // retryAfterMs (clamped). 20s covers both for any retryAfterMs in
+    // [1s, 15s]: 5s + up to 15s = 20s.
+    await vi.advanceTimersByTimeAsync(advanceMs);
+    const recorded = [...pollTimestamps];
+
+    getStatusSpy.mockRestore();
+    if (observedJobId) {
+      fake.statusOverrides.set(observedJobId, "completed");
+      fake.resultOverrides.set(observedJobId, { output: "ok" });
+    }
+    await vi.advanceTimersByTimeAsync(ASYNC_POLL_INTERVAL_MS_PLUS);
+    const result = await promise;
+    // The loop must terminate normally through the override sequence — no
+    // stall, no abort, no 30-minute timeout return.
+    expect(result.type).toBe("completed");
+
+    const gaps: number[] = [];
+    for (let i = 1; i < recorded.length; i++) {
+      gaps.push(recorded[i] - recorded[i - 1]);
+    }
+    return { gaps };
+  }
+
+  it("honors the registry's retryAfterMs as the next poll interval when rate_limited", async () => {
+    // 8s retryAfterMs: above the ×1.5-grown 7.5s, below the 15s cap — the
+    // override must WIN over the growth. Polls fire at t=5s (rate_limited)
+    // and t=13s (5+8), so a 20s advance captures exactly the two.
+    const { gaps } = await pollWithRateLimitOnce(8_000, 20_000);
+
+    expect(gaps.length).toBeGreaterThanOrEqual(2);
+    // First gap ≈ 5s — the §10.3 start interval to the FIRST poll (which
+    // returned the rate_limited snapshot).
+    expect(gaps[0]).toBeGreaterThanOrEqual(4_900);
+    expect(gaps[0]).toBeLessThanOrEqual(5_100);
+    // Second gap ≈ 8s — retryAfterMs honored (×1.5 growth would give 7.5s).
+    expect(gaps[1]).toBeGreaterThanOrEqual(7_900);
+    expect(gaps[1]).toBeLessThanOrEqual(8_100);
+  });
+
+  it("clamps a tiny retryAfterMs to the 1s floor (no hot loop)", async () => {
+    // 50ms retryAfterMs is below the 1s floor — the next poll must still
+    // be at least 1s out (§10.3 "a minimum one-second interval"), never
+    // 50ms. The second poll fires at t=6s (5+1), then normal growth.
+    const { gaps } = await pollWithRateLimitOnce(50, 20_000);
+
+    expect(gaps.length).toBeGreaterThanOrEqual(2);
+    expect(gaps[0]).toBeGreaterThanOrEqual(4_900);
+    expect(gaps[0]).toBeLessThanOrEqual(5_100);
+    // Clamped to the 1s floor — and exactly ~1s (not the grown 7.5s)
+    // proves the retryAfterMs override was applied before the clamp.
+    expect(gaps[1]).toBeGreaterThanOrEqual(1_000);
+    expect(gaps[1]).toBeLessThanOrEqual(1_050);
+  });
+
+  it("caps a huge retryAfterMs at the 15s max (a misbehaving registry cannot stall the poll)", async () => {
+    // 60s retryAfterMs exceeds the 15s cap — the next poll must fire at
+    // 15s, not 60s (otherwise the loop looks hung for a minute per tick).
+    // Polls fire at t=5s (rate_limited) and t=20s (5+15); 22s captures both.
+    const { gaps } = await pollWithRateLimitOnce(60_000, 22_000);
+
+    expect(gaps.length).toBeGreaterThanOrEqual(2);
+    expect(gaps[0]).toBeGreaterThanOrEqual(4_900);
+    expect(gaps[0]).toBeLessThanOrEqual(5_100);
+    // Capped at ~15s — the override won over the grown interval (7.5s)
+    // but did NOT exceed the §10.3 max.
+    expect(gaps[1]).toBeGreaterThanOrEqual(14_900);
+    expect(gaps[1]).toBeLessThanOrEqual(15_100);
+  });
+});

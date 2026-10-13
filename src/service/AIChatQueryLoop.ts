@@ -1391,7 +1391,6 @@ export class AIChatQueryLoop {
    * accumulator has run yet (e.g. a round-cap on the very first round).
    */
   private policyConsultContent(
-    input: AIChatQueryLoopInput,
     recoveryState: { recoveredContentPrefix: string },
     accumulator: OpenAIStreamAccumulator | null
   ): string {
@@ -1509,6 +1508,8 @@ export class AIChatQueryLoop {
       getOperation: (key) => operationModule.getOperation(key),
       findUnresolvedByIntent: (query) =>
         operationModule.findUnresolvedByIntent(query),
+      countOccurrencesByIntent: (query) =>
+        operationModule.countOccurrencesByIntent(query),
       updateState: (update) => operationModule.updateState(update),
       setReceiptReference: async (input) =>
         operationModule.setReceipt({
@@ -1543,18 +1544,33 @@ export class AIChatQueryLoop {
   }
 
   /**
-   * T23d (§10.1): the send descriptor — trusted tool identity, the gate's
-   * authorization batchId as the domain target (never model text), and the
-   * stable intent allowlist from bulkEmailTaskInputSchema. Recipients,
-   * subject, and body are NEVER hashed (sensitive-data rule §10.1).
+   * T23d (§10.1): the send descriptor — trusted tool identity, a trusted
+   * domain target (never model text), and the stable intent allowlist from
+   * bulkEmailTaskInputSchema. Recipients, subject, and body are NEVER hashed
+   * (sensitive-data rule §10.1).
+   *
+   * Two trusted-target shapes:
+   *  - batched send: the gate's authorization batchId → `outbound_batch:N`.
+   *  - skip_review direct send (D4 review fix): no batch exists, so the
+   *    target derives from the trusted loop input's source user message id
+   *    (`outbound_direct:<sourceUserMessageId>`) — the same binding the
+   *    outbound authorization itself uses (AD-001/AD-005). Falls back to
+   *    null (the guard hashes the intent without a target) when even the
+   *    source message id is absent.
    */
   private static buildSendDescriptor(
-    batchId: number,
+    batchId: number | undefined,
+    input: AIChatQueryLoopInput,
     toolArguments: Readonly<Record<string, unknown>>
   ): OperationGuardDescriptor {
     return {
       toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
-      domainTarget: `outbound_batch:${batchId}`,
+      domainTarget:
+        batchId !== undefined
+          ? `outbound_batch:${batchId}`
+          : input.sourceUserMessageId
+            ? `outbound_direct:${input.sourceUserMessageId}`
+            : null,
       intentFields: [
         "service_ids",
         "template_ids",
@@ -1867,7 +1883,7 @@ export class AIChatQueryLoop {
           const policyRoundCapOutcome = await this.maybeConsultPolicy({
             input,
             boundary: "round_cap",
-            content: this.policyConsultContent(input, recoveryState, finalAccumulator),
+            content: this.policyConsultContent(recoveryState, finalAccumulator),
             finishReason: finalAccumulator?.state.finishReason ?? null,
           });
           if (policyRoundCapOutcome) {
@@ -2638,7 +2654,7 @@ export class AIChatQueryLoop {
             const policyEmptyStopOutcome = await this.maybeConsultPolicy({
               input,
               boundary: "response_end",
-              content: this.policyConsultContent(input, recoveryState, accumulator),
+              content: this.policyConsultContent(recoveryState, accumulator),
               finishReason: accumulator.state.finishReason ?? null,
             });
             if (policyEmptyStopOutcome) {
@@ -2748,7 +2764,7 @@ export class AIChatQueryLoop {
             const policyGoalTextOutcome = await this.maybeConsultPolicy({
               input,
               boundary: "response_end",
-              content: this.policyConsultContent(input, recoveryState, accumulator),
+              content: this.policyConsultContent(recoveryState, accumulator),
               finishReason: accumulator.state.finishReason ?? null,
             });
             if (policyGoalTextOutcome) {
@@ -2833,7 +2849,7 @@ export class AIChatQueryLoop {
           const policyLoopExitOutcome = await this.maybeConsultPolicy({
             input,
             boundary: "response_end",
-            content: this.policyConsultContent(input, recoveryState, accumulator),
+            content: this.policyConsultContent(recoveryState, accumulator),
             finishReason: accumulator.state.finishReason ?? null,
           });
           if (policyLoopExitOutcome) {
@@ -3390,8 +3406,8 @@ export class AIChatQueryLoop {
               continue;
             }
             // skip_review with no draft: send this call's content via the
-            // legacy path. Otherwise thread the trusted authorization triple
-            // so the send tool claims the batch (§15.1).
+            // legacy path (no batch to claim). Otherwise thread the trusted
+            // authorization triple so the send tool claims the batch (§15.1).
             if (!gateDecision.skipReviewDirectSend) {
               outboundAuthorization = {
                 batchId: gateDecision.batchId,
@@ -3402,25 +3418,29 @@ export class AIChatQueryLoop {
           }
 
           // T23d (§10.2): durable operation fence for the consequential send.
-          // Runs ONLY for policy-enrolled turns (T16 frozen binding flag) with
-          // a trusted authorization triple (skip_review direct sends have no
-          // batch target and keep legacy behavior byte-identical). Blocked →
-          // the same blocked tool_result shape the intent gate emits above;
-          // allowed → thread the claim into the settle after dispatch.
+          // Runs for EVERY allowed gate decision on policy-enrolled turns
+          // (T16 frozen binding flag) — including skip_review direct sends.
+          // D4 review fix: a skip_review send previously left the fence
+          // unset (no operation row, no double-send CAS) on an unattended
+          // path. The fence descriptor keeps §10.1 trusted-identity rules in
+          // BOTH shapes: the batch claim uses the gate's authorizationId as
+          // the domain target; a skip_review direct send has no batch, so it
+          // derives a stable target from trusted loop input (source user
+          // message id) — never from model text. Blocked → the same blocked
+          // tool_result shape the intent gate emits above; allowed → thread
+          // the claim into the settle after dispatch.
           let operationClaim: {
             readonly descriptor: OperationGuardDescriptor;
             readonly claimGeneration: number;
             readonly intentHash: string;
             readonly occurrenceOrdinal: number;
           } | null = null;
-          if (
-            call.name === OUTBOUND_EMAIL_SEND_TOOL &&
-            outboundAuthorization
-          ) {
+          if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const guard = this.buildOperationGuardForSend(input);
             if (guard) {
               const descriptor = AIChatQueryLoop.buildSendDescriptor(
-                outboundAuthorization.batchId,
+                outboundAuthorization?.batchId,
+                input,
                 call.arguments ?? {}
               );
               try {

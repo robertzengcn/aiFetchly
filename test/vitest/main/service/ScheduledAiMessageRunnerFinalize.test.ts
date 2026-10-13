@@ -171,7 +171,8 @@ vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", () => ({
   }),
 }));
 
-import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
+import { ScheduledAiMessageRunner, mapOutcomeToFinalizeInput } from "@/service/ScheduledAiMessageRunner";
+import { TASK_EXECUTION_REASON_CODES } from "@/entityTypes/aiTaskExecutionTypes";
 
 const TASK = {
   id: 1,
@@ -343,5 +344,163 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
     engineOutcome.value = { type: "complete", content: "done" };
     mockCompleteRun.mockRejectedValue(new Error("sqlite disk I/O error"));
     await expect(call()).rejects.toThrow(/disk I\/O error/);
+  });
+
+  /**
+   * D8 review-coverage gap: the `reused` crash-retry branch had zero tests.
+   * A transport retry of the same occurrence key (same scheduleId +
+   * occurrence, e.g. the app crashed mid-run and the scheduler re-claimed)
+   * gets `reused` from startScheduled. The runner must finalize the run row
+   * as failed with the honest OCCURRENCE_ALREADY_ENROLLED code — never
+   * silently re-run the turn (double execution) and never leave the claim
+   * stuck "running" (GAP-S2 #9).
+   */
+  it("flag-on + reused enrollment (crash retry): finalizes failed with OCCURRENCE_ALREADY_ENROLLED, no engine turn", async () => {
+    flagOn.value = true;
+    mockStartScheduled.mockResolvedValue({ status: "reused" });
+
+    const result = await call({ idempotencyKey: "scheduled-loop:2:1" });
+
+    // Enrollment was attempted exactly once and hit the reused branch.
+    expect(mockStartScheduled).toHaveBeenCalledTimes(1);
+    expect(mockStartScheduled.mock.calls[0][0]).toMatchObject({
+      occurrenceKey: "scheduled-loop:2:1",
+    });
+    // The engine NEVER runs — a retry must not double-execute the turn.
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    // The run row is finalized as failed with the honest error code so the
+    // claim is not stuck "running".
+    expect(mockFailRun).toHaveBeenCalledTimes(1);
+    expect(mockFailRun.mock.calls[0][0]).toBe(9);
+    expect(String(mockFailRun.mock.calls[0][1])).toContain(
+      "OCCURRENCE_ALREADY_ENROLLED"
+    );
+    expect(mockUpdateRunStatus).toHaveBeenCalledWith(
+      9,
+      "failed",
+      expect.objectContaining({ error_code: "OCCURRENCE_ALREADY_ENROLLED" })
+    );
+    // Legacy accounting: the occurrence failed, so the schedule's
+    // consecutive-failure counter increments (success: false).
+    expect(mockUpdateIntervalAfterResult).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false })
+    );
+    // Policy finalization never runs — there is no fresh execution for this
+    // attempt (the existing row's finalization belongs to the other attempt).
+    expect(mockFinalizeScheduled).not.toHaveBeenCalled();
+
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toBe("OCCURRENCE_ALREADY_ENROLLED");
+  });
+});
+
+/**
+ * D8 review-coverage gap: the finalize mapping's FALLBACK statics had zero
+ * direct tests. mapOutcomeToFinalizeInput is the last writer before the
+ * durable outcome_reason_code column (varchar(64)) and the §17 rollout
+ * histogram — every code it emits or passes through must be in the
+ * TASK_EXECUTION_REASON_CODES vocabulary, or the histogram grows a novel
+ * bucket and the 6-language i18n display map misses it.
+ */
+describe("mapOutcomeToFinalizeInput — reason-code statics (writer format-drift guard)", () => {
+  it("completed → CRITERIA_SATISFIED (static, in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      {
+        kind: "completed",
+        assistantMessageId: "m1",
+        content: "done",
+      },
+      1_000
+    );
+    expect(mapping.taskOutcome).toBe("verified_complete");
+    expect(mapping.reasonCode).toBe("CRITERIA_SATISFIED");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
+  });
+
+  it("incomplete → reasonCode passthrough (NO_PROGRESS, in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      {
+        kind: "incomplete",
+        assistantMessageId: "m1",
+        content: "partial",
+        reasonCode: "NO_PROGRESS",
+        remainingWork: [],
+      },
+      1_000
+    );
+    expect(mapping.taskOutcome).toBe("incomplete");
+    expect(mapping.reasonCode).toBe("NO_PROGRESS");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
+  });
+
+  it("missing_outcome → reasonCode passthrough (in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      {
+        kind: "missing_outcome",
+        assistantMessageId: "m1",
+        reasonCode: "MISSING_TASK_OUTCOME",
+      },
+      1_000
+    );
+    expect(mapping.reasonCode).toBe("MISSING_TASK_OUTCOME");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
+  });
+
+  it("failed with classified reasonCode → passthrough (in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      {
+        kind: "failed",
+        assistantMessageId: "m1",
+        errorMessage: "provider exploded",
+        reasonCode: "PROVIDER_ERROR",
+      },
+      1_000
+    );
+    // D7: the stable code goes to the column; raw transport text stays in
+    // the summary for renderer display only.
+    expect(mapping.reasonCode).toBe("PROVIDER_ERROR");
+    expect(mapping.summary).toBe("provider exploded");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
+  });
+
+  it("failed WITHOUT classified reasonCode → REMOTE_AI_ERROR static (in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      {
+        kind: "failed",
+        assistantMessageId: "m1",
+        errorMessage: "fetch failed: ECONNRESET",
+      },
+      1_000
+    );
+    // The raw transport text must never reach the reason-code column.
+    expect(mapping.reasonCode).toBe("REMOTE_AI_ERROR");
+    expect(mapping.summary).toBe("fetch failed: ECONNRESET");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
+  });
+
+  it("blocked → reason static, BLOCKED_BY_POLICY fallback (in vocabulary)", () => {
+    const withReason = mapOutcomeToFinalizeInput(
+      { kind: "blocked", assistantMessageId: "m1", reason: "CONTENT_RESTRICTED" },
+      1_000
+    );
+    expect(withReason.reasonCode).toBe("CONTENT_RESTRICTED");
+    const withoutReason = mapOutcomeToFinalizeInput(
+      { kind: "blocked", assistantMessageId: "m1", reason: "" },
+      1_000
+    );
+    expect(withoutReason.reasonCode).toBe("BLOCKED_BY_POLICY");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(withReason.reasonCode);
+    expect(TASK_EXECUTION_REASON_CODES).toContain(withoutReason.reasonCode);
+  });
+
+  it("cancelled → RUN_INTERRUPTED static (in vocabulary)", () => {
+    const mapping = mapOutcomeToFinalizeInput(
+      { kind: "cancelled", assistantMessageId: "m1", content: "stopped" },
+      1_000
+    );
+    expect(mapping.taskOutcome).toBe("cancelled");
+    expect(mapping.reasonCode).toBe("RUN_INTERRUPTED");
+    expect(TASK_EXECUTION_REASON_CODES).toContain(mapping.reasonCode);
   });
 });

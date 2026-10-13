@@ -1411,36 +1411,18 @@ export class AiTaskExecutionModel extends BaseDb {
   }
 
   /**
-   * Persist an already-loaded execution entity (e.g. after mutating
-   * `execution_state_json` for a shadow decision). Used by the module's
-   * `recordShadowDecision` so it does not need bracket-access to a private
-   * repository field.
-   *
-   * NOTE: this is a full-row UPSERT with no CAS guard. It is retained for
-   * callers that hold the executionCreateMutex or otherwise serialize access.
-   * `recordShadowDecision` does NOT hold that mutex and must use
-   * {@link applyShadowDecisionCas} instead, which guards against the
-   * finalize-then-shadow interleaving the full-row save would clobber.
-   */
-  async saveExecution(exec: AiTaskExecutionEntity): Promise<void> {
-    assertNotWorker("saveExecution");
-    await this.executionRepo.save(exec);
-  }
-
-  /**
    * Atomically merge a shadow decision into `execution_state_json` and bump
    * the CAS version, guarded by `finalized = 0` and the expected version.
    *
-   * This is the CAS-protected counterpart to {@link saveExecution} for the
-   * shadow-decision path. The previous full-row `saveExecution` was a
-   * read-then-write UPSERT with no WHERE predicate: a finalizer that
-   * committed its atomic CAS UPDATE *between* the shadow path's `getById`
-   * read and its `saveExecution` would have its `finalized=1`, outcome, and
-   * `finalized_at` silently reverted to the stale in-memory entity's
-   * `finalized=0` — an inconsistent row with a released ledger but no
-   * outcome. The B8.2 version bump only protected the shadow-THEN-finalize
-   * ordering (the finalizer's stale CAS rejects); it did NOT protect
-   * finalize-THEN-shadow.
+   * This is the only sanctioned write path for shadow decisions. A full-row
+   * UPSERT here would have no CAS guard (the removed `saveExecution` was
+   * exactly that): a finalizer that committed its atomic CAS UPDATE *between*
+   * the shadow path's `getById` read and the save would have its
+   * `finalized=1`, outcome, and `finalized_at` silently reverted to the stale
+   * in-memory entity's `finalized=0` — an inconsistent row with a released
+   * ledger but no outcome. The B8.2 version bump only protected the
+   * shadow-THEN-finalize ordering (the finalizer's stale CAS rejects); it did
+   * NOT protect finalize-THEN-shadow.
    *
    * This single atomic statement fixes both directions:
    *  - finalize-THEN-shadow: the `finalized = 0` predicate fails (the

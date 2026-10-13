@@ -192,9 +192,19 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
     }
   }
 
-  /** True when the three tables exist (used by the service fail-closed path). */
-  async tablesExist(): Promise<boolean> {
-    assertNotWorker("AiTaskRolloutMetrics.tablesExist");
+  /**
+   * Table-presence shape for the service fail-closed path. All three tables
+   * missing = pre-migration DB (or fresh install) — NOT degraded. SOME
+   * missing = corrupt / concurrently-migrating store — the read itself is
+   * untrustworthy, so the module must flag degraded (D7 review fix: a
+   * partial drop previously read as "pre-migration" and masked a broken
+   * monitor as an empty rollout).
+   */
+  async describeTables(): Promise<{
+    readonly present: number;
+    readonly allPresent: boolean;
+  }> {
+    assertNotWorker("AiTaskRolloutMetrics.describeTables");
     const runner = this.sqliteDb.connection.createQueryRunner();
     try {
       const rows = (await runner.query(
@@ -204,7 +214,10 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
                          'ai_task_execution_ledger',
                          'ai_task_operation')`
       )) as unknown as readonly { readonly name: string }[];
-      return rows.length === 3;
+      return {
+        present: rows.length,
+        allPresent: rows.length === 3,
+      };
     } finally {
       await runner.release();
     }

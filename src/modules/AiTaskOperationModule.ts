@@ -53,6 +53,22 @@ export class AiTaskOperationModule extends BaseModule {
     return this.model.findUnresolvedByIntent(input);
   }
 
+  /**
+   * Occurrence-ordinal source for the TaskOperationGuard (§10.1): count ALL
+   * rows for one execution + intent (terminal included) — passthrough to the
+   * model query.
+   */
+  async countOccurrencesByIntent(input: {
+    readonly executionId: string;
+    readonly toolIdentity: string;
+    readonly domainTarget: string | null;
+    readonly intentHash: string;
+    readonly limit?: number;
+  }): Promise<number> {
+    await this.ensureConnection();
+    return this.model.countOccurrencesByIntent(input);
+  }
+
   async updateState(
     input: UpdateStateInput
   ): Promise<UpdateStateResult> {

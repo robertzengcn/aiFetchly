@@ -166,6 +166,46 @@ export class ContactInfoRepository {
 
         return { total, completed, failed, pending, analyzing };
     }
+
+    /**
+     * Count contact rows created at/after a timestamp (execution-scoped freshness
+     * bound, AC-03). `extraction_date` is the `@CreateDateColumn` (UTC text
+     * `"YYYY-MM-DD HH:MM:SS"`, no offset marker); comparing against an ISO
+     * string is lexicographically correct for the equal-format case.
+     */
+    async countSince(startedAt: Date): Promise<number> {
+        const repository = await this.getRepository();
+        return repository
+            .createQueryBuilder('contact')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: startedAt.toISOString(),
+            })
+            .getCount();
+    }
+
+    /**
+     * Find the freshest contact row created at/after a timestamp, returning its
+     * `extraction_date`. Used by the observation provider so `observedAt` is the
+     * real row time, not `now()` — a historical row can no longer masquerade as
+     * a fresh observation (AC-04/AC-03). Returns null when no in-window row
+     * exists (fail-closed → unknown).
+     */
+    async findLatestSince(
+        startedAt: Date
+    ): Promise<{ extractionDate: Date } | null> {
+        const repository = await this.getRepository();
+        const row = await repository
+            .createQueryBuilder('contact')
+            .select('contact.extraction_date', 'extractionDate')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: startedAt.toISOString(),
+            })
+            .orderBy('contact.extraction_date', 'DESC')
+            .limit(1)
+            .getRawOne<{ extractionDate: string } | undefined>();
+        if (!row || !row.extractionDate) return null;
+        return { extractionDate: new Date(row.extractionDate) };
+    }
 }
 
 // Export singleton instance

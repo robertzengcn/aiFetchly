@@ -11,6 +11,13 @@ import {
   TASK_EXECUTION_LEDGER_STATUSES,
   TASK_EXECUTION_REASON_CODES,
 } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  TaskCompletionDecision,
+  TaskEndCandidate,
+} from "@/entityTypes/aiTaskExecutionTypes";
+import type { DecideContext } from "@/service/aiTaskExecution/TaskCompletionController";
+import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
+import { mapDecisionToOutcome } from "@/service/ScheduledLoopEventSink";
 
 describe("aiTaskExecutionTypes schemas", () => {
   it("parses a valid task outcome", () => {
@@ -174,5 +181,145 @@ describe("aiTaskExecutionTypes schemas", () => {
   it("exposes the ledger-status set", () => {
     expect(TASK_EXECUTION_LEDGER_STATUSES).toContain("active");
     expect(TASK_EXECUTION_LEDGER_STATUSES).toContain("released");
+  });
+});
+
+/**
+ * D8 review finding — reason-code vocabulary drift. The durable
+ * `outcome_reason_code` column (varchar(64)) and the §17 rollout histogram
+ * are keyed by TASK_EXECUTION_REASON_CODES. Writers must never emit a code
+ * outside the vocabulary, or the histogram grows a bucket per novel string
+ * (format drift) and the i18n display map misses the code.
+ *
+ * This suite drives the reason-producing writer paths that can be exercised
+ * with light imports (controller + sink mapping; the runner's finalize
+ * statics are covered in ScheduledAiMessageRunnerFinalize.test.ts where the
+ * heavy module's mocks already exist):
+ *   - TaskCompletionController.decide (the controller's classified codes,
+ *     including T21b's distinct finishReason/recovery mappings)
+ *   - ScheduledLoopEventSink.mapDecisionToOutcome (decision → outcome kind)
+ * and asserts every emitted code lands in the vocabulary. Any writer that
+ * introduces a new code (or removes a code the fallbacks rely on) fails
+ * here first, forcing a vocabulary + 6-language i18n update in the same
+ * change.
+ */
+describe("TASK_EXECUTION_REASON_CODES vocabulary — writer format-drift guard", () => {
+  function baseCandidate(
+    overrides: Partial<TaskEndCandidate>
+  ): TaskEndCandidate {
+    return {
+      candidateId: "cand-1",
+      executionId: "exec-1",
+      content: "Partial",
+      finishReason: "stop",
+      provenance: "provider",
+      streamTerminalSeen: true,
+      boundary: "response_end",
+      pendingPermission: false,
+      pendingQuestion: false,
+      pendingPlanApproval: false,
+      safetyRestriction: false,
+      ...overrides,
+    };
+  }
+
+  type DecideContextOverrides = Partial<
+    Pick<DecideContext, "route" | "passedCriterionIds" | "requiredCriterionIds" | "recoveryReason">
+  >;
+
+  type MappedOutcome = ReturnType<typeof mapDecisionToOutcome>;
+
+  /** Drive controller.decide → sink mapDecisionToOutcome. */
+  async function decideAndMap(
+    candidateOverrides: Partial<TaskEndCandidate>,
+    contextOverrides: DecideContextOverrides
+  ): Promise<{ readonly decision: TaskCompletionDecision; readonly outcome: MappedOutcome }> {
+    const ctrl = new TaskCompletionController();
+    const decision: TaskCompletionDecision = await ctrl.decide(
+      baseCandidate(candidateOverrides),
+      {
+        route: "task_verified",
+        ...contextOverrides,
+      }
+    );
+    return { decision, outcome: mapDecisionToOutcome(decision, "msg-1") };
+  }
+
+  function decisionReasonCode(decision: TaskCompletionDecision): string {
+    if (decision.type === "finish") return decision.reasonCode;
+    if (decision.type === "wait") return decision.reason;
+    return "";
+  }
+
+  it("controller finish decisions map to vocabulary codes (verified/incomplete/blocked/cancelled)", async () => {
+    // verified_complete → completed outcome; the controller's reasonCode is
+    // CRITERIA_SATISFIED (the runner's finalize mapping emits the same code
+    // statically for completed outcomes — covered in the finalize suite).
+    const verified = await decideAndMap(
+      { content: "Saved 100 contacts." },
+      {
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1"],
+      }
+    );
+    expect(verified.outcome.kind).toBe("completed");
+    expect(verified.decision.type).toBe("finish");
+    expect(decisionReasonCode(verified.decision)).toBe("CRITERIA_SATISFIED");
+    // plain incomplete → NO_PROGRESS (vocabulary)
+    const incomplete = await decideAndMap(
+      { content: "Partial" },
+      { requiredCriterionIds: ["rec-1"] }
+    );
+    expect(incomplete.outcome.kind).toBe("incomplete");
+    if (incomplete.outcome.kind === "incomplete") {
+      expect(incomplete.outcome.reasonCode).toBe("NO_PROGRESS");
+    }
+    // content_filter finishReason → blocked CONTENT_RESTRICTED
+    const blocked = await decideAndMap(
+      { finishReason: "content_filter", safetyRestriction: false },
+      { requiredCriterionIds: ["rec-1"] }
+    );
+    expect(blocked.outcome.kind).toBe("blocked");
+    if (blocked.outcome.kind === "blocked") {
+      expect(blocked.outcome.reason).toBe("CONTENT_RESTRICTED");
+    }
+    // The drift guard itself: every writer-emitted code must be in the
+    // vocabulary or the §17 histogram + i18n display silently rot.
+    for (const code of [
+      decisionReasonCode(verified.decision),
+      decisionReasonCode(incomplete.decision),
+      decisionReasonCode(blocked.decision),
+    ]) {
+      expect(TASK_EXECUTION_REASON_CODES).toContain(code);
+    }
+  });
+
+  it("T21b distinct codes (AUTH_FAILURE/QUOTA_EXHAUSTED/NON_RECOVERABLE/PROVIDER_ERROR/OUTPUT_TRUNCATED) are all in the vocabulary", async () => {
+    const mapped = [
+      await decideAndMap({ finishReason: "stop" }, { recoveryReason: "auth" }),
+      await decideAndMap({ finishReason: "stop" }, { recoveryReason: "quota" }),
+      await decideAndMap({ finishReason: "stop" }, { recoveryReason: "non_recoverable" }),
+      await decideAndMap({ finishReason: "error" }, {}),
+      await decideAndMap({ finishReason: "length" }, {}),
+    ];
+    const codes = mapped.map(({ decision }) => decisionReasonCode(decision));
+    for (const code of codes) {
+      expect(TASK_EXECUTION_REASON_CODES).toContain(code);
+    }
+    expect(codes).toEqual([
+      "AUTH_FAILURE",
+      "QUOTA_EXHAUSTED",
+      "NON_RECOVERABLE",
+      "PROVIDER_ERROR",
+      "OUTPUT_TRUNCATED",
+    ]);
+    // Every mapped outcome carries the code the finalize path will write
+    // (incomplete → reasonCode passthrough into the durable column).
+    for (const { outcome } of mapped) {
+      expect(outcome.kind).toBe("incomplete");
+      if (outcome.kind === "incomplete") {
+        expect(TASK_EXECUTION_REASON_CODES).toContain(outcome.reasonCode);
+      }
+    }
   });
 });

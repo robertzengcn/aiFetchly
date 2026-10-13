@@ -120,10 +120,18 @@ vi.mock("@/modules/AiTaskExecutionModule", () => ({
 const {
   getOperationMock,
   countSearchResultMock,
+  countSearchResultSinceMock,
+  findLatestSearchResultSinceMock,
+  countSinceMock,
+  findLatestSinceMock,
   getStatisticsMock,
 } = vi.hoisted(() => ({
   getOperationMock: vi.fn(),
   countSearchResultMock: vi.fn(),
+  countSearchResultSinceMock: vi.fn(),
+  findLatestSearchResultSinceMock: vi.fn(),
+  countSinceMock: vi.fn(),
+  findLatestSinceMock: vi.fn(),
   getStatisticsMock: vi.fn(),
 }));
 vi.mock("@/modules/AiTaskOperationModule", () => ({
@@ -133,11 +141,19 @@ vi.mock("@/modules/AiTaskOperationModule", () => ({
 }));
 vi.mock("@/modules/SearchModule", () => ({
   SearchModule: vi.fn().mockImplementation(function () {
-    return { countSearchResult: countSearchResultMock };
+    return {
+      countSearchResult: countSearchResultMock,
+      countSearchResultSince: countSearchResultSinceMock,
+      findLatestSearchResultSince: findLatestSearchResultSinceMock,
+    };
   }),
 }));
 vi.mock("@/model/ContactInfo.model", () => ({
-  contactInfoRepository: { getStatistics: getStatisticsMock },
+  contactInfoRepository: {
+    getStatistics: getStatisticsMock,
+    countSince: countSinceMock,
+    findLatestSince: findLatestSinceMock,
+  },
   ContactInfoRepository: vi.fn(),
 }));
 
@@ -261,6 +277,14 @@ beforeEach(() => {
   mergeEvidenceCasMock.mockResolvedValue(true);
   getOperationMock.mockResolvedValue(null);
   countSearchResultMock.mockResolvedValue(0);
+  // AC-03 bound: execution-scope counts/observations go through the
+  // *Since(window) variants now; the global count/total is only reachable
+  // via the cumulative scope (which the compiler never emits for
+  // execution-local work).
+  countSearchResultSinceMock.mockResolvedValue(0);
+  findLatestSearchResultSinceMock.mockResolvedValue(null);
+  countSinceMock.mockResolvedValue(0);
+  findLatestSinceMock.mockResolvedValue(null);
   getStatisticsMock.mockResolvedValue({
     total: 0,
     completed: 0,
@@ -708,20 +732,16 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     const result = await enrollScheduledExecution(makeInput());
     expect(result.status).toBe("created");
 
-    // 100/100: getStatistics returns total 100 → record_count (scope
-    // "execution" → ContactInfo total) passes. All required criteria pass,
-    // but route is task_best_effort (not task_verified) so canVerify is true
-    // yet the outcome is finish(incomplete) with empty remainingWork — NOT
-    // verified_complete (that needs task_verified, wired by T15) and NOT
-    // continue (unmet is empty). Evidence still persists: persistEvidence
-    // runs inside checkCandidate BEFORE the controller decides.
-    getStatisticsMock.mockResolvedValue({
-      total: 100,
-      completed: 0,
-      failed: 0,
-      pending: 0,
-      analyzing: 0,
-    });
+    // 100/100: the D1 AC-03 bound routes execution-scope counts through the
+    // task-linked, createdAt-windowed count (countSearchResultSince for
+    // schedule_id 1 → taskId 1). 100 in-window rows → record_count passes.
+    // All required criteria pass, but route is task_best_effort (not
+    // task_verified) so canVerify is true yet the outcome is
+    // finish(incomplete) with empty remainingWork — NOT verified_complete
+    // (that needs task_verified, wired by T15) and NOT continue (unmet is
+    // empty). Evidence still persists: persistEvidence runs inside
+    // checkCandidate BEFORE the controller decides.
+    countSearchResultSinceMock.mockResolvedValue(100);
 
     const candidate = {
       candidateId: "cand:exec-scheduled-1:response_end",
@@ -788,12 +808,13 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
   });
 
   it("T03: 0/100 contacts with the factory-backed provider → record_count unmet → continue (live recovery, same-occurrence)", async () => {
-    // The default getStatisticsMock returns total 0 (beforeEach). With the
-    // factory-backed recordCountProvider, scope "execution" → ContactInfo
-    // total = 0 < minimum 100 → fail → unmet → the live continue branch
-    // fires (FR-07). This is the T03 upgrade of the T02 fail-closed test:
-    // the count is now authoritative (ContactInfo total via the provider),
-    // not an unknown stub.
+    // The default countSearchResultSinceMock returns 0 (beforeEach). With
+    // the factory-backed recordCountProvider, scope "execution" → the
+    // task-linked, createdAt-windowed count = 0 < minimum 100 → fail →
+    // unmet → the live continue branch fires (FR-07). This is the T03
+    // upgrade of the T02 fail-closed test: the count is now authoritative
+    // AND execution-scoped (AC-03) — unrelated pre-window rows cannot
+    // satisfy it.
     startScheduledMock.mockImplementation(async (input: {
       contract: TaskCompletionContract | null;
     }) => ({

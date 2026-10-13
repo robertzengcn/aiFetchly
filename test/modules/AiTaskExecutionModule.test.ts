@@ -146,9 +146,13 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       ...MANUAL_BUDGET_DEFAULTS,
       maxContinuations: 1000,
       maxActiveRuntimeMs: 60 * 60 * 1000,
+      maxCheckerAttempts: 1000,
     });
     expect(overCap.maxContinuations).to.equal(HARD_CAPS.maxContinuations);
     expect(overCap.maxActiveRuntimeMs).to.equal(HARD_CAPS.maxActiveRuntimeMs);
+    expect(overCap.maxCheckerAttempts).to.equal(
+      HARD_CAPS.maxCheckerAttemptsPerRun
+    );
     // Non-capped fields pass through unchanged.
     expect(overCap.maxProviderAttempts).to.equal(
       MANUAL_BUDGET_DEFAULTS.maxProviderAttempts

@@ -118,6 +118,13 @@ export function buildEvidenceService(deps: {
 
   // ----- recordCountProvider: authoritative Model-backed counts -----
 
+  // AC-03 freshness bound: `lineage` and `execution` scopes ONLY count rows
+  // created at/after this execution's `createdAt`. There is NO global-count
+  // fallback — an unmappable or window-less scope returns null → the adapter
+  // records "unknown" → the criterion is unmet → the controller returns
+  // `incomplete`, never a false `verified_complete`. `cumulative` is the only
+  // scope that reads the global total, and the compiler never emits it for
+  // execution-local work (TaskCriteriaResolver always sets "execution").
   const recordCountProvider = async (
     targetId: string,
     scope: string
@@ -127,25 +134,25 @@ export function buildEvidenceService(deps: {
     try {
       if (scope === "cumulative") {
         // Cumulative: the ContactInfo statistics total (global count — the
-        // only count-capable model without execution scoping).
+        // only count-capable model without execution scoping). Emitted only
+        // for cross-execution totals, never for execution-local work.
         const stats = await deps.contactInfoRepository.getStatistics();
         return stats.total;
       }
-      if (scope === "lineage") {
-        // Lineage/execution scope: rows created at/after this execution's
-        // createdAt (freshness bound — unrelated old records cannot satisfy
-        // execution-local work, AC-03). Task-scoped when taskId present.
+      if (scope === "lineage" || scope === "execution") {
+        // Execution-local freshness bound (AC-03): rows created at/after the
+        // execution's createdAt. Task-scoped when taskId present (SearchResult
+        // by keyword+time); otherwise contact-info-by-time. No global
+        // fallback — a missing createdAt window means we cannot bound the
+        // count, so return null (fail-closed → unknown).
+        if (!execScope.createdAt) return null;
         if (execScope.taskId !== null) {
-          return await deps.searchModule.countSearchResult(execScope.taskId);
+          return await deps.searchModule.countSearchResultSince(
+            execScope.taskId,
+            execScope.createdAt
+          );
         }
-        const stats = await deps.contactInfoRepository.getStatistics();
-        return stats.total;
-      }
-      if (scope === "execution") {
-        // Execution scope: same freshness bound, global count fallback.
-        const stats = await deps.contactInfoRepository
-          .getStatistics();
-        return stats.total;
+        return await deps.contactInfoRepository.countSince(execScope.createdAt);
       }
       return null;
     } catch {
@@ -171,31 +178,42 @@ export function buildEvidenceService(deps: {
 
   // ----- observationProvider: fresh execution-scoped observation -----
 
+  // AC-04/AC-03: a real observation is a row created within the execution
+  // window, and `observedAt` is that ROW's time — not `now()`. A historical
+  // row (created before the execution started) cannot satisfy a fresh-
+  // observation check: the provider returns null → unknown → unmet. No
+  // createdAt window also returns null (fail-closed).
   const observationProvider = async (
     targetId: string
   ): Promise<ObservationReceipt | null> => {
     const execScope = await getScope();
-    if (!execScope) return null;
+    if (!execScope || !execScope.createdAt) return null;
     try {
-      // Task-scoped: a fresh SearchResult row for the execution's task
-      // counts as a real observation (retrieved within the execution window
-      // — the freshness bound). The targetId is the slug; the linkage is
-      // the execution's task, not the slug text.
+      // Task-scoped: the freshest SearchResult row for the execution's task
+      // created at/after the execution's createdAt. The targetId is the slug;
+      // the linkage is the execution's task, not the slug text.
       if (execScope.taskId !== null) {
-        const count = await deps.searchModule.countSearchResult(execScope.taskId);
-        if (count > 0) {
+        const freshest =
+          await deps.searchModule.findLatestSearchResultSince(
+            execScope.taskId,
+            execScope.createdAt
+          );
+        if (freshest) {
           return {
-            observedAt: new Date().toISOString(),
+            observedAt: freshest.recordTime.toISOString(),
             referenceId: `search-result:${execScope.taskId}`,
           };
         }
         return null;
       }
-      // No task linkage: a fresh ContactInfo row counts as the observation.
-      const stats = await deps.contactInfoRepository.getStatistics();
-      if (stats.total > 0) {
+      // No task linkage: the freshest ContactInfo row in-window counts as the
+      // observation. observedAt = row's extraction_date, not now().
+      const freshest = await deps.contactInfoRepository.findLatestSince(
+        execScope.createdAt
+      );
+      if (freshest) {
         return {
-          observedAt: new Date().toISOString(),
+          observedAt: freshest.extractionDate.toISOString(),
           referenceId: `contact-info:${executionId}`,
         };
       }

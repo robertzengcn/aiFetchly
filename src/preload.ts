@@ -268,6 +268,12 @@ import {
   // AI Task Completion Policy — recovery actions (PRD FR-14)
   AI_CHAT_V2_TASK_CONTINUE,
   AI_CHAT_V2_TASK_RETRY,
+  // D5 review fix: the state + rollout-metrics read channels were handled
+  // in main but missing from the preload invoke whitelist, so the renderer's
+  // task-state poll and the rollout metrics panel got an "Unknown channel"
+  // rejection.
+  AI_CHAT_V2_TASK_STATE_GET,
+  AI_TASK_ROLLOUT_METRICS_GET,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   AI_CHAT_V2_SCHEDULED_LOOP_GET,
   AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
@@ -1000,6 +1006,8 @@ contextBridge.exposeInMainWorld("api", {
       // AI Task Completion Policy — recovery actions (PRD FR-14)
       AI_CHAT_V2_TASK_CONTINUE,
       AI_CHAT_V2_TASK_RETRY,
+      AI_CHAT_V2_TASK_STATE_GET,
+      AI_TASK_ROLLOUT_METRICS_GET,
       AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
       AI_CHAT_V2_SCHEDULED_LOOP_GET,
       AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,

@@ -163,15 +163,3 @@ export function deriveCandidateDiagnostics(
     safetyRestriction,
   };
 }
-
-/**
- * Surface the recovery reason for the controller's distinct mapping. Returns
- * null when no reason was classified (the controller falls back to
- * STREAM_INCOMPLETE / NO_PROGRESS). Non-retryable reasons are returned as-is
- * so the controller can map auth/quota/non_recoverable to distinct codes.
- */
-export function classifyRecoveryReason(
-  reason: AIChatRecoveryReason | null | undefined
-): AIChatRecoveryReason | null {
-  return reason ?? null;
-}

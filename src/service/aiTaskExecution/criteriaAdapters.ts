@@ -366,14 +366,24 @@ export class QualitativeEvaluator implements CriterionEvaluator {
     context: AdapterContext,
     dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
   ): Promise<DispatchOutcome> {
+    // AbortSignal.any links the parent (turn/run Stop) and the per-dispatch
+    // deadline controller into one signal — a parent abort or deadline aborts
+    // the in-flight dispatch with no manual listener bookkeeping to clean up.
+    // The deadline aborts the controller (abort() → AbortError, keeping the
+    // AC-24 terminal-abort classification); a parent abort propagates through
+    // any() automatically.
     const dispatchController = new AbortController();
-    const cleanup = linkAbortSignals(dispatchController, context.abortSignal);
     const timer = setTimeout(
       () => dispatchController.abort(),
       CHECKER_DEADLINE_MS
     );
     try {
-      const response = await dispatch(prompt, dispatchController.signal);
+      const combined = AbortSignal.any(
+        context.abortSignal
+          ? [context.abortSignal, dispatchController.signal]
+          : [dispatchController.signal]
+      );
+      const response = await dispatch(prompt, combined);
       return parseCheckerVerdict(response, criterion);
     } catch (error) {
       if (isAbortError(error)) {
@@ -385,7 +395,6 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
     } finally {
       clearTimeout(timer);
-      cleanup();
     }
   }
 }
@@ -655,26 +664,6 @@ function parseCheckerVerdict(
     evidenceIds: entry.evidenceIds,
     reason: entry.reason.slice(0, MAX_CHECKER_REASON),
   };
-}
-
-/**
- * Link a parent abort signal (turn/run Stop) to a per-dispatch controller so
- * a parent abort triggers the per-dispatch abort. Returns a cleanup fn that
- * removes the listener (no leak). If the parent is already aborted, the
- * per-dispatch controller is aborted immediately.
- */
-function linkAbortSignals(
-  controller: AbortController,
-  parent?: AbortSignal
-): () => void {
-  if (!parent) return () => undefined;
-  const onParentAbort = (): void => controller.abort();
-  if (parent.aborted) {
-    controller.abort();
-    return () => undefined;
-  }
-  parent.addEventListener("abort", onParentAbort, { once: true });
-  return () => parent.removeEventListener("abort", onParentAbort);
 }
 
 /** Build the CriterionEvalResult summary for a valid verdict. */

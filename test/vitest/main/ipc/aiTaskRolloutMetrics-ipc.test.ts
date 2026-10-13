@@ -39,6 +39,7 @@ function makeSnapshot(overrides?: {
     schemaVersion: 1 as const,
     generatedAt: overrides?.generatedAt ?? "2026-10-12T01:00:00.000Z",
     since: SINCE,
+    degraded: false,
     manual: makeEmptyRolloutOriginCohort("manual"),
     scheduled: makeEmptyRolloutOriginCohort("scheduled"),
     operations: {

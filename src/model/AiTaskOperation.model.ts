@@ -230,6 +230,40 @@ export class AiTaskOperationModel extends BaseDb {
     return qb.getMany();
   }
 
+  /**
+   * Occurrence-ordinal source for the TaskOperationGuard (§10.1): count ALL
+   * stored rows for ONE execution + intent, INCLUDING terminal ones. The
+   * §10.1 retry ordinal must be derived from the store and strictly
+   * increasing — counting only unresolved rows re-derives the same ordinal
+   * once a failed occurrence settles, wedging later retries against the
+   * terminal row's key. Backed by the `intent_hash` index; bounded by
+   * `limit` (oldest first).
+   */
+  async countOccurrencesByIntent(input: {
+    readonly executionId: string;
+    readonly toolIdentity: string;
+    readonly domainTarget: string | null;
+    readonly intentHash: string;
+    readonly limit?: number;
+  }): Promise<number> {
+    assertNotWorker("AiTaskOperation.countOccurrencesByIntent");
+    const qb = this.repository
+      .createQueryBuilder("op")
+      .where("op.execution_id = :executionId", { executionId: input.executionId })
+      .andWhere(
+        "((op.tool_identity = :toolIdentity AND op.domain_target = :domainTarget) OR op.intent_hash = :intentHash)",
+        {
+          toolIdentity: input.toolIdentity,
+          domainTarget: input.domainTarget,
+          intentHash: input.intentHash,
+        }
+      )
+      .orderBy("op.id", "ASC")
+      .limit(input.limit ?? 500);
+    const rows = await qb.getMany();
+    return rows.length;
+  }
+
   async updateState(
     input: UpdateStateInput
   ): Promise<UpdateStateResult> {

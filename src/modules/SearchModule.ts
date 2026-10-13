@@ -930,6 +930,33 @@ export class SearchModule extends BaseModule {
     return await this.serResultModel.countSearchResult(keyarr);
   }
 
+  /**
+   * Count search results for a task created at/after `startedAt` (execution-
+   * scoped freshness bound, AC-03). Unrelated old results for the same task
+   * cannot satisfy execution-local work.
+   */
+  public async countSearchResultSince(
+    taskId: number,
+    startedAt: Date
+  ): Promise<number> {
+    const keyarr = await this.getKeywrodsbyTask(taskId);
+    return await this.serResultModel.countByKeywordsSince(keyarr, startedAt);
+  }
+
+  /**
+   * Find the freshest search result for a task created at/after `startedAt`,
+   * returning its `record_time`. Used by the observation provider so
+   * `observedAt` is the real row time, not `now()` (AC-04). Null when no
+   * in-window row exists (fail-closed → unknown).
+   */
+  public async findLatestSearchResultSince(
+    taskId: number,
+    startedAt: Date
+  ): Promise<{ recordTime: Date } | null> {
+    const keyarr = await this.getKeywrodsbyTask(taskId);
+    return await this.serResultModel.findLatestByKeywordsSince(keyarr, startedAt);
+  }
+
   //get keywords id by task id
   public async getKeywrodsbyTask(taskId: number): Promise<Array<number>> {
     const keywordEnArr = await this.serKeywordModel.getKeywordsEntityByTask(

@@ -45,6 +45,10 @@ const {
   mergeEvidenceCasMock,
   getOperationMock,
   countSearchResultMock,
+  countSearchResultSinceMock,
+  findLatestSearchResultSinceMock,
+  countSinceMock,
+  findLatestSinceMock,
   getStatisticsMock,
   openAIChatCompletionMock,
 } = vi.hoisted(() => ({
@@ -52,6 +56,10 @@ const {
   mergeEvidenceCasMock: vi.fn(),
   getOperationMock: vi.fn(),
   countSearchResultMock: vi.fn(),
+  countSearchResultSinceMock: vi.fn(),
+  findLatestSearchResultSinceMock: vi.fn(),
+  countSinceMock: vi.fn(),
+  findLatestSinceMock: vi.fn(),
   getStatisticsMock: vi.fn(),
   openAIChatCompletionMock: vi.fn(),
 }));
@@ -74,13 +82,19 @@ vi.mock("@/modules/AiTaskOperationModule", () => ({
 
 vi.mock("@/modules/SearchModule", () => ({
   SearchModule: vi.fn().mockImplementation(function () {
-    return { countSearchResult: countSearchResultMock };
+    return {
+      countSearchResult: countSearchResultMock,
+      countSearchResultSince: countSearchResultSinceMock,
+      findLatestSearchResultSince: findLatestSearchResultSinceMock,
+    };
   }),
 }));
 
 vi.mock("@/model/ContactInfo.model", () => ({
   contactInfoRepository: {
     getStatistics: getStatisticsMock,
+    countSince: countSinceMock,
+    findLatestSince: findLatestSinceMock,
   },
   ContactInfoRepository: vi.fn(),
 }));
@@ -147,16 +161,17 @@ const EXEC_VERSION = 7;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // The execution row the factory scopes its providers to. createdAt is
-  // null (AuditableEntity column — null is fine for the freshness bound in
-  // unit tests); schedule_id 1 carries the task linkage.
+  // The execution row the factory scopes its providers to. createdAt anchors
+  // the AC-03 freshness window (providers count/observe only rows created
+  // at/after it — a null window is fail-closed); schedule_id 1 carries the
+  // task linkage.
   getExecutionMock.mockResolvedValue({
     executionId: "exec-factory-1",
     execution_state_json: null,
     execution_state_version: EXEC_VERSION,
     finalized: false,
     schedule_id: 1,
-    createdAt: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
   });
   mergeEvidenceCasMock.mockResolvedValue(true);
   getStatisticsMock.mockResolvedValue({
@@ -167,6 +182,10 @@ beforeEach(() => {
     analyzing: 0,
   });
   countSearchResultMock.mockResolvedValue(0);
+  countSearchResultSinceMock.mockResolvedValue(0);
+  findLatestSearchResultSinceMock.mockResolvedValue(null);
+  countSinceMock.mockResolvedValue(0);
+  findLatestSinceMock.mockResolvedValue(null);
   getOperationMock.mockResolvedValue(null);
   openAIChatCompletionMock.mockResolvedValue({
     choices: [{ message: { content: "UNKNOWN" } }],
@@ -486,10 +505,15 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     expect(result.evidenceIds).toContain(row.evidenceId);
   });
 
-  it("observationProvider: task-scoped fresh SearchResult count > 0 → returns a fresh observation receipt", async () => {
-    // schedule_id 1 → taskId 1. countSearchResult returns 2 (> 0) → the
-    // provider returns a fresh observation receipt for the task.
-    countSearchResultMock.mockResolvedValue(2);
+  it("observationProvider: task-scoped in-window SearchResult row → fresh observation receipt with the row's time (AC-04)", async () => {
+    // schedule_id 1 → taskId 1. The D1 AC-03 bound: the provider queries the
+    // FRESHEST row at/after the execution's createdAt (not a global count) —
+    // a historical row can no longer masquerade as a fresh observation.
+    const windowStart = new Date("2026-01-01T00:00:00Z");
+    const rowTime = new Date("2026-01-02T12:00:00Z");
+    findLatestSearchResultSinceMock.mockResolvedValue({
+      recordTime: rowTime,
+    });
     const providers = buildEvidenceService({
       executionId: "exec-factory-1",
       execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
@@ -500,15 +524,39 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     const receipt = await providers.observationProvider("production");
     expect(receipt).not.toBeNull();
     expect(receipt!.referenceId).toBe("search-result:1");
-    expect(typeof receipt!.observedAt).toBe("string");
-    expect(countSearchResultMock).toHaveBeenCalledWith(1);
+    // observedAt is the ROW's time, not now() — the AC-04 fix.
+    expect(receipt!.observedAt).toBe(rowTime.toISOString());
+    expect(findLatestSearchResultSinceMock).toHaveBeenCalledWith(1, windowStart);
   });
 
-  it("observationProvider: zero fresh rows → null (no observation, fail-closed)", async () => {
-    countSearchResultMock.mockResolvedValue(0);
+  it("observationProvider: no in-window row → null (fail-closed; a pre-window row cannot pass)", async () => {
+    findLatestSearchResultSinceMock.mockResolvedValue(null);
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.observationProvider("production");
+    expect(receipt).toBeNull();
+  });
+
+  it("observationProvider: null createdAt window → null (fail-closed, no global fallback — AC-03)", async () => {
+    // A window-less execution cannot bound freshness, so the provider must
+    // NOT fall back to a global count/row (the pre-D1 behavior) — it returns
+    // null → unknown → unmet.
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: 1,
+      createdAt: null,
+    });
     getStatisticsMock.mockResolvedValue({
-      total: 0,
-      completed: 0,
+      total: 50,
+      completed: 50,
       failed: 0,
       pending: 0,
       analyzing: 0,
@@ -522,6 +570,9 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     const receipt = await providers.observationProvider("production");
     expect(receipt).toBeNull();
+    // The global fallbacks must never fire for a window-less execution.
+    expect(findLatestSinceMock).not.toHaveBeenCalled();
+    expect(getStatisticsMock).not.toHaveBeenCalled();
   });
 
   it("getExecution throws → observationProvider fail-closed (returns null, never throws)", async () => {

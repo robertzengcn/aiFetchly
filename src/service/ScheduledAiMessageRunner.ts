@@ -1618,7 +1618,16 @@ export function mapOutcomeToFinalizeInput(
     case "failed":
       return {
         taskOutcome: "failed",
-        reasonCode: outcome.errorMessage || "REMOTE_AI_ERROR",
+        // D7: the durable reason-code column (varchar(64)) and the §17
+        // histogram must see a STABLE typed code, never raw provider/transport
+        // text (a 200-char model error would overflow the column and poison
+        // the histogram with one bucket per failure). Prefer the controller's
+        // classified reasonCode when present (mapDecisionToOutcome threads it
+        // from decision.reasonCode on the failed/timeout branch); fall back to
+        // REMOTE_AI_ERROR when the failure was a blind transport error with no
+        // controller consult (flag-off / no binding). Raw display text stays
+        // in `summary` (a text column) for the run row + renderer.
+        reasonCode: outcome.reasonCode ?? "REMOTE_AI_ERROR",
         summary: outcome.errorMessage || "REMOTE_AI_ERROR",
         remainingWork: [],
         incrementFailure: true,

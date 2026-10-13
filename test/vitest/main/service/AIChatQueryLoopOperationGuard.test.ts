@@ -497,10 +497,12 @@ describe("AIChatQueryLoop T23d operation guard wiring (§10.2)", () => {
     expect(row).toBeNull();
   });
 
-  it("skips the guard for a skip_review direct send (no authorization triple)", async () => {
-    // No gate seeding: an intent that blocks the batched path with
-    // skip_review=true and no draft batch → skipReviewDirectSend → the send
-    // proceeds via the legacy path with NO authorization triple and NO guard.
+  it("fences a skip_review direct send with a direct-send operation row (D4)", async () => {
+    // D4 review fix: a skip_review direct send previously bypassed the
+    // durable fence entirely (no authorization triple → no guard). The send
+    // proceeds via the legacy claim path (no batch), but the guard now runs
+    // with a direct-send descriptor whose domain target derives from the
+    // trusted loop input's source user message id.
     const { OutboundEmailIntentModel } = await import(
       "@/model/OutboundEmailIntent.model"
     );
@@ -548,15 +550,92 @@ describe("AIChatQueryLoop T23d operation guard wiring (§10.2)", () => {
 
     await loop.run(input);
 
-    // Legacy direct-send path: the tool ran, no operation row exists.
+    // The direct send executed AND left a durable operation row keyed on the
+    // direct-send target (source user message id), settled to the §10.2
+    // uncertainty state — the tool returned an unrecognized success status
+    // (completed on a start-tool is not a native claim receipt).
     expect(executeTool).toHaveBeenCalledTimes(1);
     const mod = new AiTaskOperationModule();
+    const directRow = await mod.getOperation(
+      guardOperationKey("exec-op-guard", "outbound_direct:msg-op-guard")
+    );
+    expect(directRow).not.toBeNull();
+    expect(directRow?.operation_state).toBe("unknown");
+    // Unresolved for this intent — a second dispatch is fenced.
     const rows = await mod.findUnresolvedByIntent({
       toolIdentity: "start_email_send_task",
-      domainTarget: null,
+      domainTarget: "outbound_direct:msg-op-guard",
       intentHash: "sha256:any",
     });
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("blocks a duplicate skip_review direct send via the durable fence (D4)", async () => {
+    // The fence exists so a crash/retry loop cannot silently re-run an
+    // unattended send whose outcome was never observed. Reuse the same turn
+    // identity: the second dispatch of the same intent is blocked by the
+    // unknown-outcome row the first one left.
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: guardOperationKey(
+        "exec-op-guard",
+        "outbound_direct:msg-op-guard"
+      ),
+      executionId: "exec-op-guard",
+      toolIdentity: "start_email_send_task",
+      domainTarget: "outbound_direct:msg-op-guard",
+      intentHash: "sha256:any",
+    });
+    await mod.updateState({
+      operationKey: guardOperationKey(
+        "exec-op-guard",
+        "outbound_direct:msg-op-guard"
+      ),
+      expectedClaimGeneration: 0,
+      newState: "claimed",
+    });
+
+    const { OutboundEmailIntentModel } = await import(
+      "@/model/OutboundEmailIntent.model"
+    );
+    const { OutboundEmailIntentEntity } = await import(
+      "@/entity/OutboundEmailIntent.entity"
+    );
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intentEntity = new OutboundEmailIntentEntity();
+    intentEntity.conversationId = CONVERSATION_ID;
+    intentEntity.sourceUserMessageId = "msg-op-guard";
+    intentEntity.mode = "draft_only";
+    intentEntity.reasonCode = "explicit_do_not_send";
+    intentEntity.confidence = 1;
+    intentEntity.evidenceJson = "[]";
+    intentEntity.sourceTextHash = "a".repeat(64);
+    intentEntity.resolverVersion = "outbound-resolver-v1";
+    intentEntity.previousAssistantMessageId = null;
+    const intent = await intentModel.create(intentEntity);
+
+    const executeTool = vi.fn();
+    const stream = makeSendStream({
+      ...SEND_ARGS,
+      skip_review: true,
+    });
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool,
+      getSkillDefinition: () => undefined,
+    } as never);
+    const { input } = makeInput({
+      binding: makeBinding(),
+      intentDecisionId: intent.id,
+    });
+    (input as { outboundSendPreAuthorized?: boolean }).outboundSendPreAuthorized =
+      true;
+
+    await loop.run(input);
+
+    // The send must NOT have executed — the unknown-outcome fence blocks it.
+    expect(executeTool).not.toHaveBeenCalled();
   });
 
   it("settles a definitive claim failure to no_effect (failed) with a failure code", async () => {

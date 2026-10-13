@@ -40,7 +40,16 @@ export type ScheduledTurnOutcome =
   | {
       readonly kind: "failed";
       readonly assistantMessageId?: string;
+      /** Raw, human-readable failure text (renderer display + run row). */
       readonly errorMessage: string;
+      /**
+       * Stable typed reason code (TASK_EXECUTION_REASON_CODES vocabulary)
+       * when the failure came from a classified source (a controller
+       * decision). Raw transport text stays ONLY in errorMessage so the
+       * durable reason-code column and the §17 histogram never see
+       * model/provider text.
+       */
+      readonly reasonCode?: string;
     }
   | {
       readonly kind: "blocked";
@@ -657,6 +666,12 @@ export function mapDecisionToOutcome(
             kind: "failed",
             assistantMessageId,
             errorMessage: decision.summary,
+            // D7: carry the controller's typed reason code so the runner's
+            // finalize mapping writes a STABLE code into the durable
+            // outcome_reason_code column (varchar(64) + §17 histogram key),
+            // not the raw display text. errorMessage stays the transport/
+            // summary text for renderer display (T21b).
+            reasonCode: decision.reasonCode,
           };
       }
       break;

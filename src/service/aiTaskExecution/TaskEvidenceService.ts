@@ -18,7 +18,6 @@
  * unit-testable without a database; the coordinator (Unit 3) supplies a
  * concrete store backed by `AiTaskExecutionModel.applyShadowDecisionCas`.
  */
-import { randomUUID } from "node:crypto";
 import type {
   TaskCompletionContract,
   TaskCriterion,
@@ -302,6 +301,3 @@ export function makeModuleBackedStore(deps: {
     mergeEvidenceCas: deps.applyShadowDecisionCas,
   };
 }
-
-// Re-export the evidence-id generator for callers that want stable IDs.
-export { newEvidenceId, randomUUID };

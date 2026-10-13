@@ -133,6 +133,13 @@ export const rolloutMetricsSnapshotSchema = z.object({
   manual: rolloutOriginCohortSchema,
   scheduled: rolloutOriginCohortSchema,
   operations: rolloutOperationStatsSchema,
+  /**
+   * True when the snapshot is the fail-closed all-zero fallback because the
+   * aggregation itself threw (missing tables are pre-migration, NOT
+   * degraded). Distinguishes "nothing measurable" from "the read failed" —
+   * an operator must never mistake a dead monitor for an empty rollout.
+   */
+  degraded: z.boolean().default(false),
 });
 export type RolloutMetricsSnapshot = z.infer<typeof rolloutMetricsSnapshotSchema>;
 

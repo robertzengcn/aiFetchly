@@ -132,6 +132,20 @@ export interface OperationGuardDeps {
     readonly intentHash: string;
     readonly limit?: number;
   }) => Promise<AiTaskOperationEntity[]>;
+  /**
+   * Occurrence-ordinal source: count stored rows for ONE execution + intent
+   * (ANY state — terminal failed receipts are occurrences too). The guard
+   * derives the §10.1 retry ordinal from this count; counting only
+   * unresolved rows re-derives the same ordinal once a failed occurrence
+   * settles, wedging every later retry against the terminal row's key.
+   */
+  readonly countOccurrencesByIntent: (input: {
+    readonly executionId: string;
+    readonly toolIdentity: string;
+    readonly domainTarget: string | null;
+    readonly intentHash: string;
+    readonly limit?: number;
+  }) => Promise<number>;
   /** CAS state transition. */
   readonly updateState: (input: {
     readonly operationKey: string;
@@ -221,10 +235,14 @@ export class TaskOperationGuard {
 
     // 1. Cross-execution fence (§10.2): unresolved earlier operations for
     // the same tool+target OR the same intent hash, from ANY execution.
+    // The limit is raised past the model's 50 default (D3 review fix): the
+    // default bounds a fence decision, and a truncated window could hide an
+    // unresolved row that sits after the oldest 50.
     const unresolved = await this.deps.findUnresolvedByIntent({
       toolIdentity: descriptor.toolIdentity,
       domainTarget,
       intentHash,
+      limit: 500,
     });
     const foreignUnresolved = unresolved.find(
       (op) => op.execution_id !== this.executionId
@@ -380,28 +398,28 @@ export class TaskOperationGuard {
   }
 
   /**
-   * Count stored rows for this execution + intent (any state). Used to
-   * derive the §10.1 occurrence ordinal for a legitimate retry from the
-   * store itself — the maker cannot invent an ordinal to evade a claim.
+   * Count stored rows for this execution + intent (ANY state — terminal
+   * failed receipts are occurrences). Used to derive the §10.1 occurrence
+   * ordinal for a legitimate retry from the store itself — the maker cannot
+   * invent an ordinal to evade a claim.
+   *
+   * D3 review fix: the previous derivation counted only UNRESOLVED rows
+   * (+1 for the receipt row). Once a failed occurrence settled terminal, the
+   * next retry re-derived the same ordinal, CAS-collided on the terminal
+   * row's `#occ<n>` key forever, and wedged every later retry. Counting all
+   * rows for this execution+intent keeps the ordinal strictly increasing.
    */
   private async countPriorOccurrences(
     descriptor: OperationGuardDescriptor,
     intentHash: string
   ): Promise<number> {
-    const related = await this.deps.findUnresolvedByIntent({
+    return this.deps.countOccurrencesByIntent({
+      executionId: this.executionId,
       toolIdentity: descriptor.toolIdentity,
       domainTarget: descriptor.domainTarget,
       intentHash,
       limit: 500,
     });
-    // unresolved only lists non-terminal rows; the ordinal must count the
-    // terminal failed receipt too. The receipt row holds the stable key, so
-    // any prior occurrence keys sort after it. The count of unresolved rows
-    // for this execution + 1 receipt row is the ordinal base.
-    const unresolvedCount = related.filter(
-      (op) => op.execution_id === this.executionId
-    ).length;
-    return unresolvedCount + 1;
   }
 
   /**
@@ -432,6 +450,12 @@ export class TaskOperationGuard {
    */
   async settleDispatch(input: {
     readonly descriptor: OperationGuardDescriptor;
+    /**
+     * Prepare-time claim generation, used ONLY as the fallback when the row
+     * cannot be read at settle time. The CAS runs against the row's current
+     * generation (read-at-use), so a crash between the dispatched-stamp and
+     * the outcome write does not wedge a retried settle.
+     */
     readonly claimGeneration: number;
     readonly intentHash: string;
     /** The dispatch's outcome classification. */
@@ -452,13 +476,21 @@ export class TaskOperationGuard {
       input.intentHash,
       input.occurrenceOrdinal ?? 0
     );
+    // D3 review fix: read the row's CURRENT claim_generation at settle time
+    // and CAS against THAT, not the prepare-time snapshot threaded in via
+    // `input.claimGeneration`. A crash between the two settle writes used to
+    // leave the persisted row one generation ahead of the snapshot, so the
+    // retried settle (and the direct no_effect path) lost its CAS and the
+    // intent wedged unresolved. Read-at-use keeps settle convergent.
+    const current = await this.deps.getOperation(operationKey);
+    const currentGeneration = current?.claim_generation ?? input.claimGeneration;
     if (
       (input.receiptReference || input.failureCode) &&
       this.deps.setReceiptReference
     ) {
       await this.deps.setReceiptReference({
         operationKey,
-        expectedClaimGeneration: input.claimGeneration,
+        expectedClaimGeneration: currentGeneration,
         receiptReference: input.receiptReference,
         failureCode: input.failureCode,
       });
@@ -469,17 +501,10 @@ export class TaskOperationGuard {
         : input.outcome === "no_effect"
           ? "failed"
           : "unknown";
-    // §10.2 legal paths: the row may still be `claimed` (the §10.2
-    // dispatched-stamp lives inside this settle, not a separate loop call).
-    // confirmed/unknown mean the dispatch DID happen (a receipt arrived, or
-    // the response was lost after it left the process) — claimed →
-    // dispatched → outcome. no_effect may be a before-dispatch failure
-    // (e.g. worker_start_failed) — claimed → failed directly.
-    const current = await this.deps.getOperation(operationKey);
     if (current?.operation_state === "claimed" && newState !== "failed") {
       const stamped = await this.deps.updateState({
         operationKey,
-        expectedClaimGeneration: input.claimGeneration,
+        expectedClaimGeneration: currentGeneration,
         newState: "dispatched",
       });
       if (!stamped.ok) {
@@ -492,7 +517,7 @@ export class TaskOperationGuard {
       }
       const settled = await this.deps.updateState({
         operationKey,
-        expectedClaimGeneration: input.claimGeneration + 1,
+        expectedClaimGeneration: currentGeneration + 1,
         newState,
       });
       if (!settled.ok) {
@@ -502,7 +527,7 @@ export class TaskOperationGuard {
     }
     const direct = await this.deps.updateState({
       operationKey,
-      expectedClaimGeneration: input.claimGeneration,
+      expectedClaimGeneration: currentGeneration,
       newState,
     });
     if (!direct.ok) {

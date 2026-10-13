@@ -464,4 +464,59 @@ describe("AiChatV2 T13 — task state reconstruction + executionId dedup", () =>
     expect(badge(wrapper).attributes("data-status")).toBe("terminal");
     expect(badge(wrapper).attributes("title")).toBe("NO_PROGRESS");
   });
+
+  it("D6: Continue failure restores the parent terminal badge (no stuck spinning state)", async () => {
+    // Seed a terminal-but-incomplete execution so the Continue button renders.
+    getTaskStateMock.mockResolvedValue({
+      executionId: "exec-parent",
+      conversationId: "v2-test",
+      status: "terminal",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+    });
+    // continueTask rejects — the successor was never created.
+    continueTaskMock.mockRejectedValue(new Error("network down"));
+    const wrapper = mountChat();
+    await selectConversation(wrapper);
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+
+    // Click Continue. Without the D6 catch, the status would flip to
+    // "continuing" and never recover — the badge would stay spinning and
+    // the Continue/Retry buttons (gated on status === 'terminal') would
+    // never reappear, leaving the user with no recourse.
+    await wrapper.find('button[aria-label="Continue"]').trigger("click");
+    await flushPromises();
+
+    // The parent's terminal state is restored so the actions are available
+    // again and the badge is NOT stuck on a non-terminal "continuing" state.
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    expect(badge(wrapper).attributes("data-outcome")).toBe("incomplete");
+    expect(continueTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ parentExecutionId: "exec-parent" })
+    );
+  });
+
+  it("D6: Retry failure restores the parent terminal badge (no stuck spinning state)", async () => {
+    getTaskStateMock.mockResolvedValue({
+      executionId: "exec-parent",
+      conversationId: "v2-test",
+      status: "terminal",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+    });
+    retryTaskMock.mockRejectedValue(new Error("network down"));
+    const wrapper = mountChat();
+    await selectConversation(wrapper);
+
+    await wrapper.find('button[aria-label="Retry"]').trigger("click");
+    await flushPromises();
+
+    // Retry's catch restores the parent terminal state too — the badge is
+    // not stuck on "resolving" (non-terminal), so the user can retry again.
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    expect(badge(wrapper).attributes("data-outcome")).toBe("incomplete");
+    expect(retryTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ parentExecutionId: "exec-parent" })
+    );
+  });
 });

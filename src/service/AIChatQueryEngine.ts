@@ -1311,7 +1311,35 @@ export class AIChatQueryEngine {
             err
           );
           taskExecutionBinding = undefined;
-          adoptedSuccessorExecutionId = undefined;
+          // D2/core(c) review fix: the coordinator created the successor row
+          // BEFORE this dispatch, so an adoption failure leaves an orphan
+          // active row. The old catch cleared adoptedSuccessorExecutionId,
+          // hiding the orphan from the pre-stream cancel (:2090) — and a
+          // turn that then succeeded never touched the row at all, so it
+          // stayed `running` forever (AC-24/25). The binding setup failed,
+          // so no stream will ever attach to this execution: cancel it
+          // durably right here (fire-and-forget, never masks the original
+          // error; alreadyFinalized is a no-op success). Keep the id set —
+          // the pre-stream catch stays a second net.
+          const orphanedExecutionId = successorContext.binding.executionId;
+          this.taskDecisionSlots.delete(orphanedExecutionId);
+          this.taskExecutionBindings.delete(conversationId);
+          this.policyAcceptedConversations.delete(conversationId);
+          void new TaskExecutionCoordinator()
+            .cancel(orphanedExecutionId)
+            .then((cancelResult) => {
+              if (!cancelResult.ok && !cancelResult.alreadyFinalized) {
+                console.error(
+                  `[ai-chat-v2] orphan successor cancel failed (executionId=${orphanedExecutionId}): ${cancelResult.reasonCode ?? "unknown"}`
+                );
+              }
+            })
+            .catch((cancelErr: unknown) =>
+              console.error(
+                `[ai-chat-v2] orphan successor cancel threw (executionId=${orphanedExecutionId}):`,
+                cancelErr
+              )
+            );
         }
       }
       // Generate the turn id once, at accept time (technical-design §4.3).
@@ -3191,9 +3219,30 @@ export class AIChatQueryEngine {
           pending.taskExecutionBinding
         );
       })
-      .catch((err) => {
+      .catch(async (err) => {
         console.error("[ai-chat-v2] answer-question loop failed:", err);
         void redirectToLoginOnAuthExpired(err);
+        // D2/R1 review fix: a policy-enrolled turn whose loop throws here
+        // never reached any finalization path — the execution row stayed
+        // `running` forever (AC-24/25 restart repair needs a finalized row).
+        // finalizeManualAtTerminalFailure no-ops on !policyAccepted, so the
+        // legacy path is untouched; never let a finalize error mask the
+        // original loop failure.
+        if (pending.taskExecutionBinding) {
+          try {
+            await this.finalizeManualAtTerminalFailure(
+              pending.taskExecutionBinding,
+              "failed",
+              "MODEL_FAILURE",
+              userSafeError(err)
+            );
+          } catch (finalizeErr) {
+            console.error(
+              "[ai-chat-v2] answer-question terminal finalize threw:",
+              finalizeErr
+            );
+          }
+        }
         pending.eventSink.emit({
           type: "error",
           conversationId: pending.conversationId,
@@ -3746,7 +3795,11 @@ export class AIChatQueryEngine {
         console.error(
           `[ai-chat-v2] finalize skipped — stale lease (executionId=${binding.executionId}, bindingGen=${binding.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
         );
-        return null;
+        // D2/R2 review fix: return the carried outcome, not null. The
+        // successor holds the lease and owns the durable write; returning
+        // null here made the renderer fall back to a generic terminal badge
+        // even though the consult decided a real outcome for this turn.
+        return carried;
       }
     }
     try {
@@ -3899,6 +3952,45 @@ export class AIChatQueryEngine {
           : [],
       assistantResultMessageId: null,
     };
+    // D2/R3 review fix (mirror of the complete gate's T15b guard): the
+    // terminal-failure path finalizes through the same
+    // `finalizeManual` transaction, which releases the lineage ledger
+    // unconditionally. Without the owner-generation re-check here, a stale
+    // ancestor's terminal failure would free a Continue successor's lease
+    // and double-release the ledger. On mismatch: skip the durable write,
+    // return the carried outcome (the renderer badges honestly; the
+    // successor owns the row and finalizes on its own completion).
+    // The ledger re-read is wrapped: an unreadable ledger (transient
+    // SQLITE_BUSY, module failure) is fail-closed the SAME as a stale lease
+    // — skip the durable write rather than risk double-releasing a live
+    // successor's ledger. A thrown read must never escalate out of the
+    // terminal-failure path (the row can be recovered by the scheduler; a
+    // released successor lease cannot).
+    if (binding.ledgerId && binding.leaseGeneration !== undefined) {
+      try {
+        const execModule = new AiTaskExecutionModule();
+        const currentGen = await readCurrentLeaseGeneration(
+          (id) => execModule.getLedgerById(id),
+          binding.ledgerId
+        );
+        const ownership = assertOwnership(
+          { leaseGeneration: binding.leaseGeneration },
+          currentGen ?? -1
+        );
+        if (!ownership.ok) {
+          console.error(
+            `[ai-chat-v2] terminal-failure finalize skipped — stale lease (executionId=${binding.executionId}, bindingGen=${binding.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
+          );
+          return { outcome, reasonCode };
+        }
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] terminal-failure lease re-read failed — finalize skipped (executionId=${binding.executionId}, bindingGen=${binding.leaseGeneration}):`,
+          err
+        );
+        return { outcome, reasonCode };
+      }
+    }
     try {
       const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
         finalizeInput

@@ -11,7 +11,6 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveCandidateDiagnostics,
-  classifyRecoveryReason,
 } from "@/service/aiTaskExecution/candidateDiagnostics";
 
 describe("deriveCandidateDiagnostics — terminal provenance (T21a, AC-12)", () => {
@@ -141,18 +140,5 @@ describe("deriveCandidateDiagnostics — content_filter / refusal (T21a, AC-30)"
       content: "   I'm sorry, but I can't help with that.",
     });
     expect(d.safetyRestriction).toBe(true);
-  });
-});
-
-describe("classifyRecoveryReason (T21b)", () => {
-  it("returns the reason as-is when classified", () => {
-    expect(classifyRecoveryReason("auth")).toBe("auth");
-    expect(classifyRecoveryReason("quota")).toBe("quota");
-    expect(classifyRecoveryReason("non_recoverable")).toBe("non_recoverable");
-  });
-
-  it("returns null when absent (controller falls back to STREAM_INCOMPLETE)", () => {
-    expect(classifyRecoveryReason(null)).toBeNull();
-    expect(classifyRecoveryReason(undefined)).toBeNull();
   });
 });

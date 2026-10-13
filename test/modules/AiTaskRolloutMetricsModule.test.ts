@@ -275,6 +275,29 @@ describe("AiTaskRolloutMetricsModule (§17 snapshot; Mocha)", function () {
       failed: 0,
       unknown: 0,
     });
+    // Empty DB (read succeeded, nothing migrated/seeded) is NOT degraded.
+    expect(snapshot.degraded).to.equal(false);
+  });
+
+  it("marks the snapshot degraded (not silently zero) when the aggregation throws (D7)", async () => {
+    // A real, seeded DB that the monitor can normally read — then break the
+    // read by dropping one rollout table mid-flight, simulating a corrupt/
+    // concurrently-migrating store. The monitor must still return the
+    // all-zero shape (never throw into IPC) but flag degraded:true so an
+    // operator can tell "read failed" from "nothing measurable".
+    await seedManual({ route: "task_verified", outcome: "verified_complete" });
+    const runner = SqliteDb.getInstance(tmpDir).connection.createQueryRunner();
+    try {
+      await runner.query("DROP TABLE ai_task_execution_ledger");
+    } finally {
+      await runner.release();
+    }
+    const snapshot = await new AiTaskRolloutMetricsModule().getRolloutSnapshot({
+      since: windowStart(),
+    });
+    expect(snapshot.manual.consumption.executions).to.equal(0);
+    expect(snapshot.operations.total).to.equal(0);
+    expect(snapshot.degraded).to.equal(true);
   });
 
   it("aggregates seeded rows per origin: counts, routes, outcomes, reasons, sums, latency", async () => {
@@ -577,12 +600,14 @@ describe("AiTaskRolloutMetricsModule (§17 snapshot; Mocha)", function () {
 
       // Module layer: the fail-closed contract catches the guard throw and
       // returns the zeroed snapshot — a monitor never throws into IPC, and
-      // no query runs either way.
+      // no query runs either way. The guard throw IS an aggregation failure,
+      // so the snapshot is marked degraded (D7 review fix).
       const snapshot = await new AiTaskRolloutMetricsModule().getRolloutSnapshot(
         { since: windowStart() }
       );
       expect(snapshot.manual.consumption.executions).to.equal(0);
       expect(snapshot.operations.total).to.equal(0);
+      expect(snapshot.degraded).to.equal(true);
     } finally {
       if (previous === undefined) {
         delete process.env.WORKER_TYPE;

@@ -50,11 +50,21 @@ export class AiTaskRolloutMetricsModule extends BaseModule {
     try {
       await this.ensureConnection();
 
-      const tablesReady = await this.model.tablesExist();
-      if (!tablesReady) {
-        // Pre-migration DB (or a fresh install before the first run):
-        // all-zero snapshot, fail-closed.
-        return this.emptySnapshot(query, generatedAt);
+      const tableState = await this.model.describeTables();
+      if (!tableState.allPresent) {
+        if (tableState.present === 0) {
+          // Pre-migration DB (or a fresh install before the first run):
+          // all-zero snapshot, fail-closed. NOT degraded — the read worked,
+          // there is simply nothing migrated yet.
+          return this.emptySnapshot(query, generatedAt, false);
+        }
+        // SOME tables missing: a corrupt or concurrently-migrating store.
+        // The D7 review fix treats this as degraded (not "pre-migration"),
+        // so a broken monitor is never mistaken for an empty rollout.
+        console.error(
+          `[rollout-metrics] partial rollout tables present (${tableState.present}/3) — returning degraded all-zero snapshot`
+        );
+        return this.emptySnapshot(query, generatedAt, true);
       }
 
       const aggregated = await this.model.aggregateSince(query);
@@ -70,12 +80,20 @@ export class AiTaskRolloutMetricsModule extends BaseModule {
         manual,
         scheduled,
         operations,
+        degraded: false,
       });
-    } catch {
+    } catch (err) {
       // Fail-closed: any aggregation/validation error → zeroed snapshot.
       // Zeroed counters are honest ("nothing measurable") — a monitor never
-      // fabricates numbers and never throws into the IPC layer.
-      return this.emptySnapshot(query, generatedAt);
+      // fabricates numbers and never throws into the IPC layer. D7 review
+      // fix: log the swallowed error and set `degraded: true` so an operator
+      // can tell a dead monitor from an empty rollout (a silent all-zero
+      // snapshot on a corrupt DB read as "no adoption" during §12 rollout).
+      console.error(
+        "[rollout-metrics] snapshot aggregation failed — returning degraded all-zero snapshot:",
+        err
+      );
+      return this.emptySnapshot(query, generatedAt, true);
     }
   }
 
@@ -138,7 +156,8 @@ export class AiTaskRolloutMetricsModule extends BaseModule {
    */
   private emptySnapshot(
     query: RolloutMetricsQuery,
-    generatedAt: string
+    generatedAt: string,
+    degraded: boolean
   ): RolloutMetricsSnapshot {
     return rolloutMetricsSnapshotSchema.parse({
       schemaVersion: 1,
@@ -166,6 +185,7 @@ export class AiTaskRolloutMetricsModule extends BaseModule {
         failed: 0,
         unknown: 0,
       },
+      degraded,
     });
   }
 }

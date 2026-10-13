@@ -128,6 +128,17 @@ class FakeOperationStore {
             }) as never
         );
       },
+      countOccurrencesByIntent: async (input) => {
+        // ANY state (terminal included) for ONE execution + intent — mirrors
+        // the real model's countOccurrencesByIntent (D3 ordinal fix).
+        return [...this.rows.values()].filter(
+          (row) =>
+            row.executionId === input.executionId &&
+            ((row.toolIdentity === input.toolIdentity &&
+              row.domainTarget === input.domainTarget) ||
+              row.intentHash === input.intentHash)
+        ).length;
+      },
       updateState: async (input) => {
         const row = this.rows.get(input.operationKey);
         if (!row) return { ok: false, reasonCode: "OPERATION_NOT_FOUND" };
@@ -408,5 +419,77 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     const row = store.rows.get("op:exec-A:outbound_batch:11");
     expect(row?.operationState).to.equal("failed");
     expect(row?.failureCode).to.equal("CLAIM_FAILED");
+  });
+
+  it("D3: ordinal keeps strictly increasing after a failed occurrence settles terminal (no wedge)", async () => {
+    // Pre-D3 wedge: countPriorOccurrences counted only unresolved rows +1,
+    // so once the first occurrence settled `failed` (terminal, no longer
+    // unresolved) the next retry re-derived ordinal 1, CAS-collided on the
+    // terminal `#occ1` row, and every later retry wedged. Counting ALL rows
+    // for this execution+intent keeps the ordinal strictly increasing.
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "no_effect",
+      failureCode: "CLAIM_FAILED",
+    });
+    // Second retry — must derive ordinal 1 (the failed #occ1 slot).
+    const retry1 = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(retry1.allowed).to.equal(true);
+    expect(retry1.occurrenceOrdinal).to.equal(1);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: retry1.claimGeneration ?? 0,
+      occurrenceOrdinal: retry1.occurrenceOrdinal ?? 0,
+      intentHash: retry1.intentHash ?? "",
+      outcome: "no_effect",
+      failureCode: "CLAIM_FAILED",
+    });
+    // Third retry — ordinal 2. Pre-D3 this re-derived 1 and wedged.
+    const retry2 = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(retry2.allowed).to.equal(true);
+    expect(retry2.occurrenceOrdinal).to.equal(2);
+    const occ2 = store.rows.get("op:exec-A:outbound_batch:11#occ2");
+    expect(occ2?.operationState).to.equal("claimed");
+  });
+
+  it("D3: settle reads the CURRENT claim generation (survives a crashed dispatched stamp)", async () => {
+    // Pre-D3 wedge: the two-step settle stamped dispatched at
+    // input.claimGeneration then outcome at input.claimGeneration+1. A crash
+    // between the two left the persisted row one generation ahead of the
+    // snapshot, so the retried settle (and the direct no_effect path) lost
+    // its CAS and the intent wedged unresolved. Read-at-use keeps it
+    // convergent.
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    // Simulate the crash: manually advance the row to dispatched with the
+    // first settle's stamp (the dispatched step), but skip the outcome stamp.
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "unknown",
+    });
+    // The row is now `unknown` at generation > first.claimGeneration. A
+    // reconciler retry calling settleDispatch with the STALE
+    // first.claimGeneration must still succeed because the guard reads the
+    // current generation and routes through the unknown→accepted transition.
+    const reconcile = await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "confirmed",
+      receiptReference: "attempt:91",
+    });
+    expect(reconcile.ok).to.equal(true);
+    const row = store.rows.get("op:exec-A:outbound_batch:11");
+    expect(row?.operationState).to.equal("accepted");
+    expect(row?.receiptReference).to.equal("attempt:91");
   });
 });

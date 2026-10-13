@@ -67,6 +67,13 @@ export function clampToHardCaps(limits: BudgetLimitsInput): BudgetLimitsInput {
       limits.maxActiveRuntimeMs,
       HARD_CAPS.maxActiveRuntimeMs
     ),
+    // FR-08/§9: the per-run checker cap is enforced here too — previously
+    // HARD_CAPS.maxCheckerAttemptsPerRun was declared but never read, so a
+    // task config could set maxCheckerAttempts above the cap.
+    maxCheckerAttempts: Math.min(
+      limits.maxCheckerAttempts,
+      HARD_CAPS.maxCheckerAttemptsPerRun
+    ),
   };
 }
 

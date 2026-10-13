@@ -1676,6 +1676,12 @@ async function continueTaskExecution(): Promise<void> {
     }
   } catch (err) {
     console.error("[AiChatV2] continueTask failed:", err);
+    // D6 review fix: on failure the status was left at "continuing"
+    // (non-terminal) — the Continue/Retry buttons are gated on
+    // status === 'terminal', so they'd never reappear and the user was
+    // stuck on a spinning badge with no recourse. Restore the parent's
+    // terminal state so the actions become available again.
+    activeTaskExecution.value = parent;
   }
 }
 
@@ -1716,6 +1722,11 @@ async function retryTaskExecution(): Promise<void> {
     }
   } catch (err) {
     console.error("[AiChatV2] retryTask failed:", err);
+    // D6 review fix: restore the parent's terminal state — otherwise the
+    // badge stays at "resolving" (non-terminal) and the Continue/Retry
+    // buttons (gated on status === 'terminal') never reappear, leaving
+    // the user stuck on a spinning badge.
+    activeTaskExecution.value = parent;
   }
 }
 
@@ -3025,79 +3036,6 @@ const goalStatusDescriptor = computed(() => {
       };
     default:
       return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
-  }
-});
-const taskStatusDescriptor = computed(() => {
-  const status = activeTaskExecution.value?.status;
-  switch (status) {
-    case "resolving":
-      return {
-        color: "default",
-        icon: "mdi-dot-net",
-        label: t("aiChatV2.taskExecution.status_resolving") || "resolving",
-      };
-    case "preparing":
-      return {
-        color: "info",
-        icon: "mdi-progress-pencil",
-        label: t("aiChatV2.taskExecution.status_preparing") || "preparing",
-      };
-    case "active":
-      return {
-        color: "primary",
-        icon: "mdi-autorenew",
-        label: t("aiChatV2.taskExecution.status_active") || "working",
-      };
-    case "verifying":
-      return {
-        color: "info",
-        icon: "mdi-check-decagram",
-        label: t("aiChatV2.taskExecution.status_verifying") || "checking",
-      };
-    case "continuing":
-      return {
-        color: "primary",
-        icon: "mdi-fast-forward",
-        label: t("aiChatV2.taskExecution.status_continuing") || "continuing",
-      };
-    case "waiting_permission":
-      return {
-        color: "warning",
-        icon: "mdi-shield-account",
-        label:
-          t("aiChatV2.taskExecution.status_waiting_permission") ||
-          "awaiting permission",
-      };
-    case "waiting_input":
-      return {
-        color: "warning",
-        icon: "mdi-help-circle",
-        label: t("aiChatV2.taskExecution.status_waiting_input") || "needs input",
-      };
-    case "waiting_approval":
-      return {
-        color: "warning",
-        icon: "mdi-clock-alert",
-        label:
-          t("aiChatV2.taskExecution.status_waiting_approval") ||
-          "awaiting approval",
-      };
-    case "waiting_external_job":
-      return {
-        color: "info",
-        icon: "mdi-link-variant",
-        label:
-          t("aiChatV2.taskExecution.status_waiting_external_job") ||
-          "awaiting external job",
-      };
-    case "terminal":
-      return {
-        color: "success",
-        icon: "mdi-flag-checkered",
-        label: t("aiChatV2.taskExecution.status_terminal") || "completed",
-      };
-    default:
-      return { color: "default", icon: "mdi-circle-outline", label: status ?? "task" };
   }
 });
 const scheduledLoopDescriptor = computed(() => {
