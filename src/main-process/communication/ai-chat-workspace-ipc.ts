@@ -121,6 +121,62 @@ export function getAiChatWorkspaceEventRouter(): AIChatEventRouter {
   return eventRouter;
 }
 
+/**
+ * B03: authoritative busy reason for delete protection. Returns a short
+ * reason string when ANY execution owner can still write to the
+ * conversation (coordinator live run, engine runtime, non-terminal pending
+ * rows covering running/parked/pending dispatch, or a non-terminal durable
+ * run envelope), or null when deletion is safe. Renderer state alone is
+ * never trusted — this runs in main before any delete proceeds.
+ */
+async function getConversationBusyReason(
+  conversationId: string
+): Promise<string | null> {
+  if (getAiChatWorkspaceCoordinator().getLiveRuntime(conversationId)) {
+    return "live run";
+  }
+  try {
+    if (
+      getQueryEngine().getConversationRuntimeStatus(conversationId) !== "idle"
+    ) {
+      return "engine turn active";
+    }
+  } catch {
+    // Engine status unavailable — fall through to durable checks below.
+  }
+  try {
+    const pending = await getQueueService().list(conversationId);
+    if (
+      pending.some((row) =>
+        ["queued", "steering", "dispatching", "paused"].includes(row.status)
+      )
+    ) {
+      return "queued execution";
+    }
+  } catch {
+    // Queue list unavailable — fall through to run-envelope check.
+  }
+  try {
+    const runs = await new AIChatRunModule().listByConversation(
+      conversationId,
+      10
+    );
+    if (
+      runs.some((run) =>
+        ["queued", "running", "awaiting_permission", "awaiting_user"].includes(
+          run.status
+        )
+      )
+    ) {
+      return "durable run active";
+    }
+  } catch {
+    // Run lookup unavailable — treat as not busy (fail open would be worse,
+    // but without storage we cannot confirm; the layers above already gate).
+  }
+  return null;
+}
+
 /** One-time-per-process projection backfill guard. */
 let backfillStarted = false;
 
@@ -501,15 +557,19 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid delete request");
       }
-      // Never delete under a live run: the engine would keep executing and
-      // re-persist its result, silently resurrecting the conversation.
-      if (
-        getAiChatWorkspaceCoordinator().getLiveRuntime(
-          parsed.data.conversationId
-        )
-      ) {
+      // B03: never delete under authoritative execution ownership. The old
+      // guard checked only the coordinator's liveRuns map, but ordinary
+      // sends now dispatch through the durable queue and never populate it —
+      // a running ordinary turn could be deleted and then re-persist content.
+      // Deny while ANY owner can still write: coordinator live run, engine
+      // runtime, non-terminal pending rows (running/parked/pending dispatch),
+      // or a non-terminal durable run envelope.
+      const busyReason = await getConversationBusyReason(
+        parsed.data.conversationId
+      );
+      if (busyReason) {
         return denied(
-          "This conversation is running a task. Stop it before deleting."
+          `This conversation is busy (${busyReason}). Stop it before deleting.`
         );
       }
       await new AIChatConversationModule().deleteConversation(

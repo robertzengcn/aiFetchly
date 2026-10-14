@@ -97,6 +97,7 @@
             :title="t('workspaceChat.header.delete') || 'Delete chat'"
             prepend-icon="mdi-delete-outline"
             data-testid="workspace-overflow-delete"
+            :disabled="isDeleteDisabled"
             @click="emit('delete')"
           />
         </v-list>
@@ -140,6 +141,16 @@ const { t } = useI18n();
 
 const displayTitle = computed(
   () => props.title?.trim() || (t("workspaceChat.newChat") || "New chat")
+);
+
+// B03: disable Delete while the conversation can still receive writes
+// (running, queued, parked on permission/question). The main-process IPC
+// guard is authoritative; this only prevents the unsafe click. Matches the
+// center's onDelete/onClear busy checks (selectedStore.isBusy).
+const isDeleteDisabled = computed(() =>
+  ["running", "queued", "awaiting_permission", "awaiting_user"].includes(
+    props.runtimeStatus
+  )
 );
 
 const headerStatus = computed(() =>

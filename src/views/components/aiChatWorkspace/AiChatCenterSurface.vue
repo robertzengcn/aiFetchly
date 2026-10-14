@@ -2457,6 +2457,13 @@ async function onDuplicate(): Promise<void> {
 
 async function onDelete(): Promise<void> {
   if (!conversationId.value) return;
+  if (selectedStore.isBusy) {
+    // B03: deleting under an active/queued/parked run would let the engine
+    // or queued follow-ups re-persist content after the wipe (potentially
+    // resurrecting the conversation). Main-process IPC denies it; block the
+    // click here too (matches onClear's busy guard).
+    return;
+  }
   const confirmed = window.confirm(
     t("workspaceChat.header.deleteConfirm") ||
       "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone."
