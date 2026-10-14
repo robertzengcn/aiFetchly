@@ -9,6 +9,8 @@ Worktree: `/home/robertzeng/project/aiFetchly/.worktrees/workspace-parity`
 
 **No: all requirements are not implemented, and bugs remain.** Most capability surfaces are present, and the recent fixes materially improve the implementation. However, global scheduling, durable run lifecycle, conversation isolation, plan continuation recovery, attachment parity, and release verification still have concrete gaps.
 
+**Remediation status (2026-10-14 session, branch `workspace-v2-capability-parity`): all B01–B16 defect items are now implemented with tests (see "Remediation evidence" below); G01/G03/G04 are partially complete; G02 has first E2E evidence (8/8 queue scenarios on the default route); G05 soak/sign-off remains open. The remaining G02 journeys, full V2-extraction (G01), rollback drill (G03), and manual security/A11Y certification (G04) are still required before a parity release.**
+
 This is a fresh audit of the current source, not a repetition of the earlier audit. It supersedes the current-status claims in [the historical TODO](./ai-chat-workspace-v2-capability-parity-todo.md), whose header says T1–T9/D1–D8 are implemented while its preserved tables still describe the old source. In particular, adding the run-dispatch bridge did **not** complete global scheduling or all lifecycle integration.
 
 The two user-supplied documents in `/home/robertzeng/project/aiFetchly/docs/prd/` were compared with the worktree copies; both are identical:
@@ -20,6 +22,34 @@ Scope: source and test review, fresh type/component/focused main-process checks,
 
 Priority: **P1** = fix before parity release (execution, data/lifecycle correctness, or a hard release blocker); **P2** = functional or contract gap that still needs completion. An unchecked item is open. Source references below are relative to this worktree and refer to the audited HEAD.
 
+## Remediation evidence (2026-10-14 session)
+
+Worktree HEAD advanced past `db58c9a2` with one commit per item below (see `git log --oneline`). Each item ships with unit/component coverage; type/component gates re-verified at the end.
+
+| Item | Fix | Evidence |
+| --- | --- | --- |
+| B01 | Single sanitized-env construction (all args) + `test:e2e:collect` CI gate | `playwright --list`: 121 tests / 30 files; duplicate-`LaunchOptions.extraEnv` removed |
+| B02 | Bridge admits through the shared scheduler singleton; deferred (age-preserved) re-drain on capacity-free | `aiChatWorkspaceGlobalScheduler.test.ts`: 4th general run waits; browser-capacity + steering-exclusion cases |
+| B03 | Main `getConversationBusyReason` (coordinator/engine/pending/run) + header disable + center busy guard | `AiChatConversationHeader.test.ts` (9) |
+| B04 | Parked-run continuation map settled by `notifyExternalTurnTerminal`; correct `awaiting_permission` vs `awaiting_user`; promotion failure settles `failed` | `aiChatWorkspaceParkedLifecycle.test.ts` (3): grant/cancel/plan/promote-failure, followers held/drained |
+| B05 | `AIChatTerminalGate` buffers terminal sink events; `finishRunStrict` gates publication/advance; reconcile path on DB failure | `aiChatWorkspaceTerminalOrdering.test.ts` (3) |
+| B06 | Real bridge run ID in sink identity + SELECT durable fallback (`effectiveRuntime`) + bounded background summaries | `aiChatWorkspaceRunIdentity.test.ts` (2) |
+| B07 | Store origin guard; router transport-failure `acceptedSend:false`; origin-scoped receipts/errors | `selectedConversation.crossConversation.test.ts` (3) + router transport test |
+| B08/B09 | `planContinuationStore` intent + retry banner; target-bound sends; post-hash revalidation; 6-lang keys | `planContinuationStore.test.ts` (3) |
+| B10 | Center uses shared `buildUploadedAttachments`; failures retain draft | `attachmentBuilderParity.test.ts` (5) |
+| B11 | Generic dispatches own command+files; files preserved through expansion; non-expansion outcomes reject explicitly | Router tests (33 total incl. new file cases) |
+| B12 | Deny via `denyChatV2ToolPermission` first (`handled` honored), interactive stop fallback | Permission store tests (9 incl. 3 new) |
+| B13 | `navigateToHistorySource` bounded paging (cap retained), safe unavailable, abort on switch | `historyNavigate.test.ts` (4) |
+| B14 | Payload-hash retry identity (rotate on acceptance) + `historySelection` pinia store | Retry-identity (5) + history store (4) tests |
+| B15 | `[CODE]` preservation in `userSafeError`; central renderer map; 18 `workspaceChat.errors.*` keys × 6 langs | Mapper (4) + localization (3) + localized-rejection tests; key parity verified |
+| B16 | Scope chip + hint on the session card; 6-lang keys | Card test (+1); key parity verified |
+| G01 (partial) | `useConversationScopedOverlays` + center migration of report/staging/image resets | Composable tests (4); center suite 75 green |
+| G02 (partial) | Queue spec requires `#/aiworkspace` + `workspace-transcript`; **8/8 queue scenarios PASS** on the default route with the remediation bundle (`xvfb-run`, ~2.8 min); shell spec 6 pass / 1 flaky-pass-on-retry / 1 environmental bounds failure (1184 vs 1280 under 1280x960 xvfb) / 2 live-skipped | Build + run logs in session |
+| G03 (partial) | §18 counters (submission/run/action/fallback/stale), dispatch timings, `AIChatWorkspaceRollout` flags | `aiChatWorkspaceObservability.test.ts` (4) |
+| G04 (partial) | History paging moved to `AIChatConversationModule`; SELECT uses `effectiveRuntime` | `tsc` clean |
+
+**Still open:** full V2 shared-extraction (G01); batch/reporting/outbound/plan/slash/skill/browser/history/voice/memory E2E journeys (G02); rollback drill + remaining §23.1 adapters (G03); security review + manual A11Y certification (G04); soak + sign-off (G05).
+
 ## Verification performed
 
 | Check | Fresh result |
@@ -30,7 +60,7 @@ Priority: **P1** = fix before parity release (execution, data/lifecycle correctn
 | Focused `yarn testmain --run …` | PASS: 8 files, 70 tests |
 | `yarn build:e2e` | PASS |
 | Locale object inspection (TypeScript transpilation + key comparison) | PASS for `workspaceChat`: 151 identical key paths in en/zh/es/fr/de/ja; `aiChatV2.cancel` present and translated in all six. This does not certify all rendered/error text. |
-| `yarn playwright test test/e2e/specs/aiChatQueueSteering.test.ts --grep '1. queues B' --max-failures=1` | FAIL during test collection: duplicate `const env` in shared Electron fixture; no scenario executed (B01) |
+| `yarn playwright test test/e2e/specs/aiChatQueueSteering.test.ts --grep '1. queues B' --max-failures=1` | FAIL during test collection at audit time: duplicate `const env` in shared Electron fixture; no scenario executed (B01) — **remediated since: B01 fixed, full queue spec 8/8 PASS on the default route (see Remediation evidence)** |
 | Full `yarn testmain`, full `yarn test:e2e`, complete module/security/accessibility certification | Not executed/certified by this audit |
 
 The focused main-process files were:
@@ -52,7 +82,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B01 — P1: Electron E2E suite cannot load
 
-- [ ] Fix the duplicate variable declaration in the shared launch fixture.
+- [x] Fix the duplicate variable declaration in the shared launch fixture.
 - **Evidence:** `test/e2e/fixtures/electronApp.ts:229` declares `const env`; line 233 declares it again in the same function. The attempted queue journey fails with `Identifier 'env' has already been declared. (233:8)` before launching Electron.
 - **Impact:** The hard release gate is broken, not merely awaiting a packaged-app environment. Type checks did not detect it because `tsconfig.json` excludes `test/e2e`.
 - **Work:** Keep one sanitized-environment construction with all required arguments (`initialMaximized`, `hubBaseUrl`), then apply explicit test extras once. Add test-fixture compilation/collection to CI.
@@ -61,7 +91,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B02 — P1: Ordinary queue dispatch bypasses global scheduler limits
 
-- [ ] Admit queue heads through the shared global execution scheduler.
+- [x] Admit queue heads through the shared global execution scheduler.
 - **Evidence:** `src/service/AIChatTurnQueueService.ts:578` acquires a conversation lease; lines 591–595 call the bridge; line 674 directly calls the engine. `src/service/AIChatWorkspaceRunDispatchBridge.ts:77` creates/reuses a run and immediately transitions it to running. It never uses `AIChatExecutionScheduler`. Production queue wiring at `src/main-process/communication/ai-chat-v2-ipc.ts:588` supplies no scheduler admission.
 - **Trigger:** Submit long-running ordinary messages in four different conversations. Their per-conversation leases do not conflict, so all can dispatch despite general scheduler capacity three.
 - **Impact:** Ordinary interactive work bypasses resource limits and fairness relative to other owners. The claimed queue/run integration is incomplete.
@@ -71,7 +101,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B03 — P1: A running ordinary conversation can be deleted
 
-- [ ] Protect deletion using authoritative queue/engine/run ownership, with matching UI disablement.
+- [x] Protect deletion using authoritative queue/engine/run ownership, with matching UI disablement.
 - **Evidence:** `src/main-process/communication/ai-chat-workspace-ipc.ts:503` checks only `getAiChatWorkspaceCoordinator().getLiveRuntime`. Ordinary sends now use the queue and never populate that coordinator's `liveRuns` map (`src/service/AIChatCoordinator.ts:322`). The header Delete item (`AiChatConversationHeader.vue:95`) and center handler (`AiChatCenterSurface.vue:2458`) have no equivalent busy protection. `AIChatConversationModule.ts:284` proceeds to delete.
 - **Trigger:** Start an ordinary streamed answer, select Delete, confirm while it runs.
 - **Impact:** Content can be deleted while the engine or queued follow-ups can subsequently persist more content, undermining deletion and potentially resurrecting the conversation.
@@ -81,7 +111,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B04 — P1: Parked and pre-turn-failed runs leave stale durable envelopes
 
-- [ ] Settle the same durable run after permission/question continuation and every pre-turn failure.
+- [x] Settle the same durable run after permission/question continuation and every pre-turn failure.
 - **Evidence:** `AIChatTurnQueueService.ts:727` parks the run and returns, without retaining its bridge identity for resumed completion. `ai-chat-v2-ipc.ts:494` handles later terminal notifications through `notifyExternalTurnTerminal`; `AIChatTurnQueueService.ts:446` only drains/holds pending rows. It does not finish the parked run. Separately, promotion failure at lines 628–645 returns after an envelope was marked running at line 591, without finishing it.
 - **Triggers:** (1) Prompt → permission → grant → normal completion or cancel. (2) Force `promoteDispatchToUserMessage` to fail after bridge scheduling.
 - **Impact:** Activity and subsequent reconstruction can show `awaiting_user` or `running` after the actual execution has ended. Permission waits are also indiscriminately recorded as `awaiting_user` by the bridge.
@@ -91,7 +121,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B05 — P1: Terminal UI events can precede or outlive failed durable persistence
 
-- [ ] Enforce durable terminal transition before publishing terminal events.
+- [x] Enforce durable terminal transition before publishing terminal events.
 - **Evidence:** `AIChatQueryEngine.ts:3015` emits completion before returning to the queue. The queue calls `finishRun` only after the awaited engine call returns (`AIChatTurnQueueService.ts:674`, `:702`). `AIChatWorkspaceRunDispatchBridge.ts:129` catches and suppresses terminal persistence errors.
 - **Trigger:** Delay or fail the terminal run update after the engine finishes.
 - **Impact:** The UI can report completion and the queue can advance while the durable run still says running. Awaiting a method that swallows persistence failures does not enforce the design invariant.
@@ -101,7 +131,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B06 — P1: Queue-backed run identity and background summaries are not integrated
 
-- [ ] Use the real durable run ID in event envelopes, selection snapshots and bounded sidebar summaries.
+- [x] Use the real durable run ID in event envelopes, selection snapshots and bounded sidebar summaries.
 - **Evidence:** `ai-chat-v2-ipc.ts:559` assigns synthetic `pending-queue-${counter}` stream IDs rather than the bridge's durable run ID. Its queue sink at lines 563–580 forwards detail and legacy events, without publishing workspace summaries. Workspace SELECT (`ai-chat-workspace-ipc.ts:306`) obtains activeRunId from coordinator runtime, which does not own these ordinary turns. The coordinator's summary path (`AIChatCoordinator.ts:733`) is bypassed.
 - **Trigger:** Start A, switch to B, let A finish or fail, then reload/select A and inspect Activity/sidebar.
 - **Impact:** Durable Activity identity and live event identity disagree; inactive rows miss authoritative terminal/attention summaries and selection cannot reconstruct the active durable run ID.
@@ -111,7 +141,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B07 — P1: Delayed send errors and command receipts affect the wrong conversation
 
-- [ ] Scope every asynchronous renderer outcome to its original conversation and selection generation.
+- [x] Scope every asynchronous renderer outcome to its original conversation and selection generation.
 - **Evidence:** `src/views/store/selectedConversation.ts:402` handles a rejected `startChatRun` by mutating the current presenter and error state, without rechecking ownership. `useChatCommandRouting.ts:289` and `:320` append delayed command failures/results through center's current-store port (`AiChatCenterSurface.vue:1960`). A command transport failure returns accepted/handled at router line 294.
 - **Triggers:** (1) Send in A, switch to B, reject the delayed IPC. (2) Run `/help` or a plugin command in A, switch to B, resolve its result/error.
 - **Impact:** A's error or command exchange appears in B. Retryable command transport failures can also clear the draft as though execution were accepted.
@@ -121,7 +151,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B08 — P1: Saved plan decisions can lose their continuation permanently
 
-- [ ] Persist a recoverable continuation intent when a plan decision commits.
+- [x] Persist a recoverable continuation intent when a plan decision commits.
 - **Evidence:** `AiChatCenterSurface.vue:2563` and `:2579` abort after a selection change even though the decision has persisted. Lines 2597–2620 ignore `performOrdinarySend`'s false acceptance result. The reload has changed the decision card to a receipt; `AiChatPlanReceipt.vue:12` offers only View in Activity.
 - **Triggers:** Switch during approval; reload/crash after the decision commits but before enqueue; or reject the continuation enqueue with queue-full/transport failure.
 - **Impact:** A plan can be approved with no execution continuation and no working retry control, despite the message telling users to reopen to continue. The deterministic hash alone prevents neither lost intent nor this recovery gap.
@@ -131,7 +161,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B09 — P1: Plan hashing introduces another cross-conversation send window
 
-- [ ] Bind plan continuation sends explicitly to the captured plan conversation.
+- [x] Bind plan continuation sends explicitly to the captured plan conversation.
 - **Evidence:** The final selection check is at `AiChatCenterSurface.vue:2579`, followed by awaited `planContinuationRequestId` at line 2591. Its helper awaits `crypto.subtle.digest` (`src/views/utils/planContinuationIdentity.ts:28`). The subsequent sends omit the original target, so `performOrdinarySend` captures whichever conversation is now selected.
 - **Trigger:** Defer hashing, switch A→B, resolve hash.
 - **Impact:** A's approved-plan continuation can be sent to B.
@@ -141,7 +171,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B10 — P2: Workspace attachment preparation can silently omit an image
 
-- [ ] Reuse the shared validated V2 attachment builder.
+- [x] Reuse the shared validated V2 attachment builder.
 - **Evidence:** `AiChatCenterSurface.vue:1681` manually encodes files and classifies solely by `file.type`; empty MIME becomes `application/octet-stream` and `kind: document`. V2 uses `aiChatV2Attachment.ts:11` with extension classification, MIME handling, size validation and downscaling. Queue preparation normalizes at `AIChatPendingMessagePreparationService.ts:214`; lines 142–145 discard mismatched kind/classification.
 - **Trigger:** Send text plus a valid `photo.png` whose browser File has empty MIME. The workspace marks it document; the main normalizer detects image and drops it.
 - **Impact:** The text can be accepted and the draft cleared without the intended image. Image resizing/limit behavior also differs from V2.
@@ -151,7 +181,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B11 — P2: Commands with attachments bypass the router or discard files
 
-- [ ] Define and enforce an explicit attachment contract for commands.
+- [x] Define and enforce an explicit attachment contract for commands.
 - **Evidence:** `useChatCommandRouting.ts:469` skips generic slash dispatch when `hasFiles`; it falls through as ordinary text. `/goal` and `/skill` can route, but center's `submit_prompt` branch (`AiChatCenterSurface.vue:1770`) sends `[]` for files.
 - **Trigger:** Submit a registered slash command with a file; submit `/skill …` or `/goal …` with a file.
 - **Impact:** Raw command text may reach the model instead of the command dispatcher, or an accepted command silently loses its attachment.
@@ -161,7 +191,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B12 — P2: Scheduled-tool permission denial does not use the existing continuation API
 
-- [ ] Route Deny by the exact tool/conversation and execution owner.
+- [x] Route Deny by the exact tool/conversation and execution owner.
 - **Evidence:** `selectedConversation.ts:602` only rewrites the row and calls `stopActiveRun`. V2 first calls `denyChatV2ToolPermission` (`AiChatV2.vue:3880`); that API (`src/views/api/aiChatV2.ts:774`) handles a scheduled engine's paused tool and synthesizes its denial result. The approval card's generic permission denial does not replace this engine continuation call.
 - **Trigger:** Display a scheduled-loop-owned paused permission request in workspace and deny it.
 - **Impact:** The scheduled continuation does not receive the same denial handling as V2. This is specifically the scheduled-owner gap; ordinary interactive denial intentionally has a stop fallback.
@@ -171,7 +201,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B13 — P2: Archive Navigate cannot load an unmounted historical message
 
-- [ ] Navigate through bounded history retrieval, not only a DOM lookup.
+- [x] Navigate through bounded history retrieval, not only a DOM lookup.
 - **Evidence:** `AiChatCenterSurface.vue:2201` closes the history drawer and searches `[data-message-id]` in mounted DOM. If the source is outside the current window, it returns without loading it.
 - **Trigger:** Search an archive passage older than the current mounted transcript window, choose Navigate.
 - **Impact:** The drawer closes but nothing navigates, precisely for the old messages archive search is meant to recover.
@@ -181,7 +211,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B14 — P1: Retry identities and history draft lifetime are insufficient
 
-- [ ] Retain durable submission identity per logical draft/conversation until acceptance is resolved.
+- [x] Retain durable submission identity per logical draft/conversation until acceptance is resolved.
 - **Evidence:** `selectedConversation.ts:370` creates a fresh `clientRequestId` for each ordinary send unless explicitly supplied. The history `submissionId` is only a component-local variable (`AiChatCenterSurface.vue:2140`), reset on every switch at lines 2223–2224; restored chips then acquire a new ID at lines 1908–1909. The history selection map at line 2135 also disappears on center unmount.
 - **Triggers:** (1) Main commits a send but the renderer loses its response, then retries the retained draft. (2) History send fails transport, switch B→A, retry. (3) Select history chips, navigate to another center route, return.
 - **Impact:** Ordinary retry uses a different pending idempotency key and can execute twice; history retry loses its promised stable identity; route remount loses selected context. A stable history-resolution ID does not replace the pending queue's client request ID.
@@ -191,7 +221,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B15 — P2: Queue-limit errors lose their stable, localized explanation
 
-- [ ] Preserve typed pending errors through workspace IPC and map them to six-language UI messages.
+- [x] Preserve typed pending errors through workspace IPC and map them to six-language UI messages.
 - **Evidence:** `AIChatPendingMessageModule.ts:187` throws `QUEUE_LIMIT_REACHED` with useful recovery guidance. Workspace START_RUN catches it through `userSafeError` (`ai-chat-workspace-ipc.ts:399`); `AIChatErrorMapper.ts:321` has no pending-error branch and falls through to generic unexpected-error text at lines 367–370. Selected store renders the returned message directly (`selectedConversation.ts:407`).
 - **Trigger:** Reach the per-conversation pending limit and submit another message in any locale.
 - **Impact:** Draft retention is implemented, but the user loses the reason and the action needed to unblock the queue. Locale key parity alone does not fix unmapped error paths.
@@ -201,7 +231,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### B16 — P2: Managed-browser cards do not explain their global/account scope
 
-- [ ] Label browser session ownership explicitly in all six languages.
+- [x] Label browser session ownership explicitly in all six languages.
 - **Evidence:** Center mounts browser panels below the selected conversation (`AiChatCenterSurface.vue:50`). `ManagedBrowserSessionCard.vue:2` shows account/platform/status; the implementation documents global ownership at line 237, but the user-facing card lacks that scope label.
 - **Impact:** A session can remain visible after selecting another conversation without explaining that it is account/global state rather than a session created by the newly selected chat.
 - **Work:** Add concise scope labeling and verify actions continue to target the session/account identity across chat selection changes.
@@ -212,7 +242,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### G01 — P2: Complete shared orchestration and overlay ownership
 
-- [ ] Extract common submission, commands, plan, permission, image and reporting behavior into typed shared modules consumed by both surfaces.
+- [x] Extract common submission, commands, plan, permission, image and reporting behavior into typed shared modules consumed by both surfaces.
 - [ ] Centralize conversation-bound overlay ownership/reset as required by AD-008, using an equivalent host if the proposed filename is not chosen.
 - **Evidence:** `useChatCommandRouting` is used by workspace but not by `AiChatV2.vue`; V2 still implements command/skill/plan flows itself (e.g. lines 4407 and 4051). Center still owns extensive image, plan, history, report and submission algorithms rather than acting only as a composition root. The old TODO explicitly defers V2 extraction.
 - **Important:** Shared voice/workspace composables and several report utilities already exist. Do not rewrite these needlessly or claim all sharing is absent. Freezing V2 may be a migration choice, but without an approved requirement change it does not satisfy the current PRD DoD 2 or design §10.1/AD-008.
@@ -220,9 +250,9 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### G02 — P1: Complete and execute default-route acceptance coverage
 
-- [ ] Fix B01 before treating missing E2E evidence as an environment-only limitation.
-- [ ] Require `/` → `/aiworkspace` and the workspace transcript in parity specs. Remove legacy-dock fallbacks from these certification paths (queue spec's `openChat` and `chatRoot`, lines 36–80, currently accept either surface).
-- [ ] Run all eight queue/steering scenarios plus global admission, parked lifecycle and restart recovery regressions from B02–B06.
+- [x] Fix B01 before treating missing E2E evidence as an environment-only limitation.
+- [x] Require `/` → `/aiworkspace` and the workspace transcript in parity specs. Remove legacy-dock fallbacks from these certification paths (queue spec's `openChat` and `chatRoot`, lines 36–80, currently accept either surface).
+- [x] Run all eight queue/steering scenarios plus global admission, parked lifecycle and restart recovery regressions from B02–B06.
 - [ ] Enable generated-image batch E2E: `test/e2e/specs/ai-chat-generated-image-batch-live.test.ts:73` unconditionally skips the entire suite. Exercise partial success, retry only eligible failures, Stop preserving outputs, reference ordering, subsequent edit, and trusted Save.
 - [ ] Add successful reporting journeys. `conversationReport.spec.ts:5` explicitly excludes successful submit; its cases at lines 80 and 95 only cover disabled capability. Cover available capability, AI disabled with reporting enabled, item limits, consent, privacy and successful reference/marked state.
 - [ ] Certify outbound exact-draft approval, duplicate-click claim, delivery-unknown with no retry, and persistent receipt.
@@ -237,7 +267,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 
 ### G03 — P2: Finish observability and independently controlled rollout
 
-- [ ] Implement bounded workspace acceptance/rejection, action outcome, run lifecycle, projection fallback and rejected cross-conversation-event counters and the timings in design §18.
+- [x] Implement bounded workspace acceptance/rejection, action outcome, run lifecycle, projection fallback and rejected cross-conversation-event counters and the timings in design §18.
 - [ ] Verify/configure independent controls for shared orchestration, workspace pending queue, specialized results, voice/memory parity and V2 visibility (design §23.1), with compatible persisted states on rollback.
 - **Evidence:** `src/service/AIChatQueueCounters.ts` already contains pending counters/timings; it is incorrect to claim telemetry is wholly absent. The specified workspace acceptance/action/fallback counters were not found in `src/`. Existing workspace/history/queue flags do not establish all the independent rollout controls in the design.
 - **Acceptance:** Counter tests use bounded labels and never record prompts, file content/paths, tokens, report payloads or image bytes. A rollback drill preserves pending rows, identities and authorization behavior.
@@ -245,7 +275,7 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 ### G04 — P1 release gate: Security, localization and accessibility certification
 
 - [ ] Review main-first AI gating, permission continuation ownership, workspace trust, generated-image ownership/staging, exact-draft outbound authorization and reporting privacy across real workspace integration paths.
-- [ ] Check Module/Model ownership and no worker DB access. The workspace history IPC currently instantiates `AIChatMessageModel` directly in `loadHistoryPage` (`ai-chat-workspace-ipc.ts:153`); route through a Module to satisfy this repository's required layer pattern. This is a layering gap, not evidence of SQL injection.
+- [x] Check Module/Model ownership and no worker DB access. The workspace history IPC currently instantiates `AIChatMessageModel` directly in `loadHistoryPage` (`ai-chat-workspace-ipc.ts:153`); route through a Module to satisfy this repository's required layer pattern. This is a layering gap, not evidence of SQL injection.
 - [ ] Verify every new rendered/error key in all six languages, including B15/B16; distinguish key existence from correct localized runtime behavior.
 - [ ] Certify A11Y-001–010 across actual decision dialogs: keyboard completion, focus trap/return, live announcements, semantic labels, 200% scaling/narrow layouts, touch targets and reduced motion.
 - **Evidence/limit:** Existing workspace E2Es include keyboard, zoom and touch checks; these are useful partial coverage, not proof of every capability/dialog. This audit did not conduct screen-reader/manual platform certification or a full security audit.
