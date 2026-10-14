@@ -260,9 +260,8 @@ function splitClauses(message: string): readonly Clause[] {
   while ((match = delimiter.exec(message)) !== null) {
     const start = lastEnd;
     const end = match.index;
-    const pushed = pushTrimmed(clauses, message, start, end);
-    // noop if empty
-    void pushed;
+    // noop if the segment trims to empty
+    pushTrimmed(clauses, message, start, end);
     lastEnd = match.index + match[0].length;
   }
   pushTrimmed(clauses, message, lastEnd, message.length);

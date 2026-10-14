@@ -12,9 +12,11 @@ import type { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 /**
  * Consequential-action operation guard scaffolding (technical-design §10).
  *
- * create/get/updateState/setReceipt with claim-generation CAS. Full receipt
- * reconciliation (FR-11; AC-09/10/13/28) lands with the TaskOperationGuard
- * loop wiring.
+ * create/get/updateState/setReceipt with claim-generation CAS. Receipt
+ * reconciliation (FR-11; AC-09/10/13/28) lives in
+ * EvidenceProviderFactory.reconcileAcceptedReceipt (B19): the evidence
+ * provider upgrades an `accepted` guard row to `completed` from the native
+ * send-attempt status via this module's CAS setters.
  *
  * Workers must never access this table directly (NFR-03).
  */
