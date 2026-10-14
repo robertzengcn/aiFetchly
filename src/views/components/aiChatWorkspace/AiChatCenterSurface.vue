@@ -749,6 +749,7 @@ import {
   useComposerDraftStore,
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
+import { useHistorySelectionStore } from "@/views/store/historySelection";
 import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
@@ -1013,6 +1014,7 @@ const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
 
 const composerDrafts = useComposerDraftStore();
 const pendingMessages = usePendingMessagesStore();
+const historySelStore = useHistorySelectionStore();
 
 // --- Queued (pending) message actions (message-queue PRD §7) ----------------
 async function onSteerPending(pendingMessageId: string): Promise<void> {
@@ -1169,17 +1171,6 @@ watch(
   conversationId,
   (id) => {
     void pendingMessages.loadConversation(id);
-  },
-  { immediate: true }
-);
-
-// B08: surface a saved continuation intent whenever its conversation is
-// selected (covers reload/crash recovery: the decision committed in main,
-// the follow-up never sent, the intent survived in localStorage).
-watch(
-  conversationId,
-  (id) => {
-    pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
   },
   { immediate: true }
 );
@@ -1963,13 +1954,17 @@ async function performOrdinarySend(
   // FR-HIS-002/004: drafted history selections submit as OPAQUE archive
   // references with a retry-stable submission identity; the chips clear only
   // on the engine's start acknowledgement (accepted ids only).
+  // B14: the submission identity is per-conversation in the store — minted
+  // once per logical draft, stable across transport retries, switches and
+  // remounts, resolved only by the start ack (never by switching).
   const historySelectionIds =
     historyUiEnabled.value && selectedContextItems.value.length > 0
       ? selectedContextItems.value.map((item) => item.sourceId)
       : undefined;
-  if (historySelectionIds && !pendingHistorySubmissionId) {
-    pendingHistorySubmissionId = crypto.randomUUID();
-  }
+  const historySubmissionId =
+    historySelectionIds && sendConversationId
+      ? historySelStore.ensureSubmissionId(sendConversationId)
+      : undefined;
   const accepted = await selectedStore.sendMessage(messageText, {
     clientRequestId: options?.clientRequestId,
     model: selectedModel.value,
@@ -1985,9 +1980,7 @@ async function performOrdinarySend(
         : undefined,
     confirmedBatchReferences: confirmedBatch,
     historySelectionIds,
-    submissionId: historySelectionIds
-      ? (pendingHistorySubmissionId ?? undefined)
-      : undefined,
+    submissionId: historySubmissionId,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
   // clears only when THIS send was accepted — keying on shared run state
@@ -2214,13 +2207,12 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 const historyUiEnabled = ref(false);
 const showHistoryDrawer = ref(false);
 const selectedContextItems = ref<SelectedContextItem[]>([]);
-/** Per-conversation selection drafts (§13.3): switching preserves each chat's chips. */
-const selectedContextDrafts = new Map<string, SelectedContextItem[]>();
 /**
- * Stable submission identity (§13.3): reused across transport retries so the
- * backend reuses the same user-turn metadata; resolved on the start ack.
+ * B14: per-conversation selection drafts + stable submission identities live
+ * in the history-selection pinia store (survives switches AND route
+ * remounts). The working copy below always mirrors the selected
+ * conversation; syncActiveHistoryDraft persists it back.
  */
-let pendingHistorySubmissionId: string | null = null;
 const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
 let unsubscribeCompactionProgress: (() => void) | null = null;
 let unsubscribeStartAck: (() => void) | null = null;
@@ -2229,7 +2221,7 @@ let unsubscribeLiveToolResult: (() => void) | null = null;
 function syncActiveHistoryDraft(): void {
   const id = conversationId.value;
   if (id) {
-    selectedContextDrafts.set(id, [...selectedContextItems.value]);
+    historySelStore.setItems(id, selectedContextItems.value);
   }
 }
 
@@ -2320,25 +2312,22 @@ async function handleHistoryNavigate(excerpt?: HistoryExcerpt): Promise<void> {
 }
 
 // Conversation switch: swap each chat's chip draft (never leak across chats).
-// A pending generated-image send never replays into the newly selected chat,
-// and an unresolved submission identity never crosses conversations (Codex
-// adversarial #9: a leaked id would fail the engine's CONVERSATION_MISMATCH
-// dedupe on the next send).
+// A pending generated-image send never replays into the newly selected chat.
+// B14: history submission identities are per-conversation in the store — a
+// switch never nulls them (a leaked id would fail CONVERSATION_MISMATCH
+// dedupe, but a nulled id breaks the promised stable retry identity; the
+// store keeps each conversation's own id, so neither happens).
 watch(conversationId, () => {
-  pendingHistorySubmissionId = null;
   pendingGeneratedImageSend.value = null;
   ambiguityCandidates.value = [];
   showGeneratedImageChooser.value = false;
   showBatchConfirmDialog.value = false;
 });
 
-watch(conversationId, (next, previous) => {
-  if (previous) {
-    selectedContextDrafts.set(previous, [...selectedContextItems.value]);
-  }
-  selectedContextItems.value = next
-    ? [...(selectedContextDrafts.get(next) ?? [])]
-    : [];
+watch(conversationId, (next) => {
+  // B14: restore this conversation's chips (and keep its submission
+  // identity) from the store — survives switches and route remounts.
+  selectedContextItems.value = next ? historySelStore.getItems(next) : [];
   showHistoryDrawer.value = false;
   compactionStatus.value = null;
   void refreshCompactionStatus();
@@ -2364,35 +2353,49 @@ watch(conversationId, (next, previous) => {
  * visible so the user is not silently charged for context they did not get.
  */
 function onEngineStartAck(chunk: Record<string, unknown>): void {
+  const ackConversationId =
+    typeof chunk.conversationId === "string" ? chunk.conversationId : null;
   const hasSelectionAcks =
     Array.isArray(chunk.historySelectionAcceptedIds) ||
     Array.isArray(chunk.historySelectionChangedIds) ||
     Array.isArray(chunk.historySelectionRejectedIds);
-  if (hasSelectionAcks && selectedContextItems.value.length > 0) {
-    const toIdSet = (value: unknown): Set<string> => {
-      if (!Array.isArray(value)) return new Set<string>();
-      const ids: string[] = [];
-      for (const entry of value) {
-        if (typeof entry === "string") ids.push(entry);
-      }
-      return new Set<string>(ids);
-    };
-    const accepted = toIdSet(chunk.historySelectionAcceptedIds);
-    const changed = toIdSet(chunk.historySelectionChangedIds);
-    const rejected = toIdSet(chunk.historySelectionRejectedIds);
-    selectedContextItems.value = selectedContextItems.value
-      .filter((item) => !accepted.has(item.sourceId))
-      .map((item) =>
-        changed.has(item.sourceId)
-          ? { ...item, refreshed: true }
-          : rejected.has(item.sourceId)
-            ? { ...item, rejected: true }
-            : item
-      );
-    syncActiveHistoryDraft();
+  // B14: acceptance resolves the stable submission identity for the ACKED
+  // conversation (accepted AND mixed acknowledgements) — never by switching.
+  // Chips mutate only when the ack owns the current selection, so a
+  // background ack for A never clears B's chips.
+  if (ackConversationId) {
+    historySelStore.resolveSubmission(ackConversationId);
+  } else if (conversationId.value) {
+    historySelStore.resolveSubmission(conversationId.value);
   }
-  // Acceptance resolves the stable submission identity (§13.3).
-  pendingHistorySubmissionId = null;
+  if (
+    !hasSelectionAcks ||
+    selectedContextItems.value.length === 0 ||
+    (ackConversationId !== null && ackConversationId !== conversationId.value)
+  ) {
+    return;
+  }
+  const toIdSet = (value: unknown): Set<string> => {
+    if (!Array.isArray(value)) return new Set<string>();
+    const ids: string[] = [];
+    for (const entry of value) {
+      if (typeof entry === "string") ids.push(entry);
+    }
+    return new Set<string>(ids);
+  };
+  const accepted = toIdSet(chunk.historySelectionAcceptedIds);
+  const changed = toIdSet(chunk.historySelectionChangedIds);
+  const rejected = toIdSet(chunk.historySelectionRejectedIds);
+  selectedContextItems.value = selectedContextItems.value
+    .filter((item) => !accepted.has(item.sourceId))
+    .map((item) =>
+      changed.has(item.sourceId)
+        ? { ...item, refreshed: true }
+        : rejected.has(item.sourceId)
+          ? { ...item, rejected: true }
+          : item
+    );
+  syncActiveHistoryDraft();
 }
 
 /** FR-HIS-005: compaction progress/retry/cancel, independent of run recovery. */
@@ -2631,6 +2634,19 @@ function refreshPendingPlanContinuation(): void {
   const id = conversationId.value;
   pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
 }
+
+// B08: surface a saved continuation intent whenever its conversation is
+// selected (covers reload/crash recovery: the decision committed in main,
+// the follow-up never sent, the intent survived in localStorage). Placed
+// after the ref declaration — an immediate watcher above would read the ref
+// before initialization.
+watch(
+  conversationId,
+  (id) => {
+    pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
+  },
+  { immediate: true }
+);
 
 async function onLegacyPlanAction(
   action: "approve-plan" | "reject-plan" | "request-plan-changes",

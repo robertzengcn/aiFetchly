@@ -165,6 +165,79 @@ export const useSelectedConversationStore = defineStore(
     let nextBeforeCursor: { timestamp: string; messageId: string } | null =
       null;
 
+    /**
+     * B14: durable submission identity per logical draft + conversation.
+     * The main process dedupes by clientRequestId (pending unique index /
+     * coordinator request cache), so reusing the previous id for the SAME
+     * unacknowledged payload collapses a committed-main/lost-response retry
+     * into the one accepted row instead of executing twice. Entries rotate
+     * on confirmed acceptance — an intentional repeat (or any changed
+     * payload, whose hash differs) mints a fresh identity and is never
+     * collapsed. Conversation-keyed: survives A→B→A switches and remounts.
+     */
+    const lastSubmitByConversation = new Map<
+      string,
+      { payloadHash: string; clientRequestId: string }
+    >();
+
+    /**
+     * Stable payload hash (metadata only — never attachment bytes). Any
+     * intentional content/attachment/reference/mode change yields a new
+     * hash and therefore a new request identity.
+     */
+    function hashSendPayload(text: string, options?: SendOptions): string {
+      const stable = {
+        text,
+        model: options?.model ?? null,
+        mode: options?.mode ?? null,
+        toolApprovalMode: options?.toolApprovalMode ?? null,
+        showReasoning: options?.showReasoning ?? null,
+        attachments: (options?.attachments ?? []).map((a) => ({
+          fileName: a.fileName,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          kind: a.kind,
+        })),
+        generatedImageReferences: options?.generatedImageReferences ?? null,
+        pastedContents: options?.pastedContents ?? null,
+        confirmedBatchReferences: options?.confirmedBatchReferences ?? null,
+        historySelectionIds: options?.historySelectionIds ?? null,
+        submissionId: options?.submissionId ?? null,
+      };
+      return JSON.stringify(stable);
+    }
+
+    function resolveClientRequestId(
+      conversationId: string,
+      text: string,
+      options?: SendOptions
+    ): string {
+      if (options?.clientRequestId) {
+        // Explicit identities (plan continuations, history flows) are
+        // recorded as the logical draft so a later plain retry of the same
+        // payload reconciles against them instead of minting a duplicate.
+        const entry = {
+          payloadHash: hashSendPayload(text, options),
+          clientRequestId: options.clientRequestId,
+        };
+        lastSubmitByConversation.set(conversationId, entry);
+        return options.clientRequestId;
+      }
+      const payloadHash = hashSendPayload(text, options);
+      const last = lastSubmitByConversation.get(conversationId);
+      if (last && last.payloadHash === payloadHash) {
+        // Same logical draft, acceptance still ambiguous (a confirmed
+        // acceptance rotates the entry below) — reconcile by reusing.
+        return last.clientRequestId;
+      }
+      const fresh = createClientRequestId();
+      lastSubmitByConversation.set(conversationId, {
+        payloadHash,
+        clientRequestId: fresh,
+      });
+      return fresh;
+    }
+
     function syncFromPresenter(): void {
       const state = presenter.getState();
       messages.value = [...state.messages];
@@ -370,7 +443,14 @@ export const useSelectedConversationStore = defineStore(
       // T8/D5 (audit): the optimistic row is the request's identity holder —
       // a REJECTION removes it so the draft (still in the composer) is not
       // duplicated in the transcript; the error bubble alone remains.
-      const clientRequestId = options?.clientRequestId ?? createClientRequestId();
+      // B14: retry-stable identity — an ambiguous (possibly committed, lost
+      // response) retry of the same logical draft reuses the previous id so
+      // main dedupes it into the one accepted row/provider turn.
+      const clientRequestId = resolveClientRequestId(
+        conversationId,
+        text,
+        options
+      );
       try {
         const response = await startChatRun({
           conversationId,
@@ -391,6 +471,11 @@ export const useSelectedConversationStore = defineStore(
             : undefined,
           submissionId: options?.submissionId,
         });
+        // B14: confirmed acceptance rotates the logical-draft identity — an
+        // intentional repeat of the same text afterwards mints a FRESH id
+        // and is never collapsed into this row. (Rejections keep the entry
+        // so an ambiguous retry reconciles by reuse.)
+        lastSubmitByConversation.delete(originConversationId);
         // B07: only when the selection still owns this send — after a
         // switch, A's durable row renders via subscription/summary when the
         // user returns; touching B's presenter/status here would corrupt it.

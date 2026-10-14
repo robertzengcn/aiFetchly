@@ -2060,7 +2060,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     const wrapper = mountSurface();
     useChatWorkspaceStore().setSelected("conv-a");
     await flushPromises();
-    const file = new File(["hello"], "note.txt", { type: "text/plain" });
+    const file = new File(["hello"], "note.pdf", { type: "application/pdf" });
     const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
     composer.vm.$emit("send", "see the attached note", [file]);
     // Switch mid-encode: the emit handler already suspended at the first
