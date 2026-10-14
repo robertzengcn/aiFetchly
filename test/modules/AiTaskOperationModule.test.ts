@@ -414,6 +414,78 @@ describe("AiTaskOperationModule scaffolding (Slice 3 prep)", function () {
     expect(confirmed.ok).to.equal(true);
   });
 
+  it("B19b: accepted → completed reconciles a natively finished job (§10.3, AC-09)", async () => {
+    // The guard settles `accepted` at job-START (claim receipt); the native
+    // worker finishes asynchronously. Bounded native polling upgrades the
+    // row to `completed` on terminal-completion evidence — reading only
+    // stored state could never verify final job completion.
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-reconcile",
+      executionId: "exec-r",
+      toolIdentity: "send_email",
+      domainTarget: "campaign:5",
+      intentHash: "sha256:r",
+    });
+    for (const [gen, state] of [
+      [0, "claimed"],
+      [1, "dispatched"],
+      [2, "accepted"],
+    ] as const) {
+      const step = await mod.updateState({
+        operationKey: "op-reconcile",
+        expectedClaimGeneration: gen,
+        newState: state,
+      });
+      expect(step.ok).to.equal(true);
+    }
+    const done = await mod.updateState({
+      operationKey: "op-reconcile",
+      expectedClaimGeneration: 3,
+      newState: "completed",
+    });
+    expect(done.ok).to.equal(true);
+    const op = await mod.getOperation("op-reconcile");
+    expect(op?.operation_state).to.equal("completed");
+    expect(op?.claim_generation).to.equal(4);
+    expect(op?.settled_at).to.not.equal(null);
+  });
+
+  it("B19b: accepted → failed stays rejected (only completion evidence reconciles, §10.3)", async () => {
+    const mod = new AiTaskOperationModule();
+    await mod.recordOperation({
+      operationKey: "op-no-regress",
+      executionId: "exec-nr",
+      toolIdentity: "send_email",
+      domainTarget: "campaign:5",
+      intentHash: "sha256:nr",
+    });
+    await mod.updateState({
+      operationKey: "op-no-regress",
+      expectedClaimGeneration: 0,
+      newState: "claimed",
+    });
+    await mod.updateState({
+      operationKey: "op-no-regress",
+      expectedClaimGeneration: 1,
+      newState: "dispatched",
+    });
+    await mod.updateState({
+      operationKey: "op-no-regress",
+      expectedClaimGeneration: 2,
+      newState: "accepted",
+    });
+    const regress = await mod.updateState({
+      operationKey: "op-no-regress",
+      expectedClaimGeneration: 3,
+      newState: "failed",
+    });
+    expect(regress.ok).to.equal(false);
+    expect(regress.reasonCode).to.equal("STATE_CONFLICT");
+    const op = await mod.getOperation("op-no-regress");
+    expect(op?.operation_state).to.equal("accepted");
+  });
+
   it("claimed → failed stays allowed (failed-before-dispatch fence, §10.2)", async () => {
     const mod = new AiTaskOperationModule();
     await mod.recordOperation({

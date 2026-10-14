@@ -12,6 +12,13 @@ import type {
  * dispatched → unknown uncertainty branch, and terminal stickiness for
  * accepted/completed/failed (a settled consequential action never re-opens).
  * Only listed (from → to) pairs may transition.
+ *
+ * B19 (§10.3, AC-09): `accepted → completed` reconciles a natively finished
+ * job. The guard settles `accepted` at job-START (claim receipt); the native
+ * worker finishes asynchronously, so bounded native polling upgrades the row
+ * on terminal-completion evidence. `unknown` still never jumps to
+ * `completed` — it must reconcile through dispatched/accepted first, so an
+ * unobserved outcome never becomes complete by assertion.
  */
 const OPERATION_STATE_TRANSITIONS: Readonly<
   Record<AiTaskOperationState, readonly AiTaskOperationState[]>
@@ -19,7 +26,7 @@ const OPERATION_STATE_TRANSITIONS: Readonly<
   pending: ["claimed"],
   claimed: ["dispatched", "failed"],
   dispatched: ["accepted", "failed", "unknown"],
-  accepted: [],
+  accepted: ["completed"],
   completed: [],
   failed: [],
   unknown: ["dispatched", "accepted", "failed"],
