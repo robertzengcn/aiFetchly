@@ -263,7 +263,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B19 — Receipt mapping/completion and background-job semantics remain unfinished [P1; confidence 10/10]
 
-- [ ] Map compiler criteria to trusted operation identity/native receipt; support accepted-to-completed reconciliation and correct requested start vs finish semantics.
+- [x] Map compiler criteria to trusted operation identity/native receipt; support accepted-to-completed reconciliation and correct requested start vs finish semantics.
+*(done 2026-10-14, commits `9ba27faf` (compiler start→accepted, incl. CJK 启动), `757852a5` (accepted→completed FSM transition), `41faf260` (execution-scoped singleton linkage + bounded native reconciliation with CAS write-back, wired at all 3 enrollment seams; stale B01-invariant test corrected per B22): exact key first, lone execution send links despite slug/key mismatch, 0/2+ rows fail closed; accepted upgrades only on native completed/partially_completed, unknown never completes by assertion, CAS loss converges by re-read; accepted satisfies start criteria but not finish criteria. Tests: 3 B19c compiler, 2 model transition, 8 factory/provider incl. stash-verified RED.)*
 
 **Location:** `EvidenceProviderFactory.ts:169–173`; `AiTaskOperation.model.ts:19–25`; deferred reconciliation `AIChatQueryLoop.ts:1584–1585`; operation compilation in `TaskCriteriaResolver`.
 
