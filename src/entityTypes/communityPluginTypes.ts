@@ -20,8 +20,8 @@ export type PluginCommunityAccessStatus =
   | "forbidden"
   | "unavailable";
 
-/** Install channel for the row (hub tech design §9.3). */
-export type PluginCommunityInstallMode = "direct" | "ticket";
+/** Install channel for the row (hub tech design §9.3, catalog §2). */
+export type PluginCommunityInstallMode = "direct" | "ticket" | "managed";
 
 export interface PluginCommunityAccess {
   readonly status: PluginCommunityAccessStatus;

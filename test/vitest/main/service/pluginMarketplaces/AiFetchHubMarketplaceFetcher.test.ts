@@ -216,4 +216,145 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     );
     expect(manifest.plugins[0].license).toBe("MIT");
   });
+
+  test("accepts the live hub shape: name as slug, top-level installMode, user.segment", async () => {
+    // Regression for "Couldn't reach the Plugin Hub": the Go hub
+    // (docs/plugin-hub-api-catalog.md §2) projects `name` (no `slug`),
+    // `access:{status}` + sibling `installMode`, and `user:{segment}`.
+    getFirstParty.mockResolvedValueOnce({
+      user: { segment: "anonymous" },
+      plugins: [
+        {
+          id: "01a06660-699c-7dac-b777-71ab303eeaf8",
+          currentVersionId: "01a06660-ec23-71ec-a6c3-656f10600794",
+          name: "hyperframes",
+          displayName: "HeyGen HyperFrames",
+          description: "Turns HTML into video.",
+          category: "video",
+          source: {
+            source: "github",
+            repo: "heygen-com/hyperframes",
+            ref: "main",
+            sha: "e5d89f770fbe01d8c243999dac59f3c39a62d66d",
+          },
+          visibility: "public",
+          access: { status: "allowed" },
+          installMode: "direct",
+          stats: { installs: 0 },
+          capabilities: {},
+        },
+      ],
+      pagination: { page: 1, perPage: 30, total: 1 },
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins).toHaveLength(1);
+    expect(manifest.plugins[0].slug).toBe("hyperframes");
+    expect(manifest.plugins[0].name).toBe("hyperframes");
+    expect(manifest.plugins[0].access).toEqual({
+      status: "allowed",
+      installMode: "direct",
+    });
+    expect(manifest.plugins[0].source).toEqual({
+      source: "github",
+      repo: "heygen-com/hyperframes",
+      // Pinned to sha when the hub provides both ref and sha.
+      ref: "e5d89f770fbe01d8c243999dac59f3c39a62d66d",
+    });
+  });
+
+  test("prefers explicit slug/access.installMode when both shapes are present", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          slug: "explicit-slug",
+          name: "fallback-name",
+          access: { status: "allowed", installMode: "ticket" },
+          installMode: "direct",
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].slug).toBe("explicit-slug");
+    expect(manifest.plugins[0].access).toEqual({
+      status: "allowed",
+      installMode: "ticket",
+    });
+  });
+
+  test("accepts managed installMode and maps author to owner", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      user: { segment: "free" },
+      plugins: [
+        {
+          id: "0199aaaa",
+          currentVersionId: "0199bbbb",
+          name: "managed-plugin",
+          displayName: "Managed Plugin",
+          author: "owner-handle",
+          access: { status: "allowed" },
+          installMode: "managed",
+        },
+      ],
+      pagination: { page: 1, perPage: 30, total: 1 },
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].slug).toBe("managed-plugin");
+    expect(manifest.plugins[0].access).toEqual({
+      status: "allowed",
+      installMode: "managed",
+    });
+    expect(manifest.plugins[0].owner).toBe("owner-handle");
+  });
+
+  test("tolerates catalog-only zip sources without invalidating the catalog", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          name: "zip-only",
+          access: { status: "allowed" },
+          installMode: "direct",
+          source: { source: "zip", url: "https://cdn.example.com/p.zip" },
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].slug).toBe("zip-only");
+    expect(manifest.plugins[0].source).toBeUndefined();
+  });
+
+  test("rejects entries missing both slug and name", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          access: { status: "allowed", installMode: "direct" },
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error("unreachable");
+    expect(result.errors[0].code).toBe("marketplace-fetch-failed");
+  });
 });
