@@ -297,7 +297,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B22 — Broad test run is flaky and release-gate claims are overstated [P2; confidence 10/10 for observed results]
 
-- [ ] Diagnose parallel-suite timing/isolation and add real flow regressions for the actual event/durability/guard defects above.
+- [x] Diagnose parallel-suite timing/isolation and add real flow regressions for the actual event/durability/guard defects above. *(done 2026-10-14, commit `6097b7a78`: zero-mock real-SQLite lifecycle flow (create→spend→evidence→finalize→Continue-shared-ledger→claim-to-completed + hostile/stale refusals); corrected two checked tests encoding pre-audit contracts (D4 record-but-no-gate → B13 remaining-allowance gate; enroller T03 count → B03 attribution). Parallel diagnosis: full 266-file run shows 3 load-only failures (2× 5s-timeout + oversized-externalization) that pass isolated AND in small parallel subsets — pool contention under 246s import load, not application defects; all defect-area suites green in the same run. Open remainder (needs CI/E2E infra, not code): serial/retry lane for the 3 files, Playwright E2E for 54/100 scheduled recovery + checker-in-flight Stop + crash/restart, hardware event-ordering.)*
 
 **Observed initial failures:** two search-recovery tests timed out at 5 seconds; 1,000-row output epoch-fence test timed out; stream tool-result externalization assertion found no saved message (`StreamEventProcessorToolResults.test.ts:175`). All 51 tests in those files passed serially without edits. This establishes a repeatability/load/isolation concern, not a proven new application bug in those services.
 
