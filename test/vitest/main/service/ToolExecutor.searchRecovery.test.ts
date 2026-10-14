@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { SearchTaskStatus } from "@/model/SearchTask.model";
+// B22: static import (was per-test dynamic import). ToolExecutor drags a
+// heavy graph (controllers, IPC modules); transforming it lazily INSIDE the
+// test body spends the 5s test budget under full-suite parallel load and
+// flakes. Static import pays transform once at file load, outside any test
+// timeout — identical module identity (vi.mock-hoisted), no behavior change.
+import { ToolExecutor } from "@/service/ToolExecutor";
 
 const searchByKeywordAndEngine = vi.fn();
 const getTaskStatus = vi.fn();
@@ -46,7 +52,6 @@ describe("ToolExecutor search Error recovery", () => {
       },
     ]);
 
-    const { ToolExecutor } = await import("@/service/ToolExecutor");
     const pending = ToolExecutor.execute(
       "scrape_urls_from_search_engine",
       {
@@ -72,7 +77,6 @@ describe("ToolExecutor search Error recovery", () => {
     getTaskStatus.mockResolvedValue(SearchTaskStatus.Error);
     listSearchResult.mockResolvedValue([]);
 
-    const { ToolExecutor } = await import("@/service/ToolExecutor");
     const pending = ToolExecutor.execute(
       "scrape_urls_from_search_engine",
       {

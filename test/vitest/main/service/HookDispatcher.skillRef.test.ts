@@ -272,6 +272,12 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
     HookCommandTrustService.resetForTests();
   });
 
+  // B22: 30s budget (was the 5s default). The un-wired path builds the
+  // runtime resolver per test (beforeEach resets the cache by design, so
+  // every run pays a full skill-registry filesystem init before the
+  // instant fallback assertion). That init cost is environmental
+  // (machine/pool load), not product behavior — budgeting for it keeps
+  // this fallback-preservation test deterministic under full-suite load.
   it("a skill-ref hook with no resolver wired emits skill-registry-not-available (fallback preserved)", async () => {
     const hook = skillRefHook("user:hook:unwired", "skill:anything");
     HookRegistry.replaceSource("user", [hook]);
@@ -288,5 +294,5 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
         e.message.includes("skill-registry-not-available")
       )
     ).toBe(true);
-  });
+  }, 30000);
 });

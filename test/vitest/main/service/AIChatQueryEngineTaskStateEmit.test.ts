@@ -623,8 +623,7 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
     expect(terminal).toHaveLength(1);
   });
 
-  it("active + terminal both fire for one enrolled completed turn (the full lifecycle)", async () => {
-    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+  it("active + terminal both fire for one enrolled completed turn (the full lifecycle)", async () => {    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
       type: "finish",
       outcome: "verified_complete",
       reasonCode: "CRITERIA_SATISFIED",
@@ -642,10 +641,13 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
     } as never);
 
     const states = taskStateEvents(emits);
-    // Exactly two events: one active at enrollment, one terminal at the gate.
-    expect(states).toHaveLength(2);
+    // Three events: active at enrollment, verifying at the fallback consult
+    // (G01-313 — the mocked loop records no decision, so the gate consults),
+    // terminal at the gate.
+    expect(states).toHaveLength(3);
     expect(states[0].status).toBe("active");
-    expect(states[1].status).toBe("terminal");
+    expect(states[1].status).toBe("verifying");
+    expect(states[2].status).toBe("terminal");
     // The active event must precede the terminal event in emit order.
     const activeIdx = emitSpy.mock.calls.findIndex(
       (args: unknown[]) =>

@@ -170,10 +170,15 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     };
 
     processor.processEvent(streamEvent);
-    // The handler defers to an async IIFE; let it resolve.
-    await vi.waitFor(() => {
-      expect(savedMessages.length).toBeGreaterThanOrEqual(1);
-    });
+    // The handler defers to an async IIFE; let it resolve. B22: 30s budget
+    // (was the ~1s default) — externalization does real filesystem writes
+    // that starve under full-suite parallel load; the bound is environmental.
+    await vi.waitFor(
+      () => {
+        expect(savedMessages.length).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 30000, interval: 50 }
+    );
 
     // 1. The persisted message content is a ToolResultReceipt (NOT the raw
     //    `rows` body). The receipt carries outputs[] with the artifact ref.
@@ -300,9 +305,13 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     };
 
     processor.processEvent(streamEvent);
-    await vi.waitFor(() => {
-      expect(savedMessages.length).toBeGreaterThanOrEqual(1);
-    });
+    // B22: same extended budget as above (filesystem writes under load).
+    await vi.waitFor(
+      () => {
+        expect(savedMessages.length).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 30000, interval: 50 }
+    );
 
     const persisted = savedMessages[savedMessages.length - 1];
     const content = JSON.parse(persisted.content) as Record<string, unknown>;
