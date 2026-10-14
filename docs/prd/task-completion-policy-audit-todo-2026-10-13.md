@@ -122,7 +122,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B06 — Durable outcome winner is ignored on failure, stale lease and cancellation race [P1; confidence 10/10]
 
-- [ ] Publish only the committed winning outcome; surface persistence failure explicitly and retain recovery control.
+- [x] Publish only the committed winning outcome; surface persistence failure explicitly and retain recovery control. *(done 2026-10-14, commit `87a0ab5d`: gate returns committed/alreadyFinalized-stored-winner/failed/staleLease; failure emits TASK_FINALIZE_FAILED/STALE_LEASE error with no complete/terminal/notify and retained binding; T15b fail-open tests corrected. Tests: 22/22 AIChatQueryEngineFinalize incl. B06a/b/c.)*
 
 **Location:** `AIChatQueryEngine.ts:3802, 3809–3810, 3819, 3825`; delivery `:3358–3390, 3458`.
 
@@ -134,7 +134,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B07 — Scheduled delivery/notification still occurs before scheduled transaction [P1; confidence 9/10]
 
-- [ ] Buffer scheduled terminal delivery and suppress engine notification until runner commits execution and occurrence accounting.
+- [x] Buffer scheduled terminal delivery and suppress engine notification until runner commits execution and occurrence accounting. *(done 2026-10-14, commit `16c208ac`: engine skips turn_complete notify for scheduled kind; runner absorbs terminal events and streams done/error once post-commit, error + rethrow on transaction failure. Tests: B07a/b + 37/37 finalize suites.)*
 
 **Location:** `AIChatQueryEngine.ts:3337, 3358, 3458`; `ScheduledAiMessageRunner.ts:601–651, 967`.
 
@@ -174,7 +174,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B11 — Submission reuse aborts the accepted original run [P1; confidence 9/10]
 
-- [ ] Perform accepted-submission lookup/return before replacing active turn or aborting its controller.
+- [x] Perform accepted-submission lookup/return before replacing active turn or aborting its controller. *(done 2026-10-14, commit `758b990e`: dedup short-circuit returns before activeTurn abort/register/start emit; later dead block removed. Tests: 23/23 enrollment incl. B11 retained-original regression.)*
 
 **Location:** `AIChatQueryEngine.ts:2229–2239, 2356`.
 
@@ -218,7 +218,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B15 — Negative persisted deltas restore allowance [P2; confidence 10/10; real SQLite]
 
-- [ ] Schema-validate finite nonnegative integer increments at module/model boundary; implement streak reset separately from monotonic counters.
+- [x] Schema-validate finite nonnegative integer increments at module/model boundary; implement streak reset separately from monotonic counters. *(done 2026-10-14, commit `a7b96403`: model fail-closed rejects negative/NaN/Infinity/fractional/unsafe-int without SQL; no caller passes negative deltas — in-memory mirror already floors via asFiniteNonNegative. Tests: hostile-batch unchanged-ledger + valid-path, 47/47 module suite.)*
 
 **Location:** `AiTaskExecution.model.ts:849–874`; test `test/modules/AiTaskExecutionModule.test.ts:1364–1395`.
 
@@ -228,7 +228,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B16 — Confirmed/unknown retry occurrence can be followed by another dispatch [P1; confidence 10/10; guard probe]
 
-- [ ] Inspect all same-intent occurrences before preparing any retry, not only stable ordinal zero.
+- [x] Inspect all same-intent occurrences before preparing any retry, not only stable ordinal zero. *(done 2026-10-14, commit `4c8d417e`: own-occurrence fence over ordinals 1..count — confirmed reuses receipt, unresolved blocks, all-failed permits new ordinal. Tests: 16/16 guard incl. B16a/b.)*
 
 **Location:** `TaskOperationGuard.ts:247–248, 265–323, 305–308`.
 
