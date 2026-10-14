@@ -972,3 +972,57 @@ describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08
     ).toBe(true);
   });
 });
+
+describe("AIChatQueryLoop G01-313 consult-phase badge states (FR-13/14, AC-16)", () => {
+  beforeEach(() => {
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests({ log: () => undefined });
+  });
+
+  it("badges verifying→active around the response_end consult for the consulted execution", async () => {
+    const stream = makeStopStream();
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+    });
+    // The binding's consult answers finish_response (break) — the loop hits
+    // the response_end consult site with an enrolled, accepted binding.
+    const binding = makeBudgetBinding({
+      reservation: BudgetReservationResult.Reserved,
+    });
+    const { input, events } = makeInput({ binding });
+    const result = await loop.run(input);
+    expect(result.type).toBe("completed");
+    const states = events
+      .filter((e) => e.type === "task_execution_state")
+      .map((e) => [
+        (e as { executionId: string }).executionId,
+        (e as { status: string }).status,
+      ]);
+    const verifyingIdx = states.findIndex(
+      ([id, status]) => id === "exec-t05" && status === "verifying"
+    );
+    expect(verifyingIdx).toBeGreaterThanOrEqual(0);
+    // The badge restores to active after the consult (before terminal).
+    const activeIdx = states.findIndex(
+      ([id, status], i) => i > verifyingIdx && id === "exec-t05" && status === "active"
+    );
+    expect(activeIdx).toBeGreaterThan(verifyingIdx);
+  });
+
+  it("no phase states without an accepted binding (legacy silence preserved)", async () => {
+    const stream = makeStopStream();
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+    });
+    const { input, events } = makeInput({});
+    const result = await loop.run(input);
+    expect(result.type).toBe("completed");
+    expect(
+      events.some((e) => e.type === "task_execution_state")
+    ).toBe(false);
+  });
+});

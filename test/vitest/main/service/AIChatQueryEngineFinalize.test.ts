@@ -44,6 +44,7 @@ const {
   freezeContractMock,
   finalizeManualMock,
   flushOrder,
+  skillExecuteMock,
 } = vi.hoisted(() => ({
   flagMock: vi.fn<() => boolean>(),
   classifyMock: vi.fn(),
@@ -53,6 +54,7 @@ const {
     (input: Omit<FinalizeInput, "expectedVersion">) => Promise<FinalizeResult>
   >(),
   flushOrder: [] as string[],
+  skillExecuteMock: vi.fn(),
 }));
 
 // --- Feature flag mock: each test sets the flag by configuring flagMock --
@@ -104,7 +106,17 @@ vi.mock("@/service/aiTaskExecution/TaskLoopConsult", async (importOriginal) => {
   };
 });
 
-// --- TaskExecutionCoordinator mock: startManual + finalizeManual --------
+// --- SkillExecutor mock (G01-313): permission-resume re-executes the
+// approved tool through it. Inert for all non-resume tests.
+vi.mock("@/service/SkillExecutor", () => ({
+  SkillExecutor: { execute: skillExecuteMock },
+}));
+vi.mock("@/config/skillsRegistry", () => ({
+  SkillRegistry: {
+    getAllToolFunctions: vi.fn().mockResolvedValue([]),
+    getSkill: vi.fn().mockReturnValue(undefined),
+  },
+}));
 // T15b: re-export the real `assertOwnership` + `readCurrentLeaseGeneration`
 // standalones (the engine imports them directly); only the class is mocked.
 vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", async (importOriginal) => {
@@ -411,6 +423,12 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
+    skillExecuteMock.mockReset();
+    skillExecuteMock.mockResolvedValue({
+      success: true,
+      execution_time_ms: 5,
+      result: { output: "approved tool output" },
+    });
     HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
@@ -551,6 +569,14 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
       emitSpy.mock.invocationCallOrder[completeEmitIdx]
     );
+    // G01-313: the fallback consult badges the actual verifying phase for
+    // this execution before finalization (terminal follows).
+    const states = emits.filter(
+      (e) => (e as { type: string }).type === "task_execution_state"
+    ) as Array<{ executionId: string; status: string }>;
+    expect(
+      states.some((s) => s.executionId === EXEC_ID && s.status === "verifying")
+    ).toBe(true);
   });
 
   it("flag-on + continue decision post-exit (defensive): finalized as incomplete", async () => {
@@ -602,6 +628,68 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(finalizeManualMock).toHaveBeenCalledTimes(1);
     const completeEvent = emits.find((e) => e.type === "complete");
     expect(completeEvent).toBeDefined();
+  });
+
+  it("G01-313: pause_for_permission badges waiting_permission; approval resume restores active", async () => {
+    // The enrolled turn parks on a permission gate mid-stream: the badge
+    // must show the actual owned waiting phase (not a stale active), and
+    // return to active when approval resumes the turn.
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    let calls = 0;
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        calls += 1;
+        if (calls > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            toolArguments: {},
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    const states = () =>
+      emits.filter(
+        (e) => (e as { type: string }).type === "task_execution_state"
+      ) as Array<{ executionId: string; status: string }>;
+    const waitingIdx = states().findIndex(
+      (s) => s.executionId === EXEC_ID && s.status === "waiting_permission"
+    );
+    expect(waitingIdx).toBeGreaterThanOrEqual(0);
+
+    await engine.resumeToolAfterPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+    const after = states();
+    const activeIdx = after.findIndex(
+      (s, i) => i > waitingIdx && s.executionId === EXEC_ID && s.status === "active"
+    );
+    // The badge returns to the owned running phase after the wait.
+    expect(activeIdx).toBeGreaterThan(waitingIdx);
   });
 
   it("B06a: finalize failure on verified path emits error, never verified success (FR-12, AC-15)", async () => {

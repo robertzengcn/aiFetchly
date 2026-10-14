@@ -1436,6 +1436,23 @@ export class AIChatQueryLoop {
     // could convert accepted unfinished work to unchecked success
     // (NFR-12, AC-12/32).
     if (!binding.policyAccepted) return null;
+    // G01-313 (FR-13/14; AC-16): badge the actual verifying phase. The
+    // checker dispatch is the turn's real verification work — emit
+    // `verifying` for THIS execution while it runs, then restore `active`.
+    // Same-execution ordering keeps the renderer badge truthful (B09 rules
+    // apply); a missed emit only dims the badge, never verification.
+    // Both emits are gated on isActiveTurn: a superseded turn's late
+    // consult must not resurrect its badge over the newer run (B09).
+    const emitPhase = (status: "verifying" | "active"): void => {
+      if (!params.input.isActiveTurn()) return;
+      params.input.eventSink.emit({
+        type: "task_execution_state",
+        conversationId: params.input.conversationId,
+        executionId: binding.executionId,
+        status,
+      });
+    };
+    emitPhase("verifying");
     try {
       return await consultLoopEndCandidate({
         binding,
@@ -1456,6 +1473,8 @@ export class AIChatQueryLoop {
         err
       );
       return null;
+    } finally {
+      emitPhase("active");
     }
   }
 

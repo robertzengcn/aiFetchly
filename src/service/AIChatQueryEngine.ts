@@ -1378,16 +1378,18 @@ export class AIChatQueryEngine {
           // demoting a task continuation to response_only).
           taskRoute = successorContext.route;
           adoptedSuccessorExecutionId = created.executionId;
-          // T13 (PRD FR-13, NFR-10/11, AC-16): emit the active lifecycle state
-          // for the successor so the badge tracks the new executionId as soon
-          // as Continue/Retry enrollment commits, before the successor stream
-          // attaches. The renderer's executionId dedup (Piece C) drops any late
+          // T13 (PRD FR-13, NFR-10/11, AC-16): emit the lifecycle state for
+          // the successor so the badge tracks the new executionId as soon as
+          // Continue/Retry enrollment commits, before the successor stream
+          // attaches. G01-313: the owned phase really is `continuing` (a
+          // lineage successor resuming approved work), not a fresh `active`
+          // turn. The renderer's executionId dedup (Piece C) drops any late
           // terminal chunk from the parent execution in favor of this one.
           eventSink.emit({
             type: "task_execution_state",
             conversationId,
             executionId: created.executionId,
-            status: "active",
+            status: "continuing",
           });
         } catch (err) {
           console.error(
@@ -2855,6 +2857,19 @@ export class AIChatQueryEngine {
       turnId: matchedByToolId.turnId,
       eventSink: matchedByToolId.eventSink,
     });
+    // G01-313: the turn is really running again — restore the `active`
+    // badge (it showed `waiting_permission` while parked). Enrolled turns
+    // only; the binding map survives the pause.
+    const resumedExecutionId =
+      this.taskExecutionBindings.get(conversationId);
+    if (resumedExecutionId) {
+      matchedByToolId.eventSink.emit({
+        type: "task_execution_state",
+        conversationId,
+        executionId: resumedExecutionId,
+        status: "active",
+      });
+    }
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(
       module,
@@ -3186,6 +3201,18 @@ export class AIChatQueryEngine {
       turnId: matchedByToolId.turnId,
       eventSink: matchedByToolId.eventSink,
     });
+    // G01-313: denied tools still resume the turn (with a synthesized denial
+    // result) — restore the `active` badge (see approve path above).
+    const deniedResumeExecutionId =
+      this.taskExecutionBindings.get(conversationId);
+    if (deniedResumeExecutionId) {
+      matchedByToolId.eventSink.emit({
+        type: "task_execution_state",
+        conversationId,
+        executionId: deniedResumeExecutionId,
+        status: "active",
+      });
+    }
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(
       module,
@@ -3345,6 +3372,20 @@ export class AIChatQueryEngine {
       turnId: pending.turnId,
       eventSink: pending.eventSink,
     });
+    // G01-313: the answered turn is really running again — restore the
+    // `active` badge (it showed `waiting_approval` while parked). Enrolled
+    // turns only; the binding map survives the pause.
+    const answeredResumeExecutionId = this.taskExecutionBindings.get(
+      request.conversationId
+    );
+    if (answeredResumeExecutionId) {
+      pending.eventSink.emit({
+        type: "task_execution_state",
+        conversationId: request.conversationId,
+        executionId: answeredResumeExecutionId,
+        status: "active",
+      });
+    }
 
     const answerContent = serializeToolResultContent({
       success: true,
@@ -3576,7 +3617,8 @@ export class AIChatQueryEngine {
           if (taskExecutionBinding.executionKind !== "scheduled") {
             const gateResult = await this.finalizeManualAtCompleteGate(
               result,
-              taskExecutionBinding
+              taskExecutionBinding,
+              eventSink
             );
             if (
               gateResult &&
@@ -3959,6 +4001,17 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
+        // G01-313: badge the actual owned waiting phase (the turn really is
+        // parked on a permission gate). Enrolled turns only — unenrolled
+        // turns have no badge to update.
+        if (taskExecutionBinding) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId: result.pending.conversationId,
+            executionId: taskExecutionBinding.executionId,
+            status: "waiting_permission",
+          });
+        }
         console.log(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
@@ -3970,6 +4023,16 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
+        // G01-313: badge the actual owned waiting phase (see permission
+        // pause above). Enrolled turns only.
+        if (taskExecutionBinding) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId: result.pending.conversationId,
+            executionId: taskExecutionBinding.executionId,
+            status: "waiting_approval",
+          });
+        }
         console.log(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
@@ -4014,7 +4077,8 @@ export class AIChatQueryEngine {
    */
   private async finalizeManualAtCompleteGate(
     result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
-    binding: LoopTaskExecutionBinding
+    binding: LoopTaskExecutionBinding,
+    eventSink: AIChatQueryEventSink
   ): Promise<
     | { status: "committed"; outcome: TaskOutcome; reasonCode: string }
     | { status: "alreadyFinalized"; outcome: TaskOutcome; reasonCode: string }
@@ -4061,6 +4125,18 @@ export class AIChatQueryEngine {
         safetyRestriction: diagnostics.safetyRestriction,
       };
       try {
+        // G01-313: badge the fallback consult as the actual verifying
+        // phase (terminal finalization always follows in this path, so no
+        // active restore is needed). No ownership guard: sends are blocked
+        // while this turn streams and Stop preserves the active entry, so
+        // no newer turn can own this conversation mid-gate; the binding is
+        // single-owner by construction.
+        eventSink.emit({
+          type: "task_execution_state",
+          conversationId: result.conversationId,
+          executionId: binding.executionId,
+          status: "verifying",
+        });
         decision = await binding.consult(candidate);
       } catch (err) {
         console.error(

@@ -409,6 +409,32 @@ describe("AIChatQueryEngine.submitMessage — T09 successor dispatch adoption", 
     expect(startManualMock).not.toHaveBeenCalled();
   });
 
+  it("G01-313: successor enrollment badges the owned `continuing` phase (not a fresh `active` turn)", async () => {
+    // A Continue/Retry successor resumes approved work under a new execution
+    // id — the badge must say continuing from enrollment (before the stream
+    // attaches), so the renderer never shows a fresh active turn for it.
+    flagMock.mockReturnValue(true);
+    const created = makeSuccessorBinding();
+    const emits: Array<{ type: string }> = [];
+    const { engine } = createEngineCapturingInput(() => {});
+    await engine.submitMessage({
+      request: makeSuccessorRequest(),
+      eventSink: { emit: (e: { type: string }) => emits.push(e) } as never,
+      successorContext: {
+        binding: created as never,
+        route: "task_best_effort",
+      },
+    } as never);
+    const states = emits.filter(
+      (e) => e.type === "task_execution_state"
+    ) as Array<{ executionId: string; status: string }>;
+    expect(
+      states.some(
+        (s) => s.executionId === "exec-successor-1" && s.status === "continuing"
+      )
+    ).toBe(true);
+  });
+
   it("T09 pre-stream failure: cancels the orphaned successor execution (no orphan active row) + emits a terminal error event", async () => {
     flagMock.mockReturnValue(true);
     const created = makeSuccessorBinding();
