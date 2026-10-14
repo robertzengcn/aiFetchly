@@ -2649,6 +2649,9 @@ export default {
         retry: "Retry",
         cancel: "Stop task",
       },
+      successor_reused:
+        "This task is already running; no new attempt was started.",
+      successor_error: "Could not start the task follow-up.",
       errors: {
         CRITERIA_SATISFIED: "All completion criteria were satisfied.",
         NO_PROGRESS: "The task made no further progress.",

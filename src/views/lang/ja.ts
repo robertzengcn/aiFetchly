@@ -2600,6 +2600,8 @@ export default {
         retry: "再試行",
         cancel: "タスクを停止",
       },
+      successor_reused: "このタスクはすでに実行中です。新しい試行は開始されませんでした。",
+      successor_error: "タスクのフォローアップを開始できませんでした。",
       errors: {
         CRITERIA_SATISFIED: "すべての完了条件が満たされました。",
         NO_PROGRESS: "タスクはこれ以上進展しませんでした。",

@@ -2649,6 +2649,9 @@ export default {
         retry: "Erneut versuchen",
         cancel: "Aufgabe stoppen",
       },
+      successor_reused:
+        "Diese Aufgabe wird bereits ausgeführt; es wurde kein neuer Versuch gestartet.",
+      successor_error: "Die Aufgabenfortsetzung konnte nicht gestartet werden.",
       errors: {
         CRITERIA_SATISFIED: "Alle Abschlusskriterien wurden erfüllt.",
         NO_PROGRESS: "Die Aufgabe machte keinen weiteren Fortschritt.",

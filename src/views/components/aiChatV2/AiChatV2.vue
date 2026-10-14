@@ -25,7 +25,10 @@
           size="x-small"
           variant="text"
           icon="mdi-play"
+          :loading="isTaskSuccessorLoading"
+          :disabled="isTaskSuccessorLoading"
           :aria-label="t('aiChatV2.taskExecution.actions.continue') || 'Continue'"
+          data-testid="task-continue-btn"
           @click="continueTaskExecution"
         />
         <v-btn
@@ -33,7 +36,10 @@
           size="x-small"
           variant="text"
           icon="mdi-refresh"
+          :loading="isTaskSuccessorLoading"
+          :disabled="isTaskSuccessorLoading"
           :aria-label="t('aiChatV2.taskExecution.actions.retry') || 'Retry'"
+          data-testid="task-retry-btn"
           @click="retryTaskExecution"
         />
         <v-btn
@@ -565,6 +571,18 @@
       data-testid="scheduled-permission-notice"
     >
       {{ scheduledPermissionNoticeText }}
+    </v-snackbar>
+
+    <!-- Continue/Retry successor feedback (FR-14): surfaces denied / conflict /
+         reused / error outcomes so the user is never left staring at a silent
+         badge after clicking Continue or Retry. -->
+    <v-snackbar
+      v-model="taskSuccessorNotice"
+      timeout="5000"
+      location="bottom"
+      data-testid="task-successor-notice"
+    >
+      {{ taskSuccessorNoticeText }}
     </v-snackbar>
 
     <v-dialog
@@ -1099,6 +1117,13 @@ const compactNotice = ref(false);
 // interactive tool permission — action-required, so it stays until dismissed.
 const scheduledPermissionNotice = ref(false);
 const scheduledPermissionNoticeText = ref("");
+// Continue/Retry successor UI state (FR-14): a shared in-flight flag disables
+// BOTH buttons while a successor IPC call is pending (prevents double-click
+// races that mint duplicate successors), and a snackbar surfaces non-created
+// outcomes (denied/conflict/reused/error) so the user always gets feedback.
+const isTaskSuccessorLoading = ref(false);
+const taskSuccessorNotice = ref(false);
+const taskSuccessorNoticeText = ref("");
 // Recoverable-history + incremental-compaction state (technical-design §13).
 const showHistoryDrawer = ref(false);
 /**
@@ -1939,13 +1964,38 @@ function attachSuccessorTurn(
   });
 }
 
+/** Surface Continue/Retry successor feedback so the user always knows the
+ * outcome of their click. `reused` = the occurrence was already enrolled (no
+ * new attempt started); `error` = the IPC handler rejected it (denied/conflict
+ * or an unexpected throw). The raw IPC error message is appended so the user
+ * sees the backend's reason (e.g. "Intent conflict") rather than a generic
+ * string. */
+function showTaskSuccessorNotice(
+  kind: "reused" | "error",
+  detail?: string
+): void {
+  const base =
+    kind === "reused"
+      ? t("aiChatV2.taskExecution.successor_reused") ||
+        "This task is already running; no new attempt was started."
+      : t("aiChatV2.taskExecution.successor_error") ||
+        "Could not start the task follow-up.";
+  taskSuccessorNoticeText.value = detail ? `${base} ${detail}` : base;
+  taskSuccessorNotice.value = true;
+}
+
 /** Continue an incomplete task: same lineage ledger, resurrected budget
  * (PRD FR-14, AC-27). Reuses the parent's frozen contract — never re-freezes
  * from renderer input. Renders as a normal assistant turn once the
  * continuation stream begins. */
-async function continueTaskExecution(): Promise<void> {  const parent = activeTaskExecution.value;
+async function continueTaskExecution(): Promise<void> {
+  const parent = activeTaskExecution.value;
   if (!parent) return;
+  // FR-14 guard: a successor IPC call is already in flight — refuse the
+  // re-entrant click instead of minting a second successor submissionId.
+  if (isTaskSuccessorLoading.value) return;
   const submissionId = crypto.randomUUID();
+  isTaskSuccessorLoading.value = true;
   try {
     const result = await continueTask({
       parentExecutionId: parent.executionId,
@@ -1971,6 +2021,12 @@ async function continueTaskExecution(): Promise<void> {  const parent = activeTa
         status: "continuing",
       };
       attachSuccessorTurn("continue", parent, submissionId, result.executionId);
+    } else {
+      // No new execution was created. `reused` means the occurrence was
+      // already enrolled (a prior in-flight click, or main-process dedup)
+      // — surface it so the click is not silently swallowed. Other null
+      // shapes are treated as an unavailable successor.
+      showTaskSuccessorNotice("reused");
     }
   } catch (err) {
     console.error("[AiChatV2] continueTask failed:", err);
@@ -1980,6 +2036,12 @@ async function continueTaskExecution(): Promise<void> {  const parent = activeTa
     // stuck on a spinning badge with no recourse. Restore the parent's
     // terminal state so the actions become available again.
     activeTaskExecution.value = parent;
+    // windowInvoke throws on status:false (denied/conflict) — surface the
+    // reason so the user knows why nothing started, instead of a silent
+    // console-only error.
+    showTaskSuccessorNotice("error", err instanceof Error ? err.message : String(err));
+  } finally {
+    isTaskSuccessorLoading.value = false;
   }
 }
 
@@ -1988,6 +2050,9 @@ async function continueTaskExecution(): Promise<void> {  const parent = activeTa
 async function retryTaskExecution(): Promise<void> {
   const parent = activeTaskExecution.value;
   if (!parent) return;
+  // FR-14 guard: same re-entrancy guard as Continue — a successor IPC call
+  // is already in flight, so refuse the duplicate click.
+  if (isTaskSuccessorLoading.value) return;
   const submissionId = crypto.randomUUID();
   // B10: a retry on a still-running parent must first abandon it —
   // otherwise the parent's live chunks interleave with the successor's on
@@ -1997,6 +2062,7 @@ async function retryTaskExecution(): Promise<void> {
   if (parent.status !== "terminal") {
     stopChatV2Stream(parent.conversationId);
   }
+  isTaskSuccessorLoading.value = true;
   try {
     const result = await retryTask({
       parentExecutionId: parent.executionId,
@@ -2015,6 +2081,10 @@ async function retryTaskExecution(): Promise<void> {
         status: "resolving",
       };
       attachSuccessorTurn("retry", parent, submissionId, result.executionId);
+    } else {
+      // `reused` (already enrolled occurrence) or null — surface it so the
+      // click is not silently swallowed.
+      showTaskSuccessorNotice("reused");
     }
   } catch (err) {
     console.error("[AiChatV2] retryTask failed:", err);
@@ -2023,6 +2093,11 @@ async function retryTaskExecution(): Promise<void> {
     // buttons (gated on status === 'terminal') never reappear, leaving
     // the user stuck on a spinning badge.
     activeTaskExecution.value = parent;
+    // windowInvoke throws on status:false (denied/conflict) — surface the
+    // reason so the user knows why nothing started.
+    showTaskSuccessorNotice("error", err instanceof Error ? err.message : String(err));
+  } finally {
+    isTaskSuccessorLoading.value = false;
   }
 }
 

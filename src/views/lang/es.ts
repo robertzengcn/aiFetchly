@@ -2659,6 +2659,9 @@ export default {
         retry: "Reintentar",
         cancel: "Detener tarea",
       },
+      successor_reused:
+        "Esta tarea ya se está ejecutando; no se inició un nuevo intento.",
+      successor_error: "No se pudo iniciar la continuación de la tarea.",
       errors: {
         CRITERIA_SATISFIED: "Se cumplieron todos los criterios de finalización.",
         NO_PROGRESS: "La tarea no hizo más progreso.",

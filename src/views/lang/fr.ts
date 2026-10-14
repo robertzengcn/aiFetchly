@@ -2640,6 +2640,9 @@ export default {
         retry: "Réessayer",
         cancel: "Arrêter la tâche",
       },
+      successor_reused:
+        "Cette tâche est déjà en cours d'exécution ; aucune nouvelle tentative n'a été lancée.",
+      successor_error: "Impossible de démarrer la suite de la tâche.",
       errors: {
         CRITERIA_SATISFIED: "Tous les critères d'achèvement étaient satisfaits.",
         NO_PROGRESS: "La tâche n'a pas progressé davantage.",

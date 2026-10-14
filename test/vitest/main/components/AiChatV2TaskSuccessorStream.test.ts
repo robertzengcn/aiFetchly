@@ -7,7 +7,6 @@ import {
   streamChatV2Message,
   attachChatV2SuccessorStream,
 } from "@/views/api/aiChatV2";
-import { continueTask, retryTask } from "@/views/api/aiChatTaskExecution";
 import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
 
 /**
@@ -197,6 +196,9 @@ const i18n = createI18n({
             retry: "Retry",
             cancel: "Stop task",
           },
+          successor_reused:
+            "This task is already running; no new attempt was started.",
+          successor_error: "Could not start the task follow-up.",
         },
       },
     },
@@ -249,7 +251,15 @@ function mountChat() {
         ScheduledLoopToolApprovalDialog: true,
         AIConversationReportButton: true,
         VBtn: {
-          template: `<button v-bind="$attrs"><slot /></button>`,
+          props: ["loading", "disabled"],
+          // Mirror loading onto disabled so tests can assert the in-flight
+          // state via the native disabled attribute (Vuetify does the same).
+          computed: {
+            isDisabled() {
+              return this.disabled || this.loading;
+            },
+          },
+          template: `<button :disabled="isDisabled" v-bind="$attrs"><slot /></button>`,
         },
         VAlert: true,
         VCard: true,
@@ -268,7 +278,10 @@ function mountChat() {
         VProgressLinear: true,
         VSelect: true,
         VSheet: true,
-        VSnackbar: true,
+        VSnackbar: {
+          props: ["modelValue"],
+          template: `<div v-show="modelValue" data-testid="v-snackbar"><slot /></div>`,
+        },
         VSpacer: true,
         VTextField: true,
         VTooltip: true,
@@ -563,3 +576,114 @@ describe("AiChatV2 B10 successor turn rendering + correlation", () => {
     expect(badge(wrapper).attributes("data-outcome")).toBe("verified_complete");
   });
 });
+
+/**
+ * Continue/Retry successor UI safety (FR-14): the two-time-offender bug was
+ * that neither button had loading/disabled guards (a double-click minted two
+ * successor submissionIds) and denied/conflict/reused outcomes were swallowed
+ * with only a console.error — the user saw a spinning badge with no recourse
+ * and no feedback. These tests lock the loading guard + snackbar feedback.
+ */
+describe("AiChatV2 Continue/Retry loading guard + successor feedback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    continueTaskMock.mockResolvedValue({ executionId: "exec-B", status: "created" });
+    retryTaskMock.mockResolvedValue({ executionId: "exec-B", status: "created" });
+  });
+
+  function successorNotice(wrapper: ReturnType<typeof mountChat>) {
+    return wrapper.find('[data-testid="task-successor-notice"]');
+  }
+
+  it("Continue surfaces a snackbar when the occurrence was reused (no new attempt)", async () => {
+    continueTaskMock.mockResolvedValue({ executionId: null, status: "reused" });
+    const wrapper = mountChat();
+    await flushPromises();
+    const streams = captureStreams();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+    completeStreamA(streams[0]);
+    await flushPromises();
+    await clickContinue(wrapper);
+
+    // No successor attached — the reused result must not call attach.
+    expect(attachSuccessorMock).not.toHaveBeenCalled();
+    // The notice is shown with the reused feedback text.
+    expect(successorNotice(wrapper).exists()).toBe(true);
+    expect(successorNotice(wrapper).text()).toContain("already running");
+    // Badge restored to the parent terminal state (not left spinning).
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+  });
+
+  it("Retry surfaces a snackbar with the backend reason when the IPC handler denies (status:false)", async () => {
+    retryTaskMock.mockRejectedValue(new Error("Intent conflict in flight"));
+    const wrapper = mountChat();
+    await flushPromises();
+    const streams = captureStreams();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+    completeStreamA(streams[0]);
+    await flushPromises();
+
+    const retryBtn = wrapper
+      .findAll("button[aria-label]")
+      .find((b) => b.attributes("aria-label") === "Retry");
+    expect(retryBtn).toBeDefined();
+    await retryBtn!.trigger("click");
+    await flushPromises();
+
+    expect(attachSuccessorMock).not.toHaveBeenCalled();
+    expect(successorNotice(wrapper).text()).toContain("Could not start");
+    expect(successorNotice(wrapper).text()).toContain("Intent conflict");
+    // Parent terminal state restored so the actions reappear.
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+  });
+
+  it("Continue disables both buttons while the IPC call is in flight (no double-click)", async () => {
+    // Never-resolve keeps the call pending so we can observe the in-flight state.
+    continueTaskMock.mockReturnValue(new Promise(() => undefined));
+    const wrapper = mountChat();
+    await flushPromises();
+    const streams = captureStreams();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+    completeStreamA(streams[0]);
+    await flushPromises();
+
+    const continueBtn = wrapper.find('[data-testid="task-continue-btn"]');
+    const retryBtn = wrapper.find('[data-testid="task-retry-btn"]');
+    expect(continueBtn.exists()).toBe(true);
+    expect(retryBtn.exists()).toBe(true);
+
+    await continueBtn.trigger("click");
+    await flushPromises();
+
+    // While in flight: BOTH buttons are disabled (shared loading flag).
+    expect(continueBtn.attributes("disabled")).toBeDefined();
+    expect(retryBtn.attributes("disabled")).toBeDefined();
+  });
+
+  it("a re-entrant Continue click while loading is refused (no second successor)", async () => {
+    const pending = new Promise<{ executionId: string; status: string }>(() => undefined);
+    continueTaskMock.mockReturnValue(pending);
+    const wrapper = mountChat();
+    await flushPromises();
+    const streams = captureStreams();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+    completeStreamA(streams[0]);
+    await flushPromises();
+
+    const continueBtn = wrapper.find('[data-testid="task-continue-btn"]');
+    await continueBtn.trigger("click");
+    await flushPromises();
+    const callsAfterFirst = continueTaskMock.mock.calls.length;
+    expect(callsAfterFirst).toBe(1);
+
+    // Second click while still loading: the guard returns early — no new IPC call.
+    await continueBtn.trigger("click");
+    await flushPromises();
+    expect(continueTaskMock.mock.calls.length).toBe(1);
+  });
+});
+

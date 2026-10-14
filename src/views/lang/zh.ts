@@ -2512,6 +2512,8 @@ export default {
         retry: "重试",
         cancel: "停止任务",
       },
+      successor_reused: "该任务已在运行，未启动新的尝试。",
+      successor_error: "无法启动任务后续操作。",
       errors: {
         CRITERIA_SATISFIED: "所有完成条件均已满足。",
         NO_PROGRESS: "任务未取得进一步进展。",
