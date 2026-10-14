@@ -166,11 +166,24 @@ export function buildEvidenceService(deps: {
     targetId: string
   ): Promise<OperationReceipt | null> => {
     try {
-      const op = await deps.operationModule.getOperation(
+      const direct = await deps.operationModule.getOperation(
         deriveOperationKey(executionId, targetId)
       );
-      if (!op) return null;
-      return { state: op.operation_state };
+      if (direct) return { state: direct.operation_state };
+      // B19 (FR-02/03/11/19, AC-09): the compiler emits free-text target
+      // slugs ("send-weekly-report") while the guard writes volatile keys
+      // ("op:<exec>:outbound_batch:11"), so exact-key lookup always misses
+      // for compiler-derived criteria. Fall back to the execution-scoped
+      // singleton: with exactly ONE operation row in this execution the
+      // linkage is unambiguous (guard rows are send-dispatch rows). Zero
+      // or 2+ rows stay unlinked — linking either could cite the wrong
+      // send, so fail closed to null → unknown → unmet.
+      const rows = await deps.operationModule.listOperationsByExecution(
+        executionId,
+        50
+      );
+      if (rows.length !== 1) return null;
+      return { state: rows[0].operation_state };
     } catch {
       return null;
     }

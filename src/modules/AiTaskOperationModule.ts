@@ -41,6 +41,19 @@ export class AiTaskOperationModule extends BaseModule {
   }
 
   /**
+   * B19: list an execution's operation rows for the evidence singleton
+   * fallback — passthrough to the model's bounded `execution_id`-indexed
+   * query.
+   */
+  async listOperationsByExecution(
+    executionId: string,
+    limit = 50
+  ): Promise<AiTaskOperationEntity[]> {
+    await this.ensureConnection();
+    return this.model.listOperationsByExecution(executionId, limit);
+  }
+
+  /**
    * §10.2 cross-execution unresolved lookup — passthrough to the model query.
    */
   async findUnresolvedByIntent(input: {

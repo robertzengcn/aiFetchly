@@ -44,6 +44,7 @@ const {
   getExecutionMock,
   mergeEvidenceCasMock,
   getOperationMock,
+  listOperationsByExecutionMock,
   countSearchResultMock,
   countSearchResultSinceMock,
   findLatestSearchResultSinceMock,
@@ -55,6 +56,7 @@ const {
   getExecutionMock: vi.fn(),
   mergeEvidenceCasMock: vi.fn(),
   getOperationMock: vi.fn(),
+  listOperationsByExecutionMock: vi.fn().mockResolvedValue([]),
   countSearchResultMock: vi.fn(),
   countSearchResultSinceMock: vi.fn(),
   findLatestSearchResultSinceMock: vi.fn(),
@@ -76,7 +78,10 @@ vi.mock("@/modules/AiTaskExecutionModule", () => ({
 
 vi.mock("@/modules/AiTaskOperationModule", () => ({
   AiTaskOperationModule: vi.fn().mockImplementation(function () {
-    return { getOperation: getOperationMock };
+    return {
+      getOperation: getOperationMock,
+      listOperationsByExecution: listOperationsByExecutionMock,
+    };
   }),
 }));
 
@@ -302,6 +307,58 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     expect(result2.passedCriterionIds).toEqual([]);
     expect(result2.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B19a: operationReceiptProvider links a lone execution send despite a non-matching compiler slug", async () => {
+    // The compiler emits a free-text slug ("send-weekly-report") while the
+    // guard writes volatile keys ("op:exec:outbound_batch:11"), so the exact
+    // key derivation always misses. With exactly ONE operation row in the
+    // execution, the provider links it (guard rows are send-dispatch rows;
+    // a singleton cannot be the wrong send).
+    getOperationMock.mockResolvedValue(null);
+    listOperationsByExecutionMock.mockResolvedValue([
+      {
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "completed",
+        claim_generation: 2,
+        receipt_reference: "attempt:7",
+      },
+    ]);
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.operationReceiptProvider("send-weekly-report");
+    expect(receipt).toEqual({ state: "completed" });
+    expect(listOperationsByExecutionMock).toHaveBeenCalledWith("exec-factory-1", 50);
+  });
+
+  it("B19a: zero or ambiguous execution sends stay unlinked (fail-closed)", async () => {
+    const build = async () =>
+      buildEvidenceService({
+        executionId: "exec-factory-1",
+        execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+        operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+        searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+        contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      });
+    // Zero rows → null (nothing to link).
+    getOperationMock.mockResolvedValue(null);
+    listOperationsByExecutionMock.mockResolvedValue([]);
+    expect(await (await build()).operationReceiptProvider("send-email")).toBeNull();
+    // Two rows → null (ambiguous: linking either could cite the wrong send).
+    listOperationsByExecutionMock.mockResolvedValue([
+      { operation_key: "op:exec-factory-1:outbound_batch:11", operation_state: "completed" },
+      { operation_key: "op:exec-factory-1:outbound_batch:22", operation_state: "accepted" },
+    ]);
+    expect(await (await build()).operationReceiptProvider("send-email")).toBeNull();
   });
 
   it("checkerDispatch: calls openAIChatCompletion with max_tokens 256 temperature 0; §8.2 JSON → qualitative pass (T04)", async () => {

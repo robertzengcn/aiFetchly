@@ -194,6 +194,28 @@ export class AiTaskOperationModel extends BaseDb {
   }
 
   /**
+   * B19 (FR-02/03/11/19, AC-09): list an execution's operation rows, oldest
+   * first, bounded. Backs the evidence provider's singleton fallback: the
+   * compiler emits free-text target slugs that never equal the guard's
+   * volatile operation keys, so exact-key lookup always misses for
+   * compiler-derived criteria. With exactly ONE row in the execution the
+   * linkage is unambiguous (guard rows are send-dispatch rows); zero or
+   * 2+ rows stay unlinked (fail-closed — linking either could cite the
+   * wrong send). Backed by the `execution_id` index.
+   */
+  async listOperationsByExecution(
+    executionId: string,
+    limit = 50
+  ): Promise<AiTaskOperationEntity[]> {
+    assertNotWorker("AiTaskOperation.listOperationsByExecution");
+    return this.repository.find({
+      where: { execution_id: executionId },
+      order: { id: "ASC" },
+      take: limit,
+    });
+  }
+
+  /**
    * §10.2 cross-execution unresolved-operations lookup: any prior operation
    * for the same domain intent (tool + target, or the same intent hash) that
    * has not reached a terminal state. `unknown` rows are the critical case —
