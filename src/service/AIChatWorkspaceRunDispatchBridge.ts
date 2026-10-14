@@ -56,6 +56,16 @@ export interface WorkspaceRunDispatchBridge {
   /** Parked (permission/plan) run: running -> awaiting_user. */
   parkRun(runId: string | null): Promise<void>;
   /**
+   * Parked with the correct waiting family (B04): permission pauses use
+   * `awaiting_permission`, plan-question pauses use `awaiting_user`.
+   * Indiscriminately recording every wait as `awaiting_user` mislabels
+   * permission attention in Activity/reconstruction.
+   */
+  parkRunWaiting(
+    runId: string | null,
+    waiting: "awaiting_permission" | "awaiting_user"
+  ): Promise<void>;
+  /**
    * Admit a previously deferred (queued) envelope after capacity frees.
    * Returns true when the run is now running. Idempotent.
    */
@@ -181,11 +191,18 @@ export class AIChatWorkspaceRunDispatchBridge
   }
 
   async parkRun(runId: string | null): Promise<void> {
+    return this.parkRunWaiting(runId, "awaiting_user");
+  }
+
+  async parkRunWaiting(
+    runId: string | null,
+    waiting: "awaiting_permission" | "awaiting_user"
+  ): Promise<void> {
     if (!runId) return;
     try {
       const row = await this.runModule.getByRunId(runId);
       if (!row || row.status !== "running") return;
-      await this.runModule.transition(runId, "awaiting_user");
+      await this.runModule.transition(runId, waiting);
     } catch {
       // best-effort; the resume path reconciles via its own transitions
     } finally {

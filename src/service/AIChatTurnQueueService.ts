@@ -108,6 +108,11 @@ export interface AIChatTurnQueueServiceDeps {
     releaseToQueued?(runId: string | null): Promise<void>;
     /** Parked (permission/plan) run: running -> awaiting_*. */
     parkRun?(runId: string | null): Promise<void>;
+    /** B04: park with the correct waiting family (permission vs question). */
+    parkRunWaiting?(
+      runId: string | null,
+      waiting: "awaiting_permission" | "awaiting_user"
+    ): Promise<void>;
     /** Re-admit a deferred envelope after capacity frees (B02). */
     admitDeferred?(runId: string | null): Promise<boolean>;
     /** Remove a deferred envelope from admission (cancel path, B02). */
@@ -212,6 +217,17 @@ export class AIChatTurnQueueService {
    * and scheduler entirely — they never become runs).
    */
   private readonly schedulerDeferred = new Set<string>();
+  /**
+   * B04: parked-run continuation mapping. When a dispatch parks on
+   * permission/question, the engine turn continues OUTSIDE the queue
+   * (fire-and-forget resume); its later terminal arrives via
+   * notifyExternalTurnTerminal, which must settle THIS run envelope
+   * (not a new one) and release lease/capacity exactly once.
+   */
+  private readonly parkedRuns = new Map<
+    string,
+    { runId: string; pendingMessageId: string }
+  >();
 
   constructor(private readonly deps: AIChatTurnQueueServiceDeps) {}
 
@@ -483,11 +499,23 @@ export class AIChatTurnQueueService {
    * turn (design §9.3 — the terminal re-drain contract); cancelled/failed
    * terminals hold the queue exactly like a queue-owned turn terminal would
    * (FR-14 durable pause). No-ops when the conversation has no pending rows.
+   *
+   * B04: when this conversation parked a queue-dispatched run (permission /
+   * plan question), the resumed turn's terminal settles THAT envelope here —
+   * without this, Activity/reconstruction shows `awaiting_user` forever
+   * after the actual execution ended. Exactly one terminal per parked run;
+   * lease/capacity were already released at park time.
    */
   async notifyExternalTurnTerminal(
     conversationId: string,
     outcome: "completed" | "cancelled" | "failed"
   ): Promise<void> {
+    const parked = this.parkedRuns.get(conversationId);
+    if (parked) {
+      this.parkedRuns.delete(conversationId);
+      await this.deps.dispatchBridge?.finishRun(parked.runId, outcome);
+      this.drainSchedulerWaiters(conversationId);
+    }
     const rows = await this.deps.pendingModule.listViews(conversationId);
     if (rows.length === 0) return;
     if (outcome === "completed") {
@@ -536,6 +564,14 @@ export class AIChatTurnQueueService {
   /** Clear one conversation: stop runtime, drop pending rows + bytes. */
   async clearConversation(conversationId: string): Promise<void> {
     this.deps.engine.stopActiveTurn(conversationId);
+    // B04: settle a parked envelope as cancelled so it never stays stale
+    // `awaiting_*` after its rows are dropped.
+    const parked = this.parkedRuns.get(conversationId);
+    if (parked) {
+      this.parkedRuns.delete(conversationId);
+      await this.deps.dispatchBridge?.finishRun(parked.runId, "cancelled");
+    }
+    this.schedulerDeferred.delete(conversationId);
     const views = await this.deps.pendingModule.listViews(conversationId);
     await this.deps.pendingModule.clearConversation(conversationId);
     for (const view of views) {
@@ -813,7 +849,26 @@ export class AIChatTurnQueueService {
         // Parked turns keep their envelope in the waiting family (§9.1) so
         // the resume path continues the SAME run. parkRun releases global
         // capacity (the run is waiting, not executing) and waiters drain.
-        await bridge?.parkRun?.(bridgeRunId?.runId ?? null);
+        // B04: use the correct waiting status (permission vs question) and
+        // retain the run/pending continuation mapping so the resumed turn's
+        // later terminal (via notifyExternalTurnTerminal) settles THIS
+        // envelope instead of leaving it stale.
+        const waiting =
+          terminal.type === "paused_for_permission"
+            ? ("awaiting_permission" as const)
+            : ("awaiting_user" as const);
+        const bridgeRunIdValue = bridgeRunId?.runId ?? null;
+        if (bridge?.parkRunWaiting) {
+          await bridge.parkRunWaiting(bridgeRunIdValue, waiting);
+        } else {
+          await bridge?.parkRun?.(bridgeRunIdValue);
+        }
+        if (bridgeRunIdValue) {
+          this.parkedRuns.set(conversationId, {
+            runId: bridgeRunIdValue,
+            pendingMessageId: row.pendingMessageId,
+          });
+        }
         await this.holdQueue(conversationId, terminal.type);
         this.drainSchedulerWaiters(conversationId);
         return;
