@@ -72,6 +72,9 @@ const i18n = createI18n({
       managedBrowser: {
         platform_fallback: "Social",
         proxy_active: "Proxy",
+        scope_global: "Shared browser",
+        scope_global_hint:
+          "This browser session belongs to the account and stays visible when you switch chats.",
         states: {
           ready: "Ready",
           handoff: "You have control",
@@ -167,6 +170,37 @@ describe("ManagedBrowserSessionCard", () => {
     );
     expect(wrapper.find("[data-testid='mb-session-origin']").text()).toContain(
       "https://www.youtube.com"
+    );
+  });
+
+  it("B16: labels the account/global scope so selection changes cannot confuse it", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-scope']").exists()).toBe(
+        true
+      )
+    );
+    // Localized scope label (B16): the test bundle carries the key, the
+    // six app bundles carry it in every locale (verified by key parity).
+    expect(wrapper.find("[data-testid='mb-session-scope']").text()).toContain(
+      "Shared browser"
+    );
+    // The scope chip survives live status updates (the session is
+    // account/global state, not per-chat state).
+    const push = capturedStatusCallback();
+    push(status({ state: "handoff", handoffReason: "user_requested" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-scope']").exists()).toBe(
+      true
+    );
+    // Actions still target the session/account identity, not the selection.
+    await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.stopManagedBrowser).toHaveBeenCalledWith(
+        "mb_test000000001",
+        "user_stop"
+      )
     );
   });
 

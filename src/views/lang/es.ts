@@ -4008,6 +4008,9 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Cuenta desconocida",
     proxy_active: "Proxy",
+    scope_global: "Navegador compartido",
+    scope_global_hint:
+      "Esta sesión del navegador pertenece a la cuenta y sigue visible al cambiar de chat.",
     screenshot: {
       capture: "Actualizar miniatura",
       alt: "Última captura del navegador",

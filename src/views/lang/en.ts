@@ -3975,6 +3975,9 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Unknown account",
     proxy_active: "Proxy",
+    scope_global: "Shared browser",
+    scope_global_hint:
+      "This browser session belongs to the account and stays visible when you switch chats.",
     screenshot: {
       capture: "Refresh thumbnail",
       alt: "Latest browser screenshot",

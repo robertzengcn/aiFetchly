@@ -3782,6 +3782,8 @@ export default {
     platform_fallback: "社交",
     unknown_account: "未知账号",
     proxy_active: "代理",
+    scope_global: "共享浏览器",
+    scope_global_hint: "此浏览器会话属于该账号，切换对话时仍保持可见。",
     screenshot: {
       capture: "刷新缩略图",
       alt: "最新浏览器截图",

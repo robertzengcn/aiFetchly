@@ -3995,6 +3995,9 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Compte inconnu",
     proxy_active: "Proxy",
+    scope_global: "Navigateur partagé",
+    scope_global_hint:
+      "Cette session de navigation appartient au compte et reste visible quand vous changez de conversation.",
     screenshot: {
       capture: "Actualiser la miniature",
       alt: "Dernière capture du navigateur",

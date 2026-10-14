@@ -25,6 +25,14 @@
         {{ t(`managedBrowser.states.${status.state}`) || status.state }}
       </span>
       <span
+        class="mb-session-card__scope"
+        data-testid="mb-session-scope"
+        :title="t('managedBrowser.scope_global_hint') || ''"
+      >
+        <v-icon size="x-small" aria-hidden="true">mdi-earth</v-icon>
+        {{ t("managedBrowser.scope_global") || "Shared browser" }}
+      </span>
+      <span
         v-if="elapsedLabel"
         class="mb-session-card__elapsed"
         data-testid="mb-session-header-elapsed"
@@ -634,6 +642,18 @@ onBeforeUnmount(() => {
   font-size: 0.75rem;
   color: #546e7a;
   border: 1px solid rgba(84, 110, 122, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.mb-session-card__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
   border-radius: 999px;
   padding: 1px 6px;
   white-space: nowrap;
