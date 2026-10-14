@@ -552,6 +552,101 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     expect(losers[0]?.reasonCode).to.equal("OPERATION_UNRESOLVED_EARLIER");
   });
 
+  it("B18a: uncertain send blocks the same effect under new batch/message provenance (FR-11, AC-10)", async () => {
+    // Same authorized effect (stableEffectId S), first attempt settles
+    // unknown. An equivalent request minting a NEW batch target must remain
+    // blocked pending reconciliation — fresh provenance must not evade its
+    // own unknown send.
+    const firstDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:11",
+      stableEffectId: "send-effect:S",
+    };
+    const retryDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:22",
+      stableEffectId: "send-effect:S",
+    };
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(firstDesc);
+    expect(first.allowed).to.equal(true);
+    await guard.settleDispatch({
+      descriptor: firstDesc,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "unknown",
+    });
+    // Same execution, new batch provenance → still blocked.
+    const sameExecRetry = await guard.prepareDispatch(retryDesc);
+    expect(sameExecRetry.allowed).to.equal(false);
+    expect(sameExecRetry.reasonCode).to.equal("OPERATION_UNKNOWN_OUTCOME");
+    // Different execution/conversation, same effect → fenced as earlier.
+    const otherExec = await guardFor(store, "exec-B").prepareDispatch(
+      retryDesc
+    );
+    expect(otherExec.allowed).to.equal(false);
+    expect(otherExec.reasonCode).to.equal("OPERATION_UNRESOLVED_EARLIER");
+  });
+
+  it("B18b: confirmed send leaves equivalent new-provenance requests to native authority (FR-11, AC-09)", async () => {
+    // Once the earlier attempt settles confirmed, the guard no longer
+    // phantom-blocks the same effect under new provenance — the native
+    // batch claim (already_processed) is the authority against double-send.
+    const firstDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:11",
+      stableEffectId: "send-effect:S",
+    };
+    const retryDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:22",
+      stableEffectId: "send-effect:S",
+    };
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(firstDesc);
+    await guard.settleDispatch({
+      descriptor: firstDesc,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "confirmed",
+      receiptReference: "attempt:3",
+    });
+    const retry = await guard.prepareDispatch(retryDesc);
+    expect(retry.allowed).to.equal(true);
+  });
+
+  it("B18c: different effect on a different target is not fenced (no over-block)", async () => {
+    // Same execution, first effect S1 settles unknown on batch:11. A
+    // DIFFERENT effect S2 on a DIFFERENT target (batch:99) shares neither
+    // key nor hash with the unknown row, so the fence must not collide.
+    // (The same target with a changed effect stays fail-closed at the
+    // stable-key INTENT_CONFLICT check — one authorization, one effect.)
+    const firstDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:11",
+      stableEffectId: "send-effect:S1",
+    };
+    const otherDesc: OperationGuardDescriptor = {
+      ...SEND_DESCRIPTOR,
+      domainTarget: "outbound_batch:99",
+      stableEffectId: "send-effect:S2",
+    };
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(firstDesc);
+    expect(first.allowed).to.equal(true);
+    await guard.settleDispatch({
+      descriptor: firstDesc,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "unknown",
+    });
+    const other = await guard.prepareDispatch(otherDesc);
+    expect(other.allowed).to.equal(true);
+  });
+
   it("D3: settle reads the CURRENT claim generation (survives a crashed dispatched stamp)", async () => {
     // Pre-D3 wedge: the two-step settle stamped dispatched at
     // input.claimGeneration then outcome at input.claimGeneration+1. A crash

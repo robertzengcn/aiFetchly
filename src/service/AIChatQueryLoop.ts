@@ -136,6 +136,7 @@ import {
 } from "@/entityTypes/hookTypes";
 import {
   TaskOperationGuard,
+  stableEffectIdentity,
   type OperationGuardDescriptor,
   type OperationGuardDeps,
 } from "@/service/aiTaskExecution/TaskOperationGuard";
@@ -1563,6 +1564,19 @@ export class AIChatQueryLoop {
     input: AIChatQueryLoopInput,
     toolArguments: Readonly<Record<string, unknown>>
   ): OperationGuardDescriptor {
+    // B18 (FR-11/24, AC-10/28): the fence identity is the STABLE authorized
+    // effect (tool + allowlisted stable fields) while the operation key
+    // keeps the volatile authorization provenance (batch/message IDs). An
+    // uncertain send therefore stays fenced across a new batch, message, or
+    // conversation; the native batch claim remains the authority for
+    // distinguishing genuinely recurring sends once earlier outcomes settle.
+    const intentFields = [
+      "service_ids",
+      "template_ids",
+      "filter_ids",
+      "not_duplicate",
+      "email_search_task_id",
+    ];
     return {
       toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
       domainTarget:
@@ -1571,14 +1585,13 @@ export class AIChatQueryLoop {
           : input.sourceUserMessageId
             ? `outbound_direct:${input.sourceUserMessageId}`
             : null,
-      intentFields: [
-        "service_ids",
-        "template_ids",
-        "filter_ids",
-        "not_duplicate",
-        "email_search_task_id",
-      ],
+      intentFields,
       intentArguments: toolArguments,
+      stableEffectId: stableEffectIdentity({
+        toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
+        intentFields,
+        intentArguments: toolArguments,
+      }),
     };
   }
 

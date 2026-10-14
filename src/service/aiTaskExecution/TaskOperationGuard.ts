@@ -49,9 +49,19 @@ export function computeIntentHash(input: {
   readonly intentArguments?: Readonly<Record<string, unknown>>;
   /** Explicit allowlist of stable argument names to include in the hash. */
   readonly intentFields?: readonly string[];
+  /**
+   * B18 (FR-11/24, AC-10/28): stable authorized domain-effect identity.
+   * When present it replaces the volatile `domainTarget` (per-batch /
+   * per-message authorization provenance) in the hashed identity, so an
+   * uncertain send remains fenced across a new batch, message, or
+   * conversation. The volatile target stays on the operation KEY (row
+   * separation + provenance); only the fence identity is stabilized.
+   * Absent for non-send tools — the hash is then byte-identical to before.
+   */
+  readonly stableEffectId?: string;
 }): string {
   const parts: string[] = [`tool:${input.toolIdentity}`];
-  parts.push(`target:${input.domainTarget}`);
+  parts.push(`target:${input.stableEffectId ?? input.domainTarget}`);
   if (input.intentFields && input.intentFields.length > 0) {
     const args = input.intentArguments ?? {};
     for (const field of [...input.intentFields].sort()) {
@@ -73,6 +83,30 @@ function canonicalValue(value: unknown): string {
   );
 }
 
+/**
+ * B18 (FR-11/24, AC-10/28): canonical stable authorized domain-effect
+ * identity for a consequential dispatch. Covers ONLY the trusted tool
+ * identity + the allowlisted stable intent shape — never volatile
+ * authorization provenance (batch/message IDs), timestamps, credentials,
+ * or raw sensitive data (recipient addresses, bodies). Two dispatches
+ * with the same output here are the same domain effect even across a new
+ * batch, message, or conversation; different outputs are different
+ * effects even on the same batch target.
+ */
+export function stableEffectIdentity(input: {
+  readonly toolIdentity: string;
+  readonly intentFields?: readonly string[];
+  readonly intentArguments?: Readonly<Record<string, unknown>>;
+}): string {
+  const parts: string[] = [`tool:${input.toolIdentity}`];
+  for (const field of [...(input.intentFields ?? [])].sort()) {
+    const value = input.intentArguments?.[field];
+    if (value === undefined) continue;
+    parts.push(`${field}:${canonicalValue(value)}`);
+  }
+  return parts.join("|");
+}
+
 /** Why the guard refused a dispatch. */
 export type OperationGuardBlockReasonCode =
   | "OPERATION_UNKNOWN_OUTCOME"
@@ -92,6 +126,13 @@ export interface OperationGuardDescriptor {
   readonly intentFields?: readonly string[];
   /** Full arguments (only the allowlisted fields are hashed). */
   readonly intentArguments?: Readonly<Record<string, unknown>>;
+  /**
+   * B18: stable authorized domain-effect identity (see
+   * {@link stableEffectIdentity}). Replaces the volatile `domainTarget` in
+   * the intent hash so the uncertainty fence survives a new batch, message,
+   * or conversation. The volatile target remains on the operation key.
+   */
+  readonly stableEffectId?: string;
 }
 
 export interface OperationGuardDecision {
@@ -272,6 +313,7 @@ export class TaskOperationGuard {
       domainTarget: descriptor.domainTarget ?? "none",
       intentArguments: descriptor.intentArguments,
       intentFields: descriptor.intentFields,
+      stableEffectId: descriptor.stableEffectId,
     });
     const domainTarget = descriptor.domainTarget;
 
@@ -296,6 +338,27 @@ export class TaskOperationGuard {
         reason:
           "An earlier operation with the same intent has an unresolved outcome. " +
           "Reconciliation is required before dispatching this intent again.",
+      };
+    }
+
+    // 1b. Own-execution same-effect fence (B18): an unresolved row for the
+    // same intent hash in THIS execution blocks blind replay even when it
+    // sits under a different authorization target (new batch/message for
+    // the same authorized effect). The stable receipt/occurrence checks
+    // below only read this dispatch's own target key; without this step a
+    // retry minting fresh provenance would evade its own unknown send.
+    const ownUnresolvedSameEffect = unresolved.find(
+      (op) =>
+        op.execution_id === this.executionId &&
+        op.intent_hash === intentHash
+    );
+    if (ownUnresolvedSameEffect) {
+      return {
+        allowed: false,
+        reasonCode: "OPERATION_UNKNOWN_OUTCOME",
+        reason:
+          "An earlier dispatch of this authorized effect has an unresolved outcome. " +
+          "Reconciliation is required before dispatching it again.",
       };
     }
 
