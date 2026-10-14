@@ -90,7 +90,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B03 — Evidence counts and observations are not target/execution scoped [P1; confidence 10/10; factory probe]
 
-- [ ] Resolve criteria through trusted domain adapters with target, qualification, uniqueness, execution attribution and approved cumulative/lineage scope.
+- [x] Resolve criteria through trusted domain adapters with target, qualification, uniqueness, execution attribution and approved cumulative/lineage scope. *(done 2026-10-14, commit `0e464f741`: target→keyword attribution with subset filtering; contacts/results kind gate; row-bound observation refs; lineage-root window for counts with own-window observations; unmatchable no-task targets fail closed. Residual (documented): same-task opaque-slug concurrency needs row-level execution linkage — schema + pipeline follow-up. Tests: 7/7 factory incl. stash-verified red + 6/6 real-SQLite JOIN.)*
 
 **Location:** `src/service/aiTaskExecution/EvidenceProviderFactory.ts:142–155, 186–217`.
 
@@ -102,7 +102,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B04 — Checker cites criterion IDs instead of actual supporting evidence [P1; confidence 10/10; reproduced]
 
-- [ ] Collect admissible evidence before checking and validate verdict references against that supplied evidence set.
+- [x] Collect admissible evidence before checking and validate verdict references against that supplied evidence set. *(done 2026-10-14, commit `4658ab9af`: bounded deliverable-text record materialized pre-dispatch with deterministic (criterion, execution, content-hash) id; prompt advertises only that id; citation violations become entry-unknown; service revalidates against the recomputed set and downgrades unsupported passes. Checker structurally cannot override deterministic adapters (kind-routed evaluators). Tests: 4/4 B04 incl. stash-verified red + 142/142 across evidence suites.)*
 
 **Location:** `src/service/aiTaskExecution/criteriaAdapters.ts:567, 643–645`; `src/service/aiTaskExecution/TaskEvidenceService.ts` evidence generation order.
 
