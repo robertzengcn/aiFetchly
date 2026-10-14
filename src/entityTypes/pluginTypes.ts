@@ -113,6 +113,15 @@ export interface PluginMcpServerDeclaration {
   readonly description?: string;
   readonly authType?: "none" | "api_key" | "bearer_token" | "custom";
   readonly metadata?: Record<string, unknown>;
+  /**
+   * Host-managed JavaScript runtime (plugin PRD §19.5). When set, the host
+   * launches its own embedded Node runtime (`process.execPath` in Node mode)
+   * instead of a plugin-supplied OS command. Mutually exclusive with
+   * `command`/`args`.
+   */
+  readonly runtime?: "aifetchly-node";
+  /** Plugin-relative path to the built entry file (requires `runtime`). */
+  readonly entry?: string;
 }
 
 // ---------------------------------------------------------------------------

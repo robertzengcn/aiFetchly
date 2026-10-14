@@ -4,6 +4,10 @@ import type {
   PluginMcpTransport,
   PluginError,
 } from "@/entityTypes/pluginTypes";
+import {
+  HOST_RUNTIME_METADATA_FIELD,
+  PLUGIN_MCP_HOST_RUNTIME,
+} from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Parse and normalize MCP server declarations from a plugin's mcp/servers.json.
@@ -28,6 +32,10 @@ export interface NormalizedMcpServer {
   readonly metadata: Record<string, unknown>;
   /** Relative path of the servers.json file inside the plugin (for diagnostics). */
   readonly componentPath: string;
+  /** Host-managed runtime kind (design §5.2). Present ⇒ no command/args. */
+  readonly runtime?: typeof PLUGIN_MCP_HOST_RUNTIME;
+  /** Plugin-relative entry path validated at normalize AND launch time. */
+  readonly entry?: string;
 }
 
 export interface ParseServersJsonOk {
@@ -128,6 +136,15 @@ export function normalizeMcpDeclaration(
   pluginRoot: string,
   componentPath: string
 ): NormalizeResult {
+  // Host-managed runtime variant (plugin PRD §19.5 / design §5.2): the plugin
+  // declares JavaScript code + a required host runtime instead of an OS
+  // executable. runtime/entry and command/args are mutually exclusive; the
+  // normalized descriptor rides in metadata under the reserved host-owned key
+  // and is revalidated at every launch.
+  if (decl.runtime !== undefined) {
+    return normalizeHostRuntimeDeclaration(key, decl, componentPath);
+  }
+
   const transport: PluginMcpTransport =
     decl.transport ?? (decl.command ? "stdio" : "stdio");
 
@@ -228,6 +245,94 @@ export function normalizeMcpDeclaration(
     authType: decl.authType ?? "none",
     metadata: decl.metadata ?? {},
     componentPath,
+  };
+  return { ok: true, normalized };
+}
+
+/**
+ * Normalize a host-managed runtime declaration (`runtime` + `entry`).
+ * Rules (design §5.2):
+ *  - Only "aifetchly-node" is a known runtime.
+ *  - runtime/entry and command/args are mutually exclusive.
+ *  - entry must be a relative path that cannot lexically escape the plugin
+ *    root (launch revalidates against the real filesystem).
+ *  - The normalized descriptor is stored under the reserved host-owned
+ *    metadata key; package-supplied values for that key are overwritten so
+ *    only the validated descriptor survives.
+ */
+function normalizeHostRuntimeDeclaration(
+  key: string,
+  decl: PluginMcpServerDeclaration,
+  componentPath: string
+): NormalizeResult {
+  const invalid = (
+    message: string,
+    code: "mcp-config-invalid" | "path-outside-plugin" = "mcp-config-invalid"
+  ): NormalizeError => ({
+    ok: false,
+    error: {
+      code,
+      componentType: "mcpServer",
+      componentName: key,
+      message,
+      recoverable: false,
+    },
+  });
+
+  if (decl.runtime !== PLUGIN_MCP_HOST_RUNTIME) {
+    return invalid(
+      `server "${key}" declares unknown runtime "${String(decl.runtime)}"; supported: "${PLUGIN_MCP_HOST_RUNTIME}".`
+    );
+  }
+  if (decl.command !== undefined || (decl.args ?? []).length > 0) {
+    return invalid(
+      `server "${key}" cannot declare both a host runtime and a command/args; they are mutually exclusive.`
+    );
+  }
+  if (decl.transport !== undefined && decl.transport !== "stdio") {
+    return invalid(
+      `host-managed runtime server "${key}" must use stdio transport.`
+    );
+  }
+  if (typeof decl.entry !== "string" || decl.entry.length === 0) {
+    return invalid(
+      `runtime server "${key}" requires a non-empty plugin-relative "entry".`
+    );
+  }
+  if (path.isAbsolute(decl.entry) || decl.entry.includes("..")) {
+    return invalid(
+      `entry "${decl.entry}" for server "${key}" must be a relative path inside the plugin root.`,
+      "path-outside-plugin"
+    );
+  }
+  if (decl.entry.includes("\0")) {
+    return invalid(
+      `entry for server "${key}" contains a null byte.`,
+      "path-outside-plugin"
+    );
+  }
+
+  // Plugin-supplied metadata may not smuggle a runtime descriptor; only the
+  // host writes the reserved key (design §5.3).
+  const metadata: Record<string, unknown> = { ...(decl.metadata ?? {}) };
+  metadata[HOST_RUNTIME_METADATA_FIELD] = {
+    contractVersion: 1,
+    runtime: PLUGIN_MCP_HOST_RUNTIME,
+    entry: decl.entry,
+  };
+
+  const normalized: NormalizedMcpServer = {
+    serverName: key,
+    transport: "stdio",
+    args: [],
+    env: {},
+    authType: decl.authType ?? "none",
+    timeout: decl.timeout,
+    description: decl.description,
+    metadata,
+    componentPath,
+    runtime: PLUGIN_MCP_HOST_RUNTIME,
+    entry: decl.entry,
   };
   return { ok: true, normalized };
 }
