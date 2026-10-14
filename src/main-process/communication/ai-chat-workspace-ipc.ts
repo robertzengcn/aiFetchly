@@ -38,7 +38,6 @@ import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
-import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import {
   getQueryEngine,
   getQueueService,
@@ -47,10 +46,10 @@ import {
   serializeHistoryTimestamp,
   validateAndStageGeneratedImageFields,
 } from "@/main-process/communication/ai-chat-v2-ipc";
-import { userSafeError } from "@/service/AIChatErrorMapper";
+import { userSafeError, pendingErrorCode } from "@/service/AIChatErrorMapper";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { Token } from "@/modules/token";
 import {
-  USERSDBPATH,
   USER_AI_CHAT_WORKSPACE_REDESIGN,
 } from "@/config/usersetting";
 import type { CommonMessage } from "@/entityTypes/commonType";
@@ -209,8 +208,9 @@ async function loadHistoryPage(input: {
   limit: number;
   before?: { timestamp: string; messageId: string };
 }): Promise<ChatHistoryPageResponse> {
-  const model = new AIChatMessageModel(getDbPathOrThrow());
-  const { rows, hasOlder } = await model.getConversationPageDescending(
+  // G04 layering: history paging is owned by AIChatConversationModule —
+  // IPC handlers never instantiate Models directly.
+  const { rows, hasOlder } = await new AIChatConversationModule().getConversationPage(
     input.conversationId,
     input.limit,
     input.before
@@ -233,13 +233,6 @@ async function loadHistoryPage(input: {
         : null,
     hasOlder,
   };
-}
-
-function getDbPathOrThrow(): string {
-  // The Token service owns USERSDBPATH; models need the raw path.
-  const dbpath = new Token().getValue(USERSDBPATH);
-  if (!dbpath) throw new Error("User database path is not initialized");
-  return dbpath;
 }
 
 type InvokeEvent = {
@@ -370,9 +363,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // B06: ordinary queue-backed turns never populate the coordinator's
       // liveRuns map — without a durable fallback, selection cannot
       // reconstruct the active run id and background terminals miss the
-      // sidebar. Fall back to the latest non-terminal durable run envelope.
-      let runtimeStatus = live?.runtimeStatus ?? engineStatus;
-      let activeRunId = live?.activeRunId ?? null;
+      // sidebar. Fall back to the latest non-terminal durable run envelope
+      // (same precedence as the sidebar projection helper).
+      let durableActive: { runId: string; status: string } | null = null;
       if (!live) {
         try {
           const runs = await new AIChatRunModule().listByConversation(
@@ -385,15 +378,23 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
             )
           );
           if (active) {
-            activeRunId = active.runId;
-            if (runtimeStatus === "idle") {
-              runtimeStatus = active.status as typeof runtimeStatus;
-            }
+            durableActive = { runId: active.runId, status: active.status };
           }
         } catch {
           // Durable lookup unavailable — keep coordinator/engine truth.
         }
       }
+      const snapshot = AIChatConversationModule.effectiveRuntime(
+        conversationId,
+        (id) => coordinator.getLiveRuntime(id),
+        durableActive
+      );
+      const runtimeStatus =
+        snapshot.activeRunId !== null
+          ? snapshot.runtimeStatus
+          : engineStatus !== "idle"
+            ? engineStatus
+            : snapshot.runtimeStatus;
       const response: SelectConversationResponse = {
         acceptedGeneration,
         conversationId,
@@ -401,7 +402,7 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         nextBefore: page.nextBefore,
         hasOlder: page.hasOlder,
         runtimeStatus,
-        activeRunId,
+        activeRunId: snapshot.activeRunId,
         title: null,
       };
       return ok(response);
@@ -425,11 +426,21 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
   ipcMain.handle(AI_CHAT_WORKSPACE_START_RUN, async (_e, data: unknown) => {
     const chatAccess = canUseChat();
     if (!chatAccess.ok) {
+      // G03 §18.1: entitlement rejections are labeled (deliberate
+      // validation/entitlement rejects are excluded from soak acceptance).
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_workspace_submission_rejected_total",
+        "ai_disabled"
+      );
       return denied(chatAccess.message);
     }
     try {
       const parsed = startChatRunRequestSchema.safeParse(parsePayload(data));
       if (!parsed.success) {
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          "invalid_request"
+        );
         return denied("Invalid start-run request");
       }
       // Shared trusted-channel edge (parity with the V2 stream/pending
@@ -449,6 +460,10 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         { stage: false }
       );
       if (!validated.ok) {
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          "image_reference_invalid"
+        );
         return denied(validated.errorMessage);
       }
       // T1 (AD-001/AD-004, audit): EVERY accepted ordinary send becomes a
@@ -475,10 +490,19 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           request,
         });
         if (!receipt.pendingMessage) {
+          aiChatQueueCounters.incrementLabeled(
+            "ai_chat_workspace_submission_rejected_total",
+            "conversation_busy"
+          );
           return denied(
             "A run is already active for this conversation. Wait for it to finish or stop it first."
           );
         }
+        // G03 §18.1: durable acceptances by disposition (bounded labels).
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_accepted_total",
+          receipt.disposition
+        );
         return ok({
           conversationId: request.conversationId,
           runId: `pending-${receipt.pendingMessage.pendingMessageId}`,
@@ -486,6 +510,13 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           acceptedAt: new Date().toISOString(),
         });
       } catch (err) {
+        // G03 §18.1: typed queue denials keep their bounded code as the
+        // label (codes only — never prompts or payloads); untyped errors
+        // fall back to a single unknown label.
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          pendingErrorCode(err) ?? "unknown"
+        );
         return denied(userSafeError(err));
       }
     } catch (err) {
@@ -594,6 +625,15 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         parsed.data.conversationId
       );
       if (busyReason) {
+        // G03 §18.1: unsafe-delete denials by guard outcome.
+        aiChatQueueCounters.incrementWorkspace(
+          "ai_chat_workspace_action_total",
+          {
+            capability: "workspace",
+            action: "conversation_delete",
+            outcome: "denied_busy",
+          }
+        );
         return denied(
           `This conversation is busy (${busyReason}). Stop it before deleting.`
         );
@@ -601,6 +641,11 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       await new AIChatConversationModule().deleteConversation(
         parsed.data.conversationId
       );
+      aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
+        capability: "workspace",
+        action: "conversation_delete",
+        outcome: "deleted",
+      });
       return ok({ deleted: true });
     } catch (err) {
       return denied(userSafeError(err));

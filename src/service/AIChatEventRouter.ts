@@ -2,6 +2,7 @@ import {
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
   AI_CHAT_WORKSPACE_SUMMARY_EVENT,
 } from "@/config/channellist";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type {
   ChatRunDetailEvent,
   ConversationSummaryEvent,
@@ -140,6 +141,10 @@ export class AIChatEventRouter {
       this.statsCounters.detailEventsSent += sent;
     } else {
       this.statsCounters.detailEventsDroppedStale += 1;
+      // G03 §18.1: no window selects this conversation (stale selection,
+      // background race, or cross-conversation misroute) — bounded counter,
+      // never event bodies.
+      aiChatQueueCounters.incrementCrossConversationRejected();
     }
   }
 

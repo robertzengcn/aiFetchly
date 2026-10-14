@@ -36,7 +36,24 @@ const ALL_KEYS: readonly AIChatQueueCounterKey[] = [
 /** Labeled counters (e.g. rejection reason, recovery state). */
 export type AIChatQueueLabelKey =
   | "ai_chat_steering_rejected_total"
-  | "ai_chat_queue_recovered_total";
+  | "ai_chat_queue_recovered_total"
+  | "ai_chat_workspace_submission_accepted_total"
+  | "ai_chat_workspace_submission_rejected_total"
+  | "ai_chat_run_terminal_total"
+  | "ai_chat_workspace_projection_fallback_total";
+
+/**
+ * G03 (design §18.1): multi-label counters. Labels are bounded enum-like
+ * values (dispositions, statuses, capabilities, resource classes) — never
+ * prompts, file content/paths, tokens, report payloads, or image bytes.
+ */
+export type AIChatWorkspaceMultiLabelKey =
+  | "ai_chat_run_created_total"
+  | "ai_chat_workspace_action_total";
+
+/** Plain cross-conversation rejection counter (§18.1). */
+export const AI_CHAT_CROSS_CONVERSATION_REJECTED_TOTAL =
+  "ai_chat_workspace_cross_conversation_event_rejected_total";
 
 export type AIChatQueueCounterSnapshot = Record<AIChatQueueCounterKey, number> &
   Partial<Record<string, number>>;
@@ -53,7 +70,10 @@ export type AIChatQueueTimingKey =
   | "enqueue_to_dispatch_ms"
   | "steer_click_to_boundary_ms"
   | "drain_duration_ms"
-  | "pending_db_transaction_ms";
+  | "pending_db_transaction_ms"
+  | "accept_to_claim_ms"
+  | "claim_to_admit_ms"
+  | "admit_to_provider_ms";
 
 class AIChatQueueCountersImpl {
   private readonly counts = new Map<string, number>();
@@ -71,6 +91,34 @@ class AIChatQueueCountersImpl {
   ): void {
     const composite = `${key}{reason="${label}"}`;
     this.counts.set(composite, (this.counts.get(composite) ?? 0) + amount);
+  }
+
+  /**
+   * G03 (§18.1): increment a multi-label counter, e.g.
+   * `ai_chat_run_created_total{owner="interactive",resource_class="general"}`.
+   * Label names/values must be bounded enums — never content. Names are
+   * sorted for a deterministic composite key.
+   */
+  incrementWorkspace(
+    key: AIChatWorkspaceMultiLabelKey,
+    labels: Record<string, string>,
+    amount = 1
+  ): void {
+    const rendered = Object.keys(labels)
+      .sort()
+      .map((name) => `${name}="${labels[name]}"`)
+      .join(",");
+    const composite = `${key}{${rendered}}`;
+    this.counts.set(composite, (this.counts.get(composite) ?? 0) + amount);
+  }
+
+  /** G03 (§18.1): cross-conversation/stale event rejection (no labels). */
+  incrementCrossConversationRejected(amount = 1): void {
+    this.counts.set(
+      AI_CHAT_CROSS_CONVERSATION_REJECTED_TOTAL,
+      (this.counts.get(AI_CHAT_CROSS_CONVERSATION_REJECTED_TOTAL) ?? 0) +
+        amount
+    );
   }
 
   get(key: AIChatQueueCounterKey | string): number {
@@ -121,6 +169,9 @@ class AIChatQueueCountersImpl {
       "steer_click_to_boundary_ms",
       "drain_duration_ms",
       "pending_db_transaction_ms",
+      "accept_to_claim_ms",
+      "claim_to_admit_ms",
+      "admit_to_provider_ms",
     ] as const) {
       const aggregate = this.timings.get(key);
       out[key] = aggregate

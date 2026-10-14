@@ -58,6 +58,27 @@ export class AIChatConversationModule extends BaseModule {
   }
 
   /**
+   * G04 layering: conversation history paging owned by the Module (IPC
+   * handlers never touch Models/repositories directly). Returns rows newest
+   * (descending) with the older-data flag.
+   */
+  async getConversationPage(
+    conversationId: string,
+    limit: number,
+    before?: { timestamp: Date; messageId: string }
+  ): Promise<{
+    rows: AIChatMessageEntity[];
+    hasOlder: boolean;
+  }> {
+    await this.ensureConnection();
+    return this.messageModel().getConversationPageDescending(
+      conversationId,
+      limit,
+      before
+    );
+  }
+
+  /**
    * Effective conversation summary projection (design §8.6):
    * live run state first, durable non-terminal run second, idle otherwise.
    */

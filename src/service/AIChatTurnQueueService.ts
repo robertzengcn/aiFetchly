@@ -740,6 +740,14 @@ export class AIChatTurnQueueService {
     }
     const row = claim.row;
     const claimToken = row.claimToken ?? "";
+    // G03 §18.2: acceptance (durable row creation) → scheduling claim.
+    const claimedAt = Date.now();
+    if (row.createdAt) {
+      aiChatQueueCounters.observeTiming(
+        "accept_to_claim_ms",
+        claimedAt - new Date(row.createdAt).getTime()
+      );
+    }
 
     // Deterministic assistant id lets the renderer bind its parked turn
     // renderer to THIS dispatch via the pending event (design §14.3).
@@ -779,6 +787,8 @@ export class AIChatTurnQueueService {
       conversationId,
       resourceClass: "general",
     });
+    // G03 §18.2: scheduling claim → global run admission.
+    aiChatQueueCounters.observeTiming("claim_to_admit_ms", Date.now() - claimedAt);
     if (this.deps.dispatchBridge && bridgeResult === null) {
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
         code: "RUN_ENVELOPE_FAILED",
@@ -820,6 +830,9 @@ export class AIChatTurnQueueService {
     const bridgeRunId = bridgeResult
       ? { runId: bridgeResult.runId }
       : undefined;
+    // G03 §18.2: run admission → provider start (promotion + input rebuild
+    // happen between; the span covers them).
+    const admittedAt = Date.now();
     // B06: background summary — execution admitted (bounded, no bodies).
     this.deps.summarySink?.({
       conversationId,
@@ -927,6 +940,10 @@ export class AIChatTurnQueueService {
             ? { contentParts: turnInputs.contentParts }
             : {}),
         });
+        aiChatQueueCounters.observeTiming(
+          "admit_to_provider_ms",
+          Date.now() - admittedAt
+        );
       } catch (err) {
         log.error(
           `[ai-chat-queue] dispatch turn failed conv=${conversationId}:`,

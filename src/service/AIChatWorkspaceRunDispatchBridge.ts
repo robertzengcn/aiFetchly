@@ -2,6 +2,7 @@ import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import type { AIChatRunEntity } from "@/entity/AIChatRun.entity";
 import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 
 /**
  * Run-dispatch bridge (capability-parity technical design §8.3, AD-002/003;
@@ -135,6 +136,10 @@ export class AIChatWorkspaceRunDispatchBridge
             sourceId: candidate.pendingMessageId,
             resourceClass: candidate.resourceClass,
           });
+          aiChatQueueCounters.incrementWorkspace("ai_chat_run_created_total", {
+            owner: "interactive",
+            resource_class: candidate.resourceClass,
+          });
           return this.admitEnvelope(next.runId, candidate);
         }
         // queued → admit through the global scheduler (B02); running /
@@ -151,6 +156,11 @@ export class AIChatWorkspaceRunDispatchBridge
         owner: "interactive",
         sourceId: candidate.pendingMessageId,
         resourceClass: candidate.resourceClass,
+      });
+      // G03 §18.1: run envelopes by owner + resource class (bounded).
+      aiChatQueueCounters.incrementWorkspace("ai_chat_run_created_total", {
+        owner: "interactive",
+        resource_class: candidate.resourceClass,
       });
       return this.admitEnvelope(created.runId, candidate);
     } catch {
@@ -183,6 +193,12 @@ export class AIChatWorkspaceRunDispatchBridge
         return true;
       }
       await this.runModule.transition(runId, status);
+      // G03 §18.1: run terminals by status (bounded; error codes ride the
+      // run row, never the counter).
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_run_terminal_total",
+        status
+      );
     } catch (err) {
       // B05: terminal persistence failure is NOT silent — the caller gates
       // terminal publication and queue advancement on this return value.

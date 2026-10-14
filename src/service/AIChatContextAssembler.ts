@@ -1,4 +1,5 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
@@ -930,6 +931,11 @@ export class AIChatContextAssembler {
       });
     } catch {
       // A lookup failure must never break context assembly — fall back to raw.
+      // G03 §18.1: bounded fallback counter (reason only, never row content).
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_workspace_projection_fallback_total",
+        "lookup_error"
+      );
       return rows;
     }
     if (byKey.size === 0) return rows;
