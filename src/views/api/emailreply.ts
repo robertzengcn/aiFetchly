@@ -68,6 +68,12 @@ export interface ReplyDraftDetail {
   status: string;
   generationSource: string;
   confidence: number | null;
+  /** R21: the model's persisted review request (decoded flag). */
+  requiresHumanReview: boolean;
+  /** R21: schema-bounded review reasons (raw bounded JSON from storage). */
+  reviewReasonsJson: string | null;
+  /** R21: schema-bounded unresolved questions (raw bounded JSON from storage). */
+  unresolvedQuestionsJson: string | null;
   knowledgeSourcesJson: string | null;
   warningsJson: string | null;
   sentAt: string | null;

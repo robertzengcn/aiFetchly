@@ -83,6 +83,27 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   @Column("real", { nullable: true })
   intentSuggestionConfidence: number | null;
 
+  // ---- Optional generated review metadata (R21) ----
+  // The strict generation schema accepts three OPTIONAL review signals from
+  // the model (`requiresHumanReview`, `reviewReasons`, `unresolvedQuestions`).
+  // They are persisted as REVIEW METADATA ONLY so a model-flagged draft stays
+  // flagged on reload/reuse and the approval service can refuse a clean-slate
+  // approval. They NEVER alter the authoritative message classification and
+  // never relax the deterministic validator — a persisted flag can only make
+  // review STRICTER (block approval), never lighter.
+
+  /** The model asked for human review before sending (schema-bounded boolean). */
+  @Column("integer", { nullable: true })
+  requiresHumanReview: number | null;
+
+  /** Schema-bounded reasons the model gave for the review request (≤20×500). */
+  @Column("text", { nullable: true })
+  reviewReasonsJson: string | null;
+
+  /** Schema-bounded unresolved questions the model listed (≤10×500). */
+  @Column("text", { nullable: true })
+  unresolvedQuestionsJson: string | null;
+
   /** Serialized {@code EmailReplyKnowledgeSourceAudit[]}. */
   @Column("text", { nullable: true })
   knowledgeSourcesJson: string | null;

@@ -370,6 +370,11 @@ export function registerEmailReceiveIpcHandlers(): void {
         status: draft.status,
         generationSource: draft.generationSource,
         confidence: draft.confidence,
+        // R21: review metadata rides on the detail DTO as raw bounded JSON so
+        // the renderer can surface the flag without a schema migration.
+        requiresHumanReview: draft.requiresHumanReview === 1,
+        reviewReasonsJson: draft.reviewReasonsJson,
+        unresolvedQuestionsJson: draft.unresolvedQuestionsJson,
         knowledgeSourcesJson: draft.knowledgeSourcesJson,
         warningsJson: draft.warningsJson,
         sentAt: draft.sentAt ? new Date(draft.sentAt).toISOString() : null,

@@ -5,6 +5,9 @@ import {
   LlmTransportError,
   EmailReplyDraftGenerationService,
   decodeStoredWarnings,
+  decodeStoredReviewList,
+  decodeStoredRequiresHumanReview,
+  REVIEW_ITEM_MAX_CHARS,
   type LlmRawResult,
   type LlmSubmissionResult,
   type AiChatApiFactory,
@@ -2504,6 +2507,184 @@ describe("createDraft preserves authoritative classification (B07)", () => {
     expect(drafts[0].intentSuggestion).toBe("support_request");
     expect(drafts[0].intentSuggestionConfidence).toBe(0.4);
     expect(drafts[0].confidence).toBe(0.92);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R21: the OPTIONAL generated review metadata (requiresHumanReview /
+// reviewReasons / unresolvedQuestions) is persisted, returned, decoded on
+// reload/reuse, bounded on decode, and gates approval. A model-flagged draft
+// can never silently become lighter-review output.
+// ---------------------------------------------------------------------------
+describe("createDraft persists generated review metadata (R21)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const revisionModule = new EmailReplyDraftRevisionModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4252;
+    msg.providerUid = `r21-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "support_request";
+    msg.classificationConfidence = over.classificationConfidence ?? 0.97;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("persists and returns each optional review field, and they survive a reload/reuse", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({
+          subject: "Re: Hi",
+          bodyText: "Here is the account detail you asked about.",
+          intentSuggestion: "support_request",
+          confidence: 0.7,
+          requiresHumanReview: true,
+          reviewReasons: [
+            "Customer asks for an exception the policy does not cover",
+            "Amount in question exceeds the owner's usual approval range",
+          ],
+          unresolvedQuestions: [
+            "Which billing cycle should the credit apply to?",
+          ],
+        })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const fresh = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(fresh.success).toBe(true);
+    if (!fresh.success) return;
+    expect(requests).toHaveLength(1);
+    // Fresh return carries the parsed signals.
+    expect(fresh.requiresHumanReview).toBe(true);
+    expect(fresh.reviewReasons).toEqual([
+      "Customer asks for an exception the policy does not cover",
+      "Amount in question exceeds the owner's usual approval range",
+    ]);
+    expect(fresh.unresolvedQuestions).toEqual([
+      "Which billing cycle should the credit apply to?",
+    ]);
+    // Persisted on the draft row (bounded JSON, review metadata only).
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].requiresHumanReview).toBe(1);
+    expect(JSON.parse(drafts[0].reviewReasonsJson ?? "[]")).toEqual([
+      "Customer asks for an exception the policy does not cover",
+      "Amount in question exceeds the owner's usual approval range",
+    ]);
+    expect(JSON.parse(drafts[0].unresolvedQuestionsJson ?? "[]")).toEqual([
+      "Which billing cycle should the credit apply to?",
+    ]);
+    // Also mirrored into the revision's generation metadata.
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    expect(revisions).toHaveLength(1);
+    const meta = JSON.parse(
+      revisions[0].generationMetadataJson ?? "{}"
+    ) as {
+      requiresHumanReview?: boolean;
+      reviewReasons?: string[];
+      unresolvedQuestions?: string[];
+    };
+    expect(meta.requiresHumanReview).toBe(true);
+    expect(meta.reviewReasons).toHaveLength(2);
+    expect(meta.unresolvedQuestions).toEqual([
+      "Which billing cycle should the credit apply to?",
+    ]);
+    // Reload via the reuse path: a second createDraft call reuses the stored
+    // draft (no LLM call) and must decode the PERSISTED signals — identical
+    // to what the fresh return carried, never lighter-review.
+    const reused = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(reused.success).toBe(true);
+    if (!reused.success) return;
+    expect(reused.reused).toBe(true);
+    expect(requests).toHaveLength(1); // no new model call
+    expect(reused.requiresHumanReview).toBe(true);
+    expect(reused.reviewReasons).toEqual(fresh.reviewReasons);
+    expect(reused.unresolvedQuestions).toEqual(fresh.unresolvedQuestions);
+  });
+
+  it("does not invent review signals when the model omits the optional fields", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = buildService({ apiFactory: factory });
+    const fresh = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(fresh.success).toBe(true);
+    if (!fresh.success) return;
+    // Absent optional fields → decoded falsy/empty, never an invented reason.
+    expect(fresh.requiresHumanReview).toBe(false);
+    expect(fresh.reviewReasons).toEqual([]);
+    expect(fresh.unresolvedQuestions).toEqual([]);
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].requiresHumanReview).toBe(0);
+    expect(drafts[0].reviewReasonsJson).toBe("[]");
+    expect(drafts[0].unresolvedQuestionsJson).toBe("[]");
+    // Reuse decodes the same empty signals.
+    const reused = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(reused.success).toBe(true);
+    if (!reused.success) return;
+    expect(reused.reused).toBe(true);
+    expect(reused.requiresHumanReview).toBe(false);
+    expect(reused.reviewReasons).toEqual([]);
+    expect(reused.unresolvedQuestions).toEqual([]);
+  });
+
+  it("decodeStoredReviewList is bounded (strings only, maxItems, char cap)", () => {
+    // Non-string entries are dropped; malformed JSON → []; null/missing → [].
+    expect(decodeStoredReviewList("[oops", 10)).toEqual([]);
+    expect(decodeStoredReviewList(null, 10)).toEqual([]);
+    expect(
+      decodeStoredReviewList(JSON.stringify(["ok", 7, null, { x: 1 }, "ok2"]), 10)
+    ).toEqual(["ok", "ok2"]);
+    // maxItems is honored per list (20 reasons vs 10 questions).
+    const twenty = Array.from({ length: 25 }, (_, i) => `r${i}`);
+    expect(decodeStoredReviewList(JSON.stringify(twenty), 20)).toHaveLength(20);
+    expect(decodeStoredReviewList(JSON.stringify(twenty), 10)).toHaveLength(10);
+    // Per-item char cap — a hand-edited stored payload cannot surface
+    // unbounded text.
+    const long = "x".repeat(900);
+    expect(decodeStoredReviewList(JSON.stringify([long]), 10)).toEqual([
+      "x".repeat(REVIEW_ITEM_MAX_CHARS),
+    ]);
+  });
+
+  it("decodeStoredRequiresHumanReview treats malformed/absent values as false", () => {
+    expect(decodeStoredRequiresHumanReview(1)).toBe(true);
+    expect(decodeStoredRequiresHumanReview(0)).toBe(false);
+    expect(decodeStoredRequiresHumanReview(null)).toBe(false);
+    expect(decodeStoredRequiresHumanReview(undefined)).toBe(false);
   });
 });
 

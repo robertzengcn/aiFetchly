@@ -1,6 +1,10 @@
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AiChatApi } from "@/api/aiChatApi";
-import type { OpenAIChatMessage, OpenAIToolCall, OpenAIUsage } from "@/api/aiChatApi";
+import type {
+  OpenAIChatMessage,
+  OpenAIToolCall,
+  OpenAIUsage,
+} from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -191,7 +195,8 @@ export class LlmTransportError extends Error {
   ) {
     super(message);
     this.name = "LlmTransportError";
-    this.unsupportedResponseFormat = options?.unsupportedResponseFormat ?? false;
+    this.unsupportedResponseFormat =
+      options?.unsupportedResponseFormat ?? false;
     this.deadlineExceeded = options?.deadlineExceeded ?? false;
   }
 }
@@ -211,7 +216,11 @@ const RESPONSE_FORMAT_PARAMETER_PATTERN = /response[ _-]?format\b/i;
 
 function isUnsupportedResponseFormatError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const err = error as { message?: unknown; status?: unknown; statusCode?: unknown };
+  const err = error as {
+    message?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+  };
   const status = err.status ?? err.statusCode;
   // Only client-side capability rejections (400/501) are candidates. Auth,
   // throttling, and server errors are real failures, not capability gaps.
@@ -224,7 +233,8 @@ function isUnsupportedResponseFormatError(error: unknown): boolean {
   // "invalid parameter max_tokens" / "unsupported parameter temperature" and
   // triggered a no-hint retry despite NO JSON-format rejection. Only a 400/501
   // whose body names response_format is a JSON-capability gap worth one retry.
-  const namesResponseFormat = RESPONSE_FORMAT_PARAMETER_PATTERN.test(messageText);
+  const namesResponseFormat =
+    RESPONSE_FORMAT_PARAMETER_PATTERN.test(messageText);
   return isCapabilityStatus && namesResponseFormat;
 }
 
@@ -234,10 +244,7 @@ function isUnsupportedResponseFormatError(error: unknown): boolean {
  * validation loop can be exercised without network access. Mirrors the
  * `senderFactory`/`serviceLoader` seam pattern in {@link EmailReplyDeliveryService}.
  */
-export type AiChatApiFactory = () => Pick<
-  AiChatApi,
-  "openAIChatCompletion"
->;
+export type AiChatApiFactory = () => Pick<AiChatApi, "openAIChatCompletion">;
 
 /**
  * Knowledge-grounded, owner-voice reply draft generation.
@@ -268,11 +275,10 @@ export class EmailReplyDraftGenerationService {
    * without waiting wall-clock time. Production leaves it undefined → the
    * default 5-minute invocation budget applies.
    */
-  private readonly budgetOptions?:
-    | {
-        readonly now?: () => number;
-        readonly budgetMs?: number;
-      };
+  private readonly budgetOptions?: {
+    readonly now?: () => number;
+    readonly budgetMs?: number;
+  };
   /**
    * D7.2: injectable clock for audit-row / reservation / lease / commit
    * timestamps. Distinct from `budgetOptions.now` (which only feeds the
@@ -322,49 +328,54 @@ export class EmailReplyDraftGenerationService {
    */
   private reservation: { guardId: number; ownerToken: string } | null = null;
 
-  constructor(
-    options?: {
-      readonly apiFactory?: AiChatApiFactory;
-      readonly budget?: { readonly now?: () => number; readonly budgetMs?: number };
-      /** Reply-generation output budget (FR-027); defaults to 1500 tokens. */
-      readonly maxTokens?: number;
-      /** T07: injectable guard module factory (test seam). */
-      readonly guardModuleFactory?: () => EmailReplyGuardModule;
-      /**
-       * T04/FR-031 §8.1: injectable reply-detection service (test seam). Tests
-       * pass a custom-built service with fake ports; production leaves it
-       * undefined → the lazy getter constructs the real default service.
-       */
-      readonly detectionServiceFactory?: () => EmailReplyDetectionService;
-      /**
-       * D7.1: injectable audit-module factories (test seam). Tests substitute
-       * in-memory stubs to capture audit payloads or drive write failure
-       * without a real DB. Production leaves them undefined → the real
-       * modules are constructed lazily on first use.
-       */
-      readonly replyAuditModuleFactory?: () => EmailReplyAuditLogModule;
-      readonly autoAuditModuleFactory?: () => EmailAutoReplyAuditLogModule;
-      /**
-       * D7.2: injectable clock for audit-row / reservation / lease timestamps
-       * (test seam). Distinct from `budget.now`, which only feeds the
-       * aggregate model-call deadline. Defaults to `Date.now`.
-       */
+  constructor(options?: {
+    readonly apiFactory?: AiChatApiFactory;
+    readonly budget?: {
       readonly now?: () => number;
-    }
-  ) {
+      readonly budgetMs?: number;
+    };
+    /** Reply-generation output budget (FR-027); defaults to 1500 tokens. */
+    readonly maxTokens?: number;
+    /** T07: injectable guard module factory (test seam). */
+    readonly guardModuleFactory?: () => EmailReplyGuardModule;
+    /**
+     * T04/FR-031 §8.1: injectable reply-detection service (test seam). Tests
+     * pass a custom-built service with fake ports; production leaves it
+     * undefined → the lazy getter constructs the real default service.
+     */
+    readonly detectionServiceFactory?: () => EmailReplyDetectionService;
+    /**
+     * D7.1: injectable audit-module factories (test seam). Tests substitute
+     * in-memory stubs to capture audit payloads or drive write failure
+     * without a real DB. Production leaves them undefined → the real
+     * modules are constructed lazily on first use.
+     */
+    readonly replyAuditModuleFactory?: () => EmailReplyAuditLogModule;
+    readonly autoAuditModuleFactory?: () => EmailAutoReplyAuditLogModule;
+    /**
+     * D7.2: injectable clock for audit-row / reservation / lease timestamps
+     * (test seam). Distinct from `budget.now`, which only feeds the
+     * aggregate model-call deadline. Defaults to `Date.now`.
+     */
+    readonly now?: () => number;
+  }) {
     this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
     this.budgetOptions = options?.budget;
     this.replyMaxTokens =
-      options?.maxTokens !== undefined && Number.isFinite(options.maxTokens) && options.maxTokens > 0
+      options?.maxTokens !== undefined &&
+      Number.isFinite(options.maxTokens) &&
+      options.maxTokens > 0
         ? Math.floor(options.maxTokens)
         : REPLY_MAX_TOKENS_DEFAULT;
     this.guardModuleFactory =
       options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
     this.replyAuditModuleFactory =
-      options?.replyAuditModuleFactory ?? (() => new EmailReplyAuditLogModule());
+      options?.replyAuditModuleFactory ??
+      (() => new EmailReplyAuditLogModule());
     this.autoAuditModuleFactory =
-      options?.autoAuditModuleFactory ?? (() => new EmailAutoReplyAuditLogModule());
+      options?.autoAuditModuleFactory ??
+      (() => new EmailAutoReplyAuditLogModule());
     this.now = options?.now ?? ((): number => Date.now());
   }
 
@@ -612,6 +623,20 @@ export class EmailReplyDraftGenerationService {
           knowledgeSources: [],
           confidence: reusedDraft.confidence ?? null,
           warnings: decodeStoredWarnings(reusedDraft.warningsJson),
+          // R21: reuse decodes the PERSISTED review signals so a
+          // model-flagged draft stays flagged (never lighter-review) after a
+          // reload.
+          requiresHumanReview: decodeStoredRequiresHumanReview(
+            reusedDraft.requiresHumanReview
+          ),
+          reviewReasons: decodeStoredReviewList(
+            reusedDraft.reviewReasonsJson,
+            REVIEW_REASON_MAX_ITEMS
+          ),
+          unresolvedQuestions: decodeStoredReviewList(
+            reusedDraft.unresolvedQuestionsJson,
+            REVIEW_QUESTION_MAX_ITEMS
+          ),
           reused: true,
           code: "allowed",
           requestCorrelationId,
@@ -634,7 +659,9 @@ export class EmailReplyDraftGenerationService {
         } catch (auditError) {
           incrementReplyMetric("audit_failure", { stage: "reservation" });
           const auditErrMsg =
-            auditError instanceof Error ? auditError.message : String(auditError);
+            auditError instanceof Error
+              ? auditError.message
+              : String(auditError);
           return {
             success: false,
             error: `Reservation-refusal audit persistence failed: ${auditErrMsg}`,
@@ -814,6 +841,20 @@ export class EmailReplyDraftGenerationService {
         knowledgeSources: [],
         confidence: reusable.confidence ?? null,
         warnings: decodeStoredWarnings(reusable.warningsJson),
+        // R21: reuse decodes the PERSISTED review signals so a
+        // model-flagged draft stays flagged (never lighter-review) after a
+        // reload.
+        requiresHumanReview: decodeStoredRequiresHumanReview(
+          reusable.requiresHumanReview
+        ),
+        reviewReasons: decodeStoredReviewList(
+          reusable.reviewReasonsJson,
+          REVIEW_REASON_MAX_ITEMS
+        ),
+        unresolvedQuestions: decodeStoredReviewList(
+          reusable.unresolvedQuestionsJson,
+          REVIEW_QUESTION_MAX_ITEMS
+        ),
         reused: true,
         code: "allowed",
         requestCorrelationId,
@@ -1064,6 +1105,16 @@ export class EmailReplyDraftGenerationService {
       0,
       1
     );
+    // R21: the model's OPTIONAL review signals are persisted (bounded by the
+    // generation schema) so a model-flagged draft stays flagged on reload/reuse
+    // and the approval service refuses a clean-slate approval. They are review
+    // metadata only — they never change the authoritative classification and
+    // never relax the deterministic validator.
+    const requiresHumanReview = generated.requiresHumanReview === true;
+    const reviewReasonsJson = JSON.stringify(generated.reviewReasons ?? []);
+    const unresolvedQuestionsJson = JSON.stringify(
+      generated.unresolvedQuestions ?? []
+    );
 
     // 6c. Race recheck (FR-028 Phase-1 slice, B03): the message-level guard
     //     ran before generation, but the awaited LLM call can take seconds.
@@ -1168,6 +1219,20 @@ export class EmailReplyDraftGenerationService {
         knowledgeSources: [],
         confidence: reusableNow.confidence ?? null,
         warnings: decodeStoredWarnings(reusableNow.warningsJson),
+        // R21: reuse decodes the PERSISTED review signals so a
+        // model-flagged draft stays flagged (never lighter-review) after a
+        // reload.
+        requiresHumanReview: decodeStoredRequiresHumanReview(
+          reusableNow.requiresHumanReview
+        ),
+        reviewReasons: decodeStoredReviewList(
+          reusableNow.reviewReasonsJson,
+          REVIEW_REASON_MAX_ITEMS
+        ),
+        unresolvedQuestions: decodeStoredReviewList(
+          reusableNow.unresolvedQuestionsJson,
+          REVIEW_QUESTION_MAX_ITEMS
+        ),
         reused: true,
         code: "allowed",
         requestCorrelationId,
@@ -1254,6 +1319,11 @@ export class EmailReplyDraftGenerationService {
     // B07: persist the model's intent suggestion as metadata only.
     draft.intentSuggestion = intentSuggestion;
     draft.intentSuggestionConfidence = intentSuggestionConfidence;
+    // R21: persist the optional model review signals (bounded by the
+    // generation schema) so they survive reload/reuse and gate approval.
+    draft.requiresHumanReview = requiresHumanReview ? 1 : 0;
+    draft.reviewReasonsJson = reviewReasonsJson;
+    draft.unresolvedQuestionsJson = unresolvedQuestionsJson;
     draft.knowledgeSourcesJson = JSON.stringify(knowledge.audits);
     draft.ownerStyleProfileJson = profile
       ? JSON.stringify({
@@ -1290,6 +1360,12 @@ export class EmailReplyDraftGenerationService {
       knowledgeAbstained: knowledge.abstained,
       knowledgeOutcome: knowledge.relevance?.outcome ?? null,
       conversationContext: contextMeta,
+      // R21: the optional model review signals, persisted alongside the draft
+      // columns so a model-flagged draft is visible from metadata alone. No
+      // prompts, no bodies, no raw model output — bounded metadata only.
+      requiresHumanReview,
+      reviewReasons: generated.reviewReasons ?? [],
+      unresolvedQuestions: generated.unresolvedQuestions ?? [],
       // T09/FR-027 completion telemetry: same values as the draft row's
       // telemetry columns, plus honest "unavailable" flags and the
       // generation-path provenance (correction / hint-fallback). No
@@ -1330,7 +1406,8 @@ export class EmailReplyDraftGenerationService {
         await this.releaseReservationSafely();
         return {
           success: false,
-          error: "Generation owner expired before commit; output discarded (no draft persisted)",
+          error:
+            "Generation owner expired before commit; output discarded (no draft persisted)",
           requestCorrelationId,
         };
       }
@@ -1381,7 +1458,9 @@ export class EmailReplyDraftGenerationService {
         } catch (auditError) {
           incrementReplyMetric("audit_failure", { stage: "pre_draft" });
           const auditErrMsg =
-            auditError instanceof Error ? auditError.message : String(auditError);
+            auditError instanceof Error
+              ? auditError.message
+              : String(auditError);
           return {
             success: false,
             error: `Commit refusal audit persistence failed: ${auditErrMsg}`,
@@ -1438,6 +1517,11 @@ export class EmailReplyDraftGenerationService {
       knowledgeSources: [...knowledge.sources],
       confidence: authoritativeConfidence,
       warnings,
+      // R21: surface the persisted review signals so the caller sees the same
+      // flag a later reload/reuse will report.
+      requiresHumanReview,
+      reviewReasons: generated.reviewReasons ?? [],
+      unresolvedQuestions: generated.unresolvedQuestions ?? [],
       reused: false,
       requestCorrelationId,
     };
@@ -1858,10 +1942,7 @@ export class EmailReplyDraftGenerationService {
   private async runPreDraftDetection(
     message: EmailReceivedMessageEntity,
     requestCorrelationId: string
-  ): Promise<
-    | Extract<CreateDraftOutcome, { success: false }>
-    | null
-  > {
+  ): Promise<Extract<CreateDraftOutcome, { success: false }> | null> {
     let result: ReplyDetectionResult;
     try {
       result = await this.detectionServiceForNow().detect({
@@ -2162,6 +2243,56 @@ export function decodeStoredWarnings(
     return [];
   }
   return parsed.filter((w): w is string => typeof w === "string");
+}
+
+/**
+ * R21 bounded decode of a persisted model review-reason / unresolved-question
+ * list. Mirrors {@link decodeStoredWarnings} (pure and total: `null`/missing/
+ * malformed → `[]`) and additionally re-applies the generation schema's
+ * bounds (`maxItems` — 20 for reviewReasons, 10 for unresolvedQuestions;
+ * each item ≤ {@link REVIEW_ITEM_MAX_CHARS} chars, strings only) so a
+ * corrupted or hand-edited stored payload can never surface unbounded text.
+ * The bound MUST match the schema that produced the payload — capping a
+ * 20-reason list at 10 would silently drop review signal. Exported for unit
+ * testing.
+ */
+export const REVIEW_REASON_MAX_ITEMS = 20;
+export const REVIEW_QUESTION_MAX_ITEMS = 10;
+export const REVIEW_ITEM_MAX_CHARS = 500;
+
+export function decodeStoredReviewList(
+  listJson: string | null | undefined,
+  maxItems: number
+): string[] {
+  if (!listJson) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(listJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed
+    .filter((item): item is string => typeof item === "string")
+    .slice(0, maxItems)
+    .map((item) => item.slice(0, REVIEW_ITEM_MAX_CHARS));
+}
+
+/**
+ * R21: decode the persisted `requiresHumanReview` flag of a reused draft.
+ * Returns `true` only when the stored value is a truthy 1 — a missing/malformed
+ * stored value decodes to `false` (the flag's absence means the model did not
+ * request review; approval still applies the deterministic validator).
+ * Exported for unit testing.
+ */
+export function decodeStoredRequiresHumanReview(
+  stored: number | null | undefined
+): boolean {
+  return stored === 1;
 }
 
 /**

@@ -179,6 +179,19 @@ export interface AiEmailReplyDraftResult {
   confidence: number | null;
   warnings: string[];
   /**
+   * R21: true when the model asked for human review before sending
+   * (`requiresHumanReview` in the strict generation contract). Persisted on
+   * the draft and decoded on reuse, so a flagged draft can never silently
+   * become lighter-review output. The approval service refuses approval while
+   * this flag is set. `false` when the model did not request review (the
+   * field is optional in the contract — its absence is not an error).
+   */
+  requiresHumanReview: boolean;
+  /** R21: schema-bounded reasons the model gave for the review request. */
+  reviewReasons: string[];
+  /** R21: schema-bounded unresolved questions the model listed. */
+  unresolvedQuestions: string[];
+  /**
    * True when an eligible existing draft was reused instead of regenerating
    * (FR-028). The generation service sets this when the message-level guard
    * finds a live `draft`/`approved` draft for the same message; no LLM call

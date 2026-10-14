@@ -98,7 +98,9 @@ export class EmailReplyApprovalService {
       const reopened = await this.draftModule.readAggregate(input.draftId);
       if (!reopened || reopened.status !== "draft") {
         throw new Error(
-          `Cannot approve: failed-draft reopen did not yield a 'draft' state (current '${reopened?.status ?? "missing"}')`
+          `Cannot approve: failed-draft reopen did not yield a 'draft' state (current '${
+            reopened?.status ?? "missing"
+          }')`
         );
       }
       draft = reopened;
@@ -129,6 +131,17 @@ export class EmailReplyApprovalService {
         .join(",");
       throw new Error(
         `Cannot approve: validation findings [${codes}] require review before sending`
+      );
+    }
+
+    // R21: the model's persisted review request gates approval the same way a
+    // deterministic review finding does — a draft flagged
+    // `requiresHumanReview` cannot be approved as clean (never silently
+    // lighter-review output). Reading the draft column (not a tool input)
+    // keeps the gate authoritative; the flag can only make review stricter.
+    if (draft.requiresHumanReview === 1) {
+      throw new Error(
+        "Cannot approve: the model flagged this draft as requiring human review before sending"
       );
     }
 
