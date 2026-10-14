@@ -365,6 +365,12 @@ export function stopChatV2Stream(conversationId?: string): void {
  * conversation, stale-conversation events neither route nor detach, and a
  * terminal event for the successor conversation resolves (complete) or
  * rejects (error) and detaches both listeners.
+ *
+ * B10 correlation: `executionId` (required) gates task_execution_state
+ * forwarding; content/terminal chunks are attributed by assistant message
+ * id (learned from the successor `start`, else the parent id passed by the
+ * component). Late parent chunks are dropped — a parent complete can never
+ * resolve or detach this attachment early.
  */
 export interface AttachChatV2SuccessorStreamInput {
   mode: "continue" | "retry";
@@ -372,11 +378,64 @@ export interface AttachChatV2SuccessorStreamInput {
   /** Same submissionId the create call used — enables the model dedup. */
   submissionId: string;
   conversationId: string;
-  /** Optional successor identity (from a prior `created` response). */
-  executionId?: string;
+  /**
+   * B10 (FR-13/14/21/22, AC-25/27/32): the successor execution identity
+   * (from the `created` response). REQUIRED — task_execution_state chunks
+   * are correlated by it, so late parent-execution states can never regress
+   * the successor badge this attachment owns.
+   */
+  executionId: string;
+  /**
+   * B10: the superseded parent turn's assistant message id, when known.
+   * Content/complete chunks carrying it are late-parent stragglers and are
+   * dropped (they must neither render into the successor turn nor close
+   * this attachment). Null when the parent id was never observed.
+   */
+  parentMessageId?: string | null;
   onTaskExecutionState: (state: ChatV2TaskExecutionStateEvent) => void;
+  /**
+   * B10: successor content chunks (token/tool/final segments, start) for
+   * the component to render into the successor turn. Only
+   * successor-attributed chunks arrive here — never parent stragglers, never
+   * task_execution_state (those route to onTaskExecutionState).
+   */
+  onChunk?: (chunk: ChatV2StreamChunk) => void;
   onComplete: (chunk: ChatV2StreamChunk) => void;
   onError: (error: Error) => void;
+}
+
+/**
+ * B10: a task_execution_state chunk belongs to the successor turn being
+ * attached (pure — unit-tested without IPC).
+ */
+export function isSuccessorExecutionState(
+  chunk: ChatV2StreamChunk,
+  successorExecutionId: string
+): boolean {
+  return (
+    chunk.eventType === "task_execution_state" &&
+    chunk.taskExecutionState?.executionId === successorExecutionId
+  );
+}
+
+/**
+ * B10: a terminal chunk belongs to a superseded turn and must NOT close or
+ * render into the successor attachment (pure — unit-tested without IPC).
+ * A chunk is superseded when it carries the parent's message id, or a
+ * message id that is neither the parent's nor the learned successor's
+ * (a third turn's). Chunks with no message id cannot be attributed and are
+ * accepted (the successor is the only turn this attachment streams).
+ */
+export function isSupersededTurnChunk(
+  chunk: ChatV2StreamChunk,
+  parentMessageId: string | null | undefined,
+  successorMessageId: string | null | undefined
+): boolean {
+  const messageId = chunk.messageId;
+  if (!messageId) return false;
+  if (parentMessageId && messageId === parentMessageId) return true;
+  if (successorMessageId && messageId !== successorMessageId) return true;
+  return false;
 }
 
 export async function attachChatV2SuccessorStream(
@@ -387,7 +446,10 @@ export async function attachChatV2SuccessorStream(
     parentExecutionId,
     submissionId,
     conversationId,
+    executionId,
+    parentMessageId,
     onTaskExecutionState,
+    onChunk,
     onComplete,
     onError,
   } = input;
@@ -398,6 +460,11 @@ export async function attachChatV2SuccessorStream(
     const cleanup = (): void => {
       detachConversationStreamListeners(conversationKey, false);
     };
+    // B10: the successor turn's assistant message id, learned from its
+    // `start` chunk (authoritative turn open — the parent's start fired long
+    // before attach, so a post-attach start is the successor's). Content and
+    // terminal chunks are correlated against it once known.
+    let successorMessageId: string | null = null;
 
     const chunkHandler = (raw: unknown): void => {
       try {
@@ -407,8 +474,24 @@ export async function attachChatV2SuccessorStream(
           chunk.eventType === "task_execution_state" &&
           chunk.taskExecutionState
         ) {
-          onTaskExecutionState(chunk.taskExecutionState);
+          // B10: only the successor execution's states reach the badge —
+          // late parent-execution states must not regress it.
+          if (isSuccessorExecutionState(chunk, executionId)) {
+            onTaskExecutionState(chunk.taskExecutionState);
+          }
+          return;
         }
+        // B10: drop identifiable late-parent content (it must not render
+        // into the successor turn). Unattributable chunks flow — the parent
+        // is terminal (continue) or stopped (retry), so the successor is the
+        // only turn streaming on this conversation.
+        if (isSupersededTurnChunk(chunk, parentMessageId, successorMessageId)) {
+          return;
+        }
+        if (chunk.eventType === "start" && chunk.messageId) {
+          successorMessageId = chunk.messageId;
+        }
+        onChunk?.(chunk);
       } catch (err) {
         console.error("aiChatV2: successor chunk parse error", err);
       }
@@ -421,6 +504,15 @@ export async function attachChatV2SuccessorStream(
         if (!isChunkForRequest(chunk)) {
           shouldCleanup = false;
           return;
+        }
+        // B10: a late parent complete must neither resolve this attachment
+        // nor detach its listeners — the successor is still running.
+        if (isSupersededTurnChunk(chunk, parentMessageId, successorMessageId)) {
+          shouldCleanup = false;
+          return;
+        }
+        if (chunk.messageId && !successorMessageId) {
+          successorMessageId = chunk.messageId;
         }
         if (chunk.eventType === "error" && chunk.errorMessage) {
           const error = new Error(chunk.errorMessage);

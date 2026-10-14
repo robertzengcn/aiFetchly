@@ -140,6 +140,15 @@ export interface ChatV2MessageMetadata {
   toolResult?: Record<string, unknown>;
   toolResultStatus?: "success" | "error";
   /**
+   * B10 (FR-13/14/21/22, AC-25/27): successor-turn disclosure. Marks an
+   * assistant message rendered from a Continue/Retry successor turn (with
+   * the successor execution id) so the UI — and any future caption — can
+   * distinguish the new attempt from the superseded parent turn. Set by the
+   * renderer at successor attach; never sent to the model.
+   */
+  successorMode?: "continue" | "retry";
+  successorExecutionId?: string;
+  /**
    * Bounded preserved-output references for a large tool result
    * (recoverable large tool results). These descriptors contain NO bulk
    * payload - only identity, sizes, and preservation state - so message

@@ -943,7 +943,11 @@ describe("buildEvidenceService — B03 target-attributed evidence (FR-02/03/10/2
     });
   }
 
-  function countContract(targetId: string, minimum = 100, scope = "execution") {
+  function countContract(
+    targetId: string,
+    minimum = 100,
+    scope: "execution" | "lineage" | "cumulative" = "execution"
+  ) {
     return makeContract([
       {
         id: "rec-1",
