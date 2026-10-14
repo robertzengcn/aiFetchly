@@ -664,6 +664,10 @@ export class ScheduledAiMessageRunner {
     // (`scheduled-assistant-<scheduleId>-<occurrence>`, the same ID the
     // engine used pre-commit); the committed result supplies the verdict.
     const terminalMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
+    // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+    // before the scheduled transaction releases the ledger owner — funded
+    // spend must land before owner release, never after.
+    await loopBinding?.flushPersistedBudget?.();
     let finalized: ScheduledAiMessageRunResult;
     try {
       finalized = await this.finalizeChatRun({

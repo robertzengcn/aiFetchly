@@ -3306,6 +3306,9 @@ export class AIChatQueryEngine {
         // original loop failure.
         if (pending.taskExecutionBinding) {
           try {
+            // B13c: await in-flight durable accounting before the
+            // finalization releases the ledger owner.
+            await pending.taskExecutionBinding.flushPersistedBudget?.();
             await this.finalizeManualAtTerminalFailure(
               pending.taskExecutionBinding,
               "failed",
@@ -3401,7 +3404,11 @@ export class AIChatQueryEngine {
         let taskOutcome: TaskOutcome | undefined;
         let taskExecutionId: string | undefined;
         let taskReasonCode: string | undefined;
-        if (taskExecutionBinding) {
+                if (taskExecutionBinding) {
+          // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+          // before any finalization releases the ledger owner — funded spend
+          // must land before owner release, never after.
+          await taskExecutionBinding.flushPersistedBudget?.();
           // T02 (D2): scheduled bindings are finalized by the runner's
           // `finalizeScheduledPolicyRun` (pass-through, enrollment-snapshot
           // expectedVersion, no retry) AFTER the sink captures the outcome.
@@ -3630,7 +3637,11 @@ export class AIChatQueryEngine {
         let cancelledTaskOutcome: TaskOutcome | undefined;
         let cancelledTaskExecutionId: string | undefined;
         let cancelledTaskReasonCode: string | undefined;
-        if (taskExecutionBinding) {
+                if (taskExecutionBinding) {
+          // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+          // before any finalization releases the ledger owner — funded spend
+          // must land before owner release, never after.
+          await taskExecutionBinding.flushPersistedBudget?.();
           // T02 (D2): scheduled bindings are finalized by the runner's
           // `finalizeScheduledPolicyRun` after the sink captures the outcome
           // (pass-through, enrollment-snapshot expectedVersion). Running the
@@ -3725,7 +3736,11 @@ export class AIChatQueryEngine {
         let failedTaskOutcome: TaskOutcome | undefined;
         let failedTaskExecutionId: string | undefined;
         let failedTaskReasonCode: string | undefined;
-        if (taskExecutionBinding) {
+                if (taskExecutionBinding) {
+          // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+          // before any finalization releases the ledger owner — funded spend
+          // must land before owner release, never after.
+          await taskExecutionBinding.flushPersistedBudget?.();
           // T02 (D2): scheduled bindings are finalized by the runner's
           // `finalizeScheduledPolicyRun` after the sink captures the outcome
           // (pass-through, enrollment-snapshot expectedVersion). Running the
@@ -4393,6 +4408,10 @@ export class AIChatQueryEngine {
     let failureTaskExecutionId: string | undefined;
     let failureTaskReasonCode: string | undefined;
     if (taskExecutionBinding) {
+      // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+      // before any finalization releases the ledger owner — funded spend
+      // must land before owner release, never after.
+      await taskExecutionBinding.flushPersistedBudget?.();
       // T02 (D2): scheduled bindings are finalized by the runner's
       // `finalizeScheduledPolicyRun` after the sink captures the outcome
       // (the sink's `error` commit or `failOutstanding`). Running the manual

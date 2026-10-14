@@ -43,6 +43,7 @@ const {
   startManualMock,
   freezeContractMock,
   finalizeManualMock,
+  flushOrder,
 } = vi.hoisted(() => ({
   flagMock: vi.fn<() => boolean>(),
   classifyMock: vi.fn(),
@@ -51,6 +52,7 @@ const {
   finalizeManualMock: vi.fn<
     (input: Omit<FinalizeInput, "expectedVersion">) => Promise<FinalizeResult>
   >(),
+  flushOrder: [] as string[],
 }));
 
 // --- Feature flag mock: each test sets the flag by configuring flagMock --
@@ -75,6 +77,30 @@ vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) 
     TaskRequestResolver: vi.fn().mockImplementation(function () {
       return { classify: classifyMock };
     }),
+  };
+});
+
+// --- TaskLoopConsult mock: record flush-before-finalize ordering -------
+// B13c: the engine builds its tracked persist wrapper via
+// makeTrackedPersistBudget. Wrap it to record flush invocations so the
+// ordering test below can prove durable accounting precedes owner release.
+vi.mock("@/service/aiTaskExecution/TaskLoopConsult", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskLoopConsult")>();
+  return {
+    ...actual,
+    makeTrackedPersistBudget: (
+      persist: Parameters<typeof actual.makeTrackedPersistBudget>[0]
+    ) => {
+      const tracked = actual.makeTrackedPersistBudget(persist);
+      return {
+        persistBudget: tracked.persistBudget,
+        flushPersistedBudget: async () => {
+          flushOrder.push("flush");
+          await tracked.flushPersistedBudget();
+        },
+      };
+    },
   };
 });
 
@@ -446,6 +472,36 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
       emitSpy.mock.invocationCallOrder[completeEmitIdx]
     );
+  });
+
+  it("B13c: flushPersistedBudget runs before finalizeManual (durable accounting precedes owner release)", async () => {
+    flushOrder.length = 0;
+    finalizeManualMock.mockImplementation(async () => {
+      flushOrder.push("finalize");
+      return { ok: true };
+    });
+    const finishDecision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    };
+    enrollCreated();
+    const { engine, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(finishDecision);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // The engine must await the tracked persists BEFORE releasing the owner.
+    expect(flushOrder).toEqual(["flush", "finalize"]);
   });
 
   it("flag-on + no recorded decision: fallback consult runs and finalizes before complete", async () => {
