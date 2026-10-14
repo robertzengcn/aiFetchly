@@ -285,13 +285,14 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     }
   });
 
-  // ----- D2: FR-04 best-effort route never verifies -----
-  // FR-04: a best-effort task can never reach verified_complete — even if
-  // every required criterion passes, the absence of a verified contract
-  // means the outcome is at most "incomplete". A future refactor that drops
-  // the `route === "task_verified"` guard on canVerify would silently
-  // upgrade best-effort tasks to verified — a correctness violation users
-  // would notice. This test locks the invariant.
+  // ----- D2: FR-04 best-effort route verification boundary (refined by B01) -----
+  // FR-04: a best-effort task verifies ONLY through a trusted, complete
+  // derived contract (frozen, source-anchored, no ambiguity fallback) plus
+  // real evaluated evidence. Caller-supplied criterion IDs with no contract
+  // or no evidence service — the case below — stay incomplete, as do
+  // zero-criteria and ambiguous-fallback contracts. A future refactor that
+  // drops the trust gate would silently upgrade unverifiable best-effort
+  // work to verified — a correctness violation users would notice.
   it("task_best_effort + all required criteria pass → incomplete, never verified_complete (FR-04)", async () => {
     const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
@@ -311,6 +312,188 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     expect(decision.type).toBe("finish");
     if (decision.type === "finish") {
       // FR-04: best-effort never verifies, even with all criteria passing.
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.outcome).not.toBe("verified_complete");
+    }
+  });
+
+  // ----- B01: trusted complete best-effort contracts verify (FR-04/17/19/22) -----
+  // Ordinary manual tasks (no approved plan/template) freeze a derived
+  // best-effort contract. When that contract is trusted-complete (required
+  // criteria, every one source-anchored to approved content, no ambiguity
+  // fallback) and real evaluated evidence passes every required criterion,
+  // the outcome is verified_complete — the normal Completed behavior.
+  function bestEffortContract(criteria: TaskCompletionContract["criteria"]): TaskCompletionContract {
+    return {
+      schemaVersion: 1 as const,
+      contractId: "contract-be",
+      contractHash: "hash-be",
+      objective: "Save 100 qualifying contacts to campaign camp-1",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "best_effort" as const,
+      criteria,
+    };
+  }
+
+  function anchoredRecordCount(id: string): TaskCompletionContract["criteria"][number] {
+    return {
+      id,
+      required: true,
+      kind: "record_count" as const,
+      description: "Save at least 100 qualifying contacts",
+      adapterKey: "record_count",
+      targetId: "qualifying contacts",
+      scope: "execution" as const,
+      minimum: 100,
+      sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 20 }],
+    };
+  }
+
+  function ambiguousFallback(id: string): TaskCompletionContract["criteria"][number] {
+    return {
+      id,
+      required: true,
+      kind: "qualitative" as const,
+      description: "User request: save some contacts please",
+      sourceSelectorKeys: [],
+      sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 27 }],
+    };
+  }
+
+  it("B01a: best-effort + trusted complete contract + real evidence passing all → verified_complete (FR-04/17/19/22)", async () => {
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: ["crit-record_count-0"],
+        unmetCriterionIds: [],
+        evidenceIds: ["evidence-be-1"],
+      }),
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Saved 100 qualifying contacts to camp-1.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        evidenceService: fakeService,
+        contract: bestEffortContract([anchoredRecordCount("crit-record_count-0")]),
+        evidenceContext: {
+          content: "Saved 100 qualifying contacts to camp-1.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
+      expect(decision.evidenceIds).toEqual(["evidence-be-1"]);
+    }
+  });
+
+  it("B01b: best-effort + zero-criteria contract → incomplete, never verified (FR-04)", async () => {
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: [],
+        unmetCriterionIds: [],
+        evidenceIds: [],
+      }),
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Hello.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        evidenceService: fakeService,
+        contract: bestEffortContract([]),
+        evidenceContext: {
+          content: "Hello.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.outcome).not.toBe("verified_complete");
+    }
+  });
+
+  it("B01c: best-effort + ambiguous-fallback contract stays unverified even when the checker passes it (FR-04/AC-21)", async () => {
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: ["crit-qualitative-0"],
+        unmetCriterionIds: [],
+        evidenceIds: ["evidence-be-2"],
+      }),
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "I saved some contacts.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        evidenceService: fakeService,
+        contract: bestEffortContract([ambiguousFallback("crit-qualitative-0")]),
+        evidenceContext: {
+          content: "I saved some contacts.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      // The fallback spans the whole message with no structured selectors —
+      // passing it proves nothing about the request. Stays unverified.
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.outcome).not.toBe("verified_complete");
+    }
+  });
+
+  it("B01d: best-effort + complete contract but caller-supplied IDs (no evidence service) → incomplete (FR-04)", async () => {
+    // Without a real evaluation (no evidence service wired) there is no
+    // admissible evidence — mock-path IDs must never verify, even with a
+    // trusted contract present.
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Saved 100 qualifying contacts to camp-1.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        passedCriterionIds: ["crit-record_count-0"],
+        requiredCriterionIds: ["crit-record_count-0"],
+        contract: bestEffortContract([anchoredRecordCount("crit-record_count-0")]),
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
       expect(decision.outcome).toBe("incomplete");
       expect(decision.outcome).not.toBe("verified_complete");
     }

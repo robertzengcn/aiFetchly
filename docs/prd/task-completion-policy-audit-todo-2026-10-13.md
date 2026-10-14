@@ -64,7 +64,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B01 — Ordinary complete manual tasks remain unverified [P1; confidence 10/10]
 
-- [ ] Allow trusted, complete derived contracts to establish verified completion without requiring an approved plan/template.
+- [x] Allow trusted, complete derived contracts to establish verified completion without requiring an approved plan/template.
+*(done 2026-10-14: isTrustedCompleteContract gate in decide() — best-effort verifies only with mode-matched contract, ≥1 required criterion, every required anchored to approved content, no ambiguity fallback, plus real evaluated evidence; zero-criteria/fallback/caller-ID paths stay incomplete. FR-04 test comment refined, assertions unchanged. Tests: B01a/b/c/d incl. promotion RED + 47/47 controller.)*
 
 **Location:** `src/service/AIChatQueryEngine.ts:1643–1649, 1728–1736`; `src/service/aiTaskExecution/TaskCompletionController.ts:183`.
 

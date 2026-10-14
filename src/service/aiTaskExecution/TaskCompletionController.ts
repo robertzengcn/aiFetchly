@@ -48,6 +48,48 @@ import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget
 import { buildContinuationPrompt } from "@/service/aiTaskExecution/TaskLoopConsult";
 import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 
+/**
+ * B01 (FR-04/17/19/22): whether a frozen best-effort contract is trusted
+ * and complete enough to establish verified completion. All checks run in
+ * the main process against the frozen contract (never renderer claims):
+ * - mode is best_effort (the verified route verifies through its own
+ *   branch; a mode mismatch fails closed),
+ * - at least one required criterion (zero-criteria requests stay
+ *   unverified — there is nothing evidencing the work),
+ * - every required criterion carries at least one source anchor whose
+ *   messageId is approved and whose offsets are well-formed
+ *   (start < end), so coverage is traceable to real request content,
+ * - no required qualitative criterion is an ambiguity fallback (the
+ *   compiler marks fallbacks with empty sourceSelectorKeys and a
+ *   "User request:" description; passing one proves nothing about the
+ *   request — AC-21).
+ */
+export function isTrustedCompleteContract(
+  contract: TaskCompletionContract | null | undefined
+): boolean {
+  if (!contract || contract.mode !== "best_effort") return false;
+  const required = contract.criteria.filter((criterion) => criterion.required);
+  if (required.length === 0) return false;
+  if (contract.approvedSourceMessageIds.length === 0) return false;
+  const approved = new Set(contract.approvedSourceMessageIds);
+  for (const criterion of required) {
+    const anchored = criterion.sourceRefs.some(
+      (ref) =>
+        approved.has(ref.messageId) && ref.startOffset < ref.endOffset
+    );
+    if (!anchored) return false;
+    if (criterion.kind === "qualitative") {
+      if (
+        criterion.sourceSelectorKeys.length === 0 ||
+        criterion.description.startsWith("User request:")
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
   readonly passedCriterionIds?: readonly string[];
@@ -180,7 +222,22 @@ export class TaskCompletionController {
       candidate.provenance !== "unknown" &&
       candidate.streamTerminalSeen;
 
-    if (canVerify && context.route === "task_verified") {
+    // B01 (FR-04/17/19/22): ordinary manual tasks (no approved plan or
+    // template) freeze a derived best-effort contract. When that contract is
+    // trusted-complete — required criteria present, every one anchored to
+    // approved source content, no ambiguity fallback — and real evaluated
+    // evidence passes every required criterion, the outcome is
+    // verified_complete (the normal Completed behavior). Zero-criteria,
+    // unanchored, or fallback contracts stay unverified, as does any
+    // caller-supplied ID path with no real evaluation (evidence undefined).
+    // A best-effort request lacking a usable complete contract must stay
+    // unverified — never relabel all best-effort work successful.
+    const isPromotableBestEffort =
+      context.route === "task_best_effort" &&
+      evidence !== undefined &&
+      isTrustedCompleteContract(context.contract);
+
+    if (canVerify && (context.route === "task_verified" || isPromotableBestEffort)) {
       return {
         type: "finish",
         outcome: "verified_complete",
