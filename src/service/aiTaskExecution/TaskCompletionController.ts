@@ -46,6 +46,7 @@ import type {
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import { buildContinuationPrompt } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { FALLBACK_DESCRIPTION_PREFIX } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 
 /**
@@ -60,7 +61,7 @@ import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
  *   messageId is approved and whose offsets are well-formed
  *   (start < end), so coverage is traceable to real request content,
  * - no required qualitative criterion is an ambiguity fallback (the
- *   compiler prefixes fallbacks with "User request:"; structured
+ *   compiler prefixes fallbacks with FALLBACK_DESCRIPTION_PREFIX; structured
  *   deliverables use "Deliverable:" and also carry empty selector keys,
  *   so the description prefix — not the selector list — is the fallback
  *   marker. Passing a fallback proves nothing about the request — AC-21).
@@ -80,7 +81,7 @@ export function isTrustedCompleteContract(
     );
     if (!anchored) return false;
     if (criterion.kind === "qualitative") {
-      if (criterion.description.startsWith("User request:")) {
+      if (criterion.description.startsWith(FALLBACK_DESCRIPTION_PREFIX)) {
         return false;
       }
     }

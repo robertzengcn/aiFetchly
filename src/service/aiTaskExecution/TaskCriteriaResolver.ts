@@ -48,6 +48,21 @@ export interface CompileResult {
   readonly ambiguityReason: string | null;
 }
 
+/**
+ * INV-1 (2026-10-14): the single source of truth for the description prefix
+ * that marks a {@link TaskCriterion} as an ambiguity fallback (a whole-request
+ * restatement the compiler produced because it could not structure the
+ * request). {@link isTrustedCompleteContract} matches this prefix to refuse
+ * promoting a best-effort contract carrying a fallback to `verified_complete`
+ * — passing such a criterion proves nothing about the actual request (AC-21).
+ *
+ * Both the emit sites below and the controller's `startsWith` check MUST use
+ * this constant so a one-sided edit cannot silently fail open toward a false
+ * `verified_complete`. Structured deliverables use the `"Deliverable:"` prefix
+ * (kept inline; it is emitted and matched nowhere else) — never collide with it.
+ */
+export const FALLBACK_DESCRIPTION_PREFIX = "User request:";
+
 interface Clause {
   readonly text: string;
   readonly startOffset: number;
@@ -599,7 +614,7 @@ function matchClause(
         id,
         required: true,
         kind: "qualitative",
-        description: `User request: ${text}`.slice(0, 2000),
+        description: `${FALLBACK_DESCRIPTION_PREFIX} ${text}`.slice(0, 2000),
         sourceSelectorKeys: [],
         sourceRefs: [makeSourceRef(clause, messageId)],
       },
@@ -711,7 +726,7 @@ export function compileCriteria(input: CompileInput): CompileResult {
           id,
           required: true,
           kind: "qualitative",
-          description: `User request: ${clause.text}`.slice(0, 2000),
+          description: `${FALLBACK_DESCRIPTION_PREFIX} ${clause.text}`.slice(0, 2000),
           sourceSelectorKeys: [],
           sourceRefs: [makeSourceRef(clause, input.sourceUserMessageId)],
         },
@@ -743,7 +758,7 @@ export function compileCriteria(input: CompileInput): CompileResult {
       id,
       required: true,
       kind: "qualitative",
-      description: `User request: ${message}`.slice(0, 2000),
+      description: `${FALLBACK_DESCRIPTION_PREFIX} ${message}`.slice(0, 2000),
       sourceSelectorKeys: [],
       sourceRefs: [
         {

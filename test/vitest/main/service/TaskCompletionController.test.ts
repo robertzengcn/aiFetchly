@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
+import { TaskCompletionController, isTrustedCompleteContract } from "@/service/aiTaskExecution/TaskCompletionController";
 import { TaskRunBudget, BudgetReservationResult, MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/TaskRunBudget";
+import { compileCriteria, FALLBACK_DESCRIPTION_PREFIX } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type { TaskEndCandidate, TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
 
 function baseCandidate(overrides: Partial<TaskEndCandidate>): TaskEndCandidate {
@@ -355,7 +356,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       id,
       required: true,
       kind: "qualitative" as const,
-      description: "User request: save some contacts please",
+      description: `${FALLBACK_DESCRIPTION_PREFIX} save some contacts please`,
       sourceSelectorKeys: [],
       sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 27 }],
     };
@@ -1437,5 +1438,48 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     if (decision.type === "finish") {
       expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
     }
+  });
+
+  /**
+   * INV-1 (2026-10-14): end-to-end contract for the FALLBACK_DESCRIPTION_PREFIX
+   * coupling. The resolver emits fallback criteria whose description carries
+   * the prefix; the controller's isTrustedCompleteContract refuses to promote
+   * any best-effort contract carrying such a fallback to verified_complete
+   * (AC-21). This test calls the REAL compileCriteria with an ambiguous
+   * message (action verb, no extractable target/count/text) and feeds the
+   * compiled criteria straight into isTrustedCompleteContract — proving the
+   * two sides agree on the prefix without a hand-coded string. If either side
+   * drifts, this test fails (and a one-sided change can no longer silently
+   * fail open toward a false verified_complete).
+   */
+  it("INV-1: resolver-emitted fallback prefix is rejected by isTrustedCompleteContract (AC-21)", () => {
+    // "help" is an action verb with no extractable target/count/deliverable
+    // text → the compiler falls back to a whole-request qualitative criterion.
+    const compiled = compileCriteria({
+      userMessage: "help",
+      sourceUserMessageId: "msg-1",
+      route: "task_best_effort",
+      approvedSourceMessageIds: ["msg-1"],
+    });
+    const fallbacks = compiled.criteria.filter(
+      (c) => c.kind === "qualitative" && c.required
+    );
+    expect(fallbacks.length).toBeGreaterThanOrEqual(1);
+    for (const c of fallbacks) {
+      expect(c.description.startsWith(FALLBACK_DESCRIPTION_PREFIX)).toBe(true);
+    }
+    // A best-effort contract built from the REAL compiled fallbacks must NOT
+    // be trusted — the controller must keep it unverified.
+    const contract: TaskCompletionContract = {
+      schemaVersion: 1 as const,
+      contractId: "contract-inv1",
+      contractHash: "hash-inv1",
+      objective: "help",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "best_effort" as const,
+      criteria: compiled.criteria,
+    };
+    expect(isTrustedCompleteContract(contract)).toBe(false);
   });
 });
