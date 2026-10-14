@@ -601,14 +601,13 @@ export class ScheduledAiMessageRunner {
             contentDelta: event.contentDelta,
           });
         } else if (event.type === "complete" || event.type === "error") {
-          this.broadcaster.emitScheduledStream({
-            conversationId,
-            runId,
-            messageId: assistantMessageId,
-            kind: event.type === "error" ? "error" : "done",
-            errorMessage:
-              event.type === "error" ? event.errorMessage : undefined,
-          });
+          // B07: absorb — do NOT broadcast done/error until the scheduled
+          // transaction commits (see post-commit delivery below). The sink
+          // captures the outcome independently, so absorbing delivery never
+          // starves finalization. The terminal message identity is the
+          // deterministic `scheduled-assistant-<scheduleId>-<occurrence>`
+          // recomputed at the delivery site, so no cross-scope mutable
+          // buffer is needed.
         }
         },
         policyBinding
@@ -656,16 +655,79 @@ export class ScheduledAiMessageRunner {
       if (lease) lease.release();
     }
 
-    return this.finalizeChatRun({
-      runId,
-      taskId,
-      scheduleId,
-      startedAt,
-      outcome,
-      conversationId,
-      policyExecution,
-      policyBinding,
-    });
+    // B07 (FR-12/14, NFR-10): terminal delivery happens ONLY after the
+    // scheduled transaction commits. On success the committed result
+    // decides the stream kind (completed → done, anything else → error);
+    // on transaction failure no success delivery escapes — an error
+    // streams instead and the throw propagates (no success count).
+    // The terminal message identity is deterministic
+    // (`scheduled-assistant-<scheduleId>-<occurrence>`, the same ID the
+    // engine used pre-commit); the committed result supplies the verdict.
+    const terminalMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
+    let finalized: ScheduledAiMessageRunResult;
+    try {
+      finalized = await this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome,
+        conversationId,
+        policyExecution,
+        policyBinding,
+      });
+    } catch (err) {
+      try {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "error",
+          errorMessage:
+            err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        /* broadcast failure is non-fatal */
+      }
+      throw err;
+    }
+    try {
+      if (finalized.status === "completed") {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "done",
+        });
+        // Post-commit success notification uses the committed identity
+        // (the engine's pre-commit notify is suppressed for scheduled
+        // turns — see AIChatQueryEngine completed-case B07 gate).
+        try {
+          const { DesktopNotifyService } = await import(
+            "@/service/DesktopNotifyService"
+          );
+          await DesktopNotifyService.getInstance().show({
+            type: "turn_complete",
+            title: "Scheduled run ready",
+            body: "Your scheduled AI run completed.",
+            conversationId,
+          });
+        } catch {
+          /* notification must never fail the run */
+        }
+      } else {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "error",
+          errorMessage: finalized.errorMessage ?? "scheduled run failed",
+        });
+      }
+    } catch {
+      /* broadcast failure is non-fatal */
+    }
+    return finalized;
   }
 
   /**

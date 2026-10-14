@@ -393,6 +393,54 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toBe("OCCURRENCE_ALREADY_ENROLLED");
   });
+
+  it("B07a: scheduled transaction failure → no success delivery (no done stream), error surfaces (FR-12/14)", async () => {
+    flagOn.value = true;
+    engineOutcome.value = { type: "complete", content: "done" };
+    mockFinalizeScheduled.mockResolvedValue({
+      ok: false,
+      reasonCode: "MISSING_TASK_OUTCOME",
+    });
+    await expect(call()).rejects.toThrow(/SCHEDULED_FINALIZATION_FAILED/);
+    // No `done` success delivery escaped before the commit failed.
+    const doneCalls = mockBroadcastStream.mock.calls.filter(
+      (c) => (c[0] as { kind?: string }).kind === "done"
+    );
+    expect(doneCalls).toHaveLength(0);
+    // Honest terminal: an error streams instead of a false success.
+    const errorCalls = mockBroadcastStream.mock.calls.filter(
+      (c) => (c[0] as { kind?: string }).kind === "error"
+    );
+    expect(errorCalls).toHaveLength(1);
+  });
+
+  it("B07b: scheduled commit → exactly one terminal delivery after commit, no premature done (FR-12/14)", async () => {
+    flagOn.value = true;
+    engineOutcome.value = { type: "complete", content: "done" };
+    mockFinalizeScheduled.mockResolvedValue({ ok: true });
+    await call();
+    expect(mockFinalizeScheduled).toHaveBeenCalledTimes(1);
+    // Policy path maps a natural best-effort completion to honest
+    // incomplete (no vacuous success) — the committed terminal streams as
+    // error, never as a premature `done`. Exactly one terminal delivery.
+    const doneCalls = mockBroadcastStream.mock.calls.filter(
+      (c) => (c[0] as { kind?: string }).kind === "done"
+    );
+    const errorCalls = mockBroadcastStream.mock.calls.filter(
+      (c) => (c[0] as { kind?: string }).kind === "error"
+    );
+    expect(doneCalls).toHaveLength(0);
+    expect(errorCalls).toHaveLength(1);
+    // Post-commit ordering: the terminal escapes only after the transaction
+    // applied.
+    const errorOrder = mockBroadcastStream.mock.invocationCallOrder[
+      mockBroadcastStream.mock.calls.findIndex(
+        (c) => (c[0] as { kind?: string }).kind === "error"
+      )
+    ];
+    const finalizeOrder = mockFinalizeScheduled.mock.invocationCallOrder[0];
+    expect(errorOrder).toBeGreaterThan(finalizeOrder);
+  });
 });
 
 /**

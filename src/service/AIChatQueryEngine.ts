@@ -3468,16 +3468,24 @@ export class AIChatQueryEngine {
               console.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
-        DesktopNotifyService.getInstance()
-          .show({
-            type: "turn_complete",
-            title: "AI reply ready",
-            body: "Your AI chat response is ready.",
-            conversationId,
-          })
-          .catch((err: unknown) =>
-            console.error("[desktop-notify] turn_complete failed:", err)
-          );
+        // B07 (FR-12/14): scheduled turns finalize in the runner AFTER the
+        // engine resolves — a pre-commit notify would escape before the
+        // scheduled transaction commits (and would notify even when the
+        // commit later fails). The runner notifies once post-commit using
+        // the committed identity; the engine stays silent for scheduled
+        // kind. Manual turns notify here as before.
+        if (taskExecutionBinding?.executionKind !== "scheduled") {
+          DesktopNotifyService.getInstance()
+            .show({
+              type: "turn_complete",
+              title: "AI reply ready",
+              body: "Your AI chat response is ready.",
+              conversationId,
+            })
+            .catch((err: unknown) =>
+              console.error("[desktop-notify] turn_complete failed:", err)
+            );
+        }
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
