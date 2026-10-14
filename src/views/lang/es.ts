@@ -3658,6 +3658,33 @@ export default {
       busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
       filesNotSupported: "Este comando no admite archivos adjuntos. Quita los archivos o envía tu mensaje sin el prefijo /comando.",
     },
+    errors: {
+      queueLimit:
+        "La cola de mensajes está llena. Espera la respuesta actual o detenla antes de enviar.",
+      contentTooLong: "El mensaje es demasiado largo. Acórtalo e inténtalo de nuevo.",
+      emptyMessage: "El mensaje está vacío. Escribe algo antes de enviar.",
+      preparationFailed:
+        "No se pudo preparar el mensaje. Revisa los adjuntos e inténtalo de nuevo.",
+      queueDisabled: "La cola de mensajes está desactivada. No se puede enviar.",
+      aiDisabled:
+        "Las funciones de IA no están habilitadas en este plan. Tu borrador se conservó.",
+      invalidRequest: "La solicitud no es válida. Revisa el mensaje e inténtalo de nuevo.",
+      pendingNotFound: "No se encontró el mensaje en cola. Es posible que se haya eliminado.",
+      pendingNotClaimable: "El mensaje en cola ya no se puede enviar. Reenvíalo.",
+      conversationMismatch: "El mensaje en cola pertenece a otra conversación.",
+      idempotencyConflict:
+        "Este mensaje ya se envió. Revisa la conversación antes de reenviar.",
+      attachmentsNotSteerable:
+        "Los mensajes con adjuntos no pueden dirigir una respuesta en curso.",
+      steeringDisabled: "La dirección de seguimiento está desactivada.",
+      turnNotSteerable: "No hay ninguna respuesta en curso que dirigir ahora.",
+      steeringCommitRace: "Otra acción reclamó este mensaje primero.",
+      runEnvelopeFailed:
+        "La ejecución no pudo iniciarse. Inténtalo de nuevo en un momento.",
+      dispatchPromoteFailed: "No se pudo enviar el mensaje. Inténtalo de nuevo.",
+      runTerminalPersistFailed:
+        "La respuesta terminó pero no pudo guardarse. Se recuperará al recargar.",
+    },
     history: {
       selectionLimit: "Se pueden adjuntar hasta 20 pasajes a un mensaje.",
       navigateUnavailable: "Ese mensaje ya no está disponible en esta conversación.",

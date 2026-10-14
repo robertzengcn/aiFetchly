@@ -92,6 +92,12 @@ export interface SendOptions {
    * resubmits the SAME job identity instead of minting a duplicate.
    */
   readonly clientRequestId?: string;
+  /**
+   * B15: renderer error localizer (the surface's `t()` bound to the central
+   * workspace error map). Applied to send rejections so typed queue errors
+   * surface localized actionable copy; absent = raw backend message.
+   */
+  readonly localizeError?: (message: string) => string;
 }
 
 /**
@@ -508,8 +514,12 @@ export const useSelectedConversationStore = defineStore(
         // composer for retry; keeping both showed the text twice).
         presenter.removeMessage(optimisticId);
         syncFromPresenter();
-        const messageText: string =
+        const rawText: string =
           err instanceof Error ? err.message : "Failed to start the run";
+        // B15: typed queue errors map to localized actionable copy
+        // (reason + unblock action preserved in all six languages).
+        const messageText: string =
+          options?.localizeError?.(rawText) ?? rawText;
         // Pre-V2 parity (AiChatBox + AiChatV2.showAssistantError): surface the
         // denial as a visible assistant bubble so an AI-disabled
         // (subscription-required) rejection is not silent. The optimistic user

@@ -3643,6 +3643,32 @@ export default {
       busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
       filesNotSupported: "Cette commande ne prend pas en charge les pièces jointes. Retirez les fichiers ou envoyez votre message sans le préfixe /commande.",
     },
+    errors: {
+      queueLimit:
+        "La file de messages est pleine. Attendez la réponse en cours ou arrêtez-la avant d'envoyer.",
+      contentTooLong: "Le message est trop long. Raccourcissez-le et réessayez.",
+      emptyMessage: "Le message est vide. Écrivez quelque chose avant d'envoyer.",
+      preparationFailed:
+        "Le message n'a pas pu être préparé. Vérifiez les pièces jointes et réessayez.",
+      queueDisabled: "La file de messages est désactivée. L'envoi est indisponible.",
+      aiDisabled:
+        "Les fonctions d'IA ne sont pas activées sur cette formule. Votre brouillon a été conservé.",
+      invalidRequest: "La demande n'est pas valide. Vérifiez le message et réessayez.",
+      pendingNotFound: "Le message en file est introuvable. Il a peut-être été supprimé.",
+      pendingNotClaimable: "Le message en file ne peut plus être envoyé. Renvoyez-le.",
+      conversationMismatch: "Le message en file appartient à une autre conversation.",
+      idempotencyConflict:
+        "Ce message a déjà été envoyé. Vérifiez la conversation avant de renvoyer.",
+      attachmentsNotSteerable:
+        "Les messages avec pièces jointes ne peuvent pas orienter une réponse en cours.",
+      steeringDisabled: "L'orientation de suivi est désactivée.",
+      turnNotSteerable: "Aucune réponse en cours à orienter pour le moment.",
+      steeringCommitRace: "Une autre action a réclamé ce message en premier.",
+      runEnvelopeFailed: "L'exécution n'a pas pu démarrer. Réessayez dans un moment.",
+      dispatchPromoteFailed: "Le message n'a pas pu être envoyé. Réessayez.",
+      runTerminalPersistFailed:
+        "La réponse est terminée mais n'a pas pu être enregistrée. Elle sera récupérée au rechargement.",
+    },
     history: {
       selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",
       navigateUnavailable: "Ce message n'est plus disponible dans cette conversation.",

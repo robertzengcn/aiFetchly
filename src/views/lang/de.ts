@@ -3657,6 +3657,34 @@ export default {
       busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
       filesNotSupported: "Dieser Befehl unterstützt keine Dateianhänge. Entferne die Dateien oder sende deine Nachricht ohne den /Befehl-Präfix.",
     },
+    errors: {
+      queueLimit:
+        "Die Nachrichtenwarteschlange ist voll. Warte auf die aktuelle Antwort oder stoppe sie vor dem Senden.",
+      contentTooLong: "Die Nachricht ist zu lang. Kürze sie und versuche es erneut.",
+      emptyMessage: "Die Nachricht ist leer. Schreibe etwas vor dem Senden.",
+      preparationFailed:
+        "Die Nachricht konnte nicht vorbereitet werden. Prüfe die Anhänge und versuche es erneut.",
+      queueDisabled: "Die Nachrichtenwarteschlange ist deaktiviert. Senden ist nicht verfügbar.",
+      aiDisabled: "KI-Funktionen sind in diesem Plan nicht aktiviert. Dein Entwurf wurde behalten.",
+      invalidRequest: "Die Anfrage ist ungültig. Prüfe die Nachricht und versuche es erneut.",
+      pendingNotFound:
+        "Die wartende Nachricht wurde nicht gefunden. Sie wurde möglicherweise entfernt.",
+      pendingNotClaimable:
+        "Die wartende Nachricht kann nicht mehr gesendet werden. Sende sie erneut.",
+      conversationMismatch: "Die wartende Nachricht gehört zu einer anderen Unterhaltung.",
+      idempotencyConflict:
+        "Diese Nachricht wurde bereits gesendet. Prüfe die Unterhaltung vor dem erneuten Senden.",
+      attachmentsNotSteerable:
+        "Nachrichten mit Anhängen können eine laufende Antwort nicht lenken.",
+      steeringDisabled: "Follow-up-Lenkung ist deaktiviert.",
+      turnNotSteerable: "Es gibt gerade keine laufende Antwort zum Lenken.",
+      steeringCommitRace: "Eine andere Aktion hat diese Nachricht zuerst beansprucht.",
+      runEnvelopeFailed:
+        "Die Ausführung konnte nicht gestartet werden. Versuche es gleich erneut.",
+      dispatchPromoteFailed: "Die Nachricht konnte nicht gesendet werden. Versuche es erneut.",
+      runTerminalPersistFailed:
+        "Die Antwort ist fertig, konnte aber nicht gespeichert werden. Sie wird beim Neuladen wiederhergestellt.",
+    },
     history: {
       selectionLimit: "An eine Nachricht lassen sich maximal 20 Passagen anhängen.",
       navigateUnavailable: "Diese Nachricht ist in dieser Unterhaltung nicht mehr verfügbar.",

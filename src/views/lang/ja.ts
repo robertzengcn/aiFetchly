@@ -3582,6 +3582,31 @@ export default {
       busy: "このチャットの実行中はコマンドを使用できません。完了を待つか、先に停止してください。",
       filesNotSupported: "このコマンドはファイルの添付に対応していません。ファイルを外すか、/コマンド接頭辞なしでメッセージを送信してください。",
     },
+    errors: {
+      queueLimit:
+        "メッセージキューがいっぱいです。現在の返信を待つか停止してから送信してください。",
+      contentTooLong: "メッセージが長すぎます。短くしてから再試行してください。",
+      emptyMessage: "メッセージが空です。送信前に何か入力してください。",
+      preparationFailed:
+        "メッセージを準備できませんでした。添付ファイルを確認して再試行してください。",
+      queueDisabled: "メッセージキューは無効です。送信できません。",
+      aiDisabled: "このプランでは AI 機能が有効になっていません。下書きは保持されました。",
+      invalidRequest: "リクエストが無効です。メッセージを確認して再試行してください。",
+      pendingNotFound: "キュー内のメッセージが見つかりませんでした。削除された可能性があります。",
+      pendingNotClaimable: "キュー内のメッセージは送信できなくなりました。再送信してください。",
+      conversationMismatch: "キュー内のメッセージは別の会話のものです。",
+      idempotencyConflict:
+        "このメッセージは既に送信されています。再送信前に会話を確認してください。",
+      attachmentsNotSteerable:
+        "添付ファイル付きのメッセージは実行中の返信を誘導できません。",
+      steeringDisabled: "フォローアップの誘導は無効です。",
+      turnNotSteerable: "今誘導できる実行中の返信はありません。",
+      steeringCommitRace: "別の操作がこのメッセージを先に取得しました。",
+      runEnvelopeFailed: "実行を開始できませんでした。しばらくしてから再試行してください。",
+      dispatchPromoteFailed: "メッセージを送信できませんでした。再試行してください。",
+      runTerminalPersistFailed:
+        "返信は完了しましたが保存できませんでした。再読み込み時に回復します。",
+    },
     history: {
       selectionLimit: "1 つのメッセージに添付できる引用は最大 20 件です。",
       navigateUnavailable: "そのメッセージはこの会話では利用できなくなりました。",

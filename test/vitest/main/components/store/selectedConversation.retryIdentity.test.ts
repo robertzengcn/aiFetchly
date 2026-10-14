@@ -110,6 +110,29 @@ describe("selectedConversation retry identities (B14)", () => {
     expect(sentIds()).toEqual(["req-1", "req-2"]);
   });
 
+  it("B15: a coded queue-limit rejection surfaces localized copy with the draft retained", async () => {
+    await seedConversation("conv-a");
+    const store = useSelectedConversationStore();
+    startChatRunMock.mockRejectedValue(
+      new Error("[QUEUE_LIMIT_REACHED] Queue limit reached (5 messages). Remove one before sending again.")
+    );
+
+    const accepted = await store.sendMessage("keep me", {
+      localizeError: (raw) =>
+        raw.startsWith("[QUEUE_LIMIT_REACHED]") ? "QUEUE PLEINE (fr)" : raw,
+    });
+    await flushPromises();
+
+    // Draft retained: acceptance drives clearing, and rejection returns false.
+    expect(accepted).toBe(false);
+    expect(
+      store.messages.some(
+        (m) => m.role === "assistant" && m.content === "QUEUE PLEINE (fr)"
+      )
+    ).toBe(true);
+    expect(store.errorMessage).toBe("QUEUE PLEINE (fr)");
+  });
+
   it("keeps per-conversation identities across A→B→A", async () => {
     await seedConversation("conv-a");
     const store = useSelectedConversationStore();

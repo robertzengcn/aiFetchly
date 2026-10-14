@@ -3627,6 +3627,35 @@ export default {
       filesNotSupported:
         "This command does not support file attachments. Remove the files or send your message without the /command prefix.",
     },
+    errors: {
+      queueLimit:
+        "The message queue is full. Wait for the current reply or stop it before sending again.",
+      contentTooLong: "The message is too long. Shorten it and try again.",
+      emptyMessage: "The message is empty. Type something before sending.",
+      preparationFailed:
+        "The message could not be prepared. Check the attachments and try again.",
+      queueDisabled: "The message queue is disabled. Sending is unavailable.",
+      aiDisabled: "AI features are not enabled on this plan. Your draft was kept.",
+      invalidRequest: "The request was invalid. Check the message and try again.",
+      pendingNotFound: "The queued message was not found. It may have been removed.",
+      pendingNotClaimable:
+        "The queued message can no longer be sent. Please resend it.",
+      conversationMismatch:
+        "The queued message belongs to a different conversation.",
+      idempotencyConflict:
+        "This message was already sent. Check the conversation before resending.",
+      attachmentsNotSteerable:
+        "Messages with attachments cannot steer a running reply.",
+      steeringDisabled: "Follow-up steering is disabled.",
+      turnNotSteerable: "There is no running reply to steer right now.",
+      steeringCommitRace: "Another action claimed this message first.",
+      runEnvelopeFailed:
+        "The execution could not start. Please try again in a moment.",
+      dispatchPromoteFailed:
+        "The message could not be dispatched. Please try again.",
+      runTerminalPersistFailed:
+        "The reply finished but could not be saved. It will recover on reload.",
+    },
     history: {
       selectionLimit: "Up to 20 passages can be attached to one message.",
       navigateUnavailable: "That message is no longer available in this conversation.",

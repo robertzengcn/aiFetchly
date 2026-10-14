@@ -703,6 +703,7 @@ import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types"
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { navigateToHistorySource } from "@/views/utils/historyNavigate";
+import { localizeWorkspaceError } from "@/views/utils/workspaceErrorLocalization";
 import {
   planContinuationRequestId,
   type PlanContinuationDecision,
@@ -1967,6 +1968,9 @@ async function performOrdinarySend(
       : undefined;
   const accepted = await selectedStore.sendMessage(messageText, {
     clientRequestId: options?.clientRequestId,
+    // B15: typed queue denials (e.g. full queue) surface localized
+    // actionable copy; the draft stays for retry either way.
+    localizeError: (raw) => localizeWorkspaceError(raw, (key) => t(key)).text,
     model: selectedModel.value,
     // A command-derived turn (goal plan prompt) overrides the surface mode.
     mode: options?.modeOverride ?? mode.value,
