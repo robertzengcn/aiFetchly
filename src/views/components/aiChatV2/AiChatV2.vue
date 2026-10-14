@@ -803,7 +803,7 @@ import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
 import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
 import AiChatSelectedContext from "./AiChatSelectedContext.vue";
-import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./selectedContextTypes";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";

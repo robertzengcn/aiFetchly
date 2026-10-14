@@ -697,7 +697,7 @@ import {
   inferGeneratedImageReferences,
   isFusionWording,
 } from "@/views/components/aiChatV2/generatedImageReferenceInference";
-import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "@/views/components/aiChatV2/selectedContextTypes";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";

@@ -1,19 +1,15 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import type { SelectedContextItem } from "@/views/components/aiChatV2/selectedContextTypes";
 
 /**
- * Structural slice of AiChatSelectedContext's SelectedContextItem (the .vue
- * module cannot be imported under the main-process tsconfig). Only the
- * opaque sourceId is trusted across the boundary; preview/tokens are
- * display-only.
+ * History-selection chip shape for this store. Alias of the shared
+ * renderer-local `SelectedContextItem` (kept as a named export so existing
+ * `HistorySelectedContextItem` references keep compiling); the canonical
+ * definition lives in `selectedContextTypes.ts` so `.vue` components and
+ * plain `.ts` stores never drift.
  */
-export interface HistorySelectedContextItem {
-  readonly sourceId: string;
-  readonly preview: string;
-  readonly estimatedTokens: number;
-  readonly refreshed?: boolean;
-  readonly rejected?: boolean;
-}
+export type HistorySelectedContextItem = SelectedContextItem;
 
 /**
  * Conversation-keyed history-selection drafts + stable submission identities
@@ -66,7 +62,12 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
 
   /** Chips for a conversation (restored on return / remount). */
   function getItems(conversationId: string): HistorySelectedContextItem[] {
-    return [...(drafts.value.get(conversationId)?.items ?? [])];
+    // Clone each chip: the store's items are readonly and must never be
+    // mutated through a caller-held reference (the array spread alone would
+    // still share object refs with the drafts map).
+    return (drafts.value.get(conversationId)?.items ?? []).map((item) => ({
+      ...item,
+    }));
   }
 
   /**
@@ -82,7 +83,7 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
       prev.items.length !== items.length ||
       prev.items.some((item, index) => item.sourceId !== items[index]?.sourceId);
     drafts.value.set(conversationId, {
-      items: [...items],
+      items: items.map((item) => ({ ...item })),
       submissionId: changed ? null : (prev?.submissionId ?? null),
     });
   }
@@ -97,7 +98,7 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
     if (prev?.submissionId) return prev.submissionId;
     const submissionId = newDraftId();
     drafts.value.set(conversationId, {
-      items: prev ? [...prev.items] : [],
+      items: prev ? prev.items.map((item) => ({ ...item })) : [],
       submissionId,
     });
     return submissionId;
@@ -111,7 +112,10 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
   function resolveSubmission(conversationId: string): void {
     const prev = drafts.value.get(conversationId);
     if (!prev || !prev.submissionId) return;
-    drafts.value.set(conversationId, { items: [...prev.items], submissionId: null });
+    drafts.value.set(conversationId, {
+      items: prev.items.map((item) => ({ ...item })),
+      submissionId: null,
+    });
   }
 
   /** Test seam: reset all drafts. */

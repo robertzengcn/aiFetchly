@@ -60,4 +60,26 @@ describe("historySelection store (B14)", () => {
     expect(second.getItems("conv-a")).toHaveLength(1);
     expect(second.ensureSubmissionId("conv-a")).toBe(id);
   });
+
+  it("returns isolated copies that cannot mutate store state", () => {
+    const store = useHistorySelectionStore();
+    const input = [{ sourceId: "s1", preview: "p1", estimatedTokens: 10 }];
+    store.setItems("conv-a", input);
+    // Mutating the caller's array after setItems must not affect the store.
+    input.push({ sourceId: "s2", preview: "p2", estimatedTokens: 5 });
+    expect(store.getItems("conv-a")).toHaveLength(1);
+    // Each chip is cloned on the way in and out: the surface's working copy
+    // shares no object refs with the drafts map, so a caller-held mutation
+    // can never corrupt store state except through setItems (which handles
+    // cap + submission-identity rotation).
+    expect(store.getItems("conv-a")[0]).not.toBe(
+      input[0] as unknown as object
+    );
+    const retrieved = store.getItems("conv-a");
+    retrieved.push({ sourceId: "s3", preview: "p3", estimatedTokens: 1 });
+    expect(store.getItems("conv-a")).toHaveLength(1);
+    expect(store.getItems("conv-a")[0]).not.toBe(
+      retrieved[0] as unknown as object
+    );
+  });
 });
