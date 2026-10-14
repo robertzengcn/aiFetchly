@@ -3,6 +3,7 @@ import { ContactInfoEntity } from '../entity/ContactInfo.entity';
 import { SqliteDb } from '../config/SqliteDb';
 import { Token } from '../modules/token';
 import { USERSDBPATH } from '../config/usersetting';
+import { toSqliteCurrentTimestampText } from './sqliteDatetime';
 
 /**
  * Repository for ContactInfo entity
@@ -169,16 +170,19 @@ export class ContactInfoRepository {
 
     /**
      * Count contact rows created at/after a timestamp (execution-scoped freshness
-     * bound, AC-03). `extraction_date` is the `@CreateDateColumn` (UTC text
-     * `"YYYY-MM-DD HH:MM:SS"`, no offset marker); comparing against an ISO
-     * string is lexicographically correct for the equal-format case.
+     * bound, AC-03). `extraction_date` is a `@CreateDateColumn`, stored by the
+     * better-sqlite3 driver as SQLite `CURRENT_TIMESTAMP` text
+     * (`"YYYY-MM-DD HH:MM:SS"`, space separator, no offset marker). Binding
+     * `toISOString()` (`"YYYY-MM-DDTHH:MM:SS.sssZ"`, 'T' separator) breaks the
+     * TEXT comparison — space (0x20) < 'T' (0x54) so same-day rows sort before
+     * the bound and are excluded. Bind the matching space-format text instead.
      */
     async countSince(startedAt: Date): Promise<number> {
         const repository = await this.getRepository();
         return repository
             .createQueryBuilder('contact')
             .where('contact.extraction_date >= :startedAt', {
-                startedAt: startedAt.toISOString(),
+                startedAt: toSqliteCurrentTimestampText(startedAt),
             })
             .getCount();
     }
@@ -198,7 +202,7 @@ export class ContactInfoRepository {
             .createQueryBuilder('contact')
             .select('contact.extraction_date', 'extractionDate')
             .where('contact.extraction_date >= :startedAt', {
-                startedAt: startedAt.toISOString(),
+                startedAt: toSqliteCurrentTimestampText(startedAt),
             })
             .orderBy('contact.extraction_date', 'DESC')
             .limit(1)
