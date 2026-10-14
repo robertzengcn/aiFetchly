@@ -51,6 +51,16 @@ export interface WorkspaceRunDispatchBridge {
   ): Promise<{ runId: string; admitted: boolean } | null>;
   /** Persist the run terminal state (idempotent; ignored for null runId). */
   finishRun(runId: string | null, status: TerminalRunStatus): Promise<void>;
+  /**
+   * B05 strict variant: returns true when the terminal row is durably
+   * terminal after the call (persisted now or already terminal), false when
+   * persistence failed. Callers must NOT publish terminal UI events or
+   * advance the queue on false — surface reconciliation/recovery instead.
+   */
+  finishRunStrict(
+    runId: string | null,
+    status: TerminalRunStatus
+  ): Promise<boolean>;
   /** conversation_busy release: running -> queued for the next claim. */
   releaseToQueued(runId: string | null): Promise<void>;
   /** Parked (permission/plan) run: running -> awaiting_user. */
@@ -154,22 +164,39 @@ export class AIChatWorkspaceRunDispatchBridge
     runId: string | null,
     status: TerminalRunStatus
   ): Promise<void> {
-    if (!runId) return;
+    await this.finishRunStrict(runId, status);
+  }
+
+  async finishRunStrict(
+    runId: string | null,
+    status: TerminalRunStatus
+  ): Promise<boolean> {
+    if (!runId) return true;
     try {
       const row = await this.runModule.getByRunId(runId);
-      if (!row || TERMINAL_RUN_STATUSES.has(row.status)) {
+      if (!row) {
         this.scheduler?.complete(runId);
-        return;
+        return false;
+      }
+      if (TERMINAL_RUN_STATUSES.has(row.status)) {
+        this.scheduler?.complete(runId);
+        return true;
       }
       await this.runModule.transition(runId, status);
-    } catch {
-      // Terminal persistence is best-effort on the bridge; the queue's own
-      // durable transitions remain authoritative for the pending row.
+    } catch (err) {
+      // B05: terminal persistence failure is NOT silent — the caller gates
+      // terminal publication and queue advancement on this return value.
+      console.error(
+        `[run-dispatch-bridge] terminal persistence failed run=${runId}:`,
+        err
+      );
+      return false;
     } finally {
       // B02: always release global capacity on terminal outcomes so a
       // deferred fourth run can admit. Safe to call twice (idempotent).
       this.scheduler?.complete(runId);
     }
+    return true;
   }
 
   async releaseToQueued(runId: string | null): Promise<void> {

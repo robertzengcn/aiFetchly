@@ -6,6 +6,7 @@ import type {
   ChatV2StreamRequest,
 } from "@/entityTypes/aiChatV2Types";
 import type {
+  AIChatQueryEvent,
   AIChatQueryEventSink,
   AIChatTurnTerminalEvent,
 } from "@/service/AIChatQueryEvents";
@@ -104,6 +105,14 @@ export interface AIChatTurnQueueServiceDeps {
       runId: string | null,
       status: "completed" | "failed" | "cancelled" | "interrupted"
     ): Promise<void>;
+    /**
+     * B05 strict variant: false when terminal persistence failed — the
+     * queue must not publish terminal events or advance on false.
+     */
+    finishRunStrict?(
+      runId: string | null,
+      status: "completed" | "failed" | "cancelled" | "interrupted"
+    ): Promise<boolean>;
     /** conversation_busy release: running -> queued for the next claim. */
     releaseToQueued?(runId: string | null): Promise<void>;
     /** Parked (permission/plan) run: running -> awaiting_*. */
@@ -142,6 +151,61 @@ export class AIChatTurnQueueError extends Error {
     super(message);
     this.name = "AIChatTurnQueueError";
     this.code = code;
+  }
+}
+
+/**
+ * B05: durable-terminal gate. The engine emits terminal sink events
+ * (`complete`/`cancelled`/`error`) DURING submitPersistedUserMessage —
+ * before the queue persists the run terminal. This gate buffers those
+ * terminal publications while streaming non-terminal chunks immediately;
+ * the queue flushes only AFTER the run transition commits, so terminal
+ * callbacks always observe a persisted terminal row. On persistence
+ * failure the gate drops the terminal (no successful publication) and the
+ * queue holds instead of silently advancing.
+ */
+export class AIChatTerminalGate implements AIChatQueryEventSink {
+  private readonly downstream: AIChatQueryEventSink;
+  private readonly buffered: AIChatQueryEvent[] = [];
+  private released = false;
+
+  constructor(downstream: AIChatQueryEventSink) {
+    this.downstream = downstream;
+  }
+
+  emit(event: AIChatQueryEvent): void {
+    if (this.released) {
+      this.downstream.emit(event);
+      return;
+    }
+    if (
+      event.type === "complete" ||
+      event.type === "cancelled" ||
+      event.type === "error"
+    ) {
+      this.buffered.push(event);
+      return;
+    }
+    this.downstream.emit(event);
+  }
+
+  get flushable(): Promise<void> | undefined {
+    return this.downstream.flush?.();
+  }
+
+  async flush(): Promise<void> {
+    this.released = true;
+    for (const event of this.buffered) {
+      this.downstream.emit(event);
+    }
+    this.buffered.length = 0;
+    await this.downstream.flush?.();
+  }
+
+  drop(): void {
+    // Persistence failed: terminal callbacks must NOT observe success.
+    this.released = true;
+    this.buffered.length = 0;
   }
 }
 
@@ -774,6 +838,12 @@ export class AIChatTurnQueueService {
       }
 
       let terminal: AIChatTurnTerminalEvent;
+      // B05: buffer terminal sink publication behind durable persistence.
+      // Non-terminal chunks stream immediately; complete/cancelled/error sink
+      // events flush only after the run transition commits below.
+      const terminalGate = new AIChatTerminalGate(
+        this.deps.streamSinkFactory()
+      );
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
         // Codex P1: stage the user-confirmed batch at DISPATCH — the row's
@@ -787,7 +857,7 @@ export class AIChatTurnQueueService {
           );
         }
         terminal = await this.deps.engine.submitPersistedUserMessage({
-          eventSink: this.deps.streamSinkFactory(),
+          eventSink: terminalGate,
           request: turnInputs.request,
           savedUser,
           modelContent: row.modelContent,
@@ -814,9 +884,48 @@ export class AIChatTurnQueueService {
       // for queue behavior; the envelope records the execution outcome).
       // B02: finishRun releases the global scheduler slot; wake deferred
       // conversations on every terminal path below.
+      // B05: terminal sink events buffered in terminalGate flush ONLY after
+      // the strict run transition commits. On persistence failure the gate
+      // drops the terminal (no successful publication) and the queue holds
+      // for explicit reconciliation instead of silently advancing.
       const bridge = this.deps.dispatchBridge;
+      const persistTerminal = async (
+        status: "completed" | "failed" | "cancelled" | "interrupted"
+      ): Promise<boolean> => {
+        if (bridge?.finishRunStrict) {
+          return await bridge.finishRunStrict(
+            bridgeRunId?.runId ?? null,
+            status
+          );
+        }
+        await bridge?.finishRun(bridgeRunId?.runId ?? null, status);
+        return true;
+      };
+      const reconcilePersistenceFailure = async (): Promise<void> => {
+        terminalGate.drop();
+        aiChatQueueCounters.increment("ai_chat_pending_failed_total");
+        log.error(
+          `[ai-chat-queue] run terminal persistence failed conv=${conversationId} run=${bridgeRunId?.runId ?? "none"} — holding for reconciliation (no terminal publication, no advance)`
+        );
+        await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
+          code: "RUN_TERMINAL_PERSIST_FAILED",
+          message:
+            "The execution finished but its durable terminal could not be saved. Retry after recovery.",
+        });
+        const view = await this.deps.pendingModule.getView(
+          row.pendingMessageId
+        );
+        if (view) {
+          this.emitEvent(view, "failed");
+        }
+        this.drainSchedulerWaiters(conversationId);
+      };
       if (terminal.type === "completed") {
-        await bridge?.finishRun(bridgeRunId?.runId ?? null, "completed");
+        if (!(await persistTerminal("completed"))) {
+          await reconcilePersistenceFailure();
+          return;
+        }
+        await terminalGate.flush();
         const done = await this.deps.pendingModule.getView(
           row.pendingMessageId
         );
@@ -874,7 +983,13 @@ export class AIChatTurnQueueService {
         return;
       }
       // cancelled | failed
-      await bridge?.finishRun(bridgeRunId?.runId ?? null, terminal.type);
+      const failedStatus =
+        terminal.type === "cancelled" ? "cancelled" : "failed";
+      if (!(await persistTerminal(failedStatus))) {
+        await reconcilePersistenceFailure();
+        return;
+      }
+      await terminalGate.flush();
       await this.holdQueue(conversationId, terminal.type);
       this.drainSchedulerWaiters(conversationId);
     } finally {
