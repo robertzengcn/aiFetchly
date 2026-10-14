@@ -5,7 +5,10 @@ import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
-import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
+import {
+  EmailReplyDraftGenerationService,
+  createModelOutputCapResolver,
+} from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
@@ -323,7 +326,9 @@ export async function createEmailReplyDraft(
 ): Promise<EmailReceiveAiToolResult<AiEmailReplyDraftResult>> {
   try {
     const input = createEmailReplyDraftSchema.parse(args);
-    const genService = new EmailReplyDraftGenerationService();
+    const genService = new EmailReplyDraftGenerationService({
+      resolveModelOutputCap: createModelOutputCapResolver(),
+    });
     const result = await genService.createDraft({
       messageId: input.message_id,
       tone: input.tone,

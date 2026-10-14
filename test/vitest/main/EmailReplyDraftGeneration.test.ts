@@ -512,6 +512,174 @@ describe("callLlmRaw payload + transport-error classification (FR-027)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// G01 sub-item 2 (FR-027): the 1500-token default is CLAMPED against the
+// provider-reported max output tokens. The clamp narrows only (never widens),
+// fails closed to the configured 1500 when the capability is unknown/unusable,
+// and resolves the capability ONCE per createDraft invocation (memoized), not
+// once per LLM submission.
+// ---------------------------------------------------------------------------
+describe("effectiveReplyMaxTokens capability clamp (FR-027, G01)", () => {
+  // Helper mirroring the inline seedMessage used by the B06 submission-cap
+  // test — seeds a minimal receivable message so createDraft reaches the
+  // generation path.
+  async function seedReceivableMessage(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("clamps max_tokens DOWN to the provider-reported cap when smaller than 1500", async () => {
+    const messageId = await seedReceivableMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => 800,
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // Every generation submission carried the clamped-down budget.
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(800);
+    }
+    const counters = drainCountersForTest();
+    expect(counters.get("capability_resolution{source=provider}")).toBe(1);
+  });
+
+  it("does NOT widen max_tokens beyond 1500 when the provider cap is larger", async () => {
+    const messageId = await seedReceivableMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => 3000,
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(1500);
+    }
+    const counters = drainCountersForTest();
+    expect(counters.get("capability_resolution{source=provider}")).toBe(1);
+  });
+
+  it("falls back to 1500 when the model capability is unknown (undefined)", async () => {
+    const messageId = await seedReceivableMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => undefined,
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(1500);
+    }
+    const counters = drainCountersForTest();
+    expect(counters.get("capability_resolution{source=unknown}")).toBe(1);
+  });
+
+  it("fails closed to 1500 when the capability resolver REJECTS (never 0)", async () => {
+    const messageId = await seedReceivableMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => {
+        throw new Error("catalog fetch blew up");
+      },
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(1500);
+    }
+    // A rejecting resolver is fail-closed to the configured budget, NOT a
+    // transport failure (only deadline exhaustion is). The `error` source
+    // distinguishes it from the legitimate `unknown` (no cap reported) case.
+    const counters = drainCountersForTest();
+    expect(counters.get("capability_resolution{source=error}")).toBe(1);
+  });
+
+  it("resolves the capability ONCE per invocation, not once per submission", async () => {
+    // Drive a full correction loop: first generation returns invalid JSON,
+    // correction returns valid JSON. That is ≥2 LLM submissions but the
+    // capability resolver must be invoked exactly ONCE (memoized).
+    const badJson = "{not valid json";
+    const messageId = await seedReceivableMessage();
+    let resolverCalls = 0;
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(badJson, "stop"),
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => {
+        resolverCalls++;
+        return 900;
+      },
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    // Multiple LLM submissions happened (generation + correction).
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    // But the capability was resolved exactly once for the whole invocation.
+    expect(resolverCalls).toBe(1);
+    for (const req of requests) {
+      expect(req.max_tokens).toBe(900);
+    }
+    const counters = drainCountersForTest();
+    expect(counters.get("capability_resolution{source=provider}")).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B06: JSON hint incompatibility fallback. An explicit unsupported-parameter
 // rejection of response_format triggers ONE no-hint retry; auth/throttling/
 // network/server errors do not.

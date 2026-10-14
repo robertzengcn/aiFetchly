@@ -6,6 +6,7 @@ import type {
   OpenAIUsage,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
@@ -67,6 +68,7 @@ import {
   GENERATION_INVOCATION_BUDGET_MS,
   CLASSIFIER_MAX_TOKENS,
   MODEL_NAME_MAX_CHARS,
+  clampReplyMaxTokens,
   type GenerationDeadline,
 } from "@/service/emailReply/EmailReplyGenerationBudget";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
@@ -253,6 +255,57 @@ function isUnsupportedResponseFormatError(error: unknown): boolean {
 export type AiChatApiFactory = () => Pick<AiChatApi, "openAIChatCompletion">;
 
 /**
+ * The type of the FR-027 capability resolver: maps the model id reported by
+ * the last completion (or null before the first) to the provider-reported
+ * max output tokens for that model. `undefined` = unknown capability.
+ */
+export type ModelOutputCapResolver = (
+  modelId: string | null
+) => Promise<number | undefined>;
+
+/**
+ * Process-lifetime memoized catalog instance backing
+ * {@link createModelOutputCapResolver}. Lazily constructed on first use —
+ * NEVER at module top level (`AIChatModelCatalogService` constructs an
+ * `AiChatApi` in its constructor, and top-level construction hits the
+ * BaseModule/vi.mock TDZ landmine).
+ */
+let sharedModelCatalog: AIChatModelCatalogService | null = null;
+
+/**
+ * G01/FR-027 production resolver: reads the provider's models list through
+ * the process-lifetime {@link AIChatModelCatalogService} and returns the
+ * reported max output tokens for the given model id (undefined when the
+ * model is unknown or the server omits the field — the clamp then falls
+ * back to the configured budget). The catalog never throws; a fetch failure
+ * leaves the previous cache or an empty one, which the clamp treats as
+ * unknown capability. The catalog is constructed lazily on first call and
+ * ensured loaded before lookup. Callers may pass a custom catalog (tests).
+ * Used by the IPC and AI-tool construction sites of
+ * {@link EmailReplyDraftGenerationService}; tests inject their own resolver.
+ */
+export function createModelOutputCapResolver(
+  catalog?: AIChatModelCatalogService
+): ModelOutputCapResolver {
+  return async (modelId) => {
+    if (!catalog) {
+      if (!sharedModelCatalog) {
+        sharedModelCatalog = new AIChatModelCatalogService();
+      }
+      catalog = sharedModelCatalog;
+    }
+    await catalog.ensureLoaded();
+    // On the FIRST generation submission of an invocation no completion has
+    // returned yet (modelId is null); fall back to the server-reported default
+    // model id so the very first request is clamped too, not just the
+    // correction/retry. When neither is known, getMaxOutputTokens returns
+    // undefined and the clamp falls back to the configured budget.
+    const lookup = modelId ?? catalog.getDefaultModelId() ?? undefined;
+    return catalog.getMaxOutputTokens(lookup);
+  };
+}
+
+/**
  * Knowledge-grounded, owner-voice reply draft generation.
  *
  * Pipeline: AI-enable gate -> load message + identity profile -> retrieve
@@ -298,10 +351,40 @@ export class EmailReplyDraftGenerationService {
    * T09: output budget for each reply-generation model call (FR-027).
    * Defaults to {@link REPLY_MAX_TOKENS_DEFAULT} (1500) — no longer a
    * call-site literal; callers can tune it without editing the request.
-   * Per-model clamping (reading `max_output_tokens` from the provider's
-   * models list) remains deferred capability detection.
+   * At call time the configured value is CLAMPED against the
+   * provider-reported max output tokens via {@link effectiveReplyMaxTokens}
+   * (G01/FR-027 capability clamp) — constructor overrides alone are not
+   * capability detection.
    */
   private readonly replyMaxTokens: number;
+  /**
+   * G01/FR-027: resolves the provider-reported max output tokens for the
+   * model the generation call actually uses (model id comes from the last
+   * returned completion, since no explicit model is sent). Production wires
+   * this to `AIChatModelCatalogService.getMaxOutputTokens` through
+   * {@link createModelOutputCapResolver}; tests inject a stub returning a
+   * fixed cap or undefined. Returns undefined when the model is unknown —
+   * the clamp then falls back to the configured budget. Never throws into
+   * the pipeline: a rejecting resolver is fail-closed to the configured
+   * budget inside {@link effectiveReplyMaxTokens}.
+   */
+  private readonly resolveModelOutputCap: (
+    modelId: string | null
+  ) => Promise<number | undefined>;
+  /**
+   * G01/FR-027: per-invocation memo of the clamped output budget. Null until
+   * the first model call of the invocation resolves the capability; reset at
+   * createDraft entry so a new invocation re-resolves (the model may have
+   * changed between invocations).
+   */
+  private resolvedMaxTokens: number | null = null;
+  /**
+   * G01/FR-027: the model id returned by the most recent completion in the
+   * current invocation (provider-reported, not caller-supplied). Feeds both
+   * the capability resolver and the FR-026 remembered-unsupported-JSON-route
+   * memo. Null before the first completion.
+   */
+  private lastReturnedModelId: string | null = null;
   /**
    * The live deadline for the CURRENT createDraft invocation. Created at
    * entry (after the AI-enable gate) and read by every model-call site so
@@ -342,6 +425,17 @@ export class EmailReplyDraftGenerationService {
     };
     /** Reply-generation output budget (FR-027); defaults to 1500 tokens. */
     readonly maxTokens?: number;
+    /**
+     * G01/FR-027: resolves the provider-reported max output tokens for the
+     * model actually used (by returned model id). Returns undefined when
+     * unknown — the configured budget then applies unchanged. Production
+     * wires {@link createModelOutputCapResolver}; tests inject a stub.
+     * Defaults to an always-undefined resolver so existing callers keep the
+     * exact pre-clamp behavior.
+     */
+    readonly resolveModelOutputCap?: (
+      modelId: string | null
+    ) => Promise<number | undefined>;
     /** T07: injectable guard module factory (test seam). */
     readonly guardModuleFactory?: () => EmailReplyGuardModule;
     /**
@@ -373,6 +467,8 @@ export class EmailReplyDraftGenerationService {
       options.maxTokens > 0
         ? Math.floor(options.maxTokens)
         : REPLY_MAX_TOKENS_DEFAULT;
+    this.resolveModelOutputCap =
+      options?.resolveModelOutputCap ?? (async () => undefined);
     this.guardModuleFactory =
       options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
@@ -414,6 +510,12 @@ export class EmailReplyDraftGenerationService {
     //     persistence so late output cannot be committed under an expired
     //     owner.
     this.deadline = startGenerationDeadline(this.budgetOptions);
+    // G01/FR-027: reset the per-invocation capability memo so each invocation
+    // re-resolves against the provider's CURRENT state (the model or provider
+    // may have changed between invocations — a stale clamp from a previous
+    // invocation must not leak in).
+    this.resolvedMaxTokens = null;
+    this.lastReturnedModelId = null;
 
     // 2. Load message.
     await this.messageModule.ensureConnection();
@@ -1576,15 +1678,115 @@ export class EmailReplyDraftGenerationService {
   }
 
   /**
+   * Race an awaited non-model stage against the REMAINING invocation budget
+   * (G01/FR-035: "checkpoint-only expiry checks do not abort a hanging
+   * awaited stage"). The 120s MODEL_CALL_CAP_MS does NOT apply here — model
+   * calls keep their own cap via {@link requireModelCallBudget}; this races
+   * the work against the aggregate 5-minute wall so a hanging retrieval,
+   * profile load, or envelope lookup aborts within the invocation budget
+   * instead of running unbounded.
+   *
+   * Throws {@link LlmTransportError} with `deadlineExceeded: true` (a
+   * transport failure, NOT a validation strike) when the deadline is already
+   * expired or expires while the work is in flight, emitting
+   * `deadline_exceeded{stage}`. With no deadline (defensive, non-createDraft
+   * callers) the work proceeds unbounded, matching pre-B13 behavior.
+   *
+   * The work promise is NOT cancelled (JS cannot cancel a promise); on
+   * timeout the loser keeps running detached and its eventual
+   * rejection is explicitly swallowed so it cannot surface as an
+   * unhandled rejection.
+   */
+  private raceWithDeadline<T>(stage: string, work: Promise<T>): Promise<T> {
+    const deadline = this.deadline;
+    if (!deadline) {
+      // No deadline started (defensive — every createDraft entry starts one).
+      // Do not impose a synthetic timeout; the stage proceeds unbounded exactly
+      // as before this slice for any non-createDraft caller.
+      return work;
+    }
+    if (deadline.expired()) {
+      incrementReplyMetric("deadline_exceeded", { stage });
+      return Promise.reject(
+        new LlmTransportError(
+          `Generation deadline exceeded before stage "${stage}".`,
+          { deadlineExceeded: true }
+        )
+      );
+    }
+    const remainingMs = deadline.remainingMs();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        incrementReplyMetric("deadline_exceeded", { stage });
+        reject(
+          new LlmTransportError(
+            `Generation deadline exceeded during stage "${stage}".`,
+            { deadlineExceeded: true }
+          )
+        );
+      }, remainingMs);
+    });
+    // Detached cleanup: whichever settles first clears the timer; if the WORK
+    // loses the race, swallow its eventual rejection so the abandoned promise
+    // cannot fire an unhandled-rejection event.
+    work.catch(() => undefined);
+    return Promise.race([work, timeout]).finally(() => {
+      if (timer !== null) clearTimeout(timer);
+    });
+  }
+
+  /**
+   * The output budget for the NEXT model call (G01/FR-027 capability clamp):
+   * the configured {@link replyMaxTokens} clamped against the
+   * provider-reported max output tokens for the model actually in use
+   * ({@link lastReturnedModelId}). Memoized per invocation
+   * ({@link resolvedMaxTokens}) so the capability is resolved once, not once
+   * per submission. Fail-closed to the configured budget: an unknown model,
+   * an unusable cap, or a REJECTING resolver all fall back to the configured
+   * value (never 0, never a widened budget) with a
+   * `capability_resolution{source:"unknown"|"provider"|"error"}` metric.
+   * Throws only {@link LlmTransportError} when the invocation deadline
+   * expires while the resolver is in flight (via {@link raceWithDeadline}).
+   */
+  private async effectiveReplyMaxTokens(): Promise<number> {
+    if (this.resolvedMaxTokens !== null) {
+      return this.resolvedMaxTokens;
+    }
+    let cap: number | undefined;
+    let source: "provider" | "unknown" | "error";
+    try {
+      cap = await this.raceWithDeadline(
+        "capability_resolution",
+        this.resolveModelOutputCap(this.lastReturnedModelId)
+      );
+      source = cap === undefined ? "unknown" : "provider";
+    } catch (error) {
+      // Deadline exhaustion must still propagate as a transport failure (B13
+      // invariant — NOT a validation strike); only resolver REJECTION is
+      // fail-closed to the configured budget.
+      if (error instanceof LlmTransportError && error.deadlineExceeded) {
+        throw error;
+      }
+      cap = undefined;
+      source = "error";
+    }
+    this.resolvedMaxTokens = clampReplyMaxTokens(this.replyMaxTokens, cap);
+    incrementReplyMetric("capability_resolution", { source });
+    return this.resolvedMaxTokens;
+  }
+
+  /**
    * Call the LLM and return the typed raw result (FR-027). Captures
    * `finish_reason`, `model`, and `usage` so the validation loop can treat a
    * truncated `length` completion, a `content_filter` refusal, or an
    * unexpected tool-call as a validation failure even if the JSON happens to
-   * parse. Sends `max_tokens: this.replyMaxTokens` (the FR-027 output budget,
-   * default 1500 — a 400-word reply can approach ~700 tokens with JSON framing
-   * and the model needs headroom) and passes
-   * `response_format: json_object` (FR-026) so providers that honor the hint
-   * emit valid JSON only.
+   * parse. Sends `max_tokens` = the FR-027 output budget CLAMPED against the
+   * provider-reported max output tokens (default 1500 — a 400-word reply can
+   * approach ~700 tokens with JSON framing and the model needs headroom;
+   * clamped down when the model reports a smaller cap, never widened) and
+   * passes `response_format: json_object` (FR-026) so providers that honor
+   * the hint emit valid JSON only.
    *
    * FR-035 slice / B13: the call carries `callBudgetMs` = min(remaining
    * invocation budget, MODEL_CALL_CAP_MS) so both the response-headers phase
@@ -1607,13 +1809,14 @@ export class EmailReplyDraftGenerationService {
     const callBudgetMs = this.requireModelCallBudget(
       options?.stage ?? "generation"
     );
+    const maxTokens = await this.effectiveReplyMaxTokens();
     const api = this.apiFactory();
     let resp;
     try {
       resp = await api.openAIChatCompletion({
         messages: [systemMsg, userMsg],
         temperature: 0.4,
-        max_tokens: this.replyMaxTokens,
+        max_tokens: maxTokens,
         // B06/FR-026: omit the JSON hint when retrying after an explicit
         // unsupported-parameter rejection. The provider proved it does not
         // honor response_format; local strict parsing still validates the body.
@@ -1630,6 +1833,10 @@ export class EmailReplyDraftGenerationService {
         unsupportedResponseFormat: isUnsupportedResponseFormatError(error),
       });
     }
+    // G01/FR-027: record the model the provider ACTUALLY used so the next
+    // capability resolution (and the FR-026 remembered route) keys on the
+    // provider-reported id rather than a caller-supplied guess.
+    this.lastReturnedModelId = resp.model ?? null;
     const choice = resp.choices?.[0];
     const refusalText = choice?.message?.refusal;
     const messageToolCalls = choice?.message?.tool_calls;

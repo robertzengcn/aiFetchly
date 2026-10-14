@@ -48,7 +48,10 @@ import {
   emailReplyCheckRepliedInputSchema,
 } from "@/schemas/ipc/emailReply";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
-import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
+import {
+  EmailReplyDraftGenerationService,
+  createModelOutputCapResolver,
+} from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -330,7 +333,9 @@ export function registerEmailReceiveIpcHandlers(): void {
           "Reply drafting is temporarily disabled by the kill switch"
         );
       }
-      const genService = new EmailReplyDraftGenerationService();
+      const genService = new EmailReplyDraftGenerationService({
+        resolveModelOutputCap: createModelOutputCapResolver(),
+      });
       const result = await genService.createDraft(input);
       if (!result.success) {
         // B12: throw a structured error so the validated-IPC catch duck-types

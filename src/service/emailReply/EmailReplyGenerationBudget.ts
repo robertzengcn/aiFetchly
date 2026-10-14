@@ -40,11 +40,37 @@ export const GENERATION_INVOCATION_BUDGET_MS = 5 * 60_000;
  * default, no longer a call-site literal). A 400-word reply can approach
  * ~700 tokens with JSON framing, so the default keeps headroom for strict
  * JSON + the correction loop. Configurable per service instance so callers
- * can tune it without editing the call site; per-model clamping (reading
- * `max_output_tokens` from the provider's models list) remains deferred
- * capability detection (T09 honest scope).
+ * can tune it without editing the call site. The configured value is clamped
+ * against the provider-reported `max_output_tokens` at call time via
+ * {@link clampReplyMaxTokens} (G01/FR-027 capability clamp); when the model is
+ * unknown the configured value applies unchanged.
  */
 export const REPLY_MAX_TOKENS_DEFAULT = 1500;
+
+/**
+ * Clamp the configured reply output budget against the model's
+ * provider-reported max output tokens (FR-027, G01 sub-item 2).
+ *
+ * Narrows ONLY: the result is never larger than the configured budget, so an
+ * unknown/large cap can never widen what the operator configured. An unusable
+ * cap (undefined, non-finite, or <= 0) is treated as "unknown capability" and
+ * the configured budget applies unchanged — never clamp to 0 (that would
+ * forbid the model from emitting anything). A fractional cap is floored since
+ * `max_tokens` must be an integer. The result is at least 1 so a genuinely
+ * tiny reported cap still allows a minimal (truncation-detected) reply rather
+ * than a request the provider would reject outright.
+ *
+ * Pure and dependency-free.
+ */
+export function clampReplyMaxTokens(
+  configured: number,
+  cap: number | undefined
+): number {
+  if (cap === undefined || !Number.isFinite(cap) || cap <= 0) {
+    return configured;
+  }
+  return Math.max(1, Math.min(configured, Math.floor(cap)));
+}
 
 /**
  * Output budget for the safety-classifier call (FR-027 sibling). The
