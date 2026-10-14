@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
 import type { EvidenceStore, EvidenceStoreSnapshot } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
@@ -1297,5 +1297,79 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
     expect(calls).toBe(1);
     expect(result.passedCriterionIds).toEqual([]);
     expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B20b: already-aborted signal returns unknown promptly with no dispatch (FR-06, AC-24)", async () => {
+    // Stop fired before the checker ran (or a provider that never honors
+    // cancellation). The gate must not dispatch into a dead turn and must
+    // not hang — unknown now, no late success ever.
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([qualitativeCriterion("rec-1", "polite")]);
+    let calls = 0;
+    const dispatch = async (): Promise<string> => {
+      calls += 1;
+      return JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "late" },
+        ],
+      });
+    };
+    const controller = new AbortController();
+    controller.abort();
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "Hello." }),
+      contract,
+      {
+        content: "Hello.",
+        source: "t04",
+        sourceRevision: "slice2-t04",
+        expectedStateVersion: 0,
+        checkerDispatch: dispatch,
+        budgetReserveChecker: () => BudgetReservationResult.Reserved,
+        abortSignal: controller.signal,
+      }
+    );
+    expect(calls).toBe(0);
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B20b: hanging (non-cooperative) dispatch resolves unknown at the deadline via race (FR-06, NFR-02)", async () => {
+    // A transport that ignores AbortSignal would hold the gate past the
+    // 30s deadline forever (signal-only abort). The Promise.race deadline
+    // returns unknown promptly with no late verified result and no retry
+    // (abort is terminal, AC-24).
+    vi.useFakeTimers();
+    try {
+      const { store } = memoryStore();
+      const service = new TaskEvidenceService(store);
+      const contract = makeContract([qualitativeCriterion("rec-1", "polite")]);
+      let calls = 0;
+      const dispatch = vi.fn(
+        () => new Promise<string>(() => {})
+      );
+      const pending = service.checkCandidate(
+        baseCandidate({ content: "Hello." }),
+        contract,
+        {
+          content: "Hello.",
+          source: "t04",
+          sourceRevision: "slice2-t04",
+          expectedStateVersion: 0,
+          checkerDispatch: dispatch,
+          budgetReserveChecker: () => BudgetReservationResult.Reserved,
+        }
+      );
+      calls = dispatch.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(result.passedCriterionIds).toEqual([]);
+      expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+      expect(calls).toBeLessThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

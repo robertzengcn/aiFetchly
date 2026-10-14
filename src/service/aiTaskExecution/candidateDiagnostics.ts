@@ -108,6 +108,91 @@ function looksLikeRefusal(content: string): boolean {
 }
 
 /**
+ * B20 (FR-06/22, AC-07/12/21): input/capability-request markers. A model
+ * turn opening with refusal phrasing ("I cannot…", "I can't…") is NOT a
+ * safety restriction when the sentence asks for missing input — until you
+ * choose/provide, I need your X, please select, which/what + question.
+ * Without this distinction every missing-campaign ask becomes
+ * CONTENT_RESTRICTED (blocked_by_policy) instead of an input wait/clarify.
+ * Matched case-insensitively against the leading text (input asks come
+ * first); genuine refusals carry none of these markers.
+ */
+const INPUT_REQUEST_MARKERS = [
+  "until you",
+  "unless you",
+  "i need you",
+  "i need your",
+  "please choose",
+  "please select",
+  "please provide",
+  "please confirm",
+  "please specify",
+  "please tell",
+  "please let me know",
+  "which campaign",
+  "which one",
+  "which of",
+  "which list",
+  "what campaign",
+  "what should",
+  "what would",
+  "what do you",
+  "what list",
+  "what target",
+  "choose a",
+  "choose your",
+  "choose the",
+  "select a",
+  "select your",
+  "select the",
+  "provide the",
+  "provide your",
+  "missing",
+  "required",
+  "awaiting your",
+] as const;
+
+/**
+ * B20: service/capability-failure markers. "I can't reach X / service
+ * unavailable / try again later" is a service failure, not a safety
+ * refusal — it must stay a recoverable incomplete, never a policy block.
+ */
+const SERVICE_FAILURE_MARKERS = [
+  "service unavailable",
+  "service is unavailable",
+  "temporarily unavailable",
+  "try again later",
+  "timed out",
+  "timed-out",
+  "could not reach",
+  "couldn't reach",
+  "cannot reach",
+  "can't reach",
+  "connection failed",
+  "connection error",
+  "connection refused",
+  "rate limit",
+  "rate-limit",
+  "overloaded",
+  "server error",
+] as const;
+
+/** Probe window: input/service asks open the turn; cap the scan. */
+const NON_REFUSAL_PROBE_CHARS = 1000;
+
+/**
+ * True when refusal-shaped content is actually a missing-input ask or a
+ * service-failure notice rather than a genuine safety refusal.
+ */
+function isInputOrServiceNotice(content: string): boolean {
+  const head = content.trimStart().toLowerCase().slice(0, NON_REFUSAL_PROBE_CHARS);
+  return (
+    INPUT_REQUEST_MARKERS.some((marker) => head.includes(marker)) ||
+    SERVICE_FAILURE_MARKERS.some((marker) => head.includes(marker))
+  );
+}
+
+/**
  * Derive the three trust fields from actual accumulator/transport state.
  *
  * Precedence:
@@ -134,8 +219,15 @@ function looksLikeRefusal(content: string): boolean {
 export function deriveCandidateDiagnostics(
   input: CandidateDiagnosticsInput
 ): CandidateDiagnostics {
+  // B20: a refusal-shaped opener that asks for missing input or reports a
+  // service failure is not a safety restriction. content_filter stays
+  // authoritative and always restricts.
+  const refusalOpener =
+    input.finishReason !== "content_filter" &&
+    looksLikeRefusal(input.content);
   const safetyRestriction =
-    input.finishReason === "content_filter" || looksLikeRefusal(input.content);
+    input.finishReason === "content_filter" ||
+    (refusalOpener && !isInputOrServiceNotice(input.content));
 
   if (input.hadTransportError) {
     return {

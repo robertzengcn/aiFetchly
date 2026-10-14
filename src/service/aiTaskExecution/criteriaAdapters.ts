@@ -373,17 +373,38 @@ export class QualitativeEvaluator implements CriterionEvaluator {
     // AC-24 terminal-abort classification); a parent abort propagates through
     // any() automatically.
     const dispatchController = new AbortController();
-    const timer = setTimeout(
-      () => dispatchController.abort(),
-      CHECKER_DEADLINE_MS
-    );
+    // B20 (FR-06, NFR-02, AC-24): the timer alone cannot stop a transport
+    // that ignores AbortSignal — `await dispatch()` would hold the gate
+    // indefinitely past the deadline. Race the dispatch against a deadline
+    // rejection so a hanging request returns promptly; the race loser is
+    // ignored (no late verified result). The deadline rejects with an
+    // AbortError-shaped error so the catch below classifies it as terminal
+    // abort (no retry), identical to a signaled abort.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        dispatchController.abort();
+        const err = new Error(
+          `checker dispatch deadline exceeded (${CHECKER_DEADLINE_MS}ms)`
+        );
+        err.name = "AbortError";
+        reject(err);
+      }, CHECKER_DEADLINE_MS);
+    });
+    // Promise.race subscribes to both inputs, so the loser settling later is
+    // always handled — never an unhandled rejection.
     try {
       const combined = AbortSignal.any(
         context.abortSignal
           ? [context.abortSignal, dispatchController.signal]
           : [dispatchController.signal]
       );
-      const response = await dispatch(prompt, combined);
+      // Already-aborted (Stop fired before dispatch, or a deadlined earlier
+      // attempt): never dispatch into a dead turn — terminal unknown now.
+      if (combined.aborted) {
+        return { kind: "aborted", reason: "checker dispatch already aborted before start (Stop or deadline)" };
+      }
+      const response = await Promise.race([dispatch(prompt, combined), deadline]);
       return parseCheckerVerdict(response, criterion);
     } catch (error) {
       if (isAbortError(error)) {
@@ -394,7 +415,7 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       // Transient error (network/timeout/entitlement throw) → retryable.
       return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
     } finally {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 }

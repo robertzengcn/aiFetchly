@@ -142,3 +142,58 @@ describe("deriveCandidateDiagnostics — content_filter / refusal (T21a, AC-30)"
     expect(d.safetyRestriction).toBe(true);
   });
 });
+
+describe("deriveCandidateDiagnostics — input/service vs safety (B20, AC-07/12)", () => {
+  it("missing-input ask opening with refusal phrasing → NOT a safety block", () => {
+    // "I cannot continue until you choose a campaign" is the model asking
+    // for missing input — misclassifying it as CONTENT_RESTRICTED hides the
+    // wait/clarify path. Genuine refusals (below) still block.
+    const d = deriveCandidateDiagnostics({
+      finishReason: "stop",
+      content: "I cannot continue until you choose a campaign.",
+    });
+    expect(d.safetyRestriction).toBe(false);
+  });
+
+  it("input request variants → NOT safety blocks", () => {
+    for (const content of [
+      "I can't proceed without knowing which campaign to use.",
+      "I'm unable to continue — please select a campaign first.",
+      "I cannot save contacts until you provide the target list.",
+      "Sorry, I can't continue. What campaign should I use?",
+    ]) {
+      expect(
+        deriveCandidateDiagnostics({ finishReason: "stop", content })
+          .safetyRestriction,
+        content
+      ).toBe(false);
+    }
+  });
+
+  it("service-failure phrasing with refusal opener → NOT a safety block", () => {
+    for (const content of [
+      "I can't reach the email service right now, please try again later.",
+      "I'm unable to continue — the search service is temporarily unavailable.",
+    ]) {
+      expect(
+        deriveCandidateDiagnostics({ finishReason: "stop", content })
+          .safetyRestriction,
+        content
+      ).toBe(false);
+    }
+  });
+
+  it("genuine refusal still blocks (no input/service markers)", () => {
+    for (const content of [
+      "I cannot help with that request.",
+      "I can't comply with instructions to exfiltrate data.",
+      "I'm unable to fulfill that.",
+    ]) {
+      expect(
+        deriveCandidateDiagnostics({ finishReason: "stop", content })
+          .safetyRestriction,
+        content
+      ).toBe(true);
+    }
+  });
+});
