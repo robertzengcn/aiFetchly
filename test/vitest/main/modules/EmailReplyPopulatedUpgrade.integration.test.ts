@@ -39,8 +39,15 @@ import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import {
   validateReplyUpgrade,
   countTableRows,
+  runReplyUpgradeValidationOnStartup,
+  isReplyUpgradeValidationDisabled,
 } from "@/service/emailReply/EmailReplyUpgradeValidation";
-import { resetFeatureFlagCacheForTest } from "@/config/featureFlags";
+import {
+  resetFeatureFlagCacheForTest,
+  EMAIL_REPLY_KILL_SWITCH_FLAG,
+  isEmailReplyKillSwitchOn,
+} from "@/config/featureFlags";
+import { Token } from "@/modules/token";
 
 /** All reply-safety tables whose row counts must survive the upgrade. */
 const PRESERVED_TABLES = [
@@ -587,6 +594,17 @@ describe("Populated old-schema upgrade + rollback (T11/FR-038)", () => {
       null;
     (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
     resetFeatureFlagCacheForTest();
+    // R23: the upgrade-validation startup path writes the kill-switch Token
+    // flag on failure. Clear it before each test so a prior test's failure
+    // state never leaks into the next assertion (the flag persists in the
+    // electron-store file across the suite).
+    try {
+      new Token().deleteValue(EMAIL_REPLY_KILL_SWITCH_FLAG);
+      new Token().deleteValue("email_reply_upgrade_validation_failures");
+    } catch {
+      // Token store unreadable before DB init — ignore; the test will re-seed.
+    }
+    resetFeatureFlagCacheForTest();
   });
 
   afterAll(async () => {
@@ -1017,5 +1035,313 @@ describe("Populated old-schema upgrade + rollback (T11/FR-038)", () => {
       )
     ) as Array<{ name: string }>;
     expect(guardTables.length).toBe(0);
+  });
+});
+
+/**
+ * R23: wire upgrade validation into production startup. The previous tests
+ * proved `validateReplyUpgrade` reports failures read-only. These tests prove
+ * the PRODUCTION wiring — `runReplyUpgradeValidationOnStartup` — turns a
+ * failure report into the §5.3 rollout action: it DISABLES guarded reply
+ * work (draft generation + new send claims) via the emergency kill-switch
+ * Token flag, PRESERVES the database (never destructive), and a passing
+ * validation does NOT silently clear an operator's intentional kill switch.
+ * They also pin the exact-index fix: a WRONG composite unique index that the
+ * old substring check would have accepted is now rejected.
+ *
+ * "Helper-only tests are not production wiring evidence" (R23 regression): the
+ * startup entry point `runReplyUpgradeValidationOnStartup` is the wiring, and
+ * these tests exercise it directly, including the kill-switch disable side
+ * effect the draft/send IPC handlers gate on.
+ */
+describe("R23 — production upgrade-validation wiring + exact index check", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `aifetchly-reply-r23-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+    );
+    fs.mkdirSync(tmpDir, { recursive: true });
+    dbPath = path.join(tmpDir, "scraper.db");
+    (SqliteDb as unknown as { instance: unknown }).instance = null;
+    (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+      null;
+    (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
+    resetFeatureFlagCacheForTest();
+    try {
+      new Token().deleteValue(EMAIL_REPLY_KILL_SWITCH_FLAG);
+      new Token().deleteValue("email_reply_upgrade_validation_failures");
+    } catch {
+      // Token store unreadable before DB init — ignore.
+    }
+    resetFeatureFlagCacheForTest();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      new Token().deleteValue(EMAIL_REPLY_KILL_SWITCH_FLAG);
+      new Token().deleteValue("email_reply_upgrade_validation_failures");
+    } catch {
+      // Best-effort cleanup.
+    }
+  });
+
+  async function upgradeOnce(): Promise<void> {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+  }
+
+  /**
+   * Corrupt a freshly-upgraded DB: drop the guard table entirely (the same
+   * corruption the existing read-only test uses), then run the PRODUCTION
+   * startup path. The kill switch MUST turn ON so guarded work refuses, and
+   * the DB MUST be preserved (no row loss, no table recreated by the
+   * validator).
+   */
+  it("runReplyUpgradeValidationOnStartup disables guarded work via the kill switch on a corrupted schema and preserves the DB", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    const ds = SqliteDb.getInstance(tmpDir).connection;
+    // Corrupt: drop the guard table (the invariants the validator checks).
+    const qr = ds.createQueryRunner();
+    await qr.query(`DROP TABLE email_reply_guard`);
+    await qr.release();
+
+    // Snapshot row counts — the validator must NOT mutate (no destructive
+    // repair, §5.3).
+    const receivedBefore = await countTableRows(ds, "email_received_message");
+    const draftBefore = await countTableRows(ds, "email_reply_draft");
+
+    // The kill switch is OFF before validation (beforeEach cleared it).
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(false);
+
+    const report = await runReplyUpgradeValidationOnStartup(
+      ds,
+      "r23-corrupted-schema"
+    );
+    expect(report.ok).toBe(false);
+    expect(report.failures.length).toBeGreaterThan(0);
+    expect(
+      report.failures.some(
+        (f) => f.check === "table" && f.detail.includes("email_reply_guard")
+      )
+    ).toBe(true);
+
+    // §5.3 rollout disable: the kill switch is now ON — guarded reply work
+    // (draft generation + new send claims) refuses on the next IPC call.
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(true);
+    expect(isReplyUpgradeValidationDisabled()).toBe(true);
+
+    // The diagnostic key carries the reason + bounded failure detail.
+    const diag = new Token().getValue(
+      "email_reply_upgrade_validation_failures"
+    );
+    expect(diag).toContain("r23-corrupted-schema");
+    expect(diag).toContain("table");
+
+    // DB PRESERVED: no rows lost, no tables recreated by the validator.
+    const receivedAfter = await countTableRows(ds, "email_received_message");
+    const draftAfter = await countTableRows(ds, "email_reply_draft");
+    expect(receivedAfter).toBe(receivedBefore);
+    expect(draftAfter).toBe(draftBefore);
+    const guardTables = (
+      await ds.query(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='email_reply_guard'`
+      )
+    ) as Array<{ name: string }>;
+    expect(guardTables.length).toBe(0);
+  });
+
+  /**
+   * R23 exact-index fix: a WRONG composite unique index that contains both
+   * `emailServiceId` and `replyKey` tokens but is neither the exact ordered
+   * pair nor UNIQUE — the old substring check (`sql.includes("unique") &&
+   * sql.includes("emailserviceid") && sql.includes("replykey")`) would ACCEPT
+   * this as valid. The exact-column resolver must REJECT it.
+   *
+   * Fixture: replace the correct unique index with
+   * `(replyKey, emailServiceId, phase, leaseExpiresAt)` — wrong column order,
+   * extra columns, non-unique. The validator must report the index failure.
+   */
+  it("validateReplyUpgrade rejects a WRONG composite unique index the old substring check would accept (exact columns)", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    const ds = SqliteDb.getInstance(tmpDir).connection;
+    // Replace the correct unique acquire index with a wrong composite index
+    // that contains both tokens but is neither the exact pair nor unique.
+    const qr = ds.createQueryRunner();
+    // Drop every existing guard index, then create one that the old check
+    // would pass but the exact-column resolver must reject.
+    const indexes = (await qr.query(
+      `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='email_reply_guard'`
+    )) as Array<{ name: string }>;
+    for (const idx of indexes) {
+      // sqlite_master name is a literal from our own query — safe to quote.
+      await qr.query(`DROP INDEX IF EXISTS "${idx.name}"`);
+    }
+    await qr.query(
+      `CREATE INDEX "IDX_wrong_composite" ON email_reply_guard (replyKey, emailServiceId, phase, leaseExpiresAt)`
+    );
+    await qr.release();
+
+    const report = await validateReplyUpgrade(ds);
+    expect(report.ok).toBe(false);
+    // The unique acquire index is missing (the wrong index is non-unique and
+    // has the wrong column set) → index failure. The phase-lease index is
+    // also missing as a standalone (the wrong index has extra columns) →
+    // another index failure.
+    expect(
+      report.failures.some(
+        (f) =>
+          f.check === "index" &&
+          f.detail.includes("UNIQUE (emailServiceId, replyKey)")
+      )
+    ).toBe(true);
+    expect(
+      report.failures.some(
+        (f) =>
+          f.check === "index" && f.detail.includes("(phase, leaseExpiresAt)")
+      )
+    ).toBe(true);
+  });
+
+  /**
+   * R23 exact-index positive: a correct unique (emailServiceId, replyKey)
+   * index AND a correct non-unique (phase, leaseExpiresAt) index pass. This
+   * pins that the exact-column resolver did not over-tighten and reject the
+   * real TypeORM-created indexes.
+   */
+  it("validateReplyUpgrade accepts the correct TypeORM-created guard indexes (exact-column positive)", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    const ds = SqliteDb.getInstance(tmpDir).connection;
+    const report = await validateReplyUpgrade(ds);
+    expect(
+      report.ok,
+      `should pass with correct indexes: ${JSON.stringify(report.failures)}`
+    ).toBe(true);
+    // No index failures at all.
+    expect(report.failures.some((f) => f.check === "index")).toBe(false);
+  });
+
+  /**
+   * R23 §5.3: a PASSING validation must NOT silently clear an operator's
+   * intentional kill switch. The operator may have turned the kill switch
+   * ON by hand (a separate emergency action); a clean validation re-run on
+   * the next startup must not undo that decision. The startup path only
+   * writes the flag on FAILURE.
+   */
+  it("a passing validation does NOT clear an operator's intentional kill switch", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    // Operator turned the kill switch ON intentionally (separate emergency).
+    new Token().setValue(EMAIL_REPLY_KILL_SWITCH_FLAG, "true");
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(true);
+
+    const ds = SqliteDb.getInstance(tmpDir).connection;
+    const report = await runReplyUpgradeValidationOnStartup(
+      ds,
+      "r23-passing-with-manual-killswitch"
+    );
+    expect(report.ok).toBe(true);
+
+    // The intentional kill switch survives — validation did not clear it.
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(true);
+  });
+
+  /**
+   * R23 fail-closed on a validator EXCEPTION: if `validateReplyUpgrade`
+   * itself throws (e.g. an unreadable DataSource in a way the report cannot
+   * capture), the startup path disables guarded work rather than proceeding
+   * against an unvalidated schema. The exception message is persisted as
+   * the failure reason.
+   */
+  it("runReplyUpgradeValidationOnStartup fails closed (kill switch ON) when the validator itself throws", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    // A DataSource whose queryRunner.query throws simulates an unreadable
+    // connection the validator cannot capture in its report. We pass a
+    // minimal stub that throws on createQueryRunner.
+    const throwingConnection = {
+      createQueryRunner() {
+        return {
+          query() {
+            throw new Error("simulated unreadable connection");
+          },
+          release() {
+            return Promise.resolve();
+          },
+        };
+      },
+    } as unknown as import("typeorm").DataSource;
+
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(false);
+
+    const report = await runReplyUpgradeValidationOnStartup(
+      throwingConnection,
+      "r23-validator-exception"
+    );
+    expect(report.ok).toBe(false);
+    expect(report.failures[0]?.check).toBe("validator_exception");
+    expect(report.failures[0]?.detail).toContain("simulated unreadable");
+
+    // Fail closed: guarded work refuses.
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(true);
+  });
+
+  /**
+   * R23 "populated upgrades run twice and verify pre/post IDs, bindings,
+   * status/protection" — the startup path on a CLEAN populated upgrade
+   * reports ok and leaves the kill switch OFF (the operator did not set it).
+   * This is the production happy path: two consecutive startups over the
+   * same populated DB both validate clean and never disable guarded work.
+   */
+  it("two consecutive startup validations over a populated upgraded DB both pass and leave the kill switch OFF", async () => {
+    buildLegacyDatabase(dbPath);
+    await upgradeOnce();
+
+    const ds = SqliteDb.getInstance(tmpDir).connection;
+
+    // First startup validation.
+    const report1 = await runReplyUpgradeValidationOnStartup(
+      ds,
+      "r23-startup-1"
+    );
+    expect(report1.ok).toBe(true);
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(false);
+
+    // Second startup validation (idempotent over the already-upgraded DB).
+    const report2 = await runReplyUpgradeValidationOnStartup(
+      ds,
+      "r23-startup-2"
+    );
+    expect(report2.ok).toBe(true);
+    resetFeatureFlagCacheForTest();
+    expect(isEmailReplyKillSwitchOn()).toBe(false);
+
+    // Historical sent protection intact across both startups.
+    const historical = (
+      await ds.query(
+        `SELECT replyStatus, processedAt FROM email_received_message WHERE replyStatus = 'sent'`
+      )
+    ) as Array<{ replyStatus: string; processedAt: string | null }>;
+    expect(historical.length).toBe(1);
+    expect(historical[0].replyStatus).toBe("sent");
+    expect(historical[0].processedAt).not.toBeNull();
   });
 });

@@ -1234,6 +1234,46 @@ function initialize() {
         );
       }
 
+      // Post-synchronize email-reply upgrade validation (R23, technical design
+      // §5.3). Runs AFTER ensureInitialized() has applied TypeORM synchronize
+      // over the POPULATED database. Read-only: never repairs, drops, or
+      // backfills. On a non-empty failure list (or a validator exception) it
+      // DISABLES guarded reply work (draft generation + new send claims) via
+      // the emergency kill-switch Token flag so the refusal is visible to
+      // operators, and PRESERVES the database — the §5.3 rollout contract.
+      // The mandatory local duplicate protection (sent/unknown/conflict
+      // clusters blocking acquireReservation) has no feature-flag dependency
+      // and runs unconditionally, so this disable cannot remove it.
+      // Fire-and-forget so a slow or stuck validation never blocks startup;
+      // the kill switch takes effect on the next draft/send IPC call.
+      if (startupPolicy.validateReplyUpgradeOnStartup) {
+        try {
+          const { runReplyUpgradeValidationOnStartup } = await import(
+            "@/service/emailReply/EmailReplyUpgradeValidation"
+          );
+          void runReplyUpgradeValidationOnStartup(
+            appDataSource.connection,
+            "startup-upgrade-validation"
+          ).then((report) => {
+            if (!report.ok) {
+              log.error(
+                "[email-reply-upgrade-validation] FAILED — guarded reply work disabled via kill switch. Failures:",
+                JSON.stringify(report.failures)
+              );
+            } else {
+              log.info(
+                "[email-reply-upgrade-validation] passed — reply schema invariants verified"
+              );
+            }
+          });
+        } catch (err) {
+          log.error(
+            "[email-reply-upgrade-validation] startup wiring failed to launch:",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+
       // Best-effort cache cleanup so stale paste expansions do not grow
       // without bound. Fire-and-forget so it never blocks startup.
       try {
