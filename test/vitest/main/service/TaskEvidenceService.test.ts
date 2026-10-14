@@ -4,6 +4,7 @@ import type { EvidenceStore, EvidenceStoreSnapshot } from "@/service/aiTaskExecu
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import {
   buildDefaultRegistry,
+  buildTextEvidence,
   CriteriaAdapterRegistry,
   OperationReceiptAdapter,
 } from "@/service/aiTaskExecution/criteriaAdapters";
@@ -239,17 +240,23 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     const dispatch = async (prompt: string): Promise<string> => {
       calls += 1;
       // T04: the §8.2 JSON contract, one entry per batched criterion. The
-      // checker cites the admissible evidence id (the criterion id) on pass;
+      // checker cites the admissible text evidence id (B04) on pass;
       // fail/unknown carry no citation.
       expect(prompt).toContain("rec-1");
       expect(prompt).toContain("rec-2");
       expect(prompt).toContain("rec-3");
+      const textId = buildTextEvidence(
+        "Hello, I hope you are well.",
+        "rec-1",
+        "exec-1"
+      ).evidenceId;
+      expect(prompt).toContain(textId);
       return JSON.stringify({
         criteria: [
           {
             criterionId: "rec-1",
             verdict: "pass",
-            evidenceIds: ["rec-1"],
+            evidenceIds: [textId],
             reason: "polite",
           },
           {
@@ -512,12 +519,13 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
         expectedStateVersion: 0,
         toolCatalogState: { "op-send": { state: "completed" } },
         checkerDispatch: async (prompt: string): Promise<string> => {
-          // T04: return the §8.2 JSON for the criterion id in the prompt.
+          // T04: return the §8.2 JSON for the criterion id in the prompt,
+          // citing its admissible text evidence id (B04).
           const m = prompt.match(/Criterion \(([^\)]+)\):/);
           const cid = m ? m[1] : "rec-4";
           return JSON.stringify({
             criteria: [
-              { criterionId: cid, verdict: "pass", evidenceIds: [cid], reason: "ok" },
+              { criterionId: cid, verdict: "pass", evidenceIds: [buildTextEvidence("Saved 100 contacts.", cid, "exec-1").evidenceId], reason: "ok" },
             ],
           });
         },
@@ -863,7 +871,7 @@ describe("TaskEvidenceService.checkCandidate — T03 provider-backed evidence (F
           const cid = m ? m[1] : "rec-2";
           return JSON.stringify({
             criteria: [
-              { criterionId: cid, verdict: "pass", evidenceIds: [cid], reason: "ok" },
+              { criterionId: cid, verdict: "pass", evidenceIds: [buildTextEvidence("Saved 100 contacts. Hello, I hope you are well.", cid, "exec-1").evidenceId], reason: "ok" },
             ],
           });
         },
@@ -928,9 +936,10 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
     const dispatch = async (): Promise<string> => {
       calls += 1;
       if (calls === 1) return "not json at all";
+      const textId = buildTextEvidence("Hello.", "rec-1", "exec-1").evidenceId;
       return JSON.stringify({
         criteria: [
-          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite on retry" },
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite on retry" },
         ],
       });
     };
@@ -1205,14 +1214,15 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
     expect(result.unmetCriterionIds).toEqual(["rec-1"]);
   });
 
-  it("valid references pass only allowed criteria (pass with evidenceIds:['rec-1'] for criterion rec-1 → pass)", async () => {
+  it("valid references pass only allowed criteria (pass citing its text evidence id for criterion rec-1 → pass)", async () => {
     const { store } = memoryStore();
     const service = new TaskEvidenceService(store);
     const contract = makeContract([qualitativeCriterion("rec-1", "polite")]);
+    const textId = buildTextEvidence("Hello, I hope you are well.", "rec-1", "exec-1").evidenceId;
     const dispatch = async (): Promise<string> =>
       JSON.stringify({
         criteria: [
-          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite" },
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite" },
         ],
       });
     const result = await service.checkCandidate(
@@ -1372,12 +1382,15 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
 });
 
 describe("TaskEvidenceService.checkCandidate — B05 batch qualitative checking (FR-04/08, AC-03/08/20)", () => {
-  const batchPass = (ids: string[]) =>
+  // B04: the batch helper cites each criterion's deliverable-text evidence
+  // id (the only admissible citation for a pass) — criterion-id-only
+  // citations no longer verify.
+  const batchPass = (ids: string[], content: string, scopeId = "exec-1") =>
     JSON.stringify({
       criteria: ids.map((criterionId) => ({
         criterionId,
         verdict: "pass",
-        evidenceIds: [criterionId],
+        evidenceIds: [buildTextEvidence(content, criterionId, scopeId).evidenceId],
         reason: `${criterionId} satisfied`,
       })),
     });
@@ -1403,7 +1416,7 @@ describe("TaskEvidenceService.checkCandidate — B05 batch qualitative checking 
       qualitativeCriterion("rec-2", "email draft"),
       qualitativeCriterion("rec-3", "tweet"),
     ]);
-    const dispatch = vi.fn(async () => batchPass(["rec-1", "rec-2", "rec-3"]));
+    const dispatch = vi.fn(async () => batchPass(["rec-1", "rec-2", "rec-3"], "blog + email + tweet"));
     const cap = cappedReserve(2);
     const result = await service.checkCandidate(
       baseCandidate({ content: "blog + email + tweet" }),
@@ -1434,7 +1447,7 @@ describe("TaskEvidenceService.checkCandidate — B05 batch qualitative checking 
     const dispatch = vi.fn(async (): Promise<string> => {
       calls += 1;
       if (calls === 1) return "not json at all";
-      return batchPass(["rec-1", "rec-2"]);
+      return batchPass(["rec-1", "rec-2"], "blog + email");
     });
     const cap = cappedReserve(2);
     const result = await service.checkCandidate(
@@ -1464,7 +1477,7 @@ describe("TaskEvidenceService.checkCandidate — B05 batch qualitative checking 
     const dispatch = vi.fn(async () =>
       JSON.stringify({
         criteria: [
-          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "good post" },
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [buildTextEvidence("blog only", "rec-1", "exec-1").evidenceId], reason: "good post" },
           { criterionId: "rec-2", verdict: "fail", evidenceIds: [], reason: "no draft" },
         ],
       })
@@ -1529,5 +1542,103 @@ describe("TaskEvidenceService.checkCandidate — B21 artifact baselines flow (FR
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("TaskEvidenceService.checkCandidate — B04 admissible text evidence (FR-03/04, AC-11/20/21)", () => {
+  const CONTENT = "Write a blog post about testing. It is thorough and complete.";
+
+  function checkWith(
+    dispatch: (prompt: string) => Promise<string>,
+    content = CONTENT
+  ): Promise<{ passed: string[]; unmet: string[]; prompts: string[] }> {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([qualitativeCriterion("rec-1", "blog post delivered")]);
+    const prompts: string[] = [];
+    return service
+      .checkCandidate(
+        baseCandidate({ content }),
+        contract,
+        {
+          content,
+          source: "b04",
+          sourceRevision: "slice-b04",
+          expectedStateVersion: 0,
+          checkerDispatch: async (prompt: string) => {
+            prompts.push(prompt);
+            return dispatch(prompt);
+          },
+          budgetReserveChecker: () => BudgetReservationResult.Reserved,
+        }
+      )
+      .then((result) => ({
+        passed: [...result.passedCriterionIds],
+        unmet: [...result.unmetCriterionIds],
+        prompts,
+      }));
+  }
+
+  it("B04a: pass citing ONLY the criterion id → unknown (no supporting evidence row exists)", async () => {
+    // The old contract advertised the criterion id itself as admissible, so
+    // a bare self-citation verified. No text evidence row supports this
+    // verdict — it must not verify.
+    const { passed, unmet } = await checkWith(async () =>
+      JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "looks done" },
+        ],
+      })
+    );
+    expect(passed).toEqual([]);
+    expect(unmet).toEqual(["rec-1"]);
+  });
+
+  it("B04b: pass citing a text id for DIFFERENT content (stale) → unknown", async () => {
+    // A citation bound to other content (or another execution) is not a
+    // member of this check's supplied evidence set — unsupported references
+    // become unknown, never pass.
+    const stale = buildTextEvidence("Something else entirely.", "rec-1", "exec-1");
+    const { passed, unmet } = await checkWith(async () =>
+      JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [stale.evidenceId], reason: "looks done" },
+        ],
+      })
+    );
+    expect(passed).toEqual([]);
+    expect(unmet).toEqual(["rec-1"]);
+  });
+
+  it("B04c: pass citing the check's own text evidence id → pass (real bounded deliverable text)", async () => {
+    const text = buildTextEvidence(CONTENT, "rec-1", "exec-1");
+    const { passed, unmet, prompts } = await checkWith(async () =>
+      JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [text.evidenceId], reason: "complete post" },
+        ],
+      })
+    );
+    // The prompt must advertise the text evidence id (not the criterion id)
+    // as the admissible citation for the pass.
+    expect(prompts[0]).toContain(text.evidenceId);
+    expect(passed).toEqual(["rec-1"]);
+    expect(unmet).toEqual([]);
+  });
+
+  it("B04d: buildTextEvidence is deterministic, scope-bound, and criterion-bound", () => {
+    const a = buildTextEvidence(CONTENT, "rec-1", "exec-1");
+    const b = buildTextEvidence(CONTENT, "rec-1", "exec-1");
+    expect(a.evidenceId).toBe(b.evidenceId);
+    // Different content → different id (stale citations never validate).
+    expect(buildTextEvidence(CONTENT + "!", "rec-1", "exec-1").evidenceId).not.toBe(a.evidenceId);
+    // Different execution → different id (wrong-execution citations never validate).
+    expect(buildTextEvidence(CONTENT, "rec-1", "exec-2").evidenceId).not.toBe(a.evidenceId);
+    // Different criterion → different id (cross-criterion citations never validate).
+    expect(buildTextEvidence(CONTENT, "rec-2", "exec-1").evidenceId).not.toBe(a.evidenceId);
+    // Bounded excerpt + revision for audit.
+    expect(a.excerpt.length).toBeLessThanOrEqual(2000);
+    expect(a.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.judgedLength).toBeGreaterThan(0);
   });
 });

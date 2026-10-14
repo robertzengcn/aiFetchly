@@ -83,10 +83,73 @@ export interface AdapterContext {
    * {@link snapshotArtifactBaselines} at the enrollment seam.
    */
   readonly artifactBaselines?: Readonly<Record<string, string>>;
+  /**
+   * B04 (FR-03/04; AC-11/20/21): execution scope binding the checker's
+   * admissible text evidence to THIS check. The service sets it to the
+   * candidate's executionId; text evidence ids embed it, so citations from
+   * another execution (or another check's content) are not members of this
+   * check's supplied set. Absent (direct evaluator callers, legacy tests) —
+   * ids bind content + criterion only.
+   */
+  readonly evidenceScopeId?: string;
 }
 
 export interface CriterionEvaluator {
   evaluate(criterion: TaskCriterion, context: AdapterContext): Promise<CriterionEvalResult>;
+}
+
+/**
+ * B04 (FR-03/04; NFR-08; AC-11/20/21): bounded deliverable-text evidence for
+ * tool-free qualitative checks.
+ *
+ * Before the checker dispatches, the candidate content it will judge is
+ * materialized as a bounded text record: the judged slice (exactly what the
+ * prompt carries, §8.2 — never more than the checker saw), its sha256
+ * revision, and a display excerpt. The record's id is deterministic in
+ * (criterion, scope, judged content): a retry cites the SAME evidence
+ * (§8.2 "using the same evidence" is literal), while stale content,
+ * another criterion, or another execution yields a different id that never
+ * validates against this check's supplied set.
+ *
+ * The checker may cite ONLY this id for a pass (see
+ * {@link parseCheckerBatchVerdict}); the criterion id remains a structural
+ * anchor in referenceIds but is NOT supporting evidence — a pass citing
+ * only the criterion id verifies nothing and becomes unknown.
+ */
+export const TEXT_EVIDENCE_JUDGED_SLICE = 8000;
+export const TEXT_EVIDENCE_EXCERPT = 2000;
+
+export interface DeliverableTextEvidence {
+  readonly evidenceId: string;
+  readonly excerpt: string;
+  readonly contentHash: string;
+  readonly judgedLength: number;
+}
+
+function sanitizeEvidenceSegment(segment: string, maxLength: number): string {
+  const cleaned = segment.replace(/[^A-Za-z0-9_-]/g, "-");
+  return cleaned.length > maxLength ? cleaned.slice(0, maxLength) : cleaned;
+}
+
+export function buildTextEvidence(
+  content: string,
+  criterionId: string,
+  scopeId?: string
+): DeliverableTextEvidence {
+  const judged = content.slice(0, TEXT_EVIDENCE_JUDGED_SLICE);
+  const contentHash = createHash("sha256").update(judged, "utf8").digest("hex");
+  const hash12 = contentHash.slice(0, 12);
+  const criterionSegment = sanitizeEvidenceSegment(criterionId, 64) || "criterion";
+  const scopeSegment =
+    scopeId !== undefined && scopeId.length > 0
+      ? `-${sanitizeEvidenceSegment(scopeId, 12)}`
+      : "";
+  return {
+    evidenceId: `text-${criterionSegment}${scopeSegment}-${hash12}`,
+    excerpt: judged.slice(0, TEXT_EVIDENCE_EXCERPT),
+    contentHash,
+    judgedLength: judged.length,
+  };
 }
 
 /** Generate a stable evidence identity for a criterion evaluation. */
@@ -277,7 +340,7 @@ export class RecordCountAdapter implements CriterionEvaluator {
  *
  * T04 (FR-04/06/08/22; NFR-02/04/08; AC-11/21/24; §8.2):
  * - **Schema-validated output.** The dispatch returns the §8.2 JSON for the
- *   single criterion. `parseCheckerVerdict` validates parseable JSON, the Zod
+ *   single criterion. `parseCheckerBatchVerdict` validates parseable JSON, the Zod
  *   schema, `criterionId === criterion.id`, `evidenceIds ⊆ admissible`, and
  *   non-empty `evidenceIds` on `pass`. Malformed `PASS ...` prefix, prompt
  *   injection, invented/absent references → `"unknown"` (never pass).
@@ -348,7 +411,19 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       }
       return empty;
     }
-    const prompt = buildCheckerBatchPrompt(batch, context.content);
+    // B04: materialize the bounded deliverable-text record per criterion
+    // BEFORE dispatching — the prompt advertises these ids as the only
+    // admissible citations, and the parse validates against them. The map
+    // is stable across the initial attempt and the §8.2 retry (same
+    // evidence for the unchanged candidate).
+    const textEvidence = new Map<string, DeliverableTextEvidence>();
+    for (const criterion of batch) {
+      textEvidence.set(
+        criterion.id,
+        buildTextEvidence(context.content, criterion.id, context.evidenceScopeId)
+      );
+    }
+    const prompt = buildCheckerBatchPrompt(batch, context.content, textEvidence);
     // The guard above narrowed context.checkerDispatch to non-undefined; bind
     // it to a local so dispatchBatchOnce has a stable non-optional reference.
     const dispatch = context.checkerDispatch;
@@ -366,9 +441,9 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       return empty;
     }
 
-    const firstResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch);
+    const firstResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch, textEvidence);
     if (firstResult.kind === "verdict") {
-      return this.summarizeBatch(batch, firstResult.verdicts, false);
+      return this.summarizeBatch(batch, firstResult.verdicts, false, textEvidence);
     }
     // Abort (Stop / deadline) is TERMINAL — no retry (AC-24: no late
     // verified result). A Stop mid-check cannot be retried into a pass.
@@ -398,9 +473,9 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       }
       return empty;
     }
-    const retryResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch);
+    const retryResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch, textEvidence);
     if (retryResult.kind === "verdict") {
-      return this.summarizeBatch(batch, retryResult.verdicts, true);
+      return this.summarizeBatch(batch, retryResult.verdicts, true, textEvidence);
     }
     for (const criterion of batch) {
       empty.set(
@@ -422,7 +497,8 @@ export class QualitativeEvaluator implements CriterionEvaluator {
   private summarizeBatch(
     batch: readonly TaskCriterion[],
     verdicts: ReadonlyMap<string, BatchVerdict>,
-    retried: boolean
+    retried: boolean,
+    textEvidence: ReadonlyMap<string, DeliverableTextEvidence>
   ): ReadonlyMap<string, CriterionEvalResult> {
     const results = new Map<string, CriterionEvalResult>();
     for (const criterion of batch) {
@@ -431,7 +507,7 @@ export class QualitativeEvaluator implements CriterionEvaluator {
         results.set(criterion.id, unknown(criterion.id, "batch missing verdict for criterion (fail-closed)"));
         continue;
       }
-      results.set(criterion.id, summarizeVerdict(criterion, verdict, retried));
+      results.set(criterion.id, summarizeVerdict(criterion, verdict, retried, textEvidence.get(criterion.id)));
     }
     return results;
   }
@@ -496,45 +572,18 @@ export class QualitativeEvaluator implements CriterionEvaluator {
   }
 
   /**
-   * One dispatch + parse, wrapped in the abort/deadline race. Returns either a
-   * valid verdict (pass/fail/unknown — schema-valid, criterion-id match,
-   * admissible evidence) or an invalid outcome (transient error / invalid
-   * JSON / schema mismatch / invented references). Abort (turn or deadline) →
-   * invalid-but-not-retried: the caller treats abort as terminal fail-closed,
-   * not a transient retry, per AC-24 ("no late verified result").
-   */
-  private async dispatchOnce(
-    criterion: TaskCriterion,
-    prompt: string,
-    context: AdapterContext,
-    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
-  ): Promise<DispatchOutcome> {
-    let response: string;
-    try {
-      response = await this.raceDispatch(prompt, context, dispatch);
-    } catch (error) {
-      if (isAbortError(error)) {
-        // AC-24: Stop or deadline-aborted mid-dispatch → terminal unknown, no
-        // retry (no late verified result). Signal this via a distinct outcome.
-        return { kind: "aborted", reason: "checker LLM aborted (Stop or deadline)" };
-      }
-      // Transient error (network/timeout/entitlement throw) → retryable.
-      return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
-    }
-    return parseCheckerVerdict(response, criterion);
-  }
-
-  /**
    * B05: one dispatch + batch parse for a whole candidate's qualitative
-   * criteria. Same abort/deadline semantics as {@link dispatchOnce}; the
-   * batch parse validates id-set equality + per-entry admissibility, so one
-   * malformed entry invalidates the batch (fail-closed, one retry).
+   * criteria. Same abort/deadline semantics as the batch race below; the
+   * batch parse validates id-set equality + per-entry admissibility, so a
+   * structural violation invalidates the batch (fail-closed, one retry)
+   * while citation violations become entry-unknown (B04).
    */
   private async dispatchBatchOnce(
     criteria: readonly TaskCriterion[],
     prompt: string,
     context: AdapterContext,
-    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
+    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>,
+    textEvidence: ReadonlyMap<string, DeliverableTextEvidence>
   ): Promise<
     | { kind: "verdict"; verdicts: ReadonlyMap<string, BatchVerdict> }
     | { kind: "invalid"; reason: string }
@@ -549,20 +598,9 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       }
       return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
     }
-    return parseCheckerBatchVerdict(response, criteria);
+    return parseCheckerBatchVerdict(response, criteria, textEvidence);
   }
 }
-
-/** Outcome of one dispatch attempt. */
-type DispatchOutcome =
-  | {
-      readonly kind: "verdict";
-      readonly verdict: CriterionState;
-      readonly evidenceIds: readonly string[];
-      readonly reason: string;
-    }
-  | { readonly kind: "invalid"; readonly reason: string }
-  | { readonly kind: "aborted"; readonly reason: string };
 
 // ----- Artifact evaluator (validated read-only filesystem) -----
 
@@ -798,26 +836,37 @@ function meetsOperationThreshold(actual: string, required: string): boolean {
  * runaway stream cannot grow it). The per-criterion admissible sets are
  * unchanged (B04 trust boundary holds per entry).
  */
-function buildCheckerBatchPrompt(criteria: readonly TaskCriterion[], content: string): string {
+function buildCheckerBatchPrompt(
+  criteria: readonly TaskCriterion[],
+  content: string,
+  textEvidence: ReadonlyMap<string, DeliverableTextEvidence>
+): string {
   // §8.2: the checker judges whether the content satisfies each criterion
   // and returns a per-criterion JSON result. The prompt enumerates the
-  // admissible evidence IDs per criterion (the criterion id — the checker
-  // cannot see prior evidence rows; the evaluator is the boundary) so the
-  // checker knows what it may cite. A pass REQUIRES admissible supporting
-  // evidence (§8.2: "Every pass cites admissible supporting evidence").
-  // Output is parsed strictly — no provider JSON-mode reliance (§8.2).
+  // admissible evidence ID per criterion — the deliverable-text record for
+  // THIS check (B04; never the criterion id, which is a structural anchor,
+  // not supporting evidence) — so the checker knows what it may cite. A
+  // pass REQUIRES citing its text evidence id (§8.2: "Every pass cites
+  // admissible supporting evidence"). Output is parsed strictly — no
+  // provider JSON-mode reliance (§8.2).
   const listed = criteria
-    .map((c) => `Criterion (${c.id}): ${c.description}\nAdmissible evidence ids: ["${c.id}"]`)
+    .map((c) => {
+      const text = textEvidence.get(c.id);
+      const admissibleId = text ? text.evidenceId : c.id;
+      return `Criterion (${c.id}): ${c.description}\nAdmissible evidence ids: ["${admissibleId}"]`;
+    })
     .join("\n\n");
   const schemaEntries = criteria
-    .map(
-      (c) => `    {
+    .map((c) => {
+      const text = textEvidence.get(c.id);
+      const admissibleId = text ? text.evidenceId : c.id;
+      return `    {
       "criterionId": "${c.id}",
       "verdict": "pass" | "fail" | "unknown",
-      "evidenceIds": ["${c.id}"],
+      "evidenceIds": ["${admissibleId}"],
       "reason": "one short sentence"
-    }`
-    )
+    }`;
+    })
     .join(",\n");
   return `You are a task completion verifier. Determine whether each criterion below is satisfied by the assistant's response. Reply ONLY with a single JSON object, no prose, no code fences.
 
@@ -883,10 +932,12 @@ function extractJsonObject(raw: string): string | null {
 /**
  * Parse + validate the checker's batch response against the §8.2 contract.
  * Returns per-criterion verdicts only when the output is schema-valid AND
- * every cross-check passes for EVERY entry (id-set equality with the batch,
- * evidenceIds ⊆ that criterion's admissible set, non-empty on pass). Any
- * violation → `invalid` for the whole batch (the caller retries once within
- * budget, then fails closed). Malformed `PASS ...` prefix and
+ * the id set equals the batch. Citation violations are entry-local: an
+ * entry citing non-admissible ids (or a pass with no citations) becomes
+ * entry-unknown — unsupported references never pass, but the rest of the
+ * batch still stands. Structural violations (bad JSON, schema failure,
+ * id-set mismatch) → `invalid` for the whole batch (the caller retries
+ * once within budget, then fails closed). Malformed `PASS ...` prefix and
  * prompt-injection text never yield verdicts here — they are not valid
  * JSON (AC-11/21).
  */
@@ -894,7 +945,8 @@ type BatchVerdict = { readonly verdict: CriterionState; readonly evidenceIds: re
 
 function parseCheckerBatchVerdict(
   response: string,
-  criteria: readonly TaskCriterion[]
+  criteria: readonly TaskCriterion[],
+  textEvidence: ReadonlyMap<string, DeliverableTextEvidence>
 ):
   | { kind: "verdict"; verdicts: ReadonlyMap<string, BatchVerdict> }
   | { kind: "invalid"; reason: string } {
@@ -943,24 +995,34 @@ function parseCheckerBatchVerdict(
     if (!criterion) {
       return { kind: "invalid", reason: `checker criterionId not in batch: "${entry.criterionId}"` };
     }
-    // Admissible evidence set: the criterion id (the evaluator is the
-    // boundary; the checker cannot cite external evidence ids).
-    const admissible = new Set<string>([criterion.id]);
+    // B04 admissible evidence set: ONLY this check's deliverable-text id.
+    // The criterion id is a structural anchor, not supporting evidence — a
+    // pass citing only it verifies nothing. Stale (other content), foreign
+    // (other criterion/execution), or invented ids are not members of this
+    // check's supplied set. Entry violations become entry-unknown (never
+    // pass); the rest of the batch still stands. Structural violations
+    // (bad JSON/schema/id-set) stay batch-invalid → one retry → all unknown.
+    const text = textEvidence.get(entry.criterionId);
+    const admissible = new Set<string>(text ? [text.evidenceId] : []);
     const allAdmissible = entry.evidenceIds.every((id) => admissible.has(id));
     if (!allAdmissible) {
-      return {
-        kind: "invalid",
-        reason: `checker cited non-admissible evidence ids for "${entry.criterionId}": ${JSON.stringify(entry.evidenceIds)}`,
-      };
+      verdicts.set(entry.criterionId, {
+        verdict: "unknown",
+        evidenceIds: [],
+        reason: `checker cited non-admissible evidence ids for "${entry.criterionId}" (unsupported references become unknown): ${JSON.stringify(entry.evidenceIds).slice(0, 200)}`,
+      });
+      continue;
     }
     // §8.2: "Every pass cites admissible supporting evidence." Empty
-    // evidence on pass → invalid (invented/absent references cannot
+    // evidence on pass → entry-unknown (invented/absent references cannot
     // satisfy a pass).
     if (entry.verdict === "pass" && entry.evidenceIds.length === 0) {
-      return {
-        kind: "invalid",
+      verdicts.set(entry.criterionId, {
+        verdict: "unknown",
+        evidenceIds: [],
         reason: `checker verdict pass with no evidence ids for "${entry.criterionId}" (citations required)`,
-      };
+      });
+      continue;
     }
     verdicts.set(entry.criterionId, {
       verdict: entry.verdict,
@@ -979,39 +1041,25 @@ function parseCheckerBatchVerdict(
  * then fails closed). Malformed `PASS ...` prefix and prompt-injection text
  * never yield a verdict here — they are not valid JSON (AC-11/21).
  */
-function parseCheckerVerdict(
-  response: string,
-  criterion: TaskCriterion
-): DispatchOutcome {
-  const batch = parseCheckerBatchVerdict(response, [criterion]);
-  if (batch.kind === "invalid") {
-    return { kind: "invalid", reason: batch.reason };
-  }
-  const entry = batch.verdicts.get(criterion.id);
-  if (!entry) {
-    return { kind: "invalid", reason: `checker response missing criterion "${criterion.id}"` };
-  }
-  return {
-    kind: "verdict",
-    verdict: entry.verdict,
-    evidenceIds: entry.evidenceIds,
-    reason: entry.reason,
-  };
-}
-
 /** Build the CriterionEvalResult summary for a valid verdict. */
 function summarizeVerdict(
   criterion: TaskCriterion,
   result: { readonly verdict: CriterionState; readonly evidenceIds: readonly string[]; readonly reason: string },
-  retried: boolean
+  retried: boolean,
+  text?: DeliverableTextEvidence
 ): CriterionEvalResult {
+  // B04: the bounded text record the checker judged travels with the
+  // verdict row — excerpt + content revision pin exactly what a pass cites.
+  const textNote = text
+    ? ` [text sha256:${text.contentHash.slice(0, 12)} len:${text.judgedLength}]: ${text.excerpt.slice(0, 200)}`
+    : "";
   return {
     state: result.verdict,
     // The validated evidence ids the checker cited + the structural criterion
     // anchor. The service persists both as evidence rows.
     referenceIds: [...result.evidenceIds, criterion.id],
     summary: truncate(
-      `${result.verdict}: qualitative "${criterion.description.slice(0, 80)}"${retried ? " (after retry)" : ""} reason: ${result.reason}`
+      `${result.verdict}: qualitative "${criterion.description.slice(0, 80)}"${retried ? " (after retry)" : ""} reason: ${result.reason}${textNote}`
     ),
   };
 }

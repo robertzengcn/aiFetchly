@@ -30,7 +30,7 @@ import {
   TaskRunBudget,
   MANUAL_BUDGET_DEFAULTS,
 } from "@/service/aiTaskExecution/TaskRunBudget";
-import { buildDefaultRegistry } from "@/service/aiTaskExecution/criteriaAdapters";
+import { buildDefaultRegistry, buildTextEvidence } from "@/service/aiTaskExecution/criteriaAdapters";
 import type {
   TaskEndCandidate,
   TaskCompletionContract,
@@ -296,15 +296,17 @@ describe("T01 regression — resolver → compiler → freeze → evidence → c
 
     // T04 §8.2 contract: the checker must return a JSON object with exactly
     // one criterion entry whose criterionId matches, verdict in enum, and
-    // non-empty admissible evidenceIds on pass. Raw "PASS" text is invalid
-    // (parseCheckerVerdict → invalid → retry → fail-closed unknown).
+    // the check's deliverable-text evidence id cited on pass (B04 — the
+    // criterion id alone no longer verifies). Raw "PASS" text is invalid
+    // (batch parse → invalid → retry → fail-closed unknown).
+    const checkerContent = "Here is the blog post about our launch...";
     const checker = vi.fn(async () =>
       JSON.stringify({
         criteria: [
           {
             criterionId: qual!.id,
             verdict: "pass",
-            evidenceIds: [qual!.id],
+            evidenceIds: [buildTextEvidence(checkerContent, qual!.id, "exec-1").evidenceId],
             reason: "The delivered text is the requested blog post about the launch.",
           },
         ],
@@ -312,7 +314,7 @@ describe("T01 regression — resolver → compiler → freeze → evidence → c
     );
     const budget = new TaskRunBudget(MANUAL_BUDGET_DEFAULTS);
     const done = baseCandidate({
-      content: "Here is the blog post about our launch...",
+      content: checkerContent,
       boundary: "response_end",
       finishReason: "stop",
     });

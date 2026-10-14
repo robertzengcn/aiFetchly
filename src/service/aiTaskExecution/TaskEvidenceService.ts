@@ -29,6 +29,7 @@ import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget
 import {
   ArtifactAdapter,
   buildDefaultRegistry,
+  buildTextEvidence,
   CriteriaAdapterRegistry,
   CriterionEvalResult,
   CriterionState,
@@ -137,7 +138,7 @@ export class TaskEvidenceService implements EvidenceChecker {
     // criterion (which starves the third criterion within the 2-per-candidate
     // cap). The batch shares the adapter context every per-criterion check
     // would have received.
-    const batchAdapterContext = {
+    const adapterContext = {
       content: context.content,
       toolCatalogState: context.toolCatalogState,
       abortSignal: context.abortSignal,
@@ -147,11 +148,14 @@ export class TaskEvidenceService implements EvidenceChecker {
       operationReceiptProvider: context.operationReceiptProvider,
       artifactBaseDir: context.artifactBaseDir,
       artifactBaselines: context.artifactBaselines,
+      // B04: bind this check's admissible text evidence to the candidate's
+      // execution — citations from another execution never validate.
+      evidenceScopeId: candidate.executionId,
     };
     const qualitativeBatch = contract.criteria.filter((c) => c.kind === "qualitative");
     const batchResults =
       qualitativeBatch.length > 0
-        ? await this.qualitativeEvaluator.evaluateBatch(qualitativeBatch, batchAdapterContext)
+        ? await this.qualitativeEvaluator.evaluateBatch(qualitativeBatch, adapterContext)
         : new Map<string, CriterionEvalResult>();
 
     for (const criterion of contract.criteria) {
@@ -159,7 +163,19 @@ export class TaskEvidenceService implements EvidenceChecker {
         criterion.kind === "qualitative"
           ? (batchResults.get(criterion.id) ??
             unknownResult(criterion.id, "batch missing verdict for criterion (fail-closed)"))
-          : await this.evaluateCriterion(criterion, context);
+          : await this.evaluateCriterion(criterion, context, candidate.executionId);
+      // B04 membership gate: validate the verdict's citations against this
+      // check's recomputed supplied set (independent of the evaluator's own
+      // parse — pins the contract even for future evaluator changes).
+      const checked =
+        criterion.kind === "qualitative"
+          ? this.validateQualitativeReferences(
+              criterion,
+              result,
+              context.content,
+              candidate.executionId
+            )
+          : result;
       const evidenceId = newEvidenceId();
       evidenceRows.push({
         evidenceId,
@@ -169,11 +185,11 @@ export class TaskEvidenceService implements EvidenceChecker {
         observedAt,
         source: context.source,
         sourceRevision: context.sourceRevision,
-        state: result.state,
-        referenceIds: [...result.referenceIds],
-        summary: truncate(result.summary),
+        state: checked.state,
+        referenceIds: [...checked.referenceIds],
+        summary: truncate(checked.summary),
       });
-      if (result.state === "pass") {
+      if (checked.state === "pass") {
         passed.push(criterion.id);
       } else {
         unmet.push(criterion.id);
@@ -195,9 +211,49 @@ export class TaskEvidenceService implements EvidenceChecker {
     };
   }
 
-  private async evaluateCriterion(
+  /**
+   * B04 (FR-03/04; AC-11/20/21): validate a qualitative verdict's citations
+   * against this check's recomputed supplied set — the deliverable-text id
+   * for (content, criterion, execution) plus the structural criterion
+   * anchor. Only a pass can verify, so only passes are gated: a pass must
+   * cite its text evidence id, and every cited supporting id must be
+   * exactly that id. Anything else (criterion-id-only, stale content,
+   * foreign criterion/execution, invented ids) downgrades to unknown —
+   * unsupported references never verify. Independent of the evaluator's
+   * own parse (defense in depth).
+   */
+  private validateQualitativeReferences(
     criterion: TaskCriterion,
-    context: EvidenceContext
+    result: CriterionEvalResult,
+    content: string,
+    scopeId: string
+  ): CriterionEvalResult {
+    if (result.state !== "pass") return result;
+    const expected = buildTextEvidence(content, criterion.id, scopeId).evidenceId;
+    const cited = new Set(result.referenceIds);
+    const downgrade = (reason: string): CriterionEvalResult => ({
+      state: "unknown",
+      referenceIds: [...result.referenceIds],
+      summary: `${result.summary} [B04 reference downgrade: ${reason}]`,
+    });
+    for (const id of cited) {
+      if (id !== criterion.id && id !== expected) {
+        return downgrade(
+          `unsupported reference "${id.slice(0, 80)}" (not this check's text evidence)`
+        );
+      }
+    }
+    if (!cited.has(expected)) {
+      return downgrade(
+        "pass cites no supporting text evidence (the criterion anchor is not evidence)"
+      );
+    }
+    return result;
+  }
+
+  private async evaluateCriterion(    criterion: TaskCriterion,
+    context: EvidenceContext,
+    evidenceScopeId?: string
   ): Promise<CriterionEvalResult> {
     const adapterContext = {
       content: context.content,
@@ -209,6 +265,7 @@ export class TaskEvidenceService implements EvidenceChecker {
       operationReceiptProvider: context.operationReceiptProvider,
       artifactBaseDir: context.artifactBaseDir,
       artifactBaselines: context.artifactBaselines,
+      evidenceScopeId,
     };
     try {
       switch (criterion.kind) {

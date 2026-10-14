@@ -25,6 +25,7 @@
 // ContactInfoRepository (getStatistics), AiChatApi (openAIChatCompletion).
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { buildEvidenceService, deriveOperationKey } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import { buildTextEvidence } from "@/service/aiTaskExecution/criteriaAdapters";
 import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import { z } from "zod/v4";
@@ -369,11 +370,18 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
   it("checkerDispatch: calls openAIChatCompletion with max_tokens 256 temperature 0; §8.2 JSON → qualitative pass (T04)", async () => {
     // T04: the §8.2 JSON contract needs more room than a one-word verdict;
     // CHECKER_MAX_TOKENS is 256 (a single criterion result: verdict + evidence
-    // ids + a short reason). The mock returns the JSON the parser accepts.
+    // ids + a short reason). The mock returns the JSON the parser accepts —
+    // B04: the pass cites this check's deliverable-text evidence id (the
+    // criterion id alone no longer verifies).
+    const textId = buildTextEvidence(
+      "Hello, I hope you are well.",
+      "rec-1",
+      "exec-factory-1"
+    ).evidenceId;
     openAIChatCompletionMock.mockResolvedValue({
       choices: [{ message: { content: JSON.stringify({
         criteria: [
-          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite" },
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite" },
         ],
       }) } }],
     });
@@ -388,7 +396,7 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     const verdict = await providers.checkerDispatch("Is this polite?");
     expect(verdict).toBe(JSON.stringify({
       criteria: [
-        { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "polite" },
+        { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite" },
       ],
     }));
     expect(openAIChatCompletionMock).toHaveBeenCalledTimes(1);
