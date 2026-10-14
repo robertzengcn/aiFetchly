@@ -3,11 +3,14 @@
 // T05 (FR-08/10/23, AC-06/08/22/27/29): the loop's provider-dispatch gate
 // fail-closed behavior. Before each `deps.streamChatCompletion` call the
 // loop:
-//   1. calls `binding.reserveProviderAttempt(`prov:<executionId>:<round>`)`
+//   1. calls `binding.reserveProviderAttempt` with a unique-per-attempt ID
+//      (`prov:<executionId>:<round>:<seq>`, B13b — never reused across
+//      retries, resets, or resumes)
 //   2. on `Exhausted` → throws `RecoverableHistoryError("MODEL_ATTEMPT_LIMIT")`
 //   3. on `Reserved` → calls `binding.persistBudget({providerAttempts:1})`;
 //      if false (lease lost) → throws the same fail-closed error
-//   4. on `AlreadyReserved` → proceeds (dedup; transport retry of same round)
+//   4. transport retries inside the stream call are counted via the onRetry
+//      hook (B13b), each with its own retry identity
 //
 // These tests lock the fail-closed contract: an enrolled turn whose budget
 // is spent MUST NOT reach the provider, and a lease-loosed persist MUST NOT
@@ -170,9 +173,9 @@ describe("AIChatQueryLoop T05 provider-dispatch budget gate (FR-08/10/23, AC-06/
     expect(err).toBeInstanceOf(RecoverableHistoryError);
     expect((err as RecoverableHistoryError).code).toBe("MODEL_ATTEMPT_LIMIT");
     expect(stream).not.toHaveBeenCalled();
-    // The stable ID is `prov:<executionId>:<round>` (round 0 = the first
-    // provider dispatch of the turn).
-    expect(reservedId).toBe("prov:exec-t05:0");
+    // B13b: the ID is unique per actual attempt —
+    // `prov:<executionId>:<round>:<seq>` (round 0, first mint of the instance).
+    expect(reservedId).toBe("prov:exec-t05:0:0");
   });
 
   it("throws MODEL_ATTEMPT_LIMIT when persistBudget returns false (lease lost/superseded)", async () => {
@@ -552,5 +555,161 @@ describe("AIChatQueryLoop B13a tool-dispatch budget gate (FR-08/10/23, AC-27)", 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(result.type).toBe("completed");
     expect(budget.getConsumed().toolExecutions).toBe(1);
+  });
+});
+
+describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08/23)", () => {
+  function makeStopStream() {
+    return vi.fn(
+      async (
+        _req: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        onChunk({
+          id: "resp-b13b",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "done", role: "assistant" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      }
+    );
+  }
+
+  function makeRealBudgetBinding(
+    budget: TaskRunBudget,
+    captured: { reserves: string[]; persists: unknown[] }
+  ): LoopTaskExecutionBinding {
+    return {
+      executionId: "exec-b13b",
+      policyAccepted: true,
+      ledgerId: "ledger-b13b",
+      leaseGeneration: 0,
+      reserveContinuation: (id) => budget.reserveContinuation(id),
+      reserveProviderAttempt: (id) => {
+        captured.reserves.push(id);
+        return budget.reserveProviderAttempt(id);
+      },
+      reserveToolExecution: (id) => budget.reserveToolExecution(id),
+      reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
+      addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      persistBudget: async (delta) => {
+        captured.persists.push(delta);
+        return true;
+      },
+      consult: async () => ({ type: "finish_response", result: "response_ended" }),
+      recordDecision: () => undefined,
+      recordToolRoundProgress: () => undefined,
+      recordAssistantTextProgress: () => undefined,
+    };
+  }
+
+  function makeLoop() {
+    return new AIChatQueryLoop({
+      streamChatCompletion: makeStopStream(),
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+    });
+  }
+
+  it("repeated runOnce calls mint fresh identities — re-dispatched rounds count again (no dedup swallow)", async () => {
+    // run() retries and permission/plan resumes re-run the same rounds on
+    // the same execution. With the old `prov:<exec>:<round>` scheme the
+    // second run deduped (AlreadyReserved) and dispatched UNCOUNTED work.
+    // Each actual attempt must reserve, count, and persist exactly once.
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS });
+    const captured = { reserves: [] as string[], persists: [] as unknown[] };
+    const binding = makeRealBudgetBinding(budget, captured);
+    const loop = makeLoop();
+    const { input } = makeInput({ binding });
+
+    const first = await loop.runOnce(input, { delivered: false });
+    expect(first.type).toBe("completed");
+    const second = await loop.runOnce(input, { delivered: false });
+    expect(second.type).toBe("completed");
+
+    // Two actual provider dispatches → two unique reservations, two
+    // provider persists, mirror at 2. Uniqueness is per mint, not per round.
+    expect(captured.reserves).toHaveLength(2);
+    expect(new Set(captured.reserves).size).toBe(2);
+    expect(captured.reserves[0]).not.toBe(captured.reserves[1]);
+    expect(budget.getConsumed().providerAttempts).toBe(2);
+    const providerPersists = captured.persists.filter(
+      (d) =>
+        typeof d === "object" &&
+        d !== null &&
+        "providerAttempts" in (d as Record<string, unknown>)
+    );
+    expect(providerPersists).toHaveLength(2);
+  });
+
+  it("transport retries via onRetry reserve unique retry identities and count toward the cap", async () => {
+    // The stream machinery retries a failed connection inside ONE round
+    // (invisible to the per-round gate). Each retry is a real wire attempt
+    // and must reserve against the 60-attempt cap with a distinct identity.
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS });
+    const captured = { reserves: [] as string[], persists: [] as unknown[] };
+    const binding = makeRealBudgetBinding(budget, captured);
+    let calls = 0;
+    const retryingStream = vi.fn(
+      async (
+        _req: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void,
+        options?: {
+          onRetry?: (info: { attempt: number; maxAttempts: number }) => void;
+        }
+      ) => {
+        calls += 1;
+        // Simulate one transport retry before the successful response.
+        options?.onRetry?.({ attempt: 1, maxAttempts: 3 });
+        onChunk({
+          id: "resp-retry",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "done", role: "assistant" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: retryingStream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+    });
+    const { input } = makeInput({ binding });
+    const result = await loop.runOnce(input, { delivered: false });
+    expect(result.type).toBe("completed");
+    // Gate reservation + one retry reservation, distinct identities, mirror
+    // at 2 against the shared 60-attempt cap.
+    expect(captured.reserves).toHaveLength(2);
+    expect(new Set(captured.reserves).size).toBe(2);
+    expect(
+      captured.reserves.some((id) => id.includes(":retry:"))
+    ).toBe(true);
+    expect(budget.getConsumed().providerAttempts).toBe(2);
+  });
+
+  it("reconcile reuses the round identity so one attempt counts tokens once", async () => {
+    // The same minted string flows through reserve → reconcile → persist:
+    // a second reconcile of the same round is a dedup replay (false), so
+    // tokens are never double-counted for one attempt.
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS });
+    const first = budget.reserveProviderAttempt("prov:e:0:7");
+    expect(first).toBe(BudgetReservationResult.Reserved);
+    expect(budget.reconcileTokens("prov:e:0:7", 100)).toBe(true);
+    expect(budget.reconcileTokens("prov:e:0:7", 100)).toBe(false);
+    expect(budget.getConsumed().tokens).toBe(100);
   });
 });

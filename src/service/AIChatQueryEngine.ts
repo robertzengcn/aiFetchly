@@ -2024,15 +2024,13 @@ export class AIChatQueryEngine {
                   created.budget.reserveContinuation(continuationId),
                 // T05 (FR-08/10/23, AC-06/08/22/27/29): provider-attempt gate.
                 // The loop calls this before streamChatCompletion with a
-                // stable `prov:<executionId>:<round>` ID. Exhausted → loop
+                // B13b-unique per-attempt ID. Exhausted → loop
                 // throws RecoverableHistoryError("MODEL_ATTEMPT_LIMIT").
                 reserveProviderAttempt: (requestId) =>
                   created.budget.reserveProviderAttempt(requestId),
-                // T05 (FR-08/10/23, AC-27): tool-execution record-but-no-gate
-                // (D4 — gating mid-operation leaves tool state in limbo; the
-                // hard cap is enforced at continuation time). The loop calls
-                // this with a stable `tool:<call.id>` ID before
-                // deps.executeTool.
+                // T05 (FR-08/10/23, AC-27) + B13a: tool-execution fail-closed
+                // gate. The loop calls this with a stable `tool:<call.id>`
+                // ID before deps.executeTool; Exhausted/persist-false throws.
                 reserveToolExecution: (toolRequestId) =>
                   created.budget.reserveToolExecution(toolRequestId),
                 // T05 (FR-08/10/23, AC-22): reconcile actual token usage after

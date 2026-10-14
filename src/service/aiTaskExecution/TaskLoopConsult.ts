@@ -44,12 +44,15 @@ export interface LoopTaskExecutionBinding {
     continuationId: string
   ) => BudgetReservationResult;
   /**
-   * T05 (FR-08/10/23, AC-06/08/22/27/29): gate a provider dispatch attempt
-   * against the execution budget before the actual streamChatCompletion call.
-   * The loop forms a stable per-round request ID (`prov:<executionId>:<round>`)
-   * so a transport-retried same-round attempt dedups (AlreadyReserved — the
-   * reservation holds, dispatch proceeds) instead of double-counting. On
-   * `Exhausted` the loop fail-closed throws `RecoverableHistoryError(
+   * T05 (FR-08/10/23, AC-06/08/22/27/29) + B13b: gate a provider dispatch
+   * attempt against the execution budget before the actual
+   * streamChatCompletion call. The loop mints a unique-per-attempt request
+   * ID (`prov:<executionId>:<round>:<seq>`, instance-monotonic seq, never
+   * reset) so run() retries, round-cap resets, and repeated runOnce/resume
+   * calls each count their re-dispatched work instead of dedup-swallowing
+   * it. Transport retries inside one stream call count via the onRetry hook
+   * with `<round-id>:retry:<attempt>` identities. On `Exhausted` the loop
+   * fail-closed throws `RecoverableHistoryError(
    * "MODEL_ATTEMPT_LIMIT")` — the controller's incomplete route owns the
    * finish (D4: provider retry exhaustion → finish(incomplete,
    * MODEL_ATTEMPT_LIMIT)). On `Reserved` the loop calls `persistBudget(
@@ -82,10 +85,11 @@ export interface LoopTaskExecutionBinding {
    * was new (the caller should then persist `tokens` to the durable ledger
    * via `persistBudget`); false when it was a dedup replay (the caller skips
    * the persist so the ledger doesn't double-count). The loop calls this
-   * with the same `prov:<executionId>:<round>` ID used for the provider
-   * reservation. Optional so flag-off callers and tests can omit it; when
-   * absent the dispatch site skips reconciliation (byte-identical legacy —
-   * the controller's token cap consults zero, which is safe fail-closed).
+   * with the same B13b-unique round ID used for the provider reservation, so
+   * one attempt reconciles exactly once. Optional so flag-off callers, tests
+   * can omit it; when absent the dispatch site skips reconciliation
+   * (byte-identical legacy — the controller's token cap consults zero, which
+   * is safe fail-closed).
    */
   readonly reconcileTokens?: (
     requestId: string,

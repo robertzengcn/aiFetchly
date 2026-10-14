@@ -1096,6 +1096,20 @@ export class AIChatQueryLoop {
    */
   private readonly conversationEpochs = new Map<string, string>();
 
+  /**
+   * B13b (FR-08/23): monotonic provider-attempt sequence, per loop instance,
+   * never reset. Reservation IDs embed it (`prov:<executionId>:<round>:<seq>`)
+   * so every actual wire attempt is unique across run() retries (which
+   * re-run the same rounds), round-cap resets (`round = -1`), and repeated
+   * runOnce/resume calls on this instance. New instances (and post-restart
+   * mirrors, whose dedup sets rebuild empty) also count every mint — the
+   * failure mode is always fail-safe over-counting, never dedup-swallowed
+   * under-counting. A bare number: unbounded growth is harmless (no per-ID
+   * retained state; the budget mirror only stores reserved IDs per
+   * execution, bounded by the attempt caps).
+   */
+  private providerAttemptSeq = 0;
+
   /** Build (or reuse) the pipeline for a conversation. */
   private getToolResultPipeline(
     conversationId: string
@@ -2164,11 +2178,16 @@ export class AIChatQueryLoop {
           currentMaxTokens = outputReserve;
         }
 
-        // T05 (FR-08/10/23, AC-06/08/22/27/29): gate the provider dispatch
-        // against the execution budget BEFORE the actual stream call, then
-        // persist the consumption to the durable ledger. The stable ID
-        // `prov:<executionId>:<round>` dedups a transport-retried same-round
-        // attempt (AlreadyReserved — reservation holds, dispatch proceeds).
+        // T05 (FR-08/10/23, AC-06/08/22/27/29) + B13b: gate the provider
+        // dispatch against the execution budget BEFORE the actual stream
+        // call, then persist the consumption to the durable ledger. The ID
+        // `prov:<executionId>:<round>:<seq>` is unique per actual wire
+        // attempt (instance-monotonic seq, never reset): run() retries that
+        // re-run the same rounds, round-cap resets, and repeated
+        // runOnce/resume calls each mint a fresh identity, so re-dispatched
+        // work is counted, never dedup-swallowed. The same string is reused
+        // for this round's token reconciliation below, so each attempt's
+        // tokens count exactly once.
         // Exhausted → fail-closed throw; the controller's incomplete route
         // owns the finish (D4). Reserved → persist; false (lease lost) →
         // fail-closed throw. Skipped entirely when no binding or not-accepted
@@ -2176,8 +2195,12 @@ export class AIChatQueryLoop {
         // outer retry layer treats this as a terminal-for-this-attempt
         // failure, not a transport retry.
         const binding = input.taskExecutionBinding;
+        // B13b: this round's reservation identity, minted once and shared by
+        // the gate, the onRetry hook, and the token reconciliation below so
+        // one actual attempt counts exactly once across all three.
+        let providerRequestId: string | undefined;
         if (binding?.policyAccepted && binding.reserveProviderAttempt) {
-          const providerRequestId = `prov:${binding.executionId}:${round}`;
+          providerRequestId = `prov:${binding.executionId}:${round}:${this.providerAttemptSeq++}`;
           const reservation =
             binding.reserveProviderAttempt(providerRequestId);
           if (reservation === BudgetReservationResult.Exhausted) {
@@ -2274,6 +2297,38 @@ export class AIChatQueryLoop {
                 retryMaxAttempts: info.maxAttempts,
                 retryDelayMs: info.delayMs,
               });
+              // B13b (FR-08/23): count the actual wire retry against the
+              // execution budget. Transport retries inside the stream call
+              // are invisible to the per-round gate above — without this
+              // hook a 60-attempt cap would admit 60 ROUNDS × N retries.
+              // Unique ID per retry (attempt number is per-layer and may
+              // repeat, so the instance seq disambiguates). Mirror reserve
+              // is synchronous (caps enforced now); the durable persist is
+              // fire-and-forget with warn-only failure, flushed before
+              // owner release by the B13c barrier.
+              if (binding?.policyAccepted && binding.reserveProviderAttempt) {
+                const retryRequestId = `${providerRequestId}:retry:${info.attempt}:${this.providerAttemptSeq++}`;
+                if (
+                  binding.reserveProviderAttempt(retryRequestId) ===
+                  BudgetReservationResult.Reserved
+                ) {
+                  binding.persistBudget?.({ providerAttempts: 1 }).then(
+                    (ok) => {
+                      if (!ok) {
+                        console.warn(
+                          `[ai-chat-v2] T05 retry-attempt persistence failed (lease released or superseded) for ${retryRequestId}`
+                        );
+                      }
+                    },
+                    (err) => {
+                      console.warn(
+                        `[ai-chat-v2] T05 retry-attempt persistence error for ${retryRequestId}:`,
+                        err
+                      );
+                    }
+                  );
+                }
+              }
             },
             onRecoveryStatus: (info) => {
               eventSink.emit({
@@ -2316,18 +2371,24 @@ export class AIChatQueryLoop {
         lastReportedUsage = resolvedUsage;
         // T05 (FR-08/10/23, AC-22/29): reconcile actual token usage AND active
         // runtime against the execution budget after each round, then persist
-        // the deltas to the durable ledger. The stable ID
-        // `prov:<executionId>:<round>` (the same key used for the
-        // provider-attempt reservation) dedups so a transport-retried round
-        // doesn't double-count tokens. The in-memory `reconcileTokens` is the
+        // the deltas to the durable ledger. Reuses this round's gated
+        // `providerRequestId` (B13b-unique per actual attempt) so the
+        // attempt's tokens count exactly once — never double-counted,
+        // never dedup-swallowed. The in-memory `reconcileTokens` is the
         // mirror (returns false on dedup); `persistBudget({tokens,
         // activeRuntimeMs})` is the authoritative path. Skipped when no
         // binding or not-accepted (byte-identical legacy). Persistence failure
         // is logged, not thrown: token/runtime accounting is advisory for the
         // budget's caps, not a dispatch gate (the reservation gates already
         // threw fail-closed before the stream).
-        if (binding?.policyAccepted && binding.reconcileTokens) {
-          const providerRequestId = `prov:${binding.executionId}:${round}`;
+        if (
+          binding?.policyAccepted &&
+          binding.reconcileTokens &&
+          providerRequestId !== undefined
+        ) {
+          // Reuses the gated round identity minted above (B13b): the same
+          // actual attempt reconciles exactly once (the gate ran under the
+          // identical binding condition, so the ID is always minted here).
           const counted = binding.reconcileTokens(
             providerRequestId,
             resolvedUsage.totalTokens
