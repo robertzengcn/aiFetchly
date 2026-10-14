@@ -238,7 +238,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B17 — Cross-execution intent fence has a check/create race [P1; confidence 10/10; controlled concurrency]
 
-- [ ] Atomically claim a shared domain-intent fence with execution-specific receipt history beneath it.
+- [x] Atomically claim a shared domain-intent fence with execution-specific receipt history beneath it. *(done 2026-10-14, commit `b146e89b`: process-wide AsyncMutex serializes prepareDispatch check→create→claim so the cross-execution unresolved fence observes the winner; loser gets OPERATION_UNRESOLVED_EARLIER. Single-process scope suffices per NFR-03. Tests: 17/17 guard incl. B17 concurrent cross-exec race.)*
 
 **Location:** `TaskOperationGuard.ts:241–249, 339–375`.
 
@@ -248,7 +248,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B18 — Send fence target changes with authorization attempt [P1; confidence 9/10]
 
-- [ ] Separate stable authorized domain effect identity from batch/message authorization provenance.
+- [x] Separate stable authorized domain effect identity from batch/message authorization provenance. *(done 2026-10-14, commit `653bd0d8`: descriptor.stableEffectId replaces volatile target in intent hash; loop builds it from allowlisted stable fields; own same-effect unresolved blocks across targets; confirmed earlier defers to native authority. Tests: 20/20 guard incl. B18a/b/c with stash-verified RED.)*
 
 **Location:** `AIChatQueryLoop.ts:1537–1558`; intent hash `TaskOperationGuard.ts:228–232`.
 
