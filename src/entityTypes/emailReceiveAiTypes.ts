@@ -33,6 +33,13 @@ export type EmailReceiveAiToolResult<T> =
         | "discard_and_retry"
         | "await_human_review"
         | "no_action";
+      /**
+       * Per-invocation request correlation id (R19). Propagated from the
+       * generation/delivery service when it provided one, so a tool/IPC refusal
+       * can be joined to the lifecycle audits written under the same id.
+       * Absent on input-validation failures (no service call was made).
+       */
+      requestCorrelationId?: string;
     };
 
 // ---- Input schemas (zod, parsed inside the service layer) ----

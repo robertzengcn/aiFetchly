@@ -130,6 +130,11 @@ function policyFailure(result: {
   // derive from the typed code.
   envelope.next_action =
     result.next_action ?? nextActionForCode(result.code, result.existing_draft_id);
+  // R19: propagate the service's request correlation id so tool/IPC consumers
+  // can correlate the refusal with lifecycle audits.
+  if (result.requestCorrelationId) {
+    envelope.requestCorrelationId = result.requestCorrelationId;
+  }
   return envelope;
 }
 

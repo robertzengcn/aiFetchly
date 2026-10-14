@@ -184,6 +184,30 @@ describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
     expect(result.code).toBe("already_replied");
     expect(result.next_action).toBe("await_human_review");
     expect(result.error).toContain("already has a sent reply");
+    // R19: the request correlation id survives the tool boundary so the refusal
+    // can be joined to lifecycle audits.
+    expect(result.requestCorrelationId).toBe("erx-req-abc-1");
+  });
+
+  it("R19: preserves requestCorrelationId on a typed generation refusal (todo reproduction)", async () => {
+    // Verbatim from the re-audit todo: execute the mapper with
+    // {success:false, error:'refused', code:'already_replied',
+    //  requestCorrelationId:'request-unique-123'} — the returned object MUST
+    // carry requestCorrelationId (previously dropped: success/error/code/
+    // next_action only).
+    draftGenStub.createDraft.mockResolvedValue({
+      success: false,
+      error: "refused",
+      code: "already_replied",
+      requestCorrelationId: "request-unique-123",
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("refused");
+    expect(result.code).toBe("already_replied");
+    expect(result.next_action).toBe("await_human_review");
+    expect(result.requestCorrelationId).toBe("request-unique-123");
   });
 
   it("surfaces code=needs_human_review with await_human_review", async () => {
