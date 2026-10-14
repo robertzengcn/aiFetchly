@@ -268,8 +268,9 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B20 — Missing input misclassified as safety block; checker deadline is not a race [P2; confidence 10/10]
 
-- [ ] Distinguish authoritative safety restriction from input/service/capability blockers.
-- [ ] Check already-aborted signals and race abort/deadline against checker dispatch, even when a provider fails to honor cancellation.
+- [x] Distinguish authoritative safety restriction from input/service/capability blockers.
+- [x] Check already-aborted signals and race abort/deadline against checker dispatch, even when a provider fails to honor cancellation.
+*(both done 2026-10-14, commit `0639f30a`: input/service markers suppress refusal flag — genuine refusals + content_filter still block; dispatchOnce Promise.race deadline + pre-abort fast path, AbortError-shaped deadline → terminal unknown, no retry. Tests: 17/17 diagnostics incl. B20a; B20b pre-abort + hanging-dispatch incl. late-pass-after-abort RED.)*
 
 **Location:** `candidateDiagnostics.ts:78–85, 104–107`; `criteriaAdapters.ts:375–387`.
 
