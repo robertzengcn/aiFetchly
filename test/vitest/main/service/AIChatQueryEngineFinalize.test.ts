@@ -106,11 +106,6 @@ vi.mock("@/service/aiTaskExecution/TaskLoopConsult", async (importOriginal) => {
   };
 });
 
-// --- SkillExecutor mock (G01-313): permission-resume re-executes the
-// approved tool through it. Inert for all non-resume tests.
-vi.mock("@/service/SkillExecutor", () => ({
-  SkillExecutor: { execute: skillExecuteMock },
-}));
 vi.mock("@/config/skillsRegistry", () => ({
   SkillRegistry: {
     getAllToolFunctions: vi.fn().mockResolvedValue([]),
@@ -269,8 +264,11 @@ vi.mock("@/config/skillsRegistry", () => ({
     getSkill: vi.fn().mockReturnValue(undefined),
   },
 }));
+// SkillExecutor mock (shared): the engine's permission-resume path
+// re-executes the approved tool through it. skillExecuteMock carries the
+// resolved tool result (G01-315 resume tests); other tests never call it.
 vi.mock("@/service/SkillExecutor", () => ({
-  SkillExecutor: { execute: vi.fn() },
+  SkillExecutor: { execute: skillExecuteMock },
 }));
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(function () {
@@ -630,8 +628,7 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(completeEvent).toBeDefined();
   });
 
-  it("G01-313: pause_for_permission badges waiting_permission; approval resume restores active", async () => {
-    // The enrolled turn parks on a permission gate mid-stream: the badge
+  it("G01-313: pause_for_permission badges waiting_permission; approval resume restores active", async () => {    // The enrolled turn parks on a permission gate mid-stream: the badge
     // must show the actual owned waiting phase (not a stale active), and
     // return to active when approval resumes the turn.
     enrollCreated();
@@ -659,6 +656,7 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
             nextRound: 1,
             toolCallId: "call-1",
             toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
             toolArguments: {},
             eventSink: input.eventSink,
           },
@@ -690,6 +688,142 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     );
     // The badge returns to the owned running phase after the wait.
     expect(activeIdx).toBeGreaterThan(waitingIdx);
+  });
+
+  it("G01-315: approval resume stays in the same execution (no re-enrollment, frozen scope)", async () => {
+    // Approval/denial/answer bind to the pending turn by (conversation,
+    // tool/question id) and resume under the SAME execution binding — the
+    // request carries only lookup keys, so approved scope (tool + args)
+    // cannot be re-authored, and resume never mints a new execution.
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    const loopInputs: AIChatQueryLoopInput[] = [];
+    let calls = 0;
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        loopInputs.push(input);
+        calls += 1;
+        if (calls > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
+            toolArguments: { url: "https://example.com" },
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    await engine.resumeToolAfterPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+
+    // The approved tool re-executes and the turn re-enters the loop in the
+    // background (fire-and-forget) — wait for the re-entry.
+    await vi.waitFor(() => {
+      expect(loopInputs.length).toBe(2);
+    });
+    // The resumed turn re-enters the loop under the SAME execution binding
+    // (Stop/finalization stay keyed to it) and never re-enrolls.
+    expect(loopInputs[1].taskExecutionBinding?.executionId).toBe(EXEC_ID);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    // The re-executed tool is the pending turn's frozen scope, not
+    // request-supplied content (the request carries no args to smuggle).
+    expect(skillExecuteMock).toHaveBeenCalledTimes(1);
+    const [toolName, toolArgs] = skillExecuteMock.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(toolName).toBe("scrape");
+    expect(toolArgs).toMatchObject({ url: "https://example.com" });
+  });
+
+  it("G01-315: denial persists a denied tool result and resumes under the same execution", async () => {
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    const loopInputs: AIChatQueryLoopInput[] = [];
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        loopInputs.push(input);
+        if (loopInputs.length > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
+            toolArguments: {},
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    const denied = await engine.denyToolPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+    expect(denied.ok).toBe(true);
+    // The denial is durable: a denied tool_result is emitted through the
+    // persisting sink (transcript row) instead of vanishing in memory.
+    const denials = emits.filter(
+      (e) =>
+        (e as { type: string }).type === "tool_result" &&
+        (e as { toolCallId?: string }).toolCallId === "call-1"
+    ) as Array<{ toolResult: { success: boolean; error: string } }>;
+    expect(denials.length).toBeGreaterThanOrEqual(1);
+    expect(denials[0].toolResult.success).toBe(false);
+    // The denied turn still re-enters the loop (background) under the same
+    // execution (no new row).
+    await vi.waitFor(() => {
+      expect(loopInputs.length).toBe(2);
+    });
+    // The denied turn still resumes under the same execution (no new row).
+    expect(loopInputs.length).toBe(2);
+    expect(loopInputs[1].taskExecutionBinding?.executionId).toBe(EXEC_ID);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    // Nothing re-executed on denial.
+    expect(skillExecuteMock).not.toHaveBeenCalled();
   });
 
   it("B06a: finalize failure on verified path emits error, never verified success (FR-12, AC-15)", async () => {
