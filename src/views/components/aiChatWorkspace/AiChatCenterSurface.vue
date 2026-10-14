@@ -633,6 +633,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { buildUploadedAttachments } from "@/views/components/aiChatV2/aiChatV2Attachment";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
@@ -1737,29 +1738,6 @@ watch(
 );
 
 // --- Composer send -----------------------------------------------------------
-async function encodeFile(file: File): Promise<{
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  contentBase64: string;
-  kind: "document" | "image";
-} | null> {
-  const buffer = await file.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return {
-    fileName: file.name,
-    mimeType: file.type || "application/octet-stream",
-    sizeBytes: file.size,
-    contentBase64: btoa(binary),
-    kind: file.type.startsWith("image/") ? "image" : "document",
-  };
-}
-
 async function onComposerSend(
   text: string,
   files: File[],
@@ -1940,13 +1918,22 @@ async function performOrdinarySend(
     text.trim().length === 0
       ? GENERATED_IMAGE_FALLBACK_PROMPT
       : text;
-  const uploadedFiles =
-    files.length > 0
-      ? (await Promise.all(files.map(encodeFile))).filter(
-          (item): item is NonNullable<Awaited<ReturnType<typeof encodeFile>>> =>
-            item !== null
-        )
-      : undefined;
+  // B10: attachment preparation reuses the shared validated V2 builder
+  // (extension classification, MIME inference, size limits, image
+  // downscaling) so both surfaces produce equivalent accepted payloads. A
+  // preparation/validation failure aborts with the draft retained and a
+  // visible explanation — rejected items never disappear silently from an
+  // accepted send.
+  let uploadedFiles: Awaited<ReturnType<typeof buildUploadedAttachments>> | undefined;
+  if (files.length > 0) {
+    try {
+      uploadedFiles = await buildUploadedAttachments(files);
+    } catch (err) {
+      commandErrorNotice.value =
+        err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
   if (conversationId.value !== sendConversationId) {
     // Selection changed while attachments encoded (audit T7/D3): keep the
     // draft, keep the message out of the newly selected chat, explain.
