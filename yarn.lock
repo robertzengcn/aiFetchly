@@ -11982,10 +11982,10 @@ playwright@1.62.1:
   optionalDependencies:
     fsevents "2.3.2"
 
-playwright@^1.62.1:
-  version "1.63.0"
-  resolved "https://registry.npmmirror.com/playwright/-/playwright-1.63.0.tgz#99b56f9f69b1b70c44f00bf84b2fe52348ae2511"
-  integrity sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==
+playwright@^1.62.1, playwright@>=1.62.1:
+  version "1.62.1"
+  resolved "https://registry.npmmirror.com/playwright/-/playwright-1.62.1.tgz#8447b6755e8aec85a3cb7207c823e3ed2fc66700"
+  integrity sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==
   dependencies:
     playwright-core "1.63.0"
 
