@@ -153,20 +153,21 @@ export class SearchResultModel extends BaseDb {
   async findLatestByKeywordsSince(
     keywords: number[],
     startedAt: Date
-  ): Promise<{ recordTime: Date } | null> {
+  ): Promise<{ recordTime: Date; id: number } | null> {
     if (keywords.length === 0) return null;
     const row = await this.repository
       .createQueryBuilder("result")
       .select("result.record_time", "recordTime")
+      .addSelect("result.id", "id")
       .where("result.keyword_id IN (:...keywords)", { keywords })
       .andWhere("result.record_time >= :startedAt", {
         startedAt: startedAt.toISOString(),
       })
       .orderBy("result.record_time", "DESC")
       .limit(1)
-      .getRawOne<{ recordTime: string } | undefined>();
+      .getRawOne<{ recordTime: string; id: number } | undefined>();
     if (!row || !row.recordTime) return null;
-    return { recordTime: new Date(row.recordTime) };
+    return { recordTime: new Date(row.recordTime), id: row.id };
   }
 
   async aggregateByDateRange(

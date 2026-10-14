@@ -50,8 +50,14 @@ const {
   countSearchResultMock,
   countSearchResultSinceMock,
   findLatestSearchResultSinceMock,
+  getKeywordTextsByTaskMock,
+  getAllKeywordTextsMock,
+  countSearchResultSinceForKeywordsMock,
+  findLatestSearchResultSinceForKeywordsMock,
   countSinceMock,
   findLatestSinceMock,
+  countSinceForKeywordsMock,
+  findLatestSinceForKeywordsMock,
   getStatisticsMock,
   openAIChatCompletionMock,
 } = vi.hoisted(() => ({
@@ -63,8 +69,14 @@ const {
   countSearchResultMock: vi.fn(),
   countSearchResultSinceMock: vi.fn(),
   findLatestSearchResultSinceMock: vi.fn(),
+  getKeywordTextsByTaskMock: vi.fn().mockResolvedValue([]),
+  getAllKeywordTextsMock: vi.fn().mockResolvedValue([]),
+  countSearchResultSinceForKeywordsMock: vi.fn(),
+  findLatestSearchResultSinceForKeywordsMock: vi.fn(),
   countSinceMock: vi.fn(),
   findLatestSinceMock: vi.fn(),
+  countSinceForKeywordsMock: vi.fn(),
+  findLatestSinceForKeywordsMock: vi.fn(),
   getStatisticsMock: vi.fn(),
   openAIChatCompletionMock: vi.fn(),
 }));
@@ -95,6 +107,10 @@ vi.mock("@/modules/SearchModule", () => ({
       countSearchResult: countSearchResultMock,
       countSearchResultSince: countSearchResultSinceMock,
       findLatestSearchResultSince: findLatestSearchResultSinceMock,
+      getKeywordTextsByTask: getKeywordTextsByTaskMock,
+      getAllKeywordTexts: getAllKeywordTextsMock,
+      countSearchResultSinceForKeywords: countSearchResultSinceForKeywordsMock,
+      findLatestSearchResultSinceForKeywords: findLatestSearchResultSinceForKeywordsMock,
     };
   }),
 }));
@@ -104,6 +120,8 @@ vi.mock("@/model/ContactInfo.model", () => ({
     getStatistics: getStatisticsMock,
     countSince: countSinceMock,
     findLatestSince: findLatestSinceMock,
+    countSinceForKeywords: countSinceForKeywordsMock,
+    findLatestSinceForKeywords: findLatestSinceForKeywordsMock,
   },
   ContactInfoRepository: vi.fn(),
 }));
@@ -193,8 +211,14 @@ beforeEach(() => {
   countSearchResultMock.mockResolvedValue(0);
   countSearchResultSinceMock.mockResolvedValue(0);
   findLatestSearchResultSinceMock.mockResolvedValue(null);
+  getKeywordTextsByTaskMock.mockResolvedValue([]);
+  getAllKeywordTextsMock.mockResolvedValue([]);
+  countSearchResultSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSearchResultSinceForKeywordsMock.mockResolvedValue(null);
   countSinceMock.mockResolvedValue(0);
   findLatestSinceMock.mockResolvedValue(null);
+  countSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSinceForKeywordsMock.mockResolvedValue(null);
   getOperationMock.mockResolvedValue(null);
   openAIChatCompletionMock.mockResolvedValue({
     choices: [{ message: { content: "UNKNOWN" } }],
@@ -579,10 +603,18 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     // schedule_id 1 → taskId 1. The D1 AC-03 bound: the provider queries the
     // FRESHEST row at/after the execution's createdAt (not a global count) —
     // a historical row can no longer masquerade as a fresh observation.
+    // B03: the target ("production") attributes to the matching keyword
+    // (id 5 — the foreign keyword 6 is excluded), and the reference cites
+    // the actual row id, not a generic task slug.
     const windowStart = new Date("2026-01-01T00:00:00Z");
     const rowTime = new Date("2026-01-02T12:00:00Z");
-    findLatestSearchResultSinceMock.mockResolvedValue({
+    getKeywordTextsByTaskMock.mockResolvedValue([
+      { id: 5, keyword: "production deployment" },
+      { id: 6, keyword: "roofing dallas" },
+    ]);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue({
       recordTime: rowTime,
+      id: 77,
     });
     const providers = buildEvidenceService({
       executionId: "exec-factory-1",
@@ -593,14 +625,17 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     const receipt = await providers.observationProvider("production");
     expect(receipt).not.toBeNull();
-    expect(receipt!.referenceId).toBe("search-result:1");
+    expect(receipt!.referenceId).toBe("search-result:77");
     // observedAt is the ROW's time, not now() — the AC-04 fix.
     expect(receipt!.observedAt).toBe(rowTime.toISOString());
-    expect(findLatestSearchResultSinceMock).toHaveBeenCalledWith(1, windowStart);
+    expect(findLatestSearchResultSinceForKeywordsMock).toHaveBeenCalledWith([5], windowStart);
   });
 
   it("observationProvider: no in-window row → null (fail-closed; a pre-window row cannot pass)", async () => {
-    findLatestSearchResultSinceMock.mockResolvedValue(null);
+    getKeywordTextsByTaskMock.mockResolvedValue([
+      { id: 5, keyword: "production deployment" },
+    ]);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue(null);
     const providers = buildEvidenceService({
       executionId: "exec-factory-1",
       execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
@@ -889,5 +924,229 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     expect(finishResult.passedCriterionIds).toEqual([]);
     expect(finishResult.unmetCriterionIds).toEqual(["rec-finish"]);
+  });
+});
+
+describe("buildEvidenceService — B03 target-attributed evidence (FR-02/03/10/24, AC-01/04/11/17/27)", () => {
+  const TASK_KEYWORDS = [
+    { id: 11, keyword: "plumbers austin" },
+    { id: 22, keyword: "roofers dallas" },
+  ];
+
+  async function build() {
+    return buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+  }
+
+  function countContract(targetId: string, minimum = 100, scope = "execution") {
+    return makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "record_count",
+        description: `count ${targetId}`,
+        adapterKey: "record_count",
+        targetId,
+        scope,
+        minimum,
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+  }
+
+  function checkContext(content = ""): {
+    content: string;
+    source: string;
+    sourceRevision: string;
+    expectedStateVersion: number;
+  } {
+    return {
+      content,
+      source: "factory-b03",
+      sourceRevision: "slice-b03",
+      expectedStateVersion: EXEC_VERSION,
+    };
+  }
+
+  it("B03a: contacts target matching one task keyword counts ONLY that keyword (foreign rows excluded)", async () => {
+    // Task 1 holds two keywords; the "plumber-contacts" target selects id
+    // 11 only. The roofer extraction's rows (id 22) must not satisfy this
+    // request's count — the attributed subset (100) verifies.
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-contacts"),
+      checkContext()
+    );
+    expect(countSinceForKeywordsMock).toHaveBeenCalledWith(
+      new Date("2026-01-01T00:00:00Z"),
+      [11]
+    );
+    // The unattributed legacy counters never fire for an attributed target.
+    expect(countSinceMock).not.toHaveBeenCalled();
+    expect(countSearchResultSinceMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03b: results target matching one task keyword counts ONLY that keyword's search rows", async () => {
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSearchResultSinceForKeywordsMock.mockResolvedValue(60);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-results", 50),
+      checkContext()
+    );
+    expect(countSearchResultSinceForKeywordsMock).toHaveBeenCalledWith(
+      [11],
+      new Date("2026-01-01T00:00:00Z")
+    );
+    // Wrong-kind table untouched: contact rows can never satisfy a results
+    // criterion.
+    expect(countSinceForKeywordsMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03c: unmatchable target without task linkage → unknown (no global fallback)", async () => {
+    // schedule_id null: no task scope. The opaque target matches no global
+    // keyword — the old global count (foreign rows satisfy anything) stays
+    // shut: null → unknown → unmet.
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    getAllKeywordTextsMock.mockResolvedValue(TASK_KEYWORDS);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("camp-9"),
+      checkContext()
+    );
+    expect(countSinceMock).not.toHaveBeenCalled();
+    expect(countSinceForKeywordsMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03d: no-task target matching a global keyword attributes the count (genuine rows still verify)", async () => {
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    getAllKeywordTextsMock.mockResolvedValue(TASK_KEYWORDS);
+    countSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-contacts"),
+      checkContext()
+    );
+    expect(countSinceForKeywordsMock).toHaveBeenCalledWith(
+      new Date("2026-01-01T00:00:00Z"),
+      [11]
+    );
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03e: lineage scope on a Continue successor bounds by the ROOT creation (ancestor progress counts)", async () => {
+    // Successor created in February with a January root: the lineage window
+    // is January — ancestor rows satisfy; the successor's own February
+    // creation would wrongly exclude them.
+    const rootStart = new Date("2026-01-05T00:00:00Z");
+    getExecutionMock.mockImplementation(async (id: string) => {
+      if (id === "exec-factory-1") {
+        return {
+          executionId: "exec-factory-1",
+          execution_state_json: null,
+          execution_state_version: EXEC_VERSION,
+          finalized: false,
+          schedule_id: 1,
+          createdAt: new Date("2026-02-01T00:00:00Z"),
+          parent_execution_id: "exec-root-1",
+        };
+      }
+      if (id === "exec-root-1") {
+        return {
+          executionId: "exec-root-1",
+          execution_state_json: null,
+          execution_state_version: 3,
+          finalized: false,
+          schedule_id: 1,
+          createdAt: rootStart,
+          parent_execution_id: null,
+        };
+      }
+      return null;
+    });
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSearchResultSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-results", 100, "lineage"),
+      checkContext()
+    );
+    expect(countSearchResultSinceForKeywordsMock).toHaveBeenCalledWith([11], rootStart);
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03f: observation cites the attributed ROW id (never a generic slug)", async () => {
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue({
+      recordTime: new Date("2026-01-03T00:00:00Z"),
+      id: 4242,
+    });
+    const providers = await build();
+    const receipt = await providers.observationProvider("plumbers austin");
+    expect(receipt).not.toBeNull();
+    expect(receipt!.referenceId).toBe("search-result:4242");
+    expect(receipt!.observedAt).toBe("2026-01-03T00:00:00.000Z");
+    expect(findLatestSearchResultSinceForKeywordsMock).toHaveBeenCalledWith(
+      [11],
+      new Date("2026-01-01T00:00:00Z")
+    );
+  });
+
+  it("B03g: matchTargetKeywordIds matches exactly/substring, rejects short-token noise", async () => {
+    const { matchTargetKeywordIds } = await import(
+      "@/service/aiTaskExecution/EvidenceProviderFactory"
+    );
+    const keywords = [
+      { id: 1, keyword: "plumbers austin" },
+      { id: 2, keyword: "roofers dallas" },
+    ];
+    // Exact (normalized) match.
+    expect(matchTargetKeywordIds("plumbers-austin", keywords)).toEqual([1]);
+    // Target contains keyword / keyword contains target.
+    expect(matchTargetKeywordIds("plumbers-austin-campaign", keywords)).toEqual([1]);
+    expect(matchTargetKeywordIds("plu", keywords)).toEqual([]);
+    // Short tokens require equality ("ai" must not match "campaign").
+    expect(
+      matchTargetKeywordIds("campaign", [{ id: 3, keyword: "ai" }])
+    ).toEqual([]);
+    expect(matchTargetKeywordIds("ai", [{ id: 3, keyword: "ai" }])).toEqual([3]);
+    // Empty universe / empty target → no match (fail-closed).
+    expect(matchTargetKeywordIds("anything", [])).toEqual([]);
+    expect(matchTargetKeywordIds("", keywords)).toEqual([]);
   });
 });

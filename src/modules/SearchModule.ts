@@ -945,16 +945,62 @@ export class SearchModule extends BaseModule {
 
   /**
    * Find the freshest search result for a task created at/after `startedAt`,
-   * returning its `record_time`. Used by the observation provider so
-   * `observedAt` is the real row time, not `now()` (AC-04). Null when no
+   * returning its `record_time` and row id. Used by the observation provider so
+   * `observedAt` is the real row time, not `now()` (AC-04), and the reference
+   * cites the actual row (B03 — never a generic task slug). Null when no
    * in-window row exists (fail-closed → unknown).
    */
   public async findLatestSearchResultSince(
     taskId: number,
     startedAt: Date
-  ): Promise<{ recordTime: Date } | null> {
+  ): Promise<{ recordTime: Date; id: number } | null> {
     const keyarr = await this.getKeywrodsbyTask(taskId);
     return await this.serResultModel.findLatestByKeywordsSince(keyarr, startedAt);
+  }
+
+  /**
+   * B03 (FR-02/03/10/24): keyword id + text for one task — the universe the
+   * evidence factory matches a criterion target against for target
+   * attribution.
+   */
+  public async getKeywordTextsByTask(
+    taskId: number
+  ): Promise<Array<{ id: number; keyword: string }>> {
+    const entities = await this.serKeywordModel.getKeywordsEntityByTask(taskId);
+    return entities.map((item) => ({ id: item.id, keyword: item.keyword }));
+  }
+
+  /**
+   * B03: every keyword id + text (bounded) — the attribution universe for
+   * executions without a task linkage.
+   */
+  public async getAllKeywordTexts(): Promise<Array<{ id: number; keyword: string }>> {
+    return await this.serKeywordModel.getAllKeywordTexts();
+  }
+
+  /**
+   * B03: count in-window search results attributed to EXPLICIT keyword ids
+   * (already target-matched by the caller) — unlike
+   * {@link countSearchResultSince}, this never counts a task's unattributed
+   * keywords, so a concurrent extraction for another target cannot satisfy
+   * this request's count.
+   */
+  public async countSearchResultSinceForKeywords(
+    keywordIds: readonly number[],
+    startedAt: Date
+  ): Promise<number> {
+    return await this.serResultModel.countByKeywordsSince([...keywordIds], startedAt);
+  }
+
+  /**
+   * B03: freshest in-window search result attributed to EXPLICIT keyword
+   * ids, with its row id for a row-bound observation reference.
+   */
+  public async findLatestSearchResultSinceForKeywords(
+    keywordIds: readonly number[],
+    startedAt: Date
+  ): Promise<{ recordTime: Date; id: number } | null> {
+    return await this.serResultModel.findLatestByKeywordsSince([...keywordIds], startedAt);
   }
 
   //get keywords id by task id

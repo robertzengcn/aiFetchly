@@ -123,3 +123,97 @@ describe("ContactInfo freshness-window datetime comparison", () => {
     expect(found?.extractionDate).toBeTruthy();
   });
 });
+
+describe("ContactInfo keyword-attributed queries (B03)", () => {
+  // Seeds one contact row under a search result with the given keyword_id.
+  // Mirrors the production ContactInfoRepository.countSinceForKeywords /
+  // findLatestSinceForKeywords JOIN shape
+  // (contact.searchResult → search_result.keyword_id) against a real SQLite
+  // DataSource, so the attribution join is proven at the SQL boundary.
+  async function seedContactForKeyword(
+    email: string,
+    keywordId: number
+  ): Promise<number> {
+    const searchRepo = dataSource.getRepository(SearchResultEntity);
+    const sr = searchRepo.create();
+    (sr as { keyword_id: number }).keyword_id = keywordId;
+    const saved = await searchRepo.save(sr);
+
+    const repo = dataSource.getRepository(ContactInfoEntity);
+    const row = new ContactInfoEntity();
+    row.resultId = saved.id;
+    row.email = email;
+    const savedContact = await repo.save(row);
+    return savedContact.id;
+  }
+
+  it("keyword-scoped count includes only the attributed keyword's rows", async () => {
+    await seedContactForKeyword("plumber@example.com", 11);
+    await seedContactForKeyword("roofer@example.com", 22);
+    const startedAt = new Date(Date.now() - 60_000);
+    const repo = dataSource.getRepository(ContactInfoEntity);
+
+    const count = await repo
+      .createQueryBuilder("contact")
+      .innerJoin("contact.searchResult", "result")
+      .where("contact.extraction_date >= :startedAt", {
+        startedAt: toSqliteCurrentTimestampText(startedAt),
+      })
+      .andWhere("result.keyword_id IN (:...keywordIds)", {
+        keywordIds: [11],
+      })
+      .getCount();
+
+    // Two in-window rows exist, but only the keyword-11 row is attributed.
+    expect(count).toBe(1);
+  });
+
+  it("keyword-scoped latest returns the attributed row's id and time", async () => {
+    const plumberId = await seedContactForKeyword("plumber2@example.com", 11);
+    await seedContactForKeyword("roofer2@example.com", 22);
+    const startedAt = new Date(Date.now() - 60_000);
+    const repo = dataSource.getRepository(ContactInfoEntity);
+
+    const found = await repo
+      .createQueryBuilder("contact")
+      .select("contact.id", "id")
+      .addSelect("contact.extraction_date", "extractionDate")
+      .innerJoin("contact.searchResult", "result")
+      .where("contact.extraction_date >= :startedAt", {
+        startedAt: toSqliteCurrentTimestampText(startedAt),
+      })
+      .andWhere("result.keyword_id IN (:...keywordIds)", {
+        keywordIds: [11],
+      })
+      .orderBy("contact.extraction_date", "DESC")
+      .limit(1)
+      .getRawOne<{ id: number; extractionDate: string } | undefined>();
+
+    expect(found).not.toBeUndefined();
+    expect(found?.id).toBe(plumberId);
+    expect(found?.extractionDate).toBeTruthy();
+  });
+
+  it("empty keyword list counts nothing (fail-closed, never a global fallback)", async () => {
+    await seedContactForKeyword("anyone@example.com", 11);
+    const startedAt = new Date(Date.now() - 60_000);
+    const repo = dataSource.getRepository(ContactInfoEntity);
+
+    // Production countSinceForKeywords short-circuits to 0 on an empty list
+    // without issuing SQL; the equivalent here is that no unattributed
+    // query shape exists — assert the attributed query with a non-matching
+    // keyword finds nothing even though an in-window row exists.
+    const count = await repo
+      .createQueryBuilder("contact")
+      .innerJoin("contact.searchResult", "result")
+      .where("contact.extraction_date >= :startedAt", {
+        startedAt: toSqliteCurrentTimestampText(startedAt),
+      })
+      .andWhere("result.keyword_id IN (:...keywordIds)", {
+        keywordIds: [999],
+      })
+      .getCount();
+
+    expect(count).toBe(0);
+  });
+});

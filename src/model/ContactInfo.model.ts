@@ -196,8 +196,7 @@ export class ContactInfoRepository {
      */
     async findLatestSince(
         startedAt: Date
-    ): Promise<{ extractionDate: Date } | null> {
-        const repository = await this.getRepository();
+    ): Promise<{ extractionDate: Date } | null> {        const repository = await this.getRepository();
         const row = await repository
             .createQueryBuilder('contact')
             .select('contact.extraction_date', 'extractionDate')
@@ -209,6 +208,62 @@ export class ContactInfoRepository {
             .getRawOne<{ extractionDate: string } | undefined>();
         if (!row || !row.extractionDate) return null;
         return { extractionDate: new Date(row.extractionDate) };
+    }
+
+    /**
+     * B03 (FR-02/03/10/24; AC-01/04/11/17/27): count contact rows created
+     * at/after a timestamp ATTRIBUTED to the given search keywords (via
+     * `contact_info.result_id → search_result.keyword_id`). Time-bounding
+     * alone lets a concurrent extraction for another campaign satisfy this
+     * request's count — the keyword join is the target attribution. Empty
+     * keyword list counts nothing (fail-closed, never a global fallback).
+     */
+    async countSinceForKeywords(
+        startedAt: Date,
+        keywordIds: readonly number[]
+    ): Promise<number> {
+        if (keywordIds.length === 0) return 0;
+        const repository = await this.getRepository();
+        return repository
+            .createQueryBuilder('contact')
+            .innerJoin('contact.searchResult', 'result')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .andWhere('result.keyword_id IN (:...keywordIds)', {
+                keywordIds: [...keywordIds],
+            })
+            .getCount();
+    }
+
+    /**
+     * B03: freshest contact row created at/after a timestamp attributed to
+     * the given search keywords, returning its id (row-bound observation
+     * reference) and `extraction_date` (the real observation time). Null
+     * when no attributed in-window row exists (fail-closed → unknown).
+     */
+    async findLatestSinceForKeywords(
+        startedAt: Date,
+        keywordIds: readonly number[]
+    ): Promise<{ id: number; extractionDate: Date } | null> {
+        if (keywordIds.length === 0) return null;
+        const repository = await this.getRepository();
+        const row = await repository
+            .createQueryBuilder('contact')
+            .select('contact.id', 'id')
+            .addSelect('contact.extraction_date', 'extractionDate')
+            .innerJoin('contact.searchResult', 'result')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .andWhere('result.keyword_id IN (:...keywordIds)', {
+                keywordIds: [...keywordIds],
+            })
+            .orderBy('contact.extraction_date', 'DESC')
+            .limit(1)
+            .getRawOne<{ id: number; extractionDate: string } | undefined>();
+        if (!row || !row.extractionDate) return null;
+        return { id: row.id, extractionDate: new Date(row.extractionDate) };
     }
 }
 

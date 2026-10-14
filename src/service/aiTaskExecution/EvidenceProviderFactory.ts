@@ -58,6 +58,67 @@ export interface EvidenceProviders {
 export interface ProviderExecutionScope {
   readonly createdAt: Date | null;
   readonly taskId: number | null;
+  readonly parentExecutionId: string | null;
+}
+
+/**
+ * B03 (FR-02/03/10/24; AC-01/04/11/17/27): target→keyword attribution.
+ *
+ * Time-bounding alone lets a concurrent extraction for another target
+ * satisfy this request's count — rows must also be ATTRIBUTED to the
+ * criterion's target. Attribution runs through search keywords (the only
+ * domain linkage rows carry: `contact_info.result_id →
+ * search_result.keyword_id → search_keyword.keyword`): a keyword matches
+ * when its normalized text equals the normalized target or contains / is
+ * contained in it (short tokens require exact equality — a 2-letter
+ * keyword is a substring of everything).
+ *
+ * Returns the matched keyword ids; empty means the target names nothing in
+ * the universe (fail-closed at the call site — never a global fallback).
+ */
+const TARGET_SUBSTRING_MIN_LENGTH = 4;
+
+function normalizeTargetToken(token: string): string {
+  return token.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function matchTargetKeywordIds(
+  targetId: string,
+  keywords: ReadonlyArray<{ readonly id: number; readonly keyword: string }>
+): number[] {
+  const target = normalizeTargetToken(targetId);
+  if (!target) return [];
+  const matched: number[] = [];
+  for (const { id, keyword } of keywords) {
+    const key = normalizeTargetToken(keyword);
+    if (!key) continue;
+    if (key === target) {
+      matched.push(id);
+      continue;
+    }
+    if (key.length >= TARGET_SUBSTRING_MIN_LENGTH && target.includes(key)) {
+      matched.push(id);
+      continue;
+    }
+    if (target.length >= TARGET_SUBSTRING_MIN_LENGTH && key.includes(target)) {
+      matched.push(id);
+    }
+  }
+  return matched;
+}
+
+/**
+ * B03 wrong-kind gate for record counts: the criterion target names the row
+ * kind it counts ("contacts" → contact rows, "results" → search rows). A
+ * target naming neither kind (opaque campaign slugs, deliverable nouns the
+ * tables do not hold) resolves null — the caller falls back to the legacy
+ * table choice for opaque slugs, or to unknown where no fallback is safe.
+ */
+function recordKindForTarget(targetId: string): "contacts" | "results" | null {
+  const normalized = normalizeTargetToken(targetId);
+  if (normalized.includes("contact")) return "contacts";
+  if (normalized.includes("result")) return "results";
+  return null;
 }
 
 /**
@@ -153,12 +214,63 @@ export function buildEvidenceService(deps: {
     try {
       const exec = await deps.execModule.getExecution(executionId);
       scopeMemo = exec
-        ? { createdAt: exec.createdAt ?? null, taskId: exec.schedule_id ?? null }
+        ? {
+            createdAt: exec.createdAt ?? null,
+            taskId: exec.schedule_id ?? null,
+            parentExecutionId: exec.parent_execution_id ?? null,
+          }
         : null;
     } catch {
       scopeMemo = null;
     }
     return scopeMemo;
+  };
+
+  /**
+   * B03 lineage window (FR-10/24; AC-27): a Continue successor inherits its
+   * ancestors' progress — the freshness bound for `lineage` scope is the
+   * lineage ROOT's creation (oldest reachable ancestor via
+   * `parent_execution_id`, G03 anchor), not the successor's own creation,
+   * which would exclude valid ancestor progress. Bounded hops, cycle-safe;
+   * a broken chain yields the oldest row reached (never null when the own
+   * window exists). Observations stay on the OWN window (freshness means
+   * this execution — AC-04); only counts use the lineage window.
+   */
+  const LINEAGE_PARENT_HOPS_MAX = 20;
+  let lineageMemo: Date | null | undefined;
+  const getLineageWindowStart = async (): Promise<Date | null> => {
+    if (lineageMemo !== undefined) return lineageMemo;
+    try {
+      const own = await getScope();
+      if (!own || !own.createdAt) {
+        lineageMemo = null;
+        return lineageMemo;
+      }
+      let rootAt: Date | null = own.createdAt;
+      const seen = new Set<string>([executionId]);
+      let cursor: string | null = own.parentExecutionId;
+      let hops = 0;
+      while (cursor && !seen.has(cursor) && hops < LINEAGE_PARENT_HOPS_MAX) {
+        seen.add(cursor);
+        hops += 1;
+        let row: {
+          readonly createdAt?: Date | null;
+          readonly parent_execution_id?: string | null;
+        } | null = null;
+        try {
+          row = await deps.execModule.getExecution(cursor);
+        } catch {
+          break;
+        }
+        if (!row) break;
+        if (row.createdAt) rootAt = row.createdAt;
+        cursor = row.parent_execution_id ?? null;
+      }
+      lineageMemo = rootAt;
+    } catch {
+      lineageMemo = null;
+    }
+    return lineageMemo;
   };
 
   // ----- recordCountProvider: authoritative Model-backed counts -----
@@ -185,19 +297,61 @@ export function buildEvidenceService(deps: {
         return stats.total;
       }
       if (scope === "lineage" || scope === "execution") {
-        // Execution-local freshness bound (AC-03): rows created at/after the
-        // execution's createdAt. Task-scoped when taskId present (SearchResult
-        // by keyword+time); otherwise contact-info-by-time. No global
-        // fallback — a missing createdAt window means we cannot bound the
+        // Freshness bound: the lineage ROOT's creation for `lineage`
+        // (Continue inherits ancestor progress — B03), the execution's own
+        // creation for `execution`. A missing window cannot bound the
         // count, so return null (fail-closed → unknown).
-        if (!execScope.createdAt) return null;
+        const windowStart =
+          scope === "lineage"
+            ? await getLineageWindowStart()
+            : execScope.createdAt;
+        if (!windowStart) return null;
+        // B03 wrong-kind gate: a target naming a row kind counts ONLY that
+        // table (contact rows can never satisfy a results criterion and
+        // vice versa). An opaque target keeps the legacy table choice
+        // below — task-scoped genuine flows keep working while attributable
+        // targets are strictly filtered.
+        const kind = recordKindForTarget(targetId);
         if (execScope.taskId !== null) {
-          return await deps.searchModule.countSearchResultSince(
-            execScope.taskId,
-            execScope.createdAt
+          const texts = await deps.searchModule.getKeywordTextsByTask(
+            execScope.taskId
+          );
+          // Attributed subset when the target selects task keywords;
+          // otherwise the whole task universe (genuine-task fallback —
+          // same-task opaque-slug concurrency needs row-level execution
+          // linkage, a schema + pipeline follow-up, and stays documented).
+          const matched = matchTargetKeywordIds(targetId, texts);
+          const keywordIds =
+            matched.length > 0 ? matched : texts.map((t) => t.id);
+          if (kind === "contacts") {
+            return await deps.contactInfoRepository.countSinceForKeywords(
+              windowStart,
+              keywordIds
+            );
+          }
+          // "results" and opaque targets count search rows (legacy table
+          // choice for opaque slugs — genuine task flows keep working).
+          return await deps.searchModule.countSearchResultSinceForKeywords(
+            keywordIds,
+            windowStart
           );
         }
-        return await deps.contactInfoRepository.countSince(execScope.createdAt);
+        // No task linkage: attribute against the global keyword universe.
+        // Unmatchable here means unattributable — null (the old global
+        // count was the foreign-row hole; there is no safe fallback).
+        const texts = await deps.searchModule.getAllKeywordTexts();
+        const matched = matchTargetKeywordIds(targetId, texts);
+        if (matched.length === 0) return null;
+        if (kind === "results") {
+          return await deps.searchModule.countSearchResultSinceForKeywords(
+            matched,
+            windowStart
+          );
+        }
+        return await deps.contactInfoRepository.countSinceForKeywords(
+          windowStart,
+          matched
+        );
       }
       return null;
     } catch {
@@ -302,33 +456,49 @@ export function buildEvidenceService(deps: {
   ): Promise<ObservationReceipt | null> => {
     const execScope = await getScope();
     if (!execScope || !execScope.createdAt) return null;
+    // Observations stay on the OWN execution window (freshness means this
+    // execution — AC-04), never the lineage window: ancestor rows are not
+    // fresh observations of this run.
+    const windowStart = execScope.createdAt;
     try {
-      // Task-scoped: the freshest SearchResult row for the execution's task
-      // created at/after the execution's createdAt. The targetId is the slug;
-      // the linkage is the execution's task, not the slug text.
+      // Task-scoped: the freshest row for the execution's task, attributed
+      // to the target's keywords when they select a subset (B03), with a
+      // row-bound reference (never a generic task slug).
       if (execScope.taskId !== null) {
+        const texts = await deps.searchModule.getKeywordTextsByTask(
+          execScope.taskId
+        );
+        const matched = matchTargetKeywordIds(targetId, texts);
+        const keywordIds =
+          matched.length > 0 ? matched : texts.map((t) => t.id);
         const freshest =
-          await deps.searchModule.findLatestSearchResultSince(
-            execScope.taskId,
-            execScope.createdAt
+          await deps.searchModule.findLatestSearchResultSinceForKeywords(
+            keywordIds,
+            windowStart
           );
         if (freshest) {
           return {
             observedAt: freshest.recordTime.toISOString(),
-            referenceId: `search-result:${execScope.taskId}`,
+            referenceId: `search-result:${freshest.id}`,
           };
         }
         return null;
       }
-      // No task linkage: the freshest ContactInfo row in-window counts as the
-      // observation. observedAt = row's extraction_date, not now().
-      const freshest = await deps.contactInfoRepository.findLatestSince(
-        execScope.createdAt
-      );
+      // No task linkage: attribute against the global keyword universe;
+      // unmatchable means unattributable (null — the old global freshest
+      // row was the arbitrary-row hole).
+      const texts = await deps.searchModule.getAllKeywordTexts();
+      const matched = matchTargetKeywordIds(targetId, texts);
+      if (matched.length === 0) return null;
+      const freshest =
+        await deps.contactInfoRepository.findLatestSinceForKeywords(
+          windowStart,
+          matched
+        );
       if (freshest) {
         return {
           observedAt: freshest.extractionDate.toISOString(),
-          referenceId: `contact-info:${executionId}`,
+          referenceId: `contact-info:${freshest.id}`,
         };
       }
       return null;
