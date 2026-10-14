@@ -113,6 +113,43 @@ export interface AiEmailInboxSummary {
   lastSyncError: string | null;
 }
 
+/**
+ * Three-state reply evidence for an inbound message, derived from the
+ * persisted evidence columns (FR-030/FR-033). Separate from the coarse
+ * {@link AiEmailMessageSummary.replyStatus} projection: after R11, a freshly
+ * observed `\Answered` flag is sticky positive EVIDENCE and is no longer
+ * projected into `replyStatus` (which stays app-delivery-owned). The AI needs
+ * the evidence to explain why a `not_started` row is still blocked.
+ *
+ * `replied` follows the detection vocabulary (FR-031): `true` = sticky
+ * positive observed (mailbox flag or sent-search match); `false` = a complete
+ * negative observation is stored; `null` = no evidence yet / inconclusive. An
+ * `unknown` is NEVER a false negative — missing/legacy rows surface as `null`.
+ *
+ * Only safe, low-cardinality fields — never credentials, raw mailbox
+ * exceptions, matched body content, or internal detector state (FR-039).
+ */
+export interface AiEmailReplyEvidence {
+  /** `true` / `false` / `null` (null = no stored evidence yet). */
+  replied: boolean | null;
+  /** ISO of the sticky first-positive detection time; never cleared. */
+  replyDetectedAt: string | null;
+  /**
+   * Which source produced the sticky positive (`mailbox_flag` /
+   * `sent_search`), or `null` when no positive evidence exists.
+   */
+  replyDetectionSource: string | null;
+  /**
+   * ISO of the last complete negative observation; null when no negative was
+   * stored (positive or never-checked).
+   */
+  replyNegativeCheckAt: string | null;
+  /** True when the raw IMAP `\Answered` flag was observed at last flag check. */
+  answeredFlagObserved: boolean;
+  /** ISO of the last provider flag check; null when never checked. */
+  answeredFlagCheckedAt: string | null;
+}
+
 /** Summary of a stored received message. No body content. */
 export interface AiEmailMessageSummary {
   id: number;
@@ -127,6 +164,11 @@ export interface AiEmailMessageSummary {
   isUnread: boolean;
   classification: EmailMessageClassification | null;
   replyStatus: EmailReplyStatus;
+  /**
+   * Three-state persisted reply evidence (G02/FR-033). Lets the AI explain
+   * blocking on a `not_started`/`sent` row without a separate detection call.
+   */
+  replyEvidence: AiEmailReplyEvidence;
 }
 
 /** Detailed view of one stored message, with sanitized body. */

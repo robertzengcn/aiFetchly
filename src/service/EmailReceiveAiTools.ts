@@ -39,6 +39,7 @@ import type {
   AiEmailMessageSummary,
   AiEmailMessageDetail,
   AiEmailReplyDraftResult,
+  AiEmailReplyEvidence,
 } from "@/entityTypes/emailReceiveAiTypes";
 import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 import type {
@@ -595,6 +596,73 @@ function bindingCodeToPolicyCode(
 
 // ---- DTO mappers ----
 
+/**
+ * Pure derivation of three-state reply evidence from persisted columns
+ * (G02/FR-030/FR-033). Read-only — no DB, no I/O, no detection call. Lets the
+ * AI explain why a `not_started` row is blocked (an externally-observed
+ * `\Answered` flag is sticky positive evidence after R11, never projected into
+ * `replyStatus`) without forcing a separate `check_email_replied` round trip.
+ *
+ * Semantics (technical design §4.2/§5.1, mirrors the detection vocabulary):
+ * - A set `replyDetectedAt` is a STICKY POSITIVE → `replied: true`. The source
+ *   is the stored provenance (`mailbox_flag` / `sent_search`). It is never
+ *   cleared by a later negative/empty observation, so a stale negative does
+ *   not weaken it.
+ * - With no positive, a stored `replyNegativeCheckAt` is a COMPLETE NEGATIVE →
+ *   `replied: false`.
+ * - Otherwise (no positive, no stored negative — legacy row, never-checked, or
+ *   a freshly-synced message) → `replied: null`. An unknown is NEVER a false
+ *   negative.
+ *
+ * The raw `isAnswered` flag is surfaced as a boolean observation alongside its
+ * check time, so the AI can distinguish "flag observed but no sticky positive
+ * recorded yet" from "no flag check ever ran". Never exposes credentials, raw
+ * mailbox exceptions, matched body content, or the negative context hash
+ * (FR-039 — only low-cardinality codes/booleans/timestamps).
+ *
+ * `replyStatus` is accepted only so a `sent` lifecycle (app-delivery proof)
+ * can strengthen an evidence-less row to `replied: true` — a reply the app
+ * itself delivered is the strongest possible positive. This is the one place
+ * the projection and evidence cross, and it only ever STRENGTHENS (never
+ * weakens a stored positive/negative).
+ */
+export function deriveReplyEvidence(input: {
+  replyDetectedAt: Date | null | undefined;
+  replyDetectionSource: string | null | undefined;
+  replyNegativeCheckAt: Date | null | undefined;
+  isAnswered: number | null | undefined;
+  answeredFlagCheckedAt: Date | null | undefined;
+  replyStatus?: EmailReplyStatus;
+}): AiEmailReplyEvidence {
+  const hasPositive = input.replyDetectedAt != null;
+  const hasNegative = input.replyNegativeCheckAt != null;
+  const appSent = input.replyStatus === "sent";
+
+  // Sticky positive wins; app-delivery proof strengthens an evidence-less row.
+  const replied: boolean | null = hasPositive
+    ? true
+    : appSent
+      ? true
+      : hasNegative
+        ? false
+        : null;
+
+  return {
+    replied,
+    replyDetectedAt: toIsoOrNull(input.replyDetectedAt),
+    replyDetectionSource: input.replyDetectionSource ?? null,
+    replyNegativeCheckAt: toIsoOrNull(input.replyNegativeCheckAt),
+    answeredFlagObserved: (input.isAnswered ?? 0) === 1,
+    answeredFlagCheckedAt: toIsoOrNull(input.answeredFlagCheckedAt),
+  };
+}
+
+/** ISO string for a persisted Date, "" for an absent timestamp on a required
+ * field, or null when the source is genuinely absent. */
+function toIsoOrNull(d: Date | null | undefined): string | null {
+  return d ? new Date(d).toISOString() : null;
+}
+
 function toInboxSummary(s: {
   id: number;
   name: string;
@@ -636,6 +704,13 @@ function toMessageSummary(e: {
   isUnread: number;
   classification: EmailMessageClassification | null;
   replyStatus: EmailReplyStatus;
+  // Persisted reply evidence columns (FR-030, technical design §5.1). May be
+  // absent on legacy rows; deriveReplyEvidence tolerates null/undefined.
+  replyDetectedAt?: Date | null;
+  replyDetectionSource?: string | null;
+  replyNegativeCheckAt?: Date | null;
+  isAnswered?: number | null;
+  answeredFlagCheckedAt?: Date | null;
 }): AiEmailMessageSummary {
   return {
     id: e.id,
@@ -650,6 +725,14 @@ function toMessageSummary(e: {
     isUnread: e.isUnread === 1,
     classification: e.classification,
     replyStatus: e.replyStatus,
+    replyEvidence: deriveReplyEvidence({
+      replyDetectedAt: e.replyDetectedAt,
+      replyDetectionSource: e.replyDetectionSource,
+      replyNegativeCheckAt: e.replyNegativeCheckAt,
+      isAnswered: e.isAnswered,
+      answeredFlagCheckedAt: e.answeredFlagCheckedAt,
+      replyStatus: e.replyStatus,
+    }),
   };
 }
 
