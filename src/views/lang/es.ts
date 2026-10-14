@@ -3660,6 +3660,7 @@ export default {
     },
     history: {
       selectionLimit: "Se pueden adjuntar hasta 20 pasajes a un mensaje.",
+      navigateUnavailable: "Ese mensaje ya no está disponible en esta conversación.",
     },
     recovery: {
       retry: "Reconectando… intento {attempt} de {max} (esperando ~{seconds} s)",

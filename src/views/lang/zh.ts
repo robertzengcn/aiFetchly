@@ -3455,6 +3455,7 @@ export default {
     },
     history: {
       selectionLimit: "一条消息最多可附加 20 段引文。",
+      navigateUnavailable: "该消息在此对话中已不可用。",
     },
     recovery: {
       retry: "正在重新连接… 第 {attempt}/{max} 次尝试（等待约 {seconds} 秒）",

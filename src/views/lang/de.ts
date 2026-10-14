@@ -3659,6 +3659,7 @@ export default {
     },
     history: {
       selectionLimit: "An eine Nachricht lassen sich maximal 20 Passagen anhängen.",
+      navigateUnavailable: "Diese Nachricht ist in dieser Unterhaltung nicht mehr verfügbar.",
     },
     recovery: {
       retry: "Verbinde erneut… Versuch {attempt} von {max} (wartet ~{seconds} s)",

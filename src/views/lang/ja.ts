@@ -3584,6 +3584,7 @@ export default {
     },
     history: {
       selectionLimit: "1 つのメッセージに添付できる引用は最大 20 件です。",
+      navigateUnavailable: "そのメッセージはこの会話では利用できなくなりました。",
     },
     recovery: {
       retry: "再接続中… 試行 {attempt}/{max}（約 {seconds} 秒待機）",

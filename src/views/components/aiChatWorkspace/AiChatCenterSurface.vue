@@ -702,6 +702,7 @@ import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
+import { navigateToHistorySource } from "@/views/utils/historyNavigate";
 import {
   planContinuationRequestId,
   type PlanContinuationDecision,
@@ -2279,21 +2280,42 @@ function clearSelectedContext(): void {
 /**
  * Source navigation from the drawer (§13.2): close and scroll to the message
  * — viewing never mutates the next model request.
+ * B13: delegates to the bounded navigation helper — sources outside the
+ * mounted window load through the history API (200-message cap retained),
+ * unavailable sources and mid-retrieval selection changes resolve safely.
  */
-function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
+async function handleHistoryNavigate(excerpt?: HistoryExcerpt): Promise<void> {
   showHistoryDrawer.value = false;
   if (!excerpt) return;
-  void nextTick(() => {
-    const el = document.querySelector(
-      `[data-message-id="${CSS.escape(excerpt.messageId)}"]`
-    );
-    if (!(el instanceof HTMLElement)) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    const previous = el.style.outline;
-    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
-    window.setTimeout(() => {
-      el.style.outline = previous;
-    }, 1_600);
+  // Bind to the conversation Navigate was issued in — a selection change
+  // during retrieval aborts rather than scrolling the new chat.
+  const targetConversationId = conversationId.value;
+  const targetMessageId = excerpt.messageId;
+  await navigateToHistorySource(targetMessageId, targetConversationId, {
+    getSelectionId: () => conversationId.value,
+    hasOlder: () => selectedStore.hasOlder,
+    isLoadingOlder: () => selectedStore.loadingOlder,
+    loadOlder: () => selectedStore.loadOlder(),
+    nextFrame: () => nextTick(),
+    queryMessageElement: (messageId) => {
+      const el = document.querySelector(
+        `[data-message-id="${CSS.escape(messageId)}"]`
+      );
+      return el instanceof HTMLElement ? el : null;
+    },
+    scrollToElement: (el) => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const previous = el.style.outline;
+      el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+      window.setTimeout(() => {
+        el.style.outline = previous;
+      }, 1_600);
+    },
+    showUnavailable: () => {
+      commandErrorNotice.value =
+        t("workspaceChat.history.navigateUnavailable") ||
+        "That message is no longer available in this conversation.";
+    },
   });
 }
 

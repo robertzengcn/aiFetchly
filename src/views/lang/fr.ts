@@ -3645,6 +3645,7 @@ export default {
     },
     history: {
       selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",
+      navigateUnavailable: "Ce message n'est plus disponible dans cette conversation.",
     },
     recovery: {
       retry: "Reconnexion… tentative {attempt} sur {max} (attente ~{seconds} s)",

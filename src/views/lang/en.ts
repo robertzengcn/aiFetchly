@@ -3629,6 +3629,7 @@ export default {
     },
     history: {
       selectionLimit: "Up to 20 passages can be attached to one message.",
+      navigateUnavailable: "That message is no longer available in this conversation.",
     },
     recovery: {
       retry: "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
