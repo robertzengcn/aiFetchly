@@ -3655,6 +3655,7 @@ export default {
       staleAborted: "Auswahl geändert — der Befehl wurde nicht ausgeführt.",
       noConversation: "Kein Chat ausgewählt — der Befehl wurde nicht ausgeführt.",
       busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
+      filesNotSupported: "Dieser Befehl unterstützt keine Dateianhänge. Entferne die Dateien oder sende deine Nachricht ohne den /Befehl-Präfix.",
     },
     history: {
       selectionLimit: "An eine Nachricht lassen sich maximal 20 Passagen anhängen.",

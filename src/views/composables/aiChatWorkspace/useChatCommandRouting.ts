@@ -139,7 +139,13 @@ export interface ChatCommandRoutingPorts {
     prompt: string,
     pastedContents?: Record<string, string>,
     conversationId?: string,
-    onAccepted?: () => void
+    onAccepted?: () => void,
+    /**
+     * B11: files attached to the command input. Preserved through expansion
+     * into the ordinary send (which validates them); the expanded send
+     * carries the same attachments instead of silently dropping them.
+     */
+    files?: readonly File[]
   ) => Promise<boolean>;
   /** Built-in `/clear` handler (clear + reload). */
   /** Built-in `/clear` — receives the conversation the command was issued in. */
@@ -150,6 +156,12 @@ export interface RouteCommandOptions {
   readonly pastedContents?: Record<string, string>;
   /** Attachments present — generic slash interception is skipped (V2 parity). */
   readonly hasFiles?: boolean;
+  /**
+   * B11: the attached files themselves. Generic slash commands have no file
+   * channel, so command+files is explicitly rejected (draft retained);
+   * goal/skill expansions preserve these through the ordinary send.
+   */
+  readonly files?: readonly File[];
   /**
    * The composer's acceptance callback (Codex P2): threaded through to the
    * expanded-prompt send so a parked (image dialog) or rejected expansion
@@ -274,14 +286,28 @@ export function useChatCommandRouting(
   /**
    * Generic registry dispatch (FR-CMD-001..004). Returns the acceptance of
    * the command's send (true for locally-handled commands; the expanded
-   * prompt's actual send outcome otherwise) or null when the input was not
-   * registry-owned.
+   * prompt's actual send outcome otherwise), an explicit files-unsupported
+   * rejection (B11 — draft retained, nothing silently dropped), or null
+   * when the input was not registry-owned.
    */
+  type GenericSlashOutcome =
+    | { kind: "handled"; acceptedSend: boolean }
+    | { kind: "rejected_files"; message: string }
+    | null;
+
+  function filesNotSupportedMessage(): string {
+    return ports.translate(
+      "workspaceChat.command.filesNotSupported",
+      "This command does not support file attachments. Remove the files or send your message without the /command prefix."
+    );
+  }
+
   async function dispatchGenericSlash(
     rawInput: string,
     pastedContents?: Record<string, string>,
-    onAccepted?: () => void
-  ): Promise<boolean | null> {
+    onAccepted?: () => void,
+    files?: readonly File[]
+  ): Promise<GenericSlashOutcome> {
     const conversationId = await ports.ensureConversationId();
     if (!conversationId) {
       // Never a silent vanish (review F4): the user keeps their draft.
@@ -291,8 +317,9 @@ export function useChatCommandRouting(
           "No chat is selected — the command was not run."
         )
       );
-      return false;
+      return { kind: "handled", acceptedSend: false };
     }
+    const hasFiles = (files?.length ?? 0) > 0;
     let result: SlashCommandDispatchResponse;
     try {
       result = await ports.dispatchSlashCommand({
@@ -301,7 +328,7 @@ export function useChatCommandRouting(
       });
     } catch (err) {
       // B07: a command TRANSPORT failure is handled-but-rejected — render the
-      // receipt against the origin conversation only, and return FALSE so
+      // receipt against the origin conversation only, and report FALSE so
       // the caller retains the draft (it was never accepted for execution).
       // Returning true here cleared the draft as though execution began.
       ports.appendLocalExchange(
@@ -309,34 +336,46 @@ export function useChatCommandRouting(
         err instanceof Error ? err.message : String(err),
         conversationId
       );
-      return false;
+      return { kind: "handled", acceptedSend: false };
     }
     if (!result.status) {
       ports.appendLocalExchange(rawInput, result.msg, conversationId);
-      return true;
+      return { kind: "handled", acceptedSend: true };
     }
     if (result.action === "submit_prompt") {
       // The expanded prompt is submitted exactly once through the ordinary
       // path; the port marks it as expanded so a body beginning with `/` is
       // chat content, not a second command (FR-CMD-003). The port reports
       // acceptance so a rejected/parked send keeps the draft (FR-SUB-002).
+      // B11: attached files ride through expansion (validated downstream);
+      // they are never silently dropped from an accepted command.
       try {
-        return await ports.onSlashPromptExpand(
+        const acceptedSend = await ports.onSlashPromptExpand(
           result.prompt,
           pastedContents,
           conversationId,
-          onAccepted
+          onAccepted,
+          files
         );
+        return { kind: "handled", acceptedSend };
       } catch {
-        return false;
+        return { kind: "handled", acceptedSend: false };
       }
+    }
+    // B11: non-expanding outcomes (receipts, /clear) have no file channel —
+    // an attached file would be silently discarded, so reject explicitly
+    // with all draft content retained instead of changing command meaning.
+    if (hasFiles) {
+      const message = filesNotSupportedMessage();
+      ports.setError(message, conversationId);
+      return { kind: "rejected_files", message };
     }
     if (result.commandId === "built-in:command:clear") {
       await ports.onClearConversation(conversationId);
-      return true;
+      return { kind: "handled", acceptedSend: true };
     }
     ports.appendLocalExchange(rawInput, result.content, conversationId);
-    return true;
+    return { kind: "handled", acceptedSend: true };
   }
 
   async function routeCommand(
@@ -484,20 +523,29 @@ export function useChatCommandRouting(
       };
     }
 
-    // --- Generic slash registry (no attachments; goal/loop already above) ---
-    if (
-      goalCmd.type === "none" &&
-      !options.hasFiles &&
-      text.trim().startsWith("/")
-    ) {
-      const handled = await dispatchGenericSlash(
+    // --- Generic slash registry (goal/loop already above) ---
+    // B11: the dispatcher owns every command-like input — including with
+    // files. Expansions preserve files through the ordinary send; outcomes
+    // without a file channel reject explicitly (draft retained) instead of
+    // silently reinterpreting raw command text as model input.
+    if (goalCmd.type === "none" && text.trim().startsWith("/")) {
+      const outcome = await dispatchGenericSlash(
         text.trim(),
         options.pastedContents,
-        options.onAccepted
+        options.onAccepted,
+        options.files
       );
-      if (handled !== null) {
-        return { kind: "completed", acceptedSend: handled };
+      if (outcome === null) {
+        return { kind: "not_command" };
       }
+      if (outcome.kind === "rejected_files") {
+        return {
+          kind: "rejected",
+          code: "command_files_not_supported",
+          message: outcome.message,
+        };
+      }
+      return { kind: "completed", acceptedSend: outcome.acceptedSend };
     }
 
     return { kind: "not_command" };

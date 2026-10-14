@@ -1758,6 +1758,7 @@ async function onComposerSend(
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,
+    files,
     onAccepted: options?.onAccepted,
   });
   await applyCommandDisposition(
@@ -1805,9 +1806,12 @@ async function applyCommandDisposition(
     // onAccepted rides INSIDE the send options so an image-dialog park
     // keeps the draft and the replayed send clears it exactly once
     // (Codex P2; no double-fire with the branch-level acceptance).
+    // B11: /goal and /skill preserve attached files through expansion —
+    // an accepted command never silently loses its attachment (validated
+    // downstream by the shared builder; failures retain the draft).
     await performOrdinarySend(
       disposition.prompt,
-      [],
+      files,
       {
         fromVoice: options?.fromVoice,
         pastedContents: options?.pastedContents,
@@ -2090,7 +2094,8 @@ const commandRouter = useChatCommandRouting({
     prompt,
     pastedContents,
     targetConversationId,
-    onAccepted
+    onAccepted,
+    files
   ): Promise<boolean> => {
     if (targetConversationId && conversationId.value !== targetConversationId) {
       // Codex High (cross-conversation command): a selection change during
@@ -2100,7 +2105,13 @@ const commandRouter = useChatCommandRouting({
         "Selection changed — the command was not run.";
       return false;
     }
-    return performOrdinarySend(prompt, [], { pastedContents, onAccepted });
+    // B11: files attached to the command ride through expansion (validated
+    // by the shared builder downstream); never silently dropped.
+    return performOrdinarySend(
+      prompt,
+      files ? [...files] : [],
+      { pastedContents, onAccepted }
+    );
   },
   onClearConversation: async (targetConversationId): Promise<void> => {
     // Codex High (cross-conversation /clear): only clear when the command

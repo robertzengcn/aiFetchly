@@ -3624,6 +3624,8 @@ export default {
       noConversation: "No chat is selected — the command was not run.",
       busy:
         "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+      filesNotSupported:
+        "This command does not support file attachments. Remove the files or send your message without the /command prefix.",
     },
     history: {
       selectionLimit: "Up to 20 passages can be attached to one message.",

@@ -3451,6 +3451,7 @@ export default {
       staleAborted: "所选对话已切换——命令未执行。",
       noConversation: "未选择对话——命令未执行。",
       busy: "当前对话正在运行，暂无法使用命令。请等待其完成或先停止。",
+      filesNotSupported: "此命令不支持文件附件。请移除文件，或去掉 /命令前缀后发送消息。",
     },
     history: {
       selectionLimit: "一条消息最多可附加 20 段引文。",

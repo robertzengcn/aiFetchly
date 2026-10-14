@@ -3641,6 +3641,7 @@ export default {
       staleAborted: "La sélection a changé — la commande n'a pas été exécutée.",
       noConversation: "Aucune conversation sélectionnée — la commande n'a pas été exécutée.",
       busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
+      filesNotSupported: "Cette commande ne prend pas en charge les pièces jointes. Retirez les fichiers ou envoyez votre message sans le préfixe /commande.",
     },
     history: {
       selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",

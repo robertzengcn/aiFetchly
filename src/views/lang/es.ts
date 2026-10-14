@@ -3656,6 +3656,7 @@ export default {
       staleAborted: "La selección cambió: el comando no se ejecutó.",
       noConversation: "No hay chat seleccionado: el comando no se ejecutó.",
       busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
+      filesNotSupported: "Este comando no admite archivos adjuntos. Quita los archivos o envía tu mensaje sin el prefijo /comando.",
     },
     history: {
       selectionLimit: "Se pueden adjuntar hasta 20 pasajes a un mensaje.",

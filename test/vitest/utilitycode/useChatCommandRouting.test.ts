@@ -391,12 +391,74 @@ describe("useChatCommandRouting.routeCommand", () => {
     expect(state.localExchanges[0].assistant).toContain("registry offline");
   });
 
-  it("does not intercept generic slashes when attachments are present", async () => {
+  it("B11: generic slash + files expands with files preserved (exact payload, acceptance honored)", async () => {
+    const seen: Array<{ prompt: string; files?: readonly unknown[] }> = [];
+    const { ports, state } = makePorts({
+      dispatchSlashCommand: async (input) => {
+        state.slashDispatches.push(input.rawInput);
+        return {
+          status: true as const,
+          action: "submit_prompt" as const,
+          prompt: "expanded prompt",
+          commandId: "plugin:x",
+        };
+      },
+      onSlashPromptExpand: async (prompt, _pasted, _conv, _accepted, files) => {
+        seen.push({ prompt, files });
+        return true;
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const file = new File(["x"], "a.png", { type: "image/png" });
+    // Dispatcher owns the input (raw text never reaches the model as chat).
+    const result = await router.routeCommand("/review Acme", {
+      hasFiles: true,
+      files: [file],
+    });
+    expect(state.slashDispatches).toEqual(["/review Acme"]);
+    expect(result).toEqual({ kind: "completed", acceptedSend: true });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].prompt).toBe("expanded prompt");
+    expect(seen[0].files).toHaveLength(1);
+  });
+
+  it("B11: generic receipt/clear + files rejects explicitly with the draft retained", async () => {
+    const { ports } = makePorts({
+      dispatchSlashCommand: async () => ({
+        status: true as const,
+        action: "show_result" as const,
+        content: "receipt body",
+        commandId: "plugin:echo",
+      }),
+    });
+    const router = useChatCommandRouting(ports);
+    const file = new File(["x"], "a.png", { type: "image/png" });
+    const result = await router.routeCommand("/echo hi", {
+      hasFiles: true,
+      files: [file],
+    });
+    // Handled-but-rejected: nothing silently dropped, draft retained.
+    expect(result.kind).toBe("rejected");
+    expect(result).toMatchObject({ code: "command_files_not_supported" });
+  });
+
+  it("B11: /goal and /skill route with files (preserved through their submit_prompt sends)", async () => {
     const { ports, state } = makePorts();
     const router = useChatCommandRouting(ports);
-    const result = await router.routeCommand("/review Acme", { hasFiles: true });
-    expect(result.kind).toBe("not_command");
+    const file = new File(["x"], "a.png", { type: "image/png" });
+    const goalResult = await router.routeCommand("/goal ship it", {
+      hasFiles: true,
+      files: [file],
+    });
+    expect(goalResult.kind).toBe("submit_prompt");
+    // The registry is bypassed for goal commands (no double dispatch).
     expect(state.slashDispatches).toHaveLength(0);
+
+    const skillResult = await router.routeCommand("/skill review do it", {
+      hasFiles: true,
+      files: [file],
+    });
+    expect(skillResult.kind).toBe("submit_prompt");
   });
 
   it("reports acceptedSend=false when the expanded prompt send is rejected (FR-SUB-002)", async () => {
