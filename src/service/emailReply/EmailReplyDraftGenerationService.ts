@@ -864,6 +864,45 @@ export class EmailReplyDraftGenerationService {
         input,
         requestCorrelationId
       );
+    } catch (error) {
+      // G01/FR-035: a non-model awaited stage (classification, profile load,
+      // knowledge retrieval, conversation-context build, envelope binding)
+      // exceeded the invocation deadline and re-threw LlmTransportError. This
+      // is a transport failure — NOT a validation strike, NOT a thrown bug —
+      // so convert it to a deadline_exceeded outcome (mirroring the
+      // attemptLlmGeneration transport-error path) rather than letting it
+      // escape createDraft as an unhandled exception. The stage label was
+      // already recorded by raceWithDeadline's deadline_exceeded metric; this
+      // catch adds the generation_outcome rollup + ONE refusal audit, releases
+      // the reservation, and returns. Non-deadline errors re-throw so R16's
+      // invariant (unexpected exceptions still propagate) holds.
+      if (
+        error instanceof LlmTransportError &&
+        error.deadlineExceeded
+      ) {
+        await this.releaseReservationSafely();
+        incrementReplyMetric("generation_outcome", {
+          outcome: "deadline_exceeded",
+        });
+        await this.recordFailure(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          `[provider_error] ${error.message}`,
+          { stage: "generation", code: "provider_error" }
+        );
+        return {
+          success: false,
+          error: `[provider_error] ${error.message}`,
+          requestCorrelationId,
+          // provider_error is NOT a member of EmailReplyPolicyCode, so the
+          // typed `code` slot stays absent — the leading bracket in `error`
+          // is the only signal (same convention as the attemptLlmGeneration
+          // transport-error path).
+          next_action: "discard_and_retry",
+        };
+      }
+      throw error;
     } finally {
       if (this.reservation !== null) {
         await this.releaseReservationSafely();
@@ -1012,19 +1051,29 @@ export class EmailReplyDraftGenerationService {
       message.classification === "unknown"
     ) {
       try {
-        const refined = await classifyMessage(
-          {
-            fromAddress: message.fromAddress,
-            subject: message.subject,
-            bodyText: message.newContentText ?? message.bodyText,
-            replyToAddress: message.replyToAddress,
-            autoSubmittedHeader: message.autoSubmittedHeader,
-            precedenceHeader: message.precedenceHeader,
-            listIdHeader: message.listIdHeader,
-            listUnsubscribeHeader: message.listUnsubscribeHeader,
-          },
-          buildLlmClassifier(this.apiFactory, () =>
-            this.requireModelCallBudget("classification")
+        // G01/FR-035: bound the classification await (including ITS inner model
+        // call, which already calls requireModelCallBudget) against the
+        // REMAINING invocation budget. A hanging classifier now aborts within
+        // the 5-minute wall instead of running unbounded. Deadline exhaustion
+        // is re-thrown so it propagates to the createDraft transport-failure
+        // handler — it is NOT a soft failure to swallow (continuing with a
+        // stored value under an expired owner would let late output persist).
+        const refined = await this.raceWithDeadline(
+          "classification",
+          classifyMessage(
+            {
+              fromAddress: message.fromAddress,
+              subject: message.subject,
+              bodyText: message.newContentText ?? message.bodyText,
+              replyToAddress: message.replyToAddress,
+              autoSubmittedHeader: message.autoSubmittedHeader,
+              precedenceHeader: message.precedenceHeader,
+              listIdHeader: message.listIdHeader,
+              listUnsubscribeHeader: message.listUnsubscribeHeader,
+            },
+            buildLlmClassifier(this.apiFactory, () =>
+              this.requireModelCallBudget("classification")
+            )
           )
         );
         if (refined.classification !== "unknown") {
@@ -1042,6 +1091,13 @@ export class EmailReplyDraftGenerationService {
           message.classificationConfidence = refined.confidence;
         }
       } catch (e) {
+        // G01/FR-035: deadline exhaustion is a transport failure, not a soft
+        // classification failure — re-throw so the createDraft catch converts
+        // it to a deadline_exceeded outcome (no draft persisted). Only genuine
+        // classifier failures fall through to the stored-value continuation.
+        if (e instanceof LlmTransportError && e.deadlineExceeded) {
+          throw e;
+        }
         console.error(
           "Model classification stage failed; continuing with stored value:",
           e
@@ -1052,22 +1108,34 @@ export class EmailReplyDraftGenerationService {
     // 3. Load owner-voice profile + derive its version stamp (FR-013): id@updatedAt
     //    identifies the exact profile content used; the identity-update handler
     //    invalidates unsent drafts when this changes.
-    const profile = await this.profileModule.getByEmailServiceId(
-      message.emailServiceId
+    //    G01/FR-035: bound the profile DB read against the invocation budget so a
+    //    hanging lookup aborts within the 5-minute wall. A deadline rejection
+    //    propagates uncaught to the createDraft catch (this site has no soft
+    //    fallback — there is no "stored profile" to continue with).
+    const profile = await this.raceWithDeadline(
+      "profile_load",
+      this.profileModule.getByEmailServiceId(message.emailServiceId)
     );
     const identityProfileVersion = profile
       ? `${profile.id}@${new Date(profile.updatedAt ?? 0).getTime()}`
       : null;
 
-    // 4. Retrieve knowledge-library context (never throws).
-    const knowledge = await retrieveReplyKnowledge({
-      emailServiceId: message.emailServiceId,
-      subject: message.subject,
-      bodyText: message.bodyText,
-      goal: input.goal,
-      classification: message.classification,
-      useKnowledgeLibrary: input.useKnowledgeLibrary ?? true,
-    });
+    // 4. Retrieve knowledge-library context (never throws under normal
+    //    operation, but G01/FR-035 bounds the await against the invocation
+    //    budget so a hanging retrieval aborts within the 5-minute wall
+    //    instead of running unbounded). A deadline rejection propagates
+    //    uncaught to the createDraft catch.
+    const knowledge = await this.raceWithDeadline(
+      "knowledge_retrieval",
+      retrieveReplyKnowledge({
+        emailServiceId: message.emailServiceId,
+        subject: message.subject,
+        bodyText: message.bodyText,
+        goal: input.goal,
+        classification: message.classification,
+        useKnowledgeLibrary: input.useKnowledgeLibrary ?? true,
+      })
+    );
 
     // 5. Build prompt + call LLM.
     // 5a. Load the bounded conversation context (FR-002/003/004) — the thread
@@ -1082,12 +1150,19 @@ export class EmailReplyDraftGenerationService {
     } | null = null;
     if (message.conversationId) {
       try {
-        const context =
-          await new EmailConversationContextService().buildContextForMessage({
+        // G01/FR-035: bound the conversation-context build against the
+        // invocation budget. Deadline exhaustion is re-thrown (NOT swallowed
+        // with the soft "drafting without it" fallback) so it propagates to
+        // the createDraft transport-failure handler — continuing without
+        // context under an expired owner would let late output persist.
+        const context = await this.raceWithDeadline(
+          "conversation_context",
+          new EmailConversationContextService().buildContextForMessage({
             emailServiceId: message.emailServiceId,
             conversationId: message.conversationId,
             currentMessageId: message.id,
-          });
+          })
+        );
         conversationSection = renderConversationContext(context);
         contextMeta = {
           truncated: context.truncated,
@@ -1097,6 +1172,11 @@ export class EmailReplyDraftGenerationService {
           estimatedTokens: context.estimatedTokens,
         };
       } catch (e) {
+        // G01/FR-035: deadline exhaustion is a transport failure — re-throw so
+        // the createDraft catch converts it to a deadline_exceeded outcome.
+        if (e instanceof LlmTransportError && e.deadlineExceeded) {
+          throw e;
+        }
         console.error(
           "Failed to build conversation context; drafting without it:",
           e
@@ -1407,8 +1487,13 @@ export class EmailReplyDraftGenerationService {
     //     behavior silently skipped revision materialization and persisted an
     //     unbound draft — exactly the "unbound sendable draft" the atomic
     //     commit forbids.
-    const emailService = await new EmailServiceModule().getEmailService(
-      message.emailServiceId
+    //    G01/FR-035: bound the envelope lookup against the invocation budget.
+    //    A hanging lookup now aborts within the 5-minute wall instead of
+    //    running unbounded post-generation; a deadline rejection propagates
+    //    uncaught to the createDraft catch (this site has no soft fallback).
+    const emailService = await this.raceWithDeadline(
+      "envelope_bind",
+      new EmailServiceModule().getEmailService(message.emailServiceId)
     );
     const senderAddress = emailService?.from ?? "";
     const recipientAddress = (

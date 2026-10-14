@@ -36,6 +36,11 @@ vi.mock("@/service/emailReply/EmailReplyDraftGenerationService", () => ({
   EmailReplyDraftGenerationService: function () {
     return draftGenStub;
   },
+  // G01/FR-027: the production EmailReceiveAiTools imports this factory to
+  // wire the capability clamp. The mock's EmailReplyDraftGenerationService
+  // constructor returns a stub that never invokes it, so a no-op stub keeps
+  // the module shape consistent without exercising the real resolver.
+  createModelOutputCapResolver: () => async () => undefined,
 }));
 vi.mock("@/service/emailReply/EmailReplyDeliveryService", () => ({
   EmailReplyDeliveryService: function () {

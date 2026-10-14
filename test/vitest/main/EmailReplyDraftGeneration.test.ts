@@ -1542,6 +1542,190 @@ describe("next-action guidance separates refusal from eligible reuse (R22)", () 
 });
 
 // ---------------------------------------------------------------------------
+// G01 sub-item 4 (FR-035/039): every awaited NON-model stage is raced against
+// the invocation deadline. Before this slice, checkpoint-only expiry did NOT
+// abort a hanging retrieval/profile/envelope call — a stage that never
+// resolved held the invocation (and the reservation lease) unbounded. Now a
+// hanging stage rejects with LlmTransportError(deadlineExceeded), the
+// createDraft catch converts that to a transport-failure outcome (no draft
+// persisted, no model call), and the stage-labeled `deadline_exceeded` metric
+// fires (FR-039 low-cardinality codes).
+// ---------------------------------------------------------------------------
+describe("raceWithDeadline bounds non-model awaited stages (G01/FR-035)", () => {
+  async function seedReceivableMessageForG01Sub4(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    // A concrete classification skips the model classifier and routes straight
+    // to the profile-load stage — the first non-model awaited stage we hang.
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("a hanging profile-load stage aborts within the invocation budget (no draft, no model call, stage-labeled metric)", async () => {
+    const messageId = await seedReceivableMessageForG01Sub4();
+    const nowMs = 1_000_000;
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    // Spy BEFORE buildService: the service's profileModule closes over the
+    // connection-guard instance copy BaseDb installs at construction, so a
+    // later spy would be shadowed. The stub NEVER resolves — it hangs the
+    // profile-load stage so raceWithDeadline's timer is the only way out.
+    const { EmailReplyIdentityProfileModel } = await import(
+      "@/model/EmailReplyIdentityProfile.model"
+    );
+    const profileSpy = vi
+      .spyOn(
+        EmailReplyIdentityProfileModel.prototype,
+        "getByEmailServiceId"
+      )
+      .mockImplementation(
+        () => new Promise(() => undefined) // perpetually pending
+      );
+    const svc = buildService({
+      apiFactory: factory,
+      budget: { now: () => nowMs, budgetMs: 100 },
+    });
+    let result: Awaited<ReturnType<typeof svc.createDraft>>;
+    try {
+      result = await svc.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+    } finally {
+      profileSpy.mockRestore();
+    }
+    // Deadline exhaustion is a transport failure, not a thrown bug —
+    // createDraft RETURNS a deadline_exceeded outcome (does NOT reject).
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.error).toContain("deadline exceeded");
+    expect(result.next_action).toBe("discard_and_retry");
+    // NO model call was ever made — the hanging profile load aborted before
+    // the LLM attempt. Pre-G01 this hung unbounded.
+    expect(requests).toHaveLength(0);
+    // NO draft persisted.
+    const draftModule = new EmailReplyDraftModule();
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+    // The stage-labeled metric fired for the profile_load stage (FR-039).
+    const counters = drainCountersForTest();
+    expect(counters.get("deadline_exceeded{stage=profile_load}")).toBe(1);
+    // The generation_outcome rollup records deadline_exceeded (not
+    // transport_error and not validation_failed).
+    expect(counters.get("generation_outcome{outcome=deadline_exceeded}")).toBe(
+      1
+    );
+  });
+
+  it("a fast profile load under the same tiny budget proceeds normally (no false abort)", async () => {
+    // Control: with a real (fast) profile load and the SAME 100ms budget, the
+    // stage completes well within budget and generation succeeds. This proves
+    // raceWithDeadline does not falsely abort a fast stage.
+    const messageId = await seedReceivableMessageForG01Sub4();
+    const nowMs = 1_000_000;
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      budget: { now: () => nowMs, budgetMs: 100 },
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // No deadline_exceeded metric fired — the stage completed in time.
+    const counters = drainCountersForTest();
+    expect(counters.get("deadline_exceeded{stage=profile_load}")).toBe(
+      undefined
+    );
+  });
+
+  it("a hanging envelope-bind stage (post-generation) aborts within the invocation budget", async () => {
+    // The envelope binding runs AFTER the LLM attempt succeeds — so a model
+    // call IS made, but the hanging envelope lookup aborts before persistence.
+    // This proves the post-generation stages are bounded too (not just the
+    // pre-generation stages).
+    const messageId = await seedReceivableMessageForG01Sub4();
+    const nowMs = 1_000_000;
+    const requests: OpenAIChatCompletionRequest[] = [];
+    // The envelope binding resolves via EmailServiceModel.read (the inline
+    // EmailServiceModule().getEmailService(...) copies the prototype method at
+    // construction). Spy BEFORE buildService so the never-resolving stub is
+    // captured. Do NOT advance the clock during the model call — the late-
+    // output guard (which uses the same synthetic clock) must PASS so we
+    // actually reach the envelope binding. The hanging read then races
+    // against the remaining ~100ms budget; raceWithDeadline's REAL setTimeout
+    // fires after that wall-clock duration and rejects with deadlineExceeded.
+    const { EmailServiceModel } = await import("@/model/EmailService.model");
+    const readSpy = vi
+      .spyOn(EmailServiceModel.prototype, "read")
+      .mockImplementation(
+        () => new Promise(() => undefined) // perpetually pending
+      );
+    const svc = buildService({
+      apiFactory: () => ({
+        openAIChatCompletion: async (req) => {
+          requests.push(req);
+          // Complete in-budget; the late-output guard (synthetic clock) sees
+          // remaining budget and passes, so the envelope binding is reached.
+          return completionResponse(validReplyJson, "stop");
+        },
+      }),
+      budget: { now: () => nowMs, budgetMs: 100 },
+    });
+    let result: Awaited<ReturnType<typeof svc.createDraft>>;
+    try {
+      result = await svc.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.error).toContain("deadline exceeded");
+    expect(result.next_action).toBe("discard_and_retry");
+    // The model call DID happen (envelope binding is post-generation)...
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // ...but NO draft persisted (the hanging envelope aborted before commit).
+    const draftModule = new EmailReplyDraftModule();
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+    const counters = drainCountersForTest();
+    expect(counters.get("deadline_exceeded{stage=envelope_bind}")).toBe(1);
+    expect(counters.get("generation_outcome{outcome=deadline_exceeded}")).toBe(
+      1
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T04 step 7 (FR-031 §8.1): the shared mailbox detector runs BEFORE
 // classification. `replied`/`unknown` → no model call, reservation released,
 // one `reply_skipped` audit (stage `pre_draft`) with the typed detection code.
