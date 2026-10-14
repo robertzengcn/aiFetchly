@@ -392,15 +392,21 @@ describe("TaskRunBudget live-gating accessors (Slice 2, D4, FR-08)", () => {
     expect(budget.isNoProgressStreakExhausted()).toBe(true);
   });
 
-  it("tool reservations stay record-but-no-gate — no accessor gates them (D4)", () => {
+  it("tool reservations gate on exhaustion — isToolBudgetExhausted refuses unfunded dispatch (B13 overrides D4)", () => {
     const budget = new TaskRunBudget(unit2Limits({ maxToolExecutions: 1 }));
+    expect(budget.isToolBudgetExhausted()).toBe(false);
     budget.reserveToolExecution("tool-1");
     expect(budget.getConsumed().toolExecutions).toBe(1);
-    // No isToolBudgetExhausted accessor exists — reserveToolExecution is
-    // record-only in Slice 2 (gating mid-operation leaves tool state limbo;
-    // tool volume is bounded via continuation/round caps).
-    const maybeAccessor = (budget as unknown as Record<string, unknown>)["isToolBudgetExhausted"];
-    expect(maybeAccessor).toBeUndefined();
+    // B13 (FR-08/23, AC-08): the remaining tool allowance binds at dispatch
+    // — a cap is not an accounting hint. D4's record-but-no-gate design is
+    // overturned by the audit: the 50-attempt hard cap must refuse the 51st
+    // dispatch. Mid-round refusal is safe (not limbo): it surfaces as a
+    // handled tool error through the existing tool-failure path, and the
+    // alternative — executing unfunded tools — violates the frozen caps.
+    expect(budget.isToolBudgetExhausted()).toBe(true);
+    expect(budget.reserveToolExecution("tool-2")).toBe(
+      BudgetReservationResult.Exhausted
+    );
   });
 });
 

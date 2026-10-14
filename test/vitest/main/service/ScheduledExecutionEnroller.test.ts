@@ -122,16 +122,28 @@ const {
   countSearchResultMock,
   countSearchResultSinceMock,
   findLatestSearchResultSinceMock,
+  getKeywordTextsByTaskMock,
+  getAllKeywordTextsMock,
+  countSearchResultSinceForKeywordsMock,
+  findLatestSearchResultSinceForKeywordsMock,
   countSinceMock,
   findLatestSinceMock,
+  countSinceForKeywordsMock,
+  findLatestSinceForKeywordsMock,
   getStatisticsMock,
 } = vi.hoisted(() => ({
   getOperationMock: vi.fn(),
   countSearchResultMock: vi.fn(),
   countSearchResultSinceMock: vi.fn(),
   findLatestSearchResultSinceMock: vi.fn(),
+  getKeywordTextsByTaskMock: vi.fn().mockResolvedValue([]),
+  getAllKeywordTextsMock: vi.fn().mockResolvedValue([]),
+  countSearchResultSinceForKeywordsMock: vi.fn(),
+  findLatestSearchResultSinceForKeywordsMock: vi.fn(),
   countSinceMock: vi.fn(),
   findLatestSinceMock: vi.fn(),
+  countSinceForKeywordsMock: vi.fn(),
+  findLatestSinceForKeywordsMock: vi.fn(),
   getStatisticsMock: vi.fn(),
 }));
 vi.mock("@/modules/AiTaskOperationModule", () => ({
@@ -145,6 +157,10 @@ vi.mock("@/modules/SearchModule", () => ({
       countSearchResult: countSearchResultMock,
       countSearchResultSince: countSearchResultSinceMock,
       findLatestSearchResultSince: findLatestSearchResultSinceMock,
+      getKeywordTextsByTask: getKeywordTextsByTaskMock,
+      getAllKeywordTexts: getAllKeywordTextsMock,
+      countSearchResultSinceForKeywords: countSearchResultSinceForKeywordsMock,
+      findLatestSearchResultSinceForKeywords: findLatestSearchResultSinceForKeywordsMock,
     };
   }),
 }));
@@ -153,6 +169,8 @@ vi.mock("@/model/ContactInfo.model", () => ({
     getStatistics: getStatisticsMock,
     countSince: countSinceMock,
     findLatestSince: findLatestSinceMock,
+    countSinceForKeywords: countSinceForKeywordsMock,
+    findLatestSinceForKeywords: findLatestSinceForKeywordsMock,
   },
   ContactInfoRepository: vi.fn(),
 }));
@@ -283,8 +301,16 @@ beforeEach(() => {
   // execution-local work).
   countSearchResultSinceMock.mockResolvedValue(0);
   findLatestSearchResultSinceMock.mockResolvedValue(null);
+  // B03: keyword-attributed variants default to empty universe / zero —
+  // unattributed targets stay unknown unless a test wires keywords.
+  getKeywordTextsByTaskMock.mockResolvedValue([]);
+  getAllKeywordTextsMock.mockResolvedValue([]);
+  countSearchResultSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSearchResultSinceForKeywordsMock.mockResolvedValue(null);
   countSinceMock.mockResolvedValue(0);
   findLatestSinceMock.mockResolvedValue(null);
+  countSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSinceForKeywordsMock.mockResolvedValue(null);
   getStatisticsMock.mockResolvedValue({
     total: 0,
     completed: 0,
@@ -733,8 +759,9 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     expect(result.status).toBe("created");
 
     // 100/100: the D1 AC-03 bound routes execution-scope counts through the
-    // task-linked, createdAt-windowed count (countSearchResultSince for
-    // schedule_id 1 → taskId 1). 100 in-window rows → record_count passes.
+    // task-linked, createdAt-windowed count. B03: the "camp-1" target
+    // attributes to the matching task keyword (id 9 — foreign keywords
+    // excluded); 100 attributed in-window rows → record_count passes.
     // B01: the frozen best-effort contract is trusted-complete (structured
     // anchored record_count, no fallback) and real evaluated evidence passes
     // every required criterion — so the outcome is verified_complete even
@@ -742,7 +769,11 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     // usable derived contracts; FR-04). Evidence still persists:
     // persistEvidence runs inside checkCandidate BEFORE the controller
     // decides.
-    countSearchResultSinceMock.mockResolvedValue(100);
+    getKeywordTextsByTaskMock.mockResolvedValue([
+      { id: 9, keyword: "camp-1 prospects" },
+      { id: 10, keyword: "unrelated vertical" },
+    ]);
+    countSearchResultSinceForKeywordsMock.mockResolvedValue(100);
 
     const candidate = {
       candidateId: "cand:exec-scheduled-1:response_end",
