@@ -158,7 +158,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B09 — Second manual execution is rejected as a stale event [P1; confidence 10/10]
 
-- [ ] Bind renderer acceptance to current submission/turn/generation and allow a legitimate new execution to replace the old one.
+- [x] Bind renderer acceptance to current submission/turn/generation and allow a legitimate new execution to replace the old one. *(done 2026-10-14, commit `7957bf4c0`: terminal-tracked + non-terminal-incoming adopts the replacement; older-run chunks and older terminals over newer terminals drop (executionId is the generation surrogate — chunks carry no submission id). Tests: B09a red-verified + B09b/c guards in the successor-stream component suite.)*
 
 **Location:** `src/views/components/aiChatV2/AiChatV2.vue:4776–4779`, `onSend`.
 
@@ -168,7 +168,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B10 — Successor listeners attach late and discard work output [P1; confidence 10/10]
 
-- [ ] Register/correlate successor stream before dispatch, render response/tool segments, and consume final content/outcome.
+- [x] Register/correlate successor stream before dispatch, render response/tool segments, and consume final content/outcome. *(done 2026-10-14, commits `70cf6c977` + `7957bf4c0`: attach requires the successor executionId (state correlation) + parent message id (content/complete correlation, id learned from successor start); successor tokens/tools render into a disclosed assistant turn; complete finalizes content with authoritative badge refresh; late parent output renders/closes nothing; retry on a running parent stops it first and the live successor owns the running lifecycle. Tests: 6/6 renderer IPC + 6/6 component, all stash-verified red.)*
 
 **Location:** `AiChatV2.vue:1647–1671, 1695–1717`; `src/views/api/aiChatV2.ts:382–474`; successor dispatch `ai-chat-v2-ipc.ts:2243`.
 
