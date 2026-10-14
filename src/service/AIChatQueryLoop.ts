@@ -1614,16 +1614,18 @@ export class AIChatQueryLoop {
    * authorization path.
    *
    * The start-vs-completion distinction lives at the criterion-threshold
-   * layer: `TaskCriteriaResolver` compiles every send to `operation_receipt`
-   * with `requiredState: "completed"`, and `meetsOperationThreshold` ranks
+   * layer: `TaskCriteriaResolver` compiles sends to `operation_receipt`
+   * with `requiredState: "accepted"` for explicit start requests and
+   * `"completed"` otherwise (B19), and `meetsOperationThreshold` ranks
    * `pending < claimed < dispatched < accepted < completed`. A claimed send
    * lands `accepted` (§10.2 confirmed) — it satisfies a start-only criterion
    * (`accepted ≥ accepted`) but FAILS the completion criterion
    * (`accepted < completed`), exactly as §10.3 prescribes ("Accepted receipt
    * satisfies a start-only criterion; completion requires actual confirmed
-   * completion"). Resolving `accepted` → `completed` is the deferred
-   * terminology-reconciliation gap (TASK-COMPLETION-POLICY-TODO §F), not a
-   * classifySendOutcome concern.
+   * completion"). Resolving `accepted` → `completed` happens in the evidence
+   * provider's bounded native reconciliation (B19): an `accepted` row with
+   * an `attempt:<id>` receipt is upgraded on terminal-completion evidence
+   * from the send-attempt store — never by assertion.
    */
   private static classifySendOutcome(toolResult: ToolExecutionResult): {
     readonly outcome: "confirmed" | "no_effect" | "unknown";

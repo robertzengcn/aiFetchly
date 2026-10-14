@@ -19,6 +19,7 @@
  */
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
+import { OutboundEmailDeliveryModule } from "@/modules/OutboundEmailDeliveryModule";
 import { SearchModule } from "@/modules/SearchModule";
 import { ContactInfoRepository } from "@/model/ContactInfo.model";
 import { AiChatApi, openAIContentToString } from "@/api/aiChatApi";
@@ -60,6 +61,43 @@ export interface ProviderExecutionScope {
 }
 
 /**
+ * B19 (§10.3, AC-09): bounded read-only source for a native send attempt's
+ * terminal status. Implementations read ONE attempt row by id (indexed
+ * point read — no scans, no loops, no sleeps) and return its status string,
+ * or null when unreadable. The factory maps only terminal-completion
+ * statuses (`completed`, `partially_completed`) to an operation upgrade;
+ * every other status (in-flight, uncertain, failed, missing) leaves the
+ * stored row untouched.
+ */
+export interface NativeSendStatusReader {
+  readSendAttemptStatus(attemptId: number): Promise<string | null>;
+}
+
+/** `receipt_reference` shape stamped by guard settlement (`attempt:<id>`). */
+const ATTEMPT_RECEIPT_PATTERN = /^attempt:(\d+)$/;
+
+/**
+ * B19 (§10.3, AC-09): production native attempt-status source. Reads ONE
+ * attempt row by id (indexed point read — bounded, read-only, never sends).
+ * Construct lazily inside enrollment seams (BaseModule TDZ — never at module
+ * top level), alongside the sibling modules the seams already build.
+ */
+export function makeNativeSendStatusReader(): NativeSendStatusReader {
+  return {
+    readSendAttemptStatus: async (attemptId: number) => {
+      try {
+        const attempt = await new OutboundEmailDeliveryModule().readSendAttempt(
+          attemptId
+        );
+        return attempt?.status ?? null;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/**
  * Derive the authoritative operation key for a criterion's targetId.
  * T03: the compiler emits free-text slugs ("camp-1", "send-email"), which do
  * not match `operation_key` directly. The stable derivation
@@ -96,6 +134,13 @@ export function buildEvidenceService(deps: {
   readonly searchModule: SearchModule;
   readonly contactInfoRepository: ContactInfoRepository;
   readonly abortSignal?: AbortSignal;
+  /**
+   * B19 (§10.3, AC-09): optional native attempt-status source for
+   * accepted→completed reconciliation. Absent in tests and legacy seams —
+   * the provider then reports stored state with no upgrade path (the
+   * pre-B19 behavior, preserved byte-identical).
+   */
+  readonly deliveryStatusReader?: NativeSendStatusReader;
 }): EvidenceProviders {
   const { executionId } = deps;
 
@@ -169,7 +214,7 @@ export function buildEvidenceService(deps: {
       const direct = await deps.operationModule.getOperation(
         deriveOperationKey(executionId, targetId)
       );
-      if (direct) return { state: direct.operation_state };
+      if (direct) return reconcileAcceptedReceipt(direct);
       // B19 (FR-02/03/11/19, AC-09): the compiler emits free-text target
       // slugs ("send-weekly-report") while the guard writes volatile keys
       // ("op:<exec>:outbound_batch:11"), so exact-key lookup always misses
@@ -183,9 +228,65 @@ export function buildEvidenceService(deps: {
         50
       );
       if (rows.length !== 1) return null;
-      return { state: rows[0].operation_state };
+      return reconcileAcceptedReceipt(rows[0]);
     } catch {
       return null;
+    }
+  };
+
+  /**
+   * B19 (§10.3, AC-09): reconcile one resolved operation row against native
+   * attempt state. The guard settles `accepted` at job-START (claim
+   * receipt); the native worker finishes asynchronously, so stored state
+   * alone can never verify final job completion. On an `accepted` row with
+   * an `attempt:<id>` receipt, one bounded native read upgrades the row to
+   * `completed` (CAS write-back, so reload/history paths converge) when the
+   * attempt reached terminal completion. Everything else — non-accepted
+   * states (including `unknown`, which must reconcile through
+   * dispatched/accepted first and never completes by assertion), missing
+   * receipts, absent readers, non-terminal native statuses, read failures,
+   * and lost CAS races (converge by re-read) — reports stored state.
+   */
+  const reconcileAcceptedReceipt = async (op: {
+    readonly operation_key: string;
+    readonly operation_state: string;
+    readonly claim_generation: number;
+    readonly receipt_reference: string | null;
+  }): Promise<OperationReceipt> => {
+    if (
+      op.operation_state !== "accepted" ||
+      !deps.deliveryStatusReader
+    ) {
+      return { state: op.operation_state };
+    }
+    const receiptMatch = op.receipt_reference
+      ? ATTEMPT_RECEIPT_PATTERN.exec(op.receipt_reference)
+      : null;
+    if (!receiptMatch) return { state: op.operation_state };
+    let nativeStatus: string | null;
+    try {
+      nativeStatus = await deps.deliveryStatusReader.readSendAttemptStatus(
+        Number(receiptMatch[1])
+      );
+    } catch {
+      return { state: op.operation_state };
+    }
+    if (nativeStatus !== "completed" && nativeStatus !== "partially_completed") {
+      return { state: op.operation_state };
+    }
+    try {
+      const settled = await deps.operationModule.updateState({
+        operationKey: op.operation_key,
+        expectedClaimGeneration: op.claim_generation,
+        newState: "completed",
+      });
+      if (settled.ok) return { state: "completed" };
+      // Lost the CAS race (a concurrent settler moved the row): re-read and
+      // report the winner's state — convergent, never invented.
+      const fresh = await deps.operationModule.getOperation(op.operation_key);
+      return { state: fresh?.operation_state ?? op.operation_state };
+    } catch {
+      return { state: op.operation_state };
     }
   };
 

@@ -51,7 +51,10 @@ import {
   TaskEvidenceService,
   makeModuleBackedStore,
 } from "@/service/aiTaskExecution/TaskEvidenceService";
-import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import {
+  buildEvidenceService,
+  makeNativeSendStatusReader,
+} from "@/service/aiTaskExecution/EvidenceProviderFactory";
 import { snapshotArtifactBaselines } from "@/service/aiTaskExecution/criteriaAdapters";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
@@ -259,6 +262,7 @@ export async function enrollScheduledExecution(
     operationModule: new AiTaskOperationModule(),
     searchModule: new SearchModule(),
     contactInfoRepository,
+    deliveryStatusReader: makeNativeSendStatusReader(),
   });
 
   // FR-09 / §7.2 step 7: one tracker per execution, closing over the SAME

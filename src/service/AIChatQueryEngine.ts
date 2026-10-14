@@ -133,7 +133,10 @@ import type {
   TaskCompletionContract,
   TaskExecutionRoute,
 } from "@/entityTypes/aiTaskExecutionTypes";
-import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import {
+  buildEvidenceService,
+  makeNativeSendStatusReader,
+} from "@/service/aiTaskExecution/EvidenceProviderFactory";
 import { snapshotArtifactBaselines } from "@/service/aiTaskExecution/criteriaAdapters";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
@@ -1196,6 +1199,7 @@ export class AIChatQueryEngine {
               operationModule: new AiTaskOperationModule(),
               searchModule: new SearchModule(),
               contactInfoRepository,
+              deliveryStatusReader: makeNativeSendStatusReader(),
             });
           // One tracker per execution closing over the SAME budget the
           // controller consults (FR-09 / §7.2 step 7). BaseModule TDZ —
@@ -1901,6 +1905,7 @@ export class AIChatQueryEngine {
                 operationModule: new AiTaskOperationModule(),
                 searchModule: new SearchModule(),
                 contactInfoRepository,
+                deliveryStatusReader: makeNativeSendStatusReader(),
               });
               // B21 (FR-02/03/19): capture pre-action artifact baselines at
               // enrollment — after the contract froze, before the maker

@@ -45,6 +45,7 @@ const {
   mergeEvidenceCasMock,
   getOperationMock,
   listOperationsByExecutionMock,
+  updateStateMock,
   countSearchResultMock,
   countSearchResultSinceMock,
   findLatestSearchResultSinceMock,
@@ -57,6 +58,7 @@ const {
   mergeEvidenceCasMock: vi.fn(),
   getOperationMock: vi.fn(),
   listOperationsByExecutionMock: vi.fn().mockResolvedValue([]),
+  updateStateMock: vi.fn().mockResolvedValue({ ok: true }),
   countSearchResultMock: vi.fn(),
   countSearchResultSinceMock: vi.fn(),
   findLatestSearchResultSinceMock: vi.fn(),
@@ -81,6 +83,7 @@ vi.mock("@/modules/AiTaskOperationModule", () => ({
     return {
       getOperation: getOperationMock,
       listOperationsByExecution: listOperationsByExecutionMock,
+      updateState: updateStateMock,
     };
   }),
 }));
@@ -315,6 +318,7 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     // key derivation always misses. With exactly ONE operation row in the
     // execution, the provider links it (guard rows are send-dispatch rows;
     // a singleton cannot be the wrong send).
+    getOperationMock.mockReset();
     getOperationMock.mockResolvedValue(null);
     listOperationsByExecutionMock.mockResolvedValue([
       {
@@ -350,6 +354,7 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
         contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
       });
     // Zero rows → null (nothing to link).
+    getOperationMock.mockReset();
     getOperationMock.mockResolvedValue(null);
     listOperationsByExecutionMock.mockResolvedValue([]);
     expect(await (await build()).operationReceiptProvider("send-email")).toBeNull();
@@ -660,5 +665,221 @@ describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)
     });
     // In vitest (no Electron) the lazy require throws → null.
     expect(providers.artifactBaseDir).toBeNull();
+  });
+
+  it("B19b: accepted + natively completed attempt reconciles to completed with a CAS write-back", async () => {
+    // The guard settles `accepted` at job-START; the worker finishes later.
+    // Bounded native polling upgrades the row on terminal-completion
+    // evidence so reload/history paths (which read stored state) converge.
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: "attempt:7",
+    });
+    updateStateMock.mockResolvedValue({ ok: true });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "completed" });
+    expect(readStatus).toHaveBeenCalledWith(7);
+    expect(updateStateMock).toHaveBeenCalledWith({
+      operationKey: "op:exec-factory-1:outbound_batch:11",
+      expectedClaimGeneration: 2,
+      newState: "completed",
+    });
+  });
+
+  it("B19b: accepted + non-terminal native status stays accepted with no write-back", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: "attempt:7",
+    });
+    const readStatus = vi.fn().mockResolvedValue("sending");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "accepted" });
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: accepted without a receipt reference never touches native state", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 1,
+      receipt_reference: null,
+    });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "accepted" });
+    expect(readStatus).not.toHaveBeenCalled();
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: CAS conflict on write-back converges by re-reading (no throw, no invented state)", async () => {
+    getOperationMock.mockReset();
+    getOperationMock
+      .mockResolvedValueOnce({
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "accepted",
+        claim_generation: 2,
+        receipt_reference: "attempt:7",
+      })
+      .mockResolvedValueOnce({
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "completed",
+        claim_generation: 3,
+        receipt_reference: "attempt:7",
+      });
+    updateStateMock.mockResolvedValue({ ok: false, reasonCode: "STATE_CONFLICT" });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "completed" });
+  });
+
+  it("B19b: unknown rows never complete by assertion (no native read, no upgrade path)", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "unknown",
+      claim_generation: 3,
+      receipt_reference: "attempt:7",
+    });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    // unknown must reconcile through dispatched/accepted first — the
+    // provider reports it as-is even when native state looks terminal.
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "unknown" });
+    expect(readStatus).not.toHaveBeenCalled();
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: accepted start satisfies a start criterion but not a finish criterion (§10.3, AC-09)", async () => {
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: null,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const service = providers.evidenceService as TaskEvidenceService;
+    const startContract = makeContract([
+      {
+        id: "rec-start",
+        required: true,
+        kind: "operation_receipt",
+        description: "start the email send",
+        adapterKey: "operation_receipt",
+        targetId: "outbound_batch:11",
+        requiredState: "accepted",
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const startResult = await service.checkCandidate(baseCandidate(), startContract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    expect(startResult.passedCriterionIds).toEqual(["rec-start"]);
+    const finishContract = makeContract([
+      {
+        id: "rec-finish",
+        required: true,
+        kind: "operation_receipt",
+        description: "send the email",
+        adapterKey: "operation_receipt",
+        targetId: "outbound_batch:11",
+        requiredState: "completed",
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const finishResult = await service.checkCandidate(baseCandidate(), finishContract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    expect(finishResult.passedCriterionIds).toEqual([]);
+    expect(finishResult.unmetCriterionIds).toEqual(["rec-finish"]);
   });
 });

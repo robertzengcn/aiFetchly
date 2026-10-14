@@ -735,12 +735,13 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     // 100/100: the D1 AC-03 bound routes execution-scope counts through the
     // task-linked, createdAt-windowed count (countSearchResultSince for
     // schedule_id 1 → taskId 1). 100 in-window rows → record_count passes.
-    // All required criteria pass, but route is task_best_effort (not
-    // task_verified) so canVerify is true yet the outcome is
-    // finish(incomplete) with empty remainingWork — NOT verified_complete
-    // (that needs task_verified, wired by T15) and NOT continue (unmet is
-    // empty). Evidence still persists: persistEvidence runs inside
-    // checkCandidate BEFORE the controller decides.
+    // B01: the frozen best-effort contract is trusted-complete (structured
+    // anchored record_count, no fallback) and real evaluated evidence passes
+    // every required criterion — so the outcome is verified_complete even
+    // on the task_best_effort route (ordinary no-plan tasks verify through
+    // usable derived contracts; FR-04). Evidence still persists:
+    // persistEvidence runs inside checkCandidate BEFORE the controller
+    // decides.
     countSearchResultSinceMock.mockResolvedValue(100);
 
     const candidate = {
@@ -758,14 +759,13 @@ describe("enrollScheduledExecution — T02 scheduled enrollment helper", () => {
     };
     const decision = await result.loopBinding!.consult!(candidate);
 
-    // route task_best_effort + all required pass → finish(incomplete) via
-    // incompleteReasonCode (NO_PROGRESS for a terminal-seen provider
-    // candidate at a non-cap boundary). remainingWork is empty (nothing
-    // unmet). Never verified_complete — that needs task_verified (T15).
+    // B01: trusted-complete best-effort contract + all required pass →
+    // verified_complete with the criterion satisfied (not incomplete).
+    // remainingWork is empty (nothing unmet).
     expect(decision.type).toBe("finish");
     if (decision.type === "finish") {
-      expect(decision.outcome).toBe("incomplete");
-      expect(decision.reasonCode).toBe("NO_PROGRESS");
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
       expect(decision.remainingWork).toEqual([]);
       // Evidence row identities are returned (AC-32 reload resolves them).
       expect(decision.evidenceIds.length).toBeGreaterThan(0);
