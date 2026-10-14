@@ -434,6 +434,26 @@ describe("useChatCommandRouting.routeCommand", () => {
     await router.routeCommand("/goal grow", {});
     expect(state.slashDispatches).toHaveLength(0);
   });
+
+  it("B07: a command transport failure is handled-but-rejected (draft retained, origin-scoped receipt)", async () => {
+    const seenExchanges: Array<{ user: string; assistant: string; origin?: string }> = [];
+    const { ports, state } = makePorts({
+      dispatchSlashCommand: async (input) => {
+        state.slashDispatches.push(input.rawInput);
+        throw new Error("transport down");
+      },
+      appendLocalExchange: (user, assistant, origin) => {
+        seenExchanges.push({ user, assistant, origin });
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/help", {});
+    // Handled-but-rejected: acceptedSend false so the caller retains the
+    // draft (it was never accepted for execution).
+    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+    expect(seenExchanges).toHaveLength(1);
+    expect(seenExchanges[0].origin).toBe("v2-cmd-test");
+  });
 });
 
 describe("useChatCommandRouting resetConversationState", () => {

@@ -1792,6 +1792,15 @@ async function applyCommandDisposition(
   }
   if (disposition.kind === "rejected") {
     // FR-CMD-004: draft retained; safe localized error above the composer.
+    // B07: only when the selection still owns the command — a stale
+    // rejection must not set B's composer error.
+    if (
+      context?.commandConversationId !== undefined &&
+      context.commandConversationId !== null &&
+      conversationId.value !== context.commandConversationId
+    ) {
+      return;
+    }
     if (disposition.message) {
       commandErrorNotice.value = disposition.message;
     }
@@ -1958,7 +1967,14 @@ const commandRouter = useChatCommandRouting({
     const goal = selectedStore.goal;
     return goal ? { goalId: goal.goalId } : null;
   },
-  appendLocalExchange: (userText, assistantText) => {
+  appendLocalExchange: (userText, assistantText, originConversationId) => {
+    // B07: a delayed command outcome for A must never render into B.
+    if (
+      originConversationId !== undefined &&
+      conversationId.value !== originConversationId
+    ) {
+      return;
+    }
     // Codex P2: on the empty state the store drops local exchanges
     // silently — create the chat first so command receipts always render.
     if (!conversationId.value) {
@@ -1969,7 +1985,14 @@ const commandRouter = useChatCommandRouting({
     }
     selectedStore.appendLocalCommandExchange(userText, assistantText);
   },
-  setError: (message) => {
+  setError: (message, originConversationId) => {
+    // B07: a stale command must not set B's composer error.
+    if (
+      originConversationId !== undefined &&
+      conversationId.value !== originConversationId
+    ) {
+      return;
+    }
     commandErrorNotice.value = message;
   },
   translate: (key, fallback, vars) =>

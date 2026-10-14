@@ -346,6 +346,12 @@ export const useSelectedConversationStore = defineStore(
     ): Promise<boolean> {
       const conversationId = workspaceStore.selectedConversationId;
       if (!conversationId || text.trim().length === 0) return false;
+      // B07: the originating conversation is fixed BEFORE the first await.
+      // Every post-await presenter/status mutation below rechecks it — a
+      // delayed IPC success/rejection for A must never touch B's messages,
+      // error banner or draft (including A→B→A generation changes: the id
+      // check passes on return and durable reload reconciles the view).
+      const originConversationId = conversationId;
 
       // Optimistic user message; history reload replaces it durably.
       const optimisticId = `local-user-${Date.now()}`;
@@ -384,6 +390,12 @@ export const useSelectedConversationStore = defineStore(
             : undefined,
           submissionId: options?.submissionId,
         });
+        // B07: only when the selection still owns this send — after a
+        // switch, A's durable row renders via subscription/summary when the
+        // user returns; touching B's presenter/status here would corrupt it.
+        if (workspaceStore.selectedConversationId !== originConversationId) {
+          return true;
+        }
         activeRunId.value = response.runId;
         runtimeStatus.value = response.status;
         streamStatus.value =
@@ -400,6 +412,12 @@ export const useSelectedConversationStore = defineStore(
         }
         return true;
       } catch (err) {
+        // B07: a delayed rejection for A must not mutate B. The draft stays
+        // (composer clears only on acceptance) so A's text remains available
+        // for retry; B's messages/error/draft are untouched.
+        if (workspaceStore.selectedConversationId !== originConversationId) {
+          return false;
+        }
         // T8/D5: rejected — drop the optimistic row (the draft stays in the
         // composer for retry; keeping both showed the text twice).
         presenter.removeMessage(optimisticId);

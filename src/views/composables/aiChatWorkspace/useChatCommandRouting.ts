@@ -69,10 +69,23 @@ export interface ChatCommandRoutingPorts {
   readonly ensureConversationId: () => Promise<string | null>;
   /** The selected conversation's active goal (goal-loop precondition). */
   readonly activeGoal: () => { goalId: string } | null;
-  /** Render a local user/assistant exchange (non-persisted receipt). */
-  readonly appendLocalExchange: (userText: string, assistantText: string) => void;
-  /** Surface a transient error message (null clears). */
-  readonly setError: (message: string | null) => void;
+  /**
+   * Render a local user/assistant exchange (non-persisted receipt).
+   * B07: originConversationId scopes the receipt — the port must suppress
+   * the append when the selection no longer owns the command, so A's
+   * delayed outcome never pollutes B's transcript.
+   */
+  readonly appendLocalExchange: (
+    userText: string,
+    assistantText: string,
+    originConversationId?: string
+  ) => void;
+  /**
+   * Surface a transient error message (null clears). B07: origin-scoped
+   * like appendLocalExchange — a stale command must not set B's composer
+   * error.
+   */
+  readonly setError: (message: string | null, originConversationId?: string) => void;
   /** i18n accessor: the composable stays translation-free. */
   readonly translate: (
     key: string,
@@ -287,14 +300,19 @@ export function useChatCommandRouting(
         rawInput,
       });
     } catch (err) {
+      // B07: a command TRANSPORT failure is handled-but-rejected — render the
+      // receipt against the origin conversation only, and return FALSE so
+      // the caller retains the draft (it was never accepted for execution).
+      // Returning true here cleared the draft as though execution began.
       ports.appendLocalExchange(
         rawInput,
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.message : String(err),
+        conversationId
       );
-      return true;
+      return false;
     }
     if (!result.status) {
-      ports.appendLocalExchange(rawInput, result.msg);
+      ports.appendLocalExchange(rawInput, result.msg, conversationId);
       return true;
     }
     if (result.action === "submit_prompt") {
@@ -317,7 +335,7 @@ export function useChatCommandRouting(
       await ports.onClearConversation(conversationId);
       return true;
     }
-    ports.appendLocalExchange(rawInput, result.content);
+    ports.appendLocalExchange(rawInput, result.content, conversationId);
     return true;
   }
 
@@ -412,8 +430,8 @@ export function useChatCommandRouting(
             "aiChatV2.goalLoop.createFailed",
             "Could not create the goal."
           );
-          ports.appendLocalExchange(text, message);
-          ports.setError(message);
+          ports.appendLocalExchange(text, message, conversationId);
+          ports.setError(message, conversationId);
           return { kind: "rejected", code: "goal_create_failed", message };
         }
         return { kind: "submit_prompt", prompt: created.planPrompt, mode: "plan" };
@@ -425,8 +443,8 @@ export function useChatCommandRouting(
                 "aiChatV2.goalLoop.createFailed",
                 "Could not create the goal."
               );
-        ports.appendLocalExchange(text, message);
-        ports.setError(message);
+        ports.appendLocalExchange(text, message, conversationId);
+        ports.setError(message, conversationId);
         return { kind: "rejected", code: "goal_create_failed", message };
       }
     }
@@ -512,8 +530,8 @@ export function useChatCommandRouting(
           "aiChatV2.scheduledLoop.createFailed",
           "Could not create the scheduled loop."
         );
-        ports.appendLocalExchange(staged.rawCommand, message);
-        ports.setError(message);
+        ports.appendLocalExchange(staged.rawCommand, message, conversationId);
+        ports.setError(message, conversationId);
         return;
       }
       // Reload history/summaries so the persisted command + confirmation
@@ -527,8 +545,8 @@ export function useChatCommandRouting(
               "aiChatV2.scheduledLoop.createFailed",
               "Could not create the scheduled loop."
             );
-      ports.appendLocalExchange(staged.rawCommand, message);
-      ports.setError(message);
+      ports.appendLocalExchange(staged.rawCommand, message, conversationId);
+      ports.setError(message, conversationId);
     }
   }
 
