@@ -4,6 +4,7 @@
 **Status:** Revised proposal; implementation and release gates remain open\
 **Created:** 2026-07-28\
 **Reviewed:** 2026-10-14\
+**Technical design:** [Detailed implementation design](yellow-pages-scraper-plugin-technical-design.md)\
 **Primary surface:** AiChatV2\
 **Execution model:** Installed plugin with skill, command, optional hooks, and an MCP stdio server\
 **Persistence model:** Plugin result artifacts; no new Yellow Pages TypeORM entities\
