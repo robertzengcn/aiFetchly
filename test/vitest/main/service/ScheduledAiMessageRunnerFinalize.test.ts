@@ -173,6 +173,7 @@ vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", () => ({
 
 import { ScheduledAiMessageRunner, mapOutcomeToFinalizeInput } from "@/service/ScheduledAiMessageRunner";
 import { TASK_EXECUTION_REASON_CODES } from "@/entityTypes/aiTaskExecutionTypes";
+import { SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES } from "@/config/aiChatScheduledLoopConfig";
 
 const TASK = {
   id: 1,
@@ -354,8 +355,16 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
    * as failed with the honest OCCURRENCE_ALREADY_ENROLLED code — never
    * silently re-run the turn (double execution) and never leave the claim
    * stuck "running" (GAP-S2 #9).
+   *
+   * FIX-5 (2026-10-14): a crash-retry duplicate is NOT a task failure. The
+   * original attempt's outcome is authoritative, so the run row is honestly
+   * `failed` (no result was produced) BUT the schedule's consecutive-failure
+   * streak must NOT increment — otherwise 3 transport retries would
+   * terminalize a healthy schedule (PRD §advice L276: "interruption remains
+   * distinct" from failure). `incrementFailure: false` is the neutral signal:
+   * the model leaves the streak untouched and the run can never terminalize.
    */
-  it("flag-on + reused enrollment (crash retry): finalizes failed with OCCURRENCE_ALREADY_ENROLLED, no engine turn", async () => {
+  it("flag-on + reused enrollment (crash retry): finalizes failed with OCCURRENCE_ALREADY_ENROLLED, no engine turn, streak NOT incremented", async () => {
     flagOn.value = true;
     mockStartScheduled.mockResolvedValue({ status: "reused" });
 
@@ -381,10 +390,15 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
       "failed",
       expect.objectContaining({ error_code: "OCCURRENCE_ALREADY_ENROLLED" })
     );
-    // Legacy accounting: the occurrence failed, so the schedule's
-    // consecutive-failure counter increments (success: false).
+    // FIX-5: the schedule accounting call carries incrementFailure=false
+    // (neutral) and success=false (the run row produced no result). The
+    // streak is neither incremented nor reset, and the run never terminalizes.
     expect(mockUpdateIntervalAfterResult).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false })
+      expect.objectContaining({
+        success: false,
+        incrementFailure: false,
+        terminalStatus: undefined,
+      })
     );
     // Policy finalization never runs — there is no fresh execution for this
     // attempt (the existing row's finalization belongs to the other attempt).
@@ -392,6 +406,36 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
 
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toBe("OCCURRENCE_ALREADY_ENROLLED");
+  });
+
+  /**
+   * FIX-5 regression: a `reused` duplicate must not push a healthy schedule
+   * to its terminal failure threshold. Seed the schedule one short of the
+   * limit and assert a crash-retry duplicate leaves the streak unchanged and
+   * the schedule NOT terminalized (it stays active for the next occurrence).
+   */
+  it("FIX-5: reused duplicate one-short-of-limit does NOT terminalize the schedule", async () => {
+    flagOn.value = true;
+    mockStartScheduled.mockResolvedValue({ status: "reused" });
+    // One short of SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES (3). A genuine
+    // failure here would hit the threshold and go terminal; a neutral
+    // duplicate must not.
+    SCHEDULE.consecutive_failure_count =
+      SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES - 1;
+
+    const result = await call({ idempotencyKey: "scheduled-loop:2:9" });
+
+    expect(mockUpdateIntervalAfterResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incrementFailure: false,
+        terminalStatus: undefined,
+      })
+    );
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toBe("OCCURRENCE_ALREADY_ENROLLED");
+
+    // Reset for subsequent tests.
+    SCHEDULE.consecutive_failure_count = 0;
   });
 
   it("B07a: scheduled transaction failure → no success delivery (no done stream), error surfaces (FR-12/14)", async () => {

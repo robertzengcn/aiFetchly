@@ -384,6 +384,11 @@ export class ScheduledAiMessageRunner {
             outcome: { kind: "failed", errorMessage: "OCCURRENCE_ALREADY_ENROLLED" },
             errorCode: "OCCURRENCE_ALREADY_ENROLLED",
             conversationId,
+            // A crash-retry duplicate is NOT a task failure: the original
+            // attempt's outcome is authoritative. Counting it would
+            // terminalize a healthy schedule after 3 transport retries
+            // (PRD §advice L276: "interruption remains distinct").
+            incrementFailure: false,
           });
         } else if (enrollResult.status === "skipped") {
           // T02 (D5): the resolver classified the task message as not
@@ -762,6 +767,20 @@ export class ScheduledAiMessageRunner {
       readonly idempotencyKey: string;
     } | null;
     policyBinding?: ScheduledLoopPolicyBinding | undefined;
+    /**
+     * Whether the run increments the schedule's consecutive-failure streak.
+     * Defaults to `true` (every failed/incomplete run is a genuine failure).
+     * The `reused` crash-retry branch sets it to `false`: a transport
+     * duplicate that found the occurrence already enrolled is NOT a task
+     * failure — the original attempt's outcome (running elsewhere or already
+     * finalized) is authoritative. Counting it would terminalize a healthy
+     * schedule after `SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES` transport
+     * retries (PRD §advice L276: "interruption remains distinct" from
+     * failure). Neutral means do-not-increment-and-do-not-reset: we don't
+     * know whether the original succeeded, so we leave the streak untouched
+     * and never go terminal from a duplicate.
+     */
+    incrementFailure?: boolean;
   }): Promise<ScheduledAiMessageRunResult> {
     const {
       runId,
@@ -774,6 +793,7 @@ export class ScheduledAiMessageRunner {
       pauseSchedule,
       policyExecution,
       policyBinding,
+      incrementFailure = true,
     } = input;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
@@ -893,17 +913,27 @@ export class ScheduledAiMessageRunner {
           resultErrorCode ?? "BLOCKED_BY_POLICY"
         );
       } else {
+        // The streak increments only for genuine failures. A `reused`
+        // crash-retry (incrementFailure=false) is a transport duplicate, not
+        // a task failure, so it is neutral: the streak is neither incremented
+        // nor reset, and it can never terminalize the schedule by itself.
+        const countsAsFailure = !scheduleSuccess && incrementFailure;
         const consecutive =
           (schedule?.consecutive_failure_count ?? 0) +
-          (scheduleSuccess ? 0 : 1);
+          (countsAsFailure ? 1 : 0);
         const terminal =
-          !scheduleSuccess &&
+          countsAsFailure &&
           consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES
             ? ("failed" as const)
             : undefined;
         await this.scheduleModel.updateIntervalAfterResult({
           scheduleId,
+          // `scheduleSuccess` stays the honest success/failure signal for the
+          // run-row's accounting semantics. `incrementFailure` (false for a
+          // `reused` duplicate) is the authoritative streak override: when
+          // false the model leaves the streak untouched.
           success: scheduleSuccess,
+          incrementFailure,
           nextRunAt,
           terminalStatus: terminal,
           terminalReason: terminal ? "REPEATED_RUN_FAILURE" : undefined,

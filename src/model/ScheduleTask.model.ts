@@ -862,6 +862,11 @@ export class ScheduleTaskModel extends BaseDb {
   /**
    * Update schedule counters and optional terminal state after a run result.
    * Resets the consecutive-failure counter on success; increments on failure.
+   *
+   * `incrementFailure: false` is NEUTRAL: the streak is left untouched (neither
+   * incremented nor reset) and the run can never terminalize the schedule on
+   * its own. Used by the crash-retry `reused` branch — a transport duplicate is
+   * not a task failure (PRD §advice L276: "interruption remains distinct").
    */
   async updateIntervalAfterResult(input: IntervalResultUpdate): Promise<void> {
     assertNotWorker("updateIntervalAfterResult");
@@ -869,7 +874,10 @@ export class ScheduleTaskModel extends BaseDb {
       next_run_time: input.nextRunAt,
       last_modified: new Date(),
     };
-    if (input.success) {
+    if (input.incrementFailure === false) {
+      // Neutral outcome (e.g. a crash-retry `reused` duplicate): advance the
+      // next-run slot but leave the failure streak exactly as it was.
+    } else if (input.success) {
       update.consecutive_failure_count = 0;
     } else {
       // SQL expression lambda (TypeORM increments the column in-database);
