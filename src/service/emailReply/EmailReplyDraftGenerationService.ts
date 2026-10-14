@@ -386,6 +386,18 @@ export class EmailReplyDraftGenerationService {
    */
   private lastReturnedModelId: string | null = null;
   /**
+   * G01/FR-026: per-invocation memo of a model id that rejected the
+   * `response_format: json_object` hint. Once a provider/model has proved
+   * (via an explicit unsupported-parameter 400/501) it does not honor the
+   * JSON hint, the hint is omitted PROACTIVELY on subsequent submissions to
+   * the SAME returned model id within this invocation — saving one wasted
+   * round-trip (the doomed hinted submission). The memo is keyed on the
+   * provider-returned model id (not a caller-supplied guess), so it
+   * INVALIDATES automatically when the returned model changes: a different
+   * id re-sends the hint. Null until a no-hint retry succeeds for a model.
+   */
+  private omitJsonHintForModelId: string | null = null;
+  /**
    * The live deadline for the CURRENT createDraft invocation. Created at
    * entry (after the AI-enable gate) and read by every model-call site so
    * classification, generation, hint-fallback, and correction all draw
@@ -516,6 +528,10 @@ export class EmailReplyDraftGenerationService {
     // invocation must not leak in).
     this.resolvedMaxTokens = null;
     this.lastReturnedModelId = null;
+    // G01/FR-026: reset the per-invocation remembered-unsupported-JSON-route
+    // memo. A model that rejected the JSON hint in a PREVIOUS invocation must
+    // re-prove it this invocation (the provider's support may have changed).
+    this.omitJsonHintForModelId = null;
 
     // 2. Load message.
     await this.messageModule.ensureConnection();
@@ -1810,6 +1826,20 @@ export class EmailReplyDraftGenerationService {
       options?.stage ?? "generation"
     );
     const maxTokens = await this.effectiveReplyMaxTokens();
+    // G01/FR-026: omit the JSON hint when EITHER (a) the caller explicitly
+    // requests it (the B06 no-hint retry after an unsupported-parameter
+    // rejection) OR (b) the per-invocation memo has remembered that the model
+    // returned by the most recent completion rejects response_format. The memo
+    // invalidates automatically when the returned model id changes — a
+    // different id re-sends the hint. Never omits the hint on the FIRST
+    // completion of an invocation (the memo is null and lastReturnedModelId is
+    // null), so the hint is always tried at least once per model per
+    // invocation. Local strict parsing still validates the body either way.
+    const omitHint =
+      options?.omitResponseFormat === true ||
+      (this.omitJsonHintForModelId !== null &&
+        this.omitJsonHintForModelId === this.lastReturnedModelId &&
+        this.lastReturnedModelId !== null);
     const api = this.apiFactory();
     let resp;
     try {
@@ -1820,7 +1850,7 @@ export class EmailReplyDraftGenerationService {
         // B06/FR-026: omit the JSON hint when retrying after an explicit
         // unsupported-parameter rejection. The provider proved it does not
         // honor response_format; local strict parsing still validates the body.
-        ...(options?.omitResponseFormat
+        ...(omitHint
           ? {}
           : { response_format: { type: "json_object" as const } }),
         ...(Number.isNaN(callBudgetMs)
@@ -1868,6 +1898,13 @@ export class EmailReplyDraftGenerationService {
    * and are handled by the caller as provider failures (no validation strike
    * consumed). The total transport ceiling per generation attempt is two
    * submissions (hint, then no-hint), preserving the aggregate request budget.
+   *
+   * G01/FR-026: when the no-hint retry SUCCEEDS (returns a completion, even
+   * one that later fails validation), the returned model id is recorded in
+   * {@link omitJsonHintForModelId} so subsequent submissions to the SAME
+   * returned model id skip the doomed hinted first try — saving one
+   * round-trip per later submission. The memo invalidates automatically when
+   * the returned model id changes (a different id re-sends the hint).
    */
   private async callLlmRawWithHintFallback(
     systemMsg: OpenAIChatMessage,
@@ -1891,6 +1928,15 @@ export class EmailReplyDraftGenerationService {
           omitResponseFormat: true,
           stage: options?.stage,
         });
+        // G01/FR-026: remember this returned model id rejects the JSON hint so
+        // subsequent submissions to the SAME model id omit the hint
+        // proactively. `callLlmRaw` already recorded the returned model id in
+        // `lastReturnedModelId`; mirror it here so the memo is keyed on the
+        // model the no-hint retry actually used (the first, hinted attempt did
+        // not return a model — it was rejected before a completion body).
+        if (raw.returnedModel) {
+          this.omitJsonHintForModelId = raw.returnedModel;
+        }
         return { raw, usedHintFallback: true };
       }
       throw error;

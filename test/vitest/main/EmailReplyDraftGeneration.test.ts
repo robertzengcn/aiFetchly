@@ -684,37 +684,48 @@ describe("effectiveReplyMaxTokens capability clamp (FR-027, G01)", () => {
 // rejection of response_format triggers ONE no-hint retry; auth/throttling/
 // network/server errors do not.
 // ---------------------------------------------------------------------------
-describe("callLlmRawWithHintFallback retries once without the hint on unsupported-parameter (B06)", () => {
-  // Helper: build a factory whose first N calls throw, then return canned
-  // responses. Each thrown error carries a status so the detector can decide.
-  function stagedFactory(
-    stages: ReadonlyArray<
-      | { readonly kind: "throw"; readonly status?: number; readonly message: string }
-      | { readonly kind: "respond"; readonly content: string }
-    >
-  ): { factory: AiChatApiFactory; requests: OpenAIChatCompletionRequest[] } {
-    const requests: OpenAIChatCompletionRequest[] = [];
-    let i = 0;
-    const factory: AiChatApiFactory = () => ({
-      openAIChatCompletion: async (req) => {
-        requests.push(req);
-        const stage = stages[i++];
-        if (!stage) {
-          throw new Error("stagedFactory: no more stages");
+// Helper: build a factory whose first N calls throw, then return canned
+// responses. Each thrown error carries a status so the detector can decide.
+// A respond stage may override the returned model id (FR-026 model-change
+// tests).
+function stagedFactory(
+  stages: ReadonlyArray<
+    | { readonly kind: "throw"; readonly status?: number; readonly message: string }
+    | {
+        readonly kind: "respond";
+        readonly content: string;
+        /** Optional per-stage model id override (FR-026 model-change tests). */
+        readonly model?: string;
+      }
+  >
+): { factory: AiChatApiFactory; requests: OpenAIChatCompletionRequest[] } {
+  const requests: OpenAIChatCompletionRequest[] = [];
+  let i = 0;
+  const factory: AiChatApiFactory = () => ({
+    openAIChatCompletion: async (req) => {
+      requests.push(req);
+      const stage = stages[i++];
+      if (!stage) {
+        throw new Error("stagedFactory: no more stages");
+      }
+      if (stage.kind === "throw") {
+        const err = new Error(stage.message);
+        if (typeof stage.status === "number") {
+          (err as unknown as { status: number }).status = stage.status;
         }
-        if (stage.kind === "throw") {
-          const err = new Error(stage.message);
-          if (typeof stage.status === "number") {
-            (err as unknown as { status: number }).status = stage.status;
-          }
-          throw err;
-        }
-        return completionResponse(stage.content);
-      },
-    });
-    return { factory, requests };
-  }
+        throw err;
+      }
+      const resp = completionResponse(stage.content);
+      if (stage.model) {
+        resp.model = stage.model;
+      }
+      return resp;
+    },
+  });
+  return { factory, requests };
+}
 
+describe("callLlmRawWithHintFallback retries once without the hint on unsupported-parameter (B06)", () => {
   it("an explicit unsupported-parameter 400 triggers one no-hint retry and succeeds", async () => {
     const { factory, requests } = stagedFactory([
       {
@@ -906,10 +917,16 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
   });
 
   it("createDraft caps total transport submissions at four across hint-fallback + correction", async () => {
-    // Worst case: first generation rejects response_format (1), no-hint retry
-    // returns invalid JSON (2); correction rejects response_format again (3),
-    // no-hint correction retry returns invalid JSON (4). Two validation
-    // strikes → needs_human_review. Exactly four transport submissions.
+    // Worst case under the FR-026 remembered route. (1) generation hint
+    // rejected, (2) no-hint retry returns invalid JSON under model "m1" —
+    // remembered. (3) The correction's first submission OMITS the hint
+    // (remembered route saves the doomed hint), but the staged factory still
+    // throws a response_format 400 there (intentional adversarial probe — a
+    // real provider would not reject a no-hint request for response_format,
+    // but the matcher keys on the error body, so the no-hint retry fires
+    // anyway), (4) no-hint correction retry returns invalid JSON. Two
+    // validation strikes → needs_human_review. Exactly four submissions — the
+    // ceiling holds even under the remembered route.
     const badJson = "{not valid json";
     const { factory, requests } = stagedFactory([
       {
@@ -917,13 +934,13 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
         status: 400,
         message: "response_format unsupported",
       },
-      { kind: "respond", content: badJson },
+      { kind: "respond", content: badJson, model: "m1" },
       {
         kind: "throw",
         status: 400,
         message: "response_format unsupported",
       },
-      { kind: "respond", content: badJson },
+      { kind: "respond", content: badJson, model: "m1" },
     ]);
     const messageModule = new EmailReceivedMessageModule();
     const msg = new EmailReceivedMessageEntity();
@@ -955,13 +972,235 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toContain("needs_human_review");
-    // Bounded transport ceiling: hint + no-hint for generation, hint + no-hint
-    // for correction = 4. Never exceeds four.
+    // Bounded transport ceiling: 4 submissions, never more.
     expect(requests).toHaveLength(4);
     expect(requests[0].response_format).toEqual({ type: "json_object" });
     expect(requests[1].response_format).toBeUndefined();
-    expect(requests[2].response_format).toEqual({ type: "json_object" });
+    // The correction's first submission OMITTED the hint (remembered route for
+    // "m1") — the FR-026 optimization saved the doomed hint round-trip.
+    expect(requests[2].response_format).toBeUndefined();
     expect(requests[3].response_format).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G01 sub-item 3 (FR-026): once a provider/model has proved (via an explicit
+// unsupported-parameter rejection) it does not honor the response_format JSON
+// hint, the hint is omitted PROACTIVELY on subsequent submissions to the SAME
+// returned model id within one invocation — saving one wasted round-trip per
+// later submission. The memo invalidates automatically when the returned model
+// id changes (a different id re-sends the hint). The two-validation /
+// four-generation-submission ceiling holds across all lower-level retries, with
+// classification separately bounded (one call, 60 tokens).
+// ---------------------------------------------------------------------------
+describe("FR-026 remembered unsupported-JSON route + submission cap (G01)", () => {
+  async function seedReceivableMessageForG01(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("remembers the unsupported route and OMITS the hint on the correction's first submission (saves a round-trip)", async () => {
+    // Generation: hint rejected (1), no-hint retry returns invalid JSON under
+    // model "m1" (2) — "m1" is remembered. Correction: because "m1" is
+    // remembered, the hint is OMITTED on the correction's first submission (3)
+    // — no wasted doomed hint round-trip. That returns invalid JSON too (strike
+    // 2) → needs_human_review. THREE submissions, not four.
+    const badJson = "{not valid json";
+    const messageId = await seedReceivableMessageForG01();
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format unsupported",
+      },
+      { kind: "respond", content: badJson, model: "m1" },
+      { kind: "respond", content: badJson, model: "m1" },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("needs_human_review");
+    // The remembered route saved the correction's doomed hint submission:
+    // generation hint + generation no-hint + correction no-hint (hint skipped)
+    // = 3, not 4.
+    expect(requests).toHaveLength(3);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+    expect(requests[1].response_format).toBeUndefined();
+    // The correction's first submission OMITTED the hint (remembered route),
+    // saving one round-trip.
+    expect(requests[2].response_format).toBeUndefined();
+  });
+
+  it("invalidates the memo when the returned model id changes (re-sends the hint on the next call)", async () => {
+    // Unit-level proof of FR-026 invalidation. The memo is keyed on the model
+    // id returned by the most recent completion, so once a later submission
+    // returns a DIFFERENT model id, the hint is re-sent on the next
+    // submission to that new id. This cannot be exercised through one
+    // createDraft (the two-strike loop has at most two hint-fallback chains),
+    // so we drive callLlmRawWithHintFallback directly across three calls.
+    const goodJson = JSON.stringify({
+      subject: "Re: Pricing",
+      bodyText: "Thanks.",
+      intentSuggestion: "interested",
+      confidence: 0.8,
+    });
+    // Call 1: hinted → response_format 400 → no-hint retry succeeds under
+    // "m1" (memo = "m1"). Call 2: "m1" still current → hint omitted
+    // (remembered route). Call 3: the previous completion returned "m2", so
+    // the memo (still "m1") no longer matches → hint RE-SENT.
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format unsupported",
+      },
+      { kind: "respond", content: goodJson, model: "m1" },
+      { kind: "respond", content: goodJson, model: "m2" },
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format unsupported",
+      },
+      { kind: "respond", content: goodJson, model: "m2" },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmSubmissionResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    const sys = { role: "system", content: "sys" } as const;
+    const usr = { role: "user", content: "u" } as const;
+    // Call 1: hint rejected → no-hint retry succeeds ("m1" remembered).
+    const r1 = await fallback(sys, usr);
+    expect(r1.usedHintFallback).toBe(true);
+    expect(r1.raw.returnedModel).toBe("m1");
+    expect(requests).toHaveLength(2);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+    expect(requests[1].response_format).toBeUndefined();
+    // Call 2: "m1" is current → hint OMITTED (remembered route, one call).
+    const r2 = await fallback(sys, usr);
+    expect(r2.usedHintFallback).toBe(false);
+    expect(r2.raw.returnedModel).toBe("m2");
+    expect(requests).toHaveLength(3);
+    expect(requests[2].response_format).toBeUndefined();
+    // Call 3: the previous completion returned "m2" — memo ("m1") no longer
+    // matches "m2", so the hint is RE-SENT, then rejected → no-hint retry.
+    const r3 = await fallback(sys, usr);
+    expect(r3.usedHintFallback).toBe(true);
+    expect(r3.raw.returnedModel).toBe("m2");
+    expect(requests).toHaveLength(5);
+    expect(requests[3].response_format).toEqual({ type: "json_object" });
+    expect(requests[4].response_format).toBeUndefined();
+  });
+
+  it("a transport error (auth/throttle/500) is NOT a response_format rejection — no memo, no no-hint retry", async () => {
+    // A 500 server error does not mean the model lacks JSON support — the hint
+    // fallback must NOT fire, the memo must NOT record anything, and the error
+    // surfaces as a transport_error (no validation strike consumed).
+    const messageId = await seedReceivableMessageForG01();
+    const { factory, requests } = stagedFactory([
+      { kind: "throw", status: 500, message: "internal server error" },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    // Exactly one submission; no no-hint retry; the hint WAS sent (not a
+    // remembered route — the memo is empty on the first submission).
+    expect(requests).toHaveLength(1);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+  });
+
+  it("classification is separately bounded (one call, 60 tokens) and never widens the generation budget", async () => {
+    // When the stored classification is null (inconclusive at sync time), the
+    // policy passes (null is not in BLOCKED_CLASSIFICATIONS) and the
+    // constrained classifier runs ONCE with max_tokens=60 — it never consumes
+    // the generation submission budget. The generation then runs with its own
+    // clamped max_tokens. This proves the "separately bounded classification"
+    // half of FR-026.
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    // null → policy passes, and the deterministic stage returns "unknown"
+    // (inconclusive for "Hi"/"Hello"), so the model classifier runs.
+    msg.classification = null;
+    msg.classificationConfidence = null;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    // Classification returns a confident "interested"; generation returns a
+    // valid reply. Two separate calls, distinct max_tokens budgets.
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "respond",
+        content: JSON.stringify({
+          classification: "interested",
+          confidence: 0.9,
+        }),
+        model: "test-model",
+      },
+      { kind: "respond", content: validReplyJson, model: "test-model" },
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async () => 800,
+    });
+    const result = await svc.createDraft({
+      messageId: saved.id,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    // Exactly two calls: one classification (60 tokens), one generation
+    // (clamped to 800). The generation budget was never applied to
+    // classification and vice versa.
+    expect(requests).toHaveLength(2);
+    expect(requests[0].max_tokens).toBe(60);
+    expect(requests[1].max_tokens).toBe(800);
   });
 });
 
