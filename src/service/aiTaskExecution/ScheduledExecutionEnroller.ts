@@ -52,6 +52,7 @@ import {
   makeModuleBackedStore,
 } from "@/service/aiTaskExecution/TaskEvidenceService";
 import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import { snapshotArtifactBaselines } from "@/service/aiTaskExecution/criteriaAdapters";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import type { ScheduledLoopPolicyBinding } from "@/service/ScheduledLoopEventSink";
@@ -267,6 +268,15 @@ export async function enrollScheduledExecution(
     budget: created.budget,
   });
 
+  // B21 (FR-02/03/19): capture pre-action artifact baselines at enrollment —
+  // after the contract froze, before the maker dispatches. The adapter
+  // compares `changed` expectations against this map; files created by the
+  // run itself simply have no baseline and stay honestly unknown.
+  const artifactBaselines = await snapshotArtifactBaselines(
+    artifactBaseDir ?? undefined,
+    created.contract?.criteria ?? []
+  );
+
   // D2: executionKind "scheduled" — the engine's manual finalization gate
   // no-ops for this binding; the runner's finalizeScheduledPolicyRun owns
   // finalization (prevents double-finalize).
@@ -296,6 +306,7 @@ export async function enrollScheduledExecution(
           observationProvider,
           operationReceiptProvider,
           artifactBaseDir: artifactBaseDir ?? undefined,
+          artifactBaselines,
           // T04: thread the run-scoped abort signal into the checker dispatch.
           abortSignal: input.getAbortSignal?.(),
           expectedStateVersion,
@@ -364,6 +375,7 @@ export async function enrollScheduledExecution(
       observationProvider,
       operationReceiptProvider,
       artifactBaseDir: artifactBaseDir ?? undefined,
+      artifactBaselines,
       // T04: the run-scoped abort signal — read fresh at consult time so the
       // fallback checker dispatch races Stop / run-cancel + a deadline.
       abortSignal: input.getAbortSignal?.(),

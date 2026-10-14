@@ -280,7 +280,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B21 — Artifact verification is unbounded and cannot verify changed artifacts [P2; confidence 9/10]
 
-- [ ] Capture source baseline before action and use bounded asynchronous artifact reads and trusted content predicates.
+- [x] Capture source baseline before action and use bounded asynchronous artifact reads and trusted content predicates.
+*(done 2026-10-14: ARTIFACT_MAX_BYTES-gated async fs/promises reads — oversized refuses to judge; `changed` compares enrollment-captured baselines via context (identical→fail, absent→unknown); snapshot helper wired at manual/successor/scheduled enrollment + sink pass-through. Engine wiring rode in `6fff4dfd0` (co-landed D2 commit); remainder in B21 commit below. Tests: 11 adapter incl. oversized-head-pattern RED + snapshot + service flow.)*
 
 **Location:** `criteriaAdapters.ts:467, 472–477, 482–483`.
 

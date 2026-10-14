@@ -6,9 +6,8 @@
  * content, tool catalog, store counts, checker LLM) and returns a
  * {@link CriterionState}. The registry maps `adapterKey` → evaluator for the
  * keyed kinds (`observation`, `operation_receipt`, `record_count`); the
- * `qualitative` kind has its own checker-LLM evaluator; `artifact` is stubbed
- * to `"unknown"` in Slice 2 (no filesystem adapter — fail-closed → not-passed
- * → incomplete, safe).
+ * `qualitative` kind has its own checker-LLM evaluator; `artifact` reads a
+ * validated read-only filesystem root with bounded async reads (B21).
  *
  * Fail-closed default: an unknown adapterKey or a thrown evaluator returns
  * `"unknown"`, never a false `"pass"`. A criterion that cannot be evaluated
@@ -16,9 +15,8 @@
  * `verified_complete` (AC-12).
  */
 import { randomUUID, createHash } from "node:crypto";
-import { readFileSync, statSync, realpathSync } from "node:fs";
+import { realpath, stat, open } from "node:fs/promises";
 import * as path from "node:path";
-import type { Stats } from "node:fs";
 import { z } from "zod/v4";
 import type {
   TaskCriterion,
@@ -77,6 +75,14 @@ export interface AdapterContext {
   readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
   readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
   readonly artifactBaseDir?: string;
+  /**
+   * B21 (FR-02/03/19): pre-action artifact baselines — relativePath →
+   * sha256 hex captured at enrollment, before the maker acts. The artifact
+   * adapter compares `changed` expectations against this map; absent entries
+   * stay unknown (never a false pass). Populated by
+   * {@link snapshotArtifactBaselines} at the enrollment seam.
+   */
+  readonly artifactBaselines?: Readonly<Record<string, string>>;
 }
 
 export interface CriterionEvaluator {
@@ -434,6 +440,15 @@ type DispatchOutcome =
 // ----- Artifact evaluator (validated read-only filesystem) -----
 
 /**
+ * B21 (FR-02/03/19, NFR-02/08, AC-03/11/20/24): bound on artifact content
+ * inspected per check. Content predicates run on a bounded head slice only;
+ * larger files return unknown (refuse to judge — never a pass on unread
+ * content, never a fail claiming absence). 64 KiB covers deliverable-sized
+ * artifacts (reports, drafts, configs) without holding the main thread.
+ */
+export const ARTIFACT_MAX_BYTES = 64 * 1024;
+
+/**
  * Artifact criteria check a file artifact against its expectation. T03
  * (FR-03): a REAL read-only filesystem adapter — the fail-closed stub does
  * not satisfy the Slice 2 release gate. `relativePath` is resolved against
@@ -443,10 +458,17 @@ type DispatchOutcome =
  * - `exists`: pass when the file exists and is readable; unknown when
  *   absent (it may appear later — absence is not failure).
  * - `changed`: pass when the sha256 of the content differs from the
- *   baseline hash embedded in the summary the contract was frozen with;
- *   unknown when there is no baseline to compare against.
- * - `requiredContentChecks`: substring/regex assertions against the file
- *   content (bounded read, ≤ ARTIFACT_MAX_BYTES — NFR-08).
+ *   pre-action baseline in `context.artifactBaselines` (captured at
+ *   enrollment, before the maker acts — B21); fail when identical
+ *   (deterministic unmet); unknown when there is no baseline to compare
+ *   against (never a false pass).
+ * - `requiredContentChecks`: substring/regex assertions against the BOUNDED
+ *   file head (≤ ARTIFACT_MAX_BYTES — NFR-08). Oversized files return
+ *   unknown promptly without a full read, so a large artifact or
+ *   pathological check cannot block Stop/deadline handling on the main
+ *   thread. Regex patterns are schema-capped (200 chars) and
+ *   contract-authored (maker text never becomes a pattern); the bounded
+ *   slice keeps match cost proportional to the cap, not the file.
  *
  * Path traversal (the macOS symlink containment bug class): the resolved
  * path is canonicalized and must stay inside the canonicalized base dir —
@@ -470,32 +492,59 @@ export class ArtifactAdapter implements CriterionEvaluator {
       return unknown(criterion.id, "artifact relativePath contains NUL");
     }
     try {
-      const resolvedBase = realpathSync(baseDir);
-      const resolved = realpathSync(path.resolve(baseDir, relativePath));
+      // All filesystem work is async (never sync on the main thread — B21,
+      // NFR-02): realpath/stat/open/read via fs/promises so Stop/deadline
+      // handling is never blocked by artifact I/O.
+      const resolvedBase = await realpath(baseDir);
+      const resolved = await realpath(path.resolve(baseDir, relativePath));
       // Containment: canonical prefix, not lexical (symlinks resolved).
       if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
         return unknown(criterion.id, `artifact path escapes base dir: ${relativePath}`);
       }
-      let stat: Stats;
+      let size: number;
+      let isFile: boolean;
       try {
-        stat = statSync(resolved);
+        const st = await stat(resolved);
+        size = st.size;
+        isFile = st.isFile();
       } catch {
         return unknown(criterion.id, `artifact ${relativePath} not readable`);
       }
-      if (!stat.isFile()) {
+      if (!isFile) {
         return unknown(criterion.id, `artifact ${relativePath} is not a regular file`);
       }
-      const content = readFileSync(resolved, "utf8");
-      const hash = createHash("sha256").update(content).digest("hex");
+      // Size gate BEFORE any content read: oversized files return unknown
+      // promptly (never a pass on unread content, never a fail claiming
+      // absence). Other evidence may still verify the criterion.
+      if (size > ARTIFACT_MAX_BYTES) {
+        return unknown(
+          criterion.id,
+          `artifact ${relativePath} oversize (${size} bytes > ${ARTIFACT_MAX_BYTES} bound, refusing full read)`
+        );
+      }
+      // Capped read (size+1 would catch TOCTOU growth past the gate; the
+      // slice below additionally never exceeds the bound).
+      const content = await readBoundedHead(resolved, ARTIFACT_MAX_BYTES);
+      const hash = createHash("sha256").update(content, "utf8").digest("hex");
 
       const checks: string[] = [];
       let state: CriterionState = "pass";
       if (criterion.expectation === "changed") {
-        // Baseline: the contract carries no stored baseline hash in Slice 2,
-        // so "changed" is inconclusive until a baseline lifecycle (T17/T26)
-        // stores one. Unknown keeps the criterion unmet without a false pass.
-        checks.push("changed: no baseline hash stored (inconclusive)");
-        state = "unknown";
+        // B21: compare against the pre-action baseline captured at
+        // enrollment. No baseline → unknown (never a false pass);
+        // identical → deterministic fail (the required change did not
+        // happen); differs → pass.
+        const baseline = context.artifactBaselines?.[relativePath];
+        if (baseline === undefined) {
+          checks.push("changed: no baseline hash captured (inconclusive)");
+          state = "unknown";
+        } else if (baseline === hash) {
+          checks.push(`changed: content identical to baseline sha256=${hash.slice(0, 16)}`);
+          state = "fail";
+        } else {
+          checks.push(`changed: sha256=${hash.slice(0, 16)} differs from baseline ${baseline.slice(0, 16)}`);
+          state = "pass";
+        }
       }
       // requiredContentChecks: each string is a substring pattern, or a
       // `regex:`-prefixed pattern (same convention as observation targets).
@@ -520,6 +569,63 @@ export class ArtifactAdapter implements CriterionEvaluator {
 }
 
 // ----- Helpers -----
+
+/**
+ * B21: read at most `maxBytes` of a file as UTF-8, async (never blocks the
+ * main thread on large files). Files are pre-gated on `stat().size` by the
+ * caller; the cap additionally bounds TOCTOU growth between stat and read.
+ */
+async function readBoundedHead(resolvedPath: string, maxBytes: number): Promise<string> {
+  const handle = await open(resolvedPath, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0);
+    return buffer.subarray(0, Math.min(bytesRead, maxBytes)).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * B21 (FR-02/03/19): capture pre-action baselines for a contract's artifact
+ * criteria — call at the enrollment seam (after the contract freezes, before
+ * the maker dispatches) with the same base dir the adapter will evaluate
+ * against. Each readable, contained, regular file at or under
+ * ARTIFACT_MAX_BYTES contributes its sha256; anything else (missing,
+ * oversized, escaping, unreadable) is omitted so its `changed` check stays
+ * honestly unknown. Never throws — a snapshot failure yields an empty map,
+ * never a false baseline.
+ */
+export async function snapshotArtifactBaselines(
+  baseDir: string | undefined,
+  criteria: readonly TaskCriterion[]
+): Promise<Record<string, string>> {
+  const baselines: Record<string, string> = {};
+  if (!baseDir) return baselines;
+  let resolvedBase: string;
+  try {
+    resolvedBase = await realpath(baseDir);
+  } catch {
+    return baselines;
+  }
+  for (const criterion of criteria) {
+    if (criterion.kind !== "artifact") continue;
+    const relativePath = criterion.relativePath;
+    if (relativePath.includes("\0")) continue;
+    try {
+      const resolved = await realpath(path.resolve(baseDir, relativePath));
+      if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) continue;
+      const st = await stat(resolved);
+      if (!st.isFile() || st.size > ARTIFACT_MAX_BYTES) continue;
+      const content = await readBoundedHead(resolved, ARTIFACT_MAX_BYTES);
+      baselines[relativePath] = createHash("sha256").update(content, "utf8").digest("hex");
+    } catch {
+      // Per-file isolation: one unreadable artifact never breaks the rest.
+      continue;
+    }
+  }
+  return baselines;
+}
 
 function unknown(criterionId: string, reason: string): CriterionEvalResult {
   return {

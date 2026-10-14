@@ -1373,3 +1373,48 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
     }
   });
 });
+
+describe("TaskEvidenceService.checkCandidate — B21 artifact baselines flow (FR-02/03/19)", () => {
+  it("artifactBaselines thread through checkCandidate into the adapter (changed → pass)", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { default: path } = await import("node:path");
+    const { default: os } = await import("node:os");
+    const { createHash } = await import("node:crypto");
+    const baseDir = mkdtempSync(path.join(os.tmpdir(), "aifetchly-ev-b21-"));
+    try {
+      writeFileSync(path.join(baseDir, "report.txt"), "version one");
+      const baseline = createHash("sha256").update("version one", "utf8").digest("hex");
+      writeFileSync(path.join(baseDir, "report.txt"), "version two");
+      const { store } = memoryStore();
+      const service = new TaskEvidenceService(store);
+      const contract = makeContract([
+        {
+          id: "art-1",
+          required: true,
+          kind: "artifact",
+          description: "artifact report.txt changed",
+          relativePath: "report.txt",
+          expectation: "changed",
+          requiredContentChecks: [],
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ]);
+      const result = await service.checkCandidate(
+        baseCandidate({ content: "done." }),
+        contract,
+        {
+          content: "done.",
+          source: "b21",
+          sourceRevision: "slice2-b21",
+          expectedStateVersion: 0,
+          artifactBaseDir: baseDir,
+          artifactBaselines: { "report.txt": baseline },
+        }
+      );
+      expect(result.passedCriterionIds).toEqual(["art-1"]);
+      expect(result.unmetCriterionIds).toEqual([]);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+});

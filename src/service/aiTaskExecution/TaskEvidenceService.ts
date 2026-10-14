@@ -71,6 +71,12 @@ export interface EvidenceContext {
   readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
   readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
   readonly artifactBaseDir?: string;
+  /**
+   * B21 (FR-02/03/19): pre-action artifact baselines (relativePath → sha256),
+   * captured at enrollment via {@link snapshotArtifactBaselines}. Threaded
+   * into the artifact adapter per evaluation; absent entries stay unknown.
+   */
+  readonly artifactBaselines?: Readonly<Record<string, string>>;
   /** Provenance stamped onto each evidence row (FR-16). */
   readonly source: string;
   readonly sourceRevision: string;
@@ -166,6 +172,7 @@ export class TaskEvidenceService implements EvidenceChecker {
       observationProvider: context.observationProvider,
       operationReceiptProvider: context.operationReceiptProvider,
       artifactBaseDir: context.artifactBaseDir,
+      artifactBaselines: context.artifactBaselines,
     };
     try {
       switch (criterion.kind) {
