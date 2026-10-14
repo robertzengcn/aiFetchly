@@ -11,7 +11,14 @@ import type { EmailMessageClassification } from "@/entityTypes/emailReceiveTypes
 
 export const GENERATED_REPLY_SCHEMA_VERSION = "gen-schema-v1";
 
-const CLASSIFICATIONS = [
+/**
+ * The closed set of intent classifications (FR-025 single source of truth).
+ * The prompt builder, the correction prompt, and the strict Zod enum below all
+ * derive from this one constant so the model is never told a different enum than
+ * the validator enforces. Exported so prompt/correction text and the schema
+ * enum can never drift apart.
+ */
+export const REPLY_CLASSIFICATIONS = [
   "interested",
   "not_interested",
   "unsubscribe",
@@ -21,6 +28,27 @@ const CLASSIFICATIONS = [
   "needs_human_review",
   "unknown",
 ] as const satisfies readonly EmailMessageClassification[];
+
+/**
+ * The classification enum as a comma-separated English string, derived from the
+ * single source of truth ({@link REPLY_CLASSIFICATIONS}). The system prompt and
+ * the correction prompt both embed this exact string so the model is told the
+ * same enum the validator enforces (FR-025). Never hand-write the list in prompt
+ * text — import this so a future classification value reaches the prompt
+ * automatically.
+ */
+export const REPLY_CLASSIFICATIONS_TEXT = REPLY_CLASSIFICATIONS.join(", ");
+
+/**
+ * The canonical JSON shape string the prompt asks the model to emit, derived
+ * from the strict schema's required field names (FR-025). Embedding this in BOTH
+ * the system prompt and the correction prompt keeps the field-name contract
+ * (the `intentSuggestion` vs `classification` mismatch that broke every
+ * well-formed reply pre-v2) locked to the schema. `subject`/`bodyText`/
+ * `intentSuggestion`/`confidence` are the four required non-optional fields.
+ */
+export const REPLY_JSON_SHAPE_TEXT =
+  '{"subject": string, "bodyText": string, "intentSuggestion": string, "confidence": number}';
 
 export const generatedEmailReplySchema = z.object({
   subject: z
@@ -33,7 +61,7 @@ export const generatedEmailReplySchema = z.object({
     .trim()
     .min(1, "body_empty")
     .max(20_000, "body_too_long"),
-  intentSuggestion: z.enum(CLASSIFICATIONS),
+  intentSuggestion: z.enum(REPLY_CLASSIFICATIONS),
   confidence: z
     .number()
     .finite("confidence_not_finite")
@@ -118,9 +146,9 @@ export function buildCorrectionPrompt(input: CorrectionPromptInput): string {
   const lines: string[] = [
     "Your previous reply failed strict validation. Do NOT repeat the invalid reply.",
     "Regenerate a FRESH reply as valid JSON only, with this exact shape:",
-    '{"subject": string, "bodyText": string, "intentSuggestion": string, "confidence": number}.',
+    `${REPLY_JSON_SHAPE_TEXT}.`,
     "The classification field is named intentSuggestion (NOT classification).",
-    "intentSuggestion must be one of: interested, not_interested, unsubscribe, bounce, auto_reply, support_request, needs_human_review, unknown.",
+    `intentSuggestion must be one of: ${REPLY_CLASSIFICATIONS_TEXT}.`,
     "Fix these validation issues:",
     ...codes.map((c) => `- ${c}`),
   ];
