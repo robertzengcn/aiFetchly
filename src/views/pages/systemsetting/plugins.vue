@@ -1,14 +1,11 @@
 <template>
-  <div>
-    <PluginManager />
-    <SkillInstallManager class="mt-4" />
-  </div>
   <AppPageShell
     page-id="settings-plugins"
     title-key="route.plugins"
     content-width="wide"
   >
     <PluginManager />
+    <SkillInstallManager class="mt-4" />
   </AppPageShell>
 </template>
 
