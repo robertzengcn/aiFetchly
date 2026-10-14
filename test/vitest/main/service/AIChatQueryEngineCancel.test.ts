@@ -34,6 +34,7 @@ const {
   startManualMock,
   freezeContractMock,
   cancelMock,
+  mentionResolveMock,
 } = vi.hoisted(() => ({
   flagMock: vi.fn<() => boolean>(),
   classifyMock: vi.fn(),
@@ -45,6 +46,7 @@ const {
       expectedVersion?: number
     ) => Promise<{ ok: true } | { ok: false; reasonCode: string }>
   >(),
+  mentionResolveMock: vi.fn(),
 }));
 
 vi.mock("@/config/featureFlags", async (importOriginal) => {
@@ -108,7 +110,14 @@ vi.mock("@/modules/OutboundEmailIntentModule", () => ({
   }),
 }));
 
-// --- AIChatV2Module mock ------------------------------------------------
+// --- AtMentionResolutionService mock (G01-312): prep stalls here on
+// demand so Stop can land mid-preparation. Default is a behavior-preserving
+// passthrough (existing tests never assert mention content).
+vi.mock("@/service/aiChatAtMentions/AtMentionResolutionService", () => ({
+  AtMentionResolutionService: vi.fn().mockImplementation(function () {
+    return { resolveMessage: mentionResolveMock };
+  }),
+}));
 const mockSaveUserMessage = vi
   .fn()
   .mockResolvedValue({ messageId: "user-1" });
@@ -297,6 +306,16 @@ describe("AIChatQueryEngine.stopActiveTurn — completion policy cancel", () => 
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
+    // G01-312: mention resolution defaults to a passthrough (no stall).
+    mentionResolveMock.mockImplementation(
+      async (_conversationId: string, message: string) => ({
+        originalMessage: message,
+        modelMessage: message,
+        metadata: [],
+        warnings: [],
+        hasResolvedMentions: false,
+      })
+    );
     HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
@@ -368,4 +387,121 @@ describe("AIChatQueryEngine.stopActiveTurn — completion policy cancel", () => 
     engine.stopActiveTurn("conv-never-enrolled");
     expect(cancelMock).not.toHaveBeenCalled();
   });
+
+  it("G01-312a: Stop during pre-enrollment prep exits before any loop dispatch", async () => {
+    // Stall the mention-resolution stage (pre-enrollment slow prep), stop
+    // mid-stall, then release: the turn must exit controlled (cancelled
+    // emitted, loop never ran) instead of streaming on despite the Stop.
+    // Nothing enrolled yet, so no coordinator cancel is owed.
+    enrollCreated();
+    let release!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      release = resolve as (value: unknown) => void;
+    });
+    mentionResolveMock.mockReturnValue(gate);
+    const { engine, loopRunSpy } = makeEngine();
+    const { sink, emits } = makeSink();
+    const submission = engine
+      .submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          message: "Extract contacts.",
+          model: "gpt-4o",
+        },
+        eventSink: sink,
+      } as never)
+      .catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(mentionResolveMock).toHaveBeenCalled();
+    });
+    engine.stopActiveTurn("v2-test-conv");
+    release({
+      originalMessage: "Extract contacts.",
+      modelMessage: "Extract contacts.",
+      metadata: [],
+      warnings: [],
+      hasResolvedMentions: false,
+    });
+    await flushPromisesSafe();
+    // Fast red on unfixed code: the loop runs (Stop was a no-op).
+    expect(loopRunSpy).not.toHaveBeenCalled();
+    await submission;
+    expect(emits.some((e) => e.type === "cancelled")).toBe(true);
+    expect(cancelMock).not.toHaveBeenCalled();
+
+    // No wedging: a fresh submit after the aborted prep streams normally.
+    mentionResolveMock.mockImplementation(
+      async (_conversationId: string, message: string) => ({
+        originalMessage: message,
+        modelMessage: message,
+        metadata: [],
+        warnings: [],
+        hasResolvedMentions: false,
+      })
+    );
+    const { sink: sink2 } = makeSink();
+    engine
+      .submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          message: "Extract contacts again.",
+          model: "gpt-4o",
+        },
+        eventSink: sink2,
+      } as never)
+      .catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(loopRunSpy).toHaveBeenCalled();
+    });
+  });
+
+  it("G01-312b: Stop after enrollment but before streaming cancels the just-enrolled row", async () => {
+    // Stall transcript assembly (post-enrollment): the row exists when Stop
+    // lands, so the abort exit must cancel it (no orphan active row) and
+    // the loop must never run.
+    enrollCreated();
+    const { engine, loopRunSpy } = makeEngine();
+    const assembler = (
+      engine as unknown as {
+        contextAssembler: { assemble: (...args: never[]) => Promise<unknown> };
+      }
+    ).contextAssembler;
+    let release!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      release = resolve as (value: unknown) => void;
+    });
+    const assembleSpy = vi
+      .spyOn(assembler, "assemble")
+      .mockReturnValue(gate as Promise<unknown>);
+    const { sink, emits } = makeSink();
+    try {
+      const submission = engine
+        .submitMessage({
+          request: {
+            conversationId: "v2-test-conv",
+            message: "Extract contacts.",
+            model: "gpt-4o",
+          },
+          eventSink: sink,
+        } as never)
+        .catch(() => undefined);
+      await vi.waitFor(() => {
+        expect(assembleSpy).toHaveBeenCalled();
+      });
+      engine.stopActiveTurn("v2-test-conv");
+      release({ messages: [] });
+      await flushPromisesSafe();
+      // Fast red on unfixed code: the loop runs despite the Stop.
+      expect(loopRunSpy).not.toHaveBeenCalled();
+      await submission;
+      expect(cancelMock).toHaveBeenCalledWith(EXEC_ID);
+      expect(emits.some((e) => e.type === "cancelled")).toBe(true);
+    } finally {
+      assembleSpy.mockRestore();
+    }
+  });
 });
+
+async function flushPromisesSafe(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}

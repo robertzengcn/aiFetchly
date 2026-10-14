@@ -405,6 +405,28 @@ export class AIChatQueryEngine {
    * pendingPermissions/pendingPlanQuestions — the three maps are disjoint.
    */
   private activeTurns = new Map<string, ActiveTurnState>();
+  /**
+   * G01-312 (FR-06/22; AC-24): pre-stream preparations keyed by
+   * conversationId. The slow prep (plan state, attachment staging, mention /
+   * history resolution, enrollment, transcript assembly) runs BEFORE the
+   * active-turn registration — without this map a Stop during that window
+   * finds no abort handle and the turn streams anyway. The entry is
+   * registered right after the turn id is minted and promoted into
+   * `activeTurns` at the stream-registration point (or discarded on dedup
+   * reuse / prep failure / prep abort). It NEVER disturbs the active
+   * original: dedup-reuse returns discard only their own turnId's entry
+   * (B11), and Stop aborts both pending and active handles.
+   */
+  private pendingTurns = new Map<
+    string,
+    {
+      abortController: AbortController;
+      turnId: string;
+      assistantMessageId: string;
+      eventSink: AIChatQueryEventSink;
+      submissionId: string | null;
+    }
+  >();
   private pendingPermissions = new Map<string, PendingPermissionTurn>();
 
   /**
@@ -1082,6 +1104,18 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let turnId: string;
     let messages: OpenAIChatMessage[];
+    // G01-312: pre-stream abort state, initialized to inert values so every
+    // exit path (including the pre-stream catch, which cannot prove the
+    // try-body assignments) can use them safely. Assigned at turn accept;
+    // prepExecutionId tracks OUR enrolled row for orphan-cancel on abort.
+    let prepAbortController: AbortController | null = null;
+    let prepTurnId = "";
+    let prepAssistantMessageId = "";
+    let prepExecutionId: string | null = null;
+    // G01-312: the controller THIS turn's prep boundaries check — the
+    // registered handle normally, or a local one when a same-submission
+    // retry keeps the original's registered handle (B11).
+    let prepOwnController: AbortController | null = null;
     let reassembleMessages: (() => Promise<OpenAIChatMessage[]>) | null = null;
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
@@ -1165,6 +1199,8 @@ export class AIChatQueryEngine {
           conversationId,
           input.taskExecutionBinding.executionId
         );
+        // G01-312: track our enrolled row for orphan-cancel on prep abort.
+        prepExecutionId = input.taskExecutionBinding.executionId;
         this.policyAcceptedConversations.add(conversationId);
         let recordedDecision: TaskCompletionDecision | null = null;
         this.taskDecisionSlots.set(input.taskExecutionBinding.executionId, {
@@ -1336,6 +1372,8 @@ export class AIChatQueryEngine {
           });
           this.taskExecutionBindings.set(conversationId, created.executionId);
           this.policyAcceptedConversations.add(conversationId);
+          // G01-312: track our enrolled row for orphan-cancel on prep abort.
+          prepExecutionId = created.executionId;
           // Route: the parent's parsed route (re-classification would risk
           // demoting a task continuation to response_only).
           taskRoute = successorContext.route;
@@ -1394,6 +1432,61 @@ export class AIChatQueryEngine {
       turnId = scheduledContext
         ? scheduledContext.userMessageId
         : `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      // G01-312: mint the assistant message id alongside the turn id (it
+      // depends only on the scheduled context) so the abort handle below
+      // can emit a correlated cancelled event however early Stop lands.
+      assistantMessageId = scheduledContext
+        ? scheduledContext.assistantMessageId
+        : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // G01-312: register the pre-stream abort handle BEFORE the slow prep
+      // (plan state, attachments, resolutions, enrollment, assembly). A Stop
+      // during that window aborts this controller; prep stage boundaries
+      // check it and exit before any loop dispatch (see pre-stream catch).
+      // Keyed by conversation; promotion/discard paths match on turnId so a
+      // concurrent turn never clears another turn's handle. A same-
+      // submission transport retry (B11) keeps the ORIGINAL's handle: the
+      // retry preps with a local controller and either reuses (returns,
+      // original untouched) or adopts its handle post-enrollment.
+      // A different submission supersedes: abort the prior pending prep
+      // (mirrors the active-turn replacement at stream registration).
+      const controller = new AbortController();
+      prepAbortController = controller;
+      prepTurnId = turnId;
+      prepAssistantMessageId = assistantMessageId;
+      {
+        const priorPending = this.pendingTurns.get(conversationId);
+        const sameSubmission =
+          request.submissionId != null &&
+          priorPending?.submissionId === request.submissionId;
+        if (priorPending && !sameSubmission) {
+          this.pendingTurns.delete(conversationId);
+          priorPending.abortController.abort();
+        }
+        if (!sameSubmission) {
+          this.pendingTurns.set(conversationId, {
+            abortController: controller,
+            turnId,
+            assistantMessageId,
+            eventSink,
+            submissionId: request.submissionId ?? null,
+          });
+          prepOwnController = controller;
+        } else {
+          // B11: a same-submission transport retry keeps the ORIGINAL's
+          // registered handle — Stop aborts the original, while the retry
+          // always reaches the enrollment dedup (reused → return, original
+          // untouched). Its boundaries watch a local controller Stop never
+          // aborts.
+          prepOwnController = new AbortController();
+        }
+      }
+      // G01-312: prep stage boundaries call this after each slow await. A
+      // Stop that landed mid-prep throws here; the pre-stream catch turns it
+      // into a controlled cancelled exit (abortPrepExit) before any loop
+      // dispatch — never a half-prepped stream, never an orphan row.
+      const throwIfPrepAborted = (): void => {
+        prepOwnController?.signal.throwIfAborted();
+      };
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -1430,6 +1523,7 @@ export class AIChatQueryEngine {
       //   2. Build the enriched message WITH the correct attachment_ref values so the
       //      LLM can call read_attachment_content with a valid refId — not a filename.
       //   3. Persist attachment bytes to the database.
+      throwIfPrepAborted();
       const hasFiles =
         Array.isArray(request.uploadedFiles) &&
         request.uploadedFiles.length > 0;
@@ -1467,6 +1561,7 @@ export class AIChatQueryEngine {
       // Resolve pasted-text placeholders on the (attachment-enriched)
       // message BEFORE resolving @-mentions. This ensures mention tokens
       // inside pasted content get expanded correctly.
+      throwIfPrepAborted();
       const pastedTextResolution =
         await new PastedTextResolutionService().resolveMessage(
           messageToSave,
@@ -1488,6 +1583,7 @@ export class AIChatQueryEngine {
       // final budget. Accepted excerpts become the "current user + selected"
       // context block below; the references (never the text) are persisted with
       // the user row. Rejected/unavailable selections never block the turn.
+      throwIfPrepAborted();
       const selectionResolution = await this.resolveSelectedHistory(
         conversationId,
         turnId,
@@ -1506,6 +1602,7 @@ export class AIChatQueryEngine {
       // passages are folded into the SAME user message the user authored, so
       // preflight can never evict them as an independent optional block
       // (technical-design line 372) and they are included exactly once.
+      throwIfPrepAborted();
       const userMessageForModel =
         selectedHistoryBlock.length > 0
           ? `${modelUserMessage}\n\n${selectedHistoryBlock}`
@@ -1593,6 +1690,7 @@ export class AIChatQueryEngine {
       // message, never tool args / retrieved content / assistant statements.
       // Idempotent across stream retries via the (conversationId, sourceUserMessageId)
       // unique index. Failures resolve to draft_only and never break chat.
+      throwIfPrepAborted();
       sourceUserMessageId = savedUser.messageId;
       try {
         const intentModule = new OutboundEmailIntentModule();
@@ -1876,6 +1974,8 @@ export class AIChatQueryEngine {
                 conversationId,
                 created.executionId
               );
+              // G01-312: track our enrolled row for orphan-cancel on prep abort.
+              prepExecutionId = created.executionId;
               // T16: freeze the flag-at-enrollment value so Stop-cancel and
               // the finalization gate do not re-check the mutable runtime
               // flag for this accepted execution (NFR-12, AC-12/32).
@@ -2162,6 +2262,10 @@ export class AIChatQueryEngine {
       }
 
       // Load history and build transcript.
+      // G01-312: the enrollment seam above may have committed a row — a Stop
+      // landing mid-enrollment exits here, and abortPrepExit cancels the
+      // just-enrolled execution (no orphan active row).
+      throwIfPrepAborted();
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
@@ -2176,10 +2280,13 @@ export class AIChatQueryEngine {
         currentUserContentParts,
       });
 
-      assistantMessageId = scheduledContext
-        ? scheduledContext.assistantMessageId
-        : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // G01-312: assistantMessageId was minted at accept time (with turnId)
+      // so the pending abort handle can emit a correlated cancelled event
+      // however early Stop lands.
       messages = [...assembled.messages];
+      // G01-312: last prep gate before stream registration — an abort here
+      // still precedes every loop dispatch.
+      throwIfPrepAborted();
       const assembleInput = {
         conversationId,
         currentUserMessage: userMessageForModel,
@@ -2197,6 +2304,23 @@ export class AIChatQueryEngine {
       };
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
+      // G01-312: prep aborted via Stop → controlled cancelled exit (the
+      // loop never ran, nothing streamed). Any just-enrolled execution is
+      // cancelled inside abortPrepExit — no orphan active row. Outer lets
+      // (never bare try-assigned locals: the catch cannot prove those).
+      if (prepAbortController?.signal.aborted) {
+        await this.abortPrepExit({
+          conversationId: request.conversationId ?? "",
+          turnId: prepTurnId,
+          assistantMessageId: prepAssistantMessageId,
+          eventSink,
+          executionId: prepExecutionId,
+        });
+        return;
+      }
+      // G01-312: prep failed — drop this turn's pending handle so a later
+      // Stop cannot abort a dead controller (turnId-guarded, B11-safe).
+      this.discardPendingTurn(request.conversationId ?? "", prepTurnId);
       // T09 (AC-28): the successor execution row was created before this
       // dispatch; a startup failure would leave it active forever. Cancel it
       // through the coordinator (fire-and-forget) so no orphan active row
@@ -2310,6 +2434,9 @@ export class AIChatQueryEngine {
       ? await this.conversationToolStateService.loadSnapshot(conversationId)
       : undefined;
 
+    // G01-312: covers the tool-catalog snapshot + context-window prep above.
+    // (Outside the pre-stream try: use the outer handle directly.)
+    prepOwnController?.signal.throwIfAborted();
     // ------------------------------------------------------------------
     // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
     //    the new turn. Cross-conversation turns are left alone so background
@@ -2344,6 +2471,23 @@ export class AIChatQueryEngine {
           finishReason: "stop",
         });
       }
+      // G01-312: dedup reuse/conflict/denied runs no maker — discard only
+      // this turn's pending handle (turnId-guarded, B11: the accepted
+      // original's handle survives).
+      this.discardPendingTurn(request.conversationId ?? "", prepTurnId);
+      return;
+    }
+    // G01-312: a Stop that landed anywhere in prep wins over streaming —
+    // exit controlled (abortPrepExit cancels any just-enrolled row) instead
+    // of registering a turn the user already stopped.
+    if (prepAbortController?.signal.aborted) {
+      await this.abortPrepExit({
+        conversationId: request.conversationId ?? "",
+        turnId: prepTurnId,
+        assistantMessageId: prepAssistantMessageId,
+        eventSink,
+        executionId: prepExecutionId,
+      });
       return;
     }
     const prior = this.activeTurns.get(conversationId);
@@ -2357,6 +2501,8 @@ export class AIChatQueryEngine {
       turnId,
       eventSink,
     });
+    // G01-312: promotion — the pending handle served its purpose.
+    this.discardPendingTurn(conversationId, turnId);
     this.pendingPermissions.delete(conversationId);
     this.pendingPlanQuestions.delete(conversationId);
 
@@ -2559,6 +2705,16 @@ export class AIChatQueryEngine {
    */
   private stopConversation(conversationId: string): void {
     this.dispatchStop(conversationId, "user_stopped");
+    // G01-312: a turn still in pre-stream prep has no activeTurns entry yet
+    // — abort its pending handle so the next stage boundary exits before
+    // any loop dispatch (the exit path emits cancelled + cancels any
+    // just-enrolled row). Enrolled-execution cancellation below covers the
+    // post-enrollment case via the binding map.
+    const pending = this.pendingTurns.get(conversationId);
+    if (pending) {
+      this.pendingTurns.delete(conversationId);
+      pending.abortController.abort();
+    }
     // T16: check the FROZEN flag-at-enrollment value, not the live runtime
     // flag. An execution enrolled while the flag was on stays accepted for
     // Stop-cancel even if the flag was turned off midstream — otherwise
@@ -4238,6 +4394,64 @@ export class AIChatQueryEngine {
       return;
     }
     this.activeTurns.delete(conversationId);
+  }
+
+  /**
+   * G01-312: discard a pre-stream abort handle, but only when it still
+   * belongs to this turn (turnId-guarded — a concurrent turn's
+   * registration/adoption must survive another turn's exit path, B11).
+   */
+  private discardPendingTurn(conversationId: string, turnId: string): void {
+    if (this.pendingTurns.get(conversationId)?.turnId === turnId) {
+      this.pendingTurns.delete(conversationId);
+    }
+  }
+
+  /**
+   * G01-312: controlled exit for a turn whose pre-stream prep was aborted
+   * via Stop. No loop ever ran and nothing streamed: consume any enrolled
+   * execution binding (cancelling the just-enrolled row so no orphan active
+   * row remains — the mid-enrollment abort window), then emit `cancelled`
+   * on the turn's own sink so the renderer clears streaming state.
+   */
+  private async abortPrepExit(input: {
+    conversationId: string;
+    turnId: string;
+    assistantMessageId: string;
+    eventSink: AIChatQueryEventSink;
+    /**
+     * G01-312: this turn's enrolled execution row, when one was committed
+     * before the abort (tracked at enrollment, never read back from the
+     * shared binding map — a superseding turn may already own that map
+     * entry, and cancelling ITS row would be a cross-turn kill).
+     */
+    executionId: string | null;
+  }): Promise<void> {
+    const { conversationId, turnId, assistantMessageId, eventSink, executionId } = input;
+    this.discardPendingTurn(conversationId, turnId);
+    if (executionId) {
+      // Consume the shared binding entry only when it still points at our
+      // row (a superseding turn owns it otherwise — leave it alone).
+      if (this.taskExecutionBindings.get(conversationId) === executionId) {
+        this.taskExecutionBindings.delete(conversationId);
+        this.policyAcceptedConversations.delete(conversationId);
+      }
+      this.taskDecisionSlots.delete(executionId);
+      try {
+        await new TaskExecutionCoordinator().cancel(executionId);
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] prep-abort execution cancel failed (executionId=${executionId}):`,
+          err
+        );
+      }
+    }
+    eventSink.emit({
+      type: "cancelled",
+      conversationId,
+      messageId: assistantMessageId,
+      fullContent: "",
+    });
   }
 
   /**
