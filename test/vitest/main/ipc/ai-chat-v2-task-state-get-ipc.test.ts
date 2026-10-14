@@ -4,10 +4,12 @@
 // IPC handler `AI_CHAT_V2_TASK_STATE_GET` lets history reload restore the
 // badge from the stored row. The handler is AI-gated first (the
 // AI-feature-IPC mandate), delegates to `AiTaskExecutionModule.
-// getLatestByConversation`, never touches a repository directly, and
-// returns a minimal projection (executionId / conversationId / status /
-// reasonCode / outcome). Returns null for response-only answers that
-// never enrolled — the renderer shows no badge in that case.
+// getExecutionStateProjection` (G01-314 enriched projection: badge +
+// progress + remaining limits + safe actions), never touches a repository
+// directly, and returns the projection (executionId / conversationId /
+// status / reasonCode / outcome + enrichment). Returns null for
+// response-only answers that never enrolled — the renderer shows no badge
+// in that case.
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   setupElectronMocks,
@@ -61,11 +63,11 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
   };
 });
 
-// --- AiTaskExecutionModule: getLatestByConversation is the T13 query ----
-const getLatestByConversationMock = vi.hoisted(() => vi.fn());
+// --- AiTaskExecutionModule: getExecutionStateProjection is the T13/G01-314 query ----
+const getExecutionStateProjectionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/modules/AiTaskExecutionModule", () => ({
   AiTaskExecutionModule: class {
-    getLatestByConversation = getLatestByConversationMock;
+    getExecutionStateProjection = getExecutionStateProjectionMock;
   },
 }));
 
@@ -116,36 +118,51 @@ import {
 import { AI_CHAT_V2_TASK_STATE_GET } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
-/** A finalized execution row the module mock serves. */
-function executionRow(overrides?: {
-  execution_id?: string;
-  conversation_id?: string;
-  stage?: string;
-  task_outcome?: string | null;
-  outcome_reason_code?: string | null;
-}) {
-  // Use `=== undefined` checks (not `??`) so an explicit `null` override
-  // — the "in-flight, not yet finalized" case — passes through to the
-  // projection instead of being coalesced back to the finalized default.
-  return {
-    execution_id:
-      overrides?.execution_id !== undefined
-        ? overrides.execution_id
-        : "exec-state-1",
-    conversation_id:
-      overrides?.conversation_id !== undefined
-        ? overrides.conversation_id
-        : "v2-test-conv",
-    stage: overrides?.stage !== undefined ? overrides.stage : "terminal",
-    task_outcome:
-      overrides?.task_outcome !== undefined
-        ? overrides.task_outcome
-        : "verified_complete",
-    outcome_reason_code:
-      overrides?.outcome_reason_code !== undefined
-        ? overrides.outcome_reason_code
-        : "CRITERIA_SATISFIED",
+/** A finalized execution state projection the module mock serves. */
+function executionProjection(overrides?: {
+  executionId?: string;
+  conversationId?: string;
+  status?: string;
+  outcome?: string | undefined;
+  reasonCode?: string | undefined;
+  finalEventIdentity?: string;
+  safeActions?: string[];
+}): Record<string, unknown> {
+  // Presence checks (`in`) — not `??` — so an explicit `undefined` override
+  // (the "in-flight, not yet finalized" case) omits the key instead of being
+  // coalesced back to the finalized default. The handler spreads
+  // `safeActions`, so the mock always serves an array (mirrors
+  // `deriveSafeActions`: verified_complete → [], running → ["stop"]).
+  const hasOutcome: boolean =
+    overrides !== undefined && "outcome" in overrides;
+  const hasReasonCode: boolean =
+    overrides !== undefined && "reasonCode" in overrides;
+  const projection: Record<string, unknown> = {
+    executionId: overrides?.executionId ?? "exec-state-1",
+    conversationId: overrides?.conversationId ?? "v2-test-conv",
+    status: overrides?.status ?? "terminal",
+    safeActions: overrides?.safeActions ?? [],
   };
+  if (hasOutcome) {
+    const outcome: string | undefined = overrides?.outcome;
+    if (outcome !== undefined) {
+      projection.outcome = outcome;
+    }
+  } else {
+    projection.outcome = "verified_complete";
+  }
+  if (hasReasonCode) {
+    const reasonCode: string | undefined = overrides?.reasonCode;
+    if (reasonCode !== undefined) {
+      projection.reasonCode = reasonCode;
+    }
+  } else {
+    projection.reasonCode = "CRITERIA_SATISFIED";
+  }
+  if (overrides?.finalEventIdentity !== undefined) {
+    projection.finalEventIdentity = overrides.finalEventIdentity;
+  }
+  return projection;
 }
 
 const call = async (
@@ -164,8 +181,8 @@ describe("AI Chat V2 task-state-get IPC — history reconstruction (T13)", () =>
     mockState.aiEnabled = "true";
     mockState.tokenStore.clear();
     mockState.tokenStore.set("USERSDBPATH", "/tmp/aifetchly-test.db");
-    getLatestByConversationMock.mockReset();
-    getLatestByConversationMock.mockResolvedValue(null);
+    getExecutionStateProjectionMock.mockReset();
+    getExecutionStateProjectionMock.mockResolvedValue(null);
     registerAiChatV2IpcHandlers();
   });
 
@@ -176,34 +193,34 @@ describe("AI Chat V2 task-state-get IPC — history reconstruction (T13)", () =>
 
   it("denies before any work when AI is disabled (AI-gate-first mandate)", async () => {
     mockState.aiEnabled = "false";
-    getLatestByConversationMock.mockResolvedValue(executionRow());
+    getExecutionStateProjectionMock.mockResolvedValue(executionProjection());
     const res = await call(JSON.stringify({ conversationId: "v2-test-conv" }));
     expect(res.status).toBe(false);
-    expect(getLatestByConversationMock).not.toHaveBeenCalled();
+    expect(getExecutionStateProjectionMock).not.toHaveBeenCalled();
   });
 
   it("denies when the payload is not valid JSON / object", async () => {
     const res = await call("not-json");
     expect(res.status).toBe(false);
-    expect(getLatestByConversationMock).not.toHaveBeenCalled();
+    expect(getExecutionStateProjectionMock).not.toHaveBeenCalled();
   });
 
   it("denies when conversationId is missing or empty", async () => {
     const res = await call(JSON.stringify({ conversationId: "" }));
     expect(res.status).toBe(false);
-    expect(getLatestByConversationMock).not.toHaveBeenCalled();
+    expect(getExecutionStateProjectionMock).not.toHaveBeenCalled();
   });
 
   it("returns null when no execution exists for the conversation (response-only answers never enrolled)", async () => {
-    getLatestByConversationMock.mockResolvedValue(null);
+    getExecutionStateProjectionMock.mockResolvedValue(null);
     const res = await call(JSON.stringify({ conversationId: "v2-test-conv" }));
     expect(res.status).toBe(true);
     expect(res.data).toBeNull();
-    expect(getLatestByConversationMock).toHaveBeenCalledWith("v2-test-conv");
+    expect(getExecutionStateProjectionMock).toHaveBeenCalledWith("v2-test-conv");
   });
 
   it("returns the row projection (executionId / status / outcome / reasonCode) for a finalized execution", async () => {
-    getLatestByConversationMock.mockResolvedValue(executionRow());
+    getExecutionStateProjectionMock.mockResolvedValue(executionProjection());
     const res = await call(JSON.stringify({ conversationId: "v2-test-conv" }));
     expect(res.status).toBe(true);
     expect(res.data).toMatchObject({
@@ -216,11 +233,12 @@ describe("AI Chat V2 task-state-get IPC — history reconstruction (T13)", () =>
   });
 
   it("returns undefined reasonCode / outcome when the row has none (in-flight, not yet finalized)", async () => {
-    getLatestByConversationMock.mockResolvedValue(
-      executionRow({
-        stage: "active",
-        task_outcome: null,
-        outcome_reason_code: null,
+    getExecutionStateProjectionMock.mockResolvedValue(
+      executionProjection({
+        status: "active",
+        outcome: undefined,
+        reasonCode: undefined,
+        safeActions: ["stop"],
       })
     );
     const res = await call(JSON.stringify({ conversationId: "v2-test-conv" }));
@@ -236,7 +254,7 @@ describe("AI Chat V2 task-state-get IPC — history reconstruction (T13)", () =>
   });
 
   it("denies safely (userSafeError) when the module throws — never leaks the raw error", async () => {
-    getLatestByConversationMock.mockRejectedValue(new Error("boom: sqlite_locked table=ai_task_execution"));
+    getExecutionStateProjectionMock.mockRejectedValue(new Error("boom: sqlite_locked table=ai_task_execution"));
     const res = await call(JSON.stringify({ conversationId: "v2-test-conv" }));
     expect(res.status).toBe(false);
     // The raw error message (with table name / internals) must NOT leak.
