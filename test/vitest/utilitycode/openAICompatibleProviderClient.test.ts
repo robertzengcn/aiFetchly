@@ -85,6 +85,57 @@ function signalAwareHangingBodyFetch(): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
+/**
+ * R17: a fetch that returns NON-2xx response headers (an error status) but whose
+ * error body (`res.text()`) never resolves on its own — it only rejects when the
+ * request signal aborts. Simulates a provider that sends error headers then
+ * stalls the error body. This is the regression vehicle for Trigger B: without
+ * a deadline spanning the error-body read, `toProviderError`'s `res.text()`
+ * hangs past the call/invocation budget.
+ *
+ * The patched `.text()` rejects when the signal passed to fetch aborts — the
+ * same contract real fetch follows for a stalled body. In `complete()` the body
+ * timer aborts that very controller, so the read rejects within the budget. In
+ * `stream()` the client bounds the error-body read on its own internal timer
+ * (not the fetch signal), so the wall-clock assertion is what proves the fix
+ * there; the `.catch(() => "")` inside `toProviderError` never runs because the
+ * read is abandoned by the racing timeout, not by a signal rejection.
+ */
+function signalAwareHangingErrorBodyFetch(
+  status: number
+): typeof fetch {
+  return ((_url: string | URL | Request, init?: RequestInit) => {
+    const sig = init?.signal as AbortSignal | undefined;
+    const res = new Response("", {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+    const patched = {
+      ...res,
+      ok: false,
+      status,
+      headers: res.headers,
+      text: () =>
+        new Promise<string>((_resolveText, rejectText) => {
+          const fail = (): void => {
+            const err = new Error("The operation was aborted.");
+            err.name = "AbortError";
+            rejectText(err);
+          };
+          if (sig) {
+            if (sig.aborted) {
+              fail();
+            } else {
+              sig.addEventListener("abort", fail, { once: true });
+            }
+          }
+          // otherwise: error body never resolves
+        }),
+    };
+    return Promise.resolve(patched as unknown as Response);
+  }) as unknown as typeof fetch;
+}
+
 describe("OpenAICompatibleProviderClient timeouts", () => {
   it("rejects with a timeout network error when the provider never responds", async () => {
     const client = new OpenAICompatibleProviderClient(
@@ -235,6 +286,77 @@ describe("OpenAICompatibleProviderClient timeouts", () => {
       callBudgetMs: 5000,
     });
     expect(result.choices?.[0]?.message?.content).toBe("pong");
+  });
+
+  it("R17: complete() bounds a stalled NON-2xx error body within the budget (no hang)", async () => {
+    // Headers arrive as 500, but res.text() never resolves. Before the fix the
+    // !res.ok branch ran BEFORE the body timer was armed, so toProviderError's
+    // res.text() hung forever. Now the body-phase timer is armed first and the
+    // abort rejects the read within the budget → network timeout error.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 5000
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("R17: the stalled-error-body timeout surfaces as AIProviderError (network), not a compat/validation error", async () => {
+    // The abort during the error-body read must classify as a network timeout
+    // INDEPENDENTLY of compatibility — never an unsupported/validation signal
+    // that would trigger a no-hint retry or a validation strike.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      5000,
+      5000
+    );
+    try {
+      await client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AIProviderError);
+      expect((err as AIProviderError).code).toBe("network");
+      // No 5xx status is attached to a timeout — it is a transport failure.
+      expect((err as AIProviderError).status).toBeUndefined();
+    }
+  });
+
+  it("R17: stream() bounds a stalled NON-2xx error body under a tiny budget (no hang)", async () => {
+    // The streaming path armed no body timer after fetchWithResponseTimeout
+    // returned, so a stalled non-2xx error body hung toProviderError forever.
+    // The fix bounds the error-body read with its own timer (bodyTimeoutMs).
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 20
+    );
+    const start = Date.now();
+    await expect(
+      client.stream(
+        { messages: [{ role: "user", content: "hi" }] },
+        () => undefined
+      )
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 });
 

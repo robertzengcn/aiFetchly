@@ -251,16 +251,15 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         clearTimeout(headersTimer);
       }
     }
-    if (!res.ok) {
-      throw await toProviderError(res, {
-        endpoint: "/chat/completions",
-        model: payload.model,
-      });
-    }
-    // Body phase: arm a fresh timer on the SAME controller for the smaller of
-    // the remaining budget (Infinity when no callBudgetMs → just the body
-    // timeout) and the configured body timeout. If the budget already elapsed,
-    // abort immediately rather than await a JSON parse that may never resolve.
+    // R17: the body-phase timer covers BOTH the error-body read (non-2xx →
+    // toProviderError → res.text()) and the success-body read (res.json()).
+    // Previously the !res.ok branch ran BEFORE the body timer was armed, so a
+    // provider that sent non-2xx headers then stalled the error body hung
+    // toProviderError's res.text() beyond the call/invocation budget. Now the
+    // SAME controller's timer is live through successful AND error
+    // response-body consumption; an abort during either read surfaces as a
+    // network timeout (classified independently of compatibility — never a
+    // no-hint retry).
     const remaining = deadline - Date.now();
     const bodyTimeout = Number.isFinite(remaining)
       ? Math.min(remaining, this.bodyTimeoutMs)
@@ -272,6 +271,25 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
     }
     try {
+      if (!res.ok) {
+        // toProviderError reads res.text(), which rejects on abort but is
+        // swallowed by its .catch(() => "") — so a stalled non-2xx body that
+        // the timer aborts resolves here as a status-classified error with an
+        // empty body. If the controller aborted during the read, reclassify as
+        // a network timeout so the generation service treats it as a transport
+        // failure (independent of compatibility), never a no-hint retry.
+        const providerErr = await toProviderError(res, {
+          endpoint: "/chat/completions",
+          model: payload.model,
+        });
+        if (controller.signal.aborted && bodyTimer !== undefined) {
+          throw new AIProviderError(
+            "The AI provider sent response headers but stalled before finishing the body. Check that it is not overloaded.",
+            "network"
+          );
+        }
+        throw providerErr;
+      }
       return (await res.json()) as OpenAIChatCompletionResponse;
     } catch (err) {
       // An abort here is a body-phase timeout (the headers phase already
@@ -316,10 +334,42 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       throw toNetworkProviderError(err);
     }
     if (!res.ok) {
-      throw await toProviderError(res, {
-        endpoint: "/chat/completions",
-        model: payload.model,
+      // R17: a stalled non-2xx error body on the streaming path would hang
+      // toProviderError's res.text() — fetchWithResponseTimeout cleared its
+      // headers timer once the Response arrived, and stream() armed no body
+      // timer at all. Bound the error-body read by RACING it against a deadline
+      // rejection for the configured body timeout (the streaming path carries
+      // no callBudgetMs, so the per-phase body timeout is the only budget). The
+      // timer is independent of the fetch signal (which the already-returned
+      // internal controller owns), so the race — not a signal abort — enforces
+      // the deadline. The timeout surfaces as a network error, classified
+      // independently of compatibility (never a no-hint retry).
+      let errorTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadlineRejection = new Promise<never>((_resolve, reject) => {
+        errorTimer = setTimeout(() => {
+          reject(
+            new AIProviderError(
+              "The AI provider sent response headers but stalled before finishing the body. Check that it is not overloaded.",
+              "network"
+            )
+          );
+        }, this.bodyTimeoutMs);
       });
+      try {
+        // A settled (fast) error body wins the race and its status-classified
+        // error propagates; a stalled body loses to the deadline rejection.
+        throw await Promise.race([
+          toProviderError(res, {
+            endpoint: "/chat/completions",
+            model: payload.model,
+          }),
+          deadlineRejection,
+        ]);
+      } finally {
+        if (errorTimer !== undefined) {
+          clearTimeout(errorTimer);
+        }
+      }
     }
     await this.streamParser.consume(res, onChunk, options?.signal);
   }

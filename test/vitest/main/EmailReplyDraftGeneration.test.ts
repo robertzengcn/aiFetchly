@@ -620,6 +620,100 @@ describe("callLlmRawWithHintFallback retries once without the hint on unsupporte
     expect(requests).toHaveLength(1);
   });
 
+  it("R17: a 400 rejecting max_tokens does NOT trigger a no-hint retry (unrelated parameter)", async () => {
+    // The old OR-ed pattern list matched /invalid[ _-]?parameter/i on
+    // "invalid parameter max_tokens" and fired the no-hint retry despite NO
+    // JSON-format rejection. R17 requires the message to name response_format.
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "invalid parameter max_tokens is not supported",
+      },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmSubmissionResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    await expect(
+      fallback(
+        { role: "system", content: "sys" },
+        { role: "user", content: "u" }
+      )
+    ).rejects.toSatisfy((err: unknown) => {
+      if (!(err instanceof LlmTransportError)) return false;
+      return err.unsupportedResponseFormat === false;
+    });
+    // Exactly ONE submission — the unrelated parameter error is a real failure,
+    // not a JSON-capability gap, so there is no no-hint retry.
+    expect(requests).toHaveLength(1);
+    // The single submission carried the JSON hint (it was never retried).
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+  });
+
+  it("R17: a 400 rejecting temperature does NOT trigger a no-hint retry (unrelated parameter)", async () => {
+    // The old OR-ed pattern list matched /unsupported[ _-]?parameter/i on
+    // "unsupported parameter temperature" and fired the no-hint retry. R17
+    // requires the message to name response_format explicitly.
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "unsupported parameter temperature for this model",
+      },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmSubmissionResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    await expect(
+      fallback(
+        { role: "system", content: "sys" },
+        { role: "user", content: "u" }
+      )
+    ).rejects.toSatisfy((err: unknown) => {
+      if (!(err instanceof LlmTransportError)) return false;
+      return err.unsupportedResponseFormat === false;
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+  });
+
+  it("R17: an explicit response_format 400 still triggers one no-hint retry (positive control)", async () => {
+    // The tightened matcher must STILL recognize a genuine JSON-format
+    // capability rejection so the hint fallback keeps working.
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format is not supported by this model",
+      },
+      { kind: "respond", content: validReplyJson },
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmSubmissionResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    const result = await fallback(
+      { role: "system", content: "sys" },
+      { role: "user", content: "u" }
+    );
+    expect(result.raw.content).toBe(validReplyJson);
+    expect(result.usedHintFallback).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+    expect(requests[1].response_format).toBeUndefined();
+  });
+
   it("a network error with no status is NOT retried", async () => {
     const { factory, requests } = stagedFactory([
       { kind: "throw", message: "network timeout" },

@@ -197,20 +197,17 @@ export class LlmTransportError extends Error {
 }
 
 /**
- * Detect an explicit provider rejection of the `response_format` JSON hint
- * (B06/FR-026). The OpenAI-compatible API and most third-party gateways
- * surface this as a 400 (sometimes 501) whose error body names `response_format`
- * as unsupported/unrecognized/invalid. Auth (401/403), throttling (429), and
- * generic server (5xx) errors are explicitly NOT matches — those are real
- * failures, not capability gaps, and must not trigger the no-hint retry.
+ * The EXPLICIT provider signal that the `response_format` JSON hint is an
+ * unsupported parameter (B06/FR-026). The OpenAI-compatible API and most
+ * third-party gateways echo the rejected parameter name (`response_format`)
+ * back in the error body. R17: the matcher requires this explicit signal —
+ * generic "unsupported parameter temperature" / "invalid parameter
+ * max_tokens" must NOT trigger the no-hint retry, because they are unrelated
+ * parameter rejections, not a JSON-format capability gap. Auth (401/403),
+ * throttling (429), and generic server (5xx) errors are excluded by the
+ * 400/501 capability-status gate.
  */
-const UNSUPPORTED_RESPONSE_FORMAT_PATTERNS: readonly RegExp[] = [
-  /response_format\b/i,
-  /unsupported[ _-]?parameter/i,
-  /unrecognized[ _-]?(parameter|request[ _-]?argument)/i,
-  /not[ _-]?supported/i,
-  /invalid[ _-]?parameter/i,
-];
+const RESPONSE_FORMAT_PARAMETER_PATTERN = /response[ _-]?format\b/i;
 
 function isUnsupportedResponseFormatError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -222,14 +219,13 @@ function isUnsupportedResponseFormatError(error: unknown): boolean {
     typeof status === "number" && (status === 400 || status === 501);
   const messageText =
     typeof err.message === "string" ? err.message : String(err.message ?? "");
-  if (!messageText && !isCapabilityStatus) return false;
-  const messageMatches = UNSUPPORTED_RESPONSE_FORMAT_PATTERNS.some((re) =>
-    re.test(messageText)
-  );
-  // A 400/501 whose message names response_format / unsupported-parameter is
-  // the canonical signal. Require BOTH a capability status AND a matching
-  // message so a generic 400 (e.g. malformed body) does not trigger the retry.
-  return isCapabilityStatus && messageMatches;
+  // R17: require an EXPLICIT `response_format` signal — the message must name
+  // the rejected parameter. The previous OR-ed pattern list matched generic
+  // "invalid parameter max_tokens" / "unsupported parameter temperature" and
+  // triggered a no-hint retry despite NO JSON-format rejection. Only a 400/501
+  // whose body names response_format is a JSON-capability gap worth one retry.
+  const namesResponseFormat = RESPONSE_FORMAT_PARAMETER_PATTERN.test(messageText);
+  return isCapabilityStatus && namesResponseFormat;
 }
 
 /**
