@@ -2121,16 +2121,23 @@ async function handleTaskStateGet(
       typeof p.conversationId === "string" ? p.conversationId : "";
     if (!conversationId) return denied("conversationId is required");
     const module = new AiTaskExecutionModule();
-    const exec = await module.getLatestByConversation(conversationId);
-    if (!exec) return ok(null);
+    // G01-314: the enriched reload-restore projection (badge + progress +
+    // remaining limits + safe actions) comes from the module — the handler
+    // stays a thin AI-gate + parse + delegate shell. Null when the
+    // conversation never enrolled (response-only answers show no badge).
+    const projection = await module.getExecutionStateProjection(conversationId);
+    if (!projection) return ok(null);
     return ok({
-      executionId: exec.execution_id,
-      conversationId: exec.conversation_id ?? conversationId,
-      status: exec.stage,
-      reasonCode: exec.outcome_reason_code ?? undefined,
-      outcome: exec.task_outcome ?? undefined,
+      executionId: projection.executionId,
+      conversationId: projection.conversationId,
+      status: projection.status,
+      reasonCode: projection.reasonCode,
+      outcome: projection.outcome,
       // G02: durable delivery identity for reload reconstruction dedup.
-      finalEventIdentity: exec.final_event_identity ?? undefined,
+      finalEventIdentity: projection.finalEventIdentity,
+      progress: projection.progress,
+      remainingLimits: projection.remainingLimits,
+      safeActions: [...projection.safeActions],
     });
   } catch (err) {
     // Malformed JSON payload or module failure — never leak the raw error

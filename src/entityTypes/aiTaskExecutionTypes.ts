@@ -301,6 +301,46 @@ export const TASK_EXECUTION_STATUSES = [
 export type AiTaskExecutionStatus = (typeof TASK_EXECUTION_STATUSES)[number];
 
 /**
+ * G01-314 (FR-10/13/14; AC-06/16/27): reload-restore projection for the
+ * latest execution of a conversation. Core identity/outcome fields are
+ * always present when a row exists; the enrichment sections are best-effort
+ * (undefined when their source is missing or unparseable — the badge still
+ * restores from the core fields):
+ * - `progress`: per-criterion last-state rollup from the persisted evidence
+ *   rows (append-only — last row per criterion wins).
+ * - `remainingLimits`: frozen policy caps minus ledger-consumed spend, per
+ *   lane, floored at zero.
+ * - `safeActions`: the follow-ups the durable state actually allows
+ *   (`stop` while running; `continue` only on continuable terminal
+ *   outcomes; `retry` on finalized non-complete rows; nothing on
+ *   verified_complete — mirrors the successor IPC eligibility).
+ */
+export interface TaskExecutionStateProjection {
+  readonly executionId: string;
+  readonly conversationId: string;
+  readonly status: AiTaskExecutionStatus;
+  readonly reasonCode?: string;
+  readonly outcome?: TaskOutcome;
+  /** G02: durable delivery identity for reload-reconstruction dedup. */
+  readonly finalEventIdentity?: string;
+  readonly progress?: {
+    readonly totalCriteria: number;
+    readonly passedCriteria: number;
+    readonly unmetCriterionIds: readonly string[];
+  };
+  readonly remainingLimits?: {
+    readonly tokens: number;
+    readonly providerAttempts: number;
+    readonly toolExecutions: number;
+    readonly checkerAttempts: number;
+    readonly continuations: number;
+    readonly activeRuntimeMs: number;
+    readonly waitMs: number;
+  };
+  readonly safeActions: readonly string[];
+}
+
+/**
  * Renderer-facing task execution state pushed via the `task_execution_state`
  * stream chunk (PRD FR-13: show checking-completion and continuing-work
  * states). Mirrors `ChatV2GoalStateEvent`: all fields readonly, main-process

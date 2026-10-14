@@ -74,6 +74,24 @@ export interface TaskExecutionStateView {
   readonly outcome?: TaskOutcome;
   /** G02: durable delivery identity for reload-reconstruction dedup. */
   readonly finalEventIdentity?: string;
+  /** G01-314: persisted-evidence progress rollup (best-effort). */
+  readonly progress?: {
+    readonly totalCriteria: number;
+    readonly passedCriteria: number;
+    readonly unmetCriterionIds: readonly string[];
+  };
+  /** G01-314: frozen caps minus ledger spend per lane (best-effort). */
+  readonly remainingLimits?: {
+    readonly tokens: number;
+    readonly providerAttempts: number;
+    readonly toolExecutions: number;
+    readonly checkerAttempts: number;
+    readonly continuations: number;
+    readonly activeRuntimeMs: number;
+    readonly waitMs: number;
+  };
+  /** G01-314: follow-ups the durable state allows. */
+  readonly safeActions?: readonly string[];
 }
 
 export async function getChatV2TaskExecutionState(

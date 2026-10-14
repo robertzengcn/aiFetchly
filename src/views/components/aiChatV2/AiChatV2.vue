@@ -21,11 +21,7 @@
           class="ml-2"
         />
         <v-btn
-          v-if="
-            activeTaskExecution &&
-            activeTaskExecution.status === 'terminal' &&
-            activeTaskExecution.outcome !== 'verified_complete'
-          "
+          v-if="showContinueAction"
           size="x-small"
           variant="text"
           icon="mdi-play"
@@ -33,11 +29,7 @@
           @click="continueTaskExecution"
         />
         <v-btn
-          v-if="
-            activeTaskExecution &&
-            activeTaskExecution.status === 'terminal' &&
-            activeTaskExecution.outcome !== 'verified_complete'
-          "
+          v-if="showRetryAction"
           size="x-small"
           variant="text"
           icon="mdi-refresh"
@@ -45,10 +37,7 @@
           @click="retryTaskExecution"
         />
         <v-btn
-          v-if="
-            activeTaskExecution &&
-            activeTaskExecution.status !== 'terminal'
-          "
+          v-if="showStopAction"
           size="x-small"
           variant="text"
           icon="mdi-stop"
@@ -1630,6 +1619,11 @@ async function restoreActiveTaskExecution(): Promise<void> {
           reasonCode: state.reasonCode,
           outcome: state.outcome,
           finalEventIdentity: state.finalEventIdentity,
+          // G01-314: restore progress, remaining limits and safe actions
+          // alongside the badge so reload recovers the full durable picture.
+          progress: state.progress,
+          remainingLimits: state.remainingLimits,
+          safeActions: state.safeActions,
         }
       : null;
   } catch {
@@ -1967,9 +1961,13 @@ async function continueTaskExecution(): Promise<void> {  const parent = activeTa
       // tokens/tools into a disclosed successor assistant turn and
       // correlates chunks by successor identity (late parent output can
       // neither render nor close the turn).
+      // G01-314: adopt identity + phase only — the parent's restored
+      // progress/limits/actions snapshot belongs to the finished run, not
+      // the fresh attempt (which carries no safeActions until its own
+      // states arrive, so the running-turn rules apply).
       activeTaskExecution.value = {
-        ...parent,
         executionId: result.executionId,
+        conversationId: parent.conversationId,
         status: "continuing",
       };
       attachSuccessorTurn("continue", parent, submissionId, result.executionId);
@@ -2010,9 +2008,10 @@ async function retryTaskExecution(): Promise<void> {
       // badge must track its id and stream, not the parent's.
       // B10: attachSuccessorTurn renders the attempt (disclosed via the
       // successor marker) with identity-correlated chunks.
+      // G01-314: identity + phase only (no parent snapshot carryover).
       activeTaskExecution.value = {
-        ...parent,
         executionId: result.executionId,
+        conversationId: parent.conversationId,
         status: "resolving",
       };
       attachSuccessorTurn("retry", parent, submissionId, result.executionId);
@@ -3245,8 +3244,61 @@ type ActiveTaskExecutionView = {
   readonly remainingWork?: string;
   /** G02: durable delivery identity for consumer dedup (design §6.3). */
   readonly finalEventIdentity?: string;
+  /** G01-314: restored progress/limits/actions (best-effort, may be absent). */
+  readonly progress?: {
+    readonly totalCriteria: number;
+    readonly passedCriteria: number;
+    readonly unmetCriterionIds: readonly string[];
+  };
+  readonly remainingLimits?: {
+    readonly tokens: number;
+    readonly providerAttempts: number;
+    readonly toolExecutions: number;
+    readonly checkerAttempts: number;
+    readonly continuations: number;
+    readonly activeRuntimeMs: number;
+    readonly waitMs: number;
+  };
+  readonly safeActions?: readonly string[];
 };
 const activeTaskExecution = ref<ActiveTaskExecutionView | null>(null);
+/**
+ * G01-314 (FR-10/13/14; AC-06/16/27): action visibility follows the durable
+ * truth. Restored states carry `safeActions` (stop while running; continue
+ * only on continuable terminal outcomes; retry on finalized non-complete
+ * rows; nothing on verified_complete) — when present they decide, so a
+ * reload can never offer an action the main process would deny (e.g.
+ * Continue on a cancelled row). Stream-driven states carry no safeActions
+ * and keep the legacy status/outcome rules (byte-identical behavior).
+ */
+const showContinueAction = computed(() => {
+  const tracked = activeTaskExecution.value;
+  if (!tracked) return false;
+  if (tracked.safeActions !== undefined) {
+    return tracked.safeActions.includes("continue");
+  }
+  return (
+    tracked.status === "terminal" && tracked.outcome !== "verified_complete"
+  );
+});
+const showRetryAction = computed(() => {
+  const tracked = activeTaskExecution.value;
+  if (!tracked) return false;
+  if (tracked.safeActions !== undefined) {
+    return tracked.safeActions.includes("retry");
+  }
+  return (
+    tracked.status === "terminal" && tracked.outcome !== "verified_complete"
+  );
+});
+const showStopAction = computed(() => {
+  const tracked = activeTaskExecution.value;
+  if (!tracked) return false;
+  if (tracked.safeActions !== undefined) {
+    return tracked.safeActions.includes("stop");
+  }
+  return tracked.status !== "terminal";
+});
 /**
  * B10 (FR-13/14/21/22, AC-25/32): assistant message ids of turns whose
  * terminal complete already fired, per conversation. Successor attachments

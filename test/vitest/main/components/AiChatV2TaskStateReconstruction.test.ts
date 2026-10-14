@@ -409,6 +409,58 @@ describe("AiChatV2 T13 — task state reconstruction + executionId dedup", () =>
     expect(badge(wrapper).attributes("data-status")).toBe("active");
   });
 
+  it("G01-314: restored safeActions gate follow-ups (cancelled row offers Retry, never Continue)", async () => {
+    // The durable truth says this terminal row is cancelled: Continue would
+    // be IPC-denied, so the reloaded UI must not offer it — while Retry
+    // (repair path) stays available. Stream-driven states without
+    // safeActions keep the legacy rules (covered by the suites above).
+    getTaskStateMock.mockResolvedValue({
+      executionId: "exec-stored-3",
+      conversationId: "v2-test",
+      status: "terminal",
+      outcome: "cancelled",
+      reasonCode: "USER_CANCELLED",
+      progress: { totalCriteria: 2, passedCriteria: 0, unmetCriterionIds: ["c1", "c2"] },
+      remainingLimits: {
+        tokens: 120000,
+        providerAttempts: 55,
+        toolExecutions: 48,
+        checkerAttempts: 6,
+        continuations: 3,
+        activeRuntimeMs: 500000,
+        waitMs: 3500000,
+      },
+      safeActions: ["retry"],
+    });
+    const wrapper = mountChat();
+    await selectConversation(wrapper);
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    const labels = wrapper
+      .findAll("button[aria-label]")
+      .map((b) => b.attributes("aria-label"));
+    expect(labels).toContain("Retry");
+    expect(labels).not.toContain("Continue");
+    expect(labels).not.toContain("Stop task");
+  });
+
+  it("G01-314: restored running row offers Stop only", async () => {
+    getTaskStateMock.mockResolvedValue({
+      executionId: "exec-stored-4",
+      conversationId: "v2-test",
+      status: "resolving",
+      safeActions: ["stop"],
+    });
+    const wrapper = mountChat();
+    await selectConversation(wrapper);
+    expect(badge(wrapper).attributes("data-status")).toBe("resolving");
+    const labels = wrapper
+      .findAll("button[aria-label]")
+      .map((b) => b.attributes("aria-label"));
+    expect(labels).toContain("Stop task");
+    expect(labels).not.toContain("Continue");
+    expect(labels).not.toContain("Retry");
+  });
+
   it("Piece C stale-execution dedup: a late chunk from an OLD execution does NOT overwrite the tracked successor badge", async () => {
     // Stream an active task, then a terminal chunk for a DIFFERENT execution
     // (a stale callback racing the tracked execution). The tracked execution

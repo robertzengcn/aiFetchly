@@ -9,6 +9,85 @@ import type {
   LedgerSnapshot,
 } from "@/model/AiTaskExecution.model";
 import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import type {
+  TaskExecutionStateProjection,
+  TaskOutcome,
+} from "@/entityTypes/aiTaskExecutionTypes";
+
+/** Outcomes on which a Continue successor is allowed (mirrors the successor IPC eligibility). */
+const CONTINUABLE_OUTCOMES: ReadonlySet<string> = new Set([
+  "incomplete",
+  "needs_user_input",
+  "blocked_by_policy",
+  "timeout",
+  "failed",
+]);
+
+/**
+ * G01-314: roll up persisted evidence rows into progress. Rows are
+ * append-only across checks — the LAST row per criterion wins. Malformed
+ * rows are skipped (never fail the projection); a wholly unparseable
+ * payload yields undefined (fail-soft — the badge still restores).
+ */
+function readEvidenceProgress(
+  executionStateJson: string | null
+): TaskExecutionStateProjection["progress"] {
+  if (!executionStateJson) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(executionStateJson);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const rows = (parsed as { evidence?: unknown }).evidence;
+    if (!Array.isArray(rows) || rows.length === 0) return undefined;
+    const lastByCriterion = new Map<string, string>();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const record = row as Record<string, unknown>;
+      if (typeof record.criterionId !== "string" || record.criterionId === "") {
+        continue;
+      }
+      if (
+        record.state !== "pass" &&
+        record.state !== "fail" &&
+        record.state !== "unknown"
+      ) {
+        continue;
+      }
+      lastByCriterion.set(record.criterionId, record.state);
+    }
+    if (lastByCriterion.size === 0) return undefined;
+    const unmetCriterionIds = [...lastByCriterion.entries()]
+      .filter(([, state]) => state !== "pass")
+      .map(([criterionId]) => criterionId);
+    return {
+      totalCriteria: lastByCriterion.size,
+      passedCriteria: lastByCriterion.size - unmetCriterionIds.length,
+      unmetCriterionIds,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * G01-314: follow-ups the durable state actually allows. Running rows can
+ * only stop; terminal continuable rows offer continue + retry; other
+ * finalized rows offer retry (repair path) except verified_complete, which
+ * offers nothing (matches the hidden-actions renderer rule + successor IPC
+ * eligibility).
+ */
+function deriveSafeActions(
+  finalized: boolean,
+  outcome: TaskOutcome | null
+): string[] {
+  if (!finalized) return ["stop"];
+  if (outcome === "verified_complete") return [];
+  if (outcome !== null && CONTINUABLE_OUTCOMES.has(outcome)) {
+    return ["continue", "retry"];
+  }
+  return ["retry"];
+}
 
 /**
  * Business logic for task executions (technical-design §6.3, FR-24).
@@ -115,6 +194,78 @@ export class AiTaskExecutionModule extends BaseModule {
   ): Promise<AiTaskExecutionEntity | null> {
     await this.ensureConnection();
     return this.model.getLatestByConversation(conversationId);
+  }
+
+  /**
+   * G01-314 (FR-10/13/14; AC-06/16/27): reload-restore projection for the
+   * latest execution of a conversation (badge + progress + remaining limits
+   * + safe actions). Pure derivation over the execution row, its evidence
+   * rows, and the lineage ledger — no IPC shapes here. Every enrichment is
+   * best-effort: a missing/unparseable source yields `undefined` for that
+   * section, never a throw, so reload always restores at least the core
+   * identity/outcome.
+   */
+  async getExecutionStateProjection(
+    conversationId: string
+  ): Promise<TaskExecutionStateProjection | null> {
+    await this.ensureConnection();
+    const exec = await this.model.getLatestByConversation(conversationId);
+    if (!exec) return null;
+    const progress = readEvidenceProgress(exec.execution_state_json);
+    const remainingLimits = await this.readRemainingLimits(
+      exec.lineage_ledger_id
+    );
+    return {
+      executionId: exec.execution_id,
+      conversationId: exec.conversation_id ?? conversationId,
+      status: exec.stage,
+      reasonCode: exec.outcome_reason_code ?? undefined,
+      outcome: exec.task_outcome ?? undefined,
+      finalEventIdentity: exec.final_event_identity ?? undefined,
+      progress,
+      remainingLimits,
+      safeActions: deriveSafeActions(exec.finalized, exec.task_outcome),
+    };
+  }
+
+  private async readRemainingLimits(
+    lineageLedgerId: string | null
+  ): Promise<TaskExecutionStateProjection["remainingLimits"]> {
+    if (!lineageLedgerId) return undefined;
+    try {
+      const ledger = await this.model.getLedgerById(lineageLedgerId);
+      if (!ledger) return undefined;
+      const limits = JSON.parse(ledger.policyLimitsJson) as Record<
+        string,
+        unknown
+      >;
+      const lane = (limitKey: string, consumed: unknown): number => {
+        const limit = Number(limits[limitKey]);
+        const spent = Number(consumed);
+        if (!Number.isFinite(limit) || !Number.isFinite(spent)) return 0;
+        return Math.max(0, Math.floor(limit) - Math.floor(spent));
+      };
+      return {
+        tokens: lane("maxTokens", ledger.consumedTokens),
+        providerAttempts: lane(
+          "maxProviderAttempts",
+          ledger.consumedProviderAttempts
+        ),
+        toolExecutions: lane(
+          "maxToolExecutions",
+          ledger.consumedToolExecutions
+        ),
+        checkerAttempts: lane(
+          "maxCheckerAttempts",
+          ledger.consumedCheckerAttempts
+        ),
+        continuations: lane("maxContinuations", ledger.consumedContinuations),
+        activeRuntimeMs: lane("maxActiveRuntimeMs", ledger.consumedActiveMs),
+        waitMs: lane("maxWaitMs", ledger.consumedWaitMs),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /**
