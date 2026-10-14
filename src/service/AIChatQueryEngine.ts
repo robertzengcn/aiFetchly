@@ -2225,7 +2225,38 @@ export class AIChatQueryEngine {
     // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
     //    the new turn. Cross-conversation turns are left alone so background
     //    streaming can continue (concurrent-turns support).
+    //    B11 (FR-21, AC-26): a reused/conflict/denied submission must NOT
+    //    abort the accepted original run. The enrollment seam above already
+    //    resolved `dedupShortCircuit` — return the accepted status WITHOUT
+    //    touching `activeTurns` so the original stream continues and only one
+    //    message/execution/provider dispatch exists.
     // ------------------------------------------------------------------
+    if (dedupShortCircuit) {
+      if (dedupShortCircuit.kind === "conflict") {
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          messageId: assistantMessageId,
+          errorMessage: `SUBMISSION_CONFLICT: submissionId already accepted with different request content (executionId=${dedupShortCircuit.executionId})`,
+        });
+      } else if (dedupShortCircuit.kind === "denied") {
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          messageId: assistantMessageId,
+          errorMessage: `TASK_CONTINUE_DENIED: ${dedupShortCircuit.reasonCode}`,
+        });
+      } else {
+        eventSink.emit({
+          type: "complete",
+          conversationId,
+          messageId: assistantMessageId,
+          fullContent: "",
+          finishReason: "stop",
+        });
+      }
+      return;
+    }
     const prior = this.activeTurns.get(conversationId);
     if (prior) {
       prior.abortController.abort();
@@ -2344,58 +2375,8 @@ export class AIChatQueryEngine {
       taskRoute,
     };
 
-    // T10 (FR-17/21, AC-26): accepted-submission dedup short-circuit. On a
-    // transport retry (reused) or a submissionId conflict, the enrollment
-    // seam set `dedupShortCircuit`. The DB-level dedup already recorded the
-    // existing execution — but dedup at the DB layer alone never stopped the
-    // maker from re-dispatching (the original bug: the engine logged
-    // reused/conflict, dropped the consult binding, then ran the loop
-    // anyway). Skip the loop dispatch entirely: no provider call, no renewed
-    // budget, no repeated effect, no second assistant message. Emit a
-    // terminal event so the renderer ends the turn cleanly.
-    if (dedupShortCircuit) {
-      if (dedupShortCircuit.kind === "conflict") {
-        // SUBMISSION_CONFLICT surfaces as an explicit error before any work.
-        eventSink.emit({
-          type: "error",
-          conversationId,
-          messageId: assistantMessageId,
-          errorMessage: `SUBMISSION_CONFLICT: submissionId already accepted with different request content (executionId=${dedupShortCircuit.executionId})`,
-        });
-      } else if (dedupShortCircuit.kind === "denied") {
-        // T08 (FR-23/24, AC-29/32): a Continue/retry successor's lineage
-        // ledger claim was rejected (dangling, released, or superseded). No
-        // execution row was persisted, so surface the denial as a terminal
-        // error and never dispatch the maker on a missing/unauthorized ledger.
-        eventSink.emit({
-          type: "error",
-          conversationId,
-          messageId: assistantMessageId,
-          errorMessage: `TASK_CONTINUE_DENIED: ${dedupShortCircuit.reasonCode}`,
-        });
-      } else {
-        // Reused transport retry: the existing execution's status is
-        // authoritative. Emit a `complete` event with empty content so the
-        // renderer ends the turn — the prior turn's assistant message is
-        // already in history (a transport retry re-fetches it). Carries no
-        // new content and no final event identity, so the renderer does not
-        // treat this as a fresh verified result.
-        eventSink.emit({
-          type: "complete",
-          conversationId,
-          messageId: assistantMessageId,
-          fullContent: "",
-          finishReason: "stop",
-        });
-      }
-      // Clear the active turn entry — no loop ran, no pause possible.
-      const entry = this.activeTurns.get(conversationId);
-      if (entry && entry.assistantMessageId === assistantMessageId) {
-        this.activeTurns.delete(conversationId);
-      }
-      return;
-    }
-
+    // B11 early return above already handled reused/conflict/denied without
+    // touching activeTurns; reaching here means a fresh dispatch.
     try {
       const result = await this.loop.run(loopInput);
       await this.handleLoopResult(result, module, streamEventSink, taskExecutionBinding);

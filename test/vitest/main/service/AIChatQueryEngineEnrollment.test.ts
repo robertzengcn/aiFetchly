@@ -416,6 +416,101 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     expect(completeEvent).toBeDefined();
   });
 
+  it("B11 reused transport retry does NOT abort the accepted original run (FR-21, AC-26)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    // First submission creates; second identical submissionId reuses.
+    startManualMock
+      .mockResolvedValueOnce({
+        status: "created",
+        executionId: "exec-original",
+        ledgerId: "ledger-original",
+        leaseGeneration: 0,
+        binding: {
+          executionId: "exec-original",
+          controller: { decide: vi.fn() },
+          budget: {
+            reserveContinuation: vi.fn().mockReturnValue({ status: "Reserved" }),
+            reserveProviderAttempt: vi.fn().mockReturnValue({ status: "Reserved" }),
+            reserveToolExecution: vi.fn().mockReturnValue({ status: "Reserved" }),
+            reconcileTokens: vi.fn().mockReturnValue(true),
+            addActiveRuntime: vi.fn(),
+          },
+          persistBudget: vi.fn().mockResolvedValue(true),
+        },
+      })
+      .mockResolvedValueOnce({
+        status: "reused",
+        existing: {
+          executionId: "exec-original",
+          finalized: false,
+          taskOutcome: null,
+        },
+      });
+    // Hold the original loop open so the retry races an active turn.
+    let resolveOriginal!: (v: AIChatQueryLoopResult) => void;
+    const originalGate = new Promise<AIChatQueryLoopResult>((resolve) => {
+      resolveOriginal = resolve;
+    });
+    const runMock = vi.fn(async (input: AIChatQueryLoopInput) => {
+      // Only the original dispatches; the retry must never reach loop.run.
+      return originalGate;
+    });
+    const fakeLoop = { run: runMock } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    const firstEmit = vi.fn();
+    const firstPromise = engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "Extract contacts from the uploaded CSV.",
+        model: "gpt-4o",
+        submissionId: "sub-b11",
+      },
+      eventSink: { emit: firstEmit } as never,
+    } as never);
+    // Wait until the original turn is registered (abort controller exists).
+    for (let i = 0; i < 100; i++) {
+      const entry = (engine as unknown as { activeTurns: Map<string, unknown> }).activeTurns?.get(
+        "v2-test-conv"
+      );
+      if (entry) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const priorEntry = (engine as unknown as {
+      activeTurns: Map<string, { abortController: AbortController }>;
+    }).activeTurns.get("v2-test-conv");
+    expect(priorEntry).toBeDefined();
+    expect(priorEntry!.abortController.signal.aborted).toBe(false);
+
+    const retryEmit = vi.fn();
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "Extract contacts from the uploaded CSV.",
+        model: "gpt-4o",
+        submissionId: "sub-b11",
+      },
+      eventSink: { emit: retryEmit } as never,
+    } as never);
+    // Retry returns accepted status without dispatching new work.
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const retryComplete = retryEmit.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.type === "complete");
+    expect(retryComplete).toBeDefined();
+    // Original run was NOT aborted by the reuse.
+    expect(priorEntry!.abortController.signal.aborted).toBe(false);
+    // Cleanup: let the original finish.
+    resolveOriginal({
+      type: "completed",
+      conversationId: "v2-test-conv",
+      assistantMessageId: "a1",
+      fullContent: "",
+      finishReason: "stop",
+    } as AIChatQueryLoopResult);
+    await firstPromise;
+  });
+
   it("T10 flag-on + submission conflict: no dispatch, SUBMISSION_CONFLICT error before work (FR-17/21, AC-26)", async () => {
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
