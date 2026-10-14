@@ -3617,7 +3617,6 @@ export default {
     },
     newChat: "New chat",
     automations: "Automations",
-    customize: "Customize",
     insights: "Insights",
     knowledgeLibrary: "Knowledge Library",
     plugins: "Plugins",

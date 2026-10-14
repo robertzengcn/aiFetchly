@@ -3574,7 +3574,6 @@ export default {
     },
     newChat: "新しいチャット",
     automations: "オートメーション",
-    customize: "カスタマイズ",
     insights: "インサイト",
     knowledgeLibrary: "ナレッジライブラリ",
     plugins: "プラグイン",
