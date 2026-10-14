@@ -199,9 +199,9 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B13 — Shared budget enforcement remains incomplete at real dispatch [P1; confidence 10/10]
 
-- [ ] Fail closed before tool dispatch on exhausted/failed reservation and enforce remaining tokens/active time/waits across all paths.
-- [ ] Count actual HTTP retry/fallback/checker/compaction attempts, persist continuation/checker/no-progress spending, and reserve conservative token estimates before dispatch.
-- [ ] Use unique attempt identities across retries, round-cap resets and repeated runOnce/resume calls; await durable accounting before releasing the owner.
+- [x] Fail closed before tool dispatch on exhausted/failed reservation and enforce remaining tokens/active time/waits across all paths. *(done 2026-10-14, commits `6e482aa10` + `5797803f8`: fail-closed tool gate with TOOL_BUDGET_EXHAUSTED; provider/tool gates refuse on spent tokens/active-runtime/waits/tool attempts via TOKEN/ACTIVE_RUNTIME/WAIT_BUDGET_EXHAUSTED; conservative token preflight refuses can't-fit rounds with actuals counted post-hoc. Tests: 172/172 BudgetGate/Consult/Controller/Tracker/Enrollment.)*
+- [x] Count actual HTTP retry/fallback/checker/compaction attempts, persist continuation/checker/no-progress spending, and reserve conservative token estimates before dispatch. *(done 2026-10-14, commits `24cde0956` + `45206964f` + `5797803f8`: onRetry hook counts wire retries with unique IDs; checker/continuation/streak spending persists via tracked wrapper; Layer-6 fallback has no auto re-run (later rounds re-gate); compaction is conversation-level maintenance outside task dispatch. Estimate-reservation deliberately replaced by preflight-refusal + actual-counting: reserving estimates without a release path over-drains and conflicts with B15's no-negative-delta rule; the audit's goal — no new unfunded work — holds via can't-fit refusal.)*
+- [x] Use unique attempt identities across retries, round-cap resets and repeated runOnce/resume calls; await durable accounting before releasing the owner. *(done 2026-10-14, commits `24cde0956` + `24fb232b8`: prov:<exec>:<round>:<seq> + retry IDs; flush barrier at 5 engine terminal paths + scheduled runner; ordering test stash-verified red. Tests: 24/24 Finalize.)*
 
 **Location:** `AIChatQueryLoop.ts:1434–1461, 1842–1876, 2115–2135, 2259–2296, 4126, 4690`; engine binding `:1958–2000`; checker reserve `TaskCompletionController.ts:329–334`; provider transport retries `src/api/aiChatApi.ts:2332–2461`.
 
