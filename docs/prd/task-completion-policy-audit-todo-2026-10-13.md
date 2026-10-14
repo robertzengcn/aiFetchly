@@ -147,7 +147,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B08 — Actual stream listener cleanup loses terminal task state [P1; confidence 10/10]
 
-- [ ] Deliver authoritative terminal task state before stream cleanup, or consume its outcome atomically from the terminal completion payload.
+- [x] Deliver authoritative terminal task state before stream cleanup, or consume its outcome atomically from the terminal completion payload.
+*(done 2026-10-14: engine emits terminal task_execution_state BEFORE complete/cancelled/error in all three paths (both still post-finalization); renderer cleanup can no longer drop it. Order-locking tests corrected per B22 (they pinned the buggy order). Tests: 8/8 TaskStateEmit incl. 3 flipped order assertions + 31/31 with finalize.)*
 
 **Location:** `AIChatQueryEngine.ts:3358–3390`; `ai-chat-v2-ipc.ts:743`; `src/views/api/aiChatV2.ts:253–293, 417–444`.
 

@@ -3400,6 +3400,26 @@ export class AIChatQueryEngine {
           // but the slot map grows without bound across turns.
           this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
+        // B08 (PRD FR-13/14, NFR-10, AC-16/24/25/27/32): emit ONE terminal
+        // task_execution_state event BEFORE the stream-terminal `complete`
+        // emit. Both are AFTER durable finalization (authoritative state,
+        // never speculative), but the terminal state must reach the renderer
+        // first: the renderer's complete handler synchronously detaches both
+        // stream listeners, so a terminal state emitted after `complete` is
+        // dropped and the badge sticks until reload. Only enrolled turns
+        // (taskExecutionId set) emit; response-only answers never enrolled and
+        // never get a badge. The renderer dedups by executionId + drops a
+        // terminal replay (NFR-10: one terminal event per execution).
+        if (taskExecutionId && taskOutcome) {
+          eventSink.emit({
+            type: "task_execution_state",
+            conversationId,
+            executionId: taskExecutionId,
+            status: "terminal",
+            outcome: taskOutcome,
+            reasonCode: taskReasonCode,
+          });
+        }
         eventSink.emit({
           type: "complete",
           conversationId,
@@ -3416,23 +3436,6 @@ export class AIChatQueryEngine {
           taskExecutionId,
           taskReasonCode,
         });
-        // T13 (PRD FR-13/14, NFR-10, AC-16/24/25/27/32): emit ONE terminal
-        // task_execution_state event AFTER durable finalization committed the
-        // row's outcome, so the renderer badge reflects authoritative state
-        // — never a speculative pre-finalization value. Only enrolled turns
-        // (taskExecutionId set) emit; response-only answers never enrolled and
-        // never get a badge. The renderer dedups by executionId + drops a
-        // terminal replay (NFR-10: one terminal event per execution).
-        if (taskExecutionId && taskOutcome) {
-          eventSink.emit({
-            type: "task_execution_state",
-            conversationId,
-            executionId: taskExecutionId,
-            status: "terminal",
-            outcome: taskOutcome,
-            reasonCode: taskReasonCode,
-          });
-        }
         // Post-turn compaction. The durable incremental coordinator (§11) takes
         // precedence when injected — it dedups concurrent requests, acquires a
         // durable claim with fence/lease, and atomically saves/publishes the
@@ -3578,17 +3581,9 @@ export class AIChatQueryEngine {
           // decision slot must not outlive the binding (see complete gate).
           this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
-        eventSink.emit({
-          type: "cancelled",
-          conversationId,
-          messageId:
-            result.partialContent.length > 0 ? assistantMessageId : undefined,
-          fullContent: result.partialContent,
-          taskOutcome: cancelledTaskOutcome,
-          taskExecutionId: cancelledTaskExecutionId,
-          taskReasonCode: cancelledTaskReasonCode,
-        });
-        // T13: terminal state after durable finalization (cancelled path).
+        // B08: terminal state BEFORE the stream-terminal `cancelled` emit
+        // (same listener-cleanup hazard as the complete path — both follow
+        // durable finalization).
         if (cancelledTaskExecutionId && cancelledTaskOutcome) {
           eventSink.emit({
             type: "task_execution_state",
@@ -3599,6 +3594,16 @@ export class AIChatQueryEngine {
             reasonCode: cancelledTaskReasonCode,
           });
         }
+        eventSink.emit({
+          type: "cancelled",
+          conversationId,
+          messageId:
+            result.partialContent.length > 0 ? assistantMessageId : undefined,
+          fullContent: result.partialContent,
+          taskOutcome: cancelledTaskOutcome,
+          taskExecutionId: cancelledTaskExecutionId,
+          taskReasonCode: cancelledTaskReasonCode,
+        });
         this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
@@ -3669,17 +3674,9 @@ export class AIChatQueryEngine {
           // slot must not outlive the binding (see complete gate).
           this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
-        eventSink.emit({
-          type: "error",
-          conversationId,
-          messageId:
-            result.partialContent.length > 0 ? assistantMessageId : undefined,
-          errorMessage: userSafeError(result.error),
-          taskOutcome: failedTaskOutcome,
-          taskExecutionId: failedTaskExecutionId,
-          taskReasonCode: failedTaskReasonCode,
-        });
-        // T13: terminal state after durable finalization (failed path).
+        // B08: terminal state BEFORE the stream-terminal `error` emit
+        // (same listener-cleanup hazard as the complete path — both follow
+        // durable finalization).
         if (failedTaskExecutionId && failedTaskOutcome) {
           eventSink.emit({
             type: "task_execution_state",
@@ -3690,6 +3687,16 @@ export class AIChatQueryEngine {
             reasonCode: failedTaskReasonCode,
           });
         }
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          messageId:
+            result.partialContent.length > 0 ? assistantMessageId : undefined,
+          errorMessage: userSafeError(result.error),
+          taskOutcome: failedTaskOutcome,
+          taskExecutionId: failedTaskExecutionId,
+          taskReasonCode: failedTaskReasonCode,
+        });
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
         break;

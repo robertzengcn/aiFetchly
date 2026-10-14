@@ -501,9 +501,11 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
       reasonCode: "CRITERIA_SATISFIED",
     });
 
-    // The terminal task_execution_state event must come AFTER the
-    // durable `complete` emit (the gate ordering: finalize → complete →
-    // terminal state — never the reverse).
+    // B08: the terminal task_execution_state event must come BEFORE the
+    // stream-terminal `complete` emit. The renderer's complete handler
+    // synchronously detaches both stream listeners, so a terminal state
+    // emitted after `complete` is dropped and the badge sticks until
+    // reload. Gate ordering: finalize → terminal state → complete.
     const completeEmitIdx = emitSpy.mock.calls.findIndex(
       (args: unknown[]) => (args[0] as { type: string }).type === "complete"
     );
@@ -514,10 +516,10 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
     );
     expect(completeEmitIdx).toBeGreaterThanOrEqual(0);
     expect(terminalEmitIdx).toBeGreaterThanOrEqual(0);
-    expect(terminalEmitIdx).toBeGreaterThan(completeEmitIdx);
+    expect(terminalEmitIdx).toBeLessThan(completeEmitIdx);
   });
 
-  it("terminal: cancelled gate emits terminal with cancelled outcome AFTER the cancelled event", async () => {
+  it("terminal: cancelled gate emits terminal with cancelled outcome BEFORE the cancelled event (B08)", async () => {
     enrollCreated();
     const { engine, emits, eventSink, emitSpy } = createEngineReturning(
       makeCancelledResult()
@@ -548,10 +550,10 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
         (args[0] as { status: string }).status === "terminal"
     );
     expect(cancelledEmitIdx).toBeGreaterThanOrEqual(0);
-    expect(terminalEmitIdx).toBeGreaterThan(cancelledEmitIdx);
+    expect(terminalEmitIdx).toBeLessThan(cancelledEmitIdx);
   });
 
-  it("terminal: failed gate emits terminal with failed outcome AFTER the error event", async () => {
+  it("terminal: failed gate emits terminal with failed outcome BEFORE the error event (B08)", async () => {
     enrollCreated();
     const { engine, emits, eventSink, emitSpy } = createEngineReturning(
       makeFailedResult()
@@ -582,7 +584,7 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
         (args[0] as { status: string }).status === "terminal"
     );
     expect(errorEmitIdx).toBeGreaterThanOrEqual(0);
-    expect(terminalEmitIdx).toBeGreaterThan(errorEmitIdx);
+    expect(terminalEmitIdx).toBeLessThan(errorEmitIdx);
   });
 
   it("NFR-10: exactly one terminal task_execution_state event per execution (no double-emit at the gate)", async () => {
