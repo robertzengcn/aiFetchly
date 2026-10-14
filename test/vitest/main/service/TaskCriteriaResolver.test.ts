@@ -228,4 +228,72 @@ describe("TaskCriteriaResolver.compileCriteria", () => {
     expect(a.criteria).not.toBe(b.criteria);
     expect(a.criteria).toEqual(b.criteria);
   });
+
+  it("B02a: conjunction verb carry — 'Write a blog post and a tweet about our launch' keeps both clauses", () => {
+    // The second clause has no verb of its own; the governing verb (write)
+    // carries through the conjunction instead of silently dropping the
+    // tweet. Blog-only content must not verify this contract.
+    const message = "Write a blog post and a tweet about our launch";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(2);
+    expect(result.ambiguityReason).toBeNull();
+    const descs = result.criteria.map((c) => c.description.toLowerCase());
+    expect(descs.some((d) => d.includes("blog post"))).toBe(true);
+    expect(descs.some((d) => d.includes("tweet"))).toBe(true);
+    for (const c of result.criteria) {
+      expect(c.required).toBe(true);
+      expectValidRefs(c, message);
+    }
+    const ids = result.criteria.map((c) => c.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("B02b: count qualifier retained — 'Save 100 qualifying contacts' keeps 'qualifying'", () => {
+    const message = "Save 100 qualifying contacts to campaign camp-1";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(1);
+    const c = result.criteria[0];
+    expect(c.kind).toBe("record_count");
+    if (c.kind === "record_count") {
+      expect(c.minimum).toBe(100);
+      expect(c.description.toLowerCase()).toContain("qualifying");
+    }
+    expect(result.ambiguityReason).toBeNull();
+  });
+
+  it("B02c: report is a deliverable, not an 'it-to-me' observation", () => {
+    // "Check deployment status and report it to me": retrieval (check) +
+    // report delivery. The report clause must not compile to an observation
+    // for target "it-to-me"; it is a report deliverable on the deployment
+    // status topic.
+    const message = "Check deployment status and report it to me";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(2);
+    const kinds = result.criteria.map((c) => c.kind);
+    expect(kinds).toContain("observation");
+    expect(kinds).toContain("qualitative");
+    const targets = result.criteria.flatMap((c) =>
+      c.kind === "observation" ? [c.targetId] : []
+    );
+    expect(targets.some((t) => t.includes("it-to-me"))).toBe(false);
+    const report = result.criteria.find((c) => c.kind === "qualitative");
+    expect(report?.description.toLowerCase()).toContain("report");
+    for (const c of result.criteria) {
+      expectValidRefs(c, message);
+    }
+  });
+
+  it("B02d: uncompilable verbless clause → required fallback, never a silent drop", () => {
+    // "Save 100 contacts and blah blorp snorf": the second clause matches
+    // no pattern and carries no verb. Dropping it would declare coverage
+    // complete on a partial request; instead it becomes a required
+    // fallback (ambiguous) so the request clarifies instead of passing.
+    const message = "Save 100 contacts and blah blorp snorf";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(2);
+    expect(result.ambiguityReason).not.toBeNull();
+    const kinds = result.criteria.map((c) => c.kind);
+    expect(kinds).toContain("record_count");
+    expect(kinds).toContain("qualitative");
+  });
 });

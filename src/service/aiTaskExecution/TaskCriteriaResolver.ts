@@ -8,11 +8,18 @@
  * never enables additional actions").
  *
  * The compiler only restates explicit request content as verifiable criteria:
- *   - count/target      → `record_count`  ("save 100 contacts to camp-1")
+ *   - count/target      → `record_count`  ("save 100 contacts to camp-1",
+ *     qualifiers retained: "save 100 qualifying contacts")
  *   - operation/send    → `operation_receipt` ("send an email to the list")
- *   - observation/report→ `observation`  ("check the deployment status")
+ *   - observation       → `observation`  ("check the deployment status" —
+ *     retrieval only; "report ..." is a deliverable, see below)
+ *   - report            → `qualitative`  ("report it to me" → "Report:
+ *     <prior topic>"; pronouns resolve against the previous clause)
  *   - text deliverable   → `qualitative`  ("write a blog post about X")
- *   - conjunction       → one criterion per clause ("find 20, save, draft")
+ *   - conjunction       → one criterion per clause, with the governing verb
+ *     carried into verbless continuations ("write a blog post and a tweet"
+ *     keeps both); uncompilable clauses become required fallbacks, never
+ *     silent drops.
  *
  * Ambiguous scope (action verb, no extractable target/count/text) emits a
  * `qualitative` fallback criterion spanning the whole message so the
@@ -83,12 +90,46 @@ const OPERATION_VERBS = [
 /**
  * Verbs that imply retrieving/observing a current state. The clause becomes
  * an `observation` criterion. Aligned with `TaskRequestResolver.RETRIEVAL_VERBS`.
+ * NOTE: "report" is intentionally absent — reporting (produce + deliver a
+ * report on a topic, B02) is a deliverable, not a retrieval; REPORT_VERBS
+ * below handles it before this list is consulted.
  */
 const OBSERVATION_VERBS = [
   "check",
   "monitor",
   "verify",
+] as const;
+
+/**
+ * B02 (FR-01/02/03/18/19): report verbs. "Report <topic> [to me]" produces
+ * and delivers a report — a qualitative deliverable on the topic, never an
+ * observation for a literal "it-to-me" target. Pronouns (it/this/that) resolve
+ * against the previous clause's topic; unresolvable topics fall back to an
+ * ambiguous required fallback (never a fabricated target).
+ */
+const REPORT_VERBS = [
   "report",
+] as const;
+
+/**
+ * B02: single-word noun qualifiers retained in count descriptions ("Save
+ * 100 qualifying contacts" must not lose "qualifying"). Closed adjective
+ * list on purpose: an open `(\w+)` group would eat the noun itself ("100
+ * contacts to camp" → qualifier "contacts", noun "to"), while adjectives
+ * in this list are never the clause noun in grammatical requests. Unknown
+ * adjectives behave exactly as before (first word becomes the noun).
+ */
+const COUNT_QUALIFIERS = [
+  "qualifying",
+  "qualified",
+  "new",
+  "active",
+  "recent",
+  "verified",
+  "targeted",
+  "potential",
+  "matching",
+  "filtered",
 ] as const;
 
 /**
@@ -279,13 +320,18 @@ function makeSourceRef(
 /**
  * Try to match a single clause to a criterion. Returns the criterion or null
  * (null → fallback). Patterns are ordered: count → operation → observation →
- * deliverable. First match wins.
+ * report → deliverable. First match wins.
+ *
+ * B02: each match also yields its governing verb + topic so the compile loop
+ * can carry them across conjunctions (verbless continuations inherit the
+ * governing verb; "report it" resolves against the previous topic).
  */
 function matchClause(
   clause: Clause,
   messageId: string,
-  indexByKind: Map<string, number>
-): { criterion: TaskCriterion; ambiguous: boolean } | null {
+  indexByKind: Map<string, number>,
+  context?: { readonly lastTopic: string | null }
+): { criterion: TaskCriterion; ambiguous: boolean; governingVerb: string; topic: string } | null {
   const text = clause.text;
   // Match against the polite-prefix-stripped text so "Please save 100
   // contacts" hits the count pattern. The criterion's sourceRef stays
@@ -321,28 +367,35 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: noun,
       };
     }
   }
 
-  // 1. Count/target: "<collection verb> <N> <things> [to <target>]"
+  // 1. Count/target: "<collection verb> <N> [qualifier] <things> [to <target>]"
   for (const verb of COLLECTION_VERBS) {
+    const qualifierAlt = COUNT_QUALIFIERS.join("|");
     const verbRe = new RegExp(
-      `^${verb}\\s+(\\d+)\\s+(?:qualifying\\s+)?([a-zA-Z][a-zA-Z0-9_-]*)(?:.*?\\bto\\s+(?:campaign|list|group)\\s+([\\S]+))?`,
+      `^${verb}\\s+(\\d+)\\s+(?:(${qualifierAlt})\\s+)?([a-zA-Z][a-zA-Z0-9_-]*)(?:.*?\\bto\\s+(?:campaign|list|group)\\s+([\\S]+))?`,
       "i"
     );
     const m = verbRe.exec(stripped);
     if (m) {
       const minimum = parseInt(m[1], 10);
-      const noun = m[2];
-      const target = m[3] ? slugifyTarget(m[3]) : slugifyTarget(noun);
+      const qualifier = m[2] ?? "";
+      const noun = m[3];
+      const target = m[4] ? slugifyTarget(m[4]) : slugifyTarget(noun);
       const id = nextId(indexByKind, "record_count");
+      // B02: retain the qualifier in the description ("Save at least 100
+      // qualifying contacts") — dropping it silently narrows the request.
+      const qualifiedNoun = qualifier ? `${qualifier} ${noun}` : noun;
       return {
         criterion: {
           id,
           required: true,
           kind: "record_count",
-          description: `Save at least ${minimum} ${noun}${m[3] ? ` to ${m[3]}` : ""}`.slice(0, 2000),
+          description: `Save at least ${minimum} ${qualifiedNoun}${m[4] ? ` to ${m[4]}` : ""}`.slice(0, 2000),
           adapterKey: "record_count",
           targetId: target,
           scope: "execution",
@@ -350,6 +403,8 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: noun,
       };
     }
   }
@@ -372,6 +427,53 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: targetPhrase || text,
+      };
+    }
+  }
+
+  // 2b. Report delivery (B02): "<report verb> <topic> [to me]" produces and
+  // delivers a report — a qualitative deliverable on the topic, never an
+  // observation for a literal "it-to-me" target. Retrieval (check/monitor/
+  // verify) stays an observation; report/draft/start/completion are distinct
+  // request shapes with distinct verification.
+  for (const verb of REPORT_VERBS) {
+    const verbRe = new RegExp(`^${verb}\\b\\s*(.*)$`, "i");
+    const m = verbRe.exec(stripped);
+    if (m) {
+      // Strip a trailing delivery suffix ("to me", "for me", "back") before
+      // resolving the topic — it is provenance, not subject matter.
+      const rest = m[1]
+        .replace(/\s+(to\s+me|for\s+me|back)\s*$/i, "")
+        .trim();
+      const pronounRe = /^(it|this|that|these|those|them|the\s+results?|the\s+status)\b/i;
+      const lastTopic = context?.lastTopic ?? null;
+      let topic = rest;
+      if (rest.length === 0 || pronounRe.test(rest)) {
+        // "Report it to me" / bare "report": the topic must come from the
+        // previous clause. No resolvable topic → ambiguous required
+        // fallback (never a fabricated "it-to-me" target).
+        if (!lastTopic) {
+          break;
+        }
+        topic = pronounRe.test(rest) && rest.length > 0
+          ? rest.replace(pronounRe, lastTopic)
+          : lastTopic;
+      }
+      const id = nextId(indexByKind, "qualitative");
+      return {
+        criterion: {
+          id,
+          required: true,
+          kind: "qualitative",
+          description: `Report: ${topic}`.slice(0, 2000),
+          sourceSelectorKeys: [],
+          sourceRefs: [makeSourceRef(clause, messageId)],
+        },
+        ambiguous: false,
+        governingVerb: verb,
+        topic,
       };
     }
   }
@@ -393,6 +495,8 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: deliverable || text,
       };
     }
   }
@@ -416,6 +520,8 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: opTarget || verb,
       };
     }
   }
@@ -445,6 +551,8 @@ function matchClause(
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
+        governingVerb: verb,
+        topic: opTarget || verb,
       };
     }
   }
@@ -459,6 +567,7 @@ function matchClause(
     ...COLLECTION_VERBS,
     ...OPERATION_VERBS,
     ...OBSERVATION_VERBS,
+    ...REPORT_VERBS,
     ...DELIVERABLE_VERBS,
   ];
   const startsWithActionVerb = allActionVerbs.some(
@@ -470,6 +579,8 @@ function matchClause(
   );
   if (startsWithActionVerb) {
     const id = nextId(indexByKind, "qualitative");
+    // B02 chaining: a later verbless clause can inherit this verb.
+    const leadingVerb = lower.split(/[\s,.]/, 1)[0];
     return {
       criterion: {
         id,
@@ -480,6 +591,8 @@ function matchClause(
         sourceRefs: [makeSourceRef(clause, messageId)],
       },
       ambiguous: true,
+      governingVerb: leadingVerb,
+      topic: text,
     };
   }
 
@@ -493,6 +606,34 @@ function nextId(
   const idx = indexByKind.get(kind) ?? 0;
   indexByKind.set(kind, idx + 1);
   return `${ID_PREFIX}-${kind}-${idx}`;
+}
+
+/**
+ * B02: true when a clause carries no leading action verb of its own (after
+ * polite-prefix stripping) — a conjunction continuation ("a tweet about our
+ * launch") rather than a fresh imperative. Only such clauses inherit the
+ * governing verb; verb-led clauses match (or fall back) on their own text.
+ */
+function isVerblessContinuation(clauseText: string): boolean {
+  const lower = stripPolitePrefix(clauseText).toLowerCase();
+  if (lower.length === 0) return false;
+  const verbs: readonly string[] = [
+    ...COLLECTION_VERBS,
+    ...OPERATION_VERBS,
+    ...OBSERVATION_VERBS,
+    ...REPORT_VERBS,
+    ...DELIVERABLE_VERBS,
+    ...CJK_COLLECTION_VERBS,
+    ...CJK_OPERATION_VERBS,
+  ];
+  return !verbs.some(
+    (v) =>
+      lower === v ||
+      lower.startsWith(v + " ") ||
+      lower.startsWith(v + ",") ||
+      lower.startsWith(v + ".") ||
+      lower.startsWith(v)
+  );
 }
 
 /**
@@ -521,15 +662,61 @@ export function compileCriteria(input: CompileInput): CompileResult {
   const criteria: TaskCriterion[] = [];
   let ambiguityReason: string | null = null;
   let anyAmbiguous = false;
+  // B02: governing verb + topic carried across conjunction clauses. A
+  // verbless continuation ("a tweet about our launch") inherits the
+  // governing verb; "report it" resolves against the previous topic.
+  let governingVerb: string | null = null;
+  let lastTopic: string | null = null;
 
   for (const clause of splitClauses(message)) {
-    const matched = matchClause(clause, input.sourceUserMessageId, indexByKind);
-    if (matched) {
-      criteria.push(matched.criterion);
-      if (matched.ambiguous) anyAmbiguous = true;
+    let matched = matchClause(clause, input.sourceUserMessageId, indexByKind, { lastTopic });
+    if (!matched && governingVerb && isVerblessContinuation(clause.text)) {
+      // B02: retry with the governing verb prepended ("a tweet about our
+      // launch" → "write a tweet about our launch"), anchored to the REAL
+      // clause span. Only structured (non-ambiguous) inheritances are kept —
+      // anything else becomes the per-clause fallback below with the real
+      // clause text (never a description containing an invented verb).
+      const synthetic: Clause = {
+        text: `${governingVerb} ${stripPolitePrefix(clause.text)}`,
+        startOffset: clause.startOffset,
+        endOffset: clause.endOffset,
+      };
+      const inherited = matchClause(synthetic, input.sourceUserMessageId, indexByKind, { lastTopic });
+      if (inherited && !inherited.ambiguous) {
+        matched = inherited;
+      }
     }
-    // Clauses that match nothing are dropped — the fallback below covers the
-    // whole-message case so the controller always has unmet work.
+    if (!matched) {
+      // B02: an uncompilable clause becomes a required qualitative fallback
+      // spanning THAT clause (ambiguous) — never a silent drop. Coverage is
+      // then honestly partial: the fallback stays unmet without a checker
+      // (AC-21) and blocks best-effort promotion (B01), so the request
+      // clarifies instead of passing on a subset.
+      const id = nextId(indexByKind, "qualitative");
+      matched = {
+        criterion: {
+          id,
+          required: true,
+          kind: "qualitative",
+          description: `User request: ${clause.text}`.slice(0, 2000),
+          sourceSelectorKeys: [],
+          sourceRefs: [makeSourceRef(clause, input.sourceUserMessageId)],
+        },
+        ambiguous: true,
+        governingVerb: governingVerb ?? "",
+        topic: clause.text,
+      };
+      // A verbless unknown keeps the prior governing verb for later clauses
+      // ("write blog and blah and tweet" — tweet still inherits write).
+      anyAmbiguous = true;
+      criteria.push(matched.criterion);
+      if (matched.topic) lastTopic = matched.topic;
+      continue;
+    }
+    criteria.push(matched.criterion);
+    if (matched.ambiguous) anyAmbiguous = true;
+    if (matched.governingVerb) governingVerb = matched.governingVerb;
+    if (matched.topic) lastTopic = matched.topic;
   }
 
   if (criteria.length === 0) {

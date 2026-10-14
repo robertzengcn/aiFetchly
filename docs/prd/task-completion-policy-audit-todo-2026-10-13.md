@@ -77,7 +77,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B02 — Contract compiler drops requested clauses, qualifiers and report semantics [P1; confidence 10/10; reproduced]
 
-- [ ] Preserve every requested outcome and qualifier, or add a required whole-request fallback/clarification when a clause cannot be compiled safely.
+- [x] Preserve every requested outcome and qualifier, or add a required whole-request fallback/clarification when a clause cannot be compiled safely.
+*(done 2026-10-14: governing-verb carry into verbless conjunctions (structured inheritances only, real-span anchors); closed-list qualifier retention in count descriptions; report split into qualitative deliverables with prior-topic pronoun resolution (never "it-to-me" observations); uncompilable clauses become required per-clause fallbacks instead of silent drops. Tests: B02a/b/c/d incl. all-4 RED + 27/27 + 78/78 consumers.)*
 
 **Location:** `src/service/aiTaskExecution/TaskCriteriaResolver.ts:525–532` and its count/observation parsers.
 
