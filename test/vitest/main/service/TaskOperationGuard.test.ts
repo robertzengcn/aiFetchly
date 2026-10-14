@@ -457,6 +457,68 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     expect(occ2?.operationState).to.equal("claimed");
   });
 
+  it("B16a: confirmed retry occurrence blocks a third dispatch with receipt reuse (FR-11, AC-09)", async () => {
+    // Ordinal-0 failed (no effect) → ordinal-1 retry confirmed (accepted).
+    // A third prepare must NOT dispatch ordinal-2 — it reuses the confirmed
+    // retry receipt instead of repeating a confirmed effect.
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "no_effect",
+      failureCode: "SMTP_CONNECT_FAILED",
+    });
+    const retry = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(retry.allowed).to.equal(true);
+    expect(retry.occurrenceOrdinal).to.equal(1);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: retry.claimGeneration ?? 0,
+      occurrenceOrdinal: retry.occurrenceOrdinal ?? 0,
+      intentHash: retry.intentHash ?? "",
+      outcome: "confirmed",
+      receiptReference: "attempt:8",
+    });
+    const third = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(third.allowed).to.equal(false);
+    expect(third.reasonCode).to.equal("OPERATION_ALREADY_CONFIRMED");
+    expect(third.reusedReceiptState).to.equal("accepted");
+    // No ordinal-2 row was created.
+    expect(store.rows.has("op:exec-A:outbound_batch:11#occ2")).to.equal(false);
+  });
+
+  it("B16b: unknown retry occurrence blocks a third dispatch pending reconciliation (FR-11, AC-10)", async () => {
+    // Ordinal-0 failed → ordinal-1 retry lost its response (unknown). A
+    // third prepare must NOT dispatch — the unknown retry blocks blind
+    // replay until reconciled.
+    const guard = guardFor(store, "exec-A");
+    const first = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: first.claimGeneration ?? 0,
+      occurrenceOrdinal: first.occurrenceOrdinal ?? 0,
+      intentHash: first.intentHash ?? "",
+      outcome: "no_effect",
+      failureCode: "SMTP_CONNECT_FAILED",
+    });
+    const retry = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(retry.allowed).to.equal(true);
+    await guard.settleDispatch({
+      descriptor: SEND_DESCRIPTOR,
+      claimGeneration: retry.claimGeneration ?? 0,
+      occurrenceOrdinal: retry.occurrenceOrdinal ?? 0,
+      intentHash: retry.intentHash ?? "",
+      outcome: "unknown",
+    });
+    const third = await guard.prepareDispatch(SEND_DESCRIPTOR);
+    expect(third.allowed).to.equal(false);
+    expect(third.reasonCode).to.equal("OPERATION_UNKNOWN_OUTCOME");
+    expect(store.rows.has("op:exec-A:outbound_batch:11#occ2")).to.equal(false);
+  });
+
   it("D3: settle reads the CURRENT claim generation (survives a crashed dispatched stamp)", async () => {
     // Pre-D3 wedge: the two-step settle stamped dispatched at
     // input.claimGeneration then outcome at input.claimGeneration+1. A crash

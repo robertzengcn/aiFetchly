@@ -323,6 +323,55 @@ export class TaskOperationGuard {
       // this row and the claim proceeds from its CURRENT generation.
     }
 
+    // B16 (FR-11/24, AC-09/10/28): inspect ALL same-intent occurrences in
+    // THIS execution, not only the stable ordinal-0 receipt above. A
+    // confirmed (accepted/completed) retry occurrence reuses its receipt —
+    // never a new dispatch of an already-confirmed effect. An unresolved
+    // (pending/claimed/dispatched/unknown) retry occurrence blocks blind
+    // replay pending reconciliation. Only when every prior occurrence is
+    // definitively failed (evidenced no-effect) may a new ordinal dispatch.
+    // Definitive no-effect evidence for EVERY earlier attempt is required
+    // before a new ordinal — a single failed ordinal-0 never licenses a
+    // repeat while its own retry sits accepted/unknown.
+    const priorOccurrences = await this.countPriorOccurrences(
+      descriptor,
+      intentHash
+    );
+    for (let ordinal = 1; ordinal <= priorOccurrences; ordinal++) {
+      const occurrenceKey = this.resolveOccurrenceKey(
+        descriptor,
+        intentHash,
+        ordinal
+      );
+      const occurrence = await this.deps.getOperation(occurrenceKey);
+      if (!occurrence || occurrence.intent_hash !== intentHash) continue;
+      if (
+        occurrence.operation_state === "accepted" ||
+        occurrence.operation_state === "completed"
+      ) {
+        this.notifyConflict("OPERATION_ALREADY_CONFIRMED", "prepare");
+        return {
+          allowed: false,
+          reasonCode: "OPERATION_ALREADY_CONFIRMED",
+          reason:
+            "A prior retry of this operation was already confirmed. " +
+            "Reusing the stored receipt instead of dispatching again.",
+          reusedReceiptState: occurrence.operation_state,
+        };
+      }
+      if (occurrence.operation_state !== "failed") {
+        // pending/claimed/dispatched/unknown: an earlier retry's outcome is
+        // still open — block blind replay until it reconciles.
+        return {
+          allowed: false,
+          reasonCode: "OPERATION_UNKNOWN_OUTCOME",
+          reason:
+            "An earlier retry of this operation has an unresolved outcome. " +
+            "Reconciliation is required before dispatching again.",
+        };
+      }
+    }
+
     // The occurrence key: stable identity for ordinal 0, explicit -ordinal
     // suffix for retries of an evidenced no-effect failure (§10.1: the
     // ordinal exists only because the contract permits repeats — failed
