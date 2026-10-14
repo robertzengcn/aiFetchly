@@ -60,9 +60,10 @@ import type { AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
  *   messageId is approved and whose offsets are well-formed
  *   (start < end), so coverage is traceable to real request content,
  * - no required qualitative criterion is an ambiguity fallback (the
- *   compiler marks fallbacks with empty sourceSelectorKeys and a
- *   "User request:" description; passing one proves nothing about the
- *   request — AC-21).
+ *   compiler prefixes fallbacks with "User request:"; structured
+ *   deliverables use "Deliverable:" and also carry empty selector keys,
+ *   so the description prefix — not the selector list — is the fallback
+ *   marker. Passing a fallback proves nothing about the request — AC-21).
  */
 export function isTrustedCompleteContract(
   contract: TaskCompletionContract | null | undefined
@@ -79,10 +80,7 @@ export function isTrustedCompleteContract(
     );
     if (!anchored) return false;
     if (criterion.kind === "qualitative") {
-      if (
-        criterion.sourceSelectorKeys.length === 0 ||
-        criterion.description.startsWith("User request:")
-      ) {
+      if (criterion.description.startsWith("User request:")) {
         return false;
       }
     }

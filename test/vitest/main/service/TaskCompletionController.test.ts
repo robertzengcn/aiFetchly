@@ -472,6 +472,55 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     }
   });
 
+  it("B01e: best-effort structured tool-free deliverable verifies from valid evidence (FR-04/19)", async () => {
+    // Structured deliverables ("Deliverable:" prefix) carry empty selector
+    // keys like fallbacks do — the description prefix, not the selector
+    // list, is the fallback marker. A complete deliverable with valid
+    // evidence for every requirement verifies without tools.
+    const ctrl = new TaskCompletionController();
+    const fakeService = {
+      checkCandidate: async () => ({
+        passedCriterionIds: ["crit-qualitative-0"],
+        unmetCriterionIds: [],
+        evidenceIds: ["evidence-be-3"],
+      }),
+    };
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Here is the launch blog post: ...",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        evidenceService: fakeService,
+        contract: bestEffortContract([
+          {
+            id: "crit-qualitative-0",
+            required: true,
+            kind: "qualitative" as const,
+            description: "Deliverable: blog post about our launch",
+            sourceSelectorKeys: [],
+            sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 20 }],
+          },
+        ]),
+        evidenceContext: {
+          content: "Here is the launch blog post: ...",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("verified_complete");
+      expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
+    }
+  });
+
   it("B01d: best-effort + complete contract but caller-supplied IDs (no evidence service) → incomplete (FR-04)", async () => {
     // Without a real evaluation (no evidence service wired) there is no
     // admissible evidence — mock-path IDs must never verify, even with a
