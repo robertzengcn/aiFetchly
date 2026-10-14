@@ -68,25 +68,51 @@ describe("GoogleScraper result parsing", () => {
   });
 
   test("unwraps non-US Google redirect links regardless of country TLD", () => {
-    const results = GoogleScraper.parseResultSnapshots([
+    const cases: Array<{ href: string; expected: string }> = [
       {
-        htmlPreview: "",
-        anchors: [
-          {
-            href: "https://www.google.co.uk/url?q=https://example.com/contact&sa=U",
-            text: "Example Contact",
-            hasHeading: true,
-            headingText: "Example Contact",
-          },
-        ],
-        headings: ["Example Contact"],
-        citeTexts: [],
-        snippetTexts: [],
+        href: "https://www.google.co.uk/url?q=https://example.co.uk/page&sa=D&source=hangouts",
+        expected: "https://example.co.uk/page",
       },
-    ]);
+      {
+        href: "https://www.google.de/url?q=https://example.de/angebot&sa=t",
+        expected: "https://example.de/angebot",
+      },
+      {
+        href: "https://www.google.co.jp/url?q=https://example.jp/item&sa=t",
+        expected: "https://example.jp/item",
+      },
+      {
+        href: "https://www.google.com.hk/url?q=https://example.hk/shop&sa=t",
+        expected: "https://example.hk/shop",
+      },
+      {
+        href: "https://www.google.ca/url?q=https://example.ca/a&sa=t",
+        expected: "https://example.ca/a",
+      },
+    ];
 
-    expect(results).toHaveLength(1);
-    expect(results[0]?.link).toBe("https://example.com/contact");
+    for (const { href, expected } of cases) {
+      const results = GoogleScraper.parseResultSnapshots([
+        {
+          htmlPreview: "<div></div>",
+          anchors: [
+            {
+              href,
+              text: "Example",
+              hasHeading: true,
+              headingText: "Example",
+              ariaLabel: "Example",
+            },
+          ],
+          headings: ["Example"],
+          citeTexts: ["example"],
+          snippetTexts: ["snippet"],
+        },
+      ]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.link).toBe(expected);
+    }
   });
 
   test("unwraps non-US redirect variants of both US forms (q= and url= params)", () => {
@@ -108,6 +134,72 @@ describe("GoogleScraper result parsing", () => {
     ]);
 
     expect(results).toHaveLength(0);
+  });
+
+  test("treats non-US Google hosts as non-organic internal links", () => {
+    const results = GoogleScraper.parseResultSnapshots([
+      {
+        htmlPreview: "<div></div>",
+        anchors: [
+          {
+            href: "https://www.google.co.uk/search?q=example",
+            text: "Example",
+            hasHeading: true,
+            headingText: "Example",
+            ariaLabel: "Example",
+          },
+        ],
+        headings: ["Example"],
+        citeTexts: ["google.co.uk"],
+        snippetTexts: ["snippet"],
+      },
+    ]);
+
+    expect(results).toEqual([]);
+  });
+
+  test("detects non-US Google search results pages", () => {
+    expect(
+      GoogleScraper.isSearchResultsPageState({
+        url: "https://www.google.co.uk/search?q=software+sale+company",
+        title: "software sale company - Google Suche",
+        html: "<html></html>",
+      })
+    ).toBe(true);
+  });
+
+  test("does not treat attacker look-alike hosts as Google hosts", () => {
+    const lookAlikes = [
+      "https://evilgoogle.com/page",
+      "https://google.com.evil.com/page",
+      "https://www.google.co.uk.evil.com/page",
+    ];
+
+    for (const href of lookAlikes) {
+      const results = GoogleScraper.parseResultSnapshots([
+        {
+          htmlPreview: "<div></div>",
+          anchors: [
+            {
+              href,
+              text: "Example",
+              hasHeading: true,
+              headingText: "Example",
+              ariaLabel: "Example",
+            },
+          ],
+          headings: ["Example"],
+          citeTexts: ["example"],
+          snippetTexts: ["snippet"],
+        },
+      ]);
+
+      expect(results).toHaveLength(1);
+      // Kept links are www-stripped by canonicalization (no URL round-trip,
+      // no redirect unwrapping) — the look-alike host survives verbatim.
+      const expectedLink = href.replace(/^https:\/\/www\./i, "https://");
+      expect(results[0]?.link).toBe(expectedLink);
+    }
   });
 
   test("still accepts legitimate non-google hosts and stores them www-stripped", () => {

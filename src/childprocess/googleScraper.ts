@@ -61,6 +61,10 @@ type GoogleSelectorDiagnostic = {
     }>;
 };
 
+type RecaptchaCapablePage = {
+    solveRecaptchas?: () => Promise<unknown>;
+};
+
 export class GoogleScraper extends SearchScrape {
     search_engine_name = "google"
     private readonly searchSelectors = [
@@ -638,9 +642,8 @@ export class GoogleScraper extends SearchScrape {
 
         try {
             const url = new URL(pageState.url);
-            const allowedHosts = ['google.com'];
             const hostname = url.hostname;
-            const isGoogleHost = allowedHosts.includes(hostname) || hostname.endsWith('.google.com');
+            const isGoogleHost = GoogleScraper.isGoogleHost(hostname);
             return isGoogleHost && url.pathname.includes("/search") && url.searchParams.has("q");
         } catch {
             return false;
@@ -862,9 +865,7 @@ export class GoogleScraper extends SearchScrape {
             return "";
         }
 
-        const isGoogleRedirect =
-            trimmedHref.startsWith("/url?") || /^https?:\/\/(www\.)?google\.[^/]+\/url\?/i.test(trimmedHref);
-        if (isGoogleRedirect) {
+        if (trimmedHref.startsWith("/url?") || GoogleScraper.isGoogleRedirectUrl(trimmedHref)) {
             try {
                 const url = new URL(trimmedHref, "https://www.google.com");
                 const target = url.searchParams.get("q") || url.searchParams.get("url");
@@ -922,6 +923,33 @@ export class GoogleScraper extends SearchScrape {
         return schemeMatch[1] + userinfo + host + path + suffix;
     }
 
+    private static isGoogleRedirectUrl(href: string): boolean {
+        if (!/^https?:\/\//i.test(href)) {
+            return false;
+        }
+
+        try {
+            const url = new URL(href);
+            return url.pathname === "/url" && GoogleScraper.isGoogleHost(url.hostname);
+        } catch {
+            return false;
+        }
+    }
+
+    private static isGoogleHost(hostname: string): boolean {
+        const host = (hostname || "").trim().toLowerCase();
+        if (!host) {
+            return false;
+        }
+
+        // Matches google.<tld> and *.google.<tld> across country TLDs
+        // (google.com, www.google.co.uk, maps.google.de, ...). The suffix is
+        // limited to one or two labels so attacker-controlled look-alikes such
+        // as google.com.evil.com are rejected, and the leading (^|\.) boundary
+        // rejects evilgoogle.com.
+        return /^(.*\.)?google\.[a-z]{2,}(\.[a-z]{2,})?$/.test(host);
+    }
+
     private static isOrganicResultLink(href: string): boolean {
         const normalized = GoogleScraper.normalizeGoogleResultLink(href);
         if (!normalized) {
@@ -938,12 +966,7 @@ export class GoogleScraper extends SearchScrape {
             // country TLDs (www.google.co.uk, google.de). Redirect targets that
             // resolve back to a Google host are rejected here too, because the
             // normalized link is already unwrapped at this point.
-            const bareHost = parsed.hostname.toLowerCase().replace(/^www\./, "");
-            const isGoogleHost =
-                bareHost === "google.com" ||
-                bareHost.endsWith(".google.com") ||
-                /^google\.[a-z]/i.test(bareHost);
-            return !isGoogleHost;
+            return !GoogleScraper.isGoogleHost(parsed.hostname);
         } catch {
             return false;
         }
@@ -974,7 +997,7 @@ export class GoogleScraper extends SearchScrape {
                 if (process.env.TWOCAPTCHA_TOKEN && process.env.TWOCAPTCHA_TOKEN.trim() !== '') {
                     // The recaptcha plugin should handle this automatically
                     // If manual solving is needed, use type assertion
-                    await (this.page as any).solveRecaptchas?.()
+                    await (this.page as unknown as RecaptchaCapablePage).solveRecaptchas?.()
                 } else {
                     if (this.config.headless === false) {
                         this.logger.info(`Browser is not headless. Waiting for manual captcha solving...`);
