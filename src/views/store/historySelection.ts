@@ -1,6 +1,19 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
+
+/**
+ * Structural slice of AiChatSelectedContext's SelectedContextItem (the .vue
+ * module cannot be imported under the main-process tsconfig). Only the
+ * opaque sourceId is trusted across the boundary; preview/tokens are
+ * display-only.
+ */
+export interface HistorySelectedContextItem {
+  readonly sourceId: string;
+  readonly preview: string;
+  readonly estimatedTokens: number;
+  readonly refreshed?: boolean;
+  readonly rejected?: boolean;
+}
 
 /**
  * Conversation-keyed history-selection drafts + stable submission identities
@@ -23,7 +36,7 @@ import type { SelectedContextItem } from "@/views/components/aiChatV2/AiChatSele
 const HISTORY_DRAFT_CAP = 50;
 
 interface HistorySelectionDraft {
-  items: SelectedContextItem[];
+  items: HistorySelectedContextItem[];
   submissionId: string | null;
 }
 
@@ -52,7 +65,7 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
   }
 
   /** Chips for a conversation (restored on return / remount). */
-  function getItems(conversationId: string): SelectedContextItem[] {
+  function getItems(conversationId: string): HistorySelectedContextItem[] {
     return [...(drafts.value.get(conversationId)?.items ?? [])];
   }
 
@@ -61,7 +74,7 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
    * pending (unacknowledged) submission identity — the next send mints a
    * fresh one for the changed payload.
    */
-  function setItems(conversationId: string, items: SelectedContextItem[]): void {
+  function setItems(conversationId: string, items: HistorySelectedContextItem[]): void {
     touch(conversationId);
     const prev = drafts.value.get(conversationId);
     const changed =
