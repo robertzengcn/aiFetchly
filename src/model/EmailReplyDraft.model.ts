@@ -967,8 +967,14 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.action = "send_claimed";
       audit.actor = "system";
       audit.reason = "Atomic approved->sending claim before SMTP";
+      // R20: dual correlation — the per-invocation id joins THIS send request's
+      // claim to its refusal/result; the deterministic message id stays a
+      // separate field. Omitted input (legacy caller) falls back to the
+      // message id so grouping by correlationId keeps working.
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: savedAttempt.id,
         revisionId: input.revisionId,
         policyVersion: input.policyVersion,
@@ -1109,7 +1115,12 @@ export class EmailReplyDraftModel extends BaseDb {
           ? "SMTP accepted reply"
           : input.sanitizedError ?? input.outcome;
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        // R20: dual correlation — per-invocation id first (joins THIS send
+        // request's result), deterministic message id kept separately. A
+        // recovery sweep without an invocation id falls back to the message id.
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         providerMessageId: input.providerMessageId ?? null,
         failureCode: input.failureCode ?? null,
@@ -1232,6 +1243,14 @@ export class EmailReplyDraftModel extends BaseDb {
      * authorize retry; terminal accepted evidence cannot be downgraded").
      */
     guardId?: number | null;
+    /**
+     * Per-invocation request correlation id (R20). When provided, the
+     * reconciliation audit carries it as `correlationId` and keeps the
+     * deterministic per-message id in `messageCorrelationId`. When omitted
+     * (operator reconcile path with no invocation id), `correlationId` falls
+     * back to the message id.
+     */
+    requestCorrelationId?: string;
   }): Promise<void> {
     await runReplyTxn(this.sqliteDb, async (manager) => {
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
@@ -1403,7 +1422,11 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.actor = "system";
       audit.reason = `Manual reconciliation: ${input.action}`;
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        // R20: dual correlation — per-invocation id first (joins the operator
+        // reconcile request when provided), deterministic message id separate.
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         evidence: input.evidence ?? null,
         providerMessageId: input.providerMessageId ?? null,
@@ -1546,6 +1569,15 @@ export interface ClaimSendInput {
    * stale negative through the 5s window.
    */
   now?: Date;
+  /**
+   * Per-invocation request correlation id (R20). When provided by the delivery
+   * service, the `send_claimed` audit carries it as `correlationId` (joining
+   * THIS invocation's refusal/result) and keeps the deterministic per-message id
+   * in `messageCorrelationId`. When omitted (legacy callers / recovery sweep
+   * with no invocation id), `correlationId` falls back to the message id so
+   * existing audit grouping still works.
+   */
+  requestCorrelationId?: string;
 }
 
 export type ClaimSendResult =
@@ -1579,6 +1611,14 @@ export interface FinalizeOutcomeInput {
    * claim) → the attempt/draft conditional UPDATEs remain the authority.
    */
   guardId?: number | null;
+  /**
+   * Per-invocation request correlation id (R20). When provided, the outcome
+   * audit (`reply_sent` / `send_failed` / `delivery_unknown`) carries it as
+   * `correlationId` and keeps the deterministic per-message id in
+   * `messageCorrelationId`. When omitted (recovery sweep without an invocation
+   * id), `correlationId` falls back to the message id.
+   */
+  requestCorrelationId?: string;
 }
 
 /** Input to the atomic generation commit ({@link commitGeneratedDraft}). */

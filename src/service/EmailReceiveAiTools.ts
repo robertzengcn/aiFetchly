@@ -356,6 +356,12 @@ export async function sendEmailReply(args: unknown): Promise<
     draft_id: number;
     message_id: number;
     sent_at: string;
+    /**
+     * Per-invocation request correlation id (R20). Joins this send result to
+     * the lifecycle audits (send_claimed / reply_sent / send_failed /
+     * delivery_unknown) the delivery service wrote under the same id.
+     */
+    requestCorrelationId: string;
   }>
 > {
   try {
@@ -406,6 +412,7 @@ export async function sendEmailReply(args: unknown): Promise<
         draft_id: draft.id,
         message_id: draft.messageId,
         sent_at: outcome.sentAt,
+        requestCorrelationId: outcome.requestCorrelationId,
       };
     }
     if (outcome.status === "already_processed") {
@@ -414,11 +421,14 @@ export async function sendEmailReply(args: unknown): Promise<
       // already_replied here has no reusable draft id surfaced (the outcome
       // carries only the attempt, not a fresh draft), so it routes to
       // await_human_review, consistent with the SendPolicyRejection path.
+      // R20: surface the invocation id so this result joins the claim/outcome
+      // audits the delivery service wrote under it.
       return {
         success: false,
         error: "A send was already submitted for this approved revision",
         code: "already_replied",
         next_action: nextActionForCode("already_replied", undefined),
+        requestCorrelationId: outcome.requestCorrelationId,
       };
     }
     // failed: the delivery service surfaces a sanitized transport error string
@@ -432,6 +442,7 @@ export async function sendEmailReply(args: unknown): Promise<
         error: outcome.error,
         next_action: "discard_and_retry",
         existing_draft_id: draft.id,
+        requestCorrelationId: outcome.requestCorrelationId,
       };
     }
     // delivery_unknown: ambiguous outcome after possible provider acceptance.
@@ -444,25 +455,32 @@ export async function sendEmailReply(args: unknown): Promise<
       code: "delivery_unknown",
       next_action: "await_human_review",
       existing_draft_id: draft.id,
+      requestCorrelationId: outcome.requestCorrelationId,
     };
   } catch (error) {
     if (error instanceof SendPolicyRejection) {
       // Pre-send policy refusal (FR-029): already_replied / reply_in_progress /
       // reply_state_conflict / delivery_unknown / etc. Carries the stable code.
+      // R20: surface the invocation id the delivery service attached so this
+      // refusal joins the lifecycle audits written under it.
       return {
         success: false,
         error: error.message,
         code: error.code,
         next_action: nextActionForCode(error.code, undefined),
+        requestCorrelationId: error.requestCorrelationId,
       };
     }
     if (error instanceof SendBindingError) {
       // Binding failures carry their own stable code vocabulary; map to a hint.
+      // R20: surface the invocation id (re-thrown with it at the validateSendBinding
+      // boundary / set on the service_missing throw).
       return {
         success: false,
         error: error.message,
         code: bindingCodeToPolicyCode(error.code),
         next_action: "discard_and_retry",
+        requestCorrelationId: error.requestCorrelationId,
       };
     }
     return error instanceof ZodError

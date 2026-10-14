@@ -5,6 +5,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import { REPLY_SEND_RECOVERY_THRESHOLD_MS } from "@/service/emailReply/replyReliabilityVersions";
 import { incrementReplyMetric } from "@/service/emailReply/EmailReplyMetrics";
+import { newRequestCorrelationId } from "@/service/emailReply/EmailReplyCorrelation";
 
 /**
  * Recovers stale in-flight send attempts (technical design §15.6, §16, FR-019)
@@ -174,6 +175,10 @@ export class EmailReplySendRecoveryService {
           )
         )?.id ?? null
       : null;
+    // R20: mint a fresh per-invocation id at the reconcile entry boundary so
+    // the reconciliation audit joins THIS operator request (distinct from the
+    // original send invocation and from any other reconcile attempt).
+    const requestCorrelationId = newRequestCorrelationId();
     await this.draftModule.reconcileDelivery({
       attemptId: attempt.id,
       draftId: attempt.draftId,
@@ -183,6 +188,7 @@ export class EmailReplySendRecoveryService {
       evidence: input.evidence ?? null,
       providerMessageId: input.providerMessageId ?? null,
       guardId,
+      requestCorrelationId,
     });
     return { reconciled: input.action !== "leave_unresolved" };
   }

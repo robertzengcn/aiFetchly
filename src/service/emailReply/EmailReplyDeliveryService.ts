@@ -268,7 +268,8 @@ export class EmailReplyDeliveryService {
       // service from other pre-send failures.
       throw new SendBindingError(
         "Send rejected: bound email service not found",
-        "service_missing"
+        "service_missing",
+        requestCorrelationId
       );
     }
 
@@ -320,7 +321,12 @@ export class EmailReplyDeliveryService {
     //    SendBindingError before the atomic claim so no SMTP submission can
     //    occur on any mismatch (wrong mailbox / sender / recipient / draft).
     //    §18.2/§18.3: identity comparison (v2) or legacy gate (v1) runs here too.
-    validateSendBinding({
+    //    R20: validateSendBinding is pure (no invocation context), so a thrown
+    //    SendBindingError carries no correlation id. Re-throw with the id
+    //    attached (new object — immutable) so the tool/IPC envelope can join
+    //    the binding failure to the lifecycle audits under this invocation.
+    try {
+      validateSendBinding({
       requestedDraftId: input.draftId,
       approval: {
         draftId: approval.draftId,
@@ -357,6 +363,16 @@ export class EmailReplyDeliveryService {
       },
       recomputedHash,
     });
+    } catch (bindingError) {
+      if (bindingError instanceof SendBindingError) {
+        throw new SendBindingError(
+          bindingError.message,
+          bindingError.code,
+          requestCorrelationId
+        );
+      }
+      throw bindingError;
+    }
 
     // 4. Idempotency replay check (B04): recognize an exact replay of THIS
     //    approved attempt BEFORE the send-time policy guard. Once the first
@@ -431,7 +447,8 @@ export class EmailReplyDeliveryService {
       // refusal happens BEFORE the atomic claim, so no SMTP side effect.
       throw new SendPolicyRejection(
         `Send rejected by policy: ${decision.reason}`,
-        decision.code
+        decision.code,
+        requestCorrelationId
       );
     }
 
@@ -484,6 +501,9 @@ export class EmailReplyDeliveryService {
       recipientAddress: revision.recipientAddress,
       policyVersion: REPLY_POLICY_VERSION,
       guardId: guardRow?.id ?? null,
+      // R20: thread this invocation's id so the send_claimed audit joins the
+      // claim to the returned result / refusal under the same correlation.
+      requestCorrelationId,
     };
     let claim = await this.draftModule.claimApprovedRevisionForSend(claimInput);
 
@@ -535,12 +555,14 @@ export class EmailReplyDeliveryService {
           const auditErrMsg = sanitizeDetectionError(auditError);
           throw new SendPolicyRejection(
             `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
-            code
+            code,
+            requestCorrelationId
           );
         }
         throw new SendPolicyRejection(
           `Send rejected by reply detection: [${code}] Forced-freshness window exceeded twice (§9.3)`,
-          code
+          code,
+          requestCorrelationId
         );
       }
     }
@@ -676,6 +698,9 @@ export class EmailReplyDeliveryService {
       // attempt/draft/approval/audit. Null when no guard row exists (legacy
       // data); finalize then skips the guard transition.
       guardId: guardRow?.id ?? null,
+      // R20: thread this invocation's id so the outcome audit joins the SMTP
+      // result to the claim/refusal under the same correlation.
+      requestCorrelationId,
     });
 
     if (outcome === "sent") {
@@ -803,12 +828,14 @@ export class EmailReplyDeliveryService {
         const auditErrMsg = sanitizeDetectionError(auditError);
         throw new SendPolicyRejection(
           `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
-          code
+          code,
+          requestCorrelationId
         );
       }
       throw new SendPolicyRejection(
         `Send rejected by reply detection: [${code}] Detection probe failed: ${errMsg}`,
-        code
+        code,
+        requestCorrelationId
       );
     }
 
@@ -848,12 +875,14 @@ export class EmailReplyDeliveryService {
       const auditErrMsg = sanitizeDetectionError(auditError);
       throw new SendPolicyRejection(
         `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
-        code
+        code,
+        requestCorrelationId
       );
     }
     throw new SendPolicyRejection(
       `Send rejected by reply detection: [${code}] ${reason}`,
-      code
+      code,
+      requestCorrelationId
     );
   }
 
@@ -1009,6 +1038,9 @@ export class EmailReplyDeliveryService {
       failureCode: code,
       sanitizedError: reason,
       guardId: input.guardId,
+      // R20: thread this invocation's id so the delivery_unknown outcome audit
+      // joins the unsent claim's refusal under the same correlation.
+      requestCorrelationId: input.requestCorrelationId,
     });
     // ONE reply_skipped audit (stage pre_send, source reply_detection) for
     // the refusal. Then throw SendPolicyRejection with the typed code so the
@@ -1026,12 +1058,14 @@ export class EmailReplyDeliveryService {
       const auditErrMsg = sanitizeDetectionError(auditError);
       throw new SendPolicyRejection(
         `Send rejected: detection audit persistence failed: ${auditErrMsg}`,
-        code
+        code,
+        input.requestCorrelationId
       );
     }
     throw new SendPolicyRejection(
       `Send rejected by reply detection: [${code}] ${reason}`,
-      code
+      code,
+      input.requestCorrelationId
     );
   }
 

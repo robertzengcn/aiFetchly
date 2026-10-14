@@ -11,6 +11,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import {
   hashApprovalEnvelope,
   hashApprovalToken,
@@ -1143,5 +1144,668 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
     // on its own draft, not the claiming draft).
     const attempts = await attemptModel.listByDraft(seed.draftId);
     expect(attempts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R20 — Send lifecycle audits carry invocation correlation (P2).
+// Per-invocation requestCorrelationId joins a send invocation's claim/outcome
+// events; the deterministic per-message messageCorrelationId is kept as a
+// separate stable field. Omitted id → fallback to the message id so existing
+// audit grouping still works.
+//
+// Todo regression (verbatim): "two invocations have different request IDs;
+// each invocation's claim/outcome events share its returned ID and keep the
+// separate message identifier."
+// ---------------------------------------------------------------------------
+describe("R20 — Send lifecycle audit dual-correlation (model level)", () => {
+  let dbpath: string;
+  let draftModel: EmailReplyDraftModel;
+  let approvalModel: EmailReplyApprovalModel;
+
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-r20-correlation-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    draftModel = new EmailReplyDraftModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const SERVICE_ID = 7;
+
+  async function seedMessage(): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = SERVICE_ID;
+    message.providerUid = `uid-r20-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    message.normalizedMessageId = null;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  async function writeObservation(messageId: number): Promise<void> {
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+  }
+
+  function claimInputFor(
+    seed: Awaited<ReturnType<typeof seedApprovedDraft>>,
+    messageId: number,
+    guardId: number | null,
+    over: { requestCorrelationId?: string } = {}
+  ) {
+    return {
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: `owner@service${seed.emailServiceId}.com`,
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      guardId,
+      requestCorrelationId: over.requestCorrelationId,
+    };
+  }
+
+  /** Read all audit rows for a message from the temp DB. */
+  async function auditsFor(messageId: number) {
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyAuditLogEntity)
+      .find({ where: { messageId } });
+  }
+
+  /** Parse the dual-correlation metadata from an audit row. */
+  function parseCorrelation(row: { metadataJson: string | null }): {
+    correlationId?: string;
+    messageCorrelationId?: string;
+  } {
+    return JSON.parse(row.metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+    };
+  }
+
+  it("claim with requestCorrelationId → send_claimed audit carries that id AND the deterministic message id", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+    const requestCorrelationId = "erx-req-r20-test-1";
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null, { requestCorrelationId })
+    );
+    expect(result.status).toBe("claimed");
+
+    const audits = await auditsFor(msg.id);
+    const claimed = audits.filter((r) => r.action === "send_claimed");
+    expect(claimed).toHaveLength(1);
+    const meta = parseCorrelation(claimed[0]);
+    // The invocation id is written as correlationId.
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    // The deterministic per-message id is a separate field.
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("finalize outcome=sent with requestCorrelationId → reply_sent audit carries dual fields", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+    const requestCorrelationId = "erx-req-r20-sent-1";
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null, {
+        requestCorrelationId,
+      })
+    );
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "<prov-r20@x>",
+      requestCorrelationId,
+    });
+
+    const audits = await auditsFor(msg.id);
+    const sentAudits = audits.filter((r) => r.action === "reply_sent");
+    expect(sentAudits).toHaveLength(1);
+    const meta = parseCorrelation(sentAudits[0]);
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("finalize outcome=failed with requestCorrelationId → send_failed audit carries dual fields", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+    const requestCorrelationId = "erx-req-r20-fail-1";
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null, {
+        requestCorrelationId,
+      })
+    );
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "failed",
+      failureCode: "smtp_rejected",
+      sanitizedError: "Recipient address rejected",
+      requestCorrelationId,
+    });
+
+    const audits = await auditsFor(msg.id);
+    const failedAudits = audits.filter((r) => r.action === "send_failed");
+    expect(failedAudits).toHaveLength(1);
+    const meta = parseCorrelation(failedAudits[0]);
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("finalize outcome=delivery_unknown with requestCorrelationId → delivery_unknown audit carries dual fields", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+    const requestCorrelationId = "erx-req-r20-unknown-1";
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null, {
+        requestCorrelationId,
+      })
+    );
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "delivery_unknown",
+      sanitizedError: "SMTP disconnect after possible acceptance",
+      requestCorrelationId,
+    });
+
+    const audits = await auditsFor(msg.id);
+    const unknownAudits = audits.filter(
+      (r) => r.action === "delivery_unknown"
+    );
+    expect(unknownAudits).toHaveLength(1);
+    const meta = parseCorrelation(unknownAudits[0]);
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("reconcile confirm_sent with requestCorrelationId → reply_sent audit carries dual fields", async () => {
+    const msg = await seedMessage();
+    // Guard starts idle so the claim can bind it; the delivery_unknown
+    // finalize below transitions it to the pre-reconcile state.
+    const guard = new EmailReplyGuardEntity();
+    guard.emailServiceId = SERVICE_ID;
+    guard.replyKey = `row:${msg.id}`;
+    guard.messageId = msg.id;
+    guard.phase = "idle";
+    guard.ownerToken = null;
+    guard.leaseExpiresAt = null;
+    guard.activeDraftId = null;
+    guard.activeAttemptId = null;
+    const savedGuard = await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .save(guard);
+
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+
+    // Claim → delivery_unknown (simulate ambiguous delivery).
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, savedGuard.id)
+    );
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "delivery_unknown",
+      sanitizedError: "Recovered as delivery-unknown",
+      guardId: savedGuard.id,
+    });
+
+    const requestCorrelationId = "erx-req-r20-reconcile-1";
+    await draftModel.reconcileDelivery({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      messageId: msg.id,
+      emailServiceId: seed.emailServiceId,
+      action: "confirm_sent",
+      evidence: "Mailbox verified",
+      providerMessageId: "<prov-reconcile@x>",
+      guardId: savedGuard.id,
+      requestCorrelationId,
+    });
+
+    // The reconciliation writes its own audit (action reply_sent). Filter out
+    // the earlier delivery_unknown audit from the finalize step.
+    const audits = await auditsFor(msg.id);
+    const reconcileAudits = audits.filter(
+      (r) => r.action === "reply_sent" && r.reason === "Manual reconciliation: confirm_sent"
+    );
+    expect(reconcileAudits).toHaveLength(1);
+    const meta = parseCorrelation(reconcileAudits[0]);
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("reconcile confirm_not_sent with requestCorrelationId → send_failed audit carries dual fields", async () => {
+    const msg = await seedMessage();
+    // Guard starts idle so the claim can bind it (same flow as above).
+    const guard = new EmailReplyGuardEntity();
+    guard.emailServiceId = SERVICE_ID;
+    guard.replyKey = `row:${msg.id}`;
+    guard.messageId = msg.id;
+    guard.phase = "idle";
+    guard.ownerToken = null;
+    guard.leaseExpiresAt = null;
+    guard.activeDraftId = null;
+    guard.activeAttemptId = null;
+    const savedGuard = await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .save(guard);
+
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+
+    const claim = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, savedGuard.id)
+    );
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "delivery_unknown",
+      sanitizedError: "Recovered as delivery-unknown",
+      guardId: savedGuard.id,
+    });
+
+    const requestCorrelationId = "erx-req-r20-not-sent-1";
+    await draftModel.reconcileDelivery({
+      attemptId: claim.attemptId,
+      draftId: seed.draftId,
+      messageId: msg.id,
+      emailServiceId: seed.emailServiceId,
+      action: "confirm_not_sent",
+      evidence: "Operator confirmed not sent",
+      providerMessageId: null,
+      guardId: savedGuard.id,
+      requestCorrelationId,
+    });
+
+    // The reconciliation writes a send_failed audit for confirm_not_sent.
+    // Filter out the earlier delivery_unknown audit from the finalize step.
+    const audits = await auditsFor(msg.id);
+    const reconcileAudits = audits.filter(
+      (r) => r.action === "send_failed" && r.reason === "Manual reconciliation: confirm_not_sent"
+    );
+    expect(reconcileAudits).toHaveLength(1);
+    const meta = parseCorrelation(reconcileAudits[0]);
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  // ---- Core regression: two invocations with different request IDs ----
+  it("two invocations have different request IDs; each invocation's claim/outcome events share its returned ID and keep the separate message identifier", async () => {
+    // Two independent invocations on two messages (a second claim on the
+    // first message would be refused by the T08 sibling fence once the first
+    // draft is sent — the sibling fence is out of scope here). Each
+    // invocation's claim + outcome events must share THAT invocation's
+    // request id, while the deterministic messageCorrelationId stays a
+    // separate per-message identifier.
+    const msg = await seedMessage();
+    const seed1 = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+
+    // Invocation 1: claim + finalize sent with requestCorrelationId A.
+    const reqId1 = "erx-req-r20-invocation-1";
+    const claim1 = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed1, msg.id, null, {
+        requestCorrelationId: reqId1,
+      })
+    );
+    expect(claim1.status).toBe("claimed");
+    if (claim1.status !== "claimed") return;
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim1.attemptId,
+      draftId: seed1.draftId,
+      approvalId: seed1.approvalId,
+      emailServiceId: seed1.emailServiceId,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "<prov-inv1@x>",
+      requestCorrelationId: reqId1,
+    });
+
+    // Verify invocation 1's two audits share the SAME correlationId.
+    const audits1 = await auditsFor(msg.id);
+    const claimed1 = audits1.filter((r) => r.action === "send_claimed");
+    const sent1 = audits1.filter((r) => r.action === "reply_sent");
+    expect(claimed1).toHaveLength(1);
+    expect(sent1).toHaveLength(1);
+    const metaClaim1 = parseCorrelation(claimed1[0]);
+    const metaSent1 = parseCorrelation(sent1[0]);
+    // Both events from invocation 1 share the invocation's request id.
+    expect(metaClaim1.correlationId).toBe(reqId1);
+    expect(metaSent1.correlationId).toBe(reqId1);
+    // Both carry the SAME deterministic message id.
+    expect(metaClaim1.messageCorrelationId).toBe(
+      metaSent1.messageCorrelationId
+    );
+    expect(metaClaim1.messageCorrelationId).not.toBe(reqId1);
+    expect(metaClaim1.messageCorrelationId).toMatch(/^erx-/);
+
+    // Invocation 2: a different message with its own invocation id.
+    const msg2 = await seedMessage();
+    const seed2 = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg2.id }
+    );
+    await writeObservation(msg2.id);
+    const reqId2 = "erx-req-r20-invocation-2";
+    const claim2 = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed2, msg2.id, null, {
+        requestCorrelationId: reqId2,
+      })
+    );
+    expect(claim2.status).toBe("claimed");
+    if (claim2.status !== "claimed") return;
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim2.attemptId,
+      draftId: seed2.draftId,
+      approvalId: seed2.approvalId,
+      emailServiceId: seed2.emailServiceId,
+      messageId: msg2.id,
+      outcome: "sent",
+      providerMessageId: "<prov-inv2@x>",
+      requestCorrelationId: reqId2,
+    });
+
+    const audits2 = await auditsFor(msg2.id);
+    const claimed2 = audits2.filter((r) => r.action === "send_claimed");
+    const sent2 = audits2.filter((r) => r.action === "reply_sent");
+    expect(claimed2).toHaveLength(1);
+    expect(sent2).toHaveLength(1);
+    const metaClaim2 = parseCorrelation(claimed2[0]);
+    const metaSent2 = parseCorrelation(sent2[0]);
+    // Invocation 2's events share its OWN request id (distinct from inv 1).
+    expect(metaClaim2.correlationId).toBe(reqId2);
+    expect(metaSent2.correlationId).toBe(reqId2);
+    expect(metaClaim2.correlationId).not.toBe(reqId1);
+    // Invocation 2's messageCorrelationId is different from invocation 1's
+    // (different messageId → deterministic id is different).
+    expect(metaClaim2.messageCorrelationId).not.toBe(
+      metaClaim1.messageCorrelationId
+    );
+    expect(metaClaim2.messageCorrelationId).toMatch(/^erx-/);
+  });
+
+  it("omitted requestCorrelationId (background recovery) falls back to correlationIdForMessage", async () => {
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+
+    // Claim WITHOUT requestCorrelationId — simulates a background recovery
+    // sweep that has no per-invocation id.
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null)
+    );
+    expect(result.status).toBe("claimed");
+    if (result.status !== "claimed") return;
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: result.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "delivery_unknown",
+      sanitizedError: "Recovered as delivery-unknown",
+      // No requestCorrelationId — recovery sweep.
+    });
+
+    const audits = await auditsFor(msg.id);
+    const claimed = audits.filter((r) => r.action === "send_claimed");
+    const unknown = audits.filter((r) => r.action === "delivery_unknown");
+    expect(claimed).toHaveLength(1);
+    expect(unknown).toHaveLength(1);
+
+    // When omitted, both correlationId and messageCorrelationId fall back to
+    // the deterministic per-message id — so they are EQUAL. This preserves
+    // existing audit grouping by correlationId for legacy callers.
+    const metaClaim = parseCorrelation(claimed[0]);
+    const metaUnknown = parseCorrelation(unknown[0]);
+    expect(metaClaim.correlationId).toBeTruthy();
+    expect(metaClaim.correlationId).toBe(metaClaim.messageCorrelationId);
+    expect(metaUnknown.correlationId).toBe(metaUnknown.messageCorrelationId);
+    // Both events share the same fallback id.
+    expect(metaClaim.correlationId).toBe(metaUnknown.correlationId);
+    expect(metaClaim.correlationId).toMatch(/^erx-/);
+  });
+
+  it("deterministic messageCorrelationId is STABLE when the same message is claimed twice across different invocations", async () => {
+    // First invocation: claim + finalize with requestCorrelationId A.
+    // Then R13 re-approve the failed draft and claim again with requestCorrelationId B.
+    // Both sets of audits must share the SAME messageCorrelationId.
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await writeObservation(msg.id);
+
+    const reqId1 = "erx-req-r20-stable-1";
+    const claim1 = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id, null, {
+        requestCorrelationId: reqId1,
+      })
+    );
+    expect(claim1.status).toBe("claimed");
+    if (claim1.status !== "claimed") return;
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim1.attemptId,
+      draftId: seed.draftId,
+      approvalId: seed.approvalId,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "failed",
+      failureCode: "smtp_rejected",
+      sanitizedError: "Recipient rejected",
+      requestCorrelationId: reqId1,
+    });
+
+    // Re-approve after failure (R13 reopen): failed -> draft, then flip the
+    // draft back to approved for the SAME revision + hash so the re-claim's
+    // precondition passes (the approval service's normal path does both).
+    await draftModel.reopenFailedDraftForRetry({
+      draftId: seed.draftId,
+      messageId: msg.id,
+      emailServiceId: seed.emailServiceId,
+    });
+    const reapproved = await draftModel.markApproved(
+      seed.draftId,
+      seed.revisionId,
+      seed.contentHash,
+      "policy-1"
+    );
+    expect(reapproved).toBe(true);
+    // Fresh approval row + token for the retry invocation.
+    const reapproval = await approvalModel.create({
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedByType: "user",
+      approvedById: "test-user",
+      approvedHash: seed.contentHash,
+      approvalTokenHash: hashApprovalToken(generateApprovalToken()),
+      approvedAt: new Date(),
+      expiresAt: null,
+      invalidatedAt: null,
+      invalidationReason: null,
+    } as never);
+
+    await writeObservation(msg.id);
+    const reqId2 = "erx-req-r20-stable-2";
+    const reClaimKey = buildSendIdempotencyKey(
+      seed.draftId,
+      seed.revisionId,
+      seed.contentHash,
+      reapproval.id
+    );
+    const claim2 = await draftModel.claimApprovedRevisionForSend({
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: reClaimKey,
+      approvalId: reapproval.id,
+      messageId: msg.id,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: `owner@service${seed.emailServiceId}.com`,
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      requestCorrelationId: reqId2,
+    });
+    expect(claim2.status).toBe("claimed");
+    if (claim2.status !== "claimed") return;
+
+    await draftModel.finalizeSendOutcome({
+      attemptId: claim2.attemptId,
+      draftId: seed.draftId,
+      approvalId: reapproval.id,
+      emailServiceId: seed.emailServiceId,
+      messageId: msg.id,
+      outcome: "sent",
+      providerMessageId: "<prov-r20-retry@x>",
+      requestCorrelationId: reqId2,
+    });
+
+    // All audits for this message: order-independent matching by request id.
+    const audits = await auditsFor(msg.id);
+    const rowFor = (reqId: string) =>
+      audits.filter(
+        (r) =>
+          (JSON.parse(r.metadataJson ?? "{}") as { correlationId?: string })
+            .correlationId === reqId
+      );
+    const inv1Rows = rowFor(reqId1);
+    const inv2Rows = rowFor(reqId2);
+    expect(inv1Rows.length).toBeGreaterThanOrEqual(2); // send_claimed + send_failed
+    expect(inv2Rows.length).toBeGreaterThanOrEqual(2); // send_claimed + reply_sent
+
+    // Distinct correlationIds per invocation.
+    const inv1CorrIds = inv1Rows.map(
+      (r) =>
+        (JSON.parse(r.metadataJson ?? "{}") as { correlationId?: string })
+          .correlationId
+    );
+    const inv2CorrIds = inv2Rows.map(
+      (r) =>
+        (JSON.parse(r.metadataJson ?? "{}") as { correlationId?: string })
+          .correlationId
+    );
+    expect(new Set(inv1CorrIds).size).toBe(1);
+    expect(new Set(inv2CorrIds).size).toBe(1);
+    expect(inv1CorrIds[0]).not.toBe(inv2CorrIds[0]);
+
+    // SAME deterministic messageCorrelationId across BOTH invocations.
+    const inv1MsgCorrIds = inv1Rows.map(
+      (r) =>
+        (JSON.parse(r.metadataJson ?? "{}") as {
+          messageCorrelationId?: string;
+        }).messageCorrelationId
+    );
+    const inv2MsgCorrIds = inv2Rows.map(
+      (r) =>
+        (JSON.parse(r.metadataJson ?? "{}") as {
+          messageCorrelationId?: string;
+        }).messageCorrelationId
+    );
+    expect(new Set(inv1MsgCorrIds).size).toBe(1);
+    expect(new Set(inv2MsgCorrIds).size).toBe(1);
+    expect(inv1MsgCorrIds[0]).toBe(inv2MsgCorrIds[0]);
+    expect(inv1MsgCorrIds[0]).toMatch(/^erx-/);
   });
 });

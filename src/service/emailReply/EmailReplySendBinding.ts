@@ -85,7 +85,18 @@ export type SendBindingErrorCode =
 
 /** Thrown when an approved-send envelope binding check fails. */
 export class SendBindingError extends Error {
-  constructor(message: string, public readonly code: SendBindingErrorCode) {
+  constructor(
+    message: string,
+    public readonly code: SendBindingErrorCode,
+    /**
+     * R20: per-invocation request correlation id when the delivery service
+     * mints one at the entry boundary, so the tool/IPC failure envelope can
+     * join the binding failure to the lifecycle audits written under the id.
+     * Undefined for the pure-validation throws inside {@link validateSendBinding}
+     * (no service context — the caller catches and re-throws with the id).
+     */
+    public readonly requestCorrelationId?: string
+  ) {
     super(message);
     this.name = "SendBindingError";
   }
@@ -98,11 +109,16 @@ export class SendBindingError extends Error {
  * conflict. Carries the stable {@link EmailReplyPolicyCode} so the AI tool /
  * IPC failure envelope can surface a machine-readable reason instead of
  * parsing English out of `error.message`. Mirrors {@link SendBindingError}.
+ *
+ * R20: carries the per-invocation request correlation id when the delivery
+ * service mints one at the entry boundary, so the tool/IPC failure envelope
+ * can join the refusal to the lifecycle audits written under the same id.
  */
 export class SendPolicyRejection extends Error {
   constructor(
     message: string,
-    public readonly code: EmailReplyPolicyCode
+    public readonly code: EmailReplyPolicyCode,
+    public readonly requestCorrelationId?: string
   ) {
     super(message);
     this.name = "SendPolicyRejection";

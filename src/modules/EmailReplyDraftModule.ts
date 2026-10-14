@@ -281,6 +281,8 @@ export class EmailReplyDraftModule extends BaseModule {
     providerMessageId?: string | null;
     /** T08/FR-036: guard row bound to this attempt (null = legacy data). */
     guardId?: number | null;
+    /** R20: per-invocation id (operator reconcile); omitted on background sweep. */
+    requestCorrelationId?: string;
   }): Promise<void> {
     try {
       await this.ensureConnection();
