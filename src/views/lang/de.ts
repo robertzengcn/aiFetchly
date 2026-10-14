@@ -2659,6 +2659,7 @@ export default {
         TOOL_LIMIT: "Das Tool-Ausführungslimit wurde erreicht.",
         TOKEN_LIMIT: "Das Token-Limit wurde erreicht.",
         ACTIVE_RUNTIME_LIMIT: "Das Laufzeitlimit wurde erreicht.",
+        WAIT_LIMIT: "Das kumulative Wartelimit wurde erreicht.",
         VERIFICATION_UNAVAILABLE:
           "Der Abschluss konnte nicht verifiziert werden, da kein Prüfer verfügbar war.",
         INVALID_VERIFIER_RESPONSE:

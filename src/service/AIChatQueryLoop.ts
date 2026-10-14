@@ -1486,6 +1486,31 @@ export class AIChatQueryLoop {
   ): Promise<void> {
     const binding = input.taskExecutionBinding;
     if (!binding?.policyAccepted || !binding.reserveToolExecution) return;
+    // B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance barrier —
+    // same floors as the provider gate. A turn out of tokens, active time,
+    // or waits cannot use a tool result, so the dispatch is refused before
+    // reserving (no attempt burned).
+    if (binding.getRemainingBudgets) {
+      const remaining = binding.getRemainingBudgets();
+      if (remaining.tokens <= 0) {
+        throw new RecoverableHistoryError(
+          "TOKEN_BUDGET_EXHAUSTED",
+          "no token allowance remains for another tool dispatch"
+        );
+      }
+      if (remaining.activeRuntimeMs <= 0) {
+        throw new RecoverableHistoryError(
+          "ACTIVE_RUNTIME_EXHAUSTED",
+          "no active-runtime allowance remains for another tool dispatch"
+        );
+      }
+      if (remaining.waitMs <= 0) {
+        throw new RecoverableHistoryError(
+          "WAIT_BUDGET_EXHAUSTED",
+          "no cumulative-wait allowance remains for another tool dispatch"
+        );
+      }
+    }
     const toolRequestId = `tool:${call.id}`;
     const reservation = binding.reserveToolExecution(toolRequestId);
     if (reservation === BudgetReservationResult.Exhausted) {
@@ -1778,7 +1803,36 @@ export class AIChatQueryLoop {
         retryMaxAttempts: maxAttempts,
         retryDelayMs: delayMs,
       });
+      // B13c (FR-08/23, AC-29): accumulate the ACTUAL slept backoff against
+      // the wait budget (measured wall-clock, so an aborted sleep counts
+      // only what was waited) and persist it. Backoff storms are the
+      // unbounded in-loop wait source; the 1-hour cumulative wait cap is
+      // enforced at dispatch gates from these totals. Fire-and-forget
+      // persist (warn-only failure, flush barrier covers durability).
+      // Permission/plan pause durations are not yet measurable (pending
+      // entries carry no timestamps) and remain a follow-up.
+      const waitStartedAt = Date.now();
       await abortableDelay(delayMs, input.abortController.signal);
+      const waitedMs = Date.now() - waitStartedAt;
+      const waitBinding = input.taskExecutionBinding;
+      if (waitBinding?.policyAccepted && waitedMs > 0) {
+        waitBinding.addWaitMs?.(waitedMs);
+        waitBinding.persistBudget?.({ waitMs: waitedMs })?.then(
+          (ok) => {
+            if (!ok) {
+              console.warn(
+                `[ai-chat-v2] T05 wait persist failed (lease released or superseded) for ${input.conversationId}`
+              );
+            }
+          },
+          (err) => {
+            console.warn(
+              `[ai-chat-v2] T05 wait persist error for ${input.conversationId}:`,
+              err
+            );
+          }
+        );
+      }
     }
 
     // Unreachable: the loop always returns on the final attempt. Returned
@@ -2195,6 +2249,41 @@ export class AIChatQueryLoop {
         // outer retry layer treats this as a terminal-for-this-attempt
         // failure, not a transport retry.
         const binding = input.taskExecutionBinding;
+        // B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance barrier.
+        // Attempt counters gate their own lane, but tokens/active
+        // runtime/waits would otherwise spend without bound — refuse new
+        // dispatches when any is spent, before reserving (a refusal burns no
+        // attempt). The conservative token preflight refuses rounds that
+        // cannot possibly fit (estimate > remaining); actuals still count
+        // post-hoc, so this never double-counts.
+        if (binding?.policyAccepted && binding.getRemainingBudgets) {
+          const remaining = binding.getRemainingBudgets();
+          if (remaining.tokens <= 0) {
+            throw new RecoverableHistoryError(
+              "TOKEN_BUDGET_EXHAUSTED",
+              "no token allowance remains for another provider dispatch"
+            );
+          }
+          if (remaining.activeRuntimeMs <= 0) {
+            throw new RecoverableHistoryError(
+              "ACTIVE_RUNTIME_EXHAUSTED",
+              "no active-runtime allowance remains for another provider dispatch"
+            );
+          }
+          if (remaining.waitMs <= 0) {
+            throw new RecoverableHistoryError(
+              "WAIT_BUDGET_EXHAUSTED",
+              "no cumulative-wait allowance remains for another provider dispatch"
+            );
+          }
+          const preflight = estimateTokenUsage(messages, "");
+          if (preflight.totalTokens > remaining.tokens) {
+            throw new RecoverableHistoryError(
+              "TOKEN_BUDGET_EXHAUSTED",
+              "next round cannot fit in remaining token allowance"
+            );
+          }
+        }
         // B13b: this round's reservation identity, minted once and shared by
         // the gate, the onRetry hook, and the token reconciliation below so
         // one actual attempt counts exactly once across all three.

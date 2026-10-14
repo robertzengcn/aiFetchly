@@ -2520,6 +2520,7 @@ export default {
         TOOL_LIMIT: "已达工具执行次数上限。",
         TOKEN_LIMIT: "已达 token 上限。",
         ACTIVE_RUNTIME_LIMIT: "已达运行时长上限。",
+        WAIT_LIMIT: "已达累计等待时间上限。",
         VERIFICATION_UNAVAILABLE: "无可用的校验器,无法验证完成。",
         INVALID_VERIFIER_RESPONSE: "校验器返回了无效响应,完成未验证。",
         EVIDENCE_UNAVAILABLE: "所需证据不可用,完成未验证。",

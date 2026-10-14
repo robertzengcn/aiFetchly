@@ -9,6 +9,7 @@ import type {
   OperationReceipt,
 } from "@/service/aiTaskExecution/criteriaAdapters";
 import type { TaskRunBudget } from "@/service/aiTaskExecution/TaskRunBudget";
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import type {
   TaskCompletionDecision,
   TaskCompletionContract,
@@ -148,6 +149,12 @@ export interface ScheduledLoopPolicyBinding {
     readonly artifactBaseDir?: string;
     /** B21: pre-action artifact baselines (relativePath → sha256). */
     readonly artifactBaselines?: Readonly<Record<string, string>>;
+    /**
+     * B13c: durable spend persister for checker dispatches (mirrors the
+     * loop binding's tracked persistBudget). Threaded into fallback
+     * consults so sink-path checker spend persists too.
+     */
+    readonly persistBudgetSpending?: LoopTaskExecutionBinding["persistBudget"];
     readonly abortSignal?: AbortSignal;
     readonly resolveExpectedStateVersion?: () => Promise<number | undefined>;
   };
@@ -418,6 +425,7 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
             operationReceiptProvider: baseContext.operationReceiptProvider,
             artifactBaseDir: baseContext.artifactBaseDir,
             artifactBaselines: baseContext.artifactBaselines,
+            persistBudgetSpending: baseContext.persistBudgetSpending,
             // T04: thread the run-scoped abort signal into the fallback
             // checker dispatch (Stop / run-cancel → unknown, AC-24).
             abortSignal: baseContext.abortSignal,
@@ -543,6 +551,7 @@ export class ScheduledLoopEventSink implements AIChatQueryEventSink {
           operationReceiptProvider: baseContext.operationReceiptProvider,
           artifactBaseDir: baseContext.artifactBaseDir,
           artifactBaselines: baseContext.artifactBaselines,
+          persistBudgetSpending: baseContext.persistBudgetSpending,
           abortSignal: baseContext.abortSignal,
           expectedStateVersion,
         },

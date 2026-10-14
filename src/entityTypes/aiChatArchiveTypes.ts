@@ -188,6 +188,17 @@ export type RecoverableHistoryErrorCode =
    */
   | "TOOL_BUDGET_EXHAUSTED"
   /**
+   * B13c (FR-08/10/23, AC-06/08/22/27/29): a dispatch-time remaining
+   * allowance is spent — tokens (128k cap), active runtime (10-minute
+   * cap), or cumulative waits (1-hour cap). The loop's provider/tool gates
+   * throw these fail-closed when a new dispatch cannot be funded, and the
+   * token-estimate preflight throws TOKEN_BUDGET_EXHAUSTED when the next
+   * round cannot possibly fit. Mirrors TOOL_BUDGET_EXHAUSTED per resource.
+   */
+  | "TOKEN_BUDGET_EXHAUSTED"
+  | "ACTIVE_RUNTIME_EXHAUSTED"
+  | "WAIT_BUDGET_EXHAUSTED"
+  /**
    * The serialized request body exceeds the transport ceiling even though the
    * token preflight passed. Distinct from
    * `CONTEXT_REQUIRED_CONTENT_TOO_LARGE`: that one is about model context,

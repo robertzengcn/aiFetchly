@@ -2650,6 +2650,7 @@ export default {
         TOOL_LIMIT: "La limite d'exécution d'outils a été atteinte.",
         TOKEN_LIMIT: "La limite de jetons a été atteinte.",
         ACTIVE_RUNTIME_LIMIT: "La limite de durée d'exécution a été atteinte.",
+        WAIT_LIMIT: "La limite d'attente cumulée a été atteinte.",
         VERIFICATION_UNAVAILABLE:
           "L'achèvement n'a pas pu être vérifié faute de vérificateur disponible.",
         INVALID_VERIFIER_RESPONSE:

@@ -280,6 +280,45 @@ describe("TaskProgressTracker.recordToolRound (FR-09, §7.2 step 7)", () => {
     expect(budget.getConsumed().noProgressStreak).toBe(2);
   });
 
+  it("B13c: streak increments persist via persistBudgetSpending (pause/resume keeps the counter)", async () => {
+    // Without the durable write, the mirror-only streak is forgotten when
+    // the mirror resurrects from the ledger after a pause/resume.
+    const budget = makeBudget();
+    const persists: unknown[] = [];
+    const tracker = new TaskProgressTracker({
+      budget,
+      persistBudgetSpending: async (delta: unknown) => {
+        persists.push(delta);
+        return true;
+      },
+    });
+    const round = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(round);
+    tracker.recordToolRound(round);
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+    // Fire-and-forget: flush microtasks, then the write must have fired.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(persists).toEqual([{ noProgressStreak: 1 }]);
+  });
+
+  it("B13c: streak persist without a wired persister stays mirror-only (legacy behavior)", () => {
+    const budget = makeBudget();
+    const tracker = new TaskProgressTracker({ budget });
+    const round = {
+      toolName: "search_contacts",
+      arguments: { query: "berlin" },
+      resultPayload: { success: true, rows: [] },
+    };
+    tracker.recordToolRound(round);
+    tracker.recordToolRound(round);
+    expect(budget.getConsumed().noProgressStreak).toBe(1);
+  });
+
   it("discovery traffic never seeds a fingerprint and never counts as progress or stall", () => {
     const budget = makeBudget();
     const tracker = new TaskProgressTracker({ budget });

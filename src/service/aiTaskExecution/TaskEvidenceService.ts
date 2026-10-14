@@ -24,6 +24,7 @@ import type {
   TaskEndCandidate,
   TaskEvidence,
 } from "@/entityTypes/aiTaskExecutionTypes";
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 import {
   ArtifactAdapter,
@@ -71,6 +72,15 @@ export interface EvidenceContext {
   readonly observationProvider?: (targetId: string) => Promise<ObservationReceipt | null>;
   readonly operationReceiptProvider?: (targetId: string) => Promise<OperationReceipt | null>;
   readonly artifactBaseDir?: string;
+  /**
+   * B13c (FR-08/23, AC-08): durable spend persister wired by the enrollment
+   * seam (the loop binding's tracked `persistBudget`). The controller's
+   * checker-reserve closure fires it on every Reserved checker dispatch so
+   * checker spend survives pause/resume via the ledger (fire-and-forget;
+   * the flush barrier awaits in-flight persists before owner release).
+   * Absent in tests/sink paths — mirror-only behavior preserved.
+   */
+  readonly persistBudgetSpending?: LoopTaskExecutionBinding["persistBudget"];
   /**
    * B21 (FR-02/03/19): pre-action artifact baselines (relativePath → sha256),
    * captured at enrollment via {@link snapshotArtifactBaselines}. Threaded

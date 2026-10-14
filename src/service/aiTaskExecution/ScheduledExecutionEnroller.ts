@@ -58,6 +58,7 @@ import {
 import { snapshotArtifactBaselines } from "@/service/aiTaskExecution/criteriaAdapters";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { makeTrackedPersistBudget } from "@/service/aiTaskExecution/TaskLoopConsult";
 import type { ScheduledLoopPolicyBinding } from "@/service/ScheduledLoopEventSink";
 import type { BudgetLimitsInput } from "@/service/aiTaskExecution/budgetDefaults";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
@@ -265,11 +266,25 @@ export async function enrollScheduledExecution(
     deliveryStatusReader: makeNativeSendStatusReader(),
   });
 
+  // B13c (FR-08/23, AC-08/27/29): tracked durable-spend persister shared by
+  // the loop binding (all dispatch sites) and the evidence context's
+  // checker-spend hook, so one flush barrier covers every fire-and-forget
+  // persist this execution fires.
+  const budgetPersists = makeTrackedPersistBudget((delta) =>
+    execModule.persistBudgetConsumption({
+      ledgerId: created.ledgerId,
+      expectedOwnerGeneration: created.leaseGeneration,
+      activeExecutionId: created.executionId,
+      delta,
+    })
+  );
+
   // FR-09 / §7.2 step 7: one tracker per execution, closing over the SAME
   // budget the controller consults, so the streak the tracker increments is
   // the streak the controller's continue-branch gate reads.
   const progressTracker = new TaskProgressTracker({
     budget: created.budget,
+    persistBudgetSpending: budgetPersists.persistBudget,
   });
 
   // B21 (FR-02/03/19): capture pre-action artifact baselines at enrollment —
@@ -311,6 +326,7 @@ export async function enrollScheduledExecution(
           operationReceiptProvider,
           artifactBaseDir: artifactBaseDir ?? undefined,
           artifactBaselines,
+          persistBudgetSpending: budgetPersists.persistBudget,
           // T04: thread the run-scoped abort signal into the checker dispatch.
           abortSignal: input.getAbortSignal?.(),
           expectedStateVersion,
@@ -327,15 +343,12 @@ export async function enrollScheduledExecution(
     reconcileTokens: (requestId, actualTokens) =>
       created.budget.reconcileTokens(requestId, actualTokens),
     addActiveRuntime: (ms) => created.budget.addActiveRuntime(ms),
+    addWaitMs: (ms) => created.budget.addWaitMs(ms),
+    getRemainingBudgets: () => created.budget.getRemaining(),
     ledgerId: created.ledgerId,
     leaseGeneration: created.leaseGeneration,
-    persistBudget: (delta) =>
-      execModule.persistBudgetConsumption({
-        ledgerId: created.ledgerId,
-        expectedOwnerGeneration: created.leaseGeneration,
-        activeExecutionId: created.executionId,
-        delta,
-      }),
+    persistBudget: budgetPersists.persistBudget,
+    flushPersistedBudget: budgetPersists.flushPersistedBudget,
     recordDecision: (decision) => {
       slot.set(decision);
     },

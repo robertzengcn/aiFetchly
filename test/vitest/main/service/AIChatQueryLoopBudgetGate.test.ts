@@ -348,6 +348,8 @@ describe("AIChatQueryLoop T05 provider-dispatch budget gate (FR-08/10/23, AC-06/
       reserveToolExecution: (id) => budget.reserveToolExecution(id),
       reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
       addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      addWaitMs: (ms) => budget.addWaitMs(ms),
+      getRemainingBudgets: () => budget.getRemaining(),
       persistBudget: async () => true, // ledger persist always succeeds
       consult: async () => ({ type: "finish_response", result: "response_ended" }),
       recordDecision: () => undefined,
@@ -432,6 +434,8 @@ describe("AIChatQueryLoop B13a tool-dispatch budget gate (FR-08/10/23, AC-27)", 
       reserveToolExecution: (id) => budget.reserveToolExecution(id),
       reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
       addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      addWaitMs: (ms) => budget.addWaitMs(ms),
+      getRemainingBudgets: () => budget.getRemaining(),
       persistBudget: async (delta) =>
         typeof persistOk === "function" ? persistOk(delta) : persistOk,
       consult: async () => ({ type: "finish_response", result: "response_ended" }),
@@ -599,6 +603,8 @@ describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08
       reserveToolExecution: (id) => budget.reserveToolExecution(id),
       reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
       addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      addWaitMs: (ms) => budget.addWaitMs(ms),
+      getRemainingBudgets: () => budget.getRemaining(),
       persistBudget: async (delta) => {
         captured.persists.push(delta);
         return true;
@@ -711,5 +717,258 @@ describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08
     expect(budget.reconcileTokens("prov:e:0:7", 100)).toBe(true);
     expect(budget.reconcileTokens("prov:e:0:7", 100)).toBe(false);
     expect(budget.getConsumed().tokens).toBe(100);
+  });
+
+  it("B13c: provider gate refuses when no token allowance remains (spent tokens gate dispatch)", async () => {
+    // Attempts remain but tokens are spent: dispatching would run work the
+    // turn cannot account for. Refuse BEFORE reserving (no attempt burned)
+    // with a token-distinct code.
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxTokens: 0,
+    });
+    const stream = makeStopStream();
+    const loop = makeLoop();
+    const { input } = makeInput({
+      binding: makeRealBudgetBinding(budget, { reserves: [], persists: [] }),
+    });
+    const result = await loop.run(input);
+    expect(stream).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "TOKEN_BUDGET_EXHAUSTED"
+      );
+    }
+    expect(budget.getConsumed().providerAttempts).toBe(0);
+  });
+
+  it("B13c: provider gate refuses when the next round cannot fit (conservative token preflight)", async () => {
+    // 10 tokens remain but the current transcript already estimates above
+    // it: the round is impossible, so refuse without spending an attempt.
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxTokens: 10,
+    });
+    const stream = makeStopStream();
+    const loop = makeLoop();
+    const { input } = makeInput({
+      binding: makeRealBudgetBinding(budget, { reserves: [], persists: [] }),
+    });
+    const result = await loop.run(input);
+    expect(stream).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "TOKEN_BUDGET_EXHAUSTED"
+      );
+    }
+    expect(budget.getConsumed().providerAttempts).toBe(0);
+  });
+
+  it("B13c: provider gate refuses when active runtime is spent", async () => {
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxActiveRuntimeMs: 0,
+    });
+    const stream = makeStopStream();
+    const loop = makeLoop();
+    const { input } = makeInput({
+      binding: makeRealBudgetBinding(budget, { reserves: [], persists: [] }),
+    });
+    const result = await loop.run(input);
+    expect(stream).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "ACTIVE_RUNTIME_EXHAUSTED"
+      );
+    }
+  });
+
+  it("B13c: provider gate refuses when cumulative waits are spent", async () => {
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxWaitMs: 0,
+    });
+    const stream = makeStopStream();
+    const loop = makeLoop();
+    const { input } = makeInput({
+      binding: makeRealBudgetBinding(budget, { reserves: [], persists: [] }),
+    });
+    const result = await loop.run(input);
+    expect(stream).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "WAIT_BUDGET_EXHAUSTED"
+      );
+    }
+  });
+
+  function makeToolStyleBinding(budget: TaskRunBudget): LoopTaskExecutionBinding {
+    return {
+      executionId: "exec-b13c-tool",
+      policyAccepted: true,
+      ledgerId: "ledger-b13c-tool",
+      leaseGeneration: 0,
+      reserveContinuation: (id) => budget.reserveContinuation(id),
+      reserveProviderAttempt: (id) => budget.reserveProviderAttempt(id),
+      reserveToolExecution: (id) => budget.reserveToolExecution(id),
+      reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
+      addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      addWaitMs: (ms) => budget.addWaitMs(ms),
+      getRemainingBudgets: () => budget.getRemaining(),
+      persistBudget: async () => true,
+      consult: async () => ({ type: "finish_response", result: "response_ended" }),
+      recordDecision: () => undefined,
+      recordToolRoundProgress: () => undefined,
+      recordAssistantTextProgress: () => undefined,
+    };
+  }
+
+  it("B13c: tool gate refuses when the round's usage spent the token allowance", async () => {
+    // Reachable mid-round path: the provider gate passed (estimate fit),
+    // but the streamed round reported usage that exhausted tokens before
+    // the tool dispatch. The follow-up work is unfundable — refuse up front
+    // rather than spending a tool call the turn cannot use.
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxTokens: 100,
+    });
+    let calls = 0;
+    const stream = vi.fn(
+      async (
+        _req: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        calls += 1;
+        onChunk({
+          id: "resp-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call-b13c",
+                    type: "function",
+                    function: { name: "search", arguments: '{"q":"x"}' },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+          usage: {
+            prompt_tokens: 50,
+            completion_tokens: 100,
+            total_tokens: 150,
+          },
+        });
+      }
+    );
+    const execute = vi.fn().mockResolvedValue({
+      tool_call_id: "call-b13c",
+      tool_name: "search",
+      success: true,
+      result: { answer: "found" },
+      execution_time_ms: 10,
+    });
+    const toolLoop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: execute,
+      getSkillDefinition: () => undefined,
+    });
+    const { input } = makeInput({
+      binding: makeToolStyleBinding(budget),
+    });
+    input.openAITools = [
+      {
+        type: "function",
+        function: {
+          name: "search",
+          description: "test tool",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const result = await toolLoop.run(input);
+    // The provider round itself ran (reaching the tool call); only the
+    // tool dispatch was refused.
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "TOKEN_BUDGET_EXHAUSTED"
+      );
+    }
+    expect(budget.getConsumed().tokens).toBe(150);
+  });
+
+  it("B13c: run() backoff waits accumulate measured wall-clock into waitMs and persist", async () => {
+    // Backoff storms are the unbounded in-loop wait source. The actual
+    // slept delay (not the scheduled one) counts toward the 1-hour
+    // cumulative wait cap and persists for pause/resume continuity.
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS });
+    const persists: unknown[] = [];
+    const binding = makeRealBudgetBinding(budget, {
+      reserves: [],
+      persists,
+    });
+    let calls = 0;
+    const flakyStream = vi.fn(
+      async (
+        _req: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error(
+            "AI server returned finish_reason=error (transient server-side failure)."
+          );
+        }
+        onChunk({
+          id: "resp-wait",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "done", role: "assistant" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: flakyStream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+    });
+    const { input } = makeInput({ binding });
+    input.transientRetryConfig = { maxAttempts: 1, baseDelayMs: 30 };
+    const result = await loop.run(input);
+    expect(result.type).toBe("completed");
+    // Node timers fire late, never early: the measured wait covers the
+    // full 30ms backoff.
+    expect(budget.getConsumed().waitMs).toBeGreaterThanOrEqual(30);
+    expect(
+      persists.some(
+        (d) =>
+          typeof d === "object" &&
+          d !== null &&
+          typeof (d as Record<string, unknown>).waitMs === "number" &&
+          ((d as Record<string, unknown>).waitMs as number) >= 30
+      )
+    ).toBe(true);
   });
 });

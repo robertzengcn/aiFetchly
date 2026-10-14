@@ -2669,6 +2669,7 @@ export default {
         TOOL_LIMIT: "Se alcanzó el límite de ejecución de herramientas.",
         TOKEN_LIMIT: "Se alcanzó el límite de tokens.",
         ACTIVE_RUNTIME_LIMIT: "Se alcanzó el límite de tiempo de ejecución.",
+        WAIT_LIMIT: "Se alcanzó el límite de espera acumulada.",
         VERIFICATION_UNAVAILABLE:
           "No se pudo verificar la finalización porque no había verificador disponible.",
         INVALID_VERIFIER_RESPONSE:

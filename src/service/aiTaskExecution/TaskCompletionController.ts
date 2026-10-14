@@ -298,6 +298,51 @@ export class TaskCompletionController {
           remainingWork: [...unmet],
         };
       }
+      // B13c (FR-08/10/23, AC-06/08/22/27/29): the dispatch-time barrier in
+      // the loop refuses new work on these floors; the consult maps a turn
+      // that ends naturally past them to the same honest codes (instead of
+      // generic NO_PROGRESS), preserving reason-code continuity between the
+      // gate throws and natural loop ends.
+      if (budget.isToolBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "TOOL_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
+      if (budget.isTokenBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "TOKEN_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
+      if (budget.isActiveRuntimeExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "ACTIVE_RUNTIME_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
+      if (budget.isWaitBudgetExhausted()) {
+        return {
+          type: "finish",
+          outcome: "incomplete",
+          reasonCode: "WAIT_LIMIT",
+          evidenceIds: [...(evidence?.evidenceIds ?? [])],
+          summary: this.boundedSummary(candidate.content),
+          remainingWork: [...unmet],
+        };
+      }
     }
 
     // Shadow mode (Slice 1): unfinished/unverifiable task candidates return
@@ -401,15 +446,39 @@ export class TaskCompletionController {
     // the budget is exhausted, the qualitative evaluator receives Exhausted
     // and records "unknown" (fail-closed) instead of dispatching.
     const budget = context.budget;
+    const persistSpending = evidenceContext?.persistBudgetSpending;
     const gatedContext = budget
       ? {
           ...evidenceContext,
           budgetReserveChecker: (): BudgetReservationResult => {
             budget.beginCheckerCandidate(candidate.candidateId);
             checkerSeq += 1;
-            return budget.reserveCheckerAttempt(
+            const reserved = budget.reserveCheckerAttempt(
               `chk:${candidate.candidateId}:${checkerSeq}`
             );
+            if (reserved === BudgetReservationResult.Reserved) {
+              // B13c (FR-08/23, AC-08): persist checker spend at dispatch so
+              // pause/resume/Continue resurrects it from the ledger.
+              // Fire-and-forget (the checker dispatch itself is already
+              // underway; the flush barrier awaits in-flight persists before
+              // owner release). Warn-only failure, mirroring the token path.
+              persistSpending?.({ checkerAttempts: 1 }).then(
+                (ok) => {
+                  if (!ok) {
+                    console.warn(
+                      `[ai-chat-v2] checker spend persistence failed (lease released or superseded) for chk:${candidate.candidateId}:${checkerSeq}`
+                    );
+                  }
+                },
+                (err) => {
+                  console.warn(
+                    `[ai-chat-v2] checker spend persistence error for chk:${candidate.candidateId}:${checkerSeq}:`,
+                    err
+                  );
+                }
+              );
+            }
+            return reserved;
           },
         }
       : evidenceContext;

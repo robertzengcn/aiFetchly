@@ -2659,6 +2659,7 @@ export default {
         TOOL_LIMIT: "The tool execution limit was reached.",
         TOKEN_LIMIT: "The token limit was reached.",
         ACTIVE_RUNTIME_LIMIT: "The active runtime limit was reached.",
+        WAIT_LIMIT: "The cumulative wait limit was reached.",
         VERIFICATION_UNAVAILABLE:
           "Completion could not be verified because no checker was available.",
         INVALID_VERIFIER_RESPONSE:

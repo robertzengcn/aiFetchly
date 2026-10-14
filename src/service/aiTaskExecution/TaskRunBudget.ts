@@ -238,6 +238,33 @@ export class TaskRunBudget {
     return this.consumed.providerAttempts >= this.limits.maxProviderAttempts;
   }
 
+  /**
+   * B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance accessors for
+   * the dispatch-time barrier. The loop's provider/tool gates refuse new
+   * dispatches when tokens, active runtime, waits, or tool attempts are
+   * spent — caps the controller's consult-time checks do not cover. All
+   * fail-closed (exhausted ⇒ refuse dispatch).
+   */
+  /** True when no tool-execution allowance remains. */
+  isToolBudgetExhausted(): boolean {
+    return this.consumed.toolExecutions >= this.limits.maxToolExecutions;
+  }
+
+  /** True when no token allowance remains. */
+  isTokenBudgetExhausted(): boolean {
+    return this.consumed.tokens >= this.limits.maxTokens;
+  }
+
+  /** True when no active-runtime allowance remains. */
+  isActiveRuntimeExhausted(): boolean {
+    return this.consumed.activeRuntimeMs >= this.limits.maxActiveRuntimeMs;
+  }
+
+  /** True when no cumulative-wait allowance remains. */
+  isWaitBudgetExhausted(): boolean {
+    return this.consumed.waitMs >= this.limits.maxWaitMs;
+  }
+
   /** True when no checker allowance remains (per-run) — qualitative evidence is skipped. */
   isCheckerBudgetExhausted(): boolean {
     return (

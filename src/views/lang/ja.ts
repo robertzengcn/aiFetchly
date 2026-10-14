@@ -2608,6 +2608,7 @@ export default {
         TOOL_LIMIT: "ツール実行回数上限に達しました。",
         TOKEN_LIMIT: "トークン上限に達しました。",
         ACTIVE_RUNTIME_LIMIT: "実行時間上限に達しました。",
+        WAIT_LIMIT: "累積待機時間の上限に達しました。",
         VERIFICATION_UNAVAILABLE: "検証器が利用できないため完了を検証できませんでした。",
         INVALID_VERIFIER_RESPONSE: "検証器が無効な応答を返しました。完了は未検証です。",
         EVIDENCE_UNAVAILABLE: "必要な証拠が利用できませんでした。完了は未検証です。",

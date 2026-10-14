@@ -198,6 +198,17 @@ export interface TaskProgressTrackerDeps {
    * anyway, and the tracker stays defensive for direct construction).
    */
   readonly budget?: TaskRunBudget;
+  /**
+   * B13c (FR-08/23, AC-08): durable spend persister for streak increments,
+   * wired by the enrollment seam to the binding's tracked persistBudget.
+   * Fired fire-and-forget on every `recordNoProgress` so the streak
+   * survives pause/resume via the ledger (the flush barrier awaits
+   * in-flight persists before owner release). Absent in tests/legacy —
+   * mirror-only behavior preserved.
+   */
+  readonly persistBudgetSpending?: (delta: {
+    readonly noProgressStreak?: number;
+  }) => Promise<boolean>;
 }
 
 /**
@@ -216,11 +227,38 @@ export interface TaskProgressTrackerDeps {
  */
 export class TaskProgressTracker {
   private readonly budget?: TaskRunBudget;
+  private readonly persistBudgetSpending?: TaskProgressTrackerDeps["persistBudgetSpending"];
   private readonly toolResultFingerprints = new Map<string, string>();
   private lastAssistantTextFingerprint: string | null = null;
 
   constructor(deps: TaskProgressTrackerDeps) {
     this.budget = deps.budget;
+    this.persistBudgetSpending = deps.persistBudgetSpending;
+  }
+
+  /**
+   * B13c: record one streak unit in the mirror and persist it. Fire-and-
+   * forget (warn-only failure, mirroring the token path); the flush
+   * barrier awaits in-flight persists before owner release.
+   */
+  private recordStreakUnit(): void {
+    if (!this.budget) return;
+    this.budget.recordNoProgress();
+    this.persistBudgetSpending?.({ noProgressStreak: 1 }).then(
+      (ok) => {
+        if (!ok) {
+          console.warn(
+            "[ai-chat-v2] no-progress streak persistence failed (lease released or superseded)"
+          );
+        }
+      },
+      (err) => {
+        console.warn(
+          "[ai-chat-v2] no-progress streak persistence error:",
+          err
+        );
+      }
+    );
   }
 
   /**
@@ -249,7 +287,7 @@ export class TaskProgressTracker {
     });
     const previous = this.toolResultFingerprints.get(requestKey);
     if (previous !== undefined && previous === fingerprint) {
-      this.budget.recordNoProgress();
+      this.recordStreakUnit();
       return;
     }
     // New Map entry per observed request — never mutate an existing
@@ -276,7 +314,7 @@ export class TaskProgressTracker {
       this.lastAssistantTextFingerprint !== null &&
       this.lastAssistantTextFingerprint === fingerprint
     ) {
-      this.budget.recordNoProgress();
+      this.recordStreakUnit();
       return;
     }
     this.lastAssistantTextFingerprint = fingerprint;

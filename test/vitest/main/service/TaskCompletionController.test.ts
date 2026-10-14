@@ -942,6 +942,66 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     }
   });
 
+  it("B13c: tool executions exhausted → finish(incomplete, TOOL_LIMIT) (not generic NO_PROGRESS)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxToolExecutions: 1 });
+    budget.reserveToolExecution("tool:call-1");
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", finishReason: "length", boundary: "budget_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("TOOL_LIMIT");
+    }
+  });
+
+  it("B13c: tokens exhausted → finish(incomplete, TOKEN_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxTokens: 5 });
+    budget.reconcileTokens("prov:tok-1", 10);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", finishReason: "length", boundary: "budget_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("TOKEN_LIMIT");
+    }
+  });
+
+  it("B13c: active runtime exhausted → finish(incomplete, ACTIVE_RUNTIME_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxActiveRuntimeMs: 1000 });
+    budget.addActiveRuntime(5000);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", finishReason: "length", boundary: "budget_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("ACTIVE_RUNTIME_LIMIT");
+    }
+  });
+
+  it("B13c: cumulative waits exhausted → finish(incomplete, WAIT_LIMIT)", async () => {
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS, maxWaitMs: 1000 });
+    budget.addWaitMs(5000);
+    const decision = await ctrl.decide(
+      baseCandidate({ content: "Partial.", finishReason: "length", boundary: "budget_cap" }),
+      { route: "task_verified", budget }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("WAIT_LIMIT");
+    }
+  });
+
   it("Slice 2 budget: continuation consult wins over provider consult (both exhausted → CONTINUATION_LIMIT)", async () => {
     // Precedence: continuation-limit is checked before provider-limit so the
     // reason code is deterministic when both allowances are spent.
@@ -1178,6 +1238,71 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     if (decision.type === "finish") {
       expect(decision.outcome).toBe("verified_complete");
     }
+  });
+
+  it("B13c: checker spend persists at dispatch via evidenceContext.persistBudgetSpending (FR-08/23)", async () => {
+    // Checker spend lived only in the mirror: after a pause/resume the
+    // resurrected mirror forgot it. Each Reserved checker reserve now also
+    // fires the seam-wired persist (fire-and-forget; the flush barrier
+    // awaits in-flight persists before owner release).
+    const ctrl = new TaskCompletionController();
+    const budget = new TaskRunBudget({ ...MANUAL_BUDGET_DEFAULTS });
+    const persists: unknown[] = [];
+    const persistBudgetSpending = vi.fn(async (_delta: unknown) => {
+      persists.push(_delta);
+      return true;
+    });
+    const fakeService = {
+      checkCandidate: async (
+        _candidate: TaskEndCandidate,
+        _contract: TaskCompletionContract,
+        context: { budgetReserveChecker?: () => BudgetReservationResult }
+      ) => {
+        const reserve = context.budgetReserveChecker;
+        if (reserve) {
+          reserve();
+          reserve();
+        }
+        return { passedCriterionIds: [], unmetCriterionIds: ["rec-1"], evidenceIds: [] };
+      },
+    };
+    const contract = {
+      schemaVersion: 1 as const,
+      contractId: "contract-1",
+      contractHash: "hash-abc",
+      objective: "Save contacts",
+      sourceUserMessageId: "msg-1",
+      approvedSourceMessageIds: ["msg-1"],
+      mode: "verified" as const,
+      criteria: [
+        {
+          id: "rec-1",
+          required: true,
+          kind: "observation" as const,
+          description: "observes 100 contacts",
+          adapterKey: "observation",
+          targetId: "100 contacts",
+          sourceRefs: [{ messageId: "msg-1", startOffset: 0, endOffset: 10 }],
+        },
+      ],
+    };
+    await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        evidenceService: fakeService,
+        contract,
+        evidenceContext: {
+          content: "Saved 100 contacts.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          persistBudgetSpending: persistBudgetSpending as never,
+        },
+        budget,
+      }
+    );
+    expect(persistBudgetSpending).toHaveBeenCalledTimes(2);
+    expect(persists).toEqual([{ checkerAttempts: 1 }, { checkerAttempts: 1 }]);
   });
 
   // ----- Slice 2 (Unit 4): LIVE continuation branch (§7.2 step 10, FR-07) -----

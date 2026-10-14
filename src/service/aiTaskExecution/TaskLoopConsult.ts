@@ -21,8 +21,53 @@ import type {
   TaskEndCandidate,
 } from "@/entityTypes/aiTaskExecutionTypes";
 import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
+import type { BudgetRemaining } from "@/service/aiTaskExecution/TaskRunBudget";
 import type { ToolRoundObservation } from "@/service/aiTaskExecution/TaskProgressTracker";
 import { deriveCandidateDiagnostics } from "@/service/aiTaskExecution/candidateDiagnostics";
+
+/**
+ * B13c (FR-08/23, AC-08/27/29): tracked durable-spend persister. Wraps a
+ * raw `persistBudget` closure so every spend write is registered in a
+ * pending set; `flushPersistedBudget` awaits the snapshot set (allSettled,
+ * never throws). Enrollment seams build one per binding and hand the SAME
+ * wrapper to `binding.persistBudget` (all loop dispatch sites) and to the
+ * evidence context's checker-spend hook, so one barrier covers every
+ * fire-and-forget persist the turn fires.
+ */
+export function makeTrackedPersistBudget(
+  persist: NonNullable<LoopTaskExecutionBinding["persistBudget"]>
+): {
+  readonly persistBudget: NonNullable<LoopTaskExecutionBinding["persistBudget"]>;
+  readonly flushPersistedBudget: () => Promise<void>;
+} {
+  const pending = new Set<Promise<boolean>>();
+  const persistBudget: NonNullable<
+    LoopTaskExecutionBinding["persistBudget"]
+  > = (delta) => {
+    const current = persist(delta);
+    pending.add(current);
+    // Settle-removal only: handlers never throw, and the original promise
+    // is returned to the caller (whose own handlers own its settlement),
+    // so this derived promise can never produce an unhandled rejection.
+    void current.then(
+      () => {
+        pending.delete(current);
+      },
+      () => {
+        pending.delete(current);
+      }
+    );
+    return current;
+  };
+  return {
+    persistBudget,
+    flushPersistedBudget: async () => {
+      // Snapshot: finalization runs when the turn is quiescent (no new
+      // dispatches), so one round over the snapshot set suffices.
+      await Promise.allSettled([...pending]);
+    },
+  };
+}
 
 /**
  * Runtime binding the loop needs to consult the controller and reserve a
@@ -106,6 +151,24 @@ export interface LoopTaskExecutionBinding {
    */
   readonly addActiveRuntime?: (ms: number) => void;
   /**
+   * B13c (FR-08/23, AC-29): accumulate wait time (retry backoff sleeps
+   * measured by the loop) against the in-memory budget mirror. The 1-hour
+   * cumulative wait cap is enforced at dispatch gates from these totals.
+   * Permission/plan pause durations are not yet measurable (pending entries
+   * carry no timestamps) and remain a follow-up; backoff storms — the
+   * unbounded in-loop wait source — are covered. Optional so flag-off
+   * callers and tests can omit it (mirror stays zero, legacy behavior).
+   */
+  readonly addWaitMs?: (ms: number) => void;
+  /**
+   * B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance read for the
+   * dispatch-time barrier. The loop's provider/tool gates refuse new
+   * dispatches when tokens, active runtime, or waits are spent (the
+   * per-counter reserves only guard their own lane). Optional so flag-off
+   * callers and tests can omit it (no barrier, legacy behavior).
+   */
+  readonly getRemainingBudgets?: () => BudgetRemaining;
+  /**
    * T05 (FR-08/10/23, AC-06/08/22/27/29): durably persist budget consumption
    * to the lineage ledger at actual dispatch time. The in-memory
    * `TaskRunBudget` is a mirror; the ledger row is authoritative. The engine
@@ -134,6 +197,17 @@ export interface LoopTaskExecutionBinding {
       readonly noProgressStreak?: number;
     }
   ) => Promise<boolean>;
+  /**
+   * B13c (FR-08/23, AC-08/27/29): barrier over in-flight `persistBudget`
+   * writes. Fire-and-forget persists (token/runtime deltas, checker spend,
+   * retry attempts) resolve in the background; finalization releases the
+   * ledger owner, so the engine/runner awaits this barrier first — durable
+   * accounting lands before owner release, never after. Resolves when the
+   * snapshot set settles (allSettled: a failed persist never wedges the
+   * barrier). Optional so flag-off callers, tests, and bindings built
+   * before this field existed omit it (no barrier, legacy behavior).
+   */
+  readonly flushPersistedBudget?: () => Promise<void>;
   /**
    * T16 / NFR-12 / AC-12/32: the completion-policy flag value FROZEN at
    * enrollment time. Downstream handling of an ACCEPTED execution — the

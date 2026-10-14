@@ -214,6 +214,47 @@ describe("consultLoopEndCandidate — decision→outcome mapping (AC-07/08)", ()
     expect(outcome.type).toBe("break");
   });
 
+  it("B13c: makeTrackedPersistBudget flush awaits in-flight persists (durable accounting before owner release)", async () => {
+    // Fire-and-forget persists (token/runtime/checker/retry deltas) must
+    // settle before finalization releases the ledger owner — otherwise a
+    // crash between dispatch and persist loses funded spend.
+    const { makeTrackedPersistBudget } = await import(
+      "@/service/aiTaskExecution/TaskLoopConsult"
+    );
+    let release!: (ok: boolean) => void;
+    const gate = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const tracked = makeTrackedPersistBudget(() => gate);
+    const pending = tracked.persistBudget({ tokens: 100 });
+    let flushed = false;
+    const flush = tracked.flushPersistedBudget().then(() => {
+      flushed = true;
+    });
+    // Flush is outstanding while the persist is in flight.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    release(true);
+    expect(await pending).toBe(true);
+    await flush;
+    expect(flushed).toBe(true);
+  });
+
+  it("B13c: makeTrackedPersistBudget flush is rejection-safe (a failed persist never hangs the barrier)", async () => {
+    const { makeTrackedPersistBudget } = await import(
+      "@/service/aiTaskExecution/TaskLoopConsult"
+    );
+    const tracked = makeTrackedPersistBudget(async () => {
+      throw new Error("ledger io");
+    });
+    const pending = tracked.persistBudget({ tokens: 1 });
+    await expect(pending).rejects.toThrow("ledger io");
+    // The barrier still settles (allSettled) — a failed persist must not
+    // wedge finalization behind it.
+    await tracked.flushPersistedBudget();
+  });
+
   it("finish (verified_complete) → break", async () => {
     const decision: TaskCompletionDecision = {
       type: "finish",

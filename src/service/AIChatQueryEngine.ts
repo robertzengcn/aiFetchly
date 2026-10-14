@@ -143,6 +143,7 @@ import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
 import { SearchModule } from "@/modules/SearchModule";
 import { contactInfoRepository } from "@/model/ContactInfo.model";
 import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { makeTrackedPersistBudget } from "@/service/aiTaskExecution/TaskLoopConsult";
 import { TaskProgressTracker } from "@/service/aiTaskExecution/TaskProgressTracker";
 import { deriveCandidateDiagnostics } from "@/service/aiTaskExecution/candidateDiagnostics";
 import type {
@@ -1201,11 +1202,24 @@ export class AIChatQueryEngine {
               contactInfoRepository,
               deliveryStatusReader: makeNativeSendStatusReader(),
             });
+          // B13c (FR-08/23, AC-08/27/29): tracked durable-spend persister
+          // shared by the loop binding and the evidence context's
+          // checker-spend hook, so one flush barrier covers every
+          // fire-and-forget persist this execution fires.
+          const budgetPersists = makeTrackedPersistBudget((delta) =>
+            execModule.persistBudgetConsumption({
+              ledgerId: created.ledgerId,
+              expectedOwnerGeneration: created.leaseGeneration,
+              activeExecutionId: created.executionId,
+              delta,
+            })
+          );
           // One tracker per execution closing over the SAME budget the
           // controller consults (FR-09 / §7.2 step 7). BaseModule TDZ —
           // never constructed at module top level.
           const progressTracker = new TaskProgressTracker({
             budget: created.budget,
+            persistBudgetSpending: budgetPersists.persistBudget,
           });
           // B21 (FR-02/03/19): pre-action artifact baselines for the
           // successor execution (same contract as the manual branch).
@@ -1281,6 +1295,7 @@ export class AIChatQueryEngine {
                   operationReceiptProvider,
                   artifactBaseDir: artifactBaseDir ?? undefined,
                   artifactBaselines: successorArtifactBaselines,
+                  persistBudgetSpending: budgetPersists.persistBudget,
                   abortSignal: this.activeTurns.get(conversationId)
                     ?.abortController.signal,
                   expectedStateVersion,
@@ -1297,15 +1312,12 @@ export class AIChatQueryEngine {
             reconcileTokens: (requestId, actualTokens) =>
               created.budget.reconcileTokens(requestId, actualTokens),
             addActiveRuntime: (ms) => created.budget.addActiveRuntime(ms),
+            addWaitMs: (ms) => created.budget.addWaitMs(ms),
+            getRemainingBudgets: () => created.budget.getRemaining(),
             ledgerId: created.ledgerId,
             leaseGeneration: created.leaseGeneration,
-            persistBudget: (delta) =>
-              execModule.persistBudgetConsumption({
-                ledgerId: created.ledgerId,
-                expectedOwnerGeneration: created.leaseGeneration,
-                activeExecutionId: created.executionId,
-                delta,
-              }),
+            persistBudget: budgetPersists.persistBudget,
+            flushPersistedBudget: budgetPersists.flushPersistedBudget,
             recordDecision: (decision) => {
               recordedDecision = decision;
             },
@@ -1915,6 +1927,15 @@ export class AIChatQueryEngine {
                 artifactBaseDir ?? undefined,
                 contract?.criteria ?? []
               );
+              // B13c: tracked durable-spend persister (see successor seam).
+              const manualBudgetPersists = makeTrackedPersistBudget((delta) =>
+                execModule.persistBudgetConsumption({
+                  ledgerId: created.ledgerId,
+                  expectedOwnerGeneration: created.leaseGeneration,
+                  activeExecutionId: created.executionId,
+                  delta,
+                })
+              );
               // FR-09 / §7.2 step 7 (GAP-S2 #2): one tracker per execution,
               // closing over the SAME budget the controller consults, so the
               // streak the tracker increments is the streak the controller's
@@ -1923,6 +1944,7 @@ export class AIChatQueryEngine {
               // state; only mutates the budget's no-progress streak counter.
               const progressTracker = new TaskProgressTracker({
                 budget: created.budget,
+                persistBudgetSpending: manualBudgetPersists.persistBudget,
               });
               taskExecutionBinding = {
                 executionId: created.executionId,
@@ -2010,6 +2032,7 @@ export class AIChatQueryEngine {
                       operationReceiptProvider,
                       artifactBaseDir: artifactBaseDir ?? undefined,
                       artifactBaselines,
+                      persistBudgetSpending: manualBudgetPersists.persistBudget,
                       // T04: thread the per-turn abort signal into the
                       // checker dispatch (read fresh — the turn may have
                       // changed between consults).
@@ -2045,6 +2068,8 @@ export class AIChatQueryEngine {
                 // delta.
                 addActiveRuntime: (ms) =>
                   created.budget.addActiveRuntime(ms),
+                addWaitMs: (ms) => created.budget.addWaitMs(ms),
+                getRemainingBudgets: () => created.budget.getRemaining(),
                 // T05 (FR-08/10/23, AC-06/08/22/27/29): durable ledger-backed
                 // budget persistence. The in-memory `created.budget` is a
                 // mirror; this closure is the authoritative path. Each dispatch
@@ -2060,13 +2085,8 @@ export class AIChatQueryEngine {
                 // or coordinator types.
                 ledgerId: created.ledgerId,
                 leaseGeneration: created.leaseGeneration,
-                persistBudget: (delta) =>
-                  execModule.persistBudgetConsumption({
-                    ledgerId: created.ledgerId,
-                    expectedOwnerGeneration: created.leaseGeneration,
-                    activeExecutionId: created.executionId,
-                    delta,
-                  }),
+                persistBudget: manualBudgetPersists.persistBudget,
+                flushPersistedBudget: manualBudgetPersists.flushPersistedBudget,
                 recordDecision: (decision) => {
                   recordedDecision = decision;
                 },
