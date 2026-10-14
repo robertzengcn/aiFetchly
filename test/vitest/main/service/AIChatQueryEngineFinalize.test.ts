@@ -571,9 +571,9 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     );
     // G01-313: the fallback consult badges the actual verifying phase for
     // this execution before finalization (terminal follows).
-    const states = emits.filter(
-      (e) => (e as { type: string }).type === "task_execution_state"
-    ) as Array<{ executionId: string; status: string }>;
+    const states = emits
+      .filter((e) => (e as { type: string }).type === "task_execution_state")
+      .map((e) => e as unknown as { executionId: string; status: string });
     expect(
       states.some((s) => s.executionId === EXEC_ID && s.status === "verifying")
     ).toBe(true);
@@ -672,9 +672,9 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     } as never);
 
     const states = () =>
-      emits.filter(
-        (e) => (e as { type: string }).type === "task_execution_state"
-      ) as Array<{ executionId: string; status: string }>;
+      emits
+        .filter((e) => (e as { type: string }).type === "task_execution_state")
+        .map((e) => e as unknown as { executionId: string; status: string });
     const waitingIdx = states().findIndex(
       (s) => s.executionId === EXEC_ID && s.status === "waiting_permission"
     );

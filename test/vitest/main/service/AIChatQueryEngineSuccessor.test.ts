@@ -425,9 +425,9 @@ describe("AIChatQueryEngine.submitMessage — T09 successor dispatch adoption", 
         route: "task_best_effort",
       },
     } as never);
-    const states = emits.filter(
-      (e) => e.type === "task_execution_state"
-    ) as Array<{ executionId: string; status: string }>;
+    const states = emits
+      .filter((e) => e.type === "task_execution_state")
+      .map((e) => e as unknown as { executionId: string; status: string });
     expect(
       states.some(
         (s) => s.executionId === "exec-successor-1" && s.status === "continuing"
