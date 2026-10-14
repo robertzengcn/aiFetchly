@@ -105,7 +105,8 @@
     "generate-platform": "ts-node src/scripts/generate-platform.ts",
     "test-platform": "ts-node src/scripts/test-platform.ts",
     "prepare": "husky",
-    "e2e:workspace": "playwright test --config playwright.config.ts"
+    "e2e:workspace": "playwright test --config playwright.config.ts",
+    "test:e2e:collect": "playwright test --config playwright.config.ts --list"
   },
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",

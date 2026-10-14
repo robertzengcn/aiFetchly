@@ -38,13 +38,6 @@ export interface LaunchOptions {
    * install pipeline target the deterministic hub fixture (UPD-GAP-05).
    */
   readonly hubBaseUrl?: string;
-  /**
-   * Explicit extra env for the Electron child, applied AFTER sanitization
-   * (never inherited from the host). Used by specs that opt into gated
-   * main-process features, e.g. AIFETCHLY_E2E_TRAY=1 for the lifecycle
-   * tray scenarios.
-   */
-  readonly extraEnv?: Record<string, string>;
 }
 
 export interface NetworkViolation {
@@ -226,10 +219,9 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
-  if (options.extraEnv) {
-    Object.assign(env, options.extraEnv);
-  }
+  // Single sanitized-environment construction with all required arguments
+  // (B01): initialMaximized + hubBaseUrl must flow through, then explicit
+  // test extras apply once post-sanitization (host env never leaks in).
   const env = buildSanitizedEnv(
     options.testRoot,
     options.fakeAiBaseUrl,

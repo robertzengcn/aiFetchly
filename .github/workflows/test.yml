@@ -52,6 +52,14 @@ jobs:
         continue-on-error: true
         run: yarn test
 
+      - name: E2E fixture collection gate (B01 — BLOCKING)
+        # The Electron E2E suite previously failed collection with a duplicate
+        # `const env` in the shared launch fixture (no scenario executed).
+        # `--list` compiles/collects every spec without launching Electron, so
+        # fixture syntax errors fail CI fast. Full `yarn test:e2e` (build +
+        # Electron launch under xvfb) remains the release gate (G02).
+        run: yarn test:e2e:collect
+
       # NOTE: coverage artifact upload is intentionally omitted —
       # `yarn testmain --coverage` hangs on the full suite (coverage
       # instrumentation interacts with some test). Re-enable coverage in CI once
