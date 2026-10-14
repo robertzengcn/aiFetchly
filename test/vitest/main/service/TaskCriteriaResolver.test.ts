@@ -105,6 +105,46 @@ describe("TaskCriteriaResolver.compileCriteria", () => {
     expectValidRefs(c, message);
   });
 
+  it("B19c: start-intent send compiles to requiredState=accepted (start ≠ finish, §10.3)", () => {
+    const message = "Start the email send";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(1);
+    const c = result.criteria[0];
+    expect(c.kind).toBe("operation_receipt");
+    expect(c.required).toBe(true);
+    if (c.kind === "operation_receipt") {
+      // An accepted (job-started) receipt satisfies an explicit start
+      // request; completion requires confirmed completion (§10.3).
+      expect(c.requiredState).toBe("accepted");
+    }
+    expectValidRefs(c, message);
+    expect(result.ambiguityReason).toBeNull();
+  });
+
+  it("B19c: finish-intent send still compiles to requiredState=completed", () => {
+    const message = "Finish the deploy";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(1);
+    const c = result.criteria[0];
+    expect(c.kind).toBe("operation_receipt");
+    if (c.kind === "operation_receipt") {
+      expect(c.requiredState).toBe("completed");
+    }
+    expectValidRefs(c, message);
+  });
+
+  it("B19c: CJK start-intent (启动) compiles to requiredState=accepted", () => {
+    const message = "启动邮件发送";
+    const result = compile(message);
+    expect(result.criteria).toHaveLength(1);
+    const c = result.criteria[0];
+    expect(c.kind).toBe("operation_receipt");
+    if (c.kind === "operation_receipt") {
+      expect(c.requiredState).toBe("accepted");
+    }
+    expectValidRefs(c, message);
+  });
+
   it("observation pattern: 'Check the latest deployment status for prod' → observation", () => {
     const message = "Check the latest deployment status for prod";
     const result = compile(message);

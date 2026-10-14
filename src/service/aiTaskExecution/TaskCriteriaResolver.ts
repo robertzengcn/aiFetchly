@@ -508,15 +508,23 @@ function matchClause(
     if (m) {
       const opTarget = m[1].trim();
       const id = nextId(indexByKind, "operation_receipt");
+      // B19 (§10.3 start-vs-completion): an explicit start request ("start
+      // the email send") is satisfied by an accepted (job-started) receipt;
+      // only a finish request needs confirmed completion. Every other
+      // operation verb keeps requiring "completed".
+      const isStartIntent = verb === "start";
+      const requiredState: "accepted" | "completed" = isStartIntent
+        ? "accepted"
+        : "completed";
       return {
         criterion: {
           id,
           required: true,
           kind: "operation_receipt",
-          description: `${verb} ${opTarget} completed`.slice(0, 2000),
+          description: `${verb} ${opTarget} ${isStartIntent ? "started" : "completed"}`.slice(0, 2000),
           adapterKey: "operation_receipt",
           targetId: slugifyTarget(opTarget || verb),
-          requiredState: "completed",
+          requiredState,
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
@@ -539,15 +547,21 @@ function matchClause(
     if (m) {
       const opTarget = (m[2] ?? "").trim();
       const id = nextId(indexByKind, "operation_receipt");
+      // B19 (§10.3): CJK 启动 ("start/boot") is a start request → accepted;
+      // every other CJK operation verb requires completed completion.
+      const isStartIntent = verb === "启动";
+      const requiredState: "accepted" | "completed" = isStartIntent
+        ? "accepted"
+        : "completed";
       return {
         criterion: {
           id,
           required: true,
           kind: "operation_receipt",
-          description: `${verb}${opTarget}完成`.slice(0, 2000),
+          description: `${verb}${opTarget}${isStartIntent ? "已开始" : "完成"}`.slice(0, 2000),
           adapterKey: "operation_receipt",
           targetId: slugifyTarget(opTarget || verb),
-          requiredState: "completed",
+          requiredState,
           sourceRefs: [makeSourceRef(clause, messageId)],
         },
         ambiguous: false,
