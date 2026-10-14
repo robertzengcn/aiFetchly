@@ -498,6 +498,61 @@ describe("AiTaskRolloutMetricsModule (§17 snapshot; Mocha)", function () {
     expect(snapshot.manual.consumption.continuations).to.equal(2);
   });
 
+  it("attributes a shared ledger to the stable lineage ROOT origin, not a random MIN(execution_id) member (G03, §17)", async () => {
+    // Scheduled lineage with a manual Continue: the shared ledger's
+    // consumption must stay in the scheduled cohort (the lineage root's
+    // origin) even when the successor's random execution_id sorts below
+    // every other member. MIN(execution_id) over UUIDs picks an arbitrary
+    // member, so cohorts would flip as successors arrive.
+    const execMod = new AiTaskExecutionModule();
+    const parent = await seedScheduled({ route: "task_verified" });
+    const spent = await execMod.persistBudgetConsumption({
+      ledgerId: parent.ledgerId,
+      expectedOwnerGeneration: 0,
+      activeExecutionId: parent.executionId,
+      delta: { tokens: 800 },
+    });
+    expect(spent).to.equal(true);
+
+    // Manual Continue successor on the SAME shared ledger.
+    const successor = unwrapCreated(
+      await execMod.startExecution({
+        conversationId: nextId("conv"),
+        sourceUserMessageId: nextId("msg"),
+        submissionId: nextId("sub"),
+        requestHash: `sha256:${nextId("req")}`,
+        origin: { type: "manual", submissionId: nextId("sub2") },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      })
+    );
+    // Rewire into one lineage with adversarial ids: the manual successor
+    // sorts FIRST, so MIN(execution_id) would attribute to manual.
+    const runner = SqliteDb.getInstance(tmpDir).connection.createQueryRunner();
+    try {
+      await runner.query(
+        `UPDATE ai_task_execution SET execution_id = 'exec-zzz-root' WHERE execution_id = ?`,
+        [parent.executionId]
+      );
+      await runner.query(
+        `UPDATE ai_task_execution SET execution_id = 'exec-aaa-child', parent_execution_id = 'exec-zzz-root', lineage_ledger_id = ? WHERE execution_id = ?`,
+        [parent.ledgerId, successor.executionId]
+      );
+    } finally {
+      await runner.release();
+    }
+
+    const snapshot = await new AiTaskRolloutMetricsModule().getRolloutSnapshot({
+      since: windowStart(),
+    });
+
+    // Root (scheduled) owns the cohort: 800 tokens scheduled, 0 manual.
+    // The pre-G03 MIN(execution_id) anchor attributed to manual instead.
+    expect(snapshot.scheduled.consumption.actualTokens).to.equal(800);
+    expect(snapshot.manual.consumption.actualTokens).to.equal(0);
+  });
+
   it("skips corrupt/unparseable timestamps in the latency pass without affecting counts", async () => {
     await seedManual({ route: "task_verified", outcome: "verified_complete" });
 

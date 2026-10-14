@@ -327,7 +327,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### G03 — Correct rollout attribution and obtain full release evidence
 
-- [ ] Attribute shared-ledger consumption to stable lineage root/origin or explicit per-origin entries, not random `MIN(execution_id)` UUID (`AiTaskRolloutMetrics.model.ts:151–162`). Scheduled lineage with manual Continue can otherwise shift cohorts arbitrarily.
+- [x] Attribute shared-ledger consumption to stable lineage root/origin or explicit per-origin entries, not random `MIN(execution_id)` UUID (`AiTaskRolloutMetrics.model.ts:151–162`). Scheduled lineage with manual Continue can otherwise shift cohorts arbitrarily.
+*(done 2026-10-14: anchor is the lineage ROOT (parent_execution_id IS NULL, MIN among roots only as corrupt-data tiebreak) — random-UUID MIN no longer flips cohorts as successors arrive; mixed lineages attribute wholly to the root cohort (member-level split would fabricate precision — ledgers hold shared counters). Tests: G03 scheduled-root/manual-successor adversarial ids + existing dedup, 13/13 module. Broader rollout evidence — shadow baseline, rollback drills, full-suite gates — stays open under B22.)*
 - [ ] Validate bounded read-only shadow behavior and compare manual/scheduled route/risk completion, actual/estimated usage, latency, waits, conflicts and reconciliation before enabling.
 - [ ] Keep automatic consequential recovery gated until B14/B16–B19 and AC-09/10/13/28 fault tests pass.
 - [ ] Exercise rollback during an accepted task and downtime/restart; frozen policy remains authoritative; no downgrade fallback success; historical rows retain historical labels.

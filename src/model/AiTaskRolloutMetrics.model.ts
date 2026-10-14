@@ -136,9 +136,17 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
       // lineage_ledger_id) back to the execution's origin_type. One
       // execution row per lineage member, so SUM over the join double-counts
       // a SHARED ledger once per member. §17 measures lineage consumption per
-      // enrolled run — de-duplicate by ledger before joining:
-      //   min(execution_id) groups the lineage, so each ledger row
-      //   contributes exactly once per origin cohort.
+      // enrolled run — de-duplicate by ledger before joining.
+      //
+      // G03 (FR-24, §17): the cohort anchor is the stable lineage ROOT (the
+      // member with parent_execution_id IS NULL), NOT MIN(execution_id).
+      // execution_id is a random UUID string, so MIN picks an arbitrary
+      // member — a scheduled lineage with a manual Continue would flip
+      // cohorts as successors arrive. The root never changes, so shared
+      // consumption attributes stably to the lineage's origin cohort.
+      // Mixed-origin lineages attribute wholly to the root cohort: member
+      // spend is not tracked per member (the ledger holds shared counters),
+      // so a per-origin split would fabricate precision.
       const ledgerGroups = (await runner.query(
         `SELECT e.origin_type,
                 SUM(l.consumed_continuations)      AS consumed_continuations,
@@ -149,9 +157,10 @@ export class AiTaskRolloutMetricsModel extends BaseDb {
                 SUM(l.consumed_active_ms)           AS consumed_active_ms,
                 SUM(l.consumed_wait_ms)            AS consumed_wait_ms
            FROM (
-                  SELECT MIN(execution_id) AS anchor_id, lineage_ledger_id
-                    FROM ai_task_execution
+                  SELECT lineage_ledger_id, MIN(execution_id) AS anchor_id
+                    FROM ai_task_execution root
                    WHERE "createdAt" >= ?
+                     AND root.parent_execution_id IS NULL
                    GROUP BY lineage_ledger_id
                 ) anchor
            JOIN ai_task_execution e
