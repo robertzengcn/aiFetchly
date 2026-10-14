@@ -3757,6 +3757,8 @@ export default {
     },
     plan: {
       continuationAborted: "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.",
+      continuationPending: "The plan decision was saved, but its follow-up message was not sent. Use Continue to retry.",
+      continue: "Continue",
       version: "Version",
       current: "current",
       changeReason: "Change reason",

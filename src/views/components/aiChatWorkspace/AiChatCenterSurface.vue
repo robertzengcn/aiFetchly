@@ -360,6 +360,47 @@
       </v-btn>
     </div>
 
+    <!-- B08: recoverable plan-continuation banner. A committed decision whose
+         follow-up was never sent (selection change, rejected enqueue,
+         reload recovery) offers Continue — same decision identity, exactly
+         one continuation — or Dismiss to abandon it. -->
+    <div
+      v-if="pendingPlanContinuation !== null"
+      class="chat-center__genimg-notice"
+      role="alert"
+      data-testid="workspace-plan-continuation-banner"
+    >
+      <v-icon size="x-small" color="warning" class="mr-1">
+        mdi-alert-circle-outline
+      </v-icon>
+      <span class="chat-center__genimg-notice-text">
+        {{
+          t("workspaceChat.plan.continuationPending") ||
+          "The plan decision was saved, but its follow-up message was not sent. Use Continue to retry."
+        }}
+      </span>
+      <v-btn
+        size="x-small"
+        variant="text"
+        class="ml-1"
+        :disabled="planDecisionInFlight"
+        data-testid="workspace-plan-continuation-retry"
+        @click="onRetryPlanContinuation"
+      >
+        {{ t("workspaceChat.plan.continue") || "Continue" }}
+      </v-btn>
+      <v-btn
+        size="x-small"
+        variant="text"
+        class="ml-1"
+        :aria-label="t('common.dismiss') || 'Dismiss'"
+        data-testid="workspace-plan-continuation-dismiss"
+        @click="onDismissPlanContinuation"
+      >
+        {{ t("common.dismiss") || "Dismiss" }}
+      </v-btn>
+    </div>
+
     <!-- Generated-image reference notice (over-limit preflight abort). -->
     <div
       v-if="generatedImageNotice !== null"
@@ -664,6 +705,13 @@ import {
   planContinuationRequestId,
   type PlanContinuationDecision,
 } from "@/views/utils/planContinuationIdentity";
+import {
+  savePlanContinuationIntent,
+  loadPlanContinuationIntent,
+  clearPlanContinuationIntent,
+  type PlanContinuationAction,
+  type PlanContinuationIntent,
+} from "@/views/utils/planContinuationStore";
 import {
   readAiChatReasoningVisible,
   writeAiChatReasoningVisible,
@@ -1117,6 +1165,17 @@ watch(
   conversationId,
   (id) => {
     void pendingMessages.loadConversation(id);
+  },
+  { immediate: true }
+);
+
+// B08: surface a saved continuation intent whenever its conversation is
+// selected (covers reload/crash recovery: the decision committed in main,
+// the follow-up never sent, the intent survived in localStorage).
+watch(
+  conversationId,
+  (id) => {
+    pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
   },
   { immediate: true }
 );
@@ -2539,6 +2598,17 @@ async function onRequestPlanChangesWithFeedback(): Promise<void> {
  */
 const planDecisionInFlight = ref(false);
 const planDecisionError = ref<string | null>(null);
+// B08: recoverable continuation intent for the SELECTED conversation. Set
+// when a committed decision's follow-up could not be sent (selection
+// change, rejected enqueue, reload recovery); cleared on acceptance or
+// explicit dismiss. The banner below offers the working retry control the
+// receipt card lacks.
+const pendingPlanContinuation = ref<PlanContinuationIntent | null>(null);
+
+function refreshPendingPlanContinuation(): void {
+  const id = conversationId.value;
+  pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
+}
 
 async function onLegacyPlanAction(
   action: "approve-plan" | "reject-plan" | "request-plan-changes",
@@ -2575,7 +2645,8 @@ async function onLegacyPlanAction(
     if (!updated) {
       // FR-PLN-005: approval did not take effect — do NOT send the
       // "begin executing" message; the model would execute an unapproved
-      // plan. The card stays actionable for a retry.
+      // plan. The card stays actionable for a retry. B08: null decision
+      // saves no intent and starts nothing.
       const errorKeys: Record<typeof action, string> = {
         "approve-plan": "aiChatV2Plan.approve_failed",
         "reject-plan": "aiChatV2Plan.reject_failed",
@@ -2590,12 +2661,26 @@ async function onLegacyPlanAction(
       planDecisionError.value = t(errorKeys[action]) || fallbacks[action];
       return;
     }
+    // B08: the decision COMMITTED — persist the recoverable continuation
+    // intent BEFORE any further await (reload, hash, send). Whatever happens
+    // next (selection change, crash, rejected enqueue), reopening this
+    // conversation offers the retry that sends exactly one continuation.
+    const intent: PlanContinuationIntent = {
+      conversationId: targetConversationId,
+      planId: plan.planId,
+      version,
+      action: action as PlanContinuationAction,
+      feedback,
+      savedAt: new Date().toISOString(),
+    };
+    savePlanContinuationIntent(intent);
     if (conversationId.value !== targetConversationId) {
       // Codex P1: the user switched chats mid-decision. The decision itself
-      // persisted in its originating conversation, but the continuation must
-      // NOT fire into the newly selected one — and loadSelection(target)
-      // would hijack the selection BACK, so abort before any reload. The
-      // receipt renders the next time that conversation is opened.
+      // persisted in its originating conversation and the intent above keeps
+      // its continuation recoverable — but the follow-up must NOT fire into
+      // the newly selected one, and loadSelection(target) would hijack the
+      // selection BACK, so abort before any reload. The retry banner renders
+      // the next time that conversation is opened.
       planDecisionError.value =
         t("workspaceChat.plan.continuationAborted") ||
         "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.";
@@ -2605,11 +2690,13 @@ async function onLegacyPlanAction(
     // receipt/planStateView reflects the persisted decision.
     await selectedStore.loadSelection(targetConversationId);
     // Codex P1 (round 2): the reload AWAITS — a selection change during it
-    // must abort here too, or the continuation fires into chat B.
+    // must abort here too, or the continuation fires into chat B. The saved
+    // intent keeps the continuation recoverable via the retry banner.
     if (conversationId.value !== targetConversationId) {
       planDecisionError.value =
         t("workspaceChat.plan.continuationAborted") ||
         "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.";
+      refreshPendingPlanContinuation();
       return;
     }
     // FR-PLN-006/007: start the correct continuation exactly once. The
@@ -2618,44 +2705,150 @@ async function onLegacyPlanAction(
     // persisted transition — reloads, replays, and double-clicks resubmit the
     // SAME identity, so the coordinator cache (idle) / pending unique index
     // (busy) collapse them into the one accepted continuation.
+    // B09: the hash AWAITS — revalidate the captured target after it and
+    // pass the target through every follow-up so a deferred hash can never
+    // submit A's approved-plan continuation to B.
     const continuationRequestId = await planContinuationRequestId(
       plan.planId,
       version,
       action as PlanContinuationDecision
     );
+    if (conversationId.value !== targetConversationId) {
+      planDecisionError.value =
+        t("workspaceChat.plan.continuationAborted") ||
+        "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.";
+      refreshPendingPlanContinuation();
+      return;
+    }
+    const sendTarget = { targetConversationId };
+    const sendOptions = {
+      modeOverride: "chat" as const,
+      clientRequestId: continuationRequestId,
+    };
+    let continued = false;
     if (action === "approve-plan") {
-      await performOrdinarySend(
+      continued = await performOrdinarySend(
         t("aiChatV2Plan.approved_continue_message") ||
           "Plan approved. Please begin executing the plan now.",
         [],
-        { modeOverride: "chat", clientRequestId: continuationRequestId }
+        sendOptions,
+        sendTarget
       );
     } else if (action === "reject-plan") {
       const prefix =
         t("aiChatV2Plan.rejected_continue_message") ||
         "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.";
-      await performOrdinarySend(
+      continued = await performOrdinarySend(
         feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
         [],
-        { modeOverride: "chat", clientRequestId: continuationRequestId }
+        sendOptions,
+        sendTarget
       );
     } else {
       const prefix =
         t("aiChatV2Plan.changes_requested_continue_message") ||
         "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.";
-      await performOrdinarySend(
+      continued = await performOrdinarySend(
         feedback ? `${prefix}\n\nFeedback: ${feedback}` : prefix,
         [],
-        { modeOverride: "chat", clientRequestId: continuationRequestId }
+        sendOptions,
+        sendTarget
       );
+    }
+    // B08: acceptance clears the intent (exactly one continuation exists);
+    // rejection (queue-full/transport) or a mid-send selection change keeps
+    // it and surfaces the retry banner — the decision is never lost without
+    // a working retry control. performOrdinarySend's own target guard
+    // returns false after a switch, so `continued` is authoritative here
+    // (the old code ignored it).
+    if (continued && conversationId.value === targetConversationId) {
+      clearPlanContinuationIntent(targetConversationId);
+      pendingPlanContinuation.value = null;
+    } else {
+      refreshPendingPlanContinuation();
+      if (!planDecisionError.value) {
+        planDecisionError.value =
+          t("workspaceChat.plan.continuationPending") ||
+          "The plan decision was saved, but its follow-up message was not sent. Use Continue to retry.";
+      }
     }
   } catch (err) {
     // FR-PLN-005: persistence/transport failure keeps the card actionable.
+    // B08: a committed decision's intent was already saved above, so the
+    // retry banner (refreshed here) still offers recovery.
+    planDecisionError.value =
+      err instanceof Error ? err.message : String(err);
+    refreshPendingPlanContinuation();
+  } finally {
+    planDecisionInFlight.value = false;
+  }
+}
+
+/**
+ * B08: retry a saved continuation with its ORIGINAL decision identity.
+ * The deterministic request id makes this idempotent — a replayed retry
+ * collapses into the one accepted continuation (exactly one row/execution).
+ */
+async function onRetryPlanContinuation(): Promise<void> {
+  const intent = pendingPlanContinuation.value;
+  if (!intent || planDecisionInFlight.value) return;
+  if (
+    !conversationId.value ||
+    conversationId.value !== intent.conversationId
+  ) {
+    return;
+  }
+  planDecisionInFlight.value = true;
+  planDecisionError.value = null;
+  try {
+    const continuationRequestId = await planContinuationRequestId(
+      intent.planId,
+      intent.version,
+      intent.action as PlanContinuationDecision
+    );
+    if (conversationId.value !== intent.conversationId) return;
+    const prefixByAction: Record<PlanContinuationAction, string> = {
+      "approve-plan":
+        t("aiChatV2Plan.approved_continue_message") ||
+        "Plan approved. Please begin executing the plan now.",
+      "reject-plan":
+        t("aiChatV2Plan.rejected_continue_message") ||
+        "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
+      "request-plan-changes":
+        t("aiChatV2Plan.changes_requested_continue_message") ||
+        "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
+    };
+    const base = prefixByAction[intent.action];
+    const text =
+      intent.action === "approve-plan" || !intent.feedback
+        ? base
+        : `${base}\n\nFeedback: ${intent.feedback}`;
+    const continued = await performOrdinarySend(
+      text,
+      [],
+      { modeOverride: "chat", clientRequestId: continuationRequestId },
+      { targetConversationId: intent.conversationId }
+    );
+    if (continued && conversationId.value === intent.conversationId) {
+      clearPlanContinuationIntent(intent.conversationId);
+      pendingPlanContinuation.value = null;
+    } else {
+      refreshPendingPlanContinuation();
+    }
+  } catch (err) {
     planDecisionError.value =
       err instanceof Error ? err.message : String(err);
   } finally {
     planDecisionInFlight.value = false;
   }
+}
+
+function onDismissPlanContinuation(): void {
+  const intent = pendingPlanContinuation.value;
+  if (intent) {
+    clearPlanContinuationIntent(intent.conversationId);
+  }
+  pendingPlanContinuation.value = null;
 }
 
 // --- Inspector bridge (design §12.3) -----------------------------------------

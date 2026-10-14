@@ -3791,6 +3791,8 @@ export default {
     },
     plan: {
       continuationAborted: "La selección cambió: la decisión del plan se guardó, pero su mensaje de seguimiento no se envió. Reabre la conversación para continuar.",
+      continuationPending: "La decisión del plan se guardó, pero su mensaje de seguimiento no se envió. Usa Continuar para reintentar.",
+      continue: "Continuar",
       version: "Versión",
       current: "actual",
       changeReason: "Motivo del cambio",

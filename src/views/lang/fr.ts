@@ -3778,6 +3778,8 @@ export default {
     },
     plan: {
       continuationAborted: "La sélection a changé — la décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Rouvrez la conversation pour continuer.",
+      continuationPending: "La décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Utilisez Continuer pour réessayer.",
+      continue: "Continuer",
       version: "Version",
       current: "actuelle",
       changeReason: "Motif de la modification",

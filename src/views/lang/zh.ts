@@ -3582,6 +3582,8 @@ export default {
     },
     plan: {
       continuationAborted: "所选对话已切换——计划决策已保存，但后续消息未发送。请重新打开该对话继续。",
+      continuationPending: "计划决策已保存，但后续消息未发送。请使用“继续”重试。",
+      continue: "继续",
       version: "版本",
       current: "当前",
       changeReason: "变更原因",

@@ -3791,6 +3791,8 @@ export default {
     },
     plan: {
       continuationAborted: "Auswahl geändert — die Planentscheidung wurde gespeichert, die Folgenachricht wurde aber nicht gesendet. Öffne die Unterhaltung erneut, um fortzufahren.",
+      continuationPending: "Die Planentscheidung wurde gespeichert, die Folgenachricht wurde aber nicht gesendet. Verwende Fortsetzen, um es erneut zu versuchen.",
+      continue: "Fortsetzen",
       version: "Version",
       current: "aktuell",
       changeReason: "Änderungsgrund",

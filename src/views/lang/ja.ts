@@ -3713,6 +3713,8 @@ export default {
     },
     plan: {
       continuationAborted: "選択が変更されたため、プランの決定は保存されましたが、後続メッセージは送信されませんでした。会話を開き直して続行してください。",
+      continuationPending: "プランの決定は保存されましたが、後続メッセージは送信されませんでした。「続行」で再試行してください。",
+      continue: "続行",
       version: "バージョン",
       current: "現在",
       changeReason: "変更理由",
