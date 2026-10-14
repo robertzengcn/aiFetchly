@@ -20,6 +20,7 @@ import {
 import { log } from "@/modules/Logger";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import type { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 
 /**
  * Main-process queue orchestration (message-queue technical design §9).
@@ -85,6 +86,9 @@ export interface AIChatTurnQueueServiceDeps {
    * T1 (AD-002/003): mints the durable run envelope at the scheduling
    * claim (sourceId = pendingMessageId) and persists the terminal mapping.
    * Optional so non-production wiring keeps the pre-bridge behavior.
+   * B02: when the bridge composes the global scheduler, `admitted` is
+   * false while capacity is full — the queue must release its claim
+   * WITHOUT error and re-drain on capacity-free notification.
    */
   readonly dispatchBridge?: {
     schedule(candidate: {
@@ -95,7 +99,7 @@ export interface AIChatTurnQueueServiceDeps {
         | "browser"
         | "cpu"
         | "artifact_batch";
-    }): Promise<{ runId: string } | null>;
+    }): Promise<{ runId: string; admitted: boolean } | null>;
     finishRun(
       runId: string | null,
       status: "completed" | "failed" | "cancelled" | "interrupted"
@@ -104,7 +108,18 @@ export interface AIChatTurnQueueServiceDeps {
     releaseToQueued?(runId: string | null): Promise<void>;
     /** Parked (permission/plan) run: running -> awaiting_*. */
     parkRun?(runId: string | null): Promise<void>;
+    /** Re-admit a deferred envelope after capacity frees (B02). */
+    admitDeferred?(runId: string | null): Promise<boolean>;
+    /** Remove a deferred envelope from admission (cancel path, B02). */
+    cancelDeferred?(runId: string | null): void;
   };
+  /**
+   * B02: shared global execution scheduler (AD-002/004). When present, the
+   * bridge composes it (see dispatchBridge.admitted); this service tracks
+   * capacity-deferred conversations and re-drains them when any terminal
+   * frees a slot. Absent = legacy immediate-dispatch behavior (tests).
+   */
+  readonly scheduler?: AIChatExecutionScheduler | null;
 }
 
 export type AIChatQueueErrorCode =
@@ -190,8 +205,36 @@ export function createSteeringPromoter(
 export class AIChatTurnQueueService {
   /** Per-conversation drain serialization chains (design §9.3). */
   private readonly drainChains = new Map<string, Promise<void>>();
+  /**
+   * B02: conversations whose dispatch was deferred for global capacity.
+   * Re-drained when any terminal frees a slot (finish/park/busy-release).
+   * Steering-consumed rows never enter here (steer() bypasses the bridge
+   * and scheduler entirely — they never become runs).
+   */
+  private readonly schedulerDeferred = new Set<string>();
 
   constructor(private readonly deps: AIChatTurnQueueServiceDeps) {}
+
+  /**
+   * B02: wake capacity-deferred conversations after a slot frees. Called
+   * after every terminal/park/busy-release path (bridge.finishRun already
+   * released the scheduler slot). Each re-drain re-attempts admission;
+   * still-full conversations re-defer with scheduling age preserved (the
+   * scheduler queue entry keeps its original enqueue time).
+   */
+  private drainSchedulerWaiters(exceptConversation?: string): void {
+    if (this.schedulerDeferred.size === 0) return;
+    const waiters = [...this.schedulerDeferred];
+    this.schedulerDeferred.clear();
+    for (const conversationId of waiters) {
+      if (conversationId === exceptConversation) {
+        // The completing conversation drains itself through its own
+        // terminal path (scheduleDrain/holdQueue); re-adding would loop.
+        continue;
+      }
+      this.scheduleDrain(conversationId);
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Submission
@@ -588,12 +631,17 @@ export class AIChatTurnQueueService {
     // T1 (AD-002): the run envelope is minted at the scheduling claim, AFTER
     // the claim + lease and BEFORE any provider work. A null envelope is a
     // pre-turn failure: release the claim — no engine call, no orphan run.
-    const bridgeRunId = await this.deps.dispatchBridge?.schedule({
+    // B02: the bridge composes global scheduler admission. `admitted=false`
+    // means capacity is full — the envelope stays queued with its original
+    // enqueue time (age preserved); release the dispatch claim WITHOUT
+    // error and re-drain on capacity-free notification. Steering-consumed
+    // rows never reach here (steer() bypasses bridge+scheduler entirely).
+    const bridgeResult = await this.deps.dispatchBridge?.schedule({
       pendingMessageId: row.pendingMessageId,
       conversationId,
       resourceClass: "general",
     });
-    if (this.deps.dispatchBridge && bridgeRunId === null) {
+    if (this.deps.dispatchBridge && bridgeResult === null) {
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
         code: "RUN_ENVELOPE_FAILED",
         message: "Could not mint the run envelope for this dispatch.",
@@ -605,6 +653,29 @@ export class AIChatTurnQueueService {
       lease.release();
       return;
     }
+    if (bridgeResult && !bridgeResult.admitted) {
+      // B02 deferred: capacity full. Keep the scheduler queue entry (age
+      // preserved), release the DB claim back to queued WITHOUT error, and
+      // remember to re-drain when any terminal frees a slot. Zero provider
+      // calls on this path (admission precedes promotion AND execution).
+      await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+      this.schedulerDeferred.add(conversationId);
+      const queuedView = await this.deps.pendingModule.getView(
+        row.pendingMessageId
+      );
+      if (queuedView) {
+        this.emitEvent(queuedView, "queued");
+      }
+      aiChatQueueCounters.increment("ai_chat_pending_deferred_total");
+      log.info(
+        `[ai-chat-queue] scheduler deferred conv=${conversationId} run=${bridgeResult.runId}`
+      );
+      lease.release();
+      return;
+    }
+    const bridgeRunId = bridgeResult
+      ? { runId: bridgeResult.runId }
+      : undefined;
 
     try {
       let savedUser;
@@ -628,6 +699,13 @@ export class AIChatTurnQueueService {
       } catch (err) {
         aiChatQueueCounters.increment("ai_chat_pending_failed_total");
         // Pre-turn failure: recoverable — pause, keep visible (FR-14).
+        // B04: the envelope was already admitted to running above, so settle
+        // it terminally (failed) instead of leaving a stale `running` row —
+        // recoverable intent stays on the pending row (released claim).
+        await this.deps.dispatchBridge?.finishRun(
+          bridgeRunId?.runId ?? null,
+          "failed"
+        );
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
           code: "DISPATCH_PROMOTE_FAILED",
           message: err instanceof Error ? err.message : String(err),
@@ -642,6 +720,7 @@ export class AIChatTurnQueueService {
           `[ai-chat-queue] promote failed conv=${conversationId}:`,
           err
         );
+        this.drainSchedulerWaiters(conversationId);
         return;
       }
 
@@ -697,6 +776,8 @@ export class AIChatTurnQueueService {
       // T1 (AD-002): persist the run terminal BEFORE the drain's side
       // effects settle (the pending row's own transitions stay authoritative
       // for queue behavior; the envelope records the execution outcome).
+      // B02: finishRun releases the global scheduler slot; wake deferred
+      // conversations on every terminal path below.
       const bridge = this.deps.dispatchBridge;
       if (terminal.type === "completed") {
         await bridge?.finishRun(bridgeRunId?.runId ?? null, "completed");
@@ -712,15 +793,17 @@ export class AIChatTurnQueueService {
         );
         // FR-10/11: schedule exactly one next drain.
         this.scheduleDrain(conversationId);
+        this.drainSchedulerWaiters(conversationId);
         return;
       }
       if (terminal.type === "conversation_busy") {
         // Another turn owns the conversation (legacy path race). Put the
         // row back; a later drain or resume picks it up. The envelope was
         // minted for THIS claim — release it to queued so the next claim
-        // can reuse it idempotently.
+        // can reuse it idempotently (scheduler requeue preserves age).
         await bridge?.releaseToQueued?.(bridgeRunId?.runId ?? null);
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+        this.drainSchedulerWaiters(conversationId);
         return;
       }
       if (
@@ -728,14 +811,17 @@ export class AIChatTurnQueueService {
         terminal.type === "paused_for_plan_question"
       ) {
         // Parked turns keep their envelope in the waiting family (§9.1) so
-        // the resume path continues the SAME run.
+        // the resume path continues the SAME run. parkRun releases global
+        // capacity (the run is waiting, not executing) and waiters drain.
         await bridge?.parkRun?.(bridgeRunId?.runId ?? null);
         await this.holdQueue(conversationId, terminal.type);
+        this.drainSchedulerWaiters(conversationId);
         return;
       }
       // cancelled | failed
       await bridge?.finishRun(bridgeRunId?.runId ?? null, terminal.type);
       await this.holdQueue(conversationId, terminal.type);
+      this.drainSchedulerWaiters(conversationId);
     } finally {
       lease.release();
     }

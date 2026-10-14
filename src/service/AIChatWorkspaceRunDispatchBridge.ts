@@ -1,6 +1,7 @@
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import type { AIChatRunEntity } from "@/entity/AIChatRun.entity";
 import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 
 /**
  * Run-dispatch bridge (capability-parity technical design §8.3, AD-002/003;
@@ -36,18 +37,31 @@ export interface QueueDispatchCandidate {
 export interface WorkspaceRunDispatchBridge {
   /**
    * Idempotently create (or reuse) the interactive run envelope for a
-   * claimed pending row and transition it to running. Returns null when the
-   * envelope cannot be minted (the queue releases the claim instead).
+   * claimed pending row and admit it through the global scheduler.
+   * Returns null when the envelope cannot be minted (the queue releases
+   * the claim instead). When a scheduler is composed (B02), `admitted`
+   * is false while global capacity is full — the envelope stays `queued`
+   * with its original enqueue time (scheduling age preserved) and the
+   * queue releases its dispatch claim WITHOUT error so a later
+   * capacity-free notification can re-drain. `admitted` is always true
+   * when no scheduler is composed (legacy immediate-running behavior).
    */
   schedule(
     candidate: QueueDispatchCandidate
-  ): Promise<{ runId: string } | null>;
+  ): Promise<{ runId: string; admitted: boolean } | null>;
   /** Persist the run terminal state (idempotent; ignored for null runId). */
   finishRun(runId: string | null, status: TerminalRunStatus): Promise<void>;
   /** conversation_busy release: running -> queued for the next claim. */
   releaseToQueued(runId: string | null): Promise<void>;
   /** Parked (permission/plan) run: running -> awaiting_user. */
   parkRun(runId: string | null): Promise<void>;
+  /**
+   * Admit a previously deferred (queued) envelope after capacity frees.
+   * Returns true when the run is now running. Idempotent.
+   */
+  admitDeferred(runId: string | null): Promise<boolean>;
+  /** Remove a deferred envelope from scheduler admission (cancel path). */
+  cancelDeferred(runId: string | null): void;
 }
 
 export type TerminalRunStatus = Extract<
@@ -66,14 +80,19 @@ export class AIChatWorkspaceRunDispatchBridge
   implements WorkspaceRunDispatchBridge
 {
   private readonly runModule: AIChatRunModule;
+  private readonly scheduler: AIChatExecutionScheduler | null;
 
-  constructor(runModule?: AIChatRunModule) {
+  constructor(
+    runModule?: AIChatRunModule,
+    scheduler?: AIChatExecutionScheduler | null
+  ) {
     this.runModule = runModule ?? new AIChatRunModule();
+    this.scheduler = scheduler ?? null;
   }
 
   async schedule(
     candidate: QueueDispatchCandidate
-  ): Promise<{ runId: string } | null> {
+  ): Promise<{ runId: string; admitted: boolean } | null> {
     try {
       const existing = await this.findInteractiveRunBySource(
         candidate.pendingMessageId
@@ -96,16 +115,16 @@ export class AIChatWorkspaceRunDispatchBridge
             sourceId: candidate.pendingMessageId,
             resourceClass: candidate.resourceClass,
           });
-          await this.runModule.transition(next.runId, "running");
-          return { runId: next.runId };
+          return this.admitEnvelope(next.runId, candidate);
         }
-        // queued → running on first claim; running/awaiting_* → idempotent
-        // re-claim (the queue's claim token serializes dispatches per
-        // conversation, so returning the SAME envelope cannot double-run).
+        // queued → admit through the global scheduler (B02); running /
+        // awaiting_* → idempotent re-claim (the queue's claim token
+        // serializes dispatches per conversation, so returning the SAME
+        // envelope cannot double-run).
         if (existing.status === "queued") {
-          await this.runModule.transition(existing.runId, "running");
+          return this.admitEnvelope(existing.runId, candidate);
         }
-        return { runId: existing.runId };
+        return { runId: existing.runId, admitted: true };
       }
       const created = await this.runModule.createRun({
         conversationId: candidate.conversationId,
@@ -113,8 +132,7 @@ export class AIChatWorkspaceRunDispatchBridge
         sourceId: candidate.pendingMessageId,
         resourceClass: candidate.resourceClass,
       });
-      await this.runModule.transition(created.runId, "running");
-      return { runId: created.runId };
+      return this.admitEnvelope(created.runId, candidate);
     } catch {
       // Envelope minting failed: no provider call happens through this
       // dispatch — the queue treats it as a pre-turn failure.
@@ -129,11 +147,18 @@ export class AIChatWorkspaceRunDispatchBridge
     if (!runId) return;
     try {
       const row = await this.runModule.getByRunId(runId);
-      if (!row || TERMINAL_RUN_STATUSES.has(row.status)) return;
+      if (!row || TERMINAL_RUN_STATUSES.has(row.status)) {
+        this.scheduler?.complete(runId);
+        return;
+      }
       await this.runModule.transition(runId, status);
     } catch {
       // Terminal persistence is best-effort on the bridge; the queue's own
       // durable transitions remain authoritative for the pending row.
+    } finally {
+      // B02: always release global capacity on terminal outcomes so a
+      // deferred fourth run can admit. Safe to call twice (idempotent).
+      this.scheduler?.complete(runId);
     }
   }
 
@@ -145,6 +170,13 @@ export class AIChatWorkspaceRunDispatchBridge
       await this.runModule.transition(runId, "queued");
     } catch {
       // best-effort; the next claim's idempotent lookup reconciles
+    } finally {
+      // B02: a lease-race release returns the scheduler slot with its
+      // original enqueue time preserved (requeue, not cancel+resubmit, so
+      // scheduling age must not restart — design AD-002).
+      if (this.scheduler?.isActive(runId)) {
+        this.scheduler.requeue(runId);
+      }
     }
   }
 
@@ -156,7 +188,87 @@ export class AIChatWorkspaceRunDispatchBridge
       await this.runModule.transition(runId, "awaiting_user");
     } catch {
       // best-effort; the resume path reconciles via its own transitions
+    } finally {
+      // B02: a parked turn is not executing — release capacity so other
+      // conversations can admit while this run waits for the user. The
+      // resume path re-admits through admitDeferred (same run id).
+      this.scheduler?.complete(runId);
     }
+  }
+
+  async admitDeferred(runId: string | null): Promise<boolean> {
+    if (!runId) return false;
+    try {
+      const row = await this.runModule.getByRunId(runId);
+      if (!row || TERMINAL_RUN_STATUSES.has(row.status)) {
+        this.scheduler?.complete(runId);
+        return false;
+      }
+      if (!this.scheduler) {
+        if (row.status === "queued") {
+          await this.runModule.transition(runId, "running");
+        }
+        return true;
+      }
+      if (this.scheduler.isActive(runId)) {
+        if (row.status === "queued") {
+          await this.runModule.transition(runId, "running");
+        }
+        return true;
+      }
+      // Still queued in the scheduler (or unknown): pump once and recheck.
+      // The caller re-drains on capacity-free notifications; a pump here
+      // covers the race where capacity freed between notification and drain.
+      this.scheduler.pump(() => undefined);
+      if (this.scheduler.isActive(runId)) {
+        if (row.status === "queued") {
+          await this.runModule.transition(runId, "running");
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  cancelDeferred(runId: string | null): void {
+    if (!runId || !this.scheduler) return;
+    this.scheduler.cancelQueued(runId);
+  }
+
+  /**
+   * B02: admit one envelope through the global scheduler. Without a
+   * scheduler the envelope transitions to running immediately (legacy).
+   * With a scheduler the envelope is submitted (idempotent) and pumped;
+   * `admitted` is true only when the scheduler dispatched THIS run id.
+   * A deferred envelope stays `queued` in BOTH the run table and the
+   * scheduler queue with its original enqueue time — scheduling age is
+   * preserved for the later admitDeferred.
+   */
+  private async admitEnvelope(
+    runId: string,
+    candidate: QueueDispatchCandidate
+  ): Promise<{ runId: string; admitted: boolean } | null> {
+    if (!this.scheduler) {
+      await this.runModule.transition(runId, "running");
+      return { runId, admitted: true };
+    }
+    this.scheduler.submit({
+      runId,
+      conversationId: candidate.conversationId,
+      owner: "interactive",
+      resourceClass: candidate.resourceClass,
+    });
+    let admitted = false;
+    this.scheduler.pump((dispatch) => {
+      if (dispatch.runId === runId) admitted = true;
+    });
+    if (admitted) {
+      await this.runModule.transition(runId, "running");
+      return { runId, admitted: true };
+    }
+    return { runId, admitted: false };
   }
 
   private findInteractiveRunBySource(

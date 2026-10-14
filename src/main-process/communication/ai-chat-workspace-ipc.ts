@@ -34,7 +34,7 @@ import {
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
-import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
+import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
@@ -74,7 +74,10 @@ function ok<T>(data: T): CommonMessage<T> {
 // ---------------------------------------------------------------------------
 
 const eventRouter = sharedWorkspaceEventRouter;
-const scheduler = new AIChatExecutionScheduler();
+// B02: the coordinator and the durable queue admit through the SAME global
+// scheduler instance (see aiChatSharedScheduler) — ordinary interactive work
+// cannot bypass resource limits/fairness relative to other owners.
+const scheduler = getSharedExecutionScheduler();
 
 let coordinatorInstance: AIChatCoordinator | null = null;
 

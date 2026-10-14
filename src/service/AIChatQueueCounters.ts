@@ -17,6 +17,7 @@ export type AIChatQueueCounterKey =
   | "ai_chat_pending_dispatched_total"
   | "ai_chat_pending_paused_total"
   | "ai_chat_pending_failed_total"
+  | "ai_chat_pending_deferred_total"
   | "ai_chat_steering_requested_total"
   | "ai_chat_steering_applied_total"
   | "ai_chat_steering_skipped_tools_total";
@@ -26,6 +27,7 @@ const ALL_KEYS: readonly AIChatQueueCounterKey[] = [
   "ai_chat_pending_dispatched_total",
   "ai_chat_pending_paused_total",
   "ai_chat_pending_failed_total",
+  "ai_chat_pending_deferred_total",
   "ai_chat_steering_requested_total",
   "ai_chat_steering_applied_total",
   "ai_chat_steering_skipped_tools_total",
