@@ -3316,20 +3316,52 @@ export class AIChatQueryEngine {
           // cleanup below still runs: the turn is done, Stop-cancel is no
           // longer needed.
           if (taskExecutionBinding.executionKind !== "scheduled") {
-            const carried = await this.finalizeManualAtCompleteGate(
+            const gateResult = await this.finalizeManualAtCompleteGate(
               result,
               taskExecutionBinding
             );
-            if (carried) {
-              taskOutcome = carried.outcome;
+            if (
+              gateResult &&
+              (gateResult.status === "committed" ||
+                gateResult.status === "alreadyFinalized")
+            ) {
+              // Committed winner (or stored winner on idempotent retry):
+              // publish it as the single terminal truth (NFR-10).
+              taskOutcome = gateResult.outcome;
               taskExecutionId = taskExecutionBinding.executionId;
-              taskReasonCode = carried.reasonCode;
+              taskReasonCode = gateResult.reasonCode;
+            } else if (
+              gateResult &&
+              (gateResult.status === "failed" ||
+                gateResult.status === "staleLease")
+            ) {
+              // B06: durability failure — NO success delivery. The row has
+              // no committed outcome for this turn, so emitting `complete`
+              // with the intended verified outcome (plus notify + terminal
+              // verified state) would disagree with durable truth. Surface
+              // an explicit recoverable error and RETAIN the binding +
+              // frozen-policy marker for repair; only the streaming turn
+              // state is cleared. The assistant content is already saved
+              // above; no notification escapes.
+              eventSink.emit({
+                type: "error",
+                conversationId,
+                messageId: assistantMessageId,
+                errorMessage: `TASK_FINALIZE_FAILED: ${gateResult.reasonCode} (executionId=${taskExecutionBinding.executionId})`,
+                taskExecutionId: taskExecutionBinding.executionId,
+                taskReasonCode: gateResult.reasonCode,
+              });
+              this.dispatchStop(conversationId, "error");
+              this.clearActiveTurnState(conversationId, assistantMessageId);
+              break;
             }
+            // gateResult null (policy not accepted): legacy path below emits
+            // a generic complete without task fields.
           }
-          // Unit 7: the row is finalized (or the gate logged the failure) —
+          // Unit 7: the row is finalized (committed or idempotent winner) —
           // drop the conversation binding so a later Stop click never
-          // double-finalizes. ALREADY_FINALIZED is idempotent, but the map
-          // should not claim a live binding for a finished execution.
+          // double-finalizes. Failure/stale paths returned above and retain
+          // the binding for recovery control.
           this.taskExecutionBindings.delete(conversationId);
           // T16: also drop the frozen-policy marker so the set does not leak
           // past the turn (the execution is finalized; the conversation no
@@ -3662,21 +3694,32 @@ export class AIChatQueryEngine {
    *   incomplete/RESPONSE_ENDED; `continue` post-exit is defensive
    *   (continuation is impossible after the loop returned) and finalizes
    *   incomplete; `wait`/`yield_owner` post-exit finalize incomplete too.
-   * - Finalization failures never block the UI: `ok` and
-   *   `alreadyFinalized` count as success; anything else logs and the
-   *   `complete` emit still proceeds.
+   * - B06 (FR-12/24, NFR-10/11, AC-15/32): the gate NEVER publishes the
+   *   intended outcome on a durability failure. `ok` commits the intended
+   *   outcome; `alreadyFinalized` loads and publishes the STORED winner
+   *   (Stop-vs-complete race); `!ok`/throw/stale-lease return an explicit
+   *   failure status so the caller suppresses success delivery (no
+   *   `complete` with intended outcome, no terminal verified state, no
+   *   success notify) and retains the binding for recovery.
    *
-   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32: returns the
-   * committed (or synthesized) outcome + reasonCode so the complete-case
-   * caller can carry them on the `complete` event. Terminal delivery is
-   * now bound to a durable finalization decision, not to a generic
-   * stream-end: a `complete` event without `taskOutcome` is NOT proof
-   * that an enrolled task is `verified_complete`.
+   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32: returns a
+   * discriminated gate result so the complete-case caller can carry the
+   * committed outcome on the `complete` event or surface an explicit
+   * persistence error. Terminal delivery is now bound to a durable
+   * finalization decision, not to a generic stream-end: a `complete`
+   * event without `taskOutcome` is NOT proof that an enrolled task is
+   * `verified_complete`.
    */
   private async finalizeManualAtCompleteGate(
     result: Extract<AIChatQueryLoopResult, { type: "completed" }>,
     binding: LoopTaskExecutionBinding
-  ): Promise<{ outcome: TaskOutcome; reasonCode: string } | null> {
+  ): Promise<
+    | { status: "committed"; outcome: TaskOutcome; reasonCode: string }
+    | { status: "alreadyFinalized"; outcome: TaskOutcome; reasonCode: string }
+    | { status: "failed"; reasonCode: string }
+    | { status: "staleLease"; reasonCode: string }
+    | null
+  > {
     // T16: check the FROZEN flag-at-enrollment value on the binding, not the
     // live runtime flag. An execution enrolled while the flag was on stays
     // accepted for finalization even if the flag was turned off midstream —
@@ -3757,11 +3800,10 @@ export class AIChatQueryEngine {
     // finalization gate. The manual finalize transaction releases the shared
     // lineage ledger unconditionally (`WHERE ledger_id = ?`), so a stale
     // ancestor finalizing after a Continue successor claimed the ledger would
-    // free the successor's lease. Re-read owner_generation fresh and skip
-    // finalization on mismatch — the row stays running for the successor's
-    // own finalize (the successor holds the lease and will finalize on its
-    // own completion). The carried outcome still returns so the renderer
-    // badges this turn honestly; only the durable write is suppressed.
+    // free the successor's lease. Re-read owner_generation fresh and reject
+    // on mismatch — B06: surface STALE_LEASE explicitly with no success
+    // delivery; the successor holds the lease and owns the durable write.
+    // The binding is retained by the caller for recovery control.
     if (binding.ledgerId && binding.leaseGeneration !== undefined) {
       const execModule = new AiTaskExecutionModule();
       const currentGen = await readCurrentLeaseGeneration(
@@ -3776,34 +3818,67 @@ export class AIChatQueryEngine {
         console.error(
           `[ai-chat-v2] finalize skipped — stale lease (executionId=${binding.executionId}, bindingGen=${binding.leaseGeneration}, ledgerGen=${currentGen ?? "missing"})`
         );
-        // D2/R2 review fix: return the carried outcome, not null. The
-        // successor holds the lease and owns the durable write; returning
-        // null here made the renderer fall back to a generic terminal badge
-        // even though the consult decided a real outcome for this turn.
-        return carried;
+        return { status: "staleLease", reasonCode: "STALE_LEASE" };
       }
     }
     try {
       const finalizeResult = await new TaskExecutionCoordinator().finalizeManual(
         finalizeInput
       );
-      if (finalizeResult.ok || finalizeResult.alreadyFinalized) {
-        return carried;
+      if (finalizeResult.ok) {
+        return {
+          status: "committed",
+          outcome: carried.outcome,
+          reasonCode: carried.reasonCode,
+        };
       }
-      // T12: a finalization failure must NOT be swallowed silently. The row
-      // may still be `running` with no durable outcome — return the intended
-      // outcome anyway (so the renderer badges honestly) but the engine
-      // surfaces the failure as a recoverable persistence error below.
+      if (finalizeResult.alreadyFinalized) {
+        // B06: idempotent finalization must publish the COMMITTED winner,
+        // not the intended outcome. A Stop-cancel (or newer owner) that won
+        // the race owns the terminal state; the loser converges to it so
+        // live badges/history/notifications match the stored row (NFR-10).
+        try {
+          const execModule = new AiTaskExecutionModule();
+          const stored = await execModule.getExecution(binding.executionId);
+          if (stored?.task_outcome) {
+            return {
+              status: "alreadyFinalized",
+              outcome: stored.task_outcome,
+              reasonCode: stored.outcome_reason_code ?? "ALREADY_FINALIZED",
+            };
+          }
+        } catch (err) {
+          console.error(
+            `[ai-chat-v2] stored-winner re-read failed (executionId=${binding.executionId}):`,
+            err
+          );
+        }
+        // Stored row unreadable: fall back to the intended outcome so the
+        // UI does not hang, but mark it as the idempotent path.
+        return {
+          status: "alreadyFinalized",
+          outcome: carried.outcome,
+          reasonCode: "ALREADY_FINALIZED",
+        };
+      }
+      // B06: a finalization failure must NOT publish intended success. The
+      // row may still be `running` with no durable outcome — return an
+      // explicit failure so the caller emits a recoverable error (no
+      // `complete`, no terminal verified state, no success notify) and
+      // retains the binding for repair.
       console.error(
         `[ai-chat-v2] completion-policy finalize failed (executionId=${binding.executionId}): ${finalizeResult.reasonCode ?? "unknown"}`
       );
-      return { ...carried, reasonCode: finalizeResult.reasonCode ?? carried.reasonCode };
+      return {
+        status: "failed",
+        reasonCode: finalizeResult.reasonCode ?? carried.reasonCode,
+      };
     } catch (err) {
       console.error(
         `[ai-chat-v2] completion-policy finalize threw (executionId=${binding.executionId}):`,
         err
       );
-      return { ...carried, reasonCode: "FINALIZE_THREW" };
+      return { status: "failed", reasonCode: "FINALIZE_THREW" };
     }
   }
 

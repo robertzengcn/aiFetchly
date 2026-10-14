@@ -540,6 +540,129 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(completeEvent).toBeDefined();
   });
 
+  it("B06a: finalize failure on verified path emits error, never verified success (FR-12, AC-15)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      reasonCode: "STATE_CONFLICT",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // No success delivery: no complete carries verified_complete.
+    const verifiedComplete = emits.find(
+      (e) => e.type === "complete" && e.taskOutcome === "verified_complete"
+    );
+    expect(verifiedComplete).toBeUndefined();
+    // Visible recoverable failure instead.
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/FINALIZE|STATE_CONFLICT/);
+    expect(errorEvent!.taskExecutionId).toBe(EXEC_ID);
+    // No terminal verified state.
+    const verifiedTerminal = emits.find(
+      (e) =>
+        e.type === "task_execution_state" && e.outcome === "verified_complete"
+    );
+    expect(verifiedTerminal).toBeUndefined();
+    // Recovery control retained: binding NOT deleted.
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("B06b: finalize throw on verified path emits error, never verified success (FR-12, AC-15)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockRejectedValue(new Error("db locked"));
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const verifiedComplete = emits.find(
+      (e) => e.type === "complete" && e.taskOutcome === "verified_complete"
+    );
+    expect(verifiedComplete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/FINALIZE_THREW/);
+    const verifiedTerminal = emits.find(
+      (e) =>
+        e.type === "task_execution_state" && e.outcome === "verified_complete"
+    );
+    expect(verifiedTerminal).toBeUndefined();
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("B06c: ALREADY_FINALIZED publishes the stored winner, not the intended outcome (FR-12, NFR-10)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      alreadyFinalized: true,
+      reasonCode: "ALREADY_FINALIZED",
+    });
+    // Stop already finalized cancelled: stored winner is cancelled.
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_id: EXEC_ID,
+      finalized: true,
+      task_outcome: "cancelled",
+      outcome_reason_code: "USER_CANCELLED",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    // Stored winner wins: cancelled, never intended verified_complete.
+    expect(completeEvent!.taskOutcome).toBe("cancelled");
+    expect(completeEvent!.taskReasonCode).toBe("USER_CANCELLED");
+    const terminal = emits.find(
+      (e) => e.type === "task_execution_state" && e.status === "terminal"
+    );
+    expect(terminal).toBeDefined();
+    expect(terminal!.outcome).toBe("cancelled");
+    expect(terminal!.reasonCode).toBe("USER_CANCELLED");
+  });
+
   // T16 — Freeze accepted policy across flag rollback (NFR-12, AC-12/32).
   // The flag value is FROZEN at enrollment: a turn enrolled while the flag
   // was on stays accepted for finalization even if the flag is turned off
@@ -922,11 +1045,13 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
   // `owner_generation` on the shared lineage ledger; the parent binding
   // still carries the OLD frozen `leaseGeneration`. The finalize gate must
   // skip `finalizeManual` (the model releases the ledger unconditionally,
-  // so a stale ancestor finalizing would free the successor's lease) and
-  // still emit `complete` so the renderer does not hang. The row stays
-  // running for the successor's own finalize on its completion.
+  // so a stale ancestor finalizing would free the successor's lease).
+  // B06: a stale lease is an explicit durability failure — NO success
+  // delivery (no `complete` with intended outcome, no terminal state, no
+  // notify). An explicit recoverable error emits and the binding is
+  // retained for recovery control; the successor owns the durable write.
   // ------------------------------------------------------------------------
-  it("T15b: stale lease (successor bumped owner_generation) → finalizeManual skipped, complete still emitted", async () => {
+  it("T15b: stale lease (successor bumped owner_generation) → finalizeManual skipped, error emitted, no success delivery (B06)", async () => {
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
     startManualMock.mockResolvedValue({
@@ -953,9 +1078,17 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     // The guard rejected → finalizeManual must NOT have been called (no
     // unconditional ledger release on a stale ancestor).
     expect(finalizeManualMock).not.toHaveBeenCalled();
-    // Complete still emits so the renderer badges honestly and does not hang.
+    // B06: no success delivery — no complete, no terminal verified state.
     const complete = emits.find((e) => e.type === "complete");
-    expect(complete).toBeDefined();
+    expect(complete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/STALE_LEASE/);
+    expect(errorEvent!.taskExecutionId).toBe(EXEC_ID);
+    // Recovery control retained.
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
   });
 
   it("T15b: matching lease (no successor) → finalizeManual called (normal path)", async () => {
@@ -987,7 +1120,7 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(complete).toBeDefined();
   });
 
-  it("T15b: missing ledger (null) → fail-closed skip, finalizeManual not called", async () => {
+  it("T15b: missing ledger (null) → fail-closed skip, error emitted, no success delivery (B06)", async () => {
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
     startManualMock.mockResolvedValue({
@@ -1013,8 +1146,15 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     } as never);
 
     expect(finalizeManualMock).not.toHaveBeenCalled();
+    // B06: no success delivery on a fail-closed skip.
     const complete = emits.find((e) => e.type === "complete");
-    expect(complete).toBeDefined();
+    expect(complete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/STALE_LEASE/);
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
   });
 
   it("T15b: binding with no lease (legacy shape) → guard skipped, finalize proceeds", async () => {
