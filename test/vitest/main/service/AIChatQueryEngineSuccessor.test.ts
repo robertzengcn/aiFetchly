@@ -64,11 +64,18 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
 });
 
 // --- TaskRequestResolver mock: classify must NOT run for successor turns --
-vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
-  TaskRequestResolver: vi.fn().mockImplementation(function () {
-    return { classify: classifyMock };
-  }),
-}));
+// B12: isGoalLinkedMessage is NOT mocked — the enrollment ownership gate
+// must exercise the real linkage rule.
+vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskRequestResolver")>();
+  return {
+    ...actual,
+    TaskRequestResolver: vi.fn().mockImplementation(function () {
+      return { classify: classifyMock };
+    }),
+  };
+});
 
 // --- TaskCriteriaResolver mock: delegates to the REAL compiler by default --
 vi.mock("@/service/aiTaskExecution/TaskCriteriaResolver", async (importOriginal) => {

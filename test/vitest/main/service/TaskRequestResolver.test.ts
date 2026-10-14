@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
+import {
+  TaskRequestResolver,
+  isGoalLinkedMessage,
+} from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type { TaskExecutionRoute } from "@/entityTypes/aiTaskExecutionTypes";
 
@@ -500,5 +503,53 @@ describe("TaskRequestResolver.classify (FR-18)", () => {
     // pattern cleanly, so ambiguityReason stays null.
     expect(compiled.ambiguityReason).toBeNull();
     expect(compiled.criteria[0]?.description).toContain("three launch tweets");
+  });
+});
+
+describe("isGoalLinkedMessage — request-to-goal linkage (B12, FR-20)", () => {
+  const GOAL = {
+    goalId: "goal-1",
+    objective: "Build a 100-contact lead list",
+  };
+
+  it("unrelated task sharing no significant words → not linked (standalone)", () => {
+    expect(
+      isGoalLinkedMessage("Extract contacts from the uploaded CSV.", GOAL)
+    ).toBe(false);
+  });
+
+  it("message sharing two significant objective words → linked (goal)", () => {
+    expect(isGoalLinkedMessage("Build the 100-contact lead list", GOAL)).toBe(
+      true
+    );
+  });
+
+  it("explicit goalId mention → linked even without word overlap", () => {
+    expect(isGoalLinkedMessage("What is the status of goal-1?", GOAL)).toBe(
+      true
+    );
+  });
+
+  it("/goal and /loop command prefixes → linked", () => {
+    expect(isGoalLinkedMessage("/goal monitor churn", GOAL)).toBe(true);
+    expect(isGoalLinkedMessage("/loop 5", GOAL)).toBe(true);
+  });
+
+  it("single shared word → not linked (conservative toward standalone)", () => {
+    // "deployment" alone must not seize an unrelated task — linkage needs
+    // an explicit reference or two shared significant words.
+    expect(
+      isGoalLinkedMessage("Check deployment status", {
+        goalId: "goal-9",
+        objective: "Monitor production deployment health",
+      })
+    ).toBe(false);
+  });
+
+  it("empty message or empty objective → not linked", () => {
+    expect(isGoalLinkedMessage("", GOAL)).toBe(false);
+    expect(isGoalLinkedMessage("Build the list", { goalId: "g", objective: "" })).toBe(
+      false
+    );
   });
 });

@@ -499,3 +499,78 @@ export class TaskRequestResolver {
     return CJK_ACTION_VERBS.some((v) => message.includes(v));
   }
 }
+
+/**
+ * B12 (FR-20, NFR-01/07, AC-14/31): structural request-to-goal linkage. An
+ * active conversation goal owns a new task turn ONLY when the request
+ * actually links to it — mere co-presence in the conversation never seizes
+ * unrelated work (the legacy takeover). Linked when the message:
+ * - invokes a goal command (`/goal`, `/loop`), or
+ * - names the goal id verbatim, or
+ * - shares at least two significant words (length > 4, non-stopword) with
+ *   the goal objective.
+ *
+ * Deterministic and conservative toward standalone: one shared word, vague
+ * topical adjacency, or an empty message/objective never links. Goal-loop
+ * turns carry their own lineage (successorContext) and never reach this
+ * heuristic.
+ */
+const GOAL_LINK_STOPWORDS: ReadonlySet<string> = new Set([
+  "about",
+  "after",
+  "before",
+  "between",
+  "could",
+  "please",
+  "should",
+  "there",
+  "these",
+  "those",
+  "through",
+  "under",
+  "using",
+  "which",
+  "while",
+  "with",
+  "within",
+  "without",
+  "would",
+  "your",
+]);
+
+function significantWords(text: string): Set<string> {
+  const words = new Set<string>();
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length > 4 && !GOAL_LINK_STOPWORDS.has(raw)) {
+      words.add(raw);
+    }
+  }
+  return words;
+}
+
+export function isGoalLinkedMessage(
+  message: string,
+  goal: { readonly goalId: string; readonly objective: string }
+): boolean {
+  const text = (message ?? "").trim();
+  if (text.length === 0 || goal.objective.trim().length === 0) return false;
+  const lower = text.toLowerCase();
+  if (lower.startsWith("/goal") || lower.startsWith("/loop")) return true;
+  if (
+    goal.goalId.length > 0 &&
+    lower.includes(goal.goalId.toLowerCase())
+  ) {
+    return true;
+  }
+  const objectiveWords = significantWords(goal.objective);
+  if (objectiveWords.size === 0) return false;
+  const messageWords = significantWords(text);
+  let shared = 0;
+  for (const word of messageWords) {
+    if (objectiveWords.has(word)) {
+      shared += 1;
+      if (shared >= 2) return true;
+    }
+  }
+  return false;
+}

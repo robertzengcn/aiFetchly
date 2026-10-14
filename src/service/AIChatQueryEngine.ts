@@ -123,7 +123,10 @@ import {
 } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { TaskExecutionBinding } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
-import { TaskRequestResolver } from "@/service/aiTaskExecution/TaskRequestResolver";
+import {
+  TaskRequestResolver,
+  isGoalLinkedMessage,
+} from "@/service/aiTaskExecution/TaskRequestResolver";
 import { compileCriteria } from "@/service/aiTaskExecution/TaskCriteriaResolver";
 import type {
   TaskCompletionContract,
@@ -1212,9 +1215,23 @@ export class AIChatQueryEngine {
           taskExecutionBinding = {
             executionId: created.executionId,
             policyAccepted: true,
+            // B12: frozen semantic owner (inherited from the parent row) so
+            // the loop selects goal-flavored prompts exclusively for
+            // goal-owned turns.
+            completionOwner: created.completionOwner,
             getAbortSignal: () =>
               this.activeTurns.get(conversationId)?.abortController.signal,
             consult: async (candidate) => {
+              // B12: goal-owned successors end with an internal iteration
+              // yield before any standalone verification (owner inherited
+              // from the parent execution row via successorContext).
+              if (created.completionOwner === "goal") {
+                return {
+                  type: "yield_owner" as const,
+                  owner: "goal" as const,
+                  result: "maker_iteration_ended" as const,
+                };
+              }
               // Read the CAS token fresh per consult so evidence writes
               // persist (AC-32) — identical to the manual created-branch.
               const exec = await execModule.getExecution(created.executionId);
@@ -1247,6 +1264,7 @@ export class AIChatQueryEngine {
               }
               return created.controller.decide(candidate, {
                 route: created.route,
+                owner: created.completionOwner,
                 contract: created.contract ?? undefined,
                 evidenceService,
                 evidenceContext: {
@@ -1767,9 +1785,13 @@ export class AIChatQueryEngine {
               }
             }
             // T15 (FR-20, one semantic owner): resolve which completion
-            // owner enrolls this execution. When an active conversation goal
-            // owns the work, the goal controller is the sole semantic owner
-            // of completion decisions for this turn — the standalone
+            // owner enrolls this execution. B12: an active conversation goal
+            // owns the work ONLY when the request actually links to it
+            // (goal command, goal-id mention, or shared objective
+            // vocabulary — isGoalLinkedMessage); mere co-presence never
+            // seizes unrelated tasks, which retain standalone ownership
+            // with an independent objective/budget. The goal controller is
+            // the sole semantic owner of linked turns — the standalone
             // controller must not add its own nudges or claim goal
             // completion (§3 of the design). Lookup failures fall back to
             // "standalone" (fail-closed: never crash enrollment over an
@@ -1781,7 +1803,13 @@ export class AIChatQueryEngine {
               const owningGoal = await new AIChatGoalModule().getActiveGoal(
                 conversationId
               );
-              if (owningGoal) {
+              if (
+                owningGoal &&
+                isGoalLinkedMessage(request.message || "", {
+                  goalId: owningGoal.goalId,
+                  objective: owningGoal.objective,
+                })
+              ) {
                 completionOwner = "goal";
               }
             } catch (ownerErr) {
@@ -1899,6 +1927,10 @@ export class AIChatQueryEngine {
                 // enrollment cannot convert accepted unfinished work to
                 // unchecked success (NFR-12, AC-12/32).
                 policyAccepted: true,
+                // B12: frozen semantic owner (linkage-gated at enrollment)
+                // so the loop selects goal-flavored prompts exclusively for
+                // goal-owned turns.
+                completionOwner,
                 // T04 (NFR-02/04, AC-24): the per-turn abort controller is
                 // created AFTER this enrollment block runs (at the turn-state
                 // registration). Read it fresh per consult so the checker
@@ -1907,6 +1939,18 @@ export class AIChatQueryEngine {
                 getAbortSignal: () =>
                   this.activeTurns.get(conversationId)?.abortController.signal,
                 consult: async (candidate) => {
+                  // B12 (FR-20, NFR-01/07, AC-14/31): goal-owned turns end
+                  // with an internal iteration yield before any standalone
+                  // verification, evidence spend, or lease reads — the goal
+                  // loop exclusively owns goal completion decisions. One
+                  // semantic owner, no stacked standalone nudges.
+                  if (completionOwner === "goal") {
+                    return {
+                      type: "yield_owner" as const,
+                      owner: "goal" as const,
+                      result: "maker_iteration_ended" as const,
+                    };
+                  }
                   // T03: read the CAS token fresh per consult so evidence
                   // writes persist (AC-32). A frozen version would mismatch
                   // the moment any prior consult bumped the row.
@@ -1948,6 +1992,7 @@ export class AIChatQueryEngine {
                   }
                   return created.controller.decide(candidate, {
                     route: created.route,
+                    owner: completionOwner,
                     contract: created.contract ?? undefined,
                     evidenceService,
                     evidenceContext: {

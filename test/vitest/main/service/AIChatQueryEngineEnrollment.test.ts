@@ -63,11 +63,19 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
 });
 
 // --- TaskRequestResolver mock: classify returns a configurable route ----
-vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
-  TaskRequestResolver: vi.fn().mockImplementation(function () {
-    return { classify: classifyMock };
-  }),
-}));
+// B12: isGoalLinkedMessage is NOT mocked — the enrollment ownership gate
+// must exercise the real linkage rule (mocking it would make the B12a/b
+// ownership assertions vacuous).
+vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskRequestResolver")>();
+  return {
+    ...actual,
+    TaskRequestResolver: vi.fn().mockImplementation(function () {
+      return { classify: classifyMock };
+    }),
+  };
+});
 
 // --- TaskCriteriaResolver mock: T01 compiler is configurable ------------
 // By default (mockReset in beforeEach) the mock delegates to the REAL
@@ -1058,7 +1066,11 @@ describe("AIChatQueryEngine.submitMessage — T15 goal ownership + preparation l
     expect(call.completionOwner).toBe("standalone");
   });
 
-  it("T15a: task route + active conversation goal → completionOwner: 'goal' (FR-20, one semantic owner)", async () => {
+  it("T15a: task route + linked conversation goal → completionOwner: 'goal' (FR-20, one semantic owner)", async () => {
+    // B12: the goal owns the work only through actual request-to-goal
+    // linkage — here the message shares the goal objective vocabulary
+    // ("build", "contact"), so the goal controller is the sole semantic
+    // owner and the standalone controller adds no nudges (§3 of the design).
     flagMock.mockReturnValue(true);
     classifyMock.mockReturnValue("task_best_effort");
     mockGetActiveGoal.mockResolvedValue(ACTIVE_GOAL);
@@ -1083,7 +1095,10 @@ describe("AIChatQueryEngine.submitMessage — T15 goal ownership + preparation l
     });
     const { engine } = createEngineCapturingInput(() => undefined);
     await engine.submitMessage({
-      request: makeRequest(),
+      request: {
+        ...makeRequest(),
+        message: "Build the 100-contact lead list",
+      },
       eventSink: { emit: vi.fn() } as never,
     } as never);
     expect(startManualMock).toHaveBeenCalledTimes(1);
@@ -1093,6 +1108,46 @@ describe("AIChatQueryEngine.submitMessage — T15 goal ownership + preparation l
     // The goal owns the work — the standalone controller does not add its own
     // nudges or claim goal completion (§3 of the design).
     expect(call.completionOwner).toBe("goal");
+  });
+
+  it("B12a: task route + active but UNRELATED goal → completionOwner: 'standalone' (FR-20, independent objective/budget)", async () => {
+    // B12 regression: an unrelated active goal must not seize a new task.
+    // The default request ("Extract contacts from the uploaded CSV.")
+    // shares no significant vocabulary with the goal objective ("Build a
+    // 100-contact lead list"), so the turn keeps standalone ownership with
+    // an independent objective/budget.
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    mockGetActiveGoal.mockResolvedValue(ACTIVE_GOAL);
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: {
+        executionId: "exec-unrelated",
+        controller: { decide: vi.fn() },
+        budget: {
+          reserveContinuation: vi.fn(),
+          reserveProviderAttempt: vi.fn(),
+          reserveToolExecution: vi.fn(),
+          reconcileTokens: vi.fn(),
+          addActiveRuntime: vi.fn(),
+        },
+        route: "task_best_effort",
+        contract: null,
+        contractHash: null,
+        ledgerId: "ledger-unrelated",
+        leaseGeneration: 0,
+      } as never,
+    });
+    const { engine } = createEngineCapturingInput(() => undefined);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink: { emit: vi.fn() } as never,
+    } as never);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    const call = startManualMock.mock.calls[0]?.[0] as {
+      completionOwner: string;
+    };
+    expect(call.completionOwner).toBe("standalone");
   });
 
   it("T15a: response_only route + active unrelated goal → NO goal takeover, single answer (FR-20, NFR-11)", async () => {

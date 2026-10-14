@@ -56,11 +56,16 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
   };
 });
 
-vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
-  TaskRequestResolver: vi.fn().mockImplementation(function () {
-    return { classify: classifyMock };
-  }),
-}));
+vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskRequestResolver")>();
+  return {
+    ...actual,
+    TaskRequestResolver: vi.fn().mockImplementation(function () {
+      return { classify: classifyMock };
+    }),
+  };
+});
 
 // Coordinator mock: startManual (enrollment) + freezeContract + cancel (the
 // stop path under test).

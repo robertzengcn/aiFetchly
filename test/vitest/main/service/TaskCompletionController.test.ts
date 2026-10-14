@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
 import { TaskRunBudget, BudgetReservationResult, MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/TaskRunBudget";
 import type { TaskEndCandidate, TaskCompletionContract } from "@/entityTypes/aiTaskExecutionTypes";
@@ -519,6 +519,48 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       expect(decision.outcome).toBe("verified_complete");
       expect(decision.reasonCode).toBe("CRITERIA_SATISFIED");
     }
+  });
+
+  it("B12c: goal-owned turn ends with internal iteration yield, never standalone verification (FR-20)", async () => {
+    // Explicit goal work routes exclusively through the goal owner: even
+    // with every required criterion passing and budget available, the
+    // standalone controller contributes no verification, no continuation,
+    // and no goal completion — the goal loop owns those decisions.
+    const ctrl = new TaskCompletionController();
+    const decideMock = vi.fn(async () => ({
+      passedCriterionIds: ["rec-1"],
+      unmetCriterionIds: [],
+      evidenceIds: ["evidence-g-1"],
+    }));
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Goal progress update.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        owner: "goal",
+        evidenceService: { checkCandidate: decideMock },
+        contract: bestEffortContract([anchoredRecordCount("rec-1")]),
+        evidenceContext: {
+          content: "Goal progress update.",
+          source: "provider",
+          sourceRevision: "rev-1",
+          expectedStateVersion: 0,
+        },
+        budget: new TaskRunBudget(MANUAL_BUDGET_DEFAULTS),
+      }
+    );
+    expect(decision.type).toBe("yield_owner");
+    if (decision.type === "yield_owner") {
+      expect(decision.owner).toBe("goal");
+      expect(decision.result).toBe("maker_iteration_ended");
+    }
+    // No standalone verification ran: the evidence service never evaluated.
+    expect(decideMock).not.toHaveBeenCalled();
   });
 
   it("B01d: best-effort + complete contract but caller-supplied IDs (no evidence service) → incomplete (FR-04)", async () => {

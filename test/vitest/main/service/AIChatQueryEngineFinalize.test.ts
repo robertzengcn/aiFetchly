@@ -64,11 +64,19 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
 });
 
 // --- TaskRequestResolver mock: classify returns a configurable route ----
-vi.mock("@/service/aiTaskExecution/TaskRequestResolver", () => ({
-  TaskRequestResolver: vi.fn().mockImplementation(function () {
-    return { classify: classifyMock };
-  }),
-}));
+// B12: isGoalLinkedMessage is NOT mocked — the enrollment ownership gate
+// must exercise the real linkage rule (mocking it would make ownership
+// assertions vacuous and fail-closed masking would hide linkage).
+vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskRequestResolver")>();
+  return {
+    ...actual,
+    TaskRequestResolver: vi.fn().mockImplementation(function () {
+      return { classify: classifyMock };
+    }),
+  };
+});
 
 // --- TaskExecutionCoordinator mock: startManual + finalizeManual --------
 // T15b: re-export the real `assertOwnership` + `readCurrentLeaseGeneration`

@@ -188,7 +188,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B12 — Goal ownership remains metadata, not the enforced semantic owner [P1; confidence 10/10]
 
-- [ ] Determine actual request-to-goal linkage and route exclusively through that owner; ordinary tasks retain standalone ownership.
+- [x] Determine actual request-to-goal linkage and route exclusively through that owner; ordinary tasks retain standalone ownership.
+*(done 2026-10-14: isGoalLinkedMessage (command/goalId/≥2-word objective overlap, default standalone); enrollment gates owner on it; goal-owned consults + controller yield_owner before standalone verification; loop goal prompts require non-standalone binding; successor inherits parent owner. Presence-seizure test corrected per B22. Tests: linkage 6, B12a/b/c/d incl. stash-verified RED + 218/218 suites.)*
 
 **Location:** `AIChatQueryEngine.ts:1770–1774, 1929`; `TaskCompletionController.DecideContext`.
 

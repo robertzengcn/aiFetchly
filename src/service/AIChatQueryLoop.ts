@@ -1930,7 +1930,15 @@ export class AIChatQueryLoop {
           if (canKeepGoing) {
             roundCapContinuations += 1;
             emptyStopContinuations = 0;
-            const continuationPrompt = input.goalAutoContinue
+            // B12 (FR-20, NFR-01/07): goal-flavored round-cap prompts run
+            // exclusively on goal-owned turns. An explicitly standalone
+            // binding (unrelated task beside an active goal) gets the
+            // neutral prompt — no stacked goal nudges. Bindings without an
+            // owner predate this field and keep legacy behavior.
+            const useGoalPrompts =
+              input.goalAutoContinue === true &&
+              input.taskExecutionBinding?.completionOwner !== "standalone";
+            const continuationPrompt = useGoalPrompts
               ? GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
               : TOOL_ROUND_CAP_CONTINUATION_PROMPT;
             messages.push({

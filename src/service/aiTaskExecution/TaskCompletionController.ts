@@ -106,6 +106,15 @@ export interface DecideContext {
   readonly contract?: TaskCompletionContract;
   readonly evidenceContext?: EvidenceContext;
   /**
+   * B12 (FR-20, NFR-01/07, AC-14/31): the semantic owner of this decision.
+   * Standalone turns verify through this controller; goal-owned turns end
+   * with an internal iteration yield — the goal loop (not the standalone
+   * controller) owns goal verification, so goal work never stacks
+   * standalone nudges or a standalone goal completion onto goal iteration.
+   * Optional so legacy/test callers without ownership stay standalone.
+   */
+  readonly owner?: "standalone" | "goal";
+  /**
    * Slice 2 live budget (D4/FR-08/09). When supplied, the controller
    * consults the accessors before deciding: continuation allowance
    * exhausted → finish(incomplete, CONTINUATION_LIMIT); provider attempts
@@ -182,6 +191,20 @@ export class TaskCompletionController {
         evidenceIds: [],
         summary: this.boundedSummary(candidate.content),
         remainingWork: [...(context.unmetCriterionIds ?? [])],
+      };
+    }
+
+    // B12 (FR-20, NFR-01/07, AC-14/31): goal-owned turns end with an
+    // internal iteration yield — the goal loop exclusively owns goal
+    // verification and recovery. The standalone controller contributes no
+    // nudges, no verification, and no goal completion for goal work (no
+    // stacked loops). Safety/waits above still win: they describe this
+    // turn's stream, not the work routing.
+    if (context.owner === "goal") {
+      return {
+        type: "yield_owner",
+        owner: "goal",
+        result: "maker_iteration_ended",
       };
     }
 

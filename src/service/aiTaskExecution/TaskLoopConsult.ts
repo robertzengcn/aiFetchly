@@ -162,6 +162,18 @@ export interface LoopTaskExecutionBinding {
    */
   readonly executionKind?: "manual" | "scheduled";
   /**
+   * B12 (FR-20, NFR-01/07, AC-14/31): the semantic owner frozen at
+   * enrollment — "standalone" for ordinary tasks (even with an unrelated
+   * active goal present), "goal" only for actually goal-linked work. The
+   * loop uses it to select goal-flavored maker prompts exclusively for
+   * goal-owned turns (no stacked goal nudges on standalone work). Optional
+   * so flag-off callers, tests, and bindings built before this field
+   * existed omit it; when absent the loop treats the turn as standalone
+   * for prompt selection (legacy goalAutoContinue behavior otherwise
+   * unchanged).
+   */
+  readonly completionOwner?: "standalone" | "goal";
+  /**
    * T04 (NFR-02/04, AC-24): the per-consult abort source. The consult closure
    * reads this fresh per consult so the checker dispatch can race the signal +
    * a deadline (a Stop or a hanging provider stall cannot hold the gate, §9
