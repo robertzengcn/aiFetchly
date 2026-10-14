@@ -1478,7 +1478,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       sourceUserMessageId: "msg-1",
       approvedSourceMessageIds: ["msg-1"],
       mode: "best_effort" as const,
-      criteria: compiled.criteria,
+      criteria: [...compiled.criteria],
     };
     expect(isTrustedCompleteContract(contract)).toBe(false);
   });
