@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
+import { AI_CHAT_V2_DENY_TOOL_PERMISSION } from "@/config/channellist";
 
 const windowInvokeMock = vi.fn();
 const cancelChatRunMock = vi.fn();
@@ -209,8 +210,10 @@ describe("selectedConversation permission actions (design §15.5)", () => {
     const perm = permissionResult("m-perm-6", { toolCallId: "tc-deny" });
     await seedStore([perm]);
     cancelChatRunMock.mockResolvedValue(undefined);
+    // No scheduled owner: the continuation API reports handled:false.
+    windowInvokeMock.mockResolvedValue({ ok: true, handled: false });
 
-    useSelectedConversationStore().denyToolPermission(perm, TEXTS);
+    await useSelectedConversationStore().denyToolPermission(perm, TEXTS);
     await flushPromises();
 
     const store = useSelectedConversationStore();
@@ -219,6 +222,63 @@ describe("selectedConversation permission actions (design §15.5)", () => {
     expect(row?.metadata?.toolResult).toBeUndefined();
     expect(row?.metadata?.success).toBe(false);
     // Deny settles the parked run through the normal cancel path.
+    expect(cancelChatRunMock).toHaveBeenCalledWith({
+      conversationId: "conv-1",
+    });
+  });
+
+  it("B12: scheduled-owner denial honors handled and never stops the run", async () => {
+    const perm = permissionResult("m-perm-7", { toolCallId: "tc-sched" });
+    await seedStore([perm]);
+    cancelChatRunMock.mockClear();
+    // The scheduled-loop engine owns the paused turn: it synthesizes the
+    // denied tool_result and the run continues.
+    windowInvokeMock.mockResolvedValue({ ok: true, handled: true });
+
+    await useSelectedConversationStore().denyToolPermission(perm, TEXTS);
+    await flushPromises();
+
+    expect(windowInvokeMock).toHaveBeenCalledWith(
+      AI_CHAT_V2_DENY_TOOL_PERMISSION,
+      { toolId: "tc-sched", conversationId: "conv-1" }
+    );
+    const row = useSelectedConversationStore().messages.find(
+      (m) => m.id === "m-perm-7"
+    );
+    expect(row?.content).toBe(TEXTS.deniedText);
+    // Never stops an unrelated task: no interactive cancel.
+    expect(cancelChatRunMock).not.toHaveBeenCalled();
+  });
+
+  it("B12: denial IPC failure falls back to the interactive stop", async () => {
+    const perm = permissionResult("m-perm-8", { toolCallId: "tc-err" });
+    await seedStore([perm]);
+    cancelChatRunMock.mockClear();
+    cancelChatRunMock.mockResolvedValue(undefined);
+    windowInvokeMock.mockRejectedValue(new Error("ipc down"));
+
+    await useSelectedConversationStore().denyToolPermission(perm, TEXTS);
+    await flushPromises();
+
+    expect(cancelChatRunMock).toHaveBeenCalledWith({
+      conversationId: "conv-1",
+    });
+  });
+
+  it("B12: stale tool id denies via the interactive stop without a continuation call", async () => {
+    // Result row with NO resolvable tool id (no direct id, no preceding
+    // TOOL_CALL row): straight to the interactive stop, no continuation IPC.
+    const perm = permissionResult("m-perm-9");
+    await seedStore([perm]);
+    cancelChatRunMock.mockClear();
+    cancelChatRunMock.mockResolvedValue(undefined);
+    windowInvokeMock.mockClear();
+
+    await useSelectedConversationStore().denyToolPermission(perm, TEXTS);
+    await flushPromises();
+
+    // No resolvable tool id: no continuation IPC, straight to stop.
+    expect(windowInvokeMock).not.toHaveBeenCalled();
     expect(cancelChatRunMock).toHaveBeenCalledWith({
       conversationId: "conv-1",
     });

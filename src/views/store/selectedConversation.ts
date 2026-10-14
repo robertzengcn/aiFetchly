@@ -24,6 +24,7 @@ import {
   subscribeDetailEvents,
   unsubscribeDetail,
 } from "@/views/api/aiChatWorkspace";
+import { denyChatV2ToolPermission } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
 import {
@@ -613,14 +614,52 @@ export const useSelectedConversationStore = defineStore(
     }
 
     /**
-     * Deny a parked tool permission: rewrite the row to a denied receipt
-     * locally, then stop the parked run so the durable state settles to
-     * cancelled through the normal terminal path.
+     * Deny a parked tool permission (V2 parity, FR-PER-004/006/007).
+     * Routes Deny by the exact tool/conversation through the existing
+     * continuation API first: when a scheduled-loop engine owns the paused
+     * turn it synthesizes the denial result and the run continues (honor
+     * `handled` — never stop an unrelated task). Otherwise falls back to
+     * the interactive stop, which settles the parked run to cancelled
+     * through the normal terminal path. Ordinary interactive denial keeps
+     * its stop fallback; only the scheduled-owner gap is closed here.
      */
-    function denyToolPermission(
+    async function denyToolPermission(
       message: ChatV2MessageView,
       texts: PermissionActionTexts
-    ): void {
+    ): Promise<void> {
+      const toolId = resolveToolIdForPermission(message);
+      const targetConversationId =
+        message.conversationId || workspaceStore.selectedConversationId || undefined;
+      if (toolId) {
+        try {
+          const result = await denyChatV2ToolPermission(
+            toolId,
+            targetConversationId
+          );
+          if (result.handled) {
+            // Scheduled engine owned the paused turn — it synthesized a
+            // denied tool_result and the run continues. Rewrite the row to
+            // the denied receipt (the engine's tool_result replaces it on
+            // success) and do NOT stop any stream.
+            presenter.rewriteMessage(message.id, (m) => ({
+              ...m,
+              content: texts.deniedText,
+              metadata: {
+                ...m.metadata,
+                source: "chat-v2",
+                toolResult: undefined,
+                success: false,
+              },
+            }));
+            syncFromPresenter();
+            return;
+          }
+        } catch {
+          // IPC denied (e.g. AI gate) or stale tool id — fall through to
+          // the interactive stop below, which keeps an actionable card on
+          // failure via the grant-style restore path.
+        }
+      }
       presenter.rewriteMessage(message.id, (m) => ({
         ...m,
         content: texts.deniedText,
@@ -631,7 +670,8 @@ export const useSelectedConversationStore = defineStore(
           success: false,
         },
       }));
-      void stopActiveRun();
+      syncFromPresenter();
+      await stopActiveRun();
     }
 
     function teardown(): void {

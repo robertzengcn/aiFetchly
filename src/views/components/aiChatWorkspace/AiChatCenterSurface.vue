@@ -992,7 +992,9 @@ function onGrantPermission(
 }
 
 function onDenyPermission(message: ChatV2MessageView): void {
-  selectedStore.denyToolPermission(message, permissionTexts.value);
+  void selectedStore
+    .denyToolPermission(message, permissionTexts.value)
+    .catch(() => undefined);
 }
 
 // --- Durable per-conversation drafts (FR-COMP-011, legacy parity) -----------
