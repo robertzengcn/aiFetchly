@@ -306,72 +306,149 @@ export class QualitativeEvaluator implements CriterionEvaluator {
     if (criterion.kind !== "qualitative") {
       return unknown(criterion.id, "qualitative evaluator called on non-qualitative criterion");
     }
-    if (!context.checkerDispatch) {
-      return unknown(criterion.id, "no checker dispatch wired");
+    // Single-criterion path preserved via the batch path (one entry): same
+    // reserves (initial + at most one retry), same abort semantics.
+    const results = await this.evaluateBatch([criterion], context);
+    const result = results.get(criterion.id);
+    if (!result) {
+      return unknown(criterion.id, "batch missing verdict for criterion (fail-closed)");
     }
-    const prompt = buildCheckerPrompt(criterion, context.content);
+    return result;
+  }
+
+  /**
+   * B05 (FR-04/08, AC-03/08/20): judge a whole candidate's qualitative
+   * criteria in ONE bounded checker call (one prompt, one schema-validated
+   * array response, at most one retry) instead of one reserve+dispatch per
+   * criterion. Sequential per-criterion reserves spend the 2-per-candidate
+   * allowance on the first two criteria and starve the third forever (and
+   * burn the 6-check run allowance re-checking from the first). Returns one
+   * result per input criterion, keyed by criterion id; every input id is
+   * always present (missing → fail-closed unknown, never a silent drop).
+   */
+  async evaluateBatch(
+    criteria: readonly TaskCriterion[],
+    context: AdapterContext
+  ): Promise<ReadonlyMap<string, CriterionEvalResult>> {
+    const empty = new Map<string, CriterionEvalResult>();
+    if (criteria.length === 0) return empty;
+    for (const criterion of criteria) {
+      if (criterion.kind !== "qualitative") {
+        empty.set(
+          criterion.id,
+          unknown(criterion.id, "qualitative batch called on non-qualitative criterion")
+        );
+      }
+    }
+    const batch = criteria.filter((c) => c.kind === "qualitative");
+    if (batch.length === 0) return empty;
+    if (!context.checkerDispatch) {
+      for (const criterion of batch) {
+        empty.set(criterion.id, unknown(criterion.id, "no checker dispatch wired"));
+      }
+      return empty;
+    }
+    const prompt = buildCheckerBatchPrompt(batch, context.content);
     // The guard above narrowed context.checkerDispatch to non-undefined; bind
-    // it to a local so dispatchOnce has a stable non-optional reference.
+    // it to a local so dispatchBatchOnce has a stable non-optional reference.
     const dispatch = context.checkerDispatch;
 
     // First attempt (already reserved by the controller's budgetReserveChecker
-    // closure before this evaluate() is called — but guard anyway for direct
-    // callers). Exhausted → unknown fail-closed.
+    // closure before this evaluateBatch() is called — but guard anyway for
+    // direct callers). Exhausted → all unknown fail-closed.
     const firstReservation = context.budgetReserveChecker
       ? context.budgetReserveChecker()
       : BudgetReservationResult.Reserved;
     if (firstReservation === BudgetReservationResult.Exhausted) {
-      return unknown(criterion.id, "checker budget exhausted (qualitative skipped, fail-closed)");
+      for (const criterion of batch) {
+        empty.set(criterion.id, unknown(criterion.id, "checker budget exhausted (qualitative skipped, fail-closed)"));
+      }
+      return empty;
     }
 
-    const firstResult = await this.dispatchOnce(criterion, prompt, context, dispatch);
+    const firstResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch);
     if (firstResult.kind === "verdict") {
-      return summarizeVerdict(criterion, firstResult, false);
+      return this.summarizeBatch(batch, firstResult.verdicts, false);
     }
     // Abort (Stop / deadline) is TERMINAL — no retry (AC-24: no late
     // verified result). A Stop mid-check cannot be retried into a pass.
     if (firstResult.kind === "aborted") {
-      return unknown(criterion.id, firstResult.reason);
+      for (const criterion of batch) {
+        empty.set(criterion.id, unknown(criterion.id, firstResult.reason));
+      }
+      return empty;
     }
     // First attempt produced invalid/transient output → one retry within
     // budget (§8.2: "One checker retry per unchanged candidate is allowed for
-    // transient/invalid output, using the same evidence"). The retry uses a
-    // distinct request id (`:retry`) so the budget dedup does not collapse it
-    // onto the first reserve. Exhausted / AlreadyReserved → unknown fail-closed
-    // (no third dispatch — the 2-per-candidate cap is enforced by the budget).
+    // transient/invalid output, using the same evidence"). Exhausted /
+    // AlreadyReserved → all unknown fail-closed (no third dispatch — the
+    // 2-per-candidate cap is enforced by the budget).
     const retryReservation = context.budgetReserveChecker
       ? context.budgetReserveChecker()
       : BudgetReservationResult.Reserved;
     if (retryReservation !== BudgetReservationResult.Reserved) {
-      return unknown(
+      for (const criterion of batch) {
+        empty.set(
+          criterion.id,
+          unknown(
+            criterion.id,
+            `checker invalid on first attempt (${firstResult.reason}); no retry budget (fail-closed)`
+          )
+        );
+      }
+      return empty;
+    }
+    const retryResult = await this.dispatchBatchOnce(batch, prompt, context, dispatch);
+    if (retryResult.kind === "verdict") {
+      return this.summarizeBatch(batch, retryResult.verdicts, true);
+    }
+    for (const criterion of batch) {
+      empty.set(
         criterion.id,
-        `checker invalid on first attempt (${firstResult.reason}); no retry budget (fail-closed)`
+        unknown(
+          criterion.id,
+          `checker invalid after retry (first=${firstResult.reason}, retry=${retryResult.reason})`
+        )
       );
     }
-    const retryResult = await this.dispatchOnce(criterion, prompt, context, dispatch);
-    if (retryResult.kind === "verdict") {
-      return summarizeVerdict(criterion, retryResult, true);
-    }
-    return unknown(
-      criterion.id,
-      `checker invalid after retry (first=${firstResult.reason}, retry=${retryResult.reason})`
-    );
+    return empty;
   }
 
   /**
-   * One dispatch + parse, wrapped in the abort/deadline race. Returns either a
-   * valid verdict (pass/fail/unknown — schema-valid, criterion-id match,
-   * admissible evidence) or an invalid outcome (transient error / invalid
-   * JSON / schema mismatch / invented references). Abort (turn or deadline) →
-   * invalid-but-not-retried: the caller treats abort as terminal fail-closed,
-   * not a transient retry, per AC-24 ("no late verified result").
+   * Map batch verdicts back onto their criteria. Every input criterion gets
+   * exactly one result (missing verdict → fail-closed unknown — a dropped
+   * criterion must never read as verified).
    */
-  private async dispatchOnce(
-    criterion: TaskCriterion,
+  private summarizeBatch(
+    batch: readonly TaskCriterion[],
+    verdicts: ReadonlyMap<string, BatchVerdict>,
+    retried: boolean
+  ): ReadonlyMap<string, CriterionEvalResult> {
+    const results = new Map<string, CriterionEvalResult>();
+    for (const criterion of batch) {
+      const verdict = verdicts.get(criterion.id);
+      if (!verdict) {
+        results.set(criterion.id, unknown(criterion.id, "batch missing verdict for criterion (fail-closed)"));
+        continue;
+      }
+      results.set(criterion.id, summarizeVerdict(criterion, verdict, retried));
+    }
+    return results;
+  }
+
+  /**
+   * Race one checker transport call against the abort/deadline signals.
+   * Resolves the raw response; throws an AbortError-shaped error on Stop /
+   * deadline (B20 race — even a transport that ignores AbortSignal cannot
+   * hold the gate past CHECKER_DEADLINE_MS) and propagates transport errors
+   * for the caller to classify. Shared by the single and batch paths so
+   * both have identical abort/deadline semantics.
+   */
+  private async raceDispatch(
     prompt: string,
     context: AdapterContext,
     dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
-  ): Promise<DispatchOutcome> {
+  ): Promise<string> {
     // AbortSignal.any links the parent (turn/run Stop) and the per-dispatch
     // deadline controller into one signal — a parent abort or deadline aborts
     // the in-flight dispatch with no manual listener bookkeeping to clean up.
@@ -384,8 +461,8 @@ export class QualitativeEvaluator implements CriterionEvaluator {
     // indefinitely past the deadline. Race the dispatch against a deadline
     // rejection so a hanging request returns promptly; the race loser is
     // ignored (no late verified result). The deadline rejects with an
-    // AbortError-shaped error so the catch below classifies it as terminal
-    // abort (no retry), identical to a signaled abort.
+    // AbortError-shaped error so callers classify it as terminal abort
+    // (no retry), identical to a signaled abort.
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
@@ -408,10 +485,33 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       // Already-aborted (Stop fired before dispatch, or a deadlined earlier
       // attempt): never dispatch into a dead turn — terminal unknown now.
       if (combined.aborted) {
-        return { kind: "aborted", reason: "checker dispatch already aborted before start (Stop or deadline)" };
+        const err = new Error("checker dispatch already aborted before start (Stop or deadline)");
+        err.name = "AbortError";
+        throw err;
       }
-      const response = await Promise.race([dispatch(prompt, combined), deadline]);
-      return parseCheckerVerdict(response, criterion);
+      return await Promise.race([dispatch(prompt, combined), deadline]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * One dispatch + parse, wrapped in the abort/deadline race. Returns either a
+   * valid verdict (pass/fail/unknown — schema-valid, criterion-id match,
+   * admissible evidence) or an invalid outcome (transient error / invalid
+   * JSON / schema mismatch / invented references). Abort (turn or deadline) →
+   * invalid-but-not-retried: the caller treats abort as terminal fail-closed,
+   * not a transient retry, per AC-24 ("no late verified result").
+   */
+  private async dispatchOnce(
+    criterion: TaskCriterion,
+    prompt: string,
+    context: AdapterContext,
+    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
+  ): Promise<DispatchOutcome> {
+    let response: string;
+    try {
+      response = await this.raceDispatch(prompt, context, dispatch);
     } catch (error) {
       if (isAbortError(error)) {
         // AC-24: Stop or deadline-aborted mid-dispatch → terminal unknown, no
@@ -420,9 +520,36 @@ export class QualitativeEvaluator implements CriterionEvaluator {
       }
       // Transient error (network/timeout/entitlement throw) → retryable.
       return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
     }
+    return parseCheckerVerdict(response, criterion);
+  }
+
+  /**
+   * B05: one dispatch + batch parse for a whole candidate's qualitative
+   * criteria. Same abort/deadline semantics as {@link dispatchOnce}; the
+   * batch parse validates id-set equality + per-entry admissibility, so one
+   * malformed entry invalidates the batch (fail-closed, one retry).
+   */
+  private async dispatchBatchOnce(
+    criteria: readonly TaskCriterion[],
+    prompt: string,
+    context: AdapterContext,
+    dispatch: (prompt: string, signal?: AbortSignal) => Promise<string>
+  ): Promise<
+    | { kind: "verdict"; verdicts: ReadonlyMap<string, BatchVerdict> }
+    | { kind: "invalid"; reason: string }
+    | { kind: "aborted"; reason: string }
+  > {
+    let response: string;
+    try {
+      response = await this.raceDispatch(prompt, context, dispatch);
+    } catch (error) {
+      if (isAbortError(error)) {
+        return { kind: "aborted", reason: "checker LLM aborted (Stop or deadline)" };
+      }
+      return { kind: "invalid", reason: `checker LLM error: ${errorMessage(error)}` };
+    }
+    return parseCheckerBatchVerdict(response, criteria);
   }
 }
 
@@ -660,38 +787,56 @@ function meetsOperationThreshold(actual: string, required: string): boolean {
   return actualIdx >= requiredIdx;
 }
 
-function buildCheckerPrompt(criterion: TaskCriterion, content: string): string {
-  // §8.2: the checker judges whether the content satisfies the criterion and
-  // returns a per-criterion JSON result. The prompt enumerates the admissible
-  // evidence IDs (the criterion id — the checker cannot see prior evidence
-  // rows; the evaluator is the boundary) so the checker knows what it may
-  // cite. A pass REQUIRES admissible supporting evidence (§8.2: "Every pass
-  // cites admissible supporting evidence"). Output is parsed strictly — no
-  // provider JSON-mode reliance (§8.2).
-  return `You are a task completion verifier. Determine whether the following criterion is satisfied by the assistant's response. Reply ONLY with a single JSON object, no prose, no code fences.
+/**
+ * B05 (FR-04/08, AC-03/08/20): batch checker prompt. All qualitative
+ * criteria in one candidate are judged by ONE bounded dispatch (one prompt
+ * listing every criterion, one schema-validated array response, at most one
+ * retry) instead of one reserve+dispatch per criterion — sequential
+ * per-criterion reserves spend the whole 2-per-candidate allowance on the
+ * first two criteria and starve the third forever. Criteria are frozen at
+ * enrollment, so the batch size is bounded by the contract itself (a
+ * runaway stream cannot grow it). The per-criterion admissible sets are
+ * unchanged (B04 trust boundary holds per entry).
+ */
+function buildCheckerBatchPrompt(criteria: readonly TaskCriterion[], content: string): string {
+  // §8.2: the checker judges whether the content satisfies each criterion
+  // and returns a per-criterion JSON result. The prompt enumerates the
+  // admissible evidence IDs per criterion (the criterion id — the checker
+  // cannot see prior evidence rows; the evaluator is the boundary) so the
+  // checker knows what it may cite. A pass REQUIRES admissible supporting
+  // evidence (§8.2: "Every pass cites admissible supporting evidence").
+  // Output is parsed strictly — no provider JSON-mode reliance (§8.2).
+  const listed = criteria
+    .map((c) => `Criterion (${c.id}): ${c.description}\nAdmissible evidence ids: ["${c.id}"]`)
+    .join("\n\n");
+  const schemaEntries = criteria
+    .map(
+      (c) => `    {
+      "criterionId": "${c.id}",
+      "verdict": "pass" | "fail" | "unknown",
+      "evidenceIds": ["${c.id}"],
+      "reason": "one short sentence"
+    }`
+    )
+    .join(",\n");
+  return `You are a task completion verifier. Determine whether each criterion below is satisfied by the assistant's response. Reply ONLY with a single JSON object, no prose, no code fences.
 
-JSON schema (exactly one entry in "criteria"):
+JSON schema (exactly one entry per listed criterion, ids must match):
 {
   "criteria": [
-    {
-      "criterionId": "${criterion.id}",
-      "verdict": "pass" | "fail" | "unknown",
-      "evidenceIds": ["${criterion.id}"],
-      "reason": "one short sentence"
-    }
+${schemaEntries}
   ]
 }
 
 Rules:
-- "verdict": "pass" REQUIRES at least one evidenceId drawn from the admissible set below.
+- "verdict": "pass" REQUIRES at least one evidenceId drawn from that criterion's admissible set.
 - "verdict": "fail" means the response clearly does NOT satisfy the criterion.
 - "verdict": "unknown" means you cannot determine it.
+- Every listed criterionId must appear exactly once. Do NOT invent ids.
 - Do NOT cite evidence ids outside the admissible set.
 - Output ONLY the JSON object. No text before or after.
 
-Criterion (${criterion.id}): ${criterion.description}
-
-Admissible evidence ids: ["${criterion.id}"]
+${listed}
 
 Assistant response:
 ${content.slice(0, 8000)}`;
@@ -703,8 +848,11 @@ const CHECKER_DEADLINE_MS = 30_000;
 const MAX_CHECKER_REASON = 500;
 
 /**
- * Zod schema for the §8.2 checker JSON contract. Strict: exactly one
- * criterion result, enum verdict, string evidence ids, bounded reason.
+ * Zod schema for the §8.2 checker JSON contract. Strict: a non-empty array
+ * of criterion results (B05: one entry per batched criterion), enum
+ * verdict, string evidence ids, bounded reason. Id-set equality with the
+ * batch is enforced in code below (duplicates/missing/invented ids →
+ * invalid); a batch of one behaves exactly like the former single schema.
  */
 const checkerResultSchema = z.object({
   criteria: z
@@ -716,7 +864,8 @@ const checkerResultSchema = z.object({
         reason: z.string(),
       })
     )
-    .length(1),
+    .min(1)
+    .max(64),
 });
 
 /**
@@ -732,17 +881,23 @@ function extractJsonObject(raw: string): string | null {
 }
 
 /**
- * Parse + validate the checker's response against the §8.2 contract.
- * Returns a `verdict` outcome only when the output is schema-valid AND the
- * cross-checks pass (criterionId match, evidenceIds ⊆ admissible, non-empty
- * on pass). Any violation → `invalid` (the caller retries once within budget,
- * then fails closed). Malformed `PASS ...` prefix and prompt-injection text
- * never yield a verdict here — they are not valid JSON (AC-11/21).
+ * Parse + validate the checker's batch response against the §8.2 contract.
+ * Returns per-criterion verdicts only when the output is schema-valid AND
+ * every cross-check passes for EVERY entry (id-set equality with the batch,
+ * evidenceIds ⊆ that criterion's admissible set, non-empty on pass). Any
+ * violation → `invalid` for the whole batch (the caller retries once within
+ * budget, then fails closed). Malformed `PASS ...` prefix and
+ * prompt-injection text never yield verdicts here — they are not valid
+ * JSON (AC-11/21).
  */
-function parseCheckerVerdict(
+type BatchVerdict = { readonly verdict: CriterionState; readonly evidenceIds: readonly string[]; readonly reason: string };
+
+function parseCheckerBatchVerdict(
   response: string,
-  criterion: TaskCriterion
-): DispatchOutcome {
+  criteria: readonly TaskCriterion[]
+):
+  | { kind: "verdict"; verdicts: ReadonlyMap<string, BatchVerdict> }
+  | { kind: "invalid"; reason: string } {
   const jsonText = extractJsonObject(response);
   if (!jsonText) {
     return { kind: "invalid", reason: "no JSON object in checker response" };
@@ -760,36 +915,87 @@ function parseCheckerVerdict(
       reason: `checker JSON failed schema validation: ${result.error.message.slice(0, 200)}`,
     };
   }
-  const entry = result.data.criteria[0];
-  if (entry.criterionId !== criterion.id) {
+  // Id-set equality: exactly the batch ids, each once. Duplicates, missing
+  // entries, or invented ids invalidate the whole batch (fail-closed — a
+  // partial batch could otherwise smuggle an unverified criterion to pass).
+  const expected = new Set(criteria.map((c) => c.id));
+  const seen = new Set<string>();
+  for (const entry of result.data.criteria) {
+    if (!expected.has(entry.criterionId) || seen.has(entry.criterionId)) {
+      return {
+        kind: "invalid",
+        reason: `checker criterionId not exactly the batch set: got "${entry.criterionId}"`,
+      };
+    }
+    seen.add(entry.criterionId);
+  }
+  if (seen.size !== expected.size) {
+    const missing = [...expected].filter((id) => !seen.has(id));
     return {
       kind: "invalid",
-      reason: `checker criterionId mismatch: got "${entry.criterionId}" expected "${criterion.id}"`,
+      reason: `checker response missing criteria: ${JSON.stringify(missing)}`,
     };
   }
-  // Admissible evidence set: the criterion id (the evaluator is the boundary;
-  // the checker cannot cite external evidence ids).
-  const admissible = new Set<string>([criterion.id]);
-  const allAdmissible = entry.evidenceIds.every((id) => admissible.has(id));
-  if (!allAdmissible) {
-    return {
-      kind: "invalid",
-      reason: `checker cited non-admissible evidence ids: ${JSON.stringify(entry.evidenceIds)}`,
-    };
+  const byId = new Map(criteria.map((c) => [c.id, c]));
+  const verdicts = new Map<string, BatchVerdict>();
+  for (const entry of result.data.criteria) {
+    const criterion = byId.get(entry.criterionId);
+    if (!criterion) {
+      return { kind: "invalid", reason: `checker criterionId not in batch: "${entry.criterionId}"` };
+    }
+    // Admissible evidence set: the criterion id (the evaluator is the
+    // boundary; the checker cannot cite external evidence ids).
+    const admissible = new Set<string>([criterion.id]);
+    const allAdmissible = entry.evidenceIds.every((id) => admissible.has(id));
+    if (!allAdmissible) {
+      return {
+        kind: "invalid",
+        reason: `checker cited non-admissible evidence ids for "${entry.criterionId}": ${JSON.stringify(entry.evidenceIds)}`,
+      };
+    }
+    // §8.2: "Every pass cites admissible supporting evidence." Empty
+    // evidence on pass → invalid (invented/absent references cannot
+    // satisfy a pass).
+    if (entry.verdict === "pass" && entry.evidenceIds.length === 0) {
+      return {
+        kind: "invalid",
+        reason: `checker verdict pass with no evidence ids for "${entry.criterionId}" (citations required)`,
+      };
+    }
+    verdicts.set(entry.criterionId, {
+      verdict: entry.verdict,
+      evidenceIds: entry.evidenceIds,
+      reason: entry.reason.slice(0, MAX_CHECKER_REASON),
+    });
   }
-  // §8.2: "Every pass cites admissible supporting evidence." Empty evidence on
-  // pass → invalid (invented/absent references cannot satisfy a pass).
-  if (entry.verdict === "pass" && entry.evidenceIds.length === 0) {
-    return {
-      kind: "invalid",
-      reason: "checker verdict pass with no evidence ids (citations required)",
-    };
+  return { kind: "verdict", verdicts };
+}
+
+/**
+ * Parse + validate the checker's response against the §8.2 contract.
+ * Returns a `verdict` outcome only when the output is schema-valid AND the
+ * cross-checks pass (criterionId match, evidenceIds ⊆ admissible, non-empty
+ * on pass). Any violation → `invalid` (the caller retries once within budget,
+ * then fails closed). Malformed `PASS ...` prefix and prompt-injection text
+ * never yield a verdict here — they are not valid JSON (AC-11/21).
+ */
+function parseCheckerVerdict(
+  response: string,
+  criterion: TaskCriterion
+): DispatchOutcome {
+  const batch = parseCheckerBatchVerdict(response, [criterion]);
+  if (batch.kind === "invalid") {
+    return { kind: "invalid", reason: batch.reason };
+  }
+  const entry = batch.verdicts.get(criterion.id);
+  if (!entry) {
+    return { kind: "invalid", reason: `checker response missing criterion "${criterion.id}"` };
   }
   return {
     kind: "verdict",
     verdict: entry.verdict,
     evidenceIds: entry.evidenceIds,
-    reason: entry.reason.slice(0, MAX_CHECKER_REASON),
+    reason: entry.reason,
   };
 }
 

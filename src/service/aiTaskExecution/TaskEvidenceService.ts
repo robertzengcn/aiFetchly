@@ -122,8 +122,34 @@ export class TaskEvidenceService implements EvidenceChecker {
     const passed: string[] = [];
     const unmet: string[] = [];
 
+    // B05 (FR-04/08, AC-03/08/20): judge the candidate's qualitative
+    // criteria in ONE bounded batch call instead of one reserve+dispatch per
+    // criterion (which starves the third criterion within the 2-per-candidate
+    // cap). The batch shares the adapter context every per-criterion check
+    // would have received.
+    const batchAdapterContext = {
+      content: context.content,
+      toolCatalogState: context.toolCatalogState,
+      abortSignal: context.abortSignal,
+      checkerDispatch: context.checkerDispatch,
+      budgetReserveChecker: context.budgetReserveChecker,
+      observationProvider: context.observationProvider,
+      operationReceiptProvider: context.operationReceiptProvider,
+      artifactBaseDir: context.artifactBaseDir,
+      artifactBaselines: context.artifactBaselines,
+    };
+    const qualitativeBatch = contract.criteria.filter((c) => c.kind === "qualitative");
+    const batchResults =
+      qualitativeBatch.length > 0
+        ? await this.qualitativeEvaluator.evaluateBatch(qualitativeBatch, batchAdapterContext)
+        : new Map<string, CriterionEvalResult>();
+
     for (const criterion of contract.criteria) {
-      const result = await this.evaluateCriterion(criterion, context);
+      const result =
+        criterion.kind === "qualitative"
+          ? (batchResults.get(criterion.id) ??
+            unknownResult(criterion.id, "batch missing verdict for criterion (fail-closed)"))
+          : await this.evaluateCriterion(criterion, context);
       const evidenceId = newEvidenceId();
       evidenceRows.push({
         evidenceId,

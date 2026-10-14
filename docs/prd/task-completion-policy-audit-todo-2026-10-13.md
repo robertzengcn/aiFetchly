@@ -112,7 +112,8 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B05 — Three qualitative criteria starve the third within the two-check cap [P2; confidence 10/10; reproduced]
 
-- [ ] Evaluate all qualitative criteria in one bounded candidate check, or preserve valid verdicts while respecting the candidate/run attempt limits.
+- [x] Evaluate all qualitative criteria in one bounded candidate check, or preserve valid verdicts while respecting the candidate/run attempt limits.
+*(done 2026-10-14: evaluateBatch judges all qualitative criteria in one dispatch (shared §8.2 array schema, id-set equality, per-entry admissibility — B04 trust unchanged), at most one retry; single path delegates to batch-of-one; service partitions qualitative per candidate. Sequential-encoding test corrected per B22. Tests: B05b/c/d incl. 2-cap starvation RED + 158/158 suites.)*
 
 **Location:** `TaskCompletionController.ts:329–339`, `TaskEvidenceService.checkCandidate`, `TaskRunBudget.reserveCheckerAttempt`.
 

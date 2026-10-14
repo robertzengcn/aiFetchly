@@ -223,7 +223,11 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     expect(result.unmetCriterionIds).toEqual(["rec-1"]);
   });
 
-  it("qualitative criterion: checker LLM returns pass/fail/unknown via §8.2 JSON → matching state; budget exhausted → unknown (fail-closed, AC-09/10)", async () => {
+  it("qualitative criteria: one batch dispatch maps pass/fail/unknown per entry via §8.2 JSON (B05 batch contract)", async () => {
+    // B05: the three qualitative criteria share ONE bounded batch check —
+    // the checker returns one entry per listed criterion and each maps to
+    // its own state. No per-criterion dispatches, no per-criterion budget
+    // exhaustion starving the third.
     const { store } = memoryStore();
     const service = new TaskEvidenceService(store);
     const contract = makeContract([
@@ -234,34 +238,26 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
     let calls = 0;
     const dispatch = async (prompt: string): Promise<string> => {
       calls += 1;
-      // T04: the §8.2 JSON contract. The checker cites the admissible evidence
-      // id (the criterion id) on pass; fail/unknown carry no citation.
-      if (prompt.includes("polite")) {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterionId: "rec-1",
-              verdict: "pass",
-              evidenceIds: ["rec-1"],
-              reason: "polite",
-            },
-          ],
-        });
-      }
-      if (prompt.includes("rude")) {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterionId: "rec-2",
-              verdict: "fail",
-              evidenceIds: [],
-              reason: "rude",
-            },
-          ],
-        });
-      }
+      // T04: the §8.2 JSON contract, one entry per batched criterion. The
+      // checker cites the admissible evidence id (the criterion id) on pass;
+      // fail/unknown carry no citation.
+      expect(prompt).toContain("rec-1");
+      expect(prompt).toContain("rec-2");
+      expect(prompt).toContain("rec-3");
       return JSON.stringify({
         criteria: [
+          {
+            criterionId: "rec-1",
+            verdict: "pass",
+            evidenceIds: ["rec-1"],
+            reason: "polite",
+          },
+          {
+            criterionId: "rec-2",
+            verdict: "fail",
+            evidenceIds: [],
+            reason: "rude",
+          },
           {
             criterionId: "rec-3",
             verdict: "unknown",
@@ -271,7 +267,8 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
         ],
       });
     };
-    // Budget: first two reservations succeed, third exhausted.
+    // Budget: two reservations succeed (initial + one retry allowance); the
+    // batch verifies all three within them.
     let checkerCalls = 0;
     const reserveChecker = (): BudgetReservationResult => {
       checkerCalls += 1;
@@ -290,12 +287,12 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
       }
     );
     // rec-1 (polite) pass → pass; rec-2 (rude) fail → fail (unmet);
-    // rec-3 (weather) budget exhausted → unknown (unmet, fail-closed).
+    // rec-3 (weather) unknown → unmet. One batch dispatch verifies all
+    // three within the candidate allowance (B05: no third starvation).
     expect(result.passedCriterionIds).toEqual(["rec-1"]);
     expect(result.unmetCriterionIds).toContain("rec-2");
     expect(result.unmetCriterionIds).toContain("rec-3");
-    // rec-3 was never dispatched — only 2 checker calls.
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
   it("qualitative criterion: checker LLM AbortError (user cancel during checking) → unknown, never verified (AC-24)", async () => {
@@ -1371,6 +1368,122 @@ describe("TaskEvidenceService.checkCandidate — T04 checker contract + abortabl
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("TaskEvidenceService.checkCandidate — B05 batch qualitative checking (FR-04/08, AC-03/08/20)", () => {
+  const batchPass = (ids: string[]) =>
+    JSON.stringify({
+      criteria: ids.map((criterionId) => ({
+        criterionId,
+        verdict: "pass",
+        evidenceIds: [criterionId],
+        reason: `${criterionId} satisfied`,
+      })),
+    });
+
+  function cappedReserve(limit: number): { reserve: () => BudgetReservationResult; calls: () => number } {
+    let reserveCalls = 0;
+    return {
+      reserve: () => (++reserveCalls <= limit ? BudgetReservationResult.Reserved : BudgetReservationResult.Exhausted),
+      calls: () => reserveCalls,
+    };
+  }
+
+  it("B05d: three complete qualitative outputs verify within the two-check candidate cap (no third starvation)", async () => {
+    // The starvation defect: sequential per-criterion reserves spend the
+    // whole 2-per-candidate allowance on the first two criteria, leaving
+    // the third unknown forever (and burning the 6-check run allowance on
+    // re-checks from the first). One bounded batch check + at most one
+    // retry must verify all three.
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([
+      qualitativeCriterion("rec-1", "blog post"),
+      qualitativeCriterion("rec-2", "email draft"),
+      qualitativeCriterion("rec-3", "tweet"),
+    ]);
+    const dispatch = vi.fn(async () => batchPass(["rec-1", "rec-2", "rec-3"]));
+    const cap = cappedReserve(2);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "blog + email + tweet" }),
+      contract,
+      {
+        content: "blog + email + tweet",
+        source: "b05",
+        sourceRevision: "slice2-b05",
+        expectedStateVersion: 0,
+        checkerDispatch: dispatch,
+        budgetReserveChecker: cap.reserve,
+      }
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(cap.calls()).toBeLessThanOrEqual(2);
+    expect(result.passedCriterionIds).toEqual(["rec-1", "rec-2", "rec-3"]);
+    expect(result.unmetCriterionIds).toEqual([]);
+  });
+
+  it("B05b: invalid batch output retries once, then verifies all (at most one retry)", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([
+      qualitativeCriterion("rec-1", "blog post"),
+      qualitativeCriterion("rec-2", "email draft"),
+    ]);
+    let calls = 0;
+    const dispatch = vi.fn(async (): Promise<string> => {
+      calls += 1;
+      if (calls === 1) return "not json at all";
+      return batchPass(["rec-1", "rec-2"]);
+    });
+    const cap = cappedReserve(2);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "blog + email" }),
+      contract,
+      {
+        content: "blog + email",
+        source: "b05",
+        sourceRevision: "slice2-b05",
+        expectedStateVersion: 0,
+        checkerDispatch: dispatch,
+        budgetReserveChecker: cap.reserve,
+      }
+    );
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(cap.calls()).toBeLessThanOrEqual(2);
+    expect(result.passedCriterionIds).toEqual(["rec-1", "rec-2"]);
+  });
+
+  it("B05c: genuinely failed criterion stays unmet while siblings pass (no blanket pass)", async () => {
+    const { store } = memoryStore();
+    const service = new TaskEvidenceService(store);
+    const contract = makeContract([
+      qualitativeCriterion("rec-1", "blog post"),
+      qualitativeCriterion("rec-2", "email draft"),
+    ]);
+    const dispatch = vi.fn(async () =>
+      JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "good post" },
+          { criterionId: "rec-2", verdict: "fail", evidenceIds: [], reason: "no draft" },
+        ],
+      })
+    );
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "blog only" }),
+      contract,
+      {
+        content: "blog only",
+        source: "b05",
+        sourceRevision: "slice2-b05",
+        expectedStateVersion: 0,
+        checkerDispatch: dispatch,
+        budgetReserveChecker: () => BudgetReservationResult.Reserved,
+      }
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+    expect(result.unmetCriterionIds).toEqual(["rec-2"]);
   });
 });
 
