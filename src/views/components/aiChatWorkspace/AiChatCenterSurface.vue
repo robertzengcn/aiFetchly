@@ -703,6 +703,7 @@ import type { ChatV2CompactionProgressEvent } from "@/entityTypes/aiChatV2Types"
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { navigateToHistorySource } from "@/views/utils/historyNavigate";
+import { useConversationScopedOverlays } from "@/views/composables/aiChatWorkspace/useConversationScopedOverlays";
 import { localizeWorkspaceError } from "@/views/utils/workspaceErrorLocalization";
 import {
   planContinuationRequestId,
@@ -793,6 +794,15 @@ const inspector = useAppInspectorStore();
 const selectionApi = useChatWorkspaceSelection();
 
 const conversationId = computed(() => workspaceStore.selectedConversationId);
+
+// G01 (AD-008): conversation-bound overlay ownership. Report, staging and
+// generated-image dialogs always describe the current chat — their closers
+// are registered here instead of scattered one-watch-per-dialog resets, so
+// a selection change can never leave a dialog describing (or submitting
+// into) a conversation the user navigated away from.
+const scopedOverlays = useConversationScopedOverlays(
+  () => conversationId.value
+);
 
 // --- Shared conversation workspace + voice state ---------------------------
 const conversationWorkspace = useConversationWorkspace(conversationId);
@@ -1157,7 +1167,8 @@ function onConversationReportSubmitted(payload: {
 // An open dialog must never describe a conversation the user navigated away
 // from — close without submitting so a later open rebuilds a fresh snapshot.
 // FR-RPT-008: the single-output report dialog rebinds the same way.
-watch(conversationId, () => {
+// G01: owned by the shared overlay host (AD-008), not a local watcher.
+scopedOverlays.registerSelectionBoundOverlay("report-dialogs", () => {
   if (conversationReportDialogOpen.value) {
     conversationReportDialogOpen.value = false;
     conversationReportSnapshot.value = null;
@@ -2161,7 +2172,8 @@ function onScheduledLoopApprovalCancel(): void {
 }
 
 // Conversation-scoped staging never leaks across selections (FR-CMD-008).
-watch(conversationId, () => {
+// G01: owned by the shared overlay host (AD-008).
+scopedOverlays.registerSelectionBoundOverlay("scheduled-loop-staging", () => {
   commandRouter.resetConversationState();
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
@@ -2315,13 +2327,9 @@ async function handleHistoryNavigate(excerpt?: HistoryExcerpt): Promise<void> {
   });
 }
 
-// Conversation switch: swap each chat's chip draft (never leak across chats).
-// A pending generated-image send never replays into the newly selected chat.
-// B14: history submission identities are per-conversation in the store — a
-// switch never nulls them (a leaked id would fail CONVERSATION_MISMATCH
-// dedupe, but a nulled id breaks the promised stable retry identity; the
-// store keeps each conversation's own id, so neither happens).
-watch(conversationId, () => {
+// Conversation switch: image-dialog state never replays into the newly
+// selected chat. G01: owned by the shared overlay host (AD-008).
+scopedOverlays.registerSelectionBoundOverlay("generated-image-dialogs", () => {
   pendingGeneratedImageSend.value = null;
   ambiguityCandidates.value = [];
   showGeneratedImageChooser.value = false;
