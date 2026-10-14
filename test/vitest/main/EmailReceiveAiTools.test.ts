@@ -27,6 +27,8 @@ const detectionModuleStub = {
 const messageModuleStub = {
   ensureConnection: vi.fn(),
   read: vi.fn(),
+  listByEmailService: vi.fn(),
+  markRead: vi.fn(),
 };
 // AI-enable gate (FR-6.1): default true so happy-path tests proceed; the
 // disabled-AI test flips this to false.
@@ -67,6 +69,40 @@ vi.mock("@/modules/EmailReceivedMessageModule", () => ({
     return messageModuleStub;
   },
 }));
+// G02: fetch_unread_emails uses EmailReceiveSyncService.syncUnread then loads
+// stored rows via listByEmailService. Mock the sync service so the fetch
+// integration test can drive the evidence-projection path without a mailbox.
+const syncServiceStub = {
+  syncUnread: vi.fn(),
+};
+vi.mock("@/service/emailReceive/EmailReceiveSyncService", () => ({
+  EmailReceiveSyncService: function () {
+    return syncServiceStub;
+  },
+}));
+// writeReadAudit / listEmailInboxes / markEmailProcessed construct these.
+// writeReadAudit swallows failures, but the constructors touch the DB layer, so
+// stub them to keep the integration tests pure.
+const auditLogModuleStub = { create: vi.fn() };
+vi.mock("@/modules/EmailReplyAuditLogModule", () => ({
+  EmailReplyAuditLogModule: function () {
+    return auditLogModuleStub;
+  },
+}));
+vi.mock("@/entity/EmailReplyAuditLog.entity", () => ({
+  EmailReplyAuditLogEntity: function () {
+    return {};
+  },
+}));
+const emailServiceModuleStub = {
+  ensureConnection: vi.fn(),
+  listReceiveEnabledServices: vi.fn(),
+};
+vi.mock("@/modules/emailServiceModule", () => ({
+  EmailServiceModule: function () {
+    return emailServiceModuleStub;
+  },
+}));
 vi.mock("@/service/AiFeatureGate", () => ({
   // The tool's defaultIsAiEnabled() reads this; the disabled-AI test
   // flips the handle to false.
@@ -85,6 +121,9 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
   checkEmailReplied,
+  deriveReplyEvidence,
+  fetchUnreadEmails,
+  getEmailMessage,
 } from "@/service/EmailReceiveAiTools";
 import {
   SendPolicyRejection,
@@ -645,5 +684,355 @@ describe("checkEmailReplied — no-leak invariant (FR-039)", () => {
       /password|secret|token|credential|body|raw|stack|exception/i.test(k)
     );
     expect(forbidden).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G02 — safe reply evidence in ordinary message summaries (FR-033/FR-030)
+// ---------------------------------------------------------------------------
+
+describe("deriveReplyEvidence — three-state pure helper (G02)", () => {
+  // Sticky positive: replyDetectedAt set → replied:true, source preserved.
+  it("returns replied:true for a sticky positive (mailbox_flag)", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: new Date("2026-10-01T00:00:00Z"),
+      replyDetectionSource: "mailbox_flag",
+      replyNegativeCheckAt: null,
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date("2026-10-01T00:00:00Z"),
+      replyStatus: "not_started",
+    });
+    expect(ev.replied).toBe(true);
+    expect(ev.replyDetectedAt).toBe("2026-10-01T00:00:00.000Z");
+    expect(ev.replyDetectionSource).toBe("mailbox_flag");
+    // A stored negative is absent; but a stale negative MUST NOT weaken it.
+    expect(ev.replyNegativeCheckAt).toBeNull();
+    expect(ev.answeredFlagObserved).toBe(true);
+    expect(ev.answeredFlagCheckedAt).toBe("2026-10-01T00:00:00.000Z");
+  });
+
+  // Adversarial: a later negative observation does NOT clear a sticky positive.
+  it("stale negative does not weaken a sticky positive", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: new Date("2026-10-01T00:00:00Z"),
+      replyDetectionSource: "sent_search",
+      replyNegativeCheckAt: new Date("2026-10-10T00:00:00Z"),
+      isAnswered: 0,
+      answeredFlagCheckedAt: new Date("2026-10-10T00:00:00Z"),
+      replyStatus: "not_started",
+    });
+    expect(ev.replied).toBe(true);
+    expect(ev.replyDetectedAt).toBe("2026-10-01T00:00:00.000Z");
+    expect(ev.replyDetectionSource).toBe("sent_search");
+  });
+
+  // Complete negative (no positive): replied:false.
+  it("returns replied:false for a stored complete negative", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: null,
+      replyDetectionSource: null,
+      replyNegativeCheckAt: new Date("2026-10-05T00:00:00Z"),
+      isAnswered: 0,
+      answeredFlagCheckedAt: new Date("2026-10-05T00:00:00Z"),
+      replyStatus: "not_started",
+    });
+    expect(ev.replied).toBe(false);
+    expect(ev.replyDetectedAt).toBeNull();
+    expect(ev.replyNegativeCheckAt).toBe("2026-10-05T00:00:00.000Z");
+  });
+
+  // Legacy / never-checked / freshly-synced: replied:null (unknown is NEVER
+  // a false negative).
+  it("returns replied:null for a legacy/never-checked row", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: null,
+      replyDetectionSource: null,
+      replyNegativeCheckAt: null,
+      isAnswered: 0,
+      answeredFlagCheckedAt: null,
+      replyStatus: "not_started",
+    });
+    expect(ev.replied).toBeNull();
+    expect(ev.replyDetectedAt).toBeNull();
+    expect(ev.replyNegativeCheckAt).toBeNull();
+    expect(ev.answeredFlagObserved).toBe(false);
+    expect(ev.answeredFlagCheckedAt).toBeNull();
+  });
+
+  // App-delivery proof strengthens an evidence-less row to replied:true.
+  it("replyStatus=sent strengthens an evidence-less row to replied:true", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: null,
+      replyDetectionSource: null,
+      replyNegativeCheckAt: null,
+      isAnswered: 0,
+      answeredFlagCheckedAt: null,
+      replyStatus: "sent",
+    });
+    expect(ev.replied).toBe(true);
+    // No detector evidence columns, but the app lifecycle is the proof.
+    expect(ev.replyDetectedAt).toBeNull();
+    expect(ev.replyDetectionSource).toBeNull();
+  });
+
+  // Adversarial: app-sent does NOT downgrade a stored complete negative to
+  // true — but `sent` IS app-delivery proof, so it strengthens over null. A
+  // stored negative WITH replyStatus sent is contradictory; the positive
+  // (replyDetectedAt) path still wins. Here we assert sent does not weaken a
+  // stored negative to null.
+  it("replyStatus=sent does not weaken a stored negative to null", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: null,
+      replyDetectionSource: null,
+      replyNegativeCheckAt: new Date("2026-10-05T00:00:00Z"),
+      isAnswered: 0,
+      answeredFlagCheckedAt: new Date("2026-10-05T00:00:00Z"),
+      replyStatus: "sent",
+    });
+    // app-sent is positive proof → replied:true (strengthens over the negative).
+    expect(ev.replied).toBe(true);
+  });
+
+  // Flag observed but no sticky positive recorded yet → null + flag surfaced.
+  it("answered flag observed without sticky positive surfaces flag + replied:null", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: null,
+      replyDetectionSource: null,
+      replyNegativeCheckAt: null,
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date("2026-10-05T00:00:00Z"),
+      replyStatus: "not_started",
+    });
+    // No stored positive/negative → unknown; but the raw flag is surfaced so
+    // the AI can distinguish "flag seen, not yet sticky" from "never checked".
+    expect(ev.replied).toBeNull();
+    expect(ev.answeredFlagObserved).toBe(true);
+    expect(ev.answeredFlagCheckedAt).toBe("2026-10-05T00:00:00.000Z");
+  });
+
+  // FR-039 no-leak: the evidence object never carries secrets/bodies/raw
+  // mailbox exceptions.
+  it("exposes only low-cardinality safe fields (FR-039)", () => {
+    const ev = deriveReplyEvidence({
+      replyDetectedAt: new Date("2026-10-01T00:00:00Z"),
+      replyDetectionSource: "sent_search",
+      replyNegativeCheckAt: null,
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date("2026-10-01T00:00:00Z"),
+      replyStatus: "sent",
+    });
+    const keys = Object.keys(ev);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "replied",
+        "replyDetectedAt",
+        "replyDetectionSource",
+        "replyNegativeCheckAt",
+        "answeredFlagObserved",
+        "answeredFlagCheckedAt",
+      ])
+    );
+    const forbidden = keys.filter((k) =>
+      /password|secret|token|credential|body|raw|stack|exception|contextHash/i.test(k)
+    );
+    expect(forbidden).toEqual([]);
+  });
+});
+
+// A minimal stored-message row shape the mapper accepts. Only the fields
+// toMessageSummary reads; the evidence columns are optional for legacy rows.
+function storedRow(
+  overrides: Partial<{
+    id: number;
+    emailServiceId: number;
+    providerUid: string;
+    replyStatus: string;
+    replyDetectedAt: Date | null;
+    replyDetectionSource: string | null;
+    replyNegativeCheckAt: Date | null;
+    isAnswered: number;
+    answeredFlagCheckedAt: Date | null;
+  }>
+): Record<string, unknown> {
+  return {
+    id: 1,
+    emailServiceId: 10,
+    providerUid: "INBOX:42",
+    messageId: "<msg-1@x.com>",
+    threadKey: "<msg-1@x.com>",
+    fromAddress: "sender@example.com",
+    fromName: "Sender",
+    subject: "Hello",
+    receivedAt: new Date("2026-10-01T00:00:00Z"),
+    isUnread: 1,
+    classification: "interested",
+    replyStatus: "not_started",
+    replyDetectedAt: null,
+    replyDetectionSource: null,
+    replyNegativeCheckAt: null,
+    isAnswered: 0,
+    answeredFlagCheckedAt: null,
+    ...overrides,
+  };
+}
+
+describe("getEmailMessage — evidence flows to the detail DTO (G02)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    auditLogModuleStub.create.mockResolvedValue(undefined);
+    aiEnabled = true;
+  });
+
+  it("exposes sticky-positive evidence on a not_started (R11) row", async () => {
+    // R11: a freshly observed \Answered flag is sticky positive evidence; the
+    // replyStatus stays not_started. The summary must still surface replied:true.
+    messageModuleStub.read.mockResolvedValue(
+      storedRow({
+        id: 101,
+        replyStatus: "not_started",
+        replyDetectedAt: new Date("2026-10-02T00:00:00Z"),
+        replyDetectionSource: "mailbox_flag",
+        isAnswered: 1,
+        answeredFlagCheckedAt: new Date("2026-10-02T00:00:00Z"),
+      })
+    );
+    const result = await getEmailMessage({ message_id: 101 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message.replyStatus).toBe("not_started");
+    expect(result.message.replyEvidence.replied).toBe(true);
+    expect(result.message.replyEvidence.replyDetectedAt).toBe(
+      "2026-10-02T00:00:00.000Z"
+    );
+    expect(result.message.replyEvidence.replyDetectionSource).toBe(
+      "mailbox_flag"
+    );
+    expect(result.message.replyEvidence.answeredFlagObserved).toBe(true);
+  });
+
+  it("exposes replied:null for a legacy row with no evidence columns", async () => {
+    messageModuleStub.read.mockResolvedValue(
+      storedRow({ id: 102, replyStatus: "not_started" })
+    );
+    const result = await getEmailMessage({ message_id: 102 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message.replyEvidence.replied).toBeNull();
+    expect(result.message.replyEvidence.replyDetectedAt).toBeNull();
+    expect(result.message.replyEvidence.replyNegativeCheckAt).toBeNull();
+    expect(result.message.replyEvidence.answeredFlagObserved).toBe(false);
+  });
+
+  it("exposes replied:false for a stale-negative row", async () => {
+    messageModuleStub.read.mockResolvedValue(
+      storedRow({
+        id: 103,
+        replyStatus: "not_started",
+        replyNegativeCheckAt: new Date("2026-10-03T00:00:00Z"),
+        answeredFlagCheckedAt: new Date("2026-10-03T00:00:00Z"),
+      })
+    );
+    const result = await getEmailMessage({ message_id: 103 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message.replyEvidence.replied).toBe(false);
+    expect(result.message.replyEvidence.replyNegativeCheckAt).toBe(
+      "2026-10-03T00:00:00.000Z"
+    );
+  });
+
+  it("exposes replied:true for an app-sent row with no detector evidence", async () => {
+    messageModuleStub.read.mockResolvedValue(
+      storedRow({ id: 104, replyStatus: "sent" })
+    );
+    const result = await getEmailMessage({ message_id: 104 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message.replyStatus).toBe("sent");
+    expect(result.message.replyEvidence.replied).toBe(true);
+    expect(result.message.replyEvidence.replyDetectedAt).toBeNull();
+  });
+});
+
+describe("fetchUnreadEmails — summaries carry reply evidence (G02)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    auditLogModuleStub.create.mockResolvedValue(undefined);
+    syncServiceStub.syncUnread.mockResolvedValue({
+      fetched: 2,
+      stored: 2,
+      messageIds: [201, 202],
+    });
+    messageModuleStub.listByEmailService.mockResolvedValue({
+      records: [
+        storedRow({
+          id: 201,
+          replyStatus: "not_started",
+          replyDetectedAt: new Date("2026-10-04T00:00:00Z"),
+          replyDetectionSource: "sent_search",
+          isAnswered: 1,
+          answeredFlagCheckedAt: new Date("2026-10-04T00:00:00Z"),
+        }),
+        storedRow({ id: 202, replyStatus: "not_started" }),
+      ],
+    });
+  });
+
+  it("returns one evidence object per message, projection-correct", async () => {
+    const result = await fetchUnreadEmails({
+      email_service_id: 10,
+      limit: 10,
+      unread_only: true,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.messages).toHaveLength(2);
+    const [pos, legacy] = result.messages;
+    expect(pos.replyEvidence.replied).toBe(true);
+    expect(pos.replyEvidence.replyDetectionSource).toBe("sent_search");
+    expect(legacy.replyEvidence.replied).toBeNull();
+    expect(legacy.replyEvidence.answeredFlagObserved).toBe(false);
+  });
+});
+
+describe("checkEmailReplied diagnostic DTO compatibility (G02)", () => {
+  // G02 must not change the check_email_replied DTO shape. The evidence in
+  // summaries is a separate, cheaper projection; the diagnostic tool still
+  // returns the full three-state detection result.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    messageModuleStub.ensureConnection.mockResolvedValue(undefined);
+    detectionModuleStub.ensureConnection.mockResolvedValue(undefined);
+    aiEnabled = true;
+  });
+
+  it("unchanged DTO shape with state/reason_code/source/coverage", async () => {
+    messageModuleStub.read.mockResolvedValue({ id: 301, emailServiceId: 1 });
+    detectionModuleStub.checkReply.mockResolvedValue({
+      success: true,
+      result: {
+        success: true,
+        message_id: 301,
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        reason_code: "receive_unavailable",
+        matched_message_id: null,
+        checked_at: "2026-10-05T00:00:00.000Z",
+        from_cache: false,
+        coverage: "partial",
+      },
+    });
+    const result = await checkEmailReplied({ message_id: 301 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.state).toBe("unknown");
+    expect(result.replied).toBeNull();
+    expect(result.reason_code).toBe("receive_unavailable");
+    expect(result.coverage).toBe("partial");
+    // No replyEvidence field leaked into the diagnostic DTO.
+    expect(result).not.toHaveProperty("replyEvidence");
   });
 });
