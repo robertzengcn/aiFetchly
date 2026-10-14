@@ -747,6 +747,7 @@ export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
 export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
 export const E2E_SEED_RECEIVED_MESSAGE = "e2e:seed-received-message";
 export const E2E_SEED_AUTO_REPLY_AUDIT = "e2e:seed-auto-reply-audit";
+export const E2E_SEED_REPLY_DRAFT = "e2e:seed-reply-draft";
 
 // ---------------------------------------------------------------------------
 // Recoverable large tool results (AI Chat V2).

@@ -104,11 +104,119 @@ vi.mock("@/model/EmailAutoReplyAuditLog.model", () => ({
   },
 }));
 
+// G03 E2E seed: capture the draft/revision/approval/attempt collaborators so
+// the reply-draft seed channel is verified without a real database. The seed
+// drives production modules/services — they are replaced wholesale here.
+const draftSeedState = vi.hoisted(() => ({
+  createdDrafts: [] as Array<Record<string, unknown>>,
+  nextDraftId: 301,
+  revisions: [] as Array<Record<string, unknown>>,
+  nextRevisionId: 311,
+  contentHashes: [] as Array<{ draftId: number; revisionId: number; contentHash: string }>,
+  attemptEntities: [] as Array<Record<string, unknown>>,
+  statusUpdates: [] as Array<{ id: number; status: string; error: string | null }>,
+  nextAttemptId: 321,
+}));
+
+vi.mock("@/modules/EmailReplyDraftModule", () => ({
+  EmailReplyDraftModule: class {
+    async create(entity: Record<string, unknown>): Promise<{ id: number }> {
+      draftSeedState.createdDrafts.push(entity);
+      return { id: draftSeedState.nextDraftId++ };
+    }
+    async appendRevision(
+      input: Record<string, unknown> & { draftId: number }
+    ): Promise<{ revision: { id: number; revisionNumber: number }; invalidatedApprovals: number }> {
+      draftSeedState.revisions.push(input);
+      return {
+        revision: { id: draftSeedState.nextRevisionId++, revisionNumber: 1 },
+        invalidatedApprovals: 0,
+      };
+    }
+    async applyContentHash(
+      draftId: number,
+      revisionId: number,
+      contentHash: string
+    ): Promise<void> {
+      draftSeedState.contentHashes.push({ draftId, revisionId, contentHash });
+    }
+    async updateStatus(
+      id: number,
+      status: string,
+      error: string | null
+    ): Promise<void> {
+      draftSeedState.statusUpdates.push({ id, status, error });
+    }
+  },
+}));
+
+vi.mock(
+  "@/service/emailReply/EmailReplyRevisionMaterializer",
+  () => ({
+    // The real materializer composes appendRevision + hashApprovalEnvelope +
+    // applyContentHash; here we assert the seed CALLS it with the envelope
+    // identity and pass through a deterministic fake hash.
+    materializeRevision1: async (
+      _draftAccess: unknown,
+      input: { draftId: number; subject: string; senderAddress: string; recipientAddress: string }
+    ): Promise<{ revisionId: number; revisionNumber: number; contentHash: string }> => {
+      draftSeedState.revisions.push({ materializerInput: input });
+      return {
+        revisionId: draftSeedState.nextRevisionId++,
+        revisionNumber: 1,
+        contentHash: "e2e-seed-hash-64-chars-000000000000000000000000000000",
+      };
+    },
+  })
+);
+
+const approvalSeedState = vi.hoisted(() => ({
+  approveDraftInputs: [] as Array<{ draftId: number; approvedByType: string }>,
+  nextApprovalId: 331,
+}));
+
+vi.mock("@/service/emailReply/EmailReplyApprovalService", () => ({
+  EmailReplyApprovalService: class {
+    constructor(public dbpath: string) {}
+    async approveDraft(input: {
+      draftId: number;
+      approvedByType: string;
+    }): Promise<{ approvalId: number; token: string; revisionId: number; contentHash: string }> {
+      approvalSeedState.approveDraftInputs.push(input);
+      return {
+        approvalId: approvalSeedState.nextApprovalId++,
+        token: "e2e-one-time-token",
+        revisionId: draftSeedState.nextRevisionId - 1,
+        contentHash: "e2e-seed-hash-64-chars-000000000000000000000000000000",
+      };
+    }
+  },
+}));
+
+vi.mock("@/modules/EmailReplySendAttemptModule", () => ({
+  EmailReplySendAttemptModule: class {
+    async create(entity: Record<string, unknown>): Promise<{ id: number }> {
+      draftSeedState.attemptEntities.push(entity);
+      return { id: draftSeedState.nextAttemptId++ };
+    }
+  },
+}));
+
+vi.mock("@/service/emailReply/EmailReplyRevisionHasher", () => ({
+  buildSendIdempotencyKey: (
+    draftId: number,
+    revisionId: number,
+    approvedHash: string,
+    approvalId: number
+  ): string => `erv1:${draftId}:${revisionId}:${approvalId}:${approvedHash}`,
+}));
+
 import { registerE2ESeedIpcHandlers } from "@/main-process/e2e/E2ESeedIpc";
 import {
   E2E_SEED_EMAIL_SERVICE,
   E2E_SEED_RECEIVED_MESSAGE,
   E2E_SEED_AUTO_REPLY_AUDIT,
+  E2E_SEED_REPLY_DRAFT,
 } from "@/config/channellist";
 
 /** Invoke the captured handler the way ipcMain would: (event, rawPayload). */
@@ -146,6 +254,16 @@ describe("E2ESeedIpc", () => {
     messageSeedState.nextId = 101;
     auditSeedState.createdEntities = [];
     auditSeedState.nextId = 201;
+    draftSeedState.createdDrafts = [];
+    draftSeedState.nextDraftId = 301;
+    draftSeedState.revisions = [];
+    draftSeedState.nextRevisionId = 311;
+    draftSeedState.contentHashes = [];
+    draftSeedState.attemptEntities = [];
+    draftSeedState.statusUpdates = [];
+    draftSeedState.nextAttemptId = 321;
+    approvalSeedState.approveDraftInputs = [];
+    approvalSeedState.nextApprovalId = 331;
   });
 
   afterEach(() => {
@@ -412,5 +530,128 @@ describe("E2ESeedIpc", () => {
     );
     expect(result.status).toBe(false);
     expect(auditSeedState.createdEntities).toHaveLength(0);
+  });
+
+  // ---- G03: reply-draft seed channel ----
+
+  it("registers the reply-draft seed channel under AIFETCHLY_E2E=1 (and not otherwise)", () => {
+    delete process.env.AIFETCHLY_E2E;
+    registerE2ESeedIpcHandlers();
+    expect(handlers.has(E2E_SEED_REPLY_DRAFT)).toBe(false);
+
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+    expect(handlers.has(E2E_SEED_REPLY_DRAFT)).toBe(true);
+  });
+
+  it("materializes an approval-ready draft: draft row → revision → approval token returned once", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      E2E_SEED_REPLY_DRAFT,
+      JSON.stringify({
+        emailServiceId: 7,
+        messageId: 101,
+        subject: "Re: E2E workflow",
+        bodyText:
+          "Thanks for reaching out. Could you share a little more detail about what you need?",
+        senderAddress: "owner@svc.com",
+        recipientAddress: "prospect@example.com",
+      })
+    );
+    expect(result.status).toBe(true);
+    const data = result.data as {
+      id: number;
+      revisionId: number;
+      revisionNumber: number;
+      contentHash: string;
+      approvalId: number;
+      token: string;
+    };
+    // The one-time token is returned exactly once, mirroring
+    // EMAIL_REPLY_DRAFT_APPROVE — the test feeds it to EMAIL_REPLY_SEND.
+    expect(data.token).toBe("e2e-one-time-token");
+    expect(data.contentHash).toContain("e2e-seed-hash");
+    expect(data.revisionNumber).toBe(1);
+
+    // Draft row seeded with the aggregate projection BEFORE revision append.
+    expect(draftSeedState.createdDrafts).toHaveLength(1);
+    const draft = draftSeedState.createdDrafts[0];
+    expect(draft.messageId).toBe(101);
+    expect(draft.emailServiceId).toBe(7);
+    expect(draft.status).toBe("draft");
+    expect(draft.generationSource).toBe("ai");
+
+    // materializeRevision1 was driven with the v1 envelope identity.
+    const materializerInput = draftSeedState.revisions.find(
+      (r) => "materializerInput" in r
+    )?.materializerInput as Record<string, unknown>;
+    expect(materializerInput.draftId).toBe(301);
+    expect(materializerInput.senderAddress).toBe("owner@svc.com");
+    expect(materializerInput.recipientAddress).toBe("prospect@example.com");
+
+    // Approval ran with approvedByType "user" (production approve semantics).
+    expect(approvalSeedState.approveDraftInputs).toEqual([
+      { draftId: 301, approvedByType: "user" },
+    ]);
+
+    // No retry fixture without the flag: no attempt row, no status flip.
+    expect(draftSeedState.attemptEntities).toHaveLength(0);
+    expect(draftSeedState.statusUpdates).toHaveLength(0);
+  });
+
+  it("seeds the definitely-failed retry fixture (attempt + failed draft) when asked", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      E2E_SEED_REPLY_DRAFT,
+      JSON.stringify({
+        emailServiceId: 7,
+        messageId: 101,
+        subject: "Re: E2E retry",
+        bodyText: "Thanks for the update. Let me check and follow up shortly.",
+        senderAddress: "owner@svc.com",
+        recipientAddress: "prospect@example.com",
+        seedFailedAttempt: true,
+      })
+    );
+    expect(result.status).toBe(true);
+
+    // One definitely-failed attempt carrying the deterministic idempotency key
+    // derived from (draft, revision, hash, approval) — the same identity the
+    // delivery service would derive.
+    expect(draftSeedState.attemptEntities).toHaveLength(1);
+    const attempt = draftSeedState.attemptEntities[0];
+    expect(attempt.status).toBe("failed");
+    expect(attempt.idempotencyKey).toContain("erv1:301:");
+    expect(attempt.failureCode).toBe("smtp_rejected");
+
+    // Draft flipped to failed with the sanitized error (B08/R13 fixture).
+    expect(draftSeedState.statusUpdates).toEqual([
+      { id: 301, status: "failed", error: "E2E seeded definitely-failed attempt" },
+    ]);
+  });
+
+  it("rejects a reply-draft seed with an unknown extra field (strict schema)", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      E2E_SEED_REPLY_DRAFT,
+      JSON.stringify({
+        emailServiceId: 7,
+        messageId: 101,
+        subject: "s",
+        bodyText: "b",
+        senderAddress: "owner@svc.com",
+        recipientAddress: "prospect@example.com",
+        unexpected: "no",
+      })
+    );
+    expect(result.status).toBe(false);
+    expect(draftSeedState.createdDrafts).toHaveLength(0);
+    expect(approvalSeedState.approveDraftInputs).toHaveLength(0);
   });
 });

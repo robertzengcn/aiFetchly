@@ -68,6 +68,32 @@ export const e2eSeedReceivedMessageInputSchema = lazySchema(() =>
   })
 );
 
+// E2E_SEED_REPLY_DRAFT — materialize an approval-ready reply draft through the
+// production Model/service layer: EmailReplyDraftModule.create →
+// materializeRevision1 (immutable revision 1 + canonical content hash) →
+// EmailReplyApprovalService.approveDraft (one-time token). This exists because
+// the production EMAIL_REPLY_DRAFT_CREATE path requires a live AI provider
+// round trip (the draft is produced by the model), while the E2E workflows need
+// an already-materialized draft to drive the approval → send chain determinism.
+// The approval token is returned ONCE in the seed result exactly as the
+// production EMAIL_REPLY_DRAFT_APPROVE handler returns it; the test feeds it
+// straight into EMAIL_REPLY_SEND.
+//
+// senderAddress/recipientAddress are required (the v1 envelope identity);
+// seedFailedAttempt optionally seeds one definitely-failed send attempt
+// (B08/R13 retry path) and flips the draft to status "failed".
+export const e2eSeedReplyDraftInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: z.number().int().positive(),
+    messageId: z.number().int().positive(),
+    subject: z.string().min(1).max(998),
+    bodyText: z.string().min(1).max(20000),
+    senderAddress: z.string().min(1).max(320),
+    recipientAddress: z.string().min(1).max(320),
+    seedFailedAttempt: z.boolean().optional(),
+  })
+);
+
 // E2E_SEED_AUTO_REPLY_AUDIT — insert one email_auto_reply_audit_log row with
 // the structured typed metadata (stage + code as proper JSON fields in
 // `metadataJson`), exactly as the production refusal writers emit it. This

@@ -33,12 +33,14 @@ import {
   E2E_SEED_EMAIL_SERVICE,
   E2E_SEED_RECEIVED_MESSAGE,
   E2E_SEED_AUTO_REPLY_AUDIT,
+  E2E_SEED_REPLY_DRAFT,
 } from "@/config/channellist";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   e2eSeedEmailServiceInputSchema,
   e2eSeedReceivedMessageInputSchema,
   e2eSeedAutoReplyAuditInputSchema,
+  e2eSeedReplyDraftInputSchema,
 } from "@/schemas/ipc/e2eSeed";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -46,6 +48,13 @@ import { EmailReceivedMessageModel } from "@/model/EmailReceivedMessage.model";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailAutoReplyAuditLogModel } from "@/model/EmailAutoReplyAuditLog.model";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
+import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { buildSendIdempotencyKey } from "@/service/emailReply/EmailReplyRevisionHasher";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 
 /** True only inside the Playwright Electron E2E bootstrap. */
 function isE2eRuntime(): boolean {
@@ -142,6 +151,102 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       const model = new EmailAutoReplyAuditLogModel(dbpath);
       const id = await model.create(entity);
       return { id };
+    }
+  );
+
+  // G03 E2E: materialize an approval-ready reply draft through the production
+  // Model/service layer (draft row → materializeRevision1 → approveDraft). The
+  // production EMAIL_REPLY_DRAFT_CREATE path requires a live model round trip,
+  // which the loopback-only E2E network cannot deterministically drive for a
+  // specific draft shape; this seed produces the same persisted aggregate
+  // (draft + immutable revision 1 + canonical hash + approval) the generation
+  // service would leave behind, so the approval → send chain runs unmodified.
+  // The one-time approval token is returned ONCE, mirroring
+  // EMAIL_REPLY_DRAFT_APPROVE; it is never persisted in the clear.
+  registerValidatedHandler(
+    E2E_SEED_REPLY_DRAFT,
+    e2eSeedReplyDraftInputSchema,
+    async (input): Promise<{
+      id: number;
+      revisionId: number;
+      revisionNumber: number;
+      contentHash: string;
+      approvalId: number;
+      token: string;
+    }> => {
+      const dbpath = dbpathOverride ?? new Token().getValue(USERSDBPATH) ?? "";
+      const draftModule = new EmailReplyDraftModule();
+      const draft = new EmailReplyDraftEntity();
+      draft.messageId = input.messageId;
+      draft.emailServiceId = input.emailServiceId;
+      draft.subject = input.subject;
+      draft.bodyText = input.bodyText;
+      draft.bodyHtml = null;
+      draft.status = "draft";
+      draft.generationSource = "ai";
+      const savedDraft = await draftModule.create(draft);
+
+      // materializeRevision1 appends immutable revision 1, sets the draft
+      // projection (currentRevisionId / addresses / hash), and validates the
+      // body (the approval service would refuse anything else).
+      const materialized = await materializeRevision1(draftModule, {
+        draftId: savedDraft.id,
+        actor: "ai",
+        subject: input.subject,
+        bodyText: input.bodyText,
+        bodyHtml: null,
+        senderAddress: input.senderAddress,
+        recipientAddress: input.recipientAddress,
+        emailServiceId: input.emailServiceId,
+        originalMessageId: input.messageId,
+      });
+
+      const approval = await new EmailReplyApprovalService(dbpath).approveDraft(
+        {
+          draftId: savedDraft.id,
+          approvedByType: "user",
+        }
+      );
+
+      // Optional B08/R13 retry fixture: one definitely-failed attempt plus the
+      // draft flipped to "failed". A later approveDraft reopens it (R13).
+      if (input.seedFailedAttempt === true) {
+        const attemptModule = new EmailReplySendAttemptModule();
+        const attempt = new EmailReplySendAttemptEntity();
+        attempt.idempotencyKey = buildSendIdempotencyKey(
+          savedDraft.id,
+          materialized.revisionId,
+          materialized.contentHash,
+          approval.approvalId
+        );
+        attempt.draftId = savedDraft.id;
+        attempt.revisionId = materialized.revisionId;
+        attempt.approvalId = approval.approvalId;
+        attempt.messageId = input.messageId;
+        attempt.emailServiceId = input.emailServiceId;
+        attempt.senderAddress = input.senderAddress;
+        attempt.recipientAddress = input.recipientAddress;
+        attempt.status = "failed";
+        attempt.claimedAt = new Date();
+        attempt.completedAt = new Date();
+        attempt.failureCode = "smtp_rejected";
+        attempt.sanitizedError = "E2E seeded definitely-failed attempt";
+        await attemptModule.create(attempt);
+        await draftModule.updateStatus(
+          savedDraft.id,
+          "failed",
+          "E2E seeded definitely-failed attempt"
+        );
+      }
+
+      return {
+        id: savedDraft.id,
+        revisionId: materialized.revisionId,
+        revisionNumber: materialized.revisionNumber,
+        contentHash: materialized.contentHash,
+        approvalId: approval.approvalId,
+        token: approval.token,
+      };
     }
   );
 }

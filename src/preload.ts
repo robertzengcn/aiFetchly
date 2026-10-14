@@ -490,6 +490,7 @@ import {
   E2E_SEED_EMAIL_SERVICE,
   E2E_SEED_RECEIVED_MESSAGE,
   E2E_SEED_AUTO_REPLY_AUDIT,
+  E2E_SEED_REPLY_DRAFT,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -1222,6 +1223,7 @@ contextBridge.exposeInMainWorld("api", {
       E2E_SEED_EMAIL_SERVICE,
       E2E_SEED_RECEIVED_MESSAGE,
       E2E_SEED_AUTO_REPLY_AUDIT,
+      E2E_SEED_REPLY_DRAFT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
