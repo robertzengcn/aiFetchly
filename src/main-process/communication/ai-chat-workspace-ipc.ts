@@ -367,7 +367,33 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       const live = coordinator.getLiveRuntime(conversationId);
       const engineStatus =
         getQueryEngine().getConversationRuntimeStatus(conversationId);
-      const runtimeStatus = live?.runtimeStatus ?? engineStatus;
+      // B06: ordinary queue-backed turns never populate the coordinator's
+      // liveRuns map — without a durable fallback, selection cannot
+      // reconstruct the active run id and background terminals miss the
+      // sidebar. Fall back to the latest non-terminal durable run envelope.
+      let runtimeStatus = live?.runtimeStatus ?? engineStatus;
+      let activeRunId = live?.activeRunId ?? null;
+      if (!live) {
+        try {
+          const runs = await new AIChatRunModule().listByConversation(
+            conversationId,
+            10
+          );
+          const active = runs.find((run) =>
+            ["queued", "running", "awaiting_permission", "awaiting_user"].includes(
+              run.status
+            )
+          );
+          if (active) {
+            activeRunId = active.runId;
+            if (runtimeStatus === "idle") {
+              runtimeStatus = active.status as typeof runtimeStatus;
+            }
+          }
+        } catch {
+          // Durable lookup unavailable — keep coordinator/engine truth.
+        }
+      }
       const response: SelectConversationResponse = {
         acceptedGeneration,
         conversationId,
@@ -375,7 +401,7 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         nextBefore: page.nextBefore,
         hasOlder: page.hasOlder,
         runtimeStatus,
-        activeRunId: live?.activeRunId ?? null,
+        activeRunId,
         title: null,
       };
       return ok(response);

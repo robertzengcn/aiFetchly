@@ -74,8 +74,35 @@ export interface AIChatTurnQueueServiceDeps {
   readonly engine: AIChatTurnQueueEngine;
   readonly pendingModule: AIChatPendingMessageModule;
   readonly eventSink: AIChatPendingEventSink;
-  /** Builds the renderer-facing stream sink for queue-dispatched turns. */
-  readonly streamSinkFactory: () => AIChatQueryEventSink;
+  /**
+   * Builds the renderer-facing stream sink for queue-dispatched turns.
+   * B06: receives the bridge's durable run id + conversation so detail
+   * envelopes carry the REAL run identity (not a synthetic pending-queue
+   * counter) — Activity identity and live event identity must agree, and
+   * selection/reselection can reconstruct the active durable run id.
+   */
+  readonly streamSinkFactory: (identity?: {
+    readonly runId: string;
+    readonly conversationId: string;
+  }) => AIChatQueryEventSink;
+  /**
+   * B06: bounded sidebar summary hook (allowlisted reasons only — never
+   * transcript/tool bodies). Wired in production to the workspace summary
+   * broadcast so background pending/waiting/terminal changes update the
+   * inactive row's sidebar without leaking private detail.
+   */
+  readonly summarySink?: (input: {
+    readonly conversationId: string;
+    readonly runId: string | null;
+    readonly reason:
+      | "run_queued"
+      | "run_started"
+      | "permission_required"
+      | "user_input_required"
+      | "run_completed"
+      | "run_failed"
+      | "run_cancelled";
+  }) => void;
   /** Interactive lease acquisition (scheduled-vs-queue mutual exclusion). */
   readonly tryAcquireLease: (input: {
     readonly conversationId: string;
@@ -578,6 +605,17 @@ export class AIChatTurnQueueService {
     if (parked) {
       this.parkedRuns.delete(conversationId);
       await this.deps.dispatchBridge?.finishRun(parked.runId, outcome);
+      // B06: background summary — parked run settled (bounded, no bodies).
+      this.deps.summarySink?.({
+        conversationId,
+        runId: parked.runId,
+        reason:
+          outcome === "completed"
+            ? "run_completed"
+            : outcome === "cancelled"
+              ? "run_cancelled"
+              : "run_failed",
+      });
       this.drainSchedulerWaiters(conversationId);
     }
     const rows = await this.deps.pendingModule.listViews(conversationId);
@@ -760,6 +798,12 @@ export class AIChatTurnQueueService {
       // calls on this path (admission precedes promotion AND execution).
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
       this.schedulerDeferred.add(conversationId);
+      // B06: background summary — still queued for capacity (bounded).
+      this.deps.summarySink?.({
+        conversationId,
+        runId: bridgeResult.runId,
+        reason: "run_queued",
+      });
       const queuedView = await this.deps.pendingModule.getView(
         row.pendingMessageId
       );
@@ -776,6 +820,12 @@ export class AIChatTurnQueueService {
     const bridgeRunId = bridgeResult
       ? { runId: bridgeResult.runId }
       : undefined;
+    // B06: background summary — execution admitted (bounded, no bodies).
+    this.deps.summarySink?.({
+      conversationId,
+      runId: bridgeRunId?.runId ?? null,
+      reason: "run_started",
+    });
 
     try {
       let savedUser;
@@ -806,6 +856,12 @@ export class AIChatTurnQueueService {
           bridgeRunId?.runId ?? null,
           "failed"
         );
+        // B06: background summary — pre-turn failure (bounded).
+        this.deps.summarySink?.({
+          conversationId,
+          runId: bridgeRunId?.runId ?? null,
+          reason: "run_failed",
+        });
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
           code: "DISPATCH_PROMOTE_FAILED",
           message: err instanceof Error ? err.message : String(err),
@@ -841,8 +897,13 @@ export class AIChatTurnQueueService {
       // B05: buffer terminal sink publication behind durable persistence.
       // Non-terminal chunks stream immediately; complete/cancelled/error sink
       // events flush only after the run transition commits below.
+      // B06: the sink carries the REAL durable run id so live detail events
+      // and the Activity envelope agree (selection can reconstruct it).
+      const streamIdentity = bridgeRunId
+        ? { runId: bridgeRunId.runId, conversationId }
+        : undefined;
       const terminalGate = new AIChatTerminalGate(
-        this.deps.streamSinkFactory()
+        this.deps.streamSinkFactory(streamIdentity)
       );
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
@@ -907,6 +968,12 @@ export class AIChatTurnQueueService {
         log.error(
           `[ai-chat-queue] run terminal persistence failed conv=${conversationId} run=${bridgeRunId?.runId ?? "none"} — holding for reconciliation (no terminal publication, no advance)`
         );
+        // B06: background summary — persistence failure (bounded).
+        this.deps.summarySink?.({
+          conversationId,
+          runId: bridgeRunId?.runId ?? null,
+          reason: "run_failed",
+        });
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
           code: "RUN_TERMINAL_PERSIST_FAILED",
           message:
@@ -926,6 +993,12 @@ export class AIChatTurnQueueService {
           return;
         }
         await terminalGate.flush();
+        // B06: background summary — terminal success (bounded, no bodies).
+        this.deps.summarySink?.({
+          conversationId,
+          runId: bridgeRunId?.runId ?? null,
+          reason: "run_completed",
+        });
         const done = await this.deps.pendingModule.getView(
           row.pendingMessageId
         );
@@ -978,6 +1051,16 @@ export class AIChatTurnQueueService {
             pendingMessageId: row.pendingMessageId,
           });
         }
+        // B06: background attention summary — parked on permission/question
+        // updates the INACTIVE row's sidebar without private detail.
+        this.deps.summarySink?.({
+          conversationId,
+          runId: bridgeRunIdValue,
+          reason:
+            waiting === "awaiting_permission"
+              ? "permission_required"
+              : "user_input_required",
+        });
         await this.holdQueue(conversationId, terminal.type);
         this.drainSchedulerWaiters(conversationId);
         return;
@@ -990,6 +1073,13 @@ export class AIChatTurnQueueService {
         return;
       }
       await terminalGate.flush();
+      // B06: background summary — terminal failure/cancel (bounded).
+      this.deps.summarySink?.({
+        conversationId,
+        runId: bridgeRunId?.runId ?? null,
+        reason:
+          failedStatus === "cancelled" ? "run_cancelled" : "run_failed",
+      });
       await this.holdQueue(conversationId, terminal.type);
       this.drainSchedulerWaiters(conversationId);
     } finally {

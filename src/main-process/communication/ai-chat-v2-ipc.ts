@@ -554,21 +554,33 @@ function isSteeringFeatureEnabled(): boolean {
  * for the turn (the presenter binds runs by opening "start" events).
  */
 let pendingTurnSinkCounter = 0;
-function createBroadcastEventSink(): AIChatQueryEventSink {
+/**
+ * B06: per-dispatch broadcast sink. When the queue supplies the bridge's
+ * durable run identity, detail envelopes carry the REAL run id (Activity
+ * identity and live event identity agree; reselection reconstructs it).
+ * Without identity (legacy callers) a synthetic per-turn id preserves the
+ * previous behavior.
+ */
+function createBroadcastEventSink(identity?: {
+  runId: string;
+  conversationId: string;
+}): AIChatQueryEventSink {
   const broadcaster = AIChatV2EventBroadcaster.getInstance();
   pendingTurnSinkCounter += 1;
   const adapter = new AIChatRunEventAdapter(
-    `pending-queue-${pendingTurnSinkCounter}`,
-    "" // per-chunk: the envelope id is overridden below (chunks carry it)
+    identity?.runId ?? `pending-queue-${pendingTurnSinkCounter}`,
+    identity?.conversationId ?? "" // per-chunk: overridden below when empty
   );
   const routeDetail = (chunk: ChatV2StreamChunk): void => {
-    if (!chunk.conversationId) return;
+    if (!chunk.conversationId && !identity?.conversationId) return;
     // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
     // the chunk's real conversation here — the router only delivers events
     // whose conversation matches the window's selection.
     sharedWorkspaceEventRouter.sendDetailEvent({
       ...adapter.wrap(chunk),
-      conversationId: chunk.conversationId,
+      conversationId: chunk.conversationId || identity?.conversationId || "",
+      // B06: the envelope run id is the durable bridge run when known.
+      ...(identity?.runId ? { runId: identity.runId } : {}),
     });
   };
   return createChatV2StreamSink({
@@ -580,6 +592,53 @@ function createBroadcastEventSink(): AIChatQueryEventSink {
       broadcaster.emitStreamComplete(chunk);
       routeDetail(chunk);
     },
+  });
+}
+
+/**
+ * B06: bounded queue-owned summary broadcast (allowlisted reasons only —
+ * never transcript/tool bodies). Inactive rows get authoritative
+ * pending/waiting/terminal attention without private detail; the selected
+ * conversation keeps full detail via the detail channel above.
+ */
+function broadcastQueueSummary(input: {
+  conversationId: string;
+  runId: string | null;
+  reason:
+    | "run_queued"
+    | "run_started"
+    | "permission_required"
+    | "user_input_required"
+    | "run_completed"
+    | "run_failed"
+    | "run_cancelled";
+}): void {
+  const runtimeStatus =
+    input.reason === "permission_required"
+      ? ("awaiting_permission" as const)
+      : input.reason === "user_input_required"
+        ? ("awaiting_user" as const)
+        : input.reason === "run_started"
+          ? ("running" as const)
+          : input.reason === "run_queued"
+            ? ("queued" as const)
+            : ("idle" as const);
+  sharedWorkspaceEventRouter.broadcastSummary({
+    conversationId: input.conversationId,
+    workspaceKey: null,
+    runtimeStatus,
+    attention:
+      input.reason === "permission_required"
+        ? "permission"
+        : input.reason === "user_input_required"
+          ? "user_input"
+          : input.reason === "run_failed"
+            ? "failure"
+            : "none",
+    unread: input.reason !== "run_completed",
+    lastActivityAt: new Date().toISOString(),
+    ...(input.runId ? { runId: input.runId } : {}),
+    reason: input.reason,
   });
 }
 
@@ -605,7 +664,8 @@ export function getQueueService(): AIChatTurnQueueService {
         emit: (event) =>
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
       },
-      streamSinkFactory: () => createBroadcastEventSink(),
+      streamSinkFactory: (identity) => createBroadcastEventSink(identity),
+      summarySink: (input) => broadcastQueueSummary(input),
       tryAcquireLease: ({ conversationId }) =>
         AIChatConversationTurnCoordinator.getInstance().tryAcquire({
           conversationId,
