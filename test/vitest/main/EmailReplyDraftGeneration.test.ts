@@ -1000,6 +1000,141 @@ describe("createDraft guard + reuse (FR-028)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// R22: refusal never suggests approval; eligible reuse carries its own
+// guidance gated by the persisted review flag
+// ---------------------------------------------------------------------------
+describe("next-action guidance separates refusal from eligible reuse (R22)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.providerUid = `r22-guidance-${Math.random()}`;
+    msg.messageId = `<r22-guidance-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "someone@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "support_request";
+    msg.classificationConfidence = 0.9;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"],
+    flagged?: boolean
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4244;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    if (flagged) {
+      draft.requiresHumanReview = 1;
+      draft.reviewReasonsJson = JSON.stringify(["Owner should decide"]);
+      draft.unresolvedQuestionsJson = JSON.stringify(["Which plan?"]);
+    }
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("an already_replied refusal surfaces the stale draft id as context but routes to await_human_review", async () => {
+    // The todo's stated regression: already-replied WITH a draft ID provides
+    // a safe denial action — never approve guidance for the draft the
+    // refusal just vetoed. Use the reuse-path detection refusal (an eligible
+    // draft exists; the §8.1 reuse-path detection then finds a positive and
+    // refuses, surfacing the seeded draft as existing_draft_id — the path
+    // where the id is actually carried, not the policy-guard local-state
+    // short-circuit).
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      detectionResult: {
+        state: "replied",
+        replied: true,
+        source: "sent_search",
+        matchedMessageId: "sent-r22@example.com",
+        reasonCode: "already_replied",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "configured_imap",
+      },
+    });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(requests).toHaveLength(0);
+    expect(result.code).toBe("already_replied");
+    expect(result.existing_draft_id).toBe(draftId);
+    expect(result.next_action).toBe("await_human_review");
+    expect(result.next_action).not.toBe("approve_existing_draft");
+  });
+
+  it("eligible reuse (reused: true) carries approve_existing_draft for a clean draft", async () => {
+    // The todo's stated regression: eligible `reused:true` has its separate
+    // approval guidance — the guard cleared the draft for reuse, so the
+    // operator may approve/send it.
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(requests).toHaveLength(0);
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    expect(result.next_action).toBe("approve_existing_draft");
+  });
+
+  it("eligible reuse of an R21-flagged draft carries await_human_review (approval is gated)", async () => {
+    // The reused draft is flagged requiresHumanReview; the approval service
+    // refuses approval while the flag is set (R21). approve guidance would
+    // contradict the gate, so reuse routes to human review instead.
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft", true);
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(requests).toHaveLength(0);
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    expect(result.requiresHumanReview).toBe(true);
+    expect(result.next_action).toBe("await_human_review");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T04 step 7 (FR-031 §8.1): the shared mailbox detector runs BEFORE
 // classification. `replied`/`unknown` → no model call, reservation released,
 // one `reply_skipped` audit (stage `pre_draft`) with the typed detection code.
@@ -1193,13 +1328,15 @@ describe("createDraft pre-draft detection (T04 step 7, §8.1)", () => {
       useKnowledgeLibrary: false,
     });
     // The reuse-path detection refused → no model call, code already_replied,
-    // existing_draft_id points at the seeded draft (route user to approve).
+    // existing_draft_id points at the seeded draft as CONTEXT (R22 — the
+    // refusal never routes to approval guidance; the stale draft is the one
+    // someone already replied around).
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(requests).toHaveLength(0);
     expect(result.code).toBe("already_replied");
     expect(result.existing_draft_id).toBe(draftId);
-    expect(result.next_action).toBe("approve_existing_draft");
+    expect(result.next_action).toBe("await_human_review");
   });
 });
 

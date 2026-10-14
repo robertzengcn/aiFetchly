@@ -129,7 +129,7 @@ function policyFailure(result: {
   // output failures derive it directly without a policy code); otherwise
   // derive from the typed code.
   envelope.next_action =
-    result.next_action ?? nextActionForCode(result.code, result.existing_draft_id);
+    result.next_action ?? nextActionForCode(result.code);
   // R19: propagate the service's request correlation id so tool/IPC consumers
   // can correlate the refusal with lifecycle audits.
   if (result.requestCorrelationId) {
@@ -427,7 +427,7 @@ export async function sendEmailReply(args: unknown): Promise<
         success: false,
         error: "A send was already submitted for this approved revision",
         code: "already_replied",
-        next_action: nextActionForCode("already_replied", undefined),
+        next_action: nextActionForCode("already_replied"),
         requestCorrelationId: outcome.requestCorrelationId,
       };
     }
@@ -467,7 +467,7 @@ export async function sendEmailReply(args: unknown): Promise<
         success: false,
         error: error.message,
         code: error.code,
-        next_action: nextActionForCode(error.code, undefined),
+        next_action: nextActionForCode(error.code),
         requestCorrelationId: error.requestCorrelationId,
       };
     }

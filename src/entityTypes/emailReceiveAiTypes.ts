@@ -206,6 +206,21 @@ export interface AiEmailReplyDraftResult {
    */
   code?: EmailReplyPolicyCode;
   /**
+   * R22: present on the `reused: true` success side (and on refusals via the
+   * widened failure union). For a reused draft it is derived via
+   * {@link nextActionForReuse} from the persisted review flag:
+   * `approve_existing_draft` for a clean eligible draft (approval guidance is
+   * authoritative here — the guard cleared the draft for reuse), or
+   * `await_human_review` when the model flagged the draft (R21 — the approval
+   * service refuses approval while that flag is set, so approval guidance
+   * would contradict the gate). Omitted on a fresh-generation success.
+   */
+  next_action?:
+    | "approve_existing_draft"
+    | "discard_and_retry"
+    | "await_human_review"
+    | "no_action";
+  /**
    * Per-invocation request correlation id (B11). Allocated fresh at the
    * `createDraft` entry boundary by {@link newRequestCorrelationId}; distinct
    * across two invocations for the same message. All audit events written

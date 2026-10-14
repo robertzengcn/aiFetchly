@@ -216,9 +216,15 @@ const statusColor = computed(() => {
  * from the discard list and `already_replied` (no draft) from the
  * await_human_review list, so the chip showed `no_action` where the
  * service says `discard_and_retry` / `await_human_review`).
+ *
+ * R22: an audit record is a refusal record — its draftId is context (which
+ * draft the refusal touched), never evidence that the draft is eligible to
+ * approve/send. The refusal-side map routes already_replied to
+ * await_human_review regardless of the draftId; approval guidance belongs
+ * only to the reused:true success path (nextActionForReuse).
  */
 const nextAction = computed(() =>
-  nextActionForCode(audit.value?.metadataCode, audit.value?.draftId ?? undefined)
+  nextActionForCode(audit.value?.metadataCode)
 );
 
 function evidenceColor(code: string): string {

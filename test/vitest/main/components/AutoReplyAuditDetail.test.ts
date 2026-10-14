@@ -171,7 +171,12 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
     expect(text).toContain("Await human review");
   });
 
-  it("shows the approve-draft next action for already_replied with a draft", async () => {
+  it("shows await-human-review (not approve) for already_replied with a draft (R22)", async () => {
+    // R22: an audit record is a refusal record. Its draftId is context
+    // (which stale draft the refusal touched), never evidence the draft is
+    // eligible to approve/send. The previously-unsafe mapping showed
+    // "Approve existing draft" here, pointing the operator at a duplicate
+    // send for a message that is confirmed replied.
     vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
       auditFixture({
         metadataCode: "already_replied",
@@ -181,7 +186,8 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
     const wrapper = mountDetail();
     await flushPromises();
     expect(wrapper.text()).toContain("Already replied");
-    expect(wrapper.text()).toContain("Approve existing draft");
+    expect(wrapper.text()).toContain("Await human review");
+    expect(wrapper.text()).not.toContain("Approve existing draft");
   });
 
   // Review R-5: the inline nextAction copy had drifted from the canonical

@@ -40,6 +40,7 @@ import {
 } from "@/service/emailReply/EmailReplyCorrelation";
 import {
   nextActionForCode,
+  nextActionForReuse,
   type EmailReplyNextAction,
 } from "@/service/emailReply/EmailReplyNextAction";
 import {
@@ -104,10 +105,15 @@ export interface CreateDraftInput {
  *    rather than holding a non-policy string. The `error` text still carries
  *    a leading `[provider_error]` bracket for those transport failures.
  *  - `existing_draft_id`: set when a refusal leaves a live draft in place
- *    (e.g. `already_replied` with an eligible draft) so the UI can route the
- *    user to approve it. Absent when no reusable draft exists.
+ *    (e.g. `already_replied` with an eligible draft). R22: this is CONTEXT
+ *    (which stale draft the refusal touched), never evidence the draft is
+ *    eligible to approve/send — refusal-side `next_action` routes to
+ *    `await_human_review`, never approval guidance. Absent when no reusable
+ *    draft exists.
  *  - `next_action`: derived from `code` via {@link nextActionForCode} (typed
- *    derivation, not English parsing). Absent when `code` is absent.
+ *    derivation, not English parsing). Absent when `code` is absent. On the
+ *    `reused: true` success side it is derived via {@link nextActionForReuse}
+ *    from the persisted review flag (R21/R22).
  */
 export type CreateDraftOutcome =
   | ({ success: true } & AiEmailReplyDraftResult)
@@ -465,7 +471,7 @@ export class EmailReplyDraftGenerationService {
         error: `[${policyDecision.code}] ${policyDecision.reason}`,
         requestCorrelationId,
         code: policyDecision.code,
-        next_action: nextActionForCode(policyDecision.code, undefined),
+        next_action: nextActionForCode(policyDecision.code),
       };
     }
 
@@ -517,7 +523,7 @@ export class EmailReplyDraftGenerationService {
             "[reply_state_unknown] Reusable draft disappeared after reservation; requires human triage",
           requestCorrelationId,
           code: "reply_state_unknown" as const,
-          next_action: nextActionForCode("reply_state_unknown", undefined),
+          next_action: nextActionForCode("reply_state_unknown"),
         };
         const reusedDraftSnapshot = await this.draftModule.read(
           reservation.draftId
@@ -580,7 +586,7 @@ export class EmailReplyDraftGenerationService {
             error: `[${revalCode}] Reusable draft state changed during reuse checks; reuse refused`,
             requestCorrelationId,
             code: revalCode,
-            next_action: nextActionForCode(revalCode, undefined),
+            next_action: nextActionForCode(revalCode),
           };
         }
         if (revalidated.status === "missing") {
@@ -639,6 +645,12 @@ export class EmailReplyDraftGenerationService {
           ),
           reused: true,
           code: "allowed",
+          // R22: eligible reuse is where approval guidance is authoritative —
+          // derived from the persisted review flag (R21), never from the
+          // refusal-side code map.
+          next_action: nextActionForReuse(
+            decodeStoredRequiresHumanReview(reusedDraft.requiresHumanReview)
+          ),
           requestCorrelationId,
         };
       }
@@ -674,7 +686,7 @@ export class EmailReplyDraftGenerationService {
             "[generation_in_progress] Another generation is in progress for this message; try again shortly",
           requestCorrelationId,
           code: "generation_in_progress",
-          next_action: nextActionForCode("generation_in_progress", undefined),
+          next_action: nextActionForCode("generation_in_progress"),
         };
       }
       // blocked: the cluster is in a state that forbids generation
@@ -705,7 +717,7 @@ export class EmailReplyDraftGenerationService {
         error: `[${reservation.code}] Message reply state forbids generation`,
         requestCorrelationId,
         code: reservation.code,
-        next_action: nextActionForCode(reservation.code, undefined),
+        next_action: nextActionForCode(reservation.code),
       };
     }
     // status === "acquired": hold the reservation for the commit transaction
@@ -857,6 +869,12 @@ export class EmailReplyDraftGenerationService {
         ),
         reused: true,
         code: "allowed",
+        // R22: eligible reuse is where approval guidance is authoritative —
+        // derived from the persisted review flag (R21), never from the
+        // refusal-side code map.
+        next_action: nextActionForReuse(
+          decodeStoredRequiresHumanReview(reusable.requiresHumanReview)
+        ),
         requestCorrelationId,
       };
     }
@@ -1019,7 +1037,7 @@ export class EmailReplyDraftGenerationService {
           error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
           requestCorrelationId,
           code: "needs_human_review",
-          next_action: nextActionForCode("needs_human_review", undefined),
+          next_action: nextActionForCode("needs_human_review"),
         };
       }
       // transport_error: not a validation strike. Persist a provider-error
@@ -1154,8 +1172,9 @@ export class EmailReplyDraftGenerationService {
         { stage: "post_generation", code: recheckDecision.code }
       );
       // B12: surface the typed code + a stable next_action. If a usable draft
-      // appeared during the LLM call, surface its id so the UI can route the
-      // user to approve it. The guard may have refused because of an
+      // appeared during the LLM call, surface its id as CONTEXT (R22 — the
+      // draft is not approval-eligible; a refusal never routes to approval
+      // guidance). The guard may have refused because of an
       // already-replied/in-flight sibling; pickReusableDraft returns null when
       // no eligible reusable draft exists (sent/claimed/etc.), so
       // existing_draft_id stays undefined in that case.
@@ -1167,10 +1186,7 @@ export class EmailReplyDraftGenerationService {
         requestCorrelationId,
         code: recheckDecision.code,
         existing_draft_id: refusalReusable?.id,
-        next_action: nextActionForCode(
-          recheckDecision.code,
-          refusalReusable?.id
-        ),
+        next_action: nextActionForCode(recheckDecision.code),
       };
     }
     // The guard allowed — meaning the message is clean OR has exactly one
@@ -1235,6 +1251,12 @@ export class EmailReplyDraftGenerationService {
         ),
         reused: true,
         code: "allowed",
+        // R22: eligible reuse is where approval guidance is authoritative —
+        // derived from the persisted review flag (R21), never from the
+        // refusal-side code map.
+        next_action: nextActionForReuse(
+          decodeStoredRequiresHumanReview(reusableNow.requiresHumanReview)
+        ),
         requestCorrelationId,
       };
     }
@@ -1431,9 +1453,9 @@ export class EmailReplyDraftGenerationService {
             ? "reply_in_progress"
             : "reply_state_conflict";
         await this.releaseReservationSafely();
-        // Surface an existing live draft when one is present (so the UI can
-        // route the user to approve it) — bounded read, never blocks the
-        // refusal.
+        // Surface an existing live draft when one is present, as CONTEXT
+        // only (R22 — a refusal never routes to approval guidance) — bounded
+        // read, never blocks the refusal.
         let existingDraftId: number | undefined;
         try {
           const drafts = await this.draftModule.listByMessage(message.id);
@@ -1473,7 +1495,7 @@ export class EmailReplyDraftGenerationService {
           requestCorrelationId,
           code,
           existing_draft_id: existingDraftId,
-          next_action: nextActionForCode(code, undefined),
+          next_action: nextActionForCode(code),
         };
       }
       savedDraftId = commitResult.draftId;
@@ -1985,7 +2007,7 @@ export class EmailReplyDraftGenerationService {
         error: `[${code}] Reply detection probe failed: ${errMsg}`,
         requestCorrelationId,
         code,
-        next_action: nextActionForCode(code, undefined),
+        next_action: nextActionForCode(code),
       };
     }
 
@@ -2010,9 +2032,10 @@ export class EmailReplyDraftGenerationService {
       code,
     });
 
-    // Surface an existing live draft when one exists (so the UI can route
-    // the user to approve it). The detection service does not read drafts;
-    // this read is bounded to the message's draft list.
+    // Surface an existing live draft when one exists, as CONTEXT only
+    // (R22 — the refusal is a denial; its next_action never suggests
+    // approving the surfaced draft). The detection service does not read
+    // drafts; this read is bounded to the message's draft list.
     let existingDraftId: number | undefined;
     try {
       const drafts = await this.draftModule.listByMessage(message.id);
@@ -2056,7 +2079,7 @@ export class EmailReplyDraftGenerationService {
       requestCorrelationId,
       code,
       existing_draft_id: existingDraftId,
-      next_action: nextActionForCode(code, existingDraftId),
+      next_action: nextActionForCode(code),
     };
   }
 
