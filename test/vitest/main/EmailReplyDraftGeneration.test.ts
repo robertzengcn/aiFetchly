@@ -3529,6 +3529,105 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     expect(guardRow).toBeNull();
   });
 
+  describe("R18: reservation losers emit exactly one correlated refusal audit", () => {
+    const auditModule = new EmailReplyAuditLogModule();
+
+    it("generation_in_progress loser writes exactly ONE reply_skipped audit with stage reservation", async () => {
+      const messageId = await seedMessage();
+      // Seed an unexpired generating guard held by a foreign owner.
+      await seedGeneratingGuard(4252, `row:${messageId}`, messageId);
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("generation_in_progress");
+      expect(requests).toHaveLength(0);
+
+      // R18: exactly ONE reply_skipped audit row for the refusal.
+      const { records: genAudits } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      const skipped = genAudits.filter((a) => a.action === "reply_skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].reason).toContain("generation_in_progress");
+      const meta = JSON.parse(skipped[0].metadataJson ?? "{}");
+      expect(meta.stage).toBe("reservation");
+      expect(meta.code).toBe("generation_in_progress");
+      expect(meta.correlationId).toBe(result.requestCorrelationId);
+    });
+
+    it("blocked (already_replied) reservation outcome writes exactly ONE reply_skipped audit", async () => {
+      const messageId = await seedMessage();
+      // A sent attempt appearing in the TOCTOU window blocks at the reservation.
+      const wrappedGuard = guardModuleThatMutatesBeforeAcquire(async () => {
+        await seedAttempt(messageId, "sent");
+      });
+      const { factory, requests } = fakeApiFactory([
+        completionResponse(validReplyJson),
+      ]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => wrappedGuard,
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.code).toBe("already_replied");
+      expect(requests).toHaveLength(0);
+
+      // R18: exactly ONE reply_skipped audit row for the refusal.
+      const { records: blockedAudits } = await auditModule.list({
+        messageId,
+        page: 0,
+        size: 50,
+      });
+      const skipped = blockedAudits.filter((a) => a.action === "reply_skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].reason).toContain("already_replied");
+      const meta = JSON.parse(skipped[0].metadataJson ?? "{}");
+      expect(meta.stage).toBe("reservation");
+      expect(meta.code).toBe("already_replied");
+      expect(meta.correlationId).toBe(result.requestCorrelationId);
+    });
+
+    it("audit persistence failure on reservation refusal stops the work and surfaces the audit error", async () => {
+      const messageId = await seedMessage();
+      await seedGeneratingGuard(4252, `row:${messageId}`, messageId);
+      const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+      const svc = buildService({
+        apiFactory: factory,
+        guardModuleFactory: () => guardModule,
+        replyAuditModuleFactory: () => {
+          const failModule = new EmailReplyAuditLogModule();
+          vi.spyOn(failModule, "create").mockRejectedValue(
+            new Error("audit DB full")
+          );
+          return failModule;
+        },
+      });
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      // The audit failure error surfaces (the refusal itself is NOT silently returned).
+      expect(result.error).toContain("audit persistence failed");
+      expect(result.error).toContain("audit DB full");
+      // No code/next_action on audit failure — the refusal could not be recorded.
+      expect(result.code).toBeUndefined();
+      expect(result.next_action).toBeUndefined();
+      // The audit_failure metric fired.
+      const counters = drainCountersForTest();
+      expect(counters.get("audit_failure{stage=reservation}")).toBe(1);
+    });
+  });
+
   it("a sent attempt seeded before the call is caught by the pre-draft guard (no reservation metric)", async () => {
     // The existing FR-028 behavior: an attempt present up front is refused by
     // the 2b guard before the reservation is ever consulted — the acquire is

@@ -618,6 +618,29 @@ export class EmailReplyDraftGenerationService {
         };
       }
       if (reservation.status === "generation_in_progress") {
+        // R18: the reservation loser (in-progress sibling) emits exactly ONE
+        // correlated refusal audit, matching the pre-draft policy refusal
+        // pattern. Audit persistence failure stops the work — an unrecorded
+        // refusal must never be silently returned.
+        const code = "generation_in_progress";
+        try {
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            `[${code}] Another generation is in progress for this message; try again shortly`,
+            { stage: "reservation", code }
+          );
+        } catch (auditError) {
+          incrementReplyMetric("audit_failure", { stage: "reservation" });
+          const auditErrMsg =
+            auditError instanceof Error ? auditError.message : String(auditError);
+          return {
+            success: false,
+            error: `Reservation-refusal audit persistence failed: ${auditErrMsg}`,
+            requestCorrelationId,
+          };
+        }
         return {
           success: false,
           error:
@@ -630,6 +653,26 @@ export class EmailReplyDraftGenerationService {
       // blocked: the cluster is in a state that forbids generation
       // (already_replied / delivery_unknown / reply_in_progress /
       // reply_state_conflict / reply_state_unknown).
+      // R18: emit exactly ONE correlated refusal audit for the blocked outcome.
+      const blockedCode = reservation.code;
+      try {
+        await this.recordFailure(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          `[${blockedCode}] Message reply state forbids generation`,
+          { stage: "reservation", code: blockedCode }
+        );
+      } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "reservation" });
+        const auditErrMsg =
+          auditError instanceof Error ? auditError.message : String(auditError);
+        return {
+          success: false,
+          error: `Reservation-refusal audit persistence failed: ${auditErrMsg}`,
+          requestCorrelationId,
+        };
+      }
       return {
         success: false,
         error: `[${reservation.code}] Message reply state forbids generation`,
