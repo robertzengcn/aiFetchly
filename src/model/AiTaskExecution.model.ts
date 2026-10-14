@@ -846,6 +846,34 @@ export class AiTaskExecutionModel extends BaseDb {
   }): Promise<boolean> {
     assertNotWorker("persistBudgetConsumption");
     const d = input.delta;
+    // B15 (FR-08/23): fail-closed validation of persisted increments. Every
+    // supplied delta must be a finite non-negative safe integer; hostile
+    // values (negative/NaN/Infinity/fractional/unsafe) are rejected WITHOUT
+    // touching SQL so a rollback or a malicious caller can never restore
+    // allowance. Streak reset is a separate API, never a negative delta.
+    if (!d || typeof d !== "object") return false;
+    const deltas: readonly unknown[] = [
+      d.continuations,
+      d.providerAttempts,
+      d.toolExecutions,
+      d.checkerAttempts,
+      d.tokens,
+      d.activeRuntimeMs,
+      d.waitMs,
+      d.noProgressStreak,
+    ];
+    for (const v of deltas) {
+      if (v === undefined) continue;
+      if (
+        typeof v !== "number" ||
+        !Number.isFinite(v) ||
+        !Number.isInteger(v) ||
+        v < 0 ||
+        v > Number.MAX_SAFE_INTEGER
+      ) {
+        return false;
+      }
+    }
     const runner = this.sqliteDb.connection.createQueryRunner();
     try {
       const result = (await runner.query(

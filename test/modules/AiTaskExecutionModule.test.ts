@@ -1361,7 +1361,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         expect(ok).to.equal(false);
       });
 
-      it("treats NaN/Infinity/negative deltas as 0 (fail-closed, FR-08)", async () => {
+      it("rejects negative/NaN/Infinity/unsafe-integer deltas with unchanged ledger (B15, FR-08)", async () => {
         const mod = new AiTaskExecutionModule();
         const result = unwrapCreated(await mod.startExecution({
           conversationId: "conv-t05-6",
@@ -1374,11 +1374,57 @@ describe("AiTaskExecutionModule (Mocha)", function () {
           budgetLimits: MANUAL_BUDGET_DEFAULTS,
         }));
 
-        // Hostile deltas — the SQL `+ ?` would propagate NaN if not clamped
-        // at the boundary. The model layer clamps via the budget's
-        // asFiniteNonNegative equivalent (here: the caller is expected to
-        // pass finite non-negative ints; we still assert the persist succeeds
-        // and the row stays sane with a finite total).
+        // Seed a known baseline so a negative delta would visibly restore
+        // allowance if applied (stored 10 + delta -7 must NOT become 3).
+        const seedOk = await mod.persistBudgetConsumption({
+          ledgerId: result.ledgerId,
+          expectedOwnerGeneration: 0,
+          activeExecutionId: result.executionId,
+          delta: { tokens: 10 },
+        });
+        expect(seedOk).to.equal(true);
+
+        const hostileDeltas = [
+          { tokens: -7 },
+          { tokens: NaN },
+          { tokens: Infinity },
+          { tokens: 1.5 },
+          { tokens: Number.MAX_SAFE_INTEGER + 1 },
+          { continuations: -1 },
+          { providerAttempts: NaN },
+          { activeRuntimeMs: -1000 },
+          { waitMs: Infinity },
+          { noProgressStreak: -1 },
+        ] as const;
+        for (const delta of hostileDeltas) {
+          const ok = await mod.persistBudgetConsumption({
+            ledgerId: result.ledgerId,
+            expectedOwnerGeneration: 0,
+            activeExecutionId: result.executionId,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            delta: delta as any,
+          });
+          expect(ok, `hostile delta ${JSON.stringify(delta)} must be rejected`).to.equal(false);
+        }
+        const ledger = await mod.getLedgerById(result.ledgerId);
+        if (!ledger) throw new Error("ledger missing");
+        expect(ledger.consumedTokens).to.equal(10);
+        expect(Number.isFinite(ledger.consumedTokens)).to.equal(true);
+      });
+
+      it("accepts finite non-negative integer deltas (B15 valid path)", async () => {
+        const mod = new AiTaskExecutionModule();
+        const result = unwrapCreated(await mod.startExecution({
+          conversationId: "conv-t05-6-valid",
+          sourceUserMessageId: "msg-t05-6-valid",
+          submissionId: "sub-t05-6-valid",
+          requestHash: "sha256:t05-6-valid",
+          origin: { type: "manual", submissionId: "sub-t05-6-valid" },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        }));
+
         const ok = await mod.persistBudgetConsumption({
           ledgerId: result.ledgerId,
           expectedOwnerGeneration: 0,
