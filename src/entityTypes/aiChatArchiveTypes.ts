@@ -180,6 +180,14 @@ export type RecoverableHistoryErrorCode =
    */
   | "MODEL_ATTEMPT_LIMIT"
   /**
+   * B13a (FR-08/10/23, AC-27): the execution's tool-execution budget is
+   * exhausted (max 50 manual tool attempts) OR the durable ledger persist
+   * failed (lease released or superseded). The loop's tool-dispatch gate
+   * throws this fail-closed BEFORE deps.executeTool runs, so no unfunded
+   * tool dispatches. Mirrors MODEL_ATTEMPT_LIMIT for the tool lane.
+   */
+  | "TOOL_BUDGET_EXHAUSTED"
+  /**
    * The serialized request body exceeds the transport ceiling even though the
    * token preflight passed. Distinct from
    * `CONTEXT_REQUIRED_CONTENT_TOO_LARGE`: that one is about model context,

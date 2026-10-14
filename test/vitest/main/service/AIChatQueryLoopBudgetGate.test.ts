@@ -13,8 +13,10 @@
 // is spent MUST NOT reach the provider, and a lease-loosed persist MUST NOT
 // reach the provider either. Flag-off / no-binding paths are byte-identical
 // legacy (the stream is called, no throw).
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { setHookAuditLoggerForTests } from "@/service/hooks/HookAuditService";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
@@ -30,8 +32,26 @@ import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionChunk,
   OpenAIChatMessage,
+  ToolExecutionResult,
 } from "@/api/aiChatApi";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+
+// Tool-result capture flags stay off in this file: with capture enabled,
+// every tool turn resolves the conversation epoch through a real database,
+// and parallel workers sharing the real DB path collide in schema sync
+// ("database is locked"). The budget gate under test never depends on
+// capture — same pattern as AIChatQueryLoop.budget.test.ts.
+vi.mock("@/config/featureFlags", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/config/featureFlags")
+  >("@/config/featureFlags");
+  return {
+    ...actual,
+    isToolOutputCaptureEnabled: () => false,
+    isToolOutputModelRefsEnabled: () => false,
+  };
+});
 
 /** Scripted stream that emits one assistant text chunk + stop. */
 function makeStopStream() {
@@ -115,6 +135,15 @@ function makeBudgetBinding(opts: {
 }
 
 describe("AIChatQueryLoop T05 provider-dispatch budget gate (FR-08/10/23, AC-06/08/22/27/29)", () => {
+  beforeEach(() => {
+    // Builtin hooks registered at module init touch a real database on the
+    // post-tool-use path; reset them so tool-executing tests never leave
+    // this worker for SQLite (parallel workers sharing the real DB path
+    // collide in schema sync with "database is locked"). Mirrors
+    // AIChatQueryLoop.test.ts.
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests({ log: () => undefined });
+  });
   it("throws RecoverableHistoryError(MODEL_ATTEMPT_LIMIT) when the provider budget is Exhausted", async () => {
     const stream = makeStopStream();
     const loop = new AIChatQueryLoop({
@@ -332,5 +361,196 @@ describe("AIChatQueryLoop T05 provider-dispatch budget gate (FR-08/10/23, AC-06/
     expect(stream).toHaveBeenCalledTimes(1);
     expect(result.type).toBe("completed");
     expect(budget.getConsumed().providerAttempts).toBe(1);
+  });
+});
+
+describe("AIChatQueryLoop B13a tool-dispatch budget gate (FR-08/10/23, AC-27)", () => {
+  function makeToolCallStream() {
+    let calls = 0;
+    return vi.fn(
+      async (
+        _req: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        calls += 1;
+        if (calls === 1) {
+          onChunk({
+            id: "resp-tool",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "test-model",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call-b13a",
+                      type: "function",
+                      function: { name: "search", arguments: '{"q":"x"}' },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+          });
+          return;
+        }
+        onChunk({
+          id: "resp-done",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "done", role: "assistant" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      }
+    );
+  }
+
+  function makeToolBudgetBinding(
+    budget: TaskRunBudget,
+    persistOk: boolean | ((delta: Record<string, number | undefined>) => boolean) = true
+  ): LoopTaskExecutionBinding {
+    return {
+      executionId: "exec-b13a",
+      policyAccepted: true,
+      ledgerId: "ledger-b13a",
+      leaseGeneration: 0,
+      reserveContinuation: (id) => budget.reserveContinuation(id),
+      reserveProviderAttempt: (id) => budget.reserveProviderAttempt(id),
+      reserveToolExecution: (id) => budget.reserveToolExecution(id),
+      reconcileTokens: (id, n) => budget.reconcileTokens(id, n),
+      addActiveRuntime: (ms) => budget.addActiveRuntime(ms),
+      persistBudget: async (delta) =>
+        typeof persistOk === "function" ? persistOk(delta) : persistOk,
+      consult: async () => ({ type: "finish_response", result: "response_ended" }),
+      recordDecision: () => undefined,
+      recordToolRoundProgress: () => undefined,
+      recordAssistantTextProgress: () => undefined,
+    };
+  }
+
+  function makeToolLoop(
+    stream: (
+      req: OpenAIChatCompletionRequest,
+      onChunk: (c: OpenAIChatCompletionChunk) => void
+    ) => Promise<void>,
+    execute: (
+      name: string,
+      args: Record<string, unknown>,
+      context: SkillExecutionContext
+    ) => Promise<ToolExecutionResult>
+  ) {
+    return new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: execute,
+      getSkillDefinition: () => undefined,
+    });
+  }
+
+  function makeToolInput(binding: LoopTaskExecutionBinding) {
+    const { input } = makeInput({ binding });
+    input.openAITools = [
+      {
+        type: "function",
+        function: {
+          name: "search",
+          description: "test tool",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    return input;
+  }
+
+  it("refuses tool dispatch when the tool budget is Exhausted (fail-closed, no execute)", async () => {
+    // Real budget with zero tool allowance: the FIRST tool reservation is
+    // already Exhausted. The gate must refuse BEFORE deps.executeTool runs
+    // (record-but-no-gate/D4 let exhausted tools dispatch — B13 forbids it).
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxToolExecutions: 0,
+    });
+    const stream = makeToolCallStream();
+    const execute = vi.fn().mockResolvedValue({
+      tool_call_id: "call-b13a",
+      tool_name: "search",
+      success: true,
+      result: { answer: "found" },
+      execution_time_ms: 10,
+    });
+    const result = await makeToolLoop(stream, execute).run(
+      makeToolInput(makeToolBudgetBinding(budget))
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect(result.error).toBeInstanceOf(RecoverableHistoryError);
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "TOOL_BUDGET_EXHAUSTED"
+      );
+    }
+  });
+
+  it("refuses tool dispatch when persistBudget returns false (lease lost)", async () => {
+    // Allowance remains but the durable write fails: dispatching would run
+    // unfunded work (B14 siblings). Fail closed — no execute. Provider-side
+    // persists succeed so the turn reaches the tool gate (isolating it).
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxToolExecutions: 50,
+    });
+    const stream = makeToolCallStream();
+    const execute = vi.fn().mockResolvedValue({
+      tool_call_id: "call-b13a",
+      tool_name: "search",
+      success: true,
+      result: { answer: "found" },
+      execution_time_ms: 10,
+    });
+    const result = await makeToolLoop(stream, execute).run(
+      makeToolInput(
+        makeToolBudgetBinding(
+          budget,
+          (delta) => delta.toolExecutions === undefined
+        )
+      )
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.type).toBe("failed");
+    if (result.type === "failed") {
+      expect((result.error as RecoverableHistoryError).code).toBe(
+        "TOOL_BUDGET_EXHAUSTED"
+      );
+    }
+  });
+
+  it("dispatches the tool when reservation is Reserved and persist succeeds", async () => {
+    const budget = new TaskRunBudget({
+      ...MANUAL_BUDGET_DEFAULTS,
+      maxToolExecutions: 50,
+    });
+    const stream = makeToolCallStream();
+    const execute = vi.fn().mockResolvedValue({
+      tool_call_id: "call-b13a",
+      tool_name: "search",
+      success: true,
+      result: { answer: "found" },
+      execution_time_ms: 10,
+    });
+    const result = await makeToolLoop(stream, execute).run(
+      makeToolInput(makeToolBudgetBinding(budget, true))
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.type).toBe("completed");
+    expect(budget.getConsumed().toolExecutions).toBe(1);
   });
 });

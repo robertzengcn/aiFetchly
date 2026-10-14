@@ -63,18 +63,15 @@ export interface LoopTaskExecutionBinding {
     requestId: string
   ) => BudgetReservationResult;
   /**
-   * T05 (FR-08/10/23, AC-27): record a tool execution against the execution
-   * budget before the actual `deps.executeTool` call. Per D4 this is
-   * record-but-no-gate: gating mid-operation (the tool has already claimed
-   * resources / produced side effects) would leave tool state in limbo, so
-   * the hard cap is enforced at continuation time via `HARD_CAPS` instead.
-   * The loop forms a stable ID (`tool:<call.id>`) so a retried same-call
-   * execution dedups. `Exhausted` is logged but the call still proceeds
-   * (record-but-no-gate); `Reserved` triggers `persistBudget(
-   * {toolExecutions:1})` (false → logged, call still proceeds — fail-OPEN
-   * for tool exec per D4, since the operation is already in flight).
-   * Optional so flag-off callers and tests can omit it; when absent the
-   * dispatch site skips recording (byte-identical legacy).
+   * T05 (FR-08/10/23, AC-27) + B13a: gate a tool execution against the
+   * execution budget before the actual `deps.executeTool` call. Fail-closed:
+   * `Exhausted`, a false persist (lease lost), or a persist throw all
+   * refuse the dispatch (the gate runs pre-dispatch, so no tool state is
+   * stranded). The loop forms a stable ID (`tool:<call.id>`) so a retried
+   * same-call execution dedups. Optional so flag-off callers, tests, and
+   * the scheduled sink path (which consults at response_end without a loop
+   * binding) can omit it; when absent the dispatch site skips recording
+   * (byte-identical legacy).
    */
   readonly reserveToolExecution?: (
     toolRequestId: string

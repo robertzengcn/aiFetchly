@@ -5,9 +5,9 @@
  * Callers GATE live dispatch on the result — refuse to dispatch when the
  * result is `Exhausted` (FR-08/09): continuation dispatch checks
  * `reserveContinuation`, the checker LLM checks `reserveCheckerAttempt`,
- * provider retry checks `reserveProviderAttempt`. `reserveToolExecution`
- * remains record-but-no-gate (gating mid-operation leaves tool state in
- * limbo; the tool volume is bounded via the continuation/round caps).
+ * provider retry checks `reserveProviderAttempt`, and (B13a) tool dispatch
+ * checks `reserveToolExecution` — the tool gate runs pre-dispatch, so no
+ * tool state is stranded by refusing.
  *
  * Checker budget (§9): 6 attempts per run, 2 per candidate (1 retry).
  * `reserveCheckerAttempt` tracks both counters; the per-candidate counter

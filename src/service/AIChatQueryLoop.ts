@@ -1446,18 +1446,25 @@ export class AIChatQueryLoop {
   }
 
   /**
-   * T05 (FR-08/10/23, AC-27): record a tool execution against the execution
-   * budget before the actual `deps.executeTool` call, then persist the
-   * consumption to the durable ledger. Record-but-no-gate per D4: gating
-   * mid-operation (the tool has already claimed resources / produced side
-   * effects by the time we know it's running) would leave tool state in
-   * limbo, so `Exhausted` is logged but the call still proceeds; the hard
-   * cap is enforced at continuation time via `HARD_CAPS`. `Reserved`
-   * triggers `persistBudget({toolExecutions:1})`; a false return (lease
-   * lost) is logged but the call still proceeds — fail-OPEN for tool exec
-   * per D4. The stable ID `tool:<call.id>` dedups a retried same-call
-   * execution (AlreadyReserved — no persist). Skipped entirely when no
-   * binding or not-accepted (byte-identical legacy).
+   * T05 (FR-08/10/23, AC-27) + B13a: gate a tool execution against the
+   * execution budget BEFORE the actual `deps.executeTool` call, then persist
+   * the consumption to the durable ledger. Fail-closed on every failure
+   * mode: `Exhausted` throws (no remaining allowance — dispatching would
+   * run unfunded work); `Reserved` triggers `persistBudget({toolExecutions:1})`
+   * and a false return (lease lost) or a persist throw also throws. The
+   * stable ID `tool:<call.id>` dedups a retried same-call execution
+   * (AlreadyReserved — proceeds without re-persisting, since the same
+   * logical call was already counted). Skipped entirely when no binding or
+   * not-accepted (byte-identical legacy).
+   *
+   * B13a deliberately reverses the old D4 record-but-no-gate behavior for
+   * this pre-dispatch gate: both call sites invoke it BEFORE executeTool
+   * runs, so no tool has claimed resources or produced side effects yet and
+   * there is no "already in flight" limbo to protect. Refusing here cannot
+   * strand tool state; proceeding past exhaustion could. Throws
+   * RecoverableHistoryError so runOnce's outer catch surfaces a failed turn
+   * (the message avoids content-transient patterns, so run() never retries
+   * a budget refusal).
    */
   private async reserveToolExecutionBudget(
     input: AIChatQueryLoopInput,
@@ -1467,26 +1474,29 @@ export class AIChatQueryLoop {
     if (!binding?.policyAccepted || !binding.reserveToolExecution) return;
     const toolRequestId = `tool:${call.id}`;
     const reservation = binding.reserveToolExecution(toolRequestId);
+    if (reservation === BudgetReservationResult.Exhausted) {
+      throw new RecoverableHistoryError(
+        "TOOL_BUDGET_EXHAUSTED",
+        "tool execution budget exhausted before dispatch"
+      );
+    }
     if (reservation === BudgetReservationResult.Reserved && binding.persistBudget) {
+      let ok: boolean;
       try {
-        const ok = await binding.persistBudget({ toolExecutions: 1 });
-        if (!ok) {
-          console.warn(
-            `[ai-chat-v2] T05 tool budget persistence failed (lease released or superseded) for ${toolRequestId}`
-          );
-        }
+        ok = await binding.persistBudget({ toolExecutions: 1 });
       } catch (err) {
-        // Fail-OPEN per D4: the operation is already in flight; a ledger
-        // write error must not abort a tool that has claimed resources.
-        console.warn(
-          `[ai-chat-v2] T05 tool budget persistence error for ${toolRequestId}:`,
-          err
+        throw new RecoverableHistoryError(
+          "TOOL_BUDGET_EXHAUSTED",
+          "tool budget persistence threw before dispatch",
+          { cause: err }
         );
       }
-    } else if (reservation === BudgetReservationResult.Exhausted) {
-      console.warn(
-        `[ai-chat-v2] T05 tool execution budget exhausted for ${toolRequestId} — proceeding (D4 record-but-no-gate)`
-      );
+      if (!ok) {
+        throw new RecoverableHistoryError(
+          "TOOL_BUDGET_EXHAUSTED",
+          "tool budget persistence failed (lease released or superseded)"
+        );
+      }
     }
   }
 
@@ -4213,7 +4223,7 @@ export class AIChatQueryLoop {
     }
 
     // T05 (FR-08/10/23, AC-27): record this tool execution against the
-    // execution budget before dispatching (record-but-no-gate per D4).
+    // execution budget before dispatching (fail-closed gate per B13a).
     await this.reserveToolExecutionBudget(input, call);
 
     const registry = getDefaultToolJobRegistry();
@@ -4777,7 +4787,7 @@ export class AIChatQueryLoop {
     token.startTimer();
 
     // T05 (FR-08/10/23, AC-27): record this tool execution against the
-    // execution budget before dispatching (record-but-no-gate per D4).
+    // execution budget before dispatching (fail-closed gate per B13a).
     await this.reserveToolExecutionBudget(input, call);
 
     const executePromise = this.deps.executeTool(
