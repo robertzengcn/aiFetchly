@@ -130,6 +130,7 @@ import type {
   TaskExecutionRoute,
 } from "@/entityTypes/aiTaskExecutionTypes";
 import { buildEvidenceService } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import { snapshotArtifactBaselines } from "@/service/aiTaskExecution/criteriaAdapters";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
 import { SearchModule } from "@/modules/SearchModule";
@@ -453,7 +454,10 @@ export class AIChatQueryEngine {
    * `recordDecision` callback; the engine's finalization gate (Slice 2 Unit 5)
    * reads it to tell "the loop already consulted" from "no consult ran" and
    * only falls back to its own consult on the latter. Keyed by executionId
-   * (stable across pause/resume). Cleared in `clearConversationTurnState`.
+   * (stable across pause/resume). Cleared at every terminal binding-delete
+   * site (complete/cancelled/failed/Stop/catch + orphan-successor adoption)
+   * so a slot cannot outlive its binding and leak on the long-lived engine
+   * singleton.
    */
   private readonly taskDecisionSlots = new Map<
     string,
@@ -1195,6 +1199,12 @@ export class AIChatQueryEngine {
           const progressTracker = new TaskProgressTracker({
             budget: created.budget,
           });
+          // B21 (FR-02/03/19): pre-action artifact baselines for the
+          // successor execution (same contract as the manual branch).
+          const successorArtifactBaselines = await snapshotArtifactBaselines(
+            artifactBaseDir ?? undefined,
+            created.contract?.criteria ?? []
+          );
           // Per-turn decision slot keyed by the successor executionId (the
           // finalization gate reads it back — same contract as the manual
           // created-branch below).
@@ -1247,6 +1257,7 @@ export class AIChatQueryEngine {
                   observationProvider,
                   operationReceiptProvider,
                   artifactBaseDir: artifactBaseDir ?? undefined,
+                  artifactBaselines: successorArtifactBaselines,
                   abortSignal: this.activeTurns.get(conversationId)
                     ?.abortController.signal,
                   expectedStateVersion,
@@ -1862,6 +1873,14 @@ export class AIChatQueryEngine {
                 searchModule: new SearchModule(),
                 contactInfoRepository,
               });
+              // B21 (FR-02/03/19): capture pre-action artifact baselines at
+              // enrollment — after the contract froze, before the maker
+              // dispatches. Files the run itself creates have no baseline
+              // and stay honestly unknown.
+              const artifactBaselines = await snapshotArtifactBaselines(
+                artifactBaseDir ?? undefined,
+                contract?.criteria ?? []
+              );
               // FR-09 / §7.2 step 7 (GAP-S2 #2): one tracker per execution,
               // closing over the SAME budget the controller consults, so the
               // streak the tracker increments is the streak the controller's
@@ -1939,6 +1958,7 @@ export class AIChatQueryEngine {
                       observationProvider,
                       operationReceiptProvider,
                       artifactBaseDir: artifactBaseDir ?? undefined,
+                      artifactBaselines,
                       // T04: thread the per-turn abort signal into the
                       // checker dispatch (read fresh — the turn may have
                       // changed between consults).
@@ -2482,6 +2502,12 @@ export class AIChatQueryEngine {
       // cancelled resolution) must not double-finalize.
       this.taskExecutionBindings.delete(conversationId);
       this.policyAcceptedConversations.delete(conversationId);
+      // D-slot leak fix: the Stop path finalizes (cancels) the enrolled
+      // execution. The decision slot is keyed by executionId and must be
+      // dropped with the binding so it cannot leak on the singleton.
+      if (boundExecutionId) {
+        this.taskDecisionSlots.delete(boundExecutionId);
+      }
       if (boundExecutionId) {
         // T12: a Stop-cancel write failure must NOT be swallowed silently.
         // The row may stay `running` with no durable outcome — surface it
@@ -3367,6 +3393,12 @@ export class AIChatQueryEngine {
           // past the turn (the execution is finalized; the conversation no
           // longer holds an accepted execution).
           this.policyAcceptedConversations.delete(conversationId);
+          // D-slot leak fix: the decision slot is keyed by executionId and
+          // must live no longer than the binding. Without this delete the
+          // slot (and its captured TaskCompletionDecision) leaks on the
+          // long-lived engine singleton — the conversation binding is gone
+          // but the slot map grows without bound across turns.
+          this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
         eventSink.emit({
           type: "complete",
@@ -3542,6 +3574,9 @@ export class AIChatQueryEngine {
           }
           this.taskExecutionBindings.delete(conversationId);
           this.policyAcceptedConversations.delete(conversationId);
+          // D-slot leak fix: the cancelled execution is finalized — its
+          // decision slot must not outlive the binding (see complete gate).
+          this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
         eventSink.emit({
           type: "cancelled",
@@ -3630,6 +3665,9 @@ export class AIChatQueryEngine {
           }
           this.taskExecutionBindings.delete(conversationId);
           this.policyAcceptedConversations.delete(conversationId);
+          // D-slot leak fix: the failed execution is finalized — its decision
+          // slot must not outlive the binding (see complete gate).
+          this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
         }
         eventSink.emit({
           type: "error",
@@ -4289,6 +4327,9 @@ export class AIChatQueryEngine {
       }
       this.taskExecutionBindings.delete(conversationId);
       this.policyAcceptedConversations.delete(conversationId);
+      // D-slot leak fix: the catch-path execution is finalized (failed) —
+      // drop its decision slot with the binding so it cannot leak.
+      this.taskDecisionSlots.delete(taskExecutionBinding.executionId);
     }
     eventSink.emit({
       type: "error",

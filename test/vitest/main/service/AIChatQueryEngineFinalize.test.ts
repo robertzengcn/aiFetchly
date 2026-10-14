@@ -1183,4 +1183,29 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     const complete = emits.find((e) => e.type === "complete");
     expect(complete).toBeDefined();
   });
+
+  it("clears the task decision slot when the turn finalizes (no slot leak)", async () => {
+    // The decision slot is keyed by executionId and must live exactly as
+    // long as the conversation binding. The complete gate deletes the
+    // binding but historically leaked the slot, retaining the captured
+    // TaskCompletionDecision forever on the long-lived engine singleton.
+    enrollCreated();
+    const { engine, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    // Terminal complete emitted and finalized.
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(
+      (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+        .taskExecutionBindings.has("v2-test-conv")
+    ).toBe(false);
+    const slots = (
+      engine as unknown as { taskDecisionSlots: Map<string, unknown> }
+    ).taskDecisionSlots;
+    expect(slots.has(EXEC_ID)).toBe(false);
+  });
 });
