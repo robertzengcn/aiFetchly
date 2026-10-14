@@ -42,7 +42,7 @@ All source line references below describe the reviewed revision. **P1** means fi
 | FR-031 — automatic fresh checks | Partial | Draft/send detector and claim freshness exist; false negatives, positive claim acceptance, and delayed SMTP freshness violate contract (R02/R05/R06/R12). |
 | FR-032 — shared detector/tool | Partial | Diagnostic tool, IPC, preload and DTO exist; detector completeness/cancellation/context cases remain (R05–R10). |
 | FR-033 — safe structured results | Partial | IPC preserves typed fields; AI failures lose correlation, summaries omit evidence/freshness, and next action can contradict denial (R19/R22, G02). |
-| FR-034 — audit/localization | Partial | Strict generation/reuse auditing and translated audit UI exist; reservation denials lack events, send lifecycle correlation remains message-scoped, full workflow E2E pending (R18–R20, G03). |
+| FR-034 — audit/localization | Partial | Strict generation/reuse auditing and translated audit UI exist; send lifecycle audits now carry per-invocation correlation (R20); reservation denial events landed (R18); full workflow E2E pending (G03). |
 | FR-035 — persistent reservation | Partial | Unique guard, owner/lease, atomic draft/revision/audit persistence exist; exception cleanup closed (R16 fixed); error-body deadline enforced (R17 fixed); final reconciliation remains (R01 fixed). |
 | FR-036 — message-level send/recovery | Partial | Atomic guard binding, sibling checks, reconciliation, post-claim freshness, and failed retry exist; finalized replay now returns the existing attempt (R14); remaining scope tracked under R02–R04/R12. |
 | FR-037 — cache safety | Partial | TTL, sticky single-row positives and cache hash exist; rejected writes, cluster positives, sender/scope changes and queued concurrency incomplete (R03/R07/R09/R10). |
@@ -195,10 +195,12 @@ All source line references below describe the reviewed revision. **P1** means fi
 
 ### R20 — Send lifecycle audits carry invocation correlation [P2]
 
-- [ ] Add invocation IDs to claim/finalize/reconcile inputs and audit metadata; keep deterministic message correlation as a separate field.
+- [x] Add invocation IDs to claim/finalize/reconcile inputs and audit metadata; keep deterministic message correlation as a separate field. — FIXED (c268a047c)
 - Evidence: `src/model/EmailReplyDraft.model.ts:768,909,1118` calls `correlationIdForMessage`; `ClaimSendInput` / `FinalizeOutcomeInput` omit invocation correlation.
 - Trigger/result: different send requests for one message share lifecycle audit correlation, while the service result/refusal can contain a unique request ID. Claim/outcome events cannot reliably join that result.
 - Regression: two invocations have different request IDs; each invocation's claim/outcome events share its returned ID and keep the separate message identifier.
+- Fix detail: `ClaimSendInput` / `FinalizeOutcomeInput` (and the Module-layer reconcile input) gained a documented `requestCorrelationId?: string`. All send-lifecycle audit writes in `EmailReplyDraftModel` — `send_claimed`, `reply_sent` (sent + reconcile confirm_sent), `send_failed` (failed + reconcile confirm_not_sent/leave_unresolved), `delivery_unknown` — now write BOTH `correlationId` (= the invocation id when provided; falls back to `correlationIdForMessage(messageId)` when omitted, e.g. the background recovery sweep) AND `messageCorrelationId` (= deterministic per-message id) in `metadataJson`, alongside `attemptId` / `providerMessageId` / `failureCode` / `evidence` as before. Threading: `EmailReplyDeliveryService` passes its invocation id into both the claim and the finalize; `SendBindingError` / `SendPolicyRejection` carry the id (3rd ctor param) so refusals and results surface the same correlation; `EmailReplySendRecoveryService.reconcileAttempt` mints a fresh `newRequestCorrelationId()` at the operator-reconcile boundary while `recoverStaleAttempts` deliberately omits it; `sendEmailReply` in `EmailReceiveAiTools` passes it through (completing the R19 send-mapping deferral listed under R19).
+- Acceptance verification: the todo's stated regression is covered at the model level against real SQLite in `test/vitest/main/modules/EmailReplySendClaim.integration.test.ts` (new describe "R20 — Send lifecycle audit dual-correlation (model level)", 9 tests): (1) the core regression — two invocations with different request IDs, each invocation's claim/outcome events sharing its returned ID and keeping the separate message identifier; (2) `messageCorrelationId` STABLE when the same message is claimed twice across different invocations (R13 failed → reopen → re-approve → retry, order-independent audit matching); (3)–(7) claim + all three outcome shapes + both reconcile actions carry the dual fields; (8) omitted id (background recovery) → both fields equal via the fallback, preserving legacy grouping. GREEN: `yarn testmain` on the 5 affected files → 110/110 (101 prior + 9 new); `tsc --noEmit` clean; eslint/hooks passed (0 errors).
 
 ### R21 — Optional generated review metadata is parsed then discarded [P2]
 
@@ -275,7 +277,7 @@ All source line references below describe the reviewed revision. **P1** means fi
 | B08 failed draft ignored/stranded | Fixed: fenced `failed -> draft` reopen inside the approval path; same-ID re-approve + retry lands without a sibling (R13). |
 | B09 warnings/reuse audit missing | Fixed: stored warnings and strict reuse audit; the awaited-eligibility window is closed by the reuse revalidation returning current denial states (R15). |
 | B10 audit error caught as provider error | Original catch-boundary defect fixed. |
-| B11 per-message request correlation | Generation ID allocation fixed; tool/lifecycle boundary losses remain (R19/R20). |
+| B11 per-message request correlation | Fixed: generation ID allocation + tool boundary (R19) + send lifecycle audits (R20) all carry per-invocation correlation alongside the deterministic message id. |
 | B12 IPC strips structured error | Typed IPC/renderer envelopes implemented; complete tool/summary guidance still incomplete (R19/R22/G02). |
 | B13 header-only timeout | Success body timed; error body and all-stage deadline remain incomplete (R17/G01). |
 
