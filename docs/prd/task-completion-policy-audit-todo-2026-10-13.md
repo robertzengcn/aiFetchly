@@ -213,7 +213,7 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### B14 — Durable budget/operation gates join an unrelated shared transaction [P1; confidence 10/10; real SQLite]
 
-- [ ] Serialize durable dispatch gates under a common transaction coordinator and return success only after their own committed boundary.
+- [x] Serialize durable dispatch gates under a common transaction coordinator and return success only after their own committed boundary. *(done 2026-10-14, commit `3c33331e8`: shared `dispatchGateMutex` + `executeOwnedUpdate` choke point; persist/shadow/claim/receipt run mutex-serialized with own BEGIN/COMMIT. Singleton-runner `nested` savepoints would join, not isolate — helper pre-checks `isTransactionActive` and fails closed without touching the outer txn; rollback only when started-but-uncommitted (a post-commit rollback would nuke someone else's txn). `create` excluded with rationale: unique index is its SQL guarantee and its outcomes degrade fail-closed. Tests: 3/3 real-SQLite incl. stash-consistent red, 47/47 + 40/40 + 20/20 neighbors.)*
 
 **Location:** `src/model/AiTaskExecution.model.ts:850–881`; `src/model/AiTaskOperation.model.ts:386–405`.
 
