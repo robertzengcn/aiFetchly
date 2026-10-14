@@ -318,9 +318,10 @@ yarn playwright test test/e2e/specs/manual-cancel-during-checking.spec.ts \
 
 ### G02 — Drain restart recovery and implement durable delivery identity
 
-- [ ] Await a bounded recovery barrier before scheduler/effect startup (`src/background.ts:1276–1277` currently launches without awaiting).
-- [ ] Drain/chunk/schedule the recovery overflow, rather than slice first 200 and leave rest until another startup (`TaskExecutionRestartRecovery.ts:126–129`). Preserve interrupted semantics/checkpoints and do not replay uncertain effects.
-- [ ] Carry stored final_event_identity/generation through terminal events/IPC/notifications and implement durable pending-delivery reconciliation/consumer dedup. Storing the identity alone does not deliver or deduplicate it.
+- [x] Await a bounded recovery barrier before scheduler/effect startup (`src/background.ts:1276–1277` currently launches without awaiting).
+- [x] Drain/chunk/schedule the recovery overflow, rather than slice first 200 and leave rest until another startup (`TaskExecutionRestartRecovery.ts:126–129`). Preserve interrupted semantics/checkpoints and do not replay uncertain effects.
+- [x] Carry stored final_event_identity/generation through terminal events/IPC/notifications and implement durable pending-delivery reconciliation/consumer dedup. Storing the identity alone does not deliver or deduplicate it.
+*(done 2026-10-14: awaitRecoveryBarrier (30s bound, never fatal) awaited before schedulers; drain loop re-reads to MAX_RECOVERY_SWEEPS with unique-row accounting; execution-result identity on all terminal task_execution_state emits → bridge → chunk type → renderer dedup + reload restore + state-get projection. Crash-after-commit covered by reload reconstruction; notification channel stays best-effort. Tests: recovery drain/safety/barrier, emit identity, G02b component incl. identity attr + 477/477 components.)*
 
 **Regression:** 201+ interrupted rows recovered without repeated app restarts; scheduler cannot bypass sweep; crash after commit/before delivery emits once; late stale callbacks fenced. **NFR-05/10; FR-14/24; AC-13/25/27/28/32.** Startup recovery exists now; these are completion gaps in that implementation.
 

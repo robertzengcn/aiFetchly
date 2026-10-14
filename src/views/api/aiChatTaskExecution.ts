@@ -72,6 +72,8 @@ export interface TaskExecutionStateView {
   readonly status: AiTaskExecutionStatus;
   readonly reasonCode?: string;
   readonly outcome?: TaskOutcome;
+  /** G02: durable delivery identity for reload-reconstruction dedup. */
+  readonly finalEventIdentity?: string;
 }
 
 export async function getChatV2TaskExecutionState(

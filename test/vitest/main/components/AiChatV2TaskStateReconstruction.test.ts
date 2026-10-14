@@ -240,8 +240,8 @@ function mountChat() {
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2PlanStatusBadge: true,
         TaskExecutionStatusBadge: {
-          props: ["status", "outcome", "reasonCode"],
-          template: `<span data-testid="task-badge" :data-status="status" :data-outcome="outcome ?? ''" :title="reasonCode ?? ''" />`,
+          props: ["status", "outcome", "reasonCode", "finalEventIdentity"],
+          template: `<span data-testid="task-badge" :data-status="status" :data-outcome="outcome ?? ''" :title="reasonCode ?? ''" :data-identity="finalEventIdentity ?? ''" />`,
         },
         AiChatV2ContextBadge: true,
         AiChatCompactionStatus: true,
@@ -462,6 +462,41 @@ describe("AiChatV2 T13 — task state reconstruction + executionId dedup", () =>
     ]);
     // The first terminal won; the replay did not flip outcome/reasonCode.
     expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    expect(badge(wrapper).attributes("title")).toBe("NO_PROGRESS");
+  });
+
+  it("G02b: redelivered terminal sharing the stored final_event_identity is dropped (delivery dedup)", async () => {
+    // Reload reconstructs the terminal badge WITH its durable delivery
+    // identity; a redelivery reusing that identity (crash after commit,
+    // notification retry) must not flip the badge even with a different
+    // outcome attached.
+    getTaskStateMock.mockResolvedValue({
+      executionId: "exec-r1",
+      conversationId: "v2-test",
+      status: "terminal",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      finalEventIdentity: "execution-result:exec-r1",
+    });
+    const wrapper = mountChat();
+    await selectConversation(wrapper);
+    expect(badge(wrapper).attributes("data-outcome")).toBe("incomplete");
+    // The durable delivery identity reconstructed with the row.
+    expect(badge(wrapper).attributes("data-identity")).toBe(
+      "execution-result:exec-r1"
+    );
+    await streamWithTaskChunks(wrapper, [
+      {
+        executionId: "exec-r1",
+        conversationId: "v2-test",
+        status: "terminal",
+        outcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        finalEventIdentity: "execution-result:exec-r1",
+      },
+    ]);
+    expect(badge(wrapper).attributes("data-status")).toBe("terminal");
+    expect(badge(wrapper).attributes("data-outcome")).toBe("incomplete");
     expect(badge(wrapper).attributes("title")).toBe("NO_PROGRESS");
   });
 

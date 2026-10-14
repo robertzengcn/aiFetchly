@@ -1264,23 +1264,45 @@ function initialize() {
       }
 
       // Task completion policy (T24, PRD NFR-05/AC-13): finalize executions
-      // left unfinalized by a crash/kill as interrupted. Runs BEFORE the
-      // schedulers start so no recovered row can race a fresh dispatch, and
-      // preserves checkpoints/receipts without replaying actions (§3.3).
+      // left unfinalized by a crash/kill as interrupted.
+      // G02: await a bounded recovery barrier BEFORE scheduler/effect
+      // startup so a recovered row cannot race a fresh dispatch. The sweep
+      // itself is bounded (capped sweeps); the barrier additionally times
+      // out instead of hanging boot — on timeout the sweep continues in the
+      // background and startup proceeds (logged, never fatal).
       // Pure no-op when the completion-policy flag is off (§17 rollback);
-      // fire-and-forget and never fatal.
+      // never fatal.
       try {
-        const { TaskExecutionRestartRecovery } = await import(
+        const {
+          TaskExecutionRestartRecovery,
+          awaitRecoveryBarrier,
+        } = await import(
           "@/service/aiTaskExecution/TaskExecutionRestartRecovery"
         );
-        void new TaskExecutionRestartRecovery()
-          .recoverInterruptedExecutions()
-          .catch((err: unknown) => {
-            log.warn(
-              "[task-recovery] sweep failed:",
-              err instanceof Error ? err.message : String(err)
-            );
-          });
+        const gated = await awaitRecoveryBarrier(
+          new TaskExecutionRestartRecovery()
+            .recoverInterruptedExecutions()
+            .catch((err: unknown) => {
+              log.warn(
+                "[task-recovery] sweep failed:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return {
+                scanned: 0,
+                recovered: 0,
+                skipped: 0,
+                failed: 0,
+                overflow: 0,
+                listError: true,
+                ledgersReleased: 0,
+              };
+            })
+        );
+        if (!gated.completed) {
+          log.warn(
+            "[task-recovery] sweep barrier timed out; schedulers starting while recovery continues in the background"
+          );
+        }
       } catch (err) {
         log.warn(
           "[task-recovery] startup sweep failed to launch:",

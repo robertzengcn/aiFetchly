@@ -762,6 +762,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
           // lifecycle state to the renderer badge. Non-terminal chunk on the
           // shared STREAM_CHUNK channel; the terminal variant is emitted AFTER
           // durable finalization at the engine complete/cancelled/failed gates.
+          // G02: forward the durable delivery identity for consumer dedup.
           sendChunk(event, {
             eventType: "task_execution_state",
             conversationId: e.conversationId,
@@ -772,6 +773,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
               reasonCode: e.reasonCode,
               outcome: e.outcome,
               remainingWork: e.remainingWork,
+              finalEventIdentity: e.finalEventIdentity,
             },
           });
           break;
@@ -2127,6 +2129,8 @@ async function handleTaskStateGet(
       status: exec.stage,
       reasonCode: exec.outcome_reason_code ?? undefined,
       outcome: exec.task_outcome ?? undefined,
+      // G02: durable delivery identity for reload reconstruction dedup.
+      finalEventIdentity: exec.final_event_identity ?? undefined,
     });
   } catch (err) {
     // Malformed JSON payload or module failure — never leak the raw error

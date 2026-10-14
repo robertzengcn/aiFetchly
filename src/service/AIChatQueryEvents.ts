@@ -321,6 +321,12 @@ export interface AIChatQueryTaskExecutionStateEvent {
   outcome?: TaskOutcome;
   /** Human-readable remaining work / blocker summary (PRD FR-13). */
   remainingWork?: string;
+  /**
+   * G02 (design §6.3, NFR-10): durable delivery identity
+   * (`execution-result:<executionId>`), stamped by finalization in the same
+   * transaction as the outcome. IPC and consumers dedup on it.
+   */
+  finalEventIdentity?: string;
 }
 
 export type AIChatQueryEvent =

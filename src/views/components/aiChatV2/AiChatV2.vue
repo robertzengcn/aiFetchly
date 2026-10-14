@@ -17,6 +17,7 @@
           :status="activeTaskExecution.status"
           :outcome="activeTaskExecution.outcome"
           :reason-code="activeTaskExecution.reasonCode"
+          :final-event-identity="activeTaskExecution.finalEventIdentity"
           class="ml-2"
         />
         <v-btn
@@ -1628,6 +1629,7 @@ async function restoreActiveTaskExecution(): Promise<void> {
           status: state.status,
           reasonCode: state.reasonCode,
           outcome: state.outcome,
+          finalEventIdentity: state.finalEventIdentity,
         }
       : null;
   } catch {
@@ -2946,6 +2948,8 @@ type ActiveTaskExecutionView = {
   readonly reasonCode?: string;
   readonly outcome?: TaskOutcome;
   readonly remainingWork?: string;
+  /** G02: durable delivery identity for consumer dedup (design §6.3). */
+  readonly finalEventIdentity?: string;
 };
 const activeTaskExecution = ref<ActiveTaskExecutionView | null>(null);
 /** Active scheduled loop for the current conversation (renderer display only;
@@ -4782,7 +4786,18 @@ const onSend = async (
             sameExecution &&
             isTerminal &&
             tracked.status === "terminal";
-          if (staleOldExecution || duplicateTerminal) {
+          // G02 (design §6.3, NFR-10): durable delivery dedup. A redelivered
+          // terminal event reuses the stored final_event_identity instead of
+          // minting a second one — drop it even if the tracked badge was
+          // reconstructed without terminal status (e.g. reload raced the
+          // redelivery). Identity match implies same execution (1:1).
+          const duplicateDelivery =
+            tracked !== null &&
+            isTerminal &&
+            te.finalEventIdentity !== undefined &&
+            tracked.finalEventIdentity !== undefined &&
+            te.finalEventIdentity === tracked.finalEventIdentity;
+          if (staleOldExecution || duplicateTerminal || duplicateDelivery) {
             // drop — keep the newer / already-applied tracked state
           } else {
             activeTaskExecution.value = {
@@ -4792,6 +4807,7 @@ const onSend = async (
               reasonCode: te.reasonCode,
               outcome: te.outcome,
               remainingWork: te.remainingWork,
+              finalEventIdentity: te.finalEventIdentity,
             };
           }
         } else if (chunk.eventType === "goal_state" && chunk.goalState) {

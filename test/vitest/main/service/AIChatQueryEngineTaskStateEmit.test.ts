@@ -478,7 +478,7 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
     expect(taskStateEvents(emits)).toHaveLength(0);
   });
 
-  it("terminal: complete gate emits terminal AFTER the complete event with outcome + reasonCode (FR-14/24, NFR-10)", async () => {
+  it("terminal: complete gate emits terminal BEFORE the complete event with outcome + reasonCode (FR-14/24, NFR-10; B08)", async () => {
     const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
       type: "finish",
       outcome: "verified_complete",
@@ -660,5 +660,39 @@ describe("AIChatQueryEngine — task_execution_state lifecycle emitters (T13)", 
     expect(activeIdx).toBeGreaterThanOrEqual(0);
     expect(terminalIdx).toBeGreaterThanOrEqual(0);
     expect(activeIdx).toBeLessThan(terminalIdx);
+  });
+
+  it("G02b: terminal task_execution_state carries the stable final_event_identity (design §6.3, NFR-10)", async () => {
+    // The durable delivery identity (execution-result:<id>, stamped by
+    // finalization in the same transaction as the outcome) travels on the
+    // terminal event so IPC/notifications/consumers dedup on it — a
+    // notification retry reuses, never mints.
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "verified",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    const terminal = taskStateEvents(emits).filter(
+      (s) => s.status === "terminal"
+    );
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({
+      executionId: EXEC_ID,
+      status: "terminal",
+      outcome: "verified_complete",
+      finalEventIdentity: `execution-result:${EXEC_ID}`,
+    });
   });
 });

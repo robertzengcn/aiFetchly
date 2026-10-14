@@ -121,6 +121,7 @@ import {
   assertOwnership,
   readCurrentLeaseGeneration,
 } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import { buildFinalEventIdentity } from "@/service/aiTaskExecution/TaskExecutionRestartRecovery";
 import type { FinalizeManualInput } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import type { TaskExecutionBinding } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import {
@@ -3463,6 +3464,11 @@ export class AIChatQueryEngine {
             status: "terminal",
             outcome: taskOutcome,
             reasonCode: taskReasonCode,
+            // G02 (design §6.3, NFR-10): durable delivery identity, stamped
+            // by finalization in the same transaction as the outcome. IPC,
+            // notifications, and consumers dedup on it — a redelivery
+            // reuses, never mints.
+            finalEventIdentity: buildFinalEventIdentity(taskExecutionId),
           });
         }
         eventSink.emit({
@@ -3637,6 +3643,8 @@ export class AIChatQueryEngine {
             status: "terminal",
             outcome: cancelledTaskOutcome,
             reasonCode: cancelledTaskReasonCode,
+            // G02: durable delivery identity (see complete gate).
+            finalEventIdentity: buildFinalEventIdentity(cancelledTaskExecutionId),
           });
         }
         eventSink.emit({
@@ -3730,6 +3738,8 @@ export class AIChatQueryEngine {
             status: "terminal",
             outcome: failedTaskOutcome,
             reasonCode: failedTaskReasonCode,
+            // G02: durable delivery identity (see complete gate).
+            finalEventIdentity: buildFinalEventIdentity(failedTaskExecutionId),
           });
         }
         eventSink.emit({

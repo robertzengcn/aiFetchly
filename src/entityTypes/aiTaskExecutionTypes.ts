@@ -317,6 +317,8 @@ export interface ChatV2TaskExecutionStateEvent {
   readonly outcome?: TaskOutcome;
   /** Human-readable remaining work / blocker summary (PRD FR-13). */
   readonly remainingWork?: string;
+  /** G02: durable delivery identity (`execution-result:<executionId>`). */
+  readonly finalEventIdentity?: string;
 }
 
 export const TASK_EXECUTION_LEDGER_STATUSES = [

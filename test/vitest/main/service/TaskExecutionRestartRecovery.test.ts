@@ -28,6 +28,9 @@ import {
   TaskExecutionRestartRecovery,
   RESTART_INTERRUPTED_REASON,
   RECOVERY_SWEEP_MAX_ROWS,
+  MAX_RECOVERY_SWEEPS,
+  RECOVERY_BARRIER_TIMEOUT_MS,
+  awaitRecoveryBarrier,
   buildFinalEventIdentity,
 } from "@/service/aiTaskExecution/TaskExecutionRestartRecovery";
 
@@ -300,18 +303,44 @@ describe("TaskExecutionRestartRecovery (T24)", () => {
     expect(summary.listError).toBe(false);
   });
 
-  it("is bounded: caps the sweep at RECOVERY_SWEEP_MAX_ROWS and reports the overflow", async () => {
-    const rows = Array.from({ length: RECOVERY_SWEEP_MAX_ROWS + 5 }, (_, i) =>
+  it("is bounded: caps each sweep at RECOVERY_SWEEP_MAX_ROWS and drains via re-reads", async () => {
+    // 205 rows with a faithfully shrinking store: two bounded sweeps
+    // (200 + 5) drain fully in one call — the per-sweep cap bounds startup
+    // work while the re-read drain leaves nothing for another restart (G02a).
+    let queue = Array.from({ length: RECOVERY_SWEEP_MAX_ROWS + 5 }, (_, i) =>
       makeUnfinalizedRow({ execution_id: `exec-cap-${i}`, id: i + 1 })
+    );
+    getUnfinalizedExecutionsMock.mockImplementation(async () => {
+      const out = queue;
+      // Simulate durable finalization: the first 200 observed rows leave
+      // the unfinalized set before the next re-read.
+      queue = queue.slice(RECOVERY_SWEEP_MAX_ROWS);
+      return out;
+    });
+
+    const summary = await recovery.recoverInterruptedExecutions();
+
+    expect(getUnfinalizedExecutionsMock).toHaveBeenCalledTimes(2);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(RECOVERY_SWEEP_MAX_ROWS + 5);
+    expect(summary.scanned).toBe(RECOVERY_SWEEP_MAX_ROWS + 5);
+    expect(summary.recovered).toBe(RECOVERY_SWEEP_MAX_ROWS + 5);
+    expect(summary.overflow).toBe(0);
+  });
+
+  it("G02a: non-shrinking store still terminates at the sweep cap with overflow reported", async () => {
+    // A corrupted table that never shrinks must not hang startup: the drain
+    // stops after MAX_RECOVERY_SWEEPS bounded sweeps and reports overflow.
+    const rows = Array.from({ length: RECOVERY_SWEEP_MAX_ROWS + 1 }, (_, i) =>
+      makeUnfinalizedRow({ execution_id: `exec-stuck-${i}`, id: i + 1 })
     );
     getUnfinalizedExecutionsMock.mockResolvedValue(rows);
 
     const summary = await recovery.recoverInterruptedExecutions();
 
-    expect(finalizeManualMock).toHaveBeenCalledTimes(RECOVERY_SWEEP_MAX_ROWS);
-    expect(summary.scanned).toBe(RECOVERY_SWEEP_MAX_ROWS + 5);
-    expect(summary.recovered).toBe(RECOVERY_SWEEP_MAX_ROWS);
-    expect(summary.overflow).toBe(5);
+    expect(summary.overflow).toBeGreaterThan(0);
+    expect(summary.recovered + summary.skipped + summary.failed).toBeLessThanOrEqual(
+      RECOVERY_SWEEP_MAX_ROWS * MAX_RECOVERY_SWEEPS
+    );
   });
 
   it("handles a sweep-list failure without throwing (startup never fatal)", async () => {
@@ -361,5 +390,25 @@ describe("TaskExecutionRestartRecovery (T24)", () => {
     expect(buildFinalEventIdentity("exec-abc")).toBe(
       buildFinalEventIdentity("exec-abc")
     );
+  });
+
+  it("G02b: awaitRecoveryBarrier resolves completed work (startup gate proceeds)", async () => {
+    const gated = await awaitRecoveryBarrier(
+      Promise.resolve({ scanned: 3 }),
+      1000
+    );
+    expect(gated.completed).toBe(true);
+    if (gated.completed) {
+      expect(gated.result).toEqual({ scanned: 3 });
+    }
+  });
+
+  it("G02b: awaitRecoveryBarrier times out instead of hanging startup (bounded barrier)", async () => {
+    const gated = await awaitRecoveryBarrier(
+      new Promise(() => {}),
+      20
+    );
+    expect(gated.completed).toBe(false);
+    expect(RECOVERY_BARRIER_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });
