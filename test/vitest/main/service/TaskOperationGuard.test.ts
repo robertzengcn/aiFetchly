@@ -519,6 +519,39 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     expect(store.rows.has("op:exec-A:outbound_batch:11#occ2")).to.equal(false);
   });
 
+  it("B17: concurrent same-intent prepares in different executions → exactly one winner (FR-11, AC-09)", async () => {
+    // Two executions race the same send intent. The first record is held
+    // 50ms so the rival's fence check provably lands inside the race
+    // window (microtask-scale work vs millisecond-scale hold): without
+    // serialization both fences see empty and both dispatch (double send).
+    // With the fence serialized, the loser sees the winner's unresolved
+    // row and reconciles instead of dispatching.
+    const baseDeps = store.deps();
+    let recordCalls = 0;
+    const origRecord = baseDeps.recordOperation;
+    const racingDeps: OperationGuardDeps = {
+      ...baseDeps,
+      recordOperation: async (input) => {
+        recordCalls++;
+        if (recordCalls === 1) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return origRecord(input);
+      },
+    };
+    const guardA = new TaskOperationGuard(racingDeps, "exec-A");
+    const guardB = new TaskOperationGuard(racingDeps, "exec-B");
+    const [dA, dB] = await Promise.all([
+      guardA.prepareDispatch(SEND_DESCRIPTOR),
+      guardB.prepareDispatch(SEND_DESCRIPTOR),
+    ]);
+    const winners = [dA, dB].filter((d) => d.allowed);
+    const losers = [dA, dB].filter((d) => !d.allowed);
+    expect(winners.length).to.equal(1);
+    expect(losers.length).to.equal(1);
+    expect(losers[0]?.reasonCode).to.equal("OPERATION_UNRESOLVED_EARLIER");
+  });
+
   it("D3: settle reads the CURRENT claim generation (survives a crashed dispatched stamp)", async () => {
     // Pre-D3 wedge: the two-step settle stamped dispatched at
     // input.claimGeneration then outcome at input.claimGeneration+1. A crash

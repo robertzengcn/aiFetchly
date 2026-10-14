@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AsyncMutex } from "@/utils/asyncMutex";
 import type { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 import type {
   AiTaskOperationState,
@@ -184,6 +185,27 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
   "failed",
 ]);
 
+/**
+ * B17 (FR-11/24, AC-09/10/28): process-wide serializer for the
+ * check→create→claim prepare sequence. Per-row CAS cannot serialize
+ * DISTINCT execution keys: two concurrent same-intent prepares in different
+ * executions both observe no unresolved row, then create separate keys and
+ * win separate claims (double effect). Serializing the whole prepare makes
+ * the cross-execution fence effective — the loser observes the winner's
+ * unresolved row and reconciles instead of dispatching.
+ *
+ * A single global mutex (not per-intent): consequential dispatches are rare
+ * (send-gated tools only), the critical section is a few indexed reads plus
+ * one idempotent create and one CAS, and a keyed map would leak entries for
+ * volatile domain targets (per-batch/per-message IDs). Single-process
+ * scope is sufficient: workers never touch these tables (NFR-03 —
+ * assertNotWorker), so the Electron main process is the only writer. A
+ * multi-process deployment would need the unique partial-index fence
+ * instead; the per-row CAS + INTENT_CONFLICT winner validation remain as
+ * defense in depth beneath this serializer.
+ */
+const prepareDispatchMutex = new AsyncMutex();
+
 export class TaskOperationGuard {
   constructor(
     private readonly deps: OperationGuardDeps,
@@ -223,6 +245,26 @@ export class TaskOperationGuard {
    * 3. Create/claim the operation row and allow dispatch.
    */
   async prepareDispatch(
+    descriptor: OperationGuardDescriptor
+  ): Promise<OperationGuardDecision> {
+    // B17: serialize the fence→create→claim sequence (see prepareDispatchMutex).
+    return prepareDispatchMutex.run(() =>
+      this.prepareDispatchSerialized(descriptor)
+    );
+  }
+
+  /**
+   * §10.2 pre-dispatch fence. Order of checks:
+   * 1. Cross-execution unresolved lookup FIRST — a new execution ID or
+   *    conversation must not bypass an unknown earlier send/job for the
+   *    same intent/target.
+   * 2. This execution's own row: confirmed receipt → reuse; unknown/pending
+   *    earlier occurrence → block blind replay.
+   * 3. Create/claim the operation row and allow dispatch.
+   *
+   * Runs inside {@link prepareDispatchMutex} — do not call directly.
+   */
+  private async prepareDispatchSerialized(
     descriptor: OperationGuardDescriptor
   ): Promise<OperationGuardDecision> {
     const intentHash = computeIntentHash({
