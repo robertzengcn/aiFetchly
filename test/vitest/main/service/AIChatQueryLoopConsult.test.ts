@@ -165,6 +165,55 @@ describe("consultLoopEndCandidate — decision→outcome mapping (AC-07/08)", ()
     }
   });
 
+  it("B13c: continue + Reserved persists {continuations:1} so pause/resume keeps the spent counter", async () => {
+    // Continuation spend lived only in the mirror: after a pause/resume the
+    // resurrected mirror forgot it and re-spent the allowance. Persisting at
+    // dispatch keeps mirror and ledger identical.
+    const persists: unknown[] = [];
+    const decision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "cont-persist",
+      prompt: "continue",
+      unmetCriterionIds: [],
+    };
+    const binding = {
+      ...makeBinding({ decision, reservation: BudgetReservationResult.Reserved }),
+      persistBudget: async (delta: unknown) => {
+        persists.push(delta);
+        return true;
+      },
+    };
+    const outcome = await consultLoopEndCandidate({
+      binding,
+      boundary: "round_cap",
+      ...baseParams,
+    });
+    expect(outcome.type).toBe("continue");
+    expect(persists).toEqual([{ continuations: 1 }]);
+  });
+
+  it("B13c: continue + Reserved but persistBudget false → break (no unfunded maker dispatch)", async () => {
+    // Lease lost between reserve and persist: the mirror counted a
+    // continuation the ledger rejected. Continuing would dispatch maker
+    // work no durable accounting funds — break instead.
+    const decision: TaskCompletionDecision = {
+      type: "continue",
+      continuationId: "cont-nopersist",
+      prompt: "continue",
+      unmetCriterionIds: [],
+    };
+    const binding = {
+      ...makeBinding({ decision, reservation: BudgetReservationResult.Reserved }),
+      persistBudget: async (_delta: unknown) => false,
+    };
+    const outcome = await consultLoopEndCandidate({
+      binding,
+      boundary: "round_cap",
+      ...baseParams,
+    });
+    expect(outcome.type).toBe("break");
+  });
+
   it("finish (verified_complete) → break", async () => {
     const decision: TaskCompletionDecision = {
       type: "finish",

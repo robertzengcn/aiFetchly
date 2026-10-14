@@ -367,15 +367,16 @@ export async function consultLoopEndCandidate(
   return mapDecisionToOutcome(decision, input.binding);
 }
 
-function mapDecisionToOutcome(
+async function mapDecisionToOutcome(
   decision: TaskCompletionDecision,
   binding: LoopTaskExecutionBinding
-): ConsultOutcome {
+): Promise<ConsultOutcome> {
   if (decision.type === "continue") {
     // Budget gate: the controller authorized a continuation, but the
     // lineage budget has the final say. Three reservation results map to
     // three distinct honest outcomes (T06b):
-    // - Reserved: fresh dispatch — proceed with the continuation prompt.
+    // - Reserved: fresh dispatch — persist, then proceed with the
+    //   continuation prompt.
     // - AlreadyReserved: this exact continuation ID was already reserved
     //   (a replay of the same candidate, transport retry, or a re-consult
     //   at the same boundary with identical immutable state). Re-dispatching
@@ -390,6 +391,29 @@ function mapDecisionToOutcome(
     }
     if (reservation === BudgetReservationResult.Exhausted) {
       return { type: "break", reason: "CONTINUATION_LIMIT" };
+    }
+    // B13c (FR-08/23, AC-08/27): persist the continuation spend at dispatch
+    // so pause/resume/Continue resurrects it from the ledger instead of
+    // re-spending a forgotten allowance. A false persist (lease lost) or a
+    // persist throw breaks instead of dispatching maker work no durable
+    // accounting funds. Bindings without persistBudget (legacy/test/sink)
+    // keep mirror-only behavior.
+    if (binding.persistBudget) {
+      let persisted = false;
+      try {
+        persisted = await binding.persistBudget({ continuations: 1 });
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] continuation persist threw for ${decision.continuationId}:`,
+          err
+        );
+      }
+      if (!persisted) {
+        console.error(
+          `[ai-chat-v2] continuation persist failed for ${decision.continuationId} — breaking instead of unfunded dispatch`
+        );
+        return { type: "break", reason: "PERSISTENCE_FAILED" };
+      }
     }
     return { type: "continue", prompt: decision.prompt };
   }
