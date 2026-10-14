@@ -1637,12 +1637,319 @@ async function restoreActiveTaskExecution(): Promise<void> {
   }
 }
 
+/**
+ * B10 (FR-13/14/21/22, AC-25/27/32): render a Continue/Retry successor turn.
+ *
+ * The successor streams on the shared conversation channels; the api helper
+ * already drops parent-attributed chunks, so everything arriving here
+ * belongs to the successor execution. Rendering mirrors the main-stream
+ * turn lifecycle on a conversation-scoped controller: a lazily-added
+ * assistant placeholder (disclosed via metadata.successorMode), token
+ * appends, tool call/result/progress cards, and terminal finalization from
+ * the complete chunk. The engine message id is adopted from the first chunk
+ * that carries one (the placeholder's temp id is only a pre-first-chunk
+ * handle).
+ */
+function successorMessageController(
+  conversationId: string
+): MessageListController {
+  return {
+    get: (): ChatV2MessageView[] => {
+      if (activeConversationId.value === conversationId) {
+        return messages.value;
+      }
+      return getConversationRuntimeState(conversationId).messages ?? [];
+    },
+    set: (nextMessages: ChatV2MessageView[]): void => {
+      if (activeConversationId.value === conversationId) {
+        messages.value = nextMessages;
+      }
+      patchConversationRuntimeState(conversationId, {
+        messages: nextMessages,
+      });
+    },
+  };
+}
+
+function lastAssistantMessageId(conversationId: string): string | null {
+  const list =
+    activeConversationId.value === conversationId
+      ? messages.value
+      : (getConversationRuntimeState(conversationId).messages ?? []);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i].role === "assistant") return list[i].id;
+  }
+  return null;
+}
+
+function ensureSuccessorAssistantAdded(
+  turn: SuccessorTurnState,
+  controller: MessageListController
+): void {
+  if (turn.added) return;
+  controller.set([
+    ...controller.get(),
+    {
+      id: turn.assistantId,
+      conversationId: turn.conversationId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: "message" as MessageType,
+      metadata: {
+        source: "chat-v2",
+        successorMode: turn.mode,
+        successorExecutionId: turn.executionId,
+      },
+    },
+  ]);
+  turn.added = true;
+}
+
+function adoptSuccessorMessageId(
+  turn: SuccessorTurnState,
+  controller: MessageListController,
+  engineMessageId: string
+): void {
+  if (turn.engineMessageId === engineMessageId) return;
+  turn.engineMessageId = engineMessageId;
+  if (turn.added) {
+    const current = controller.get();
+    const idx = current.findIndex((m) => m.id === turn.assistantId);
+    if (idx !== -1) {
+      const next = [...current];
+      next[idx] = { ...next[idx], id: engineMessageId };
+      controller.set(next);
+    }
+  }
+  turn.assistantId = engineMessageId;
+  patchConversationRuntimeState(turn.conversationId, {
+    activeAssistantMessageId: engineMessageId,
+  });
+}
+
+function renderSuccessorChunk(
+  turn: SuccessorTurnState,
+  controller: MessageListController,
+  chunk: ChatV2StreamChunk
+): void {
+  if (chunk.messageId && !turn.engineMessageId) {
+    adoptSuccessorMessageId(turn, controller, chunk.messageId);
+  }
+  if (chunk.eventType === "token" && chunk.contentDelta) {
+    ensureSuccessorAssistantAdded(turn, controller);
+    turn.content += chunk.contentDelta;
+    const current = controller.get();
+    const idx = current.findIndex((m) => m.id === turn.assistantId);
+    if (idx !== -1) {
+      const next = [...current];
+      next[idx] = { ...next[idx], content: turn.content };
+      controller.set(next);
+    }
+  } else if (chunk.eventType === "tool_call") {
+    const toolCallId = chunk.toolCallId;
+    const current = controller.get();
+    const alreadyRendered = toolCallId
+      ? current.some(
+          (m) =>
+            m.messageType === MessageType.TOOL_CALL &&
+            m.metadata?.toolCallId === toolCallId
+        )
+      : false;
+    if (!alreadyRendered) {
+      const toolCallMsg: ChatV2MessageView = {
+        id: `tool-call-${toolCallId || Date.now()}`,
+        conversationId: chunk.conversationId || turn.conversationId,
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toISOString(),
+        messageType: MessageType.TOOL_CALL,
+        metadata: {
+          source: "chat-v2",
+          toolCallId,
+          toolName: chunk.toolName,
+          toolArguments: chunk.toolArguments,
+        },
+      };
+      if (turn.added) {
+        const aIdx = current.findIndex((m) => m.id === turn.assistantId);
+        if (aIdx !== -1) {
+          controller.set([
+            ...current.slice(0, aIdx),
+            toolCallMsg,
+            ...current.slice(aIdx),
+          ]);
+        } else {
+          controller.set([...current, toolCallMsg]);
+        }
+      } else {
+        controller.set([...current, toolCallMsg]);
+      }
+    }
+  } else if (chunk.eventType === "tool_result") {
+    upsertToolResultMessage(
+      chunk,
+      chunk.conversationId || turn.conversationId,
+      turn.added ? turn.assistantId : undefined,
+      controller
+    );
+  } else if (chunk.eventType === "tool_progress") {
+    upsertToolProgress(
+      chunk,
+      chunk.conversationId || turn.conversationId,
+      controller
+    );
+  }
+}
+
+function finalizeSuccessorTurn(
+  turn: SuccessorTurnState,
+  controller: MessageListController,
+  complete: ChatV2StreamChunk
+): void {
+  if (complete.messageId && !turn.engineMessageId) {
+    adoptSuccessorMessageId(turn, controller, complete.messageId);
+  }
+  if (complete.fullContent !== undefined && complete.fullContent.length > 0) {
+    ensureSuccessorAssistantAdded(turn, controller);
+    turn.content = complete.fullContent;
+    const current = controller.get();
+    const idx = current.findIndex((m) => m.id === turn.assistantId);
+    if (idx !== -1) {
+      const next = [...current];
+      next[idx] = { ...next[idx], content: turn.content };
+      controller.set(next);
+    }
+  }
+  patchConversationRuntimeState(turn.conversationId, {
+    isStreaming: false,
+    activeAssistantMessageId: null,
+    retryInfo: null,
+    recoveryInfo: null,
+  });
+  setAuthoritativeRuntimeStatus(turn.conversationId, "idle");
+  activeSuccessorTurns.value.delete(turn.conversationId);
+  // The terminal task_execution_state normally precedes complete (B08
+  // engine ordering) and already badged the outcome — but a missed state
+  // chunk must not hang the badge non-terminal. Re-read authoritative
+  // state best-effort (latest row is this successor's).
+  void getChatV2TaskExecutionState(turn.conversationId)
+    .then((state) => {
+      if (!state) return;
+      const tracked = activeTaskExecution.value;
+      if (
+        tracked &&
+        tracked.executionId === state.executionId &&
+        tracked.conversationId === state.conversationId
+      ) {
+        activeTaskExecution.value = {
+          ...tracked,
+          status: state.status,
+          reasonCode: state.reasonCode,
+          outcome: state.outcome,
+          finalEventIdentity: state.finalEventIdentity,
+        };
+      }
+    })
+    .catch(() => {});
+  void loadConversations();
+}
+
+function failSuccessorTurn(
+  turn: SuccessorTurnState,
+  controller: MessageListController,
+  error: Error
+): void {
+  ensureSuccessorAssistantAdded(turn, controller);
+  turn.content = mapStreamErrorMessage(error.message);
+  const current = controller.get();
+  const idx = current.findIndex((m) => m.id === turn.assistantId);
+  if (idx !== -1) {
+    const next = [...current];
+    next[idx] = {
+      ...next[idx],
+      content: turn.content,
+      metadata: {
+        ...(next[idx].metadata ?? { source: "chat-v2" }),
+        error: turn.content,
+      },
+    };
+    controller.set(next);
+  }
+  patchConversationRuntimeState(turn.conversationId, {
+    isStreaming: false,
+    activeAssistantMessageId: null,
+    retryInfo: null,
+    recoveryInfo: null,
+    streamError: turn.content,
+  });
+  setAuthoritativeRuntimeStatus(turn.conversationId, "idle");
+  activeSuccessorTurns.value.delete(turn.conversationId);
+}
+
+/**
+ * B10: attach a successor turn's rendering + badge lifecycle. Creates the
+ * turn state, marks the conversation streaming (blocks a same-conversation
+ * send interleaving mid-successor), and wires the correlated api callbacks.
+ * Late-parent chunks never reach these callbacks (the helper drops them).
+ */
+function attachSuccessorTurn(
+  mode: "continue" | "retry",
+  parent: ActiveTaskExecutionView,
+  submissionId: string,
+  executionId: string
+): void {
+  const controller = successorMessageController(parent.conversationId);
+  const turn: SuccessorTurnState = {
+    mode,
+    executionId,
+    conversationId: parent.conversationId,
+    assistantId: `temp-assistant-successor-${executionId}`,
+    engineMessageId: null,
+    added: false,
+    content: "",
+  };
+  activeSuccessorTurns.value.set(parent.conversationId, turn);
+  patchConversationRuntimeState(parent.conversationId, {
+    isStreaming: true,
+    activeAssistantMessageId: turn.assistantId,
+    receivedFirstResponse: false,
+    streamError: null,
+    retryInfo: null,
+    recoveryInfo: null,
+  });
+  setAuthoritativeRuntimeStatus(parent.conversationId, "running");
+  const parentMessageId =
+    completedAssistantMessageIds.value[parent.conversationId] ??
+    lastAssistantMessageId(parent.conversationId);
+  void attachChatV2SuccessorStream({
+    mode,
+    parentExecutionId: parent.executionId,
+    submissionId,
+    conversationId: parent.conversationId,
+    executionId,
+    parentMessageId,
+    onTaskExecutionState: (state) => {
+      activeTaskExecution.value = { ...state };
+    },
+    onChunk: (chunk) => {
+      renderSuccessorChunk(turn, controller, chunk);
+    },
+    onComplete: (chunk) => {
+      finalizeSuccessorTurn(turn, controller, chunk);
+    },
+    onError: (err) => {
+      console.error("[AiChatV2] successor stream failed:", err);
+      failSuccessorTurn(turn, controller, err);
+    },
+  });
+}
+
 /** Continue an incomplete task: same lineage ledger, resurrected budget
  * (PRD FR-14, AC-27). Reuses the parent's frozen contract — never re-freezes
  * from renderer input. Renders as a normal assistant turn once the
  * continuation stream begins. */
-async function continueTaskExecution(): Promise<void> {
-  const parent = activeTaskExecution.value;
+async function continueTaskExecution(): Promise<void> {  const parent = activeTaskExecution.value;
   if (!parent) return;
   const submissionId = crypto.randomUUID();
   try {
@@ -1656,25 +1963,16 @@ async function continueTaskExecution(): Promise<void> {
       // stream. The attach helper re-invokes with the SAME submissionId —
       // the model dedups that as `reused` (no re-dispatch, no renewed
       // limits) — and forwards task_execution_state chunks to the badge.
+      // B10: attachSuccessorTurn additionally renders the successor's
+      // tokens/tools into a disclosed successor assistant turn and
+      // correlates chunks by successor identity (late parent output can
+      // neither render nor close the turn).
       activeTaskExecution.value = {
         ...parent,
         executionId: result.executionId,
         status: "continuing",
       };
-      void attachChatV2SuccessorStream({
-        mode: "continue",
-        parentExecutionId: parent.executionId,
-        submissionId,
-        conversationId: parent.conversationId,
-        executionId: result.executionId,
-        onTaskExecutionState: (state) => {
-          activeTaskExecution.value = { ...state };
-        },
-        onComplete: () => {},
-        onError: (err) => {
-          console.error("[AiChatV2] successor stream failed:", err);
-        },
-      });
+      attachSuccessorTurn("continue", parent, submissionId, result.executionId);
     }
   } catch (err) {
     console.error("[AiChatV2] continueTask failed:", err);
@@ -1693,6 +1991,14 @@ async function retryTaskExecution(): Promise<void> {
   const parent = activeTaskExecution.value;
   if (!parent) return;
   const submissionId = crypto.randomUUID();
+  // B10: a retry on a still-running parent must first abandon it —
+  // otherwise the parent's live chunks interleave with the successor's on
+  // the shared conversation channel and cannot be attributed. The retry
+  // mints a brand-new lineage (no shared ledger), so stopping the parent
+  // turn is safe abandonment of superseded work.
+  if (parent.status !== "terminal") {
+    stopChatV2Stream(parent.conversationId);
+  }
   try {
     const result = await retryTask({
       parentExecutionId: parent.executionId,
@@ -1702,25 +2008,14 @@ async function retryTaskExecution(): Promise<void> {
       // T09: same successor-identity adoption as Continue, on the retry
       // channel — the retried execution is a NEW bounded attempt, so the
       // badge must track its id and stream, not the parent's.
+      // B10: attachSuccessorTurn renders the attempt (disclosed via the
+      // successor marker) with identity-correlated chunks.
       activeTaskExecution.value = {
         ...parent,
         executionId: result.executionId,
         status: "resolving",
       };
-      void attachChatV2SuccessorStream({
-        mode: "retry",
-        parentExecutionId: parent.executionId,
-        submissionId,
-        conversationId: parent.conversationId,
-        executionId: result.executionId,
-        onTaskExecutionState: (state) => {
-          activeTaskExecution.value = { ...state };
-        },
-        onComplete: () => {},
-        onError: (err) => {
-          console.error("[AiChatV2] successor stream failed:", err);
-        },
-      });
+      attachSuccessorTurn("retry", parent, submissionId, result.executionId);
     }
   } catch (err) {
     console.error("[AiChatV2] retryTask failed:", err);
@@ -2952,6 +3247,29 @@ type ActiveTaskExecutionView = {
   readonly finalEventIdentity?: string;
 };
 const activeTaskExecution = ref<ActiveTaskExecutionView | null>(null);
+/**
+ * B10 (FR-13/14/21/22, AC-25/32): assistant message ids of turns whose
+ * terminal complete already fired, per conversation. Successor attachments
+ * pass the parent's id so late parent chunks/completes are attributable
+ * (and ignorable) even after the badge adopted the successor identity.
+ */
+const completedAssistantMessageIds = ref<Record<string, string>>({});
+/**
+ * B10: live successor turns (Continue/Retry) by conversation. While present,
+ * the main-stream complete handler skips its isStreaming/idle patch for
+ * that conversation (the successor owns the running lifecycle — a late
+ * parent cancelled-complete must not mark the running successor idle).
+ */
+interface SuccessorTurnState {
+  readonly mode: "continue" | "retry";
+  readonly executionId: string;
+  readonly conversationId: string;
+  assistantId: string;
+  engineMessageId: string | null;
+  added: boolean;
+  content: string;
+}
+const activeSuccessorTurns = ref(new Map<string, SuccessorTurnState>());
 /** Active scheduled loop for the current conversation (renderer display only;
  * the main process is authoritative via getScheduledLoopStatus). */
 const activeScheduledLoop = ref<ScheduledLoopView | null>(null);
@@ -4777,10 +5095,19 @@ const onSend = async (
           const tracked = activeTaskExecution.value;
           const isTerminal = te.status === "terminal";
           const sameExecution = tracked?.executionId === te.executionId;
+          const trackedIsTerminal = tracked?.status === "terminal";
           const staleOldExecution =
             tracked !== null &&
             !sameExecution &&
-            te.conversationId === tracked.conversationId;
+            te.conversationId === tracked.conversationId &&
+            // B09 (NFR-10; AC-25/32): stale unless this is a legitimate
+            // replacement — tracked TERMINAL adopted by an incoming
+            // NON-terminal run (task B after task A finished). A different
+            // execution arriving while the tracked one still RUNS is a
+            // late chunk from an older run — drop it; a different TERMINAL
+            // while tracked is terminal is the older run's delayed
+            // terminal — also dropped (see olderTerminalReplay).
+            (!trackedIsTerminal || isTerminal);
           const duplicateTerminal =
             tracked !== null &&
             sameExecution &&
@@ -4797,7 +5124,17 @@ const onSend = async (
             te.finalEventIdentity !== undefined &&
             tracked.finalEventIdentity !== undefined &&
             te.finalEventIdentity === tracked.finalEventIdentity;
-          if (staleOldExecution || duplicateTerminal || duplicateDelivery) {
+          // B09: a DIFFERENT terminal execution arriving while the tracked
+          // one is already terminal is the older run's delayed terminal —
+          // keep the tracked (newer-adopted) badge, never resurrect the
+          // older terminal over it. (A genuinely newer run is always
+          // adopted via its non-terminal chunks first — see above.)
+          const olderTerminalReplay =
+            tracked !== null &&
+            !sameExecution &&
+            isTerminal &&
+            trackedIsTerminal;
+          if (staleOldExecution || duplicateTerminal || duplicateDelivery || olderTerminalReplay) {
             // drop — keep the newer / already-applied tracked state
           } else {
             activeTaskExecution.value = {
@@ -5007,13 +5344,30 @@ const onSend = async (
       },
       (complete: ChatV2StreamChunk) => {
         if (!isCurrentStreamChunk(complete)) return;
-        patchConversationRuntimeState(streamConversationId, {
-          isStreaming: false,
-          activeAssistantMessageId: null,
-          retryInfo: null,
-          recoveryInfo: null,
-        });
-        setAuthoritativeRuntimeStatus(streamConversationId, "idle");
+        // B10: record the completed turn's assistant message id so a later
+        // successor attachment can attribute (and ignore) late stragglers.
+        if (complete.messageId) {
+          completedAssistantMessageIds.value = {
+            ...completedAssistantMessageIds.value,
+            [streamConversationId]: complete.messageId,
+          };
+        }
+        // B10: a successor turn owns this conversation's running lifecycle —
+        // a late parent terminal (e.g. cancelled after a retry-on-active
+        // stop) must not mark the running successor idle. Message
+        // finalization below still runs (idempotent for a finished turn).
+        const successorOwnsLifecycle = activeSuccessorTurns.value.has(
+          streamConversationId
+        );
+        if (!successorOwnsLifecycle) {
+          patchConversationRuntimeState(streamConversationId, {
+            isStreaming: false,
+            activeAssistantMessageId: null,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
+          setAuthoritativeRuntimeStatus(streamConversationId, "idle");
+        }
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
