@@ -6,7 +6,7 @@ import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.enti
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
 import { ScheduleTaskEntity, ScheduleStatus } from "@/entity/ScheduleTask.entity";
 import { assertNotWorker } from "@/model/workerDbGuard";
-import { AsyncMutex } from "@/utils/asyncMutex";
+import { dispatchGateMutex, executeOwnedUpdate } from "@/model/dispatchGateMutex";
 import { randomUUID } from "node:crypto";
 import {
   clampToHardCaps,
@@ -24,17 +24,16 @@ import {
 } from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
- * Process-wide serializer for execution-create transactions. See
- * {@link AsyncMutex}: TypeORM's `connection.transaction()` over the
- * better-sqlite3 driver cannot run two transaction bodies concurrently on the
- * shared single connection — the second `BEGIN` throws "cannot start a
- * transaction within a transaction". Serializing the dedup-lookup + insert
- * makes the check-then-insert atomic relative to concurrent callers (the
- * second caller's lookup sees the first caller's committed row and resolves
- * to reused/conflict instead of colliding). The partial unique index remains
- * the SQL-level guarantee; the mutex removes the connection overlap.
+ * Process-wide serializer for execution-create transactions — now the shared
+ * {@link dispatchGateMutex} (B14 extends the same coordinator to every
+ * durable dispatch gate, not just create/finalize). Serializing the
+ * dedup-lookup + insert makes the check-then-insert atomic relative to
+ * concurrent callers (the second caller's lookup sees the first caller's
+ * committed row and resolves to reused/conflict instead of colliding). The
+ * partial unique index remains the SQL-level guarantee; the mutex removes
+ * the connection overlap.
  */
-const executionCreateMutex = new AsyncMutex();
+const executionCreateMutex = dispatchGateMutex;
 
 /**
  * Internal control-flow signals for the scheduled-finalization transaction.
@@ -874,9 +873,17 @@ export class AiTaskExecutionModel extends BaseDb {
         return false;
       }
     }
-    const runner = this.sqliteDb.connection.createQueryRunner();
-    try {
-      const result = (await runner.query(
+    // B14 (FR-08/11; NFR-10; AC-08/15/28): serialize under the common
+    // dispatch-gate coordinator with our OWN transaction boundary (see
+    // executeOwnedUpdate), and report success only after that boundary
+    // commits. Without this, the auto-commit UPDATE silently joins an
+    // unrelated open transaction on the shared better-sqlite3 connection:
+    // the gate returns true, work dispatches, and the outer rollback
+    // restores attempts 0 — a reservation that was never durably
+    // committed. If the boundary cannot be owned, fail closed.
+    return dispatchGateMutex.run(async () => {
+      const affected = await executeOwnedUpdate(
+        this.sqliteDb.connection,
         `UPDATE ai_task_execution_ledger
             SET consumed_continuations = consumed_continuations + ?,
                 consumed_provider_attempts = consumed_provider_attempts + ?,
@@ -903,13 +910,10 @@ export class AiTaskExecutionModel extends BaseDb {
           input.ledgerId,
           input.activeExecutionId,
           input.expectedOwnerGeneration,
-        ],
-        true // useStructuredResult — exposes .affected (see finalizeExecution)
-      )) as { affected?: number };
-      return (result.affected ?? 0) === 1;
-    } finally {
-      await runner.release();
-    }
+        ]
+      );
+      return affected === 1;
+    });
   }
 
   async finalizeExecution(input: FinalizeInput): Promise<FinalizeResult> {
@@ -1472,26 +1476,23 @@ export class AiTaskExecutionModel extends BaseDb {
     mergedStateJson: string;
   }): Promise<boolean> {
     assertNotWorker("applyShadowDecisionCas");
-    const runner = this.sqliteDb.connection.createQueryRunner();
-    try {
-      const result = (await runner.query(
+    // B14: same owned-boundary discipline as persistBudgetConsumption — the
+    // shadow CAS must never join an unrelated open transaction (a true that
+    // rolls back with it would finalize against a version that never
+    // committed). Fail closed when the boundary is unownable.
+    return dispatchGateMutex.run(async () => {
+      const affected = await executeOwnedUpdate(
+        this.sqliteDb.connection,
         `UPDATE ai_task_execution
             SET execution_state_json = ?,
                 execution_state_version = execution_state_version + 1
           WHERE execution_id = ?
             AND finalized = 0
             AND execution_state_version = ?`,
-        [
-          input.mergedStateJson,
-          input.executionId,
-          input.expectedVersion,
-        ],
-        true // useStructuredResult — exposes .affected (see finalizeExecution)
-      )) as { affected?: number };
-      return (result.affected ?? 0) === 1;
-    } finally {
-      await runner.release();
-    }
+        [input.mergedStateJson, input.executionId, input.expectedVersion]
+      );
+      return affected === 1;
+    });
   }
 
   /**

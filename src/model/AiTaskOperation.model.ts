@@ -2,6 +2,7 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 import { assertNotWorker } from "@/model/workerDbGuard";
+import { dispatchGateMutex, executeOwnedUpdate } from "@/model/dispatchGateMutex";
 import type {
   AiTaskOperationState,
   TaskExecutionReasonCode,
@@ -319,6 +320,13 @@ export class AiTaskOperationModel extends BaseDb {
     }
 
     const affected = await this.conditionalStateUpdate(input);
+    if (affected === -1) {
+      // B14: the commit boundary was unownable (an unrelated transaction
+      // holds the shared connection) or the commit itself failed — the
+      // caller must NOT dispatch on this gate. Distinct from STATE_CONFLICT
+      // (a genuine lost race) so the §17 monitor records the true cause.
+      return { ok: false, reasonCode: "PERSISTENCE_FAILED" };
+    }
     if (affected !== 1) {
       // Lost the race (another claimer advanced the generation between
       // the read and the write) or the state moved off the legal path —
@@ -356,20 +364,21 @@ export class AiTaskOperationModel extends BaseDb {
       parameters.push(input.failureCode);
     }
     parameters.push(input.operationKey, input.expectedClaimGeneration);
-    const runner = this.sqliteDb.connection.createQueryRunner();
-    try {
-      const result = (await runner.query(
+    // B14 (FR-08/11; NFR-10; AC-08/15/28): owned-boundary discipline — the
+    // receipt write must never join an unrelated open transaction (a true
+    // that rolls back with it would cite a receipt that never committed).
+    // Fail closed when the boundary is unownable.
+    return dispatchGateMutex.run(async () => {
+      const affected = await executeOwnedUpdate(
+        this.sqliteDb.connection,
         `UPDATE ai_task_operation
             SET ${setClauses.join(", ")}
           WHERE operation_key = ?
             AND claim_generation = ?`,
-        parameters,
-        true // useStructuredResult — exposes .affected on the driver result
-      )) as { affected?: number };
-      return (result.affected ?? 0) === 1;
-    } finally {
-      await runner.release();
-    }
+        parameters
+      );
+      return affected === 1;
+    });
   }
 
   /**
@@ -377,6 +386,10 @@ export class AiTaskOperationModel extends BaseDb {
    * carries the expected generation and sits on a state that legally
    * transitions to `newState`; bumps the generation and stamps the §10.2
    * transition timestamps in the same statement.
+   *
+   * Returns the affected row count (1 = claimed, 0 = lost race / illegal
+   * path), or -1 when the commit boundary was unownable or the commit
+   * failed (B14 — the caller must fail closed, never dispatch).
    *
    * Raw driver SQL via the QueryRunner (matching the T11/B2 finalize CAS in
    * `AiTaskExecution.model.ts`): `manager.query()` drops the
@@ -418,9 +431,14 @@ export class AiTaskOperationModel extends BaseDb {
       input.expectedClaimGeneration,
       ...legalSourceStates,
     ];
-    const runner = this.sqliteDb.connection.createQueryRunner();
-    try {
-      const result = (await runner.query(
+    // B14 (FR-08/11; NFR-10; AC-08/15/28): the claim gate owns its commit
+    // boundary (see executeOwnedUpdate) — never savepoint-join an unrelated
+    // open transaction on the singleton runner. Returns the affected row
+    // count (1 = claimed, 0 = lost race / illegal path), or -1 when the
+    // boundary was unownable or the commit failed (fail closed, never race).
+    return dispatchGateMutex.run(async () => {
+      return executeOwnedUpdate(
+        this.sqliteDb.connection,
         `UPDATE ai_task_operation
             SET ${setClauses.join(", ")}
           WHERE operation_key = ?
@@ -428,13 +446,9 @@ export class AiTaskOperationModel extends BaseDb {
             AND operation_state IN (${legalSourceStates
               .map(() => "?")
               .join(", ")})`,
-        parameters,
-        true // useStructuredResult — exposes .affected on the driver result
-      )) as { affected?: number };
-      return result.affected ?? 0;
-    } finally {
-      await runner.release();
-    }
+        parameters
+      );
+    });
   }
 
   private isUniqueConstraintError(error: unknown): boolean {
