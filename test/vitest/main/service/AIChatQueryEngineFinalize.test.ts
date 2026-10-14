@@ -806,11 +806,16 @@ describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate
     expect(denied.ok).toBe(true);
     // The denial is durable: a denied tool_result is emitted through the
     // persisting sink (transcript row) instead of vanishing in memory.
-    const denials = emits.filter(
-      (e) =>
-        (e as { type: string }).type === "tool_result" &&
-        (e as { toolCallId?: string }).toolCallId === "call-1"
-    ) as Array<{ toolResult: { success: boolean; error: string } }>;
+    const denials = emits
+      .filter(
+        (e) =>
+          (e as { type: string }).type === "tool_result" &&
+          (e as { toolCallId?: string }).toolCallId === "call-1"
+      )
+      .map(
+        (e) =>
+          e as unknown as { toolResult: { success: boolean; error: string } }
+      );
     expect(denials.length).toBeGreaterThanOrEqual(1);
     expect(denials[0].toolResult.success).toBe(false);
     // The denied turn still re-enters the loop (background) under the same
