@@ -59,6 +59,14 @@ export interface ToolJobSpawnHandle {
   readonly jobId: string;
   readonly onCancel: (handler: () => void) => void;
   /**
+   * Register a settlement callback fired exactly once when the job reaches a
+   * terminal state AND the underlying work has quiesced (design §7.3).
+   * Unlike the synchronous onCancel handlers (cancellation REQUEST), this
+   * hook runs after the terminal transition so cleanup continuations can
+   * release admission leases or report cleanup completion.
+   */
+  readonly onSettled: (handler: () => void) => void;
+  /**
    * Registry-owned abort signal for this job. `cancel()` and `shutdown()`
    * abort it so the underlying tool work is actually asked to stop — a job
    * labelled `cancelled` must never keep consuming model/tool resources
@@ -86,6 +94,8 @@ interface InternalJob {
   updatedAt: number;
   completedAt: number | null;
   cancelHandlers: Array<() => void>;
+  settledCallbacks: Array<() => void>;
+  settled: boolean;
   lastPolledAt: number;
   queuedSpawn?: () => void;
   abortController: AbortController;
@@ -136,6 +146,8 @@ export class ToolJobRegistry {
       updatedAt: Date.now(),
       completedAt: null,
       cancelHandlers: [],
+      settledCallbacks: [],
+      settled: false,
       lastPolledAt: 0,
       abortController,
     };
@@ -144,6 +156,18 @@ export class ToolJobRegistry {
     const handle: ToolJobSpawnHandle = {
       jobId,
       onCancel: (h) => job.cancelHandlers.push(h),
+      onSettled: (h) => {
+        if (job.settled) {
+          // Already terminal — fire immediately (late registration).
+          try {
+            h();
+          } catch {
+            /* best-effort */
+          }
+          return;
+        }
+        job.settledCallbacks.push(h);
+      },
       signal: abortController.signal,
       resolve: (result) => {
         if (job.status === "cancelled") return;
@@ -152,6 +176,7 @@ export class ToolJobRegistry {
         job.completedAt = Date.now();
         job.updatedAt = Date.now();
         this.running--;
+        this.markSettled(job);
         this.drainQueue();
       },
       reject: (err) => {
@@ -161,6 +186,7 @@ export class ToolJobRegistry {
         job.completedAt = Date.now();
         job.updatedAt = Date.now();
         this.running--;
+        this.markSettled(job);
         this.drainQueue();
       },
     };
@@ -283,13 +309,57 @@ export class ToolJobRegistry {
     job.updatedAt = Date.now();
     if (wasRunning) {
       this.running--;
+      this.markSettled(job);
       this.drainQueue();
     } else if (wasQueued) {
       // Remove from queue if still queued
       const idx = this.queue.indexOf(jobId);
       if (idx >= 0) this.queue.splice(idx, 1);
+      this.markSettled(job);
     }
     return { cancelled: true };
+  }
+
+  /** Fire settled callbacks exactly once for a terminal job. */
+  private markSettled(job: InternalJob): void {
+    if (job.settled) return;
+    job.settled = true;
+    for (const cb of job.settledCallbacks.splice(0)) {
+      try {
+        cb();
+      } catch {
+        /* best-effort settlement */
+      }
+    }
+  }
+
+  /**
+   * Wait (bounded) for a job to reach a terminal state (design §7.3
+   * cleanup completion). Resolves true once terminal, false on timeout or
+   * when the job is unknown. Used by the poll loop to await bounded cleanup
+   * after deadline-expiry cancellation instead of returning while the
+   * browser/plugin process may still be unwinding (PRD §11.8).
+   */
+  async waitForSettled(jobId: string, timeoutMs: number): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (!job) return false;
+    if (job.settled) return true;
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (value: boolean): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => {
+        const index = job.settledCallbacks.indexOf(settleHook);
+        if (index >= 0) job.settledCallbacks.splice(index, 1);
+        finish(job.settled);
+      }, timeoutMs);
+      const settleHook = (): void => finish(true);
+      job.settledCallbacks.push(settleHook);
+    });
   }
 
   evictStale(): number {
@@ -338,6 +408,7 @@ export class ToolJobRegistry {
         }
         job.status = "cancelled";
         job.completedAt = Date.now();
+        this.markSettled(job);
       }
     }
     this.jobs.clear();

@@ -4492,11 +4492,21 @@ export class AIChatQueryLoop {
     input: AIChatQueryGeneratorInput,
     call: { id: string; name: string },
     jobId: string,
-    onProgress?: ToolProgressEmitter
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
     const shortId = jobId.slice(0, 8);
+    // The poll cap enforces the SAME authoritative deadline the execution
+    // path uses (plugin policy maxRunMs, already clamped to the host ceiling
+    // and to the ASYNC_POLL_MAX_MS backstop).
+    const deadlineAt =
+      startedAt +
+      Math.min(
+        deadlineMs ?? ASYNC_POLL_MAX_MS,
+        ASYNC_POLL_MAX_MS
+      );
 
     const emitProgress = (
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
@@ -4576,17 +4586,28 @@ export class AIChatQueryLoop {
         };
       }
 
-      if (Date.now() - startedAt >= ASYNC_POLL_MAX_MS) {
+      if (Date.now() >= deadlineAt) {
+        // PRD §11.8: expiry must CANCEL the job and stop its browser before
+        // returning — never tell the model to retry while the original
+        // scraper may still be running. Bounded cleanup wait; the supervised
+        // transport escalates to SIGKILL independently of this wait.
+        try {
+          registry.cancel(jobId);
+        } catch {
+          // Best-effort; report the deadline either way.
+        }
+        const cleanedUp = await registry.waitForSettled(jobId, 5_000);
         return {
           tool_call_id: call.id,
           tool_name: call.name,
           success: false,
           result: {
             error:
-              "Background job did not complete within 30 minutes. " +
-              "The job may still be running; ask the user whether to keep " +
-              "waiting or cancel via cancel_tool_job(job_id).",
+              "Background job exceeded its deadline and was cancelled. " +
+              "The underlying work has been stopped; a retry starts a new job.",
+            code: "JOB_DEADLINE_EXCEEDED",
             job_id: jobId,
+            cleaned_up: cleanedUp,
           },
           execution_time_ms: Date.now() - startedAt,
         };
@@ -4928,7 +4949,8 @@ export class AIChatQueryLoop {
         input,
         effectiveCall,
         jobId,
-        onProgress
+        onProgress,
+        pluginPolicy?.policy.maxRunMs
       );
     } else {
       toolResult = await this.executeForegroundToolWithTimeout(
