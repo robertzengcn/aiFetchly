@@ -1,5 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
+import { normalizeStoredMessageId } from "@/service/emailReceive/EmailReplyIdentity";
+import { LEGACY_SIBLING_SCAN_LIMIT } from "@/model/replyClusterEvidence";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { SortBy } from "@/entityTypes/commonType";
 import {
@@ -301,13 +303,39 @@ export class EmailReceivedMessageModel extends BaseDb {
       // wants the row included; here we just return nothing for an empty key.
       return [];
     }
-    return await this.repository.find({
+    const normalized = await this.repository.find({
       where: {
         emailServiceId: input.emailServiceId,
         normalizedMessageId: input.normalizedMessageId,
       },
       order: { id: "ASC" },
     });
+    // N01: discover legacy siblings whose `normalizedMessageId` column was
+    // never populated but whose raw `messageId` normalizes to the same token.
+    // Same-service only; bounded with fail-closed on incomplete discovery.
+    const legacyCandidates = await this.repository.find({
+      where: {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: IsNull(),
+      },
+      order: { id: "ASC" },
+      take: LEGACY_SIBLING_SCAN_LIMIT + 1,
+    });
+    if (legacyCandidates.length > LEGACY_SIBLING_SCAN_LIMIT) {
+      throw new Error(
+        `Canonical discovery incomplete: more than ${LEGACY_SIBLING_SCAN_LIMIT} null-normalized rows in service ${input.emailServiceId} (§4.1)`
+      );
+    }
+    const merged = [...normalized];
+    for (const r of legacyCandidates) {
+      if (merged.some((m) => m.id === r.id)) continue;
+      const rawNormalized = normalizeStoredMessageId(r.messageId);
+      if (rawNormalized !== null && rawNormalized === input.normalizedMessageId) {
+        merged.push(r);
+      }
+    }
+    merged.sort((a, b) => a.id - b.id);
+    return merged;
   }
 
   /** Associate a received message with a conversation (P1, FR-001). */

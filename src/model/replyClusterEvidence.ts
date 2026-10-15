@@ -1,9 +1,18 @@
-import { In, type EntityManager } from "typeorm";
+import { In, IsNull, type EntityManager } from "typeorm";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { normalizeStoredMessageId } from "@/service/emailReceive/EmailReplyIdentity";
+
+/**
+ * N01: bounded legacy-row scan limit for null-normalized discovery. The scan
+ * is scoped to ONE emailServiceId and fails closed (throws) when the service
+ * holds more null-normalized rows than this bound, so an incomplete discovery
+ * can never silently omit a legacy sibling. Never merge by subject/thread or
+ * across services.
+ */
+export const LEGACY_SIBLING_SCAN_LIMIT = 2000;
 import type {
   EmailReplySendAttemptStatus,
   GuardPhase,
@@ -106,6 +115,31 @@ export async function readClusterEvidence(
       });
       for (const r of equivalents) {
         if (!clusterRows.some((c) => c.id === r.id)) {
+          clusterRows.push(r);
+        }
+      }
+      // N01: discover legacy siblings whose `normalizedMessageId` column was
+      // never populated but whose raw `messageId` normalizes to the same
+      // canonical token. Same-service only; never merge by subject/thread or
+      // across services. Bounded: fail closed when the null scan is
+      // incomplete so a sibling is never silently omitted.
+      const legacyCandidates = await messageRepo.find({
+        where: {
+          emailServiceId: opts.emailServiceId,
+          normalizedMessageId: IsNull(),
+        },
+        order: { id: "ASC" },
+        take: LEGACY_SIBLING_SCAN_LIMIT + 1,
+      });
+      if (legacyCandidates.length > LEGACY_SIBLING_SCAN_LIMIT) {
+        throw new Error(
+          `Canonical discovery incomplete: more than ${LEGACY_SIBLING_SCAN_LIMIT} null-normalized rows in service ${opts.emailServiceId} (§4.1)`
+        );
+      }
+      for (const r of legacyCandidates) {
+        if (clusterRows.some((c) => c.id === r.id)) continue;
+        const rawNormalized = normalizeStoredMessageId(r.messageId);
+        if (rawNormalized !== null && rawNormalized === normalizedId) {
           clusterRows.push(r);
         }
       }
