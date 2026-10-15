@@ -65,6 +65,7 @@ import { TokenComputerUseSettingsStore } from "@/service/computerUse/ComputerUse
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
+import { registerPluginArtifactIpcHandlers } from "@/main-process/communication/plugin-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
 import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
@@ -193,6 +194,7 @@ export function registerCommunicationIpcHandlers(
     registerAIProviderIpcHandlers();
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
+    registerPluginArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
     registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();

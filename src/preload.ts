@@ -347,6 +347,10 @@ import {
   AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_PREVIEW,
+  PLUGIN_ARTIFACT_EXPORT,
+  PLUGIN_ARTIFACT_DELETE,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
   DASHBOARD_TRENDS,
@@ -1233,6 +1237,11 @@ contextBridge.exposeInMainWorld("api", {
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,
+      // Plugin file artifacts
+      PLUGIN_ARTIFACT_LIST,
+      PLUGIN_ARTIFACT_PREVIEW,
+      PLUGIN_ARTIFACT_EXPORT,
+      PLUGIN_ARTIFACT_DELETE,
       AI_KEYWORDS_GENERATE,
       // AI Provider (Local/Custom) Settings Channels
       AI_PROVIDER_SETTINGS_GET,

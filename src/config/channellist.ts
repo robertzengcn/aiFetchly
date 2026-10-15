@@ -781,6 +781,12 @@ export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
 // AI Artifacts (read; creation happens through the Chat V2 stream tool)
 export const AI_ARTIFACT_GET = "ai-artifact:get";
 export const AI_ARTIFACT_LIST = "ai-artifact:list";
+
+// Plugin file artifacts (host-owned store; design §13.4)
+export const PLUGIN_ARTIFACT_LIST = "plugin-artifact:list";
+export const PLUGIN_ARTIFACT_PREVIEW = "plugin-artifact:preview";
+export const PLUGIN_ARTIFACT_EXPORT = "plugin-artifact:export";
+export const PLUGIN_ARTIFACT_DELETE = "plugin-artifact:delete";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
 export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";
