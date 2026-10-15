@@ -15,6 +15,30 @@ controls. The numeric baselines themselves are captured at pilot time against
 live IMAP/hosted providers — they are NOT asserted by this checkout's test code,
 which has no live mailbox access by design.
 
+## Landed vs. executed (G04 status marker — do not collapse these)
+
+These two tracks are DISTINCT and must never be conflated in requirement
+claims:
+
+- **Code/plan landed (this branch):** the detection/probe limits, unknown-not-
+  negative cache rule, telemetry counters, generation JSON-compat fallback +
+  capability clamp + remembered routes, bounded awaited stages, kill switch,
+  upgrade validation, audit mirroring, and THIS plan document (including the
+  G04 procedure correction in §4.1) are implemented and acceptance-verified by
+  test code. Phase 2 CODE is complete on this branch.
+- **Pilot executed (external, operator-run):** NO pilot of §4 has been
+  executed as of 2026-10-15. No provider/capability results, no first-pass/
+  correction/truncation/fallback rates, no unknown reasons, no detection p95,
+  no cache/guard-conflict counts, and no release signoff (FR-026/FR-039)
+  exist. The §5 baseline table is intentionally EMPTY. Until an operator runs
+  §4 against live mailboxes/providers and fills §5, **FR-039 remains Partial
+  (acceptance pending)** and FR-026 remains Partial (hosted end-to-end
+  evidence pending), and guarded automation must stay OFF for every mailbox.
+
+Any execution record added to §5 must state who ran it, when, against which
+providers, and cite the raw telemetry — never a reconstructed or assumed
+number.
+
 ## Scope
 
 - **In-scope (already implemented + acceptance-verified in code):** the
@@ -128,26 +152,59 @@ operator-run against real mailboxes and a real hosted provider endpoint.
 flag refresh against real IMAP providers (Gmail / Outlook / Yahoo / a generic
 Dovecot or similar).
 
-**Procedure (operator):**
+**Procedure (operator) — corrected by G04.** The previous revision sent the
+original **from** the configured mailbox and had the third party reply into
+it. That reply lands in the configured Inbox, is **authored by the third
+party**, and references a Message-ID the app never stored as an inbound row —
+it can never prove configured-sender Sent discovery. The detector's
+matching rule (`classifyCandidate` in `EmailReplyDetectionService.ts`) settles
+a direct match only when a **Sent-folder** candidate is authored by the
+**configured sending identity** (`candidateSenderMatches`) AND carries the
+**stored inbound original's** RFC Message-ID in `In-Reply-To`/`References`.
+The pilot must therefore run the conversation in the opposite direction:
+
 1. Configure one test mailbox per provider family in the app's Email Service
-   settings (IMAP account, real credentials — never committed).
-2. Send a known original message from the configured sending identity to a
-   third-party address; reply to it from that third-party address (direct
-   `In-Reply-To` match).
-3. Invoke the `check_email_replied` tool (or trigger draft generation on the
-   original message) and confirm:
+   settings (IMAP account, real credentials — never committed). Record the
+   configured sending identity the app resolves (`readIdentity().fromAddress`)
+   — every reply below MUST be sent from exactly this address, or the §7.2
+   sender check rejects the candidate as `ambiguous_match`.
+2. From a third-party mailbox you control, send a fresh original message **to
+   the configured mailbox**. Wait for the app to sync it and record the
+   stored received-row ID (the app's inbox list; this is the `message_id`
+   `check_email_replied` accepts — a stored row ID, not an RFC header).
+   Verify the synced row carries an RFC Message-ID: a missing one
+   short-circuits detection to `missing_message_id` (unknown), which is a
+   sync/parse finding, not a detection result.
+3. Reply to that original from the configured mailbox's OWN webmail/client
+   (NOT through the app), so a direct reply is saved in the configured
+   mailbox's Sent folder with `In-Reply-To` = the original's Message-ID and
+   `From` = the configured identity. Use a FRESH original for every scenario
+   below — a settled positive is sticky (`replyDetectedAt`), so re-running
+   detection on the same row returns the cached positive, not a new probe.
+4. Run detection against the STORED inbound row (`check_email_replied` with
+   the stored row ID, or trigger draft generation on it) and confirm:
    - Sent-folder discovery resolves the `\Sent` special-use folder (or the
      §7.2 fallback name for providers that omit special-use).
-   - The reply is detected as `replied` with `source: "sent_search"` (or
-     `mailbox_flag` if the `\Answered` flag was set by the client).
-   - The `matched_message_id` carries the reply's RFC `Message-ID`, not the
-     original.
-4. Repeat with an ancestor-only `References` reply (no `In-Reply-To`) and
-   confirm `ambiguous_match` (not a false positive).
-5. Repeat with a reply from an unrecognized sender alias and confirm
-   `ambiguous_match`.
-6. Repeat with a missing/inaccessible Sent folder (provider that hides Sent
-   behind a non-standard name with no special-use) and confirm
+   - The reply is detected as `replied` with `source: "sent_search"` and
+     `matched_message_id` carrying the REPLY's RFC Message-ID (never the
+     original's).
+   - Source recording: the probe checks the `\Answered` flag on the stored
+     inbox original BEFORE the Sent search, so a client that set the flag
+     settles `source: "mailbox_flag"` first — also a valid positive, but it
+     does not exercise Sent discovery. To prove the `sent_search` axis
+     specifically, clear the `\Answered` flag on the stored original (an IMAP
+     client/tool, where the provider permits) or use a reply path that does
+     not set it, then re-probe a fresh conversation. Record which source each
+     provider family actually settled — do not claim `sent_search` coverage
+     from a `mailbox_flag` result.
+5. Repeat with an ancestor-only `References` reply (the original's token
+   appears only in `References`, not `In-Reply-To`) and confirm
+   `ambiguous_match` (unknown — never a false positive).
+6. Repeat with a reply from an unrecognized alias of the configured account
+   (a `From` address that differs from the configured identity) and confirm
+   `ambiguous_match` — unconfigured aliases must not count as direct.
+7. Repeat against a provider that hides Sent behind a non-standard name with
+   no special-use and no §7.2 fallback match, and confirm
    `sent_folder_unavailable` (unknown, not negative) — and that guarded
    automation is disabled for that mailbox per §12.
 
@@ -155,6 +212,10 @@ Dovecot or similar).
 `replied`); no false negatives from a partial search (an incomplete search
 reports `unknown`, not `not_replied`); the 15s deadline is not exceeded on a
 healthy mailbox; the 200-candidate cap is not hit on a normal conversation.
+The `replied` result must also satisfy the direction check above: it settles
+only when the configured identity's OWN reply in the configured Sent folder
+matches the stored inbound original — a third-party reply arriving in the
+configured Inbox must never settle it.
 
 **Telemetry to capture:** `detection_outcome{state}`, `detection_duration_ms`
 p95, `detection_cache{hit,kind}` distribution, `detection_persist_failure{kind}`
@@ -167,7 +228,12 @@ capability is an integration dependency not established by this checkout.
 Resolve by capability testing before rollout.
 
 **Procedure (operator):**
-1. Configure the hosted AI provider endpoint per the user's plan.
+1. Configure the hosted AI provider endpoint per the user's plan. If the
+   hosted provider serves the SAME generation path as a local/OpenAI-
+   compatible provider (the app resolves the model per mailbox), run the
+   local JSON provider as Pilot B's baseline arm and the hosted endpoint as
+   the compatibility arm — the FR-026 question is whether the bounded
+   `response_format` hint survives the hosted route.
 2. Trigger draft generation on a replied original message (so detection returns
    `replied` BEFORE the model is called) and confirm the model is NOT called
    (no API request logged) — the §8.1 short-circuit.
@@ -202,6 +268,13 @@ duplicate protection.
 The design explicitly forbids fabricating numeric targets. The baselines are
 captured during the §4 pilots and recorded here as a table (to be filled at
 pilot time — left blank intentionally, NOT to be guessed):
+
+> **G04 marker (2026-10-15): still EMPTY — no pilot has been executed.** Every
+> cell below is unfilled pending an operator run of §4 against live
+> providers. Do not read the in-code test constants (15s / 5 folders / 200
+> candidates) or any branch test result as baseline data; they are limits,
+> not observations. Guarded automation stays OFF until this table carries a
+> signed-off operator capture per §6.
 
 | Metric | Pilot A (local IMAP) | Pilot B (hosted JSON) | Rollout threshold (§6) |
 |---|---|---|---|
@@ -310,7 +383,18 @@ rollback-protection suite.
 ## 8. Out of scope and honesty
 
 - This document does NOT assert numeric pilot results. The baselines are
-  captured at pilot time.
+  captured at pilot time. **As of 2026-10-15 no §4 pilot has been executed** —
+  see the "Landed vs. executed" section at the top of this document. Phase 2
+  is NOT complete: code is landed, pilot/release acceptance (FR-026/FR-039)
+  is pending external evidence.
+- The G04-corrected §4.1 procedure exists because the ORIGINAL procedure was
+  invalid: it sent the original from the configured mailbox and had the third
+  party reply into it, so any `replied` result it produced would have been
+  matched against a message the app never stored as an inbound row, authored
+  by the wrong party. Running the old procedure would have proven nothing
+  about configured-sender Sent discovery (and could not have produced a false
+  positive only because it could not produce a true positive either). Pilots
+  run before the correction (if any) are INVALID and must be re-run.
 - This document does NOT replace the §12 adversarial test matrix — that matrix
   is code-level and passing on this branch (`EmailReplyDetectionAdversarial.test.ts`).
 - The hosted JSON-mode provider capability (§4.2) is an external integration
@@ -321,3 +405,8 @@ rollback-protection suite.
 - Per §13 L601–602: "Provider/client coverage and the remaining external-send
   race are documented limits; the design does not promise complete detection or
   distributed exactly-once." This plan does not change that scope.
+- During any rollback (§7) the local duplicate protections stay active
+  unconditionally (§7.3), and a mailbox whose detection is unavailable
+  (unknown outcomes) stays in operator-driven mode — guarded automation is
+  never enabled for it, and unavailable automated workflows are blocked, not
+  retried.
