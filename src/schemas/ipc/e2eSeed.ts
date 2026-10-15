@@ -82,6 +82,11 @@ export const e2eSeedReceivedMessageInputSchema = lazySchema(() =>
     // treating the row as legacy/unresolved.
     providerFolder: z.string().max(255).optional(),
     providerUidValidity: z.string().max(64).optional(),
+    // G03 E2E (local-provider generation): a deterministic classification
+    // skips the model classifier so the generation JSON path is exercised
+    // alone. Null/omitted keeps the legacy unclassified seed behavior.
+    classification: z.string().min(1).max(50).optional(),
+    classificationConfidence: z.number().min(0).max(1).optional(),
   })
 );
 

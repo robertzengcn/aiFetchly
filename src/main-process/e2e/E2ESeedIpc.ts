@@ -132,6 +132,14 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       // G04 E2E: UID provenance for the flag-refresh leg of the probe.
       entity.providerFolder = input.providerFolder ?? null;
       entity.providerUidValidity = input.providerUidValidity ?? null;
+      // G03 E2E: deterministic classification (skips the model classifier).
+      if (input.classification !== undefined) {
+        entity.classification =
+          input.classification as EmailReceivedMessageEntity["classification"];
+      }
+      if (input.classificationConfidence !== undefined) {
+        entity.classificationConfidence = input.classificationConfidence;
+      }
       const model = new EmailReceivedMessageModel(dbpath);
       const saved = await model.upsertByProviderUid(entity);
       return { id: saved.id };

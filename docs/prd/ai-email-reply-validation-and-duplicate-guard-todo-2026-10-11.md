@@ -374,3 +374,52 @@ Still external (cannot be completed in a source checkout): G03 live
 IMAP/hosted-AI pilot execution and release signoff per
 `docs/prd/emailreply-pilot-and-rollout-plan.md`; full hosted/local provider
 configuration verification (G01 item 4) rides on that pilot.
+
+## G03 loopback-harness evidence (2026-10-15 — NOT pilot data)
+
+The pilot plan §5 stays EMPTY per its no-fabrication rule: nothing below is a
+baseline, a threshold, or a provider-family result. What follows is
+deterministic harness evidence that narrows the operator pilot to the parts
+only live servers can supply (hosted JSON arm, provider-family IMAP
+behavior, traffic baselines, human signoff).
+
+- Local provider arm (OpenAI-compatible loopback, FakeAi):
+  `test/e2e/specs/emailReplyLocalProvider.test.ts` 1/1 (19s) drives REAL
+  production generation wiring (IPC → generation service → HTTP provider →
+  strict parse → atomic commit): exactly ONE non-streaming completion (valid
+  first answer, no correction round trip), `response_format: "json_object"`
+  recorded on the submission (FR-026 hint survives the local route),
+  draft + immutable revision + mirrored `draft_created` audit persist,
+  eligible-reuse second create returns the SAME draft with ZERO additional
+  model calls, and the reused draft approves + sends end-to-end (G04
+  reuse→send). Does NOT prove: hosted-route hint survival, provider-quirk
+  fallback/ignored-hint behavior, or any pilot rate.
+- Network-boundary arm (loopback IMAP + SMTP):
+  `test/e2e/specs/emailReplyGuardedSuccess.test.ts` 4/4 proves the
+  production ImapFlow client completes the §7.1 probe legs (LOGIN/LIST/LSUB/
+  SELECT/UID SEARCH/UID FETCH/LOGOUT) and production nodemailer completes
+  SMTP against loopback servers. Does NOT prove any real provider family's
+  Sent discovery, flag behavior, or search semantics (§4.1 pilot still
+  required per provider family).
+- Rollback/readiness controls (N08, G03 bullet 3): pending/failed/kill-switch
+  refusal is proven at unit level (`EmailReplyAuditN01N09G02` readiness suite;
+  `EmailReplyRollbackProtection` kill-switch suite — new work refused, audit/
+  recovery paths untouched, duplicate-protection paths contain no flag reads);
+  the healthy path is proven at E2E level (every passing send in the two
+  specs above passed THROUGH the startup validation gate — a pending/failed
+  validation would refuse them). What remains operator-side: flipping the
+  kill switch in staging and confirming the same refusal/availability split
+  from the UI (no test-only flag-flipping channel was added — that would be
+  a new safety-relevant attack surface).
+
+PRD §7 matrix → evidence in this checkout: contract/correction (local E2E
+first-pass + unit correction/adversarial suites); provider routes (local hint
+E2E + B06/fallback/timeout units — hosted arm pending); local guards,
+flags/sync, matching, cache, concurrency, uncertain delivery (unit
+adversarial matrices + the E2E refusal/success/reconcile flows above);
+tool/audit/UI (70-file component suite + E2E audit flows, 6 languages);
+upgrade (populated old-schema suites + healthy-startup E2E). Release gates
+(PRD §7, last paragraph): deterministic cases pass; fake IMAP/SMTP
+integration proves network boundaries — DONE in-checkout. Still operator:
+hosted-JSON acceptance, §5 baselines against a pre-change baseline, and the
+human release-signoff decision itself, which no checkout can supply.
