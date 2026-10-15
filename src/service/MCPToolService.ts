@@ -129,6 +129,16 @@ function buildClientConfig(server: MCPToolEntity): {
     pluginName: string;
     entry: string;
     pluginVersion?: string;
+    context?: {
+      mode: "execute";
+      executionId: string;
+      outputDirectory?: string;
+      browser?: {
+        executablePath: string;
+        version: string;
+      };
+      deadlineEpochMs?: number;
+    };
   };
 } {
   const base: {
@@ -146,6 +156,16 @@ function buildClientConfig(server: MCPToolEntity): {
       pluginName: string;
       entry: string;
       pluginVersion?: string;
+      context?: {
+        mode: "execute";
+        executionId: string;
+        outputDirectory?: string;
+        browser?: {
+          executablePath: string;
+          version: string;
+        };
+        deadlineEpochMs?: number;
+      };
     };
   } = {
     transport: server.transport,
