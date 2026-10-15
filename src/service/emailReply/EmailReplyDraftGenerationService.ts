@@ -16,6 +16,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import type { EmailMessageClassification } from "@/entityTypes/emailReceiveTypes";
 import type {
   AiEmailReplyDraftResult,
@@ -2481,6 +2482,31 @@ export class EmailReplyDraftGenerationService {
       ...(metadata ?? {}),
     });
     await this.replyAuditModuleForNow().create(log);
+    await this.mirrorToAutoReplyAudit(log);
+  }
+
+  /**
+   * Mirror a decision-relevant reply-audit row into the auto-reply audit table
+   * the UI reads (G03-1c). The reply-audit log is the pipeline record; the
+   * auto-reply audit table is the user-visible one. Without the mirror,
+   * refusals and send outcomes are invisible in the AI Auto-Replies audit UI.
+   *
+   * Same fail-stop contract as the primary write: persistence failure here
+   * surfaces to the caller rather than being swallowed.
+   */
+  private async mirrorToAutoReplyAudit(log: EmailReplyAuditLogEntity): Promise<void> {
+    const mirrorRow = buildAutoReplyAuditMirrorRow({
+      emailServiceId: log.emailServiceId,
+      messageId: log.messageId,
+      draftId: log.draftId,
+      action: log.action,
+      reason: log.reason,
+      metadataJson: log.metadataJson,
+    });
+    if (mirrorRow === null) {
+      return;
+    }
+    await this.autoAuditModuleForNow().create(mirrorRow);
   }
 
   /**
@@ -2520,6 +2546,7 @@ export class EmailReplyDraftGenerationService {
       ruleId: decision.ruleId,
     });
     await this.replyAuditModuleForNow().create(log);
+    await this.mirrorToAutoReplyAudit(log);
   }
 
   /**

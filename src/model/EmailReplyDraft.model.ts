@@ -5,6 +5,8 @@ import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { SortBy } from "@/entityTypes/commonType";
@@ -1126,6 +1128,21 @@ export class EmailReplyDraftModel extends BaseDb {
         failureCode: input.failureCode ?? null,
       });
       await auditRepo.save(audit);
+
+      // G03-1c: mirror the send outcome into the auto-reply audit table the
+      // UI reads, in the SAME transaction so the UI never shows a decision
+      // the pipeline log lacks (or vice versa).
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: audit.emailServiceId,
+        messageId: audit.messageId,
+        draftId: audit.draftId,
+        action: audit.action,
+        reason: audit.reason,
+        metadataJson: audit.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await manager.getRepository(EmailAutoReplyAuditLogEntity).save(mirrorRow);
+      }
     });
   }
 
@@ -1432,6 +1449,20 @@ export class EmailReplyDraftModel extends BaseDb {
         providerMessageId: input.providerMessageId ?? null,
       });
       await auditRepo.save(audit);
+
+      // G03-1c: same-transaction mirror into the auto-reply audit table the
+      // UI reads (confirm_sent → auto_sent, negative reconciliation → failed).
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: audit.emailServiceId,
+        messageId: audit.messageId,
+        draftId: audit.draftId,
+        action: audit.action,
+        reason: audit.reason,
+        metadataJson: audit.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await manager.getRepository(EmailAutoReplyAuditLogEntity).save(mirrorRow);
+      }
     });
   }
 

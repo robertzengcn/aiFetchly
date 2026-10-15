@@ -4,6 +4,8 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
 import {
   EmailReplyDraftGenerationService,
@@ -307,6 +309,20 @@ export async function markEmailProcessed(
     log.actor = "ai";
     log.reason = input.reason ?? input.status;
     await auditModule.create(log);
+
+    // G03-1c: mirror the decision into the auto-reply audit table the UI
+    // reads, so AI-tool mark-processed outcomes are visible in the audit UI.
+    const mirrorRow = buildAutoReplyAuditMirrorRow({
+      emailServiceId: log.emailServiceId,
+      messageId: log.messageId,
+      draftId: log.draftId,
+      action: log.action,
+      reason: log.reason,
+      metadataJson: log.metadataJson,
+    });
+    if (mirrorRow !== null) {
+      await new EmailAutoReplyAuditLogModule().create(mirrorRow);
+    }
 
     return {
       success: true,

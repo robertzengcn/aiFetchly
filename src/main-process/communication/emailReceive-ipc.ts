@@ -64,6 +64,7 @@ import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogMo
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import {
   ReceivedMessageListDto,
   ReceivedMessageDetailDto,
@@ -187,6 +188,20 @@ export function registerEmailReceiveIpcHandlers(): void {
       log.actor = "user";
       log.reason = input.reason ?? input.status;
       await auditModule.create(log);
+
+      // G03-1c: mirror the decision into the auto-reply audit table the UI
+      // reads, so user/AI mark-processed outcomes are visible in the audit UI.
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: log.emailServiceId,
+        messageId: log.messageId,
+        draftId: log.draftId,
+        action: log.action,
+        reason: log.reason,
+        metadataJson: log.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await new EmailAutoReplyAuditLogModule().create(mirrorRow);
+      }
 
       return { messageId: input.messageId, status: input.status };
     }

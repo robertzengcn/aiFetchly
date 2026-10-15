@@ -225,6 +225,22 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
     expect(wrapper.text()).toContain("Discard and retry");
   });
 
+  it("renders the next-action chip under the audit-detail-next-action testid", async () => {
+    // G03 FR-034: the E2E spec asserts this landmark; the component test pins
+    // the testid itself so it cannot drift from the E2E selector.
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({
+        metadataCode: "receive_unavailable",
+        metadataStage: "pre_draft",
+      })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    const chip = wrapper.find('[data-testid="audit-detail-next-action"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("Await human review");
+  });
+
   it("hides the evidence block when the row carries no typed code", async () => {
     const wrapper = mountDetail();
     await flushPromises();

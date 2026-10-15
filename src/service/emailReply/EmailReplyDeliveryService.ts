@@ -8,6 +8,8 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import { ReplyEmailService } from "@/modules/lib/replyEmailService";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import {
@@ -135,6 +137,12 @@ export class EmailReplyDeliveryService {
    */
   private auditModule: EmailReplyAuditLogModule | null = null;
   private readonly auditModuleFactory: () => EmailReplyAuditLogModule;
+  /**
+   * G03-1c: mirror-side audit module (the auto-reply audit table the UI
+   * reads). Same lazy injectable-factory pattern as `auditModule` above.
+   */
+  private autoAuditModule: EmailAutoReplyAuditLogModule | null = null;
+  private readonly autoAuditModuleFactory: () => EmailAutoReplyAuditLogModule;
   private readonly policy = new EmailReplyPolicyOrchestrator();
   private readonly senderFactory: ReplySenderFactory;
   private readonly serviceLoader: (id: number) => Promise<BoundMailbox | null>;
@@ -166,6 +174,13 @@ export class EmailReplyDeliveryService {
      */
     readonly auditModuleFactory?: () => EmailReplyAuditLogModule;
     /**
+     * G03-1c: injectable factory for the mirror-side (auto-reply audit) module.
+     * Tests substitute an in-memory stub to capture mirror rows or drive write
+     * failure. Production leaves it undefined → the real module is constructed
+     * lazily on first use.
+     */
+    readonly autoAuditModuleFactory?: () => EmailAutoReplyAuditLogModule;
+    /**
      * D7.2: injectable clock (test seam) for the persisted SMTP/attempt/audit
      * timestamps. Defaults to `Date.now`.
      */
@@ -181,6 +196,8 @@ export class EmailReplyDeliveryService {
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
     this.auditModuleFactory =
       options?.auditModuleFactory ?? (() => new EmailReplyAuditLogModule());
+    this.autoAuditModuleFactory =
+      options?.autoAuditModuleFactory ?? (() => new EmailAutoReplyAuditLogModule());
     this.now = options?.now ?? ((): number => Date.now());
   }
 
@@ -212,6 +229,38 @@ export class EmailReplyDeliveryService {
       this.auditModule = this.auditModuleFactory();
     }
     return this.auditModule;
+  }
+
+  /**
+   * G03-1c: the mirror-side audit module for THIS send invocation. Lazily
+   * constructed through the injectable factory (never at module top level —
+   * BaseModule TDZ under vi.mock). Tests substitute an in-memory stub.
+   */
+  private autoAuditModuleForNow(): EmailAutoReplyAuditLogModule {
+    if (!this.autoAuditModule) {
+      this.autoAuditModule = this.autoAuditModuleFactory();
+    }
+    return this.autoAuditModule;
+  }
+
+  /**
+   * G03-1c: mirror a decision-relevant reply-audit row into the auto-reply
+   * audit table the UI reads. Same fail-stop contract as the primary write:
+   * persistence failure surfaces to the caller rather than being swallowed.
+   */
+  private async mirrorToAutoReplyAudit(log: EmailReplyAuditLogEntity): Promise<void> {
+    const mirrorRow = buildAutoReplyAuditMirrorRow({
+      emailServiceId: log.emailServiceId,
+      messageId: log.messageId,
+      draftId: log.draftId,
+      action: log.action,
+      reason: log.reason,
+      metadataJson: log.metadataJson,
+    });
+    if (mirrorRow === null) {
+      return;
+    }
+    await this.autoAuditModuleForNow().create(mirrorRow);
   }
 
   /**
@@ -758,6 +807,7 @@ export class EmailReplyDeliveryService {
       policyVersion: decision.policyVersion,
     });
     await this.auditModuleForNow().create(log);
+    await this.mirrorToAutoReplyAudit(log);
   }
 
   /**
@@ -1100,6 +1150,7 @@ export class EmailReplyDeliveryService {
       source: "reply_detection",
     });
     await this.auditModuleForNow().create(log);
+    await this.mirrorToAutoReplyAudit(log);
   }
 }
 

@@ -38,6 +38,7 @@
                   class="ml-2"
                   size="small"
                   variant="outlined"
+                  data-testid="audit-detail-next-action"
                 >
                   {{ t("emailReply.nextAction." + nextAction) }}
                 </v-chip>
