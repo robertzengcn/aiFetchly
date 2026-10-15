@@ -55,6 +55,10 @@ import {
   FRESHNESS_STALE,
   FORCED_FRESHNESS_WINDOW_MS,
 } from "@/model/EmailReplyDraft.model";
+import {
+  markSubmitterRunning,
+  markSubmitterSettled,
+} from "@/service/emailReply/EmailReplySubmitterTracker";
 
 /**
  * Sender interface the delivery service uses for the SMTP handoff. The default
@@ -280,6 +284,23 @@ export class EmailReplyDeliveryService {
     // boundary. Distinct across two invocations for the same message; all
     // audit events and the returned outcome for THIS invocation carry it.
     const requestCorrelationId = newRequestCorrelationId();
+    // N08: shared readiness/disable check at the authoritative new-send
+    // boundary — BEFORE any approval/draft/message work. While validation is
+    // pending/failed or the kill switch is on, refuse new sends. Audit reads
+    // and delivery reconciliation never enter here and stay available.
+    {
+      const { checkNewGuardedWorkReady } = await import(
+        "@/service/emailReply/EmailReplyReadiness"
+      );
+      const readiness = checkNewGuardedWorkReady();
+      if (!readiness.ready) {
+        throw new SendPolicyRejection(
+          `Send rejected: ${readiness.reason}`,
+          "probe_failed",
+          requestCorrelationId
+        );
+      }
+    }
     // 1. Resolve the opaque one-time approval token to a trusted approval
     //    record — consumed-inclusive (R14). `finalizeSendOutcome` consumes the
     //    approval (sets invalidatedAt) for EVERY terminal outcome, so a replay
@@ -625,8 +646,35 @@ export class EmailReplyDeliveryService {
       };
     }
     if (claim.status === "precondition_failed") {
+      // N07: typed transaction refusal — use the stable `code` directly
+      // (never infer from English `reason`), compose ONE correlated
+      // service-owned refusal audit, and throw a typed IPC/tool envelope.
+      // Exact-attempt idempotent replay (`already_processed`) stays separate
+      // above and never lands here.
       incrementReplyMetric("send_claim", { outcome: "precondition_failed" });
-      throw new Error(`Send rejected: ${claim.reason}`);
+      const typedCode = claim.code;
+      try {
+        await this.writeDetectionRefusalAudit(
+          message,
+          draft.id,
+          requestCorrelationId,
+          typedCode,
+          `Send claim refused in transaction: ${claim.reason}`
+        );
+      } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "pre_send" });
+        const auditErrMsg = sanitizeDetectionError(auditError);
+        throw new SendPolicyRejection(
+          `Send rejected: claim refusal audit persistence failed: ${auditErrMsg}`,
+          typedCode,
+          requestCorrelationId
+        );
+      }
+      throw new SendPolicyRejection(
+        `Send rejected by send claim: [${typedCode}] ${claim.reason}`,
+        typedCode,
+        requestCorrelationId
+      );
     }
     const attemptId = claim.attemptId;
     incrementReplyMetric("send_claim", { outcome: "claimed" });
@@ -691,6 +739,12 @@ export class EmailReplyDeliveryService {
       replyTo: service.replyTo,
     });
 
+    // N02: prove submitter liveness for reconciliation. Mark this attempt's
+    // SMTP operation as running BEFORE the handoff and settle it AFTER
+    // finalization, so a concurrent `confirm_not_sent` can refuse while the
+    // original transport may still succeed. A crash leaves no mark (restart =
+    // quiescence); a live promise blocks the downgrade.
+    markSubmitterRunning(attemptId);
     let certainty: "accepted" | "definitely_rejected" | "unknown";
     let providerMessageId: string | null = null;
     let sanitizedError: string | null = null;
@@ -731,26 +785,33 @@ export class EmailReplyDeliveryService {
     // ONE transaction (P0.6). delivery_unknown leaves the message status as-is.
     const messageReplyStatus: EmailReplyStatus | undefined =
       outcome === "sent" ? "sent" : outcome === "failed" ? "failed" : undefined;
-    await this.draftModule.finalizeSendOutcome({
-      attemptId,
-      draftId: draft.id,
-      approvalId: approval.id,
-      emailServiceId,
-      messageId: message.id,
-      outcome,
-      providerMessageId,
-      failureCode: certainty === "accepted" ? null : certainty,
-      sanitizedError,
-      messageReplyStatus,
-      // T08: the guard row resolved before the claim (step 6) — pass its id
-      // so finalize transitions the guard in the same transaction as the
-      // attempt/draft/approval/audit. Null when no guard row exists (legacy
-      // data); finalize then skips the guard transition.
-      guardId: guardRow?.id ?? null,
-      // R20: thread this invocation's id so the outcome audit joins the SMTP
-      // result to the claim/refusal under the same correlation.
-      requestCorrelationId,
-    });
+    try {
+      await this.draftModule.finalizeSendOutcome({
+        attemptId,
+        draftId: draft.id,
+        approvalId: approval.id,
+        emailServiceId,
+        messageId: message.id,
+        outcome,
+        providerMessageId,
+        failureCode: certainty === "accepted" ? null : certainty,
+        sanitizedError,
+        messageReplyStatus,
+        // T08: the guard row resolved before the claim (step 6) — pass its id
+        // so finalize transitions the guard in the same transaction as the
+        // attempt/draft/approval/audit. Null when no guard row exists (legacy
+        // data); finalize then skips the guard transition.
+        guardId: guardRow?.id ?? null,
+        // R20: thread this invocation's id so the outcome audit joins the SMTP
+        // result to the claim/refusal under the same correlation.
+        requestCorrelationId,
+      });
+    } finally {
+      // N02: settle AFTER finalization so a concurrent reconcile cannot slip
+      // between transport settle and outcome persistence. The attempt row now
+      // carries the terminal outcome; quiescence is proven.
+      markSubmitterSettled(attemptId);
+    }
 
     if (outcome === "sent") {
       return {
@@ -981,11 +1042,50 @@ export class EmailReplyDeliveryService {
       await this.refusePostClaimGate(input, "probe_failed", "Original message not found at the post-claim freshness gate");
       return;
     }
+    // N03: positive/sent precedence BEFORE freshness permission. A reply
+    // detected or sent locally after the atomic claim (during awaited
+    // markSubmitted/message read) must refuse even when a recent negative
+    // timestamp is still present. Check the seed row first, then equivalent
+    // rows (excluding only this exact owned attempt/draft via the detection
+    // exclude path below — here we check row-level positives which are never
+    // this attempt's own write).
+    if (
+      currentMessage.replyDetectedAt != null ||
+      currentMessage.replyStatus === "sent"
+    ) {
+      await this.refusePostClaimGate(
+        input,
+        "already_replied",
+        "Post-claim gate found positive reply evidence on the message before SMTP"
+      );
+      return;
+    }
+    try {
+      const clusterRows = await this.messageModule.findCanonicalEquivalents(
+        currentMessage
+      );
+      for (const row of clusterRows) {
+        if (row.id === currentMessage.id) continue;
+        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
+          await this.refusePostClaimGate(
+            input,
+            "already_replied",
+            "Post-claim gate found positive reply evidence on an equivalent message before SMTP"
+          );
+          return;
+        }
+      }
+    } catch {
+      // Cluster read failure fail-closes through the refresh path below
+      // (forceRefresh detect rereads authoritative evidence).
+    }
     const observedAt = currentMessage.replyNegativeCheckAt;
     if (observedAt != null) {
       const ageMs = Date.now() - observedAt.getTime();
       if (ageMs <= FORCED_FRESHNESS_WINDOW_MS) {
         // Fresh — proceed to SMTP immediately (§9.4). No extra detect call.
+        // N03: the positive check above already ran, so a fresh negative here
+        // means no known positive on seed or siblings at gate time.
         incrementReplyMetric("send_claim", {
           outcome: "post_claim_fresh",
         });
@@ -1019,7 +1119,42 @@ export class EmailReplyDeliveryService {
       return;
     }
     if (result.state === "not_replied") {
-      // Stale-but-still-eligible: the refresh found no reply. Proceed to SMTP.
+      // N03: revalidate refresh observation age immediately before handoff;
+      // refuse a second delay. The refresh itself took wall time — reread the
+      // seed's negative timestamp and require it to be fresh NOW. A stale
+      // observation after exactly one refresh refuses with no SMTP (no second
+      // refresh loop).
+      const afterRefresh = await this.messageModule.read(input.message.id);
+      if (
+        afterRefresh?.replyDetectedAt != null ||
+        afterRefresh?.replyStatus === "sent"
+      ) {
+        await this.refusePostClaimGate(
+          input,
+          "already_replied",
+          "Post-claim refresh completed but positive reply evidence appeared before SMTP"
+        );
+        return;
+      }
+      const refreshedAt = afterRefresh?.replyNegativeCheckAt ?? null;
+      if (refreshedAt == null) {
+        await this.refusePostClaimGate(
+          input,
+          "probe_failed",
+          "Post-claim refresh completed without a fresh negative observation before SMTP"
+        );
+        return;
+      }
+      const refreshedAgeMs = Date.now() - refreshedAt.getTime();
+      if (refreshedAgeMs > FORCED_FRESHNESS_WINDOW_MS) {
+        await this.refusePostClaimGate(
+          input,
+          "probe_failed",
+          "Post-claim refresh observation is stale before SMTP; refusing second delay"
+        );
+        return;
+      }
+      // Stale-but-still-eligible with a NOW-fresh observation: proceed to SMTP.
       incrementReplyMetric("detection_outcome", {
         stage: "pre_send",
         state: "not_replied",
@@ -1042,12 +1177,19 @@ export class EmailReplyDeliveryService {
    * R12 §9.4 item 4 — the safe-finalize + refusal path for a post-claim gate
    * refusal. The claim EXISTS (unlike the pre-claim refusal in
    * {@link runPreSendDetection}), so the unsent claim MUST be safely finalized
-   * as `delivery_unknown` — it must not be left `claimed`/`submitted` (a
-   * phantom in-flight attempt blocks every future recheck) and must not be
-   * manufactured as `sent`. Then ONE `reply_skipped` audit (stage pre_send) is
-   * written and a `SendPolicyRejection` with the typed detection code is
-   * thrown. Audit persistence failure still stops the work (§9.2) but the
-   * safe finalize has already run, so the claim is not left dangling.
+   * — it must not be left `claimed`/`submitted` (a phantom in-flight attempt
+   * blocks every future recheck) and must not be manufactured as `sent`.
+   * N06: this gate runs BEFORE SMTP (`sendReplyEmail` has not been called),
+   * so the operation is known never to have contacted SMTP. Finalize as
+   * `failed` (definitely not submitted under the owned claim), NOT
+   * `delivery_unknown` (ambiguous possible acceptance). The failed outcome
+   * consumes the one-time approval (a permitted retry needs fresh explicit
+   * approval) without manufacturing possible-SMTP-acceptance history, and
+   * leaves sibling/positive protection intact (cluster evidence still blocks).
+   * Then ONE `reply_skipped` audit (stage pre_send) is written and a
+   * `SendPolicyRejection` with the typed detection code is thrown. Audit
+   * persistence failure still stops the work (§9.2) but the safe finalize has
+   * already run, so the claim is not left dangling.
    */
   private async refusePostClaimGate(
     input: {
@@ -1070,26 +1212,25 @@ export class EmailReplyDeliveryService {
     incrementReplyMetric("send_claim", {
       outcome: "post_claim_gate_refused",
     });
-    // Safely finalize the unsent claim as delivery_unknown. This matches the
+    // N06: safely finalize the KNOWN-UNSENT claim as failed. This matches the
     // attempt's `submitted` status (finalizeSendOutcome matches
-    // claimed|submitted for failed|delivery_unknown), keeps the guard
-    // protected (phase IN ("sending") → delivery_unknown + activeAttemptId
-    // null), consumes the one-time approval, writes the delivery_unknown
-    // audit, and leaves the message replyStatus untouched (no
-    // messageReplyStatus for delivery_unknown).
+    // claimed|submitted for failed), reopens the guard to draft_ready for a
+    // fresh explicit approval (phase "sending" → "draft_ready"), consumes the
+    // one-time approval, writes the send_failed audit, and leaves the message
+    // replyStatus untouched. It never claims possible SMTP acceptance.
     await this.draftModule.finalizeSendOutcome({
       attemptId: input.attemptId,
       draftId: input.draftId,
       approvalId: input.approvalId,
       emailServiceId: input.emailServiceId,
       messageId: input.message.id,
-      outcome: "delivery_unknown",
+      outcome: "failed",
       providerMessageId: null,
       failureCode: code,
-      sanitizedError: reason,
+      sanitizedError: `Unsent (SMTP never called): ${reason}`,
       guardId: input.guardId,
-      // R20: thread this invocation's id so the delivery_unknown outcome audit
-      // joins the unsent claim's refusal under the same correlation.
+      // R20: thread this invocation's id so the failed outcome audit joins
+      // the unsent claim's refusal under the same correlation.
       requestCorrelationId: input.requestCorrelationId,
     });
     // ONE reply_skipped audit (stage pre_send, source reply_detection) for

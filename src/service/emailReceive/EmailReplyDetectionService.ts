@@ -595,7 +595,8 @@ export class EmailReplyDetectionService {
                 normalizedId,
                 configuredSender,
                 contextHash,
-                signal
+                signal,
+                deadline
               ),
             { state: "probe" }
           ),
@@ -842,7 +843,13 @@ export class EmailReplyDetectionService {
      * in-flight socket (`client.close()`) instead of lingering. Passed to
      * every port call so an abort between sub-steps also short-circuits.
      */
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /**
+     * N04: invocation deadline owning this probe. Checked after every awaited
+     * closing step (mailbox reads, config/identity reread, persistence) so an
+     * abandoned timed-out probe never persists fresh negative evidence.
+     */
+    deadline?: { expired(): boolean; remainingMs(): number }
   ): Promise<ReplyDetectionResult> {
     // Config normalization + identity resolution happened in runCachedProbe
     // (the cache key needs the pre-probe context hash, which needs both).
@@ -970,6 +977,18 @@ export class EmailReplyDetectionService {
       return this.unknown("probe_failed");
     }
 
+    // N04: capture the actual mailbox observation time NOW (when mailbox reads
+    // finished), not at the delayed write time. A later fence expiry must not
+    // rewrite this timestamp with the late write time.
+    const mailboxObservedAtMs = this.now();
+    // N04: mailbox I/O finished — if the probe already lost the deadline race,
+    // do not proceed to closing reads/persistence. The caller already received
+    // probe_timeout; persisting now would create usable negative evidence from
+    // an expired probe.
+    if (signal?.aborted || deadline?.expired()) {
+      return this.unknown("probe_timeout");
+    }
+
     // Step 7 — before persisting a negative, confirm the account context is
     // unchanged since the probe began (§7.1 step 7). Reread BOTH the receive
     // config AND the sender identity (R10): the probe matched candidates
@@ -984,6 +1003,13 @@ export class EmailReplyDetectionService {
       ),
       this.emailServicePort.readIdentity(normalizedConfig.emailServiceId),
     ]);
+    // N04: check cancellation/expiry AFTER every awaited closing step. The
+    // closing config/identity read may resolve after the 15s deadline — the
+    // caller already received probe_timeout and the queue released. Persisting
+    // now would violate unknown/freshness semantics.
+    if (signal?.aborted || deadline?.expired()) {
+      return this.unknown("probe_timeout");
+    }
     if (!freshConfig) {
       // Config vanished during I/O — the account was reconfigured or disabled.
       return this.unknown("identity_conflict");
@@ -1021,10 +1047,34 @@ export class EmailReplyDetectionService {
     // the resolved Sent scope, so it recomputes this exact empty-scope hash
     // from config + identity and compares (D5). The mid-probe conflict check
     // above keeps its own scope-resolved comparison and is unaffected.
-    const persisted = await this.persistNegative(message, preProbeContextHash, {
-      isAnswered: isAnswered ? 1 : 0,
-      answeredCheckedAt,
-    });
+    // N04: final expiry fence immediately before the awaited write. A check
+    // before an awaited write alone is insufficient if that write can complete
+    // late — persistNegative rechecks ownership/expiry internally and the
+    // write stamps mailboxObservedAtMs (actual observation time), not the
+    // delayed write time.
+    if (signal?.aborted || deadline?.expired()) {
+      return this.unknown("probe_timeout");
+    }
+    const persisted = await this.persistNegative(
+      message,
+      preProbeContextHash,
+      {
+        isAnswered: isAnswered ? 1 : 0,
+        answeredCheckedAt,
+      },
+      {
+        observedAtMs: mailboxObservedAtMs,
+        signal,
+        isExpired: () => deadline?.expired() ?? false,
+      }
+    );
+    // N04: the awaited write itself may have completed after expiry — if so,
+    // treat as expired (no usable negative) even if the store write succeeded.
+    // The write path already refuses late writes when it can; this covers a
+    // write that slipped through before the timer fired.
+    if (signal?.aborted || deadline?.expired()) {
+      return this.unknown("probe_timeout");
+    }
     if (!persisted) {
       // D1b/R09: the negative write failed OR was rejected by the sticky-
       // positive guard (0 rows — a concurrent positive landed first). Reread
@@ -1042,7 +1092,7 @@ export class EmailReplyDetectionService {
       source: "sent_search",
       matchedMessageId: null,
       reasonCode: "no_reply_observed",
-      checkedAt: new Date(this.now()).toISOString(),
+      checkedAt: new Date(mailboxObservedAtMs).toISOString(),
       fromCache: false,
       coverage: "configured_imap",
     };
@@ -1323,16 +1373,35 @@ export class EmailReplyDetectionService {
   private async persistNegative(
     message: EmailReceivedMessageEntity,
     contextHash: string,
-    flags: { isAnswered: number; answeredCheckedAt: Date | null }
+    flags: { isAnswered: number; answeredCheckedAt: Date | null },
+    fence?: {
+      observedAtMs: number;
+      signal?: AbortSignal;
+      isExpired?: () => boolean;
+    }
   ): Promise<boolean> {
+    // N04: expiry fence before the awaited write. An abandoned timed-out probe
+    // must never persist fresh negative evidence — the caller already received
+    // probe_timeout and the queue released.
+    if (fence?.signal?.aborted || fence?.isExpired?.()) {
+      return false;
+    }
     try {
       const written = await this.messagePort.updateReplyEvidence({
         id: message.id,
-        replyNegativeCheckAt: new Date(this.now()),
+        // N04: stamp the actual mailbox observation time, not the delayed
+        // write time. A late write must not manufacture fresh evidence.
+        replyNegativeCheckAt: new Date(fence?.observedAtMs ?? this.now()),
         replyNegativeContextHash: contextHash,
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
+      // N04: the awaited write itself may have completed after expiry — treat
+      // as failure (no usable negative) so the caller returns unknown instead
+      // of a decisive negative from an expired probe.
+      if (fence?.signal?.aborted || fence?.isExpired?.()) {
+        return false;
+      }
       if (!written) {
         // R09: 0 rows affected — the sticky-positive guard rejected the
         // negative (a concurrent positive landed first) or the row vanished.

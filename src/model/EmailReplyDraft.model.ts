@@ -22,6 +22,7 @@ import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
+import { isSubmitterRunning } from "@/service/emailReply/EmailReplySubmitterTracker";
 import { runReplyTxn } from "@/model/replyTxn";
 import {
   readClusterEvidence,
@@ -148,6 +149,73 @@ export class EmailReplyDraftModel extends BaseDb {
     entity.sentAt = sentAt;
     entity.sendError = null;
     await this.repository.save(entity);
+  }
+
+  /**
+   * G02: explicit human-review resolution (FR-025). Binds an authorized human's
+   * acknowledgment to the EXACT current revision: the caller passes the
+   * revision it reviewed, which must equal `currentRevisionId`, or the call
+   * refuses (stale acknowledgment). The model's original `requiresHumanReview`
+   * flag + `reviewReasonsJson`/`unresolvedQuestionsJson` are NEVER cleared
+   * (immutable provenance); this stamps a separate resolution. Any later
+   * `appendRevision` clears the stamp. There is intentionally NO AI-tool path
+   * to this method — only the renderer IPC handler (user gesture) calls it.
+   */
+  async resolveHumanReview(input: {
+    draftId: number;
+    revisionId: number;
+    resolvedBy: string;
+    note?: string | null;
+    now?: Date;
+  }): Promise<{ resolved: boolean; reason?: string }> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const draft = await draftRepo.findOne({ where: { id: input.draftId } });
+      if (!draft) {
+        return { resolved: false, reason: "draft not found" };
+      }
+      if (draft.requiresHumanReview !== 1) {
+        return { resolved: false, reason: "draft does not require human review" };
+      }
+      if (
+        draft.currentRevisionId == null ||
+        draft.currentRevisionId !== input.revisionId
+      ) {
+        return {
+          resolved: false,
+          reason: `stale review acknowledgment: reviewed revision ${input.revisionId} != current ${draft.currentRevisionId ?? "none"}`,
+        };
+      }
+      const at = input.now ?? new Date();
+      const note = (input.note ?? "").slice(0, 2000);
+      await draftRepo.update(
+        { id: input.draftId },
+        {
+          humanReviewResolvedAt: at,
+          humanReviewResolvedBy: input.resolvedBy.slice(0, 200),
+          humanReviewResolvedRevisionId: input.revisionId,
+          humanReviewResolutionNote: note.length > 0 ? note : null,
+        }
+      );
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = draft.emailServiceId ?? 0;
+      audit.messageId = draft.messageId;
+      audit.draftId = draft.id;
+      audit.action = "reply_skipped";
+      audit.actor = "user";
+      audit.reason = `[human_review_resolved] Human resolved model review request for revision ${input.revisionId}`;
+      audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(draft.messageId),
+        messageCorrelationId: correlationIdForMessage(draft.messageId),
+        stage: "human_review",
+        code: "human_review_resolved",
+        revisionId: input.revisionId,
+        resolvedBy: input.resolvedBy.slice(0, 200),
+      });
+      await auditRepo.save(audit);
+      return { resolved: true };
+    });
   }
 
   async listByMessage(messageId: number): Promise<EmailReplyDraftEntity[]> {
@@ -515,6 +583,10 @@ export class EmailReplyDraftModel extends BaseDb {
     );
 
     // Refresh the projection + reset to unapproved.
+    // G02: any edit invalidates a prior human-review resolution — a stale
+    // acknowledgment bound to an older revision must never authorize the new
+    // content. The model's original `requiresHumanReview` flag + reasons stay
+    // immutable as provenance; only the resolution stamp clears.
     draft.subject = input.subject;
     draft.bodyText = input.bodyText;
     draft.bodyHtml = input.bodyHtml;
@@ -525,6 +597,10 @@ export class EmailReplyDraftModel extends BaseDb {
     draft.revisionNumber = nextNumber;
     draft.status = "draft";
     draft.approvalInvalidatedAt = now;
+    draft.humanReviewResolvedAt = null;
+    draft.humanReviewResolvedBy = null;
+    draft.humanReviewResolvedRevisionId = null;
+    draft.humanReviewResolutionNote = null;
     if (input.policyVersion !== undefined)
       draft.policyVersion = input.policyVersion;
     if (input.validationVersion !== undefined)
@@ -806,9 +882,11 @@ export class EmailReplyDraftModel extends BaseDb {
       if (!seedMessage) {
         // No seed row — a sibling check below would also find nothing to bind
         // the cluster on; refuse rather than claim against a missing seed.
+        // N07: typed code (probe_failed — no observation to trust).
         return {
           status: "precondition_failed",
           reason: FRESHNESS_STALE,
+          code: "probe_failed",
         };
       }
       // R02: a positive is NEVER permission to send. The freshness fence
@@ -828,10 +906,11 @@ export class EmailReplyDraftModel extends BaseDb {
         // recorded without a prior negative — in all cases the send must NOT
         // proceed on a missing negative. Treat null as stale → freshness_stale
         // → the delivery service reruns detection outside the transaction and
-        // re-claims once (§9.3).
+        // re-claims once (§9.3). N07: typed code.
         return {
           status: "precondition_failed",
           reason: FRESHNESS_STALE,
+          code: "probe_failed",
         };
       }
       const ageMs = now.getTime() - observedAt.getTime();
@@ -839,6 +918,7 @@ export class EmailReplyDraftModel extends BaseDb {
         return {
           status: "precondition_failed",
           reason: FRESHNESS_STALE,
+          code: "probe_failed",
         };
       }
 
@@ -863,10 +943,22 @@ export class EmailReplyDraftModel extends BaseDb {
             { phase, activeDraftId, activeAttemptId }
           );
         }
+        // N07: typed refusal via the canonical eligibility ladder — never
+        // infer from English text downstream.
+        const eligibility = classifyClusterEligibility(evidence, input.draftId);
+        const siblingCode =
+          eligibility.reason === "already_replied"
+            ? ("already_replied" as const)
+            : eligibility.reason === "delivery_unknown"
+              ? ("delivery_unknown" as const)
+              : eligibility.reason === "reply_in_progress"
+                ? ("reply_in_progress" as const)
+                : ("reply_state_conflict" as const);
         return {
           status: "precondition_failed",
           reason:
             "Message-level state blocks send: a sibling draft or attempt is sent, delivery-unknown, or in flight (FR-029)",
+          code: siblingCode,
         };
       }
 
@@ -886,9 +978,20 @@ export class EmailReplyDraftModel extends BaseDb {
             guardRow.phase !== "draft_ready" &&
             guardRow.phase !== "idle"
           ) {
+            // N07: typed guard-phase refusal — map terminal/in-flight phases
+            // to stable policy codes (never parse the English reason).
+            const guardCode =
+              guardRow.phase === "sent"
+                ? ("already_replied" as const)
+                : guardRow.phase === "delivery_unknown"
+                  ? ("delivery_unknown" as const)
+                  : guardRow.phase === "sending"
+                    ? ("reply_in_progress" as const)
+                    : ("reply_state_conflict" as const);
             return {
               status: "precondition_failed",
               reason: `Message guard is ${guardRow.phase}; a new send requires draft_ready or idle (FR-029)`,
+              code: guardCode,
             };
           }
           bindGuardId = input.guardId;
@@ -922,6 +1025,7 @@ export class EmailReplyDraftModel extends BaseDb {
           status: "precondition_failed",
           reason:
             "Draft is not approved, or its current revision/hash no longer matches the approved envelope",
+          code: "reply_state_conflict",
         };
       }
 
@@ -1021,11 +1125,14 @@ export class EmailReplyDraftModel extends BaseDb {
 
       const completedAt = new Date();
       const attemptStatus: EmailReplySendAttemptStatus = input.outcome;
-      // CONDITIONAL finalize (§9). A late `sent` upgrades an earlier
-      // `delivery_unknown`; a downgrade cannot match a `sent` attempt.
+      // CONDITIONAL finalize (§9/N02). A late `sent` upgrades an earlier
+      // `delivery_unknown` AND a `failed` downgrade (the original transport
+      // outlived a premature negative reconciliation — late actual acceptance
+      // is terminal evidence and must not be lost). A downgrade
+      // (`failed`/`delivery_unknown`) can never match a `sent` attempt.
       const matchStatuses: EmailReplySendAttemptStatus[] =
         input.outcome === "sent"
-          ? ["claimed", "submitted", "delivery_unknown"]
+          ? ["claimed", "submitted", "delivery_unknown", "failed"]
           : ["claimed", "submitted"];
       const attemptUpdate = await attemptRepo.update(
         { id: input.attemptId, status: In(matchStatuses) },
@@ -1091,9 +1198,13 @@ export class EmailReplyDraftModel extends BaseDb {
               : ("draft_ready" as GuardPhase),
           activeAttemptId: null,
         };
+        // N02: a late `sent` upgrades from `draft_ready` too (the guard was
+        // reopened by a premature negative reconciliation before the original
+        // transport succeeded — late acceptance is terminal and must reclaim
+        // the guard). Never downgrade a `sent` guard.
         const guardMatchPhases: GuardPhase[] =
           input.outcome === "sent"
-            ? ["sending", "delivery_unknown"]
+            ? ["sending", "delivery_unknown", "draft_ready"]
             : ["sending"];
         await guardRepo.update(
           { id: input.guardId, phase: In(guardMatchPhases) },
@@ -1318,10 +1429,29 @@ export class EmailReplyDraftModel extends BaseDb {
         }
         if (targetAttempt.status === "failed") {
           // Already downgraded — idempotent: no state change, still audit.
+          // N02: even idempotent re-confirm still requires submitter
+          // quiescence — a live original transport may still succeed and its
+          // late acceptance must not be lost to a concurrent downgrade.
+          if (isSubmitterRunning(input.attemptId)) {
+            throw new Error(
+              `Reconciliation refused: original SMTP submitter for attempt ${input.attemptId} is still running — quiescence not proven (§9/N02)`
+            );
+          }
         } else if (targetAttempt.status !== "delivery_unknown") {
           throw new Error(
             `Reconciliation refused: attempt ${input.attemptId} is in unexpected status ${targetAttempt.status}`
           );
+        } else {
+          // N02: the recovered unknown target is eligible ONLY when the
+          // original submitter is proven quiescent. A timeout/status change
+          // alone never proves non-delivery — the original promise may still
+          // be alive past the five-minute recovery threshold. Optional
+          // operator evidence is not a cancellation fence.
+          if (isSubmitterRunning(input.attemptId)) {
+            throw new Error(
+              `Reconciliation refused: original SMTP submitter for attempt ${input.attemptId} is still running — quiescence not proven (§9/N02)`
+            );
+          }
         }
 
         // Canonical-cluster eligibility (R03/R04): a sibling positive or
@@ -1430,14 +1560,25 @@ export class EmailReplyDraftModel extends BaseDb {
       }
       // leave_unresolved: no state change, no guard change.
 
+      // N09: leave_unresolved retains ambiguity — it is NOT a confirmed
+      // failure. Record a reconciliation-note with typed delivery_unknown
+      // semantics (attempt/draft/guard unchanged above); the mirror surfaces
+      // it as needs-human-review with correct guidance, never failed.
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
       audit.messageId = input.messageId;
       audit.draftId = input.draftId;
       audit.action =
-        input.action === "confirm_sent" ? "reply_sent" : "send_failed";
+        input.action === "confirm_sent"
+          ? "reply_sent"
+          : input.action === "confirm_not_sent"
+            ? "send_failed"
+            : "reconciliation_noted";
       audit.actor = "system";
-      audit.reason = `Manual reconciliation: ${input.action}`;
+      audit.reason =
+        input.action === "leave_unresolved"
+          ? `Manual reconciliation: leave_unresolved — delivery remains unknown, human review required`
+          : `Manual reconciliation: ${input.action}`;
       audit.metadataJson = JSON.stringify({
         // R20: dual correlation — per-invocation id first (joins the operator
         // reconcile request when provided), deterministic message id separate.
@@ -1450,8 +1591,9 @@ export class EmailReplyDraftModel extends BaseDb {
       });
       await auditRepo.save(audit);
 
-      // G03-1c: same-transaction mirror into the auto-reply audit table the
-      // UI reads (confirm_sent → auto_sent, negative reconciliation → failed).
+      // G03-1c/N09: same-transaction mirror into the auto-reply audit table
+      // the UI reads (confirm_sent → auto_sent, confirm_not_sent → failed,
+      // leave_unresolved → needs-human-review via reconciliation_noted).
       const mirrorRow = buildAutoReplyAuditMirrorRow({
         emailServiceId: audit.emailServiceId,
         messageId: audit.messageId,
@@ -1611,13 +1753,23 @@ export interface ClaimSendInput {
   requestCorrelationId?: string;
 }
 
+/**
+ * N07: typed claim-time refusal. `code` is the stable machine-readable policy
+ * code (never inferred from English `reason` text by callers). `reason`
+ * remains human-readable English for logs. Callers MUST switch on `code`,
+ * never parse `reason`.
+ */
 export type ClaimSendResult =
   | { readonly status: "claimed"; readonly attemptId: number }
   | {
       readonly status: "already_processed";
       readonly attempt: EmailReplySendAttemptEntity;
     }
-  | { readonly status: "precondition_failed"; readonly reason: string };
+  | {
+      readonly status: "precondition_failed";
+      readonly reason: string;
+      readonly code: import("@/entityTypes/emailReplyReliabilityTypes").EmailReplyPolicyCode;
+    };
 
 export interface FinalizeOutcomeInput {
   attemptId: number;
