@@ -5,35 +5,47 @@
     :style="overlay === true ? undefined : { width: `${width}px` }"
     :aria-label="t('workspaceChat.inspector.region') || 'Inspector'"
     data-testid="workspace-inspector"
+    @keydown.escape="emit('close')"
   >
-    <v-tabs
-      :model-value="activeTab"
-      density="compact"
-      role="tablist"
-      @update:model-value="onTabChange"
-    >
-      <v-tab
-        value="artifacts"
-        role="tab"
-        data-testid="workspace-inspector-tab-artifacts"
+    <div class="inspector-header">
+      <v-tabs
+        :model-value="activeTab"
+        density="compact"
+        role="tablist"
+        @update:model-value="onTabChange"
       >
-        {{ t('workspaceChat.inspector.artifacts') || 'Artifacts' }}
-      </v-tab>
-      <v-tab
-        value="activity"
-        role="tab"
-        data-testid="workspace-inspector-tab-activity"
+        <v-tab
+          value="artifacts"
+          role="tab"
+          data-testid="workspace-inspector-tab-artifacts"
+        >
+          {{ t('workspaceChat.inspector.artifacts') || 'Artifacts' }}
+        </v-tab>
+        <v-tab
+          value="activity"
+          role="tab"
+          data-testid="workspace-inspector-tab-activity"
+        >
+          {{ t('workspaceChat.inspector.activity') || 'Activity' }}
+        </v-tab>
+        <v-tab
+          value="context"
+          role="tab"
+          data-testid="workspace-inspector-tab-context"
+        >
+          {{ t('workspaceChat.inspector.context') || 'Context' }}
+        </v-tab>
+      </v-tabs>
+      <button
+        type="button"
+        class="inspector-close"
+        :aria-label="t('workspaceChat.inspector.close') || 'Close inspector'"
+        data-testid="workspace-inspector-close"
+        @click="emit('close')"
       >
-        {{ t('workspaceChat.inspector.activity') || 'Activity' }}
-      </v-tab>
-      <v-tab
-        value="context"
-        role="tab"
-        data-testid="workspace-inspector-tab-context"
-      >
-        {{ t('workspaceChat.inspector.context') || 'Context' }}
-      </v-tab>
-    </v-tabs>
+        <v-icon icon="mdi-close" size="18" aria-hidden="true" />
+      </button>
+    </div>
 
     <!-- Pointer + keyboard resizable divider (FR-005, design §22.1). -->
     <div
@@ -154,6 +166,42 @@ function onResizerKeydown(event: KeyboardEvent): void {
 .inspector-resizer:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: -1px;
+}
+
+.inspector-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+
+.inspector-header .v-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.inspector-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.inspector-close:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.inspector-close:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
 }
 
 .workspace-inspector.overlay {

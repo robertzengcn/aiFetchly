@@ -3721,6 +3721,7 @@ export default {
     inspector: {
       region: "Inspector",
       toggle: "Alternar inspector",
+      close: "Cerrar inspector",
       artifacts: "Artefactos",
       activity: "Actividad",
       context: "Contexto",
@@ -3778,6 +3779,7 @@ export default {
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
       structuredResult: "Resultado estructurado — detalles en Actividad",
+      failureReason: "Error",
       toolPersistFailure: {
         toolCallNotSaved: "Herramienta no ejecutada: no se pudo guardar.",
         toolResultNotSaved: "La herramienta se ejecutó, pero no se pudo guardar su resultado.",

@@ -3688,6 +3688,7 @@ export default {
     inspector: {
       region: "Inspector",
       toggle: "Toggle inspector",
+      close: "Close inspector",
       artifacts: "Artifacts",
       activity: "Activity",
       context: "Context",
@@ -3743,6 +3744,7 @@ export default {
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
       structuredResult: "Structured result — see details in Activity",
+      failureReason: "Error",
       toolPersistFailure: {
         toolCallNotSaved: "Tool not run: it could not be saved.",
         toolResultNotSaved: "Tool ran but its result could not be saved.",

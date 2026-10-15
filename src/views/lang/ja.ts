@@ -3645,6 +3645,7 @@ export default {
     inspector: {
       region: "インスペクター",
       toggle: "インスペクターの切り替え",
+      close: "インスペクターを閉じる",
       artifacts: "アーティファクト",
       activity: "アクティビティ",
       context: "コンテキスト",
@@ -3700,6 +3701,7 @@ export default {
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
+      failureReason: "エラー",
       toolPersistFailure: {
         toolCallNotSaved: "ツールは実行されませんでした：保存に失敗しました。",
         toolResultNotSaved: "ツールは実行されましたが、結果を保存できませんでした。",

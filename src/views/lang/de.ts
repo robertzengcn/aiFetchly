@@ -3720,6 +3720,7 @@ export default {
     inspector: {
       region: "Inspektor",
       toggle: "Inspektor ein-/ausblenden",
+      close: "Inspektor schließen",
       artifacts: "Artefakte",
       activity: "Aktivität",
       context: "Kontext",
@@ -3778,6 +3779,7 @@ export default {
       filesChanged: "Dateien geändert — siehe Aktivität",
       permissionNeeded: "Berechtigungsentscheidung erforderlich",
       structuredResult: "Strukturiertes Ergebnis — Details in Aktivität",
+      failureReason: "Fehler",
       toolPersistFailure: {
         toolCallNotSaved: "Tool nicht ausgeführt: Speichern fehlgeschlagen.",
         toolResultNotSaved: "Tool wurde ausgeführt, aber das Ergebnis konnte nicht gespeichert werden.",
