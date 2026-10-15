@@ -530,11 +530,29 @@ export class MCPClient {
    * (design §4.1: preserve all content blocks, structured content, and
    * isError semantics). Image data must be routed to the supervisor and is
    * never persisted into tool JSON by generic callers.
+   *
+   * Managed-async callers (plugin PRD §21.5) pass `maxTotalTimeoutMs` and
+   * `resetTimeoutOnProgress: false` so progress notifications never extend
+   * the authoritative job deadline, plus `onprogress` to receive correlated
+   * SDK progress notifications.
    */
   async callToolContent(
     toolName: string,
     params: Record<string, unknown>,
-    options?: { timeoutMs?: number; signal?: AbortSignal }
+    options?: {
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      /** Hard total ceiling independent of progress activity (HOST-07). */
+      maxTotalTimeoutMs?: number;
+      /** Default true (legacy behavior); async callers pass false. */
+      resetTimeoutOnProgress?: boolean;
+      /** SDK progress-notification sink (progress/total/message). */
+      onprogress?: (progress: {
+        readonly progress: number;
+        readonly total?: number;
+        readonly message?: string;
+      }) => void;
+    }
   ): Promise<MCPToolCallContent> {
     if (!this.sdk) {
       throw new Error("callToolContent requires an SDK stdio connection");
@@ -545,7 +563,9 @@ export class MCPClient {
       {
         timeout: options?.timeoutMs ?? this.config.timeout,
         signal: options?.signal,
-        resetTimeoutOnProgress: true,
+        resetTimeoutOnProgress: options?.resetTimeoutOnProgress ?? true,
+        maxTotalTimeout: options?.maxTotalTimeoutMs,
+        onprogress: options?.onprogress,
       }
     );
 

@@ -271,6 +271,15 @@ export interface SkillExecutionContext {
   readonly signal?: AbortSignal;
 
   /**
+   * Authoritative wall-clock deadline for managed-async tool execution
+   * (HOST-07). Derived from the clamped plugin tool policy maxRunMs (or the
+   * host ceiling) and threaded through SkillExecutor → ToolExecutor →
+   * MCPToolService so every inner timeout derives from the remaining budget.
+   * Foreground callers omit it.
+   */
+  readonly deadlineEpochMs?: number;
+
+  /**
    * Number of `image_url` content parts already present in the outgoing
    * request transcript, computed by AIChatQueryLoop immediately before tool
    * execution. Image-attaching tools use this to enforce the combined
@@ -368,6 +377,14 @@ export interface ModuleExecutionContext {
    * and stop work promptly when aborted. Short modules MAY ignore it.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Authoritative wall-clock deadline for managed-async execution (HOST-07).
+   * Set from the plugin tool policy's clamped maxRunMs; when present, the
+   * MCP execution path derives every inner timeout from the remaining budget
+   * instead of applying the foreground 240 s race. Optional — foreground
+   * callers omit it and keep the existing behavior.
+   */
+  readonly deadlineEpochMs?: number;
 }
 
 // ---------------------------------------------------------------------------

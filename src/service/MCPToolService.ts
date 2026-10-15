@@ -1,7 +1,7 @@
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { log } from "@/modules/Logger";
 import { MCPToolModule } from "@/modules/MCPToolModule";
-import { MCPClient } from "@/modules/MCPClient";
+import { MCPClient, type MCPToolCallContent } from "@/modules/MCPClient";
 import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
 import {
   buildPluginToolName,
@@ -20,7 +20,11 @@ import {
 } from "@/schemas/config/mcpServer";
 import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
-import { readRuntimeDescriptorFromMetadata } from "@/entityTypes/pluginExecutionTypes";
+import {
+  readRuntimeDescriptorFromMetadata,
+  HOST_CLEANUP_RESERVE_MS,
+  type PluginToolExecutionOptions,
+} from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Build a sanitized `toolSchemas` map (toolName -> { description, inputSchema })
@@ -732,6 +736,102 @@ export class MCPToolService {
       // All errors (including MCPTimeoutError) propagate unchanged.
       // MCPTimeoutError must NOT be wrapped — callers use instanceof for
       // telemetry-safe classification.
+    } finally {
+      await client.disconnect().catch(() => {
+        /* best-effort disconnect */
+      });
+    }
+  }
+
+  /**
+   * Managed-async execution (plugin PRD §11.8 / design §9.1, HOST-03/04/07).
+   *
+   * Unlike the foreground method above, the call is NOT raced against the
+   * fixed 240 s ceiling. Every inner timeout derives from the single
+   * authoritative deadline:
+   *   - reject without spawning when the remaining budget is at or below the
+   *     cleanup reserve;
+   *   - SDK `timeout` and `maxTotalTimeout` both use the remaining budget;
+   *   - `resetTimeoutOnProgress: false` — progress never extends lifetime;
+   *   - the registry-owned signal propagates to the SDK request;
+   *   - progress notifications flow to `options.onProgress`.
+   *
+   * Returns the COMPLETE content union (`callToolContent`) so the executor
+   * can apply domain-envelope normalization (isError vs transport) instead
+   * of the throwing `callTool` compatibility shape.
+   */
+  async executeMCPToolContent(
+    serverId: number,
+    toolName: string,
+    params: Record<string, unknown>,
+    options: PluginToolExecutionOptions
+  ): Promise<MCPToolCallContent> {
+    const server = await this.mcpToolModule.getMCPToolById(serverId);
+
+    if (!server) {
+      throw new Error(`MCP server with id ${serverId} not found`);
+    }
+    if (!server.enabled) {
+      throw new Error(`MCP server ${server.serverName} is disabled`);
+    }
+    if (options.signal?.aborted) {
+      throw new Error(`Tool ${toolName} was cancelled before execution`);
+    }
+
+    this.assertToolEnabled(server, toolName);
+    this.assertStdioTrusted(server);
+
+    const remainingMs =
+      options.deadlineEpochMs !== undefined
+        ? options.deadlineEpochMs - Date.now()
+        : Number.POSITIVE_INFINITY;
+    if (remainingMs <= HOST_CLEANUP_RESERVE_MS) {
+      throw new MCPTimeoutError(
+        toolName,
+        server.serverName,
+        Math.max(0, remainingMs)
+      );
+    }
+
+    const client = this.createClientForServer(server);
+    try {
+      await client.connect();
+      return await client.callToolContent(toolName, params, {
+        timeoutMs: remainingMs,
+        maxTotalTimeoutMs: remainingMs,
+        signal: options.signal,
+        resetTimeoutOnProgress: false,
+        onprogress: options.onProgress
+          ? (notification) => {
+              // Design §9.2: units are collected records, not elapsed-time
+              // percentage; `total` is omitted by servers that cannot know it.
+              const bounded = Number.isFinite(notification.progress)
+                ? Math.max(0, notification.progress)
+                : 0;
+              const total =
+                notification.total !== undefined &&
+                Number.isFinite(notification.total) &&
+                notification.total > 0
+                  ? notification.total
+                  : null;
+              const message =
+                typeof notification.message === "string" &&
+                notification.message.length > 0
+                  ? notification.message.slice(0, 200)
+                  : total !== null
+                    ? `Collected ${bounded} of ${total} records`
+                    : `Collected ${bounded} records`;
+              options.onProgress?.({
+                phase: "extracting",
+                message,
+                progress:
+                  total !== null && total > 0 ? bounded / total : null,
+                partialCount: bounded,
+                expectedCount: total,
+              });
+            }
+          : undefined,
+      });
     } finally {
       await client.disconnect().catch(() => {
         /* best-effort disconnect */

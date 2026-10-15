@@ -50,6 +50,13 @@ export interface ToolJobLimits {
 }
 
 export interface ToolJobSpawnHandle {
+  /**
+   * The registry-assigned job id, available INSIDE the spawn callback
+   * (design §7.1: the registry may invoke the callback before start()
+   * returns, so the id must be carried on the handle rather than captured
+   * from the return value).
+   */
+  readonly jobId: string;
   readonly onCancel: (handler: () => void) => void;
   /**
    * Registry-owned abort signal for this job. `cancel()` and `shutdown()`
@@ -135,6 +142,7 @@ export class ToolJobRegistry {
     this.jobs.set(jobId, job);
 
     const handle: ToolJobSpawnHandle = {
+      jobId,
       onCancel: (h) => job.cancelHandlers.push(h),
       signal: abortController.signal,
       resolve: (result) => {

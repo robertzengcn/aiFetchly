@@ -7,6 +7,7 @@ import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
 import { formatYellowPagesResultsForLLM } from "@/service/yellowPagesResultFormatter";
 import { MCPToolService } from "@/service/MCPToolService";
+import { normalizeMcpToolOutcome } from "@/service/McpResultNormalizer";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
@@ -355,7 +356,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     // Check if this is an MCP tool (format: mcp_<serverId>_<toolName>)
     if (toolName.startsWith("mcp_")) {
-      return await this.executeMCPTool(toolName, toolParams);
+      return await this.executeMCPTool(toolName, toolParams, context);
     }
 
     switch (toolName) {
@@ -429,10 +430,17 @@ export class ToolExecutor {
    * Tool name formats:
    *   Legacy:  mcp_<serverId>_<toolName>
    *   Plugin:  mcp__<plugin>__<server>__<toolName>
+   *
+   * Managed-async plugin calls (context carrying a deadline/signal, HOST-03)
+   * route through `executeMCPToolContent` + `normalizeMcpToolOutcome` so the
+   * plugin's own `success` semantics survive into `ToolExecutionResult`
+   * instead of being nested inside an outer `{success: true, result}` wrap
+   * (PRD §14.2/§21.7). Foreground calls keep the legacy behavior untouched.
    */
   private static async executeMCPTool(
     toolName: string,
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     try {
       const mcpService = new MCPToolService();
@@ -463,6 +471,35 @@ export class ToolExecutor {
             success: false,
             error: `MCP server "${parsed.unscopedServerName}" not found for plugin "${parsed.pluginName}"`,
           };
+        }
+
+        const isManagedAsync =
+          context?.deadlineEpochMs !== undefined || context?.signal !== undefined;
+        if (isManagedAsync) {
+          const outcome = await mcpService.executeMCPToolContent(
+            server.id,
+            parsed.toolName,
+            toolParams,
+            {
+              deadlineEpochMs: context?.deadlineEpochMs,
+              signal: context?.signal,
+              onProgress: context?.emitProgress
+                ? (progress) => {
+                    context.emitProgress?.({
+                      phase: progress.phase,
+                      message: progress.message,
+                      progress: progress.progress,
+                      partialCount: progress.partialCount,
+                      expectedCount: progress.expectedCount,
+                    });
+                  }
+                : undefined,
+            }
+          );
+          const normalized = normalizeMcpToolOutcome(outcome);
+          // The normalized success verdict is authoritative; a contradictory
+          // nested flag cannot override it (design §10.4).
+          return { ...normalized.payload, success: normalized.success };
         }
 
         const result = await mcpService.executeMCPTool(

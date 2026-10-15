@@ -108,6 +108,7 @@ import {
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import { HOST_MAX_RUN_MS } from "@/entityTypes/pluginExecutionTypes";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
   evaluateSkillInstallationToolPolicy,
@@ -4382,7 +4383,8 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     } | undefined,
-    onProgress?: ToolProgressEmitter
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number
   ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
@@ -4392,6 +4394,12 @@ export class AIChatQueryLoop {
     if (!aiEnabled) {
       throw new Error("AI features are not enabled on this plan.");
     }
+
+    // One authoritative deadline for the whole job (HOST-07): the clamped
+    // plugin tool policy ceiling (or the host default). Every inner MCP
+    // timeout derives from the remaining budget; progress can never extend
+    // it, and pollAsyncJobToCompletion enforces the same bound.
+    const deadlineEpochMs = Date.now() + (deadlineMs ?? HOST_MAX_RUN_MS);
 
     const registry = getDefaultToolJobRegistry();
     const { jobId } = registry.start(
@@ -4412,6 +4420,8 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
+              // Authoritative managed-async deadline (HOST-07).
+              deadlineEpochMs,
               // Trusted intent context (technical design §9/§14.2): binds the
               // draft to the exact user message + persisted intent decision
               // so authorization is never derived from tool arguments.
@@ -4429,6 +4439,16 @@ export class AIChatQueryLoop {
               // does not contact recipients. The send tool remains gated.
               skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
               emitProgress: (event) => {
+                // HOST-04: map each progress event to BOTH destinations —
+                // the registry record (job snapshots / poll path) and the
+                // renderer tool_progress stream.
+                registry.updateProgress(handle.jobId, {
+                  phase: event.phase,
+                  message: event.message,
+                  progress: event.progress ?? null,
+                  partialCount: event.partialCount ?? null,
+                  expectedCount: event.expectedCount ?? null,
+                });
                 onProgress?.({
                   type: "tool_progress",
                   conversationId: input.conversationId,
@@ -4608,11 +4628,23 @@ export class AIChatQueryLoop {
             execution_time_ms: Date.now() - startedAt,
           };
         }
+        // Plugin domain envelopes carry their own success semantics (PRD
+        // §14.2): a recoverable application failure resolves the transport
+        // call normally but must surface as ToolExecutionResult.success =
+        // false so PostToolUseFailure hooks and the next model round see the
+        // structured error.
+        const envelope = snap.result as Record<string, unknown> | null;
+        const envelopeSuccess =
+          envelope !== null &&
+          typeof envelope === "object" &&
+          envelope.success === false
+            ? false
+            : true;
         return {
           tool_call_id: call.id,
           tool_name: call.name,
-          success: true,
-          result: (snap.result as Record<string, unknown>) ?? {},
+          success: envelopeSuccess,
+          result: envelope ?? {},
           execution_time_ms: Date.now() - startedAt,
         };
       }
@@ -4889,7 +4921,8 @@ export class AIChatQueryLoop {
         input,
         effectiveCall,
         outboundAuthorization,
-        onProgress
+        onProgress,
+        pluginPolicy?.policy.maxRunMs
       );
       toolResult = await this.pollAsyncJobToCompletion(
         input,
