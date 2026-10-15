@@ -1244,6 +1244,16 @@ watch(
 .v2-message {
   display: flex;
   margin: 8px 0;
+  /* Poor-man's virtualization (no new dependency): the browser skips layout
+     and paint for any message currently off-screen. With 1000+ messages this
+     keeps initial render and memory bounded to what is visible instead of the
+     whole history. `contain-intrinsic-size` supplies a placeholder height so
+     the scrollbar is sized correctly before a message is scrolled into view;
+     the browser corrects the real height the moment it renders the message.
+     The streaming message (last child) is always on-screen, so this never
+     delays token paint. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 .v2-message--plan {
   justify-content: stretch;
