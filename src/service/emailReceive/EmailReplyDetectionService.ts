@@ -93,8 +93,16 @@ export type {
  * Detector version stamped into the context hash (§7.3). Bump when the
  * algorithm, matching rules, or bounds change so prior negatives are
  * invalidated and re-probed against the new logic.
+ *
+ * v2 (G01/N04): the probe's negative-persistence semantics changed — an
+ * abandoned timed-out probe no longer persists fresh negative evidence, and
+ * the persisted `checkedAt`/timestamp is the actual mailbox observation time
+ * rather than the delayed write time. Pre-v2 negatives were stamped with the
+ * write time, so a late write could pass the 5s freshness fence with a stale
+ * observation. Bumping invalidates those rows (hash mismatch → re-probe,
+ * fail-closed) instead of trusting them.
  */
-export const REPLY_DETECTOR_VERSION = "reply-detection-v1";
+export const REPLY_DETECTOR_VERSION = "reply-detection-v2";
 
 /** Negative cache TTL (§7.3): a complete negative is reusable for 60s. */
 const NEGATIVE_CACHE_TTL_MS = 60_000;

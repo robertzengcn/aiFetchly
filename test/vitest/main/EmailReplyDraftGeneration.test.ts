@@ -5396,3 +5396,121 @@ describe("createDraft acquires the generation reservation (T07)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// G01/FR-035: every awaited pre-model stage is bounded by the invocation
+// deadline (message load, policy evaluation, reservation acquire, audit and
+// cleanup writes). A hung stage rejects as a transport (deadline) failure —
+// never an unbounded hang, never a validation strike, never a success.
+// ---------------------------------------------------------------------------
+describe("G01 invocation-deadline bounding of pre-model stages", () => {
+  async function seedDeadlineMessage(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-dl-${Math.random()}`;
+    msg.messageId = `<m-dl-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("an already-expired budget rejects at message load with zero model calls", async () => {
+    const messageId = await seedDeadlineMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      budget: { budgetMs: 0 },
+    });
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof LlmTransportError && error.deadlineExceeded === true
+      );
+    });
+    // No model call was ever issued — the invocation died before generation.
+    expect(requests).toHaveLength(0);
+  }, 20_000);
+
+  it("a hung reservation acquire aborts within the budget with zero model calls", async () => {
+    const messageId = await seedDeadlineMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const hangingGuard = new EmailReplyGuardModule();
+    vi.spyOn(hangingGuard, "acquireReservation").mockImplementation(
+      () => new Promise(() => {})
+    );
+    const svc = buildService({
+      apiFactory: factory,
+      guardModuleFactory: () => hangingGuard,
+      budget: { budgetMs: 120 },
+    });
+    const startedAt = Date.now();
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof LlmTransportError && error.deadlineExceeded === true
+      );
+    });
+    // Bounded: well under a 10s test ceiling (budget was 120ms).
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(requests).toHaveLength(0);
+  }, 20_000);
+
+  it("a hung refusal-audit write aborts within the budget instead of hanging", async () => {
+    // Twice-invalid model output reaches the validation_failed path, whose
+    // recordFailure audit write hangs here — the invocation must still abort
+    // as a deadline failure rather than hang forever.
+    const messageId = await seedDeadlineMessage();
+    const badJson = JSON.stringify({
+      subject: "x",
+      bodyText: "",
+      intentSuggestion: "interested",
+      confidence: 0.5,
+    });
+    const { factory } = fakeApiFactory([
+      completionResponse(badJson, "stop"),
+      completionResponse(badJson, "stop"),
+    ]);
+    const hangingAudit = new EmailReplyAuditLogModule();
+    vi.spyOn(hangingAudit, "create").mockImplementation(
+      () => new Promise(() => {}) as Promise<number>
+    );
+    const svc = buildService({
+      apiFactory: factory,
+      replyAuditModuleFactory: () => hangingAudit,
+      budget: { budgetMs: 150 },
+    });
+    const startedAt = Date.now();
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toSatisfy((error: unknown) => {
+      // The hung audit write aborts as a deadline (transport) failure —
+      // still a failure, never a success, never a hang.
+      return (
+        error instanceof LlmTransportError && error.deadlineExceeded === true
+      );
+    });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 20_000);
+});

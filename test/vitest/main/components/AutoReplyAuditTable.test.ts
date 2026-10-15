@@ -35,6 +35,10 @@ const i18n = createI18n({
         confidence: "Confidence",
         requires_approval: "Approval",
         reply_evidence: "Reply Evidence",
+        status: {
+          needs_human_review: "Needs Human Review",
+          failed: "Failed",
+        },
       },
       emailReply: {
         policyCode: {
@@ -162,5 +166,43 @@ describe("AutoReplyAuditTable — reply evidence column (T10)", () => {
     const wrapper = mountTable();
     await flushPromises();
     expect(wrapper.find(".test-row").text()).toContain("some_future_code");
+  });
+
+  // N09: a leave_unresolved reconciliation mirrors as auto_reply_skipped /
+  // needs_human_review — the table must present it as awaiting review,
+  // never as a confirmed failure.
+  it("presents an unresolved reconciliation as Needs Human Review, not Failed", async () => {
+    vi.mocked(listAutoReplyAuditLogs).mockResolvedValue({
+      data: [
+        auditRow({
+          action: "auto_reply_skipped",
+          decisionStatus: "needs_human_review",
+          reason:
+            "Manual reconciliation: leave_unresolved — delivery remains unknown, human review required",
+        }),
+      ],
+      total: 1,
+    });
+    const wrapper = mountTable();
+    await flushPromises();
+    const text = wrapper.find(".test-row").text();
+    expect(text).toContain("Needs Human Review");
+    expect(text).not.toContain("Failed");
+  });
+
+  it("still presents a definite send failure as Failed", async () => {
+    vi.mocked(listAutoReplyAuditLogs).mockResolvedValue({
+      data: [
+        auditRow({
+          action: "auto_reply_failed",
+          decisionStatus: "failed",
+          reason: "Manual reconciliation: confirm_not_sent",
+        }),
+      ],
+      total: 1,
+    });
+    const wrapper = mountTable();
+    await flushPromises();
+    expect(wrapper.find(".test-row").text()).toContain("Failed");
   });
 });

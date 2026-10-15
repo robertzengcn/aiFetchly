@@ -1596,7 +1596,10 @@ describe("EmailReplyDetectionService.checkReply — DTO wrapper (§4.2)", () => 
 
 describe("REPLY_DETECTOR_VERSION", () => {
   it("is a stable, low-cardinality string stamped into the context hash", () => {
-    expect(REPLY_DETECTOR_VERSION).toBe("reply-detection-v1");
+    // v2 (G01/N04): negative-persistence semantics changed (expiry-fenced
+    // writes + observation-time stamping), so pre-v2 persisted negatives are
+    // invalidated by hash mismatch and re-probed fail-closed.
+    expect(REPLY_DETECTOR_VERSION).toBe("reply-detection-v2");
     expect(REPLY_DETECTOR_VERSION.length).toBeLessThan(40);
   });
 });

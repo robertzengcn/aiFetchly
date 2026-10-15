@@ -557,9 +557,14 @@ export class EmailReplyDraftGenerationService {
     // re-prove it this invocation (the provider's support may have changed).
     this.omitJsonHintForModelId = null;
 
-    // 2. Load message.
+    // 2. Load message. G01/FR-035: bounded against the invocation deadline —
+    // a hung local read must abort within the aggregate budget instead of
+    // running unbounded (read-only; no mutation fence needed).
     await this.messageModule.ensureConnection();
-    const message = await this.messageModule.read(input.messageId);
+    const message = await this.raceWithDeadline(
+      "message_load",
+      this.messageModule.read(input.messageId)
+    );
     if (!message) {
       return {
         success: false,
@@ -580,11 +585,17 @@ export class EmailReplyDraftGenerationService {
     //     round-trip (zero-AI-call requirement). Classification is deferred to
     //     step 2d, after the reuse check, so it only fires when we are actually
     //     committed to generating.
-    const policyDecision = await timedReplyStage("policy", () =>
-      new EmailReplyPolicyOrchestrator().evaluate({
-        stage: "pre_draft",
-        messageId: message.id,
-      })
+    // G01/FR-035: the policy gate draws from the same aggregate budget — a
+    // hung policy evaluation aborts as a transport failure (NOT a validation
+    // strike), never an unbounded wait before any model call.
+    const policyDecision = await this.raceWithDeadline(
+      "policy_evaluation",
+      timedReplyStage("policy", () =>
+        new EmailReplyPolicyOrchestrator().evaluate({
+          stage: "pre_draft",
+          messageId: message.id,
+        })
+      )
     );
     incrementReplyMetric("policy_decision", {
       stage: "pre_draft",
@@ -640,15 +651,22 @@ export class EmailReplyDraftGenerationService {
     const leaseExpiresAt = new Date(
       this.nowForInvocation() + GENERATION_INVOCATION_BUDGET_MS
     );
-    const reservation = await this.guardModuleForNow().acquireReservation({
-      emailServiceId: message.emailServiceId,
-      replyKey,
-      messageId: message.id,
-      ownerToken,
-      leaseExpiresAt,
-      now: new Date(this.nowForInvocation()),
-      normalizedMessageId: message.normalizedMessageId,
-    });
+    // G01/FR-035: bound the reservation acquire against the invocation
+    // deadline. The acquire transaction itself reconciles the canonical
+    // cluster atomically (the mutation fence); the race only bounds a hung
+    // wait and never substitutes for the in-transaction reconciliation.
+    const reservation = await this.raceWithDeadline(
+      "reservation_acquire",
+      this.guardModuleForNow().acquireReservation({
+        emailServiceId: message.emailServiceId,
+        replyKey,
+        messageId: message.id,
+        ownerToken,
+        leaseExpiresAt,
+        now: new Date(this.nowForInvocation()),
+        normalizedMessageId: message.normalizedMessageId,
+      })
+    );
     incrementReplyMetric(
       "reservation_outcome",
       reservation.status === "blocked"
@@ -2548,12 +2566,18 @@ export class EmailReplyDraftGenerationService {
       return;
     }
     try {
-      await this.guardModuleForNow().releaseReservation({
-        guardId: reservation.guardId,
-        ownerToken: reservation.ownerToken,
-        // D7.2: injectable clock for the persisted release timestamp.
-        now: new Date(this.nowForInvocation()),
-      });
+      // G01/FR-035: bound the cleanup write against the invocation deadline.
+      // A timeout rejects into the catch below (logged, sweep-recoverable) —
+      // cleanup never throws and never blocks the invocation outcome.
+      await this.raceWithDeadline(
+        "reservation_release",
+        this.guardModuleForNow().releaseReservation({
+          guardId: reservation.guardId,
+          ownerToken: reservation.ownerToken,
+          // D7.2: injectable clock for the persisted release timestamp.
+          now: new Date(this.nowForInvocation()),
+        })
+      );
     } catch (error) {
       console.error(
         `Failed to release generation reservation ${reservation.guardId} (recoverable by sweep):`,
@@ -2593,8 +2617,18 @@ export class EmailReplyDraftGenerationService {
       messageCorrelationId: correlationIdForMessage(messageId),
       ...(metadata ?? {}),
     });
-    await this.replyAuditModuleForNow().create(log);
-    await this.mirrorToAutoReplyAudit(log);
+    // G01/FR-035: bound the refusal-audit writes against the invocation
+    // deadline. Expiry throws LlmTransportError (a transport failure, NOT a
+    // validation strike) — still a failure outcome with no draft persisted,
+    // preserving the fail-stop contract (an unrecorded refusal never reports
+    // success).
+    await this.raceWithDeadline(
+      "failure_audit",
+      (async () => {
+        await this.replyAuditModuleForNow().create(log);
+        await this.mirrorToAutoReplyAudit(log);
+      })()
+    );
   }
 
   /**
@@ -2657,8 +2691,15 @@ export class EmailReplyDraftGenerationService {
       policyVersion: decision.policyVersion,
       ruleId: decision.ruleId,
     });
-    await this.replyAuditModuleForNow().create(log);
-    await this.mirrorToAutoReplyAudit(log);
+    // G01/FR-035: bound the refusal-audit writes against the invocation
+    // deadline (same fail-stop contract as recordFailure).
+    await this.raceWithDeadline(
+      "refusal_audit",
+      (async () => {
+        await this.replyAuditModuleForNow().create(log);
+        await this.mirrorToAutoReplyAudit(log);
+      })()
+    );
   }
 
   /**
@@ -2715,7 +2756,12 @@ export class EmailReplyDraftGenerationService {
       reusedDraftStatus: draft.status,
       knowledgeAuditCount,
     });
-    await this.replyAuditModuleForNow().create(log);
+    // G01/FR-035: bound the reuse-audit write against the invocation deadline
+    // (same fail-stop contract as recordFailure).
+    await this.raceWithDeadline(
+      "reuse_audit",
+      this.replyAuditModuleForNow().create(log)
+    );
   }
 }
 
