@@ -1100,7 +1100,12 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
       page: 0,
       size: 50,
     });
-    return records.filter((r) => r.action === "delivery_unknown");
+    // N06: post-claim gate refusals finalize as send_failed (known-unsent),
+    // not delivery_unknown. Accept both so pre-existing delivery_unknown
+    // paths (SMTP unknown outcomes) still count.
+    return records.filter(
+      (r) => r.action === "delivery_unknown" || r.action === "send_failed"
+    );
   }
 
   // The markSubmitted prototype spy leaks across tests (it replaces the
@@ -1158,8 +1163,6 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
           detectCalls.count += 1;
           // The pre-send probe (step 5b) and any §9.3 claim-time refresh
           // write a fresh observation so the claim-time fence passes.
-          // The post-claim gate refresh (R12) reveals refreshResult WITHOUT
-          // persisting a fresh negative — it surfaces the stale reality.
           const isPostClaimRefresh =
             input.excludeAttemptId !== undefined &&
             input.excludeDraftId !== undefined;
@@ -1171,7 +1174,23 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
               isAnswered: 0,
               answeredFlagCheckedAt: new Date(),
             });
+          } else if (opts.refreshResult.state === "not_replied") {
+            // N03: production probeMailbox persists a fresh negative before
+            // returning not_replied — the mock must do the same so the
+            // post-claim revalidation (refresh observation age immediately
+            // before handoff) sees a NOW-fresh timestamp. Replied/unknown
+            // refreshes persist no negative (positive or nothing), matching
+            // production.
+            await messageModule.updateReplyEvidence({
+              id: input.messageId,
+              replyNegativeCheckAt: new Date(),
+              replyNegativeContextHash: "r12-context-hash",
+              isAnswered: 0,
+              answeredFlagCheckedAt: new Date(),
+            });
           }
+          // The post-claim gate refresh (R12) reveals refreshResult (with the
+          // persistence above for not_replied).
           return isPostClaimRefresh ? opts.refreshResult : NOT_REPLIED_DETECTION;
         }
       );
@@ -1201,7 +1220,7 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     return { delivery, smtpCalls, detectCalls, markSubmittedSpy };
   }
 
-  it("6s hold + refresh reveals `replied` -> ZERO SMTP, claim finalized delivery_unknown, protection retained, ONE reply_skipped audit", async () => {
+  it("6s hold + refresh reveals `replied` -> ZERO SMTP, claim finalized failed (known-unsent, N06), protection retained, ONE reply_skipped audit", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
     const refreshRevealed: ReplyDetectionResult = {
       state: "replied",
@@ -1233,16 +1252,16 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     // exact spot §9.4 item 4 closes.
     expect(markSubmittedSpy).toHaveBeenCalled();
 
-    // Retained protection: the attempt is finalized `delivery_unknown` (not
-    // sent/claimed), the draft is `delivery_unknown` (not sent/approved), the
-    // approval is consumed (one-time token invalidated), and the message
-    // replyStatus is UNTOUCHED (no EmailReplyStatus for ambiguous delivery —
-    // finalizeSendOutcome omits messageReplyStatus for delivery_unknown).
+    // N06: retained protection — the gate runs BEFORE SMTP, so the operation
+    // is known never to have contacted SMTP. Finalized `failed` (definitely
+    // not submitted), not `delivery_unknown` (ambiguous possible acceptance).
+    // The draft is `failed` (not sent/approved), the approval is consumed
+    // (one-time token invalidated), and the message replyStatus is UNTOUCHED.
     const draft = await draftModule.readAggregate(draftId);
-    expect(draft?.status).toBe("delivery_unknown");
+    expect(draft?.status).toBe("failed");
     const attempts = await attemptModule.listByDraft(draftId);
     const ourAttempt = attempts.find((a) => a.id > 0);
-    expect(ourAttempt?.status).toBe("delivery_unknown");
+    expect(ourAttempt?.status).toBe("failed");
     const message = await messageModule.read(messageId);
     expect(message?.replyStatus).toBe("not_started");
     expect(message?.processedAt).toBeNull();
@@ -1252,8 +1271,8 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     expect(approval).toBeNull();
 
     // Exactly ONE reply_skipped audit (stage pre_send, code already_replied)
-    // for the gate refusal. The finalize also writes ONE delivery_unknown
-    // audit (action delivery_unknown) — both audits present, distinct.
+    // for the gate refusal. The finalize also writes ONE send_failed audit
+    // (action send_failed, N06 known-unsent) — both audits present, distinct.
     const refusals = await refusalAuditsFor(messageId);
     expect(refusals).toHaveLength(1);
     expect(refusals[0].reason).toContain("[already_replied]");
@@ -1274,7 +1293,7 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     drainCountersForTest();
   }, 20_000);
 
-  it("6s hold + refresh reveals `unknown` (delivery_unknown) -> ZERO SMTP, claim finalized delivery_unknown, protection retained", async () => {
+  it("6s hold + refresh reveals `unknown` (delivery_unknown) -> ZERO SMTP, claim finalized failed (known-unsent, N06), protection retained", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
     const refreshRevealed: ReplyDetectionResult = {
       state: "unknown",
@@ -1305,11 +1324,13 @@ describe("sendApprovedReply R12 post-claim freshness gate (§9.4 item 4)", () =>
     expect(smtpCalls.count).toBe(0);
     expect(markSubmittedSpy).toHaveBeenCalled();
 
+    // N06: known-unsent (SMTP never called) finalizes as failed, not
+    // delivery_unknown.
     const draft = await draftModule.readAggregate(draftId);
-    expect(draft?.status).toBe("delivery_unknown");
+    expect(draft?.status).toBe("failed");
     const attempts = await attemptModule.listByDraft(draftId);
     const ourAttempt = attempts.find((a) => a.id > 0);
-    expect(ourAttempt?.status).toBe("delivery_unknown");
+    expect(ourAttempt?.status).toBe("failed");
     const message = await messageModule.read(messageId);
     expect(message?.replyStatus).toBe("not_started");
     expect(message?.processedAt).toBeNull();

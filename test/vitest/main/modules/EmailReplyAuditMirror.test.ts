@@ -172,7 +172,11 @@ describe("buildAutoReplyAuditMirrorRow — pure mapping", () => {
       { action: "reply_skipped", action2: "auto_reply_skipped", status: "skipped" },
       { action: "auto_reply_blocked", action2: "auto_reply_blocked", status: "blocked" },
       { action: "send_failed", action2: "auto_reply_failed", status: "failed" },
-      { action: "delivery_unknown", action2: "auto_reply_failed", status: "failed" },
+      // N09: ambiguous delivery is NOT a confirmed failure — surfaces as
+      // needs-human-review, never failed. A no-op reconciliation must not
+      // imply retry eligibility.
+      { action: "delivery_unknown", action2: "auto_reply_skipped", status: "needs_human_review" },
+      { action: "reconciliation_noted", action2: "auto_reply_skipped", status: "needs_human_review" },
       { action: "reply_sent", action2: "auto_reply_sent", status: "auto_sent" },
     ];
     for (const c of cases) {
