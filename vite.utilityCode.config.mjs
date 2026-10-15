@@ -96,6 +96,14 @@ export default ({ mode }) => {
             // globalSetup is config-scoped: each vitest config that wants
             // type safety references this helper.
             globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
+            // Per-worker temp-dir isolation (V01 / re-audit checkbox 1).
+            // pluginImportService / pluginDiagnosticsService / pluginLoaderService
+            // tests fall back to the shared `os.tmpdir()/aifetchly-test` DB via
+            // BaseModule; under the default forks pool two workers collide on
+            // the shared file with SQLITE_BUSY. This setupFile assigns each
+            // worker a unique TMPDIR so the fallback is worker-unique.
+            // See test/vitest/_setup/isolatedTmpDir.ts.
+            setupFiles: ['./test/vitest/_setup/isolatedTmpDir.ts'],
         }
       
     })
