@@ -1190,6 +1190,16 @@ export default {
     send_confirm: "Send this reply now?",
     send_success: "Reply sent.",
     send_failed: "Reply send failed.",
+    // G02: explicit human-review resolution (revision-bound, user gesture).
+    human_review_required: "This draft needs human review before sending.",
+    human_review_resolve: "Mark reviewed",
+    human_review_resolve_note_placeholder: "What did you check? (optional)",
+    human_review_resolved: "Human review resolved for this revision.",
+    human_review_stale: "This review was for an older revision — please review again.",
+    human_review_resolve_failed: "Could not record your review. Please try again.",
+    // N09: unresolved reconciliation guidance (delivery remains unknown).
+    delivery_unresolved: "Delivery status unknown — human review required. This is not a confirmed failure.",
+    delivery_unresolved_hint: "Leave unresolved keeps the attempt ambiguous. Confirm sent/not-sent only with verified evidence.",
     knowledge_sources: "Knowledge Sources",
     warnings: "Warnings",
     identity_profile: "Reply Identity Profile",

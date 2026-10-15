@@ -342,6 +342,24 @@ export async function createEmailReplyDraft(
   args: unknown
 ): Promise<EmailReceiveAiToolResult<AiEmailReplyDraftResult>> {
   try {
+    // N08: kill-switch + readiness BEFORE any reservation/retrieval/model
+    // work. With the switch on (or validation pending/failed), do nothing —
+    // no guard reservation, no message read, no model call.
+    if (isEmailReplyKillSwitchOn()) {
+      return {
+        success: false,
+        error: "Reply drafting is temporarily disabled by the kill switch",
+      };
+    }
+    {
+      const { checkNewGuardedWorkReady } = await import(
+        "@/service/emailReply/EmailReplyReadiness"
+      );
+      const readiness = checkNewGuardedWorkReady();
+      if (!readiness.ready) {
+        return { success: false, error: readiness.reason };
+      }
+    }
     const input = createEmailReplyDraftSchema.parse(args);
     const genService = new EmailReplyDraftGenerationService({
       resolveModelOutputCap: createModelOutputCapResolver(),

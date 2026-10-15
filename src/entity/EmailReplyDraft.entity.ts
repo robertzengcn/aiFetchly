@@ -168,4 +168,29 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   /** Timestamp of the most recent approval invalidation (edit / scope change). */
   @Column("datetime", { nullable: true })
   approvalInvalidatedAt: Date | null;
+
+  // ---- G02: explicit human-review resolution (FR-025) ----
+  // The model's `requiresHumanReview` flag + `reviewReasonsJson` /
+  // `unresolvedQuestionsJson` are IMMUTABLE provenance (never cleared). A
+  // human resolves the flag via `resolveHumanReview`, which stamps these
+  // columns bound to the exact revision reviewed. Any later edit (new
+  // revision) invalidates the resolution (columns cleared) so a stale
+  // acknowledgment can never authorize a changed draft. Approval requires
+  // either requiresHumanReview != 1, or a resolution bound to the CURRENT
+  // revision. There is no AI-accessible path to write these columns.
+  /** When a human resolved the model's review request (null = unresolved). */
+  @Column("datetime", { nullable: true })
+  humanReviewResolvedAt: Date | null;
+
+  /** Who resolved (approvedByType:approvedById, bounded, audit only). */
+  @Column("varchar", { length: 200, nullable: true })
+  humanReviewResolvedBy: string | null;
+
+  /** Revision id the human reviewed (must equal currentRevisionId to count). */
+  @Column("integer", { nullable: true })
+  humanReviewResolvedRevisionId: number | null;
+
+  /** Human's resolution note (≤2000 chars, audit only, never AI-written). */
+  @Column("text", { nullable: true })
+  humanReviewResolutionNote: string | null;
 }

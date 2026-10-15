@@ -195,6 +195,7 @@ export type EmailReplyAuditAction =
   | "send_failed"
   | "send_claimed"
   | "delivery_unknown"
+  | "reconciliation_noted"
   | "draft_reopened";
 
 /** Who triggered an audit action. */

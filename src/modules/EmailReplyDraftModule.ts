@@ -313,4 +313,24 @@ export class EmailReplyDraftModule extends BaseModule {
       throw error;
     }
   }
+
+  /**
+   * G02: explicit human-review resolution. Thin wrapper over the model
+   * transaction (revision-bound stamp + audit). Called ONLY by the renderer
+   * IPC handler (user gesture) — never by AI tools.
+   */
+  async resolveHumanReview(input: {
+    draftId: number;
+    revisionId: number;
+    resolvedBy: string;
+    note?: string | null;
+  }): Promise<{ resolved: boolean; reason?: string }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.resolveHumanReview(input);
+    } catch (error) {
+      console.error("Error resolving human review:", error);
+      throw error;
+    }
+  }
 }

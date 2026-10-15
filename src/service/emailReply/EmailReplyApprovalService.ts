@@ -134,15 +134,26 @@ export class EmailReplyApprovalService {
       );
     }
 
-    // R21: the model's persisted review request gates approval the same way a
-    // deterministic review finding does — a draft flagged
+    // R21/G02: the model's persisted review request gates approval the same
+    // way a deterministic review finding does — a draft flagged
     // `requiresHumanReview` cannot be approved as clean (never silently
     // lighter-review output). Reading the draft column (not a tool input)
     // keeps the gate authoritative; the flag can only make review stricter.
+    // G02: an explicit revision-bound human resolution lifts the gate for the
+    // reviewed revision only. The model's original reasons stay immutable as
+    // provenance (resolveHumanReview never clears them); any edit invalidates
+    // the stamp so a stale acknowledgment cannot authorize changed content.
     if (draft.requiresHumanReview === 1) {
-      throw new Error(
-        "Cannot approve: the model flagged this draft as requiring human review before sending"
-      );
+      const resolved =
+        draft.humanReviewResolvedAt != null &&
+        draft.humanReviewResolvedRevisionId != null &&
+        draft.currentRevisionId != null &&
+        draft.humanReviewResolvedRevisionId === draft.currentRevisionId;
+      if (!resolved) {
+        throw new Error(
+          "Cannot approve: the model flagged this draft as requiring human review before sending — resolve it explicitly for the current revision first"
+        );
+      }
     }
 
     const message = await this.messageModule.read(draft.messageId);

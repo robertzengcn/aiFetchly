@@ -20,7 +20,12 @@ const MIRRORED_ACTIONS: Partial<
   reply_skipped: { action: "auto_reply_skipped", decisionStatus: "skipped" },
   auto_reply_blocked: { action: "auto_reply_blocked", decisionStatus: "blocked" },
   send_failed: { action: "auto_reply_failed", decisionStatus: "failed" },
-  delivery_unknown: { action: "auto_reply_failed", decisionStatus: "failed" },
+  // N09: ambiguous delivery (SMTP unknown or operator leave_unresolved) is NOT
+  // a confirmed failure — surface as needs-human-review, never failed. A
+  // no-op reconciliation must not imply retry eligibility or confirmed
+  // non-delivery.
+  delivery_unknown: { action: "auto_reply_skipped", decisionStatus: "needs_human_review" },
+  reconciliation_noted: { action: "auto_reply_skipped", decisionStatus: "needs_human_review" },
   reply_sent: { action: "auto_reply_sent", decisionStatus: "auto_sent" },
 };
 

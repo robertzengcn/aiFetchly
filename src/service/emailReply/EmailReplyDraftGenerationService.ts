@@ -376,9 +376,12 @@ export class EmailReplyDraftGenerationService {
    * G01/FR-027: per-invocation memo of the clamped output budget. Null until
    * the first model call of the invocation resolves the capability; reset at
    * createDraft entry so a new invocation re-resolves (the model may have
-   * changed between invocations).
+   * changed between invocations). Keyed by the resolved model id — when
+   * `lastReturnedModelId` changes mid-invocation (correction/fallback routed
+   * to a different model), the memo invalidates and re-resolves (N05/G01).
    */
   private resolvedMaxTokens: number | null = null;
+  private resolvedMaxTokensForModelId: string | null = null;
   /**
    * G01/FR-027: the model id returned by the most recent completion in the
    * current invocation (provider-reported, not caller-supplied). Feeds both
@@ -514,6 +517,25 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
+    // N08: shared readiness/disable check at the authoritative generation
+    // boundary — BEFORE any reservation/retrieval/model work. While upgrade
+    // validation is pending/failed or the kill switch is on, refuse new
+    // guarded work (ordinary startup stays responsive; audit/recovery paths
+    // never consult this gate).
+    {
+      const { checkNewGuardedWorkReady } = await import(
+        "@/service/emailReply/EmailReplyReadiness"
+      );
+      const readiness = checkNewGuardedWorkReady();
+      if (!readiness.ready) {
+        return {
+          success: false,
+          error: readiness.reason,
+          requestCorrelationId,
+        };
+      }
+    }
+
     // 1b. FR-035 slice / B13: start the per-invocation aggregate deadline.
     //     Classification, generation, the hint-fallback retry, and the
     //     correction all draw down this ONE budget; each model call is
@@ -528,6 +550,7 @@ export class EmailReplyDraftGenerationService {
     // may have changed between invocations — a stale clamp from a previous
     // invocation must not leak in).
     this.resolvedMaxTokens = null;
+    this.resolvedMaxTokensForModelId = null;
     this.lastReturnedModelId = null;
     // G01/FR-026: reset the per-invocation remembered-unsupported-JSON-route
     // memo. A model that rejected the JSON hint in a PREVIOUS invocation must
@@ -1186,15 +1209,64 @@ export class EmailReplyDraftGenerationService {
     }
 
     const systemMsg = buildReplySystemMessage(profile);
+    // G01: input-context budgeting — fit retrieved knowledge + conversation
+    // to the conservative context budget BEFORE building the prompt. System /
+    // safety instructions and the original message are NEVER truncated; only
+    // retrieved sources (dropped last-first) and conversation history (oldest
+    // first) shrink. A truncation records a provenance warning so the draft
+    // shows the model did not see the full retrieval set.
+    const { fitInputToBudget, fixedPromptExceedsBudget } = await import(
+      "@/service/emailReply/EmailReplyContextBudget"
+    );
+    const knowledgeTexts = knowledge.sources.map(
+      (s) => `${s.documentName} ${s.documentTitle ?? ""} ${s.content}`
+    );
+    const budgetCheck = fitInputToBudget({
+      systemText: typeof systemMsg.content === "string" ? systemMsg.content : "",
+      originalText: `${message.subject} ${message.bodyText ?? ""}`,
+      conversationText: conversationSection,
+      knowledgeTexts,
+      extraText: `${input.tone ?? ""} ${input.goal ?? ""} ${input.extraInstructions ?? ""}`,
+    });
+    if (
+      fixedPromptExceedsBudget({
+        systemText: typeof systemMsg.content === "string" ? systemMsg.content : "",
+        originalText: `${message.subject} ${message.bodyText ?? ""}`,
+        conversationText: null,
+        knowledgeTexts: [],
+        extraText: `${input.tone ?? ""} ${input.goal ?? ""} ${input.extraInstructions ?? ""}`,
+      })
+    ) {
+      await this.releaseReservationSafely();
+      return {
+        success: false,
+        error:
+          "Input too large for the model's context window even without retrieval; refusing rather than dropping safety instructions",
+        requestCorrelationId,
+        next_action: "await_human_review",
+      };
+    }
+    const fittedSources =
+      budgetCheck.knowledgeTexts.length === knowledge.sources.length
+        ? knowledge.sources
+        : knowledge.sources.slice(0, budgetCheck.knowledgeTexts.length);
+    // `warnings` is declared below at validation (6b); collect here and merge
+    // there so no use-before-declaration occurs.
+    const contextBudgetWarnings: string[] = budgetCheck.truncated
+      ? [
+          `Input context truncated to fit the model context budget (${budgetCheck.estimatedTokens} est. tokens); the model did not see the full retrieval/conversation set.`,
+        ]
+      : [];
     const userMsg = buildReplyUserMessage({
       message,
-      knowledgeSources: knowledge.sources,
+      knowledgeSources: fittedSources,
       tone: input.tone,
       goal: input.goal,
       extraInstructions: input.extraInstructions,
       knowledgeAbstained: knowledge.abstained,
-      conversationSection,
+      conversationSection: budgetCheck.conversationText,
     });
+    void contextBudgetWarnings;
 
     // 6. Call the LLM and STRICTLY validate (FR-011/FR-027): at most one
     //    bounded regeneration carrying only validation codes; a second failure
@@ -1269,7 +1341,7 @@ export class EmailReplyDraftGenerationService {
     const { correctionAttempted, hintFallbackUsed } = attempt;
 
     // 6b. Validate output.
-    const warnings: string[] = [];
+    const warnings: string[] = [...contextBudgetWarnings];
     if (knowledge.warning) warnings.push(knowledge.warning);
 
     const subject = (generated.subject || `Re: ${message.subject}`)
@@ -1628,13 +1700,40 @@ export class EmailReplyDraftGenerationService {
         now: new Date(this.nowForInvocation()),
       });
       if (commitResult.status === "fenced") {
-        // Late output: an expired/replaced owner cannot commit (§8.2).
+        // N07: late output — an expired/replaced owner cannot commit (§8.2).
+        // Typed denial with stable code + ONE correlated refusal audit (the
+        // commit txn wrote nothing, so the outer service owns it). Invalid /
+        // unresolved IDs are not message audits — this path has a valid
+        // message id (loaded at entry) so the audit is message-scoped.
         await this.releaseReservationSafely();
+        const fencedCode = "reply_in_progress" as const;
+        try {
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            `[${fencedCode}] Generation owner expired before commit; output discarded (no draft persisted)`,
+            { stage: "pre_draft", code: fencedCode }
+          );
+        } catch (auditError) {
+          incrementReplyMetric("audit_failure", { stage: "pre_draft" });
+          const auditErrMsg =
+            auditError instanceof Error
+              ? auditError.message
+              : String(auditError);
+          return {
+            success: false,
+            error: `Commit refusal audit persistence failed: ${auditErrMsg}`,
+            requestCorrelationId,
+          };
+        }
         return {
           success: false,
           error:
-            "Generation owner expired before commit; output discarded (no draft persisted)",
+            "[reply_in_progress] Generation owner expired before commit; output discarded (no draft persisted)",
           requestCorrelationId,
+          code: fencedCode,
+          next_action: nextActionForCode(fencedCode),
         };
       }
       if (commitResult.status === "refused") {
@@ -1852,7 +1951,12 @@ export class EmailReplyDraftGenerationService {
    * expires while the resolver is in flight (via {@link raceWithDeadline}).
    */
   private async effectiveReplyMaxTokens(): Promise<number> {
-    if (this.resolvedMaxTokens !== null) {
+    // G01/N05: memoize by actual model id — a mid-invocation model change
+    // (correction/fallback returning a different model) invalidates the memo.
+    if (
+      this.resolvedMaxTokens !== null &&
+      this.resolvedMaxTokensForModelId === this.lastReturnedModelId
+    ) {
       return this.resolvedMaxTokens;
     }
     let cap: number | undefined;
@@ -1874,6 +1978,7 @@ export class EmailReplyDraftGenerationService {
       source = "error";
     }
     this.resolvedMaxTokens = clampReplyMaxTokens(this.replyMaxTokens, cap);
+    this.resolvedMaxTokensForModelId = this.lastReturnedModelId;
     incrementReplyMetric("capability_resolution", { source });
     return this.resolvedMaxTokens;
   }
@@ -1908,10 +2013,17 @@ export class EmailReplyDraftGenerationService {
       readonly stage?: string;
     }
   ): Promise<LlmRawResult> {
+    // N05: the capability lookup inside effectiveReplyMaxTokens awaits (raced
+    // against the deadline but still consuming wall time). A budget computed
+    // BEFORE that await is stale by provider-submit time — recompute AFTER so
+    // the provider receives the REMAINING amount, and never submit when the
+    // budget is exhausted. Cancellation stays enforced through headers/body
+    // via callBudgetMs in the provider adapter.
+    this.requireModelCallBudget(options?.stage ?? "generation");
+    const maxTokens = await this.effectiveReplyMaxTokens();
     const callBudgetMs = this.requireModelCallBudget(
       options?.stage ?? "generation"
     );
-    const maxTokens = await this.effectiveReplyMaxTokens();
     // G01/FR-026: omit the JSON hint when EITHER (a) the caller explicitly
     // requests it (the B06 no-hint retry after an unsupported-parameter
     // rejection) OR (b) the per-invocation memo has remembered that the model

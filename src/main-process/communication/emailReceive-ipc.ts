@@ -16,6 +16,7 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
@@ -39,6 +40,7 @@ import {
   emailReplyDraftUpdateInputSchema,
   emailReplySendInputSchema,
   emailReplyDraftApproveInputSchema,
+  emailReplyDraftResolveReviewInputSchema,
   emailReplySendAttemptDetailInputSchema,
   emailReplyDeliveryReconcileInputSchema,
   emailReplyKnowledgeScopeGetInputSchema,
@@ -525,6 +527,39 @@ export function registerEmailReceiveIpcHandlers(): void {
         approvedByType: "user",
       });
       return result;
+    }
+  );
+
+  // ---- G02: resolve the model's human-review request (renderer user gesture
+  // only — this channel is never registered as an AI tool, so the model
+  // cannot acknowledge its own review flag). Revision-bound: the reviewed
+  // revision must equal the current revision.
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
+    emailReplyDraftResolveReviewInputSchema,
+    async (input) => {
+      const { EmailReplyDraftModule } = await import(
+        "@/modules/EmailReplyDraftModule"
+      );
+      const draftModule = new EmailReplyDraftModule();
+      // Resolve through the model transaction (provenance preserved, audit
+      // written, stale revision refused).
+      const model = (
+        draftModule as unknown as {
+          resolveHumanReview: (args: {
+            draftId: number;
+            revisionId: number;
+            resolvedBy: string;
+            note?: string | null;
+          }) => Promise<{ resolved: boolean; reason?: string }>;
+        }
+      );
+      return await model.resolveHumanReview({
+        draftId: input.draftId,
+        revisionId: input.revisionId,
+        resolvedBy: "user",
+        note: input.note ?? null,
+      });
     }
   );
 

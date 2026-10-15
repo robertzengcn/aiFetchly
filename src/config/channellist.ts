@@ -95,6 +95,10 @@ export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
 // Thread-aware reply reliability (Milestone 1): approval + send-safety.
 export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+// G02: explicit human-review resolution (renderer user gesture only — never
+// exposed to AI tools).
+export const EMAIL_REPLY_DRAFT_RESOLVE_REVIEW =
+  "email:reply:draft:resolve-review";
 export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
   "email:reply:send:attempt:detail";
 export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";

@@ -1246,31 +1246,76 @@ function initialize() {
       // and runs unconditionally, so this disable cannot remove it.
       // Fire-and-forget so a slow or stuck validation never blocks startup;
       // the kill switch takes effect on the next draft/send IPC call.
+      // N08: shared admission barrier — new guarded work refuses while
+      // validation is pending/failed (EmailReplyReadiness). Audit/recovery
+      // paths never consult the gate and stay available (§5.3).
       if (startupPolicy.validateReplyUpgradeOnStartup) {
         try {
+          const {
+            markUpgradeValidationPending,
+            markUpgradeValidationPassed,
+            markUpgradeValidationFailed,
+          } = await import("@/service/emailReply/EmailReplyReadiness");
+          // N08: hold new guarded work synchronously at startup (before the
+          // async validation settles). Audit/recovery stay open.
+          markUpgradeValidationPending();
           const { runReplyUpgradeValidationOnStartup } = await import(
             "@/service/emailReply/EmailReplyUpgradeValidation"
           );
           void runReplyUpgradeValidationOnStartup(
             appDataSource.connection,
             "startup-upgrade-validation"
-          ).then((report) => {
-            if (!report.ok) {
+          ).then(
+            (report) => {
+              if (!report.ok) {
+                markUpgradeValidationFailed();
+                log.error(
+                  "[email-reply-upgrade-validation] FAILED — guarded reply work disabled via kill switch. Failures:",
+                  JSON.stringify(report.failures)
+                );
+              } else {
+                markUpgradeValidationPassed();
+                log.info(
+                  "[email-reply-upgrade-validation] passed — reply schema invariants verified"
+                );
+              }
+            },
+            (error) => {
+              // N08: promise rejection (not just a failure report) fails
+              // closed explicitly — guarded work stays held.
+              markUpgradeValidationFailed();
               log.error(
-                "[email-reply-upgrade-validation] FAILED — guarded reply work disabled via kill switch. Failures:",
-                JSON.stringify(report.failures)
-              );
-            } else {
-              log.info(
-                "[email-reply-upgrade-validation] passed — reply schema invariants verified"
+                "[email-reply-upgrade-validation] startup validation rejected:",
+                error instanceof Error ? error.message : String(error)
               );
             }
-          });
+          );
         } catch (err) {
+          // N08: wiring/import failure fails closed explicitly instead of
+          // only logging. Guarded work is held; audit/recovery stay open.
+          try {
+            const { markUpgradeValidationFailed } = await import(
+              "@/service/emailReply/EmailReplyReadiness"
+            );
+            markUpgradeValidationFailed();
+          } catch {
+            /* readiness import itself failed — gate defaults to pending (held) */
+          }
           log.error(
             "[email-reply-upgrade-validation] startup wiring failed to launch:",
             err instanceof Error ? err.message : String(err)
           );
+        }
+      } else {
+        // Validation disabled by policy — treat as passed so the gate does
+        // not hold guarded work forever. The kill switch still applies.
+        try {
+          const { markUpgradeValidationPassed } = await import(
+            "@/service/emailReply/EmailReplyReadiness"
+          );
+          markUpgradeValidationPassed();
+        } catch {
+          /* best-effort */
         }
       }
 

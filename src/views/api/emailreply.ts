@@ -8,6 +8,7 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
@@ -122,6 +123,19 @@ export async function approveEmailReplyDraft(draftId: number): Promise<{
   contentHash: string;
 }> {
   return await windowInvoke(EMAIL_REPLY_DRAFT_APPROVE, { draftId });
+}
+
+/**
+ * G02: resolve the model's human-review request for the current revision.
+ * User gesture only (renderer) — never called by AI tools. Revision-bound:
+ * pass the revision the human reviewed; a stale revision refuses.
+ */
+export async function resolveEmailReplyHumanReview(input: {
+  draftId: number;
+  revisionId: number;
+  note?: string;
+}): Promise<{ resolved: boolean; reason?: string }> {
+  return await windowInvoke(EMAIL_REPLY_DRAFT_RESOLVE_REVIEW, input);
 }
 
 /** Send attempts for a draft (audit / recovery UI). No secrets. */
