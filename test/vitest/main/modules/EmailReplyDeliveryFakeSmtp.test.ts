@@ -1590,3 +1590,262 @@ describe("sendApprovedReply replay of a finalized attempt with the same token (R
     ).rejects.toThrow(/invalid, expired, or already used/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F01/F02 — post-claim gate integrity: a sibling positive landing after the
+// claim must refuse (never be swallowed into SMTP permission); an unreadable
+// cluster must force a verified refresh (never reuse the recent negative);
+// a dead claim at the handoff fence must refuse with zero SMTP.
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function refusalAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  /** Delivery whose detect mock persists a fresh negative pre-claim and
+   * reveals `refreshResult` on the post-claim refresh; markSubmitted holds
+   * `holdMs` so `onMarkSubmitted` (e.g. a concurrent writer landing
+   * mid-flight, AFTER the claim committed) runs deterministically inside
+   * the hold — no wall-clock racing between claim and plant. */
+  function buildGateDelivery(opts: {
+    holdMs: number;
+    refreshResult: ReplyDetectionResult;
+    onMarkSubmitted?: () => Promise<void>;
+  }): {
+    delivery: EmailReplyDeliveryService;
+    smtpCalls: { count: number };
+    detectCalls: { count: number };
+    markSubmittedSpy: ReturnType<typeof vi.spyOn>;
+  } {
+    const smtpCalls = { count: 0 };
+    const detectCalls = { count: 0 };
+    const senderFactory = () => ({
+      sendReplyEmail: async (): Promise<EmailSendResult> => {
+        smtpCalls.count += 1;
+        return {
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: CLEAN_BODY,
+          info: `<prov-f01-${smtpCalls.count}@x>`,
+        };
+      },
+    });
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(
+        async (input: {
+          messageId: number;
+          forceRefresh?: boolean;
+          excludeDraftId?: number;
+          excludeAttemptId?: number;
+        }) => {
+          detectCalls.count += 1;
+          const isPostClaimRefresh =
+            input.excludeAttemptId !== undefined &&
+            input.excludeDraftId !== undefined;
+          if (!isPostClaimRefresh) {
+            await messageModule.updateReplyEvidence({
+              id: input.messageId,
+              replyNegativeCheckAt: new Date(),
+              replyNegativeContextHash: "f01-context-hash",
+              isAnswered: 0,
+              answeredFlagCheckedAt: new Date(),
+            });
+          } else if (opts.refreshResult.state === "not_replied") {
+            // Production probeMailbox persists a fresh negative before
+            // returning not_replied.
+            await messageModule.updateReplyEvidence({
+              id: input.messageId,
+              replyNegativeCheckAt: new Date(),
+              replyNegativeContextHash: "f01-context-hash",
+              isAnswered: 0,
+              answeredFlagCheckedAt: new Date(),
+            });
+          }
+          return isPostClaimRefresh ? opts.refreshResult : NOT_REPLIED_DETECTION;
+        }
+      );
+      return svc;
+    };
+    const realMarkSubmitted = attemptModule.markSubmitted.bind(attemptModule);
+    const markSubmittedSpy = vi
+      .spyOn(EmailReplySendAttemptModule.prototype, "markSubmitted")
+      .mockImplementation(async (id: number, at: Date) => {
+        // The claim already committed (markSubmitted runs post-claim), so a
+        // writer planted here lands strictly between claim and gate.
+        if (opts.onMarkSubmitted) await opts.onMarkSubmitted();
+        await new Promise((resolve) => setTimeout(resolve, opts.holdMs));
+        await realMarkSubmitted(id, at);
+      });
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: senderFactory as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+    return { delivery, smtpCalls, detectCalls, markSubmittedSpy };
+  }
+
+  it("F01: sibling positive landing after claim refuses with zero SMTP (refusal not swallowed)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // Both rows carry namespaced provider UIDs in ONE namespace (same folder
+    // hash + UIDVALIDITY, distinct UIDs): the pre-send policy's namespace-
+    // conflict check passes, so the send reaches the claim and the gate.
+    // (Two legacy bare-UID rows would — correctly — refuse at policy with
+    // reply_state_conflict before the claim; that is intended behavior, not
+    // this regression.) The sibling shares the seed's raw RFC id text (same
+    // canonical token via on-the-fly normalization) but starts with NO
+    // positive evidence, so the claim's own sibling check passes.
+    const { createHash } = await import("node:crypto");
+    const folderHash = createHash("sha256")
+      .update("INBOX", "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    const validity = "424242";
+    const { EmailReceivedMessageModel } = await import(
+      "@/model/EmailReceivedMessage.model"
+    );
+    const msgModel = new EmailReceivedMessageModel("");
+    await msgModel.updateProviderUidNamespacing({
+      id: messageId,
+      emailServiceId: FAKE_MAILBOX.id,
+      providerUid: `imap:${folderHash}:${validity}:11`,
+      providerFolder: "INBOX",
+      providerUidValidity: validity,
+    });
+    const seed = await messageModule.read(messageId);
+    const sibling = new EmailReceivedMessageEntity();
+    sibling.emailServiceId = FAKE_MAILBOX.id;
+    sibling.providerUid = `imap:${folderHash}:${validity}:12`;
+    sibling.providerFolder = "INBOX";
+    sibling.providerUidValidity = validity;
+    sibling.messageId = seed?.messageId ?? `<f01-fallback-${Math.random()}@x>`;
+    sibling.threadKey = sibling.messageId;
+    sibling.fromAddress = "prospect@example.com";
+    sibling.toAddressesJson = JSON.stringify(["owner@svc.com"]);
+    sibling.subject = "Pricing";
+    sibling.bodyText = "Hi";
+    sibling.receivedAt = new Date();
+    sibling.isUnread = 1;
+    sibling.replyStatus = "not_started";
+    sibling.processedAt = null;
+    const savedSib = await messageModule.upsertByProviderUid(sibling);
+
+    const { delivery, smtpCalls } = buildGateDelivery({
+      holdMs: 0,
+      refreshResult: NOT_REPLIED_DETECTION,
+      // Land the sticky positive mid-flight: this runs inside the
+      // markSubmitted hold, i.e. strictly after the claim committed and
+      // before the gate reads. The seed's negative is still fresh, so only
+      // the sibling branch can refuse.
+      onMarkSubmitted: async () => {
+        await messageModule.updateReplyEvidence({
+          id: savedSib.id,
+          replyDetectedAt: new Date(),
+          replyDetectionSource: "sent_search",
+          replyMatchedMessageId: "<f01-reply@x>",
+          isAnswered: 0,
+          answeredFlagCheckedAt: new Date(),
+        });
+      },
+    });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    // The swallowed-refusal bug continued to SMTP after finalizing failed —
+    // zero submissions must occur.
+    expect(smtpCalls.count).toBe(0);
+    // N06 known-unsent finalization still holds: failed, not unknown/sent.
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("failed");
+    const attempts = await attemptModule.listByDraft(draftId);
+    expect(attempts.some((a) => a.status === "failed")).toBe(true);
+    expect(attempts.some((a) => a.status === "sent")).toBe(false);
+    // Exactly ONE owned skip event for the refusal.
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[already_replied]");
+  }, 20_000);
+
+  it("F01: unreadable cluster forces a verified refresh instead of trusting the recent negative", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // The module-level cluster read fires twice per send: the pre-send
+    // policy evaluation first, then the post-claim gate (the claim itself
+    // uses the transaction-level helper and detection is mocked). Fail the
+    // SECOND call so policy passes but the gate sees incomplete evidence.
+    const origFind = EmailReceivedMessageModule.prototype.findCanonicalEquivalents;
+    let findCalls = 0;
+    vi.spyOn(
+      EmailReceivedMessageModule.prototype,
+      "findCanonicalEquivalents"
+    ).mockImplementation(async function (
+      this: EmailReceivedMessageModule,
+      seed: EmailReceivedMessageEntity
+    ) {
+      findCalls += 1;
+      if (findCalls >= 2) throw new Error("db gone");
+      return origFind.call(this, seed);
+    });
+    const { delivery, smtpCalls, detectCalls } = buildGateDelivery({
+      holdMs: 0,
+      refreshResult: NOT_REPLIED_DETECTION,
+    });
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    // The refresh ran (pre-send probe + post-claim refresh): incomplete
+    // evidence performed a verified refresh, never reused the negative.
+    expect(detectCalls.count).toBeGreaterThanOrEqual(2);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+  }, 20_000);
+
+  it("F02: dead claim at the handoff fence refuses with zero SMTP", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // The fence's ownership read is the only attemptModule.read in the send
+    // path: report the claim as already-terminal (recovered + reconciled
+    // while this operation was paused). SMTP must never run under it.
+    vi.spyOn(EmailReplySendAttemptModule.prototype, "read").mockResolvedValue(
+      { status: "failed" } as never
+    );
+    const { delivery, smtpCalls } = buildGateDelivery({
+      holdMs: 0,
+      refreshResult: NOT_REPLIED_DETECTION,
+    });
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("reply_state_conflict");
+    expect(smtpCalls.count).toBe(0);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[reply_state_conflict]");
+  }, 20_000);
+});
