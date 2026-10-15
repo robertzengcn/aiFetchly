@@ -107,6 +107,7 @@ import {
 } from "@/service/AIChatImageHandoff";
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
   evaluateSkillInstallationToolPolicy,
@@ -4864,11 +4865,17 @@ export class AIChatQueryLoop {
       outboundAuthorization,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
-    // argument-driven resolver wins over static field; otherwise infer by name.
+    // argument-driven resolver wins over static field; then validated plugin
+    // MCP tool policy (HOST-02, canonical mcp__plugin__server__tool names);
+    // otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);
+    const pluginPolicy = getPluginToolPolicyRegistry().resolveByToolName(
+      effectiveCall.name
+    );
     const cls: ToolTimeoutClass =
       skill?.resolveTimeoutClass?.(effectiveCall.arguments ?? {}) ??
       skill?.timeoutClass ??
+      pluginPolicy?.policy.timeoutClass ??
       inferTimeoutClassByName(effectiveCall.name);
     const timeoutMs = resolveTimeoutMs(cls);
 

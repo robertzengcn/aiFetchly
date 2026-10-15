@@ -13,6 +13,7 @@ import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginComm
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
@@ -56,8 +57,27 @@ export class PluginComponentRegistryService {
     // is idempotent per hook id, so calling this on every apply is safe.
     const loaded = await PluginLoaderService.loadAllPlugins();
     PluginHookRegistrar.registerFromLoadedPlugins(loaded.enabled);
+    // Register validated MCP tool policies for enabled plugins and drop them
+    // for disabled ones (HOST-01/HOST-03 wiring: policy resolution in the
+    // query loop consults this registry between skill lookup and name
+    // inference). Activation errors are logged, never thrown — a broken
+    // plugin must not break applying the rest.
+    const policyRegistry = getPluginToolPolicyRegistry();
+    for (const plugin of loaded.enabled) {
+      const result = policyRegistry.registerFromManifest(
+        plugin.name,
+        plugin.manifest
+      );
+      if (result.errors.length > 0) {
+        log.warn(
+          `[PluginComponentRegistryService] tool policy registration failed for "${plugin.name}":`,
+          result.errors.map((e) => e.message).join("; ")
+        );
+      }
+    }
     for (const plugin of loaded.disabled) {
       PluginHookRegistrar.unregisterPlugin(plugin.name);
+      policyRegistry.unregisterPlugin(plugin.name);
     }
     const manager = getAIFetchlyConfigManager();
     await PluginComponentRegistryService.promotePluginCommandsAndAgents(
@@ -74,6 +94,7 @@ export class PluginComponentRegistryService {
   static async unregisterPluginCapabilities(pluginName: string): Promise<void> {
     PluginRuntimeCache.clear(`unregister-${pluginName}`);
     SkillRegistry.unregisterSkillsByPlugin(pluginName);
+    getPluginToolPolicyRegistry().unregisterPlugin(pluginName);
     const sourceId = `plugin:${pluginName}`;
     const manager = getAIFetchlyConfigManager();
     manager.getCommandRegistry().replaceSource(sourceId, []);
