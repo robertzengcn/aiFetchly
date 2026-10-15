@@ -106,8 +106,16 @@ import {
   stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
-import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import {
+  getDefaultToolJobRegistry,
+  type ToolJobSpawnHandle,
+} from "@/service/ToolJobRegistry";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  getPluginRecoveryLedger,
+  jobFingerprintFromArgs,
+  searchIdentityFromArgs,
+} from "@/service/PluginRecoveryLedger";
 import { HOST_MAX_RUN_MS } from "@/entityTypes/pluginExecutionTypes";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
@@ -1088,6 +1096,19 @@ function isToolExecutionResultLike(
     record.result !== null &&
     typeof record.execution_time_ms === "number"
   );
+}
+
+/**
+ * Extract the owning plugin name from a canonical plugin MCP tool name
+ * (`mcp__<plugin>__<server>__<tool>`, PRD §9.3). Returns null for every
+ * other tool-name shape (built-ins, legacy `mcp_<serverId>_<tool>`).
+ */
+function parsePluginNameFromCanonicalTool(name: string): string | null {
+  if (!name.startsWith("mcp__")) return null;
+  const parts = name.split("__");
+  if (parts.length !== 4) return null;
+  const plugin = parts[1];
+  return plugin.length > 0 ? plugin : null;
 }
 
 export function buildAssistantToolCallMessage(
@@ -4385,7 +4406,10 @@ export class AIChatQueryLoop {
     } | undefined,
     onProgress?: ToolProgressEmitter,
     deadlineMs?: number
-  ): Promise<{ jobId: string }> {
+  ): Promise<
+    | { kind: "job"; jobId: string }
+    | { kind: "rejected"; result: ToolExecutionResult }
+  > {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
     // Throw on failure: the run() outer try/catch at line ~797 catches this
@@ -4402,6 +4426,96 @@ export class AIChatQueryLoop {
     const deadlineEpochMs = Date.now() + (deadlineMs ?? HOST_MAX_RUN_MS);
 
     const registry = getDefaultToolJobRegistry();
+
+    // ---- HOST-10 / HOST-16 admission (plugin async MCP tools only) ----
+    // Generic, policy-driven: no tool-specific branch lives here.
+    const args = call.arguments ?? {};
+    const pluginName = parsePluginNameFromCanonicalTool(call.name);
+    if (pluginName) {
+      const ledger = getPluginRecoveryLedger();
+      const identity = searchIdentityFromArgs(args);
+      const fingerprint = jobFingerprintFromArgs(
+        input.conversationId,
+        call.name,
+        args
+      );
+
+      // Duplicate suppression: an equivalent scrape already queued/running in
+      // this conversation returns the existing job identity, never a second
+      // live job (PRD §11.9).
+      const duplicate = registry.findActiveJobByFingerprint(
+        input.conversationId,
+        fingerprint
+      );
+      if (duplicate) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "An identical job is already running in this conversation.",
+              code: "JOB_ALREADY_RUNNING",
+              job_id: duplicate.jobId,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      // Recovery budget: the model may propose, the ledger disposes. Retry
+      // after a failure requires the host-minted error reference plus an
+      // allowed strategy, inside the attempt budget and cooldown window.
+      const recoveryArg =
+        typeof args.recovery === "object" && args.recovery !== null
+          ? (args.recovery as {
+              previousErrorId?: unknown;
+              strategy?: unknown;
+            })
+          : undefined;
+      const validation = ledger.validateAndReserve({
+        conversationId: input.conversationId,
+        pluginName,
+        searchIdentity: identity,
+        previousErrorId: recoveryArg?.previousErrorId,
+        strategy: recoveryArg?.strategy,
+      });
+      if (!validation.ok) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "Recovery request was rejected by the host retry policy.",
+              code: "INVALID_RECOVERY_REQUEST",
+              reason: validation.reason,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      const { jobId } = registry.start(
+        call.name,
+        args,
+        { conversationId: input.conversationId, toolCallId: call.id },
+        (handle) => this.spawnPluginAsyncTool(input, call, handle, {
+          deadlineEpochMs,
+          outboundAuthorization,
+          onProgress,
+          pluginName,
+          identity,
+        }),
+        { fingerprint }
+      );
+      return { kind: "job", jobId };
+    }
+
     const { jobId } = registry.start(
       call.name,
       call.arguments ?? {},
@@ -4472,7 +4586,143 @@ export class AIChatQueryLoop {
       }
     );
 
-    return { jobId };
+    return { kind: "job", jobId };
+  }
+
+  /**
+   * Spawn callback for plugin-policy async tools: identical to the generic
+   * path, plus recovery-ledger settlement — a recoverable domain failure is
+   * recorded (minting the host error reference the model must echo back) and
+   * the reserved attempt settles when the job settles (HOST-16).
+   */
+  private async spawnPluginAsyncTool(
+    input: AIChatQueryGeneratorInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    },
+    handle: ToolJobSpawnHandle,
+    meta: {
+      deadlineEpochMs: number;
+      outboundAuthorization:
+        | {
+            batchId: number;
+            authorizationId: number;
+            batchHash: string;
+          }
+        | undefined;
+      onProgress?: ToolProgressEmitter;
+      pluginName: string;
+      identity: string;
+    }
+  ): Promise<void> {
+    const ledger = getPluginRecoveryLedger();
+    handle.onSettled(() => {
+      // Outcome is derived from the settled result below; cancellation and
+      // transport failures settle as "failed" (attempt consumed, in-flight
+      // reservation released — never a dangling lock).
+      ledger.completeAttempt(
+        input.conversationId,
+        meta.pluginName,
+        meta.identity,
+        "failed"
+      );
+    });
+    try {
+      const result = await this.deps.executeTool(call.name, call.arguments ?? {}, {
+        conversationId: input.conversationId,
+        toolCallId: call.id,
+        args: call.arguments,
+        model: input.request.model,
+        signal: handle.signal,
+        deadlineEpochMs: meta.deadlineEpochMs,
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
+        ownerAgentId: input.ownerAgentId,
+        outboundAuthorization: meta.outboundAuthorization,
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+        emitProgress: (event) => {
+          getDefaultToolJobRegistry().updateProgress(handle.jobId, {
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+          });
+          meta.onProgress?.({
+            type: "tool_progress",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+            timestamp: Date.now(),
+          });
+        },
+      });
+
+      // Recoverable domain failure → record + bind the host error reference
+      // BEFORE the result reaches the model (design §12.2: the plugin's
+      // diagnostic id is preserved as pluginErrorId; the authoritative id the
+      // model must echo is host-minted).
+      if (!result.success) {
+        const errorObj = (result.result as Record<string, unknown> | undefined)
+          ?.error;
+        if (
+          errorObj &&
+          typeof errorObj === "object" &&
+          typeof (errorObj as Record<string, unknown>).code === "string"
+        ) {
+          const err = errorObj as {
+            code: string;
+            category?: unknown;
+            allowedStrategies?: unknown;
+            retryAfterMs?: unknown;
+            id?: unknown;
+          };
+          const allowed = Array.isArray(err.allowedStrategies)
+            ? (err.allowedStrategies.filter(
+                (s): s is "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay" =>
+                  s === "fallback_adapter" ||
+                  s === "reduced_scope" ||
+                  s === "switch_platform" ||
+                  s === "retry_after_delay"
+              ) as readonly ("fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay")[])
+            : [];
+          const errorRef = ledger.recordFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+            code: err.code,
+            category:
+              typeof err.category === "string" ? err.category : "plugin_bug",
+            allowedStrategies: allowed,
+            retryAfterMs:
+              typeof err.retryAfterMs === "number" ? err.retryAfterMs : undefined,
+          });
+          const bound = ledger.bindPluginErrorId(errorRef, err.id);
+          (result.result as Record<string, unknown>).error = {
+            ...err,
+            ...bound,
+          };
+        }
+      } else {
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "succeeded"
+        );
+      }
+      handle.resolve(result);
+    } catch (err) {
+      handle.reject(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 
   /**
@@ -4938,20 +5188,26 @@ export class AIChatQueryLoop {
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(
+      const admission = await this.executeAsyncTool(
         input,
         effectiveCall,
         outboundAuthorization,
         onProgress,
         pluginPolicy?.policy.maxRunMs
       );
-      toolResult = await this.pollAsyncJobToCompletion(
-        input,
-        effectiveCall,
-        jobId,
-        onProgress,
-        pluginPolicy?.policy.maxRunMs
-      );
+      if (admission.kind === "rejected") {
+        // Admission failure (duplicate job / rejected recovery): surface as
+        // the tool result directly — no job was created.
+        toolResult = admission.result;
+      } else {
+        toolResult = await this.pollAsyncJobToCompletion(
+          input,
+          effectiveCall,
+          admission.jobId,
+          onProgress,
+          pluginPolicy?.policy.maxRunMs
+        );
+      }
     } else {
       toolResult = await this.executeForegroundToolWithTimeout(
         input,

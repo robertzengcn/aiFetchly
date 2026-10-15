@@ -81,6 +81,8 @@ interface InternalJob {
   jobId: string;
   toolName: string;
   conversationId: string;
+  /** Optional canonical duplicate-suppression fingerprint (HOST-10). */
+  fingerprint?: string;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: ToolJobProgress | null;
   partial: {
@@ -120,7 +122,8 @@ export class ToolJobRegistry {
     toolName: string,
     _args: Record<string, unknown>,
     ctx: { conversationId: string; toolCallId: string },
-    spawn: (handle: ToolJobSpawnHandle) => Promise<unknown>
+    spawn: (handle: ToolJobSpawnHandle) => Promise<unknown>,
+    options?: { readonly fingerprint?: string }
   ): { jobId: string; queued: boolean } {
     if (this.closed) {
       // T06/AC-05: no job may be admitted after shutdown seals the registry.
@@ -137,6 +140,7 @@ export class ToolJobRegistry {
       jobId,
       toolName,
       conversationId: ctx.conversationId,
+      fingerprint: options?.fingerprint,
       status: "queued",
       progress: null,
       partial: null,
@@ -282,6 +286,28 @@ export class ToolJobRegistry {
     if (!job || job.conversationId !== conversationId)
       return this.notFound(jobId);
     return this.getStatus(jobId);
+  }
+
+  /**
+   * Find a queued/running job with the given duplicate-suppression
+   * fingerprint in this conversation (HOST-10). Returns the jobId so the
+   * caller can return a structured JOB_ALREADY_RUNNING outcome bound to the
+   * caller's own toolCallId instead of starting a second live job.
+   */
+  findActiveJobByFingerprint(
+    conversationId: string,
+    fingerprint: string
+  ): { jobId: string } | null {
+    for (const job of this.jobs.values()) {
+      if (
+        job.conversationId === conversationId &&
+        job.fingerprint === fingerprint &&
+        (job.status === "queued" || job.status === "running")
+      ) {
+        return { jobId: job.jobId };
+      }
+    }
+    return null;
   }
 
   cancel(jobId: string): { cancelled: boolean; reason?: string } {
