@@ -898,8 +898,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
       "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
-      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
+      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: the host runs it as a background job and the tool result you receive is the REAL final result once the job finishes (you do NOT poll — do not call check_tool_job_status for this tool). " +
+      "Progress updates stream to the user while it runs. Do not retry the call while a job is running. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch. " +
       EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
@@ -928,9 +928,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     //   the model gets the full result in one turn.
     // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
     //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
-    //   loop returns { async: true, job_id } within ~2s and the model
-    //   polls with check_tool_job_status every 15-30s. This matches the
-    //   search_maps_businesses pattern (see lines ~329).
+    //   loop registers the job, emits progress, waits locally, and returns
+    //   the REAL final result — the model never polls (managed async; see
+    //   pollAsyncJobToCompletion). This matches the search_maps_businesses
+    //   pattern (see lines ~329).
     //
     // Before this routing, large URL batches hit the 240s browser ceiling
     // even though the inner worker (URL_EXTRACTION_TIMEOUT_MS = 300s)

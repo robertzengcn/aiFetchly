@@ -144,9 +144,11 @@ export interface SkillDefinition {
   /**
    * When true (or when resolveAsync returns true for the specific call),
    * the tool runs asynchronously via the ToolJobRegistry instead of
-   * blocking the query loop. The loop returns immediately with a
-   * `{ async: true, job_id }` envelope; the model polls for completion
-   * via the companion `check_tool_job_status` tool.
+   * blocking a foreground timeout. This is MANAGED async: the host
+   * registers the job, emits progress, waits locally by polling the
+   * registry, and returns the REAL final tool result to the model — the
+   * model does not poll and never sees a `{ async: true, job_id }`
+   * placeholder for these calls.
    */
   readonly async?: boolean;
 

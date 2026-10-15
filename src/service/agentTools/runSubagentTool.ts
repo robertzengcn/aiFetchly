@@ -33,8 +33,9 @@ import type {
  *      fires first and orphans the still-running inner work.
  *
  * Routing unconditionally to "async" eliminates both:
- *   - The outer loop returns { async: true, job_id } within ~2s and the
- *     model polls check_tool_job_status every 15-30s.
+ *   - The outer loop registers a managed-async job, emits progress, waits
+ *     locally, and returns the agent's REAL final result to the model (the
+ *     model never polls; see pollAsyncJobToCompletion).
  *   - The inner agent's own maxRuntimeMs (via abortController at
  *     AgentRuntime.ts:221) becomes the real upper bound on subagent
  *     work. The outer race is unreachable.
@@ -43,7 +44,7 @@ import type {
  *   Unlike URLs or max_results, nothing in the run_subagent args
  *   (agentId, prompt, taskPacket) reliably predicts runtime. Even
  *   trivial subagent tasks take 30-60s. Always-async makes the contract
- *   uniform — the model always polls, no conditional description logic.
+ *   uniform — no conditional description logic.
  */
 
 const PARAMETERS = {
@@ -129,8 +130,8 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   description:
     "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
     "For multiple files with one operation, use process_artifact_batch instead; it coordinates bounded concurrent per-item provider requests and preserves input/output mappings. run_subagent remains available for a single specialized file task via agent-batch-worker. " +
-    "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-    "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
+    "This tool ALWAYS runs ASYNCHRONOUSLY: the host runs it as a background job and the tool result you receive is the agent's REAL final result once the job finishes (you do NOT poll — do not call check_tool_job_status for this tool). " +
+    "Progress updates stream to the user while it runs. " +
     "Use cancel_tool_job(job_id) if the user wants to stop a specialist early.",
   parameters: PARAMETERS,
   tier: "main",
