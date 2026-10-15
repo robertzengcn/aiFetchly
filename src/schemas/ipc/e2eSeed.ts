@@ -34,6 +34,16 @@ export const e2eSeedEmailServiceInputSchema = lazySchema(() =>
     status: z.number().int().min(0).max(1).optional(),
     smtpUsername: z.string().max(255).optional(),
     replyTo: z.string().max(320).optional(),
+    // G04 E2E: loopback IMAP receive config for the §7.1 probe. When
+    // receiveEnabled is 1 with an imapHost/imapPort, the production
+    // detector opens real (loopback) IMAP connections from the E2E app.
+    // Username falls back to smtpUsername → from; password falls back to
+    // the SMTP password (same production fallback chain, §8.3).
+    receiveEnabled: z.number().int().min(0).max(1).optional(),
+    imapHost: z.string().max(255).optional(),
+    imapPort: z.string().max(10).optional(),
+    imapSsl: z.number().int().min(0).max(1).optional(),
+    receiveFolder: z.string().max(255).optional(),
   })
 );
 
@@ -65,6 +75,13 @@ export const e2eSeedReceivedMessageInputSchema = lazySchema(() =>
       "failed",
     ]),
     isAnswered: z.number().int().min(0).max(1).optional(),
+    // G04 E2E: UID provenance for the §7.1 step-5 flag refresh. When set,
+    // the seeded row looks like a synced IMAP message (namespaced
+    // providerUid + source folder + UIDVALIDITY), so the production probe
+    // completes the flag side against the loopback IMAP server instead of
+    // treating the row as legacy/unresolved.
+    providerFolder: z.string().max(255).optional(),
+    providerUidValidity: z.string().max(64).optional(),
   })
 );
 
@@ -82,6 +99,12 @@ export const e2eSeedReceivedMessageInputSchema = lazySchema(() =>
 // senderAddress/recipientAddress are required (the v1 envelope identity);
 // seedFailedAttempt optionally seeds one definitely-failed send attempt
 // (B08/R13 retry path) and flips the draft to status "failed".
+//
+// G02 E2E: requiresHumanReview optionally persists the model's review
+// request (+ reasons/questions) on the seeded draft. When set, the seed
+// SKIPS approveDraft (production approval would refuse the flagged draft —
+// that refusal is itself asserted through the real APPROVE channel in-spec)
+// and returns approvalId 0 with an empty token.
 export const e2eSeedReplyDraftInputSchema = lazySchema(() =>
   z.strictObject({
     emailServiceId: z.number().int().positive(),
@@ -91,6 +114,9 @@ export const e2eSeedReplyDraftInputSchema = lazySchema(() =>
     senderAddress: z.string().min(1).max(320),
     recipientAddress: z.string().min(1).max(320),
     seedFailedAttempt: z.boolean().optional(),
+    requiresHumanReview: z.number().int().min(0).max(1).optional(),
+    reviewReasonsJson: z.string().max(12000).optional(),
+    unresolvedQuestionsJson: z.string().max(6000).optional(),
   })
 );
 

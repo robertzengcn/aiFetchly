@@ -302,3 +302,75 @@ All source line references below describe the reviewed revision. **P1** means fi
 5. Restore reliable parallel tests, execute corrected pilots, and update requirement completion claims using actual evidence (V01, G04).
 
 Do not mark a checkbox complete based only on adding a helper or changing the existing tests to accept unsafe behavior. Each fix needs its stated adversarial regression, passing relevant existing suites, and integration through the production entry path. Full-feature completion also requires the explicitly external pilot/release evidence.
+
+## 2026-10-15 audit residual resolutions (N01–N09, G01/G02/G04)
+
+The 2026-10-15 audit (`ai-email-reply-validation-and-duplicate-guard-todo-2026-10-15.md`)
+found this file's R03/R04 "FIXED" notes premature: null-normalized sibling discovery
+(N01, against R03) and recovered-but-live submitter reconciliation (N02, against R04)
+were still open, plus N03–N09 and acceptance gaps G01–G05. All code defects are now
+fixed on branch `worktree-email-reply-validation-phase1`, each with its stated
+adversarial regression, relevant suites green, and production-entry integration:
+
+- N01 (R03 residual): `readClusterEvidence` + `EmailReceivedMessageModel.
+  findCanonicalEquivalents` discover same-service NULL-normalized rows whose raw
+  `messageId` normalizes to the cluster token (bounded 2000-row scan, fail-closed
+  throw on incomplete discovery; never cross-service/subject merge) — commit
+  `706cebbcd`. Regression: normalized seed → legacy sent sibling; legacy seed →
+  multiple legacy equivalents; bracketed IDs; no cross-service merge; actual
+  mutation transactions (`EmailReplyAuditN01N09G02.integration.test.ts`, 9/9).
+- N02 (R04 residual): process-wide submitter-liveness registry
+  (`EmailReplySubmitterTracker`); `confirm_not_sent` refuses while the original
+  SMTP promise is running (crash/restart = quiescence, registry is in-memory);
+  late `sent` upgrades `failed` so premature downgrades cannot lose acceptance;
+  guard `sent` fence extended to `draft_ready` for the same upgrade — commit
+  `dc4c7557a`.
+- N03: post-claim gate checks seed/sibling positives before freshness permission
+  and revalidates observation age after the one refresh (refuses a second delay);
+  N04: probe fences negative persistence on abort/expiry after every closing await
+  and stamps observation time, not write time — same commit.
+- N05: provider budget recomputed after capability lookup; capability memo keyed
+  by actual model id. N06: post-claim gate refusals finalize as `failed`
+  (known-unsent), never `delivery_unknown`. N07: claim returns stable typed codes
+  (eligibility ladder, never parsed English) + one correlated refusal audit +
+  typed `SendPolicyRejection`; fenced generation commits carry code + audit —
+  commit `06663dcfe`. Delivery/mirror suites updated to the corrected outcomes
+  (`EmailReplyDeliveryFakeSmtp` 26/26, `EmailReplyAuditMirror` 7/7).
+- N08: shared `EmailReplyReadiness` admission barrier — background holds new
+  guarded work while validation is pending/failed; generation, send, and AI-tool
+  entries refuse before any work (audit/recovery stay open). N09:
+  `leave_unresolved` records `reconciliation_noted` mirrored as
+  `needs_human_review`, never `failed` — same commit; 6-language labels for the
+  new guidance in en/zh/es/fr/de/ja.
+- G01: output-capability memo invalidation (above) + input-context budgeting
+  (`EmailReplyContextBudget`: retrieval/conversation truncation preserving safety
+  instructions) + all remaining pre-model awaits (message/policy/reservation/
+  audits/cleanup) raced against the invocation deadline + detector v1→v2
+  invalidation of pre-N04 write-time-stamped negatives — commits `06663dcfe`,
+  `0e57b1b8b`. G01 deadline suite (expired budget, hung acquire, hung audit) 3/3
+  in `EmailReplyDraftGeneration.test.ts`.
+- G02: revision-bound human-review resolution (`resolveHumanReview`: immutable
+  model provenance, stale-revision refusal, edit invalidation) + IPC channel +
+  preload + renderer API + draft-detail resolution fields + 6-language strings;
+  approval gate honors current-revision resolutions only. Integration
+  (model transactions) 4/4 in `EmailReplyHumanReviewApproval.test.ts`.
+- G04: real cross-layer E2E via loopback fake IMAP
+  (`test/e2e/fixtures/fakeImapServer.ts`: greeting/CAPABILITY/LOGIN/LIST/LSUB/
+  SELECT/UID SEARCH/UID FETCH/LOGOUT against production ImapFlow) + loopback
+  fake SMTP (+ ambiguous drop-after-greeting mode) + E2E seed extensions
+  (receive config, UID provenance, review-flagged drafts):
+  `test/e2e/specs/emailReplyGuardedSuccess.test.ts` 4/4 — eligible reuse success
+  → approval → successful fresh send; flagged → refuse → stale-refused →
+  resolve → approve → send; blackhole → unknown → leave_unresolved (ambiguity
+  + review guidance) → confirm_not_sent → fresh approval; unknown →
+  confirm_sent → sent. Existing workflow (6/6), audit-evidence (1/1), and
+  identity (4/4) E2E unchanged.
+- G05 (this note): R03/R04 are now fully fixed per the evidence above; the
+  2026-10-15 report's N01/N02 rows are closed by commits `706cebbcd` +
+  `dc4c7557a`. Audit history above is preserved verbatim; only this dated
+  addendum asserts the new state.
+
+Still external (cannot be completed in a source checkout): G03 live
+IMAP/hosted-AI pilot execution and release signoff per
+`docs/prd/emailreply-pilot-and-rollout-plan.md`; full hosted/local provider
+configuration verification (G01 item 4) rides on that pilot.

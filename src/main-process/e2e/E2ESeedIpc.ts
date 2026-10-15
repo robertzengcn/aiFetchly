@@ -94,6 +94,16 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       // create/update merge (candidate.smtpUsername ?? null).
       entity.smtpUsername = input.smtpUsername ?? null;
       entity.replyTo = input.replyTo ?? null;
+      // G04 E2E: loopback IMAP receive config (optional; absent = no
+      // receive config, preserving the existing receive_unavailable
+      // scenarios). receiveProtocol stays "imap" (entity default).
+      entity.receiveEnabled = input.receiveEnabled ?? 0;
+      entity.imapHost = input.imapHost ?? null;
+      entity.imapPort = input.imapPort ?? null;
+      if (input.imapSsl !== undefined) entity.imapSsl = input.imapSsl;
+      if (input.receiveFolder !== undefined) {
+        entity.receiveFolder = input.receiveFolder;
+      }
       const model = new EmailServiceModel(dbpath);
       const id = await model.create(entity);
       return { id };
@@ -119,6 +129,9 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       entity.isUnread = 0;
       entity.replyStatus = input.replyStatus;
       entity.isAnswered = input.isAnswered ?? 0;
+      // G04 E2E: UID provenance for the flag-refresh leg of the probe.
+      entity.providerFolder = input.providerFolder ?? null;
+      entity.providerUidValidity = input.providerUidValidity ?? null;
       const model = new EmailReceivedMessageModel(dbpath);
       const saved = await model.upsertByProviderUid(entity);
       return { id: saved.id };
@@ -184,6 +197,12 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       draft.bodyHtml = null;
       draft.status = "draft";
       draft.generationSource = "ai";
+      // G02 E2E: persist the model's review request (immutable provenance).
+      if (input.requiresHumanReview === 1) {
+        draft.requiresHumanReview = 1;
+        draft.reviewReasonsJson = input.reviewReasonsJson ?? null;
+        draft.unresolvedQuestionsJson = input.unresolvedQuestionsJson ?? null;
+      }
       const savedDraft = await draftModule.create(draft);
 
       // materializeRevision1 appends immutable revision 1, sets the draft
@@ -201,12 +220,16 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
         originalMessageId: input.messageId,
       });
 
-      const approval = await new EmailReplyApprovalService(dbpath).approveDraft(
-        {
-          draftId: savedDraft.id,
-          approvedByType: "user",
-        }
-      );
+      // G02 E2E: a flagged draft skips approval here — production approval
+      // would refuse it, and the spec asserts that refusal through the real
+      // APPROVE channel before resolving + approving for real.
+      const approval =
+        input.requiresHumanReview === 1
+          ? { approvalId: 0, token: "" }
+          : await new EmailReplyApprovalService(dbpath).approveDraft({
+              draftId: savedDraft.id,
+              approvedByType: "user",
+            });
 
       // Optional B08/R13 retry fixture: one definitely-failed attempt plus the
       // draft flipped to "failed". A later approveDraft reopens it (R13).

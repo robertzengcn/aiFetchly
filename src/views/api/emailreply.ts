@@ -75,6 +75,10 @@ export interface ReplyDraftDetail {
   reviewReasonsJson: string | null;
   /** R21: schema-bounded unresolved questions (raw bounded JSON from storage). */
   unresolvedQuestionsJson: string | null;
+  /** G02: when a human resolved the review request (null = unresolved). */
+  humanReviewResolvedAt: string | null;
+  /** G02: the revision the human reviewed (must equal current to count). */
+  humanReviewResolvedRevisionId: number | null;
   knowledgeSourcesJson: string | null;
   warningsJson: string | null;
   sentAt: string | null;
