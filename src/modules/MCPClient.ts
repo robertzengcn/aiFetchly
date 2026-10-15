@@ -6,6 +6,10 @@ import {
   type SupervisedStdioTransportOptions,
 } from "@/modules/mcp/SupervisedStdioTransport";
 import { buildSanitizedChildEnv } from "@/modules/mcp/mcpSpawnPolicy";
+import {
+  getPluginMcpRuntimeResolver,
+  type ResolvedPluginLaunch,
+} from "@/service/PluginMcpRuntimeResolver";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import type { WebSocket as WSWebSocket } from "ws";
 
@@ -35,6 +39,33 @@ export interface MCPClientConfig {
   cwd?: string;
   /** Owned-process family id for supervised stdio spawns. */
   ownerId?: string;
+  /**
+   * Host-managed plugin runtime (plugin PRD §19.5). When present, the client
+   * resolves the trusted launch through PluginMcpRuntimeResolver instead of
+   * spawning a plugin-declared OS command: process.execPath in Node mode with
+   * the validated entry file and a written host-context file. Mutually
+   * exclusive with command/host in practice; command stays ignored.
+   */
+  hostRuntime?: {
+    readonly pluginName: string;
+    readonly entry: string;
+    readonly pluginVersion?: string;
+    /**
+     * Execute-mode host context (deadline, browser, output directory). When
+     * absent the launch is discovery mode — no browser, no output allocation
+     * (design §6.2).
+     */
+    readonly context?: {
+      readonly mode: "execute";
+      readonly executionId: string;
+      readonly outputDirectory?: string;
+      readonly browser?: {
+        readonly executablePath: string;
+        readonly version: string;
+      };
+      readonly deadlineEpochMs?: number;
+    };
+  };
 }
 
 export interface MCPToolInfo {
@@ -99,6 +130,8 @@ export class MCPClient {
   private requestId = 0;
   /** SDK client for the stdio path; owns the transport lifecycle. */
   private sdk: McpSdkClient | null = null;
+  /** Trusted host-runtime launch adopted by connectStdioHostRuntime. */
+  private hostLaunch: ResolvedPluginLaunch | null = null;
   private pendingRequests: Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -202,6 +235,14 @@ export class MCPClient {
    * fail closed when the server negotiates an unsupported protocol version.
    */
   private async connectStdio(): Promise<void> {
+    // Host-managed plugin runtime: resolve the trusted launch (validated
+    // entry, process.execPath, host-context file) and spawn through the
+    // transport's trustedNodeLaunch branch. Falls through to the normal
+    // command path for every other server.
+    if (this.config.hostRuntime) {
+      return this.connectStdioHostRuntime();
+    }
+
     // Prefer explicit command/args (plugin-owned stdio servers). Fall back to
     // the legacy "host is a space-separated command" convention for manually
     // added stdio servers.
@@ -230,6 +271,66 @@ export class MCPClient {
     };
 
     const transport = new SupervisedStdioTransport(transportOptions);
+    await this.adoptSdkTransport(transport);
+  }
+
+  /**
+   * Host-managed runtime branch (plugin PRD §19.7): resolve the launch via
+   * PluginMcpRuntimeResolver (entry confinement, atomic host-context file),
+   * spawn process.execPath in Node mode through the supervised transport, and
+   * release the context file on disconnect.
+   */
+  private async connectStdioHostRuntime(): Promise<void> {
+    const { pluginName, entry, pluginVersion, context } =
+      this.config.hostRuntime!;
+
+    const resolver = getPluginMcpRuntimeResolver();
+    const resolved = context
+      ? resolver.resolveForExecute(pluginName, entry, {
+          mode: "execute",
+          executionId: context.executionId,
+          pluginVersion: pluginVersion ?? "unknown",
+          outputDirectory: context.outputDirectory,
+          browser: context.browser,
+          deadlineEpochMs: context.deadlineEpochMs,
+        })
+      : resolver.resolveForDiscovery(
+          pluginName,
+          entry,
+          pluginVersion ?? "unknown"
+        );
+    if (!resolved.ok) {
+      throw new Error(
+        `Plugin MCP runtime for "${pluginName}" rejected: ${resolved.error.message}`
+      );
+    }
+    this.hostLaunch = resolved.launch;
+
+    const transport = new SupervisedStdioTransport({
+      command: resolved.launch.executable,
+      args: resolved.launch.extraArgs,
+      env: this.config.env,
+      cwd: resolved.launch.cwd,
+      ownerId: resolved.launch.ownerId,
+      trustedNodeLaunch: {
+        executable: resolved.launch.executable,
+        entryFile: resolved.launch.entryFile,
+      },
+    });
+    try {
+      await this.adoptSdkTransport(transport);
+    } catch (error) {
+      // Failed handshake — release the transient context file immediately.
+      resolver.release(resolved.launch);
+      this.hostLaunch = null;
+      throw error;
+    }
+  }
+
+  /** Shared SDK handshake/adoption used by both stdio branches. */
+  private async adoptSdkTransport(
+    transport: SupervisedStdioTransport
+  ): Promise<void> {
     const client = new McpSdkClient(
       { name: "aiFetchly", version: "1.0.0" },
       { capabilities: {} }
@@ -591,6 +692,13 @@ export class MCPClient {
   async disconnect(): Promise<void> {
     if (!this.connected && !this.sdk) {
       return;
+    }
+
+    // Host-runtime launches own a transient host-context file; release it on
+    // every disconnect path (design §6.2: delete after process exit).
+    if (this.hostLaunch) {
+      getPluginMcpRuntimeResolver().release(this.hostLaunch);
+      this.hostLaunch = null;
     }
 
     if (this.sdk) {

@@ -20,6 +20,7 @@ import {
 } from "@/schemas/config/mcpServer";
 import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { readRuntimeDescriptorFromMetadata } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Build a sanitized `toolSchemas` map (toolName -> { description, inputSchema })
@@ -118,6 +119,11 @@ function buildClientConfig(server: MCPToolEntity): {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  hostRuntime?: {
+    pluginName: string;
+    entry: string;
+    pluginVersion?: string;
+  };
 } {
   const base: {
     host?: string;
@@ -130,6 +136,11 @@ function buildClientConfig(server: MCPToolEntity): {
     args?: string[];
     env?: Record<string, string>;
     cwd?: string;
+    hostRuntime?: {
+      pluginName: string;
+      entry: string;
+      pluginVersion?: string;
+    };
   } = {
     transport: server.transport,
     authType: server.authType,
@@ -138,6 +149,23 @@ function buildClientConfig(server: MCPToolEntity): {
       : undefined,
     timeout: server.timeout,
   };
+
+  // Host-managed runtime branch (plugin PRD §19.5): a validated runtime
+  // descriptor in host-owned metadata wins over any command — the MCPClient
+  // resolves the trusted launch (process.execPath + entry + host context)
+  // and ignores command-style spawning for this server.
+  if (server.transport === "stdio" && server.pluginName) {
+    const descriptor = readRuntimeDescriptorFromMetadata(
+      safeJsonParse(server.metadata ?? "")
+    );
+    if (descriptor) {
+      base.hostRuntime = {
+        pluginName: server.pluginName,
+        entry: descriptor.entry,
+      };
+      return base;
+    }
+  }
 
   if (server.transport === "stdio" && server.command) {
     // Plugin-owned stdio server — use explicit fields.

@@ -41,6 +41,23 @@ export interface SupervisedStdioTransportOptions {
   gracefulCloseMs?: number;
   /** Hard-kill grace period after SIGTERM before SIGKILL (ms). */
   terminateCloseMs?: number;
+  /**
+   * Trusted host-managed Node launch (plugin PRD §19.6). When present, the
+   * transport spawns `executable` (process.execPath) with the entry file as
+   * argv[0] and injects ELECTRON_RUN_AS_NODE=1 AFTER environment
+   * sanitization — plugin-supplied values for that variable stay rejected
+   * (mcpSpawnPolicy MCP_ENV_DENY_NAMES), and the injection cannot be
+   * overridden because it is spread last. `command` is ignored in this mode;
+   * it remains required by the interface for legacy callers.
+   */
+  trustedNodeLaunch?: TrustedNodeLaunch;
+}
+
+export interface TrustedNodeLaunch {
+  /** Host executable (process.execPath) — never taken from plugin data. */
+  readonly executable: string;
+  /** Absolute, host-validated entry file inside the plugin install root. */
+  readonly entryFile: string;
 }
 
 const DEFAULTS = {
@@ -71,9 +88,15 @@ export class SupervisedStdioTransport implements Transport {
   sessionId?: string;
 
   private readonly options: Required<
-    Omit<SupervisedStdioTransportOptions, "cwd" | "env" | "ownerId">
+    Omit<
+      SupervisedStdioTransportOptions,
+      "cwd" | "env" | "ownerId" | "trustedNodeLaunch"
+    >
   > &
-    Pick<SupervisedStdioTransportOptions, "cwd" | "env" | "ownerId">;
+    Pick<
+      SupervisedStdioTransportOptions,
+      "cwd" | "env" | "ownerId" | "trustedNodeLaunch"
+    >;
 
   private child: ChildProcess | null = null;
   /** Byte buffer of the partially-received line. */
@@ -97,6 +120,7 @@ export class SupervisedStdioTransport implements Transport {
       gracefulCloseMs: options.gracefulCloseMs ?? DEFAULTS.gracefulCloseMs,
       terminateCloseMs:
         options.terminateCloseMs ?? DEFAULTS.terminateCloseMs,
+      trustedNodeLaunch: options.trustedNodeLaunch,
     };
   }
 
@@ -108,12 +132,29 @@ export class SupervisedStdioTransport implements Transport {
     if (this.started) {
       throw new Error("Transport already started.");
     }
-    assertShellFreeArgv(this.options.command, this.options.args);
+
+    // Environment assembly order (plugin PRD §19.6):
+    //   1. sanitized allowlisted env + declaration extras (ELECTRON_* and
+    //      friends from the DECLARATION are rejected inside the sanitizer);
+    //   2. ELECTRON_RUN_AS_NODE=1 injected by trusted host code AFTER
+    //      sanitization — only in the host-runtime branch, spread last so a
+    //      plugin-supplied value can never win.
+    const trusted = this.options.trustedNodeLaunch;
+    const command = trusted ? trusted.executable : this.options.command;
+    const argv = trusted
+      ? [trusted.entryFile, ...this.options.args]
+      : this.options.args;
+    assertShellFreeArgv(command, argv);
+
+    const sanitizedEnv = buildSanitizedChildEnv(this.options.env);
+    const childEnv: NodeJS.ProcessEnv = trusted
+      ? { ...sanitizedEnv, ELECTRON_RUN_AS_NODE: "1" }
+      : sanitizedEnv;
 
     const child = spawnOwned(this.options.ownerId ?? "mcp-server", () =>
-      spawn(this.options.command, this.options.args, {
+      spawn(command, argv, {
         stdio: ["pipe", "pipe", "pipe"],
-        env: buildSanitizedChildEnv(this.options.env),
+        env: childEnv,
         cwd: this.options.cwd,
         shell: false,
         windowsHide: true,
