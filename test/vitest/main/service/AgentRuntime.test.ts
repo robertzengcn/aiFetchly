@@ -103,6 +103,24 @@ vi.mock("@/config/skillsRegistry", () => ({
       },
       {
         type: "function",
+        name: "file_write",
+        description: "Write file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "file_edit",
+        description: "Edit file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "shell_execute",
+        description: "Run shell",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
         name: "check_tool_job_status",
         description: "Check job",
         parameters: { type: "object" },
@@ -441,10 +459,11 @@ describe("AgentRuntime", () => {
     expect(lastLoopInput?.request.model).toBeUndefined();
     const toolNames =
       lastLoopInput?.openAITools.map((tool) => tool.function.name) ?? [];
-    expect(toolNames).toContain("file_read");
-    expect(toolNames).toContain("grep_files");
-    expect(toolNames).toContain("glob_files");
-    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).toContain("Grep");
+    expect(toolNames).toContain("Glob");
+    expect(toolNames).toContain("Bash");
+    expect(toolNames).not.toContain("file_read");
     expect(toolNames).not.toContain("haiku");
   });
 

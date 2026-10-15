@@ -2,12 +2,13 @@
 import { randomUUID } from "crypto";
 import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import type { OpenAITool } from "@/api/aiChatApi";
+import type { OpenAITool, ToolExecutionResult } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { OpenAIChatImage } from "@/api/aiChatApi";
 import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
@@ -24,10 +25,12 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import { isClaudeModelAlias } from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
 import {
-  isClaudeModelAlias,
+  getClaudeAgentToolAlias,
   normalizeClaudeAgentToolName,
-} from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
+  translateClaudeAgentToolCall,
+} from "@/service/pluginCompat/claudeAgentTools";
 import {
   resolveToolCatalogMode,
   resolvePositiveIntEnv,
@@ -84,6 +87,53 @@ function normalizeRuntimeDefinition(
     delete normalized.defaultModel;
   }
   return normalized;
+}
+
+async function executeClaudeCompatibleTool(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: SkillExecutionContext,
+  baseExecute: AIChatQueryLoopDeps["executeTool"]
+): Promise<ToolExecutionResult> {
+  const invocations = translateClaudeAgentToolCall(name, args);
+  if (invocations.length === 0) {
+    return {
+      tool_call_id: ctx.toolCallId,
+      tool_name: name,
+      success: false,
+      result: { error: `Claude tool "${name}" did not contain any edits.` },
+      execution_time_ms: 0,
+    };
+  }
+  if (invocations.length === 1) {
+    const only = invocations[0];
+    const result = await baseExecute(only.name, only.args, ctx);
+    return result.tool_name === name ? result : { ...result, tool_name: name };
+  }
+
+  const edits: Record<string, unknown>[] = [];
+  let executionTime = 0;
+  for (const invocation of invocations) {
+    const result = await baseExecute(invocation.name, invocation.args, ctx);
+    executionTime += result.execution_time_ms;
+    edits.push(result.result);
+    if (!result.success || result.result.needsPermissionPrompt === true) {
+      return {
+        ...result,
+        tool_name: name,
+        success: false,
+        result: { ...result.result, edits },
+        execution_time_ms: executionTime,
+      };
+    }
+  }
+  return {
+    tool_call_id: ctx.toolCallId,
+    tool_name: name,
+    success: true,
+    result: { edits, summary: `Applied ${edits.length} edits.` },
+    execution_time_ms: executionTime,
+  };
 }
 
 export interface AgentRuntimeDeps {
@@ -201,8 +251,16 @@ export class AgentRuntime {
         .filter((t) => t.type === "function" && typeof t.name === "string")
         .map((t) => t.name),
       blockedTools: constraints.blockedTools,
+      source: definition.source,
     });
     const exposedTools: OpenAITool[] = exposedNames.map((name) => {
+      const alias = getClaudeAgentToolAlias(name);
+      if (alias) {
+        return toOpenAITool(alias.claudeName, {
+          description: alias.description,
+          parameters: alias.parameters,
+        });
+      }
       const def = allTools.find((t) => t.name === name);
       return toOpenAITool(name, {
         description: def?.description,
@@ -231,7 +289,11 @@ export class AgentRuntime {
       ((name: string, args, ctx) => SkillExecutor.execute(name, args, ctx));
     const getSkill =
       deps?.getSkillDefinition ??
-      ((name: string) => SkillRegistry.getSkill(name) ?? undefined);
+      ((name: string) => {
+        const alias = getClaudeAgentToolAlias(name);
+        const resolved = alias?.aifetchlyName ?? name;
+        return SkillRegistry.getSkill(resolved) ?? undefined;
+      });
 
     let executedToolCalls = 0;
     const policyCheckedExecute: AIChatQueryLoopDeps["executeTool"] = async (
@@ -281,7 +343,12 @@ export class AgentRuntime {
         };
       }
       executedToolCalls += 1;
-      const res = await baseExecute(name, args, ctx);
+      const res = await executeClaudeCompatibleTool(
+        name,
+        args,
+        ctx,
+        baseExecute
+      );
 
       // Headless agents have no UI to surface SkillExecutor's interactive
       // permission prompt, and the v1 runtime has no pause/resume path for

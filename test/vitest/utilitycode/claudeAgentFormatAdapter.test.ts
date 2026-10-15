@@ -74,18 +74,76 @@ Locate definitions.`;
     if (!r.ok) return;
     expect(r.definition.id).toBe("caveman:cavecrew-investigator");
     expect(r.definition.allowedTools).toEqual([
-      "file_read",
-      "grep_files",
-      "glob_files",
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash",
     ]);
     expect(r.definition.defaultModel).toBeUndefined();
     expect(r.manifest.claudeModelAlias).toBe("haiku");
     expect(r.warnings.map((w) => w.message).join("\n")).toContain(
       'Claude model alias "haiku"'
     );
-    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
       'Claude agent tool "Bash"'
     );
+  });
+
+  it("keeps Claude Write and Edit and honors disallowedTools", () => {
+    const md = `---
+name: blog-writer
+description: Writes posts.
+tools: Write, Edit, Read, Bash, Agent, NotebookEdit
+disallowedTools: [Bash]
+---
+
+Write the post.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "blog",
+      sourcePath: "agents/blog-writer.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.allowedTools).toEqual(["Write", "Edit", "Read"]);
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+      'Claude agent tool "NotebookEdit"'
+    );
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
+      'Claude agent tool "Write"'
+    );
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
+      'Claude agent tool "Agent"'
+    );
+  });
+
+  it("grants the default Claude coding tools when tools is omitted", () => {
+    const md = `---
+name: writer
+description: Writes.
+---
+
+Write.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "blog",
+      sourcePath: "agents/writer.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.allowedTools).toEqual([
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Skill",
+    ]);
   });
 
   it("rejects missing name", () => {

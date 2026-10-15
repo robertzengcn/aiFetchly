@@ -12,6 +12,7 @@ import { PluginCommandSourceReader } from "@/service/pluginCompat/PluginCommandS
 import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
+import { syncPersistedPluginAgents } from "@/service/pluginCompat/syncPersistedPluginAgents";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
@@ -65,6 +66,7 @@ export class PluginComponentRegistryService {
       manager.getAgentRegistry(),
       [...loaded.enabled, ...loaded.disabled]
     );
+    await syncPersistedPluginAgents(loaded.enabled);
   }
 
   /**

@@ -80,9 +80,10 @@ The Markdown body must be non-empty.
 
 | Field | Maps to | Notes |
 | --- | --- | --- |
-| `tools` | `allowedTools` | string array |
+| `tools` | `allowedTools` | Claude tool names stay as Claude names. See below. |
 | `skills` | `allowedTools` | unioned with `tools` |
-| `model` | `defaultModel` | string |
+| `disallowedTools` | subtracted from `allowedTools` | Claude subtractive filter; stored on the manifest |
+| `model` | `defaultModel` | string; `haiku`/`sonnet`/`opus` are ignored |
 | `mode` | `mode` | `coordinator`/`specialist`/`verifier`/`formatter`; default `specialist` |
 | `maxTurns` | `maxContinueCalls` | integer |
 | `maxToolCalls` | `maxToolCalls` | integer |
@@ -90,16 +91,40 @@ The Markdown body must be non-empty.
 | `outputSchema` | `outputSchema` | object only |
 | `color` / `background` / `effort` | `manifest.*` | stored for diagnostics only |
 
+### Claude Code tool names
+
+Plugin agents copied from Claude Code declare tools such as `Write`, `Edit`,
+`Read`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, and `Skill`. AiFetchly
+keeps those names on the allowlist and translates each call onto the matching
+AiFetchly tool (`file_write`, `file_edit`, `file_read`, `grep_files`,
+`glob_files`, `shell_execute`, `read_url_content`,
+`scrape_urls_from_search_engine`, `use_skill`). `MultiEdit` runs as a sequence
+of `file_edit` calls. Argument names follow Claude (`file_path`, `old_string`,
+`timeout` in milliseconds).
+
+`tools` may be a comma-separated string, a YAML array, `*`, or omitted. On a
+Claude-format plugin, omitted or `*` grants the default coding set above.
+`Bash(git:*)` is treated as `Bash`. Tools Claude Code withholds from subagents
+(`Agent`, `AskUserQuestion`, plan-mode tools) are dropped with no warning.
+Tools Claude exposes that AiFetchly cannot run yet (`NotebookEdit`,
+`TodoWrite`, and similar) produce a recoverable `agent-unsupported-field`
+warning and are not granted. That warning does not set plugin health to
+`partial_load`.
+
+`disallowedTools` is applied. A plugin agent may use `Bash`, `Write`, and
+`Edit` only when its frontmatter grants them. Email and social tools stay
+blocked. Built-in agents stay blocked from shell tools.
+
 ### Forbidden / ignored fields
 
 These are **ignored** and surfaced as recoverable `agent-unsupported-field`
-warnings in diagnostics. They never affect runtime:
+warnings in diagnostics. They never affect runtime, and they do not by
+themselves mark the plugin `partial_load`:
 
 - `permissionMode`
 - `hooks`
 - `mcpServers`
 - `alwaysAllow`
-- `disallowedTools`
 - `mcp`
 - `servers`
 
