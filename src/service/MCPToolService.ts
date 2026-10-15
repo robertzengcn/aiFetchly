@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { log } from "@/modules/Logger";
 import { MCPToolModule } from "@/modules/MCPToolModule";
@@ -20,6 +21,7 @@ import {
 } from "@/schemas/config/mcpServer";
 import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import {
   readRuntimeDescriptorFromMetadata,
   HOST_CLEANUP_RESERVE_MS,
@@ -266,8 +268,38 @@ export class MCPToolService {
     this.mcpToolModule = mcpToolModule ?? new MCPToolModule();
   }
 
-  private createClientForServer(server: MCPToolEntity): MCPClient {
-    return new MCPClient(buildClientConfig(server));
+  private createClientForServer(
+    server: MCPToolEntity,
+    executeContext?: {
+      readonly executionId: string;
+      readonly deadlineEpochMs?: number;
+    }
+  ): MCPClient {
+    const config = buildClientConfig(server);
+    // Execute-mode host context (design §6.2/§6.3): plugin runtime servers
+    // receive the host-approved browser descriptor (capability-gated, no
+    // application settings exposure) and the authoritative deadline through
+    // the trusted context file — never through model-visible arguments.
+    if (config.hostRuntime && executeContext) {
+      const browser = getPluginBrowserCapabilityService().describe();
+      config.hostRuntime = {
+        ...config.hostRuntime,
+        context: {
+          mode: "execute" as const,
+          executionId: executeContext.executionId,
+          deadlineEpochMs: executeContext.deadlineEpochMs,
+          ...(browser
+            ? {
+                browser: {
+                  executablePath: browser.path,
+                  version: browser.version,
+                },
+              }
+            : {}),
+        },
+      };
+    }
+    return new MCPClient(config);
   }
 
   /**
@@ -793,7 +825,10 @@ export class MCPToolService {
       );
     }
 
-    const client = this.createClientForServer(server);
+    const client = this.createClientForServer(server, {
+      executionId: randomUUID(),
+      deadlineEpochMs: options.deadlineEpochMs,
+    });
     try {
       await client.connect();
       return await client.callToolContent(toolName, params, {
