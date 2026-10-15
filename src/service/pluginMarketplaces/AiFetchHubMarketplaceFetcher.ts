@@ -70,13 +70,20 @@ const entrySourceSchema = z.union([
       version: z.string().max(256).optional(),
     })
     .passthrough(),
-  // Catalog-only zip entries (hub catalog §2) carry no installable source
-  // for the marketplace pipeline — accepted here so one zip row cannot
-  // invalidate the whole catalog; normalizeEntrySource drops it.
+  // Hub zip entries (hub catalog §2, e.g. GitHub release-asset URLs with a
+  // sha256) are installable through the existing `url` pipeline:
+  // UrlPluginFetcher downloads `.zip` URLs and GitHubPluginFetcher handles
+  // `github.com/.../releases/download/...` asset URLs. Accepted here and
+  // normalized to `{source:"url", url}` below so one zip row neither
+  // invalidates the whole catalog nor becomes uninstallable.
   z
     .object({
       source: z.literal("zip"),
       url: z.string().min(1).max(4096),
+      sha256: z
+        .string()
+        .regex(/^[a-fA-F0-9]{64}$/)
+        .optional(),
     })
     .passthrough(),
   z
@@ -218,6 +225,14 @@ function normalizeEntrySource(
     }
     if (r.source === "url" && typeof r.url === "string" && r.url.length > 0) {
       return { source: "url", url: r.url, ...(pinned ? { ref: pinned } : {}) };
+    }
+    if (r.source === "zip" && typeof r.url === "string" && r.url.length > 0) {
+      // Hub zip descriptor → marketplace url source. The hub's `sha256` is a
+      // checksum, not a git ref — deliberately dropped here (never smuggled
+      // into install-pipeline CLI args); the bounded download pipeline
+      // (UrlPluginFetcher / GitHub release-asset path) enforces size,
+      // https-only, and redirect-allowlist guarantees.
+      return { source: "url", url: r.url };
     }
     if (
       r.source === "npm" &&
