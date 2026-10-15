@@ -697,6 +697,7 @@ describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08
     const { input } = makeInput({ binding });
     const result = await loop.runOnce(input, { delivered: false });
     expect(result.type).toBe("completed");
+    expect(calls).toBe(1);
     // Gate reservation + one retry reservation, distinct identities, mirror
     // at 2 against the shared 60-attempt cap.
     expect(captured.reserves).toHaveLength(2);
@@ -958,16 +959,19 @@ describe("AIChatQueryLoop B13b unique attempt identities + retry counting (FR-08
     input.transientRetryConfig = { maxAttempts: 1, baseDelayMs: 30 };
     const result = await loop.run(input);
     expect(result.type).toBe("completed");
-    // Node timers fire late, never early: the measured wait covers the
-    // full 30ms backoff.
-    expect(budget.getConsumed().waitMs).toBeGreaterThanOrEqual(30);
+    // setTimeout + Date.now() can undershoot by 1-2ms under CI load (timer
+    // coalescing + ms truncation; observed 29ms for a 30ms backoff in CI
+    // #663). The contract under test is accumulation + persistence, not
+    // timer exactness — allow the same -5ms tolerance as
+    // RateLimiter.test.ts ("should apply cooldown when configured").
+    expect(budget.getConsumed().waitMs).toBeGreaterThanOrEqual(25);
     expect(
       persists.some(
         (d) =>
           typeof d === "object" &&
           d !== null &&
           typeof (d as Record<string, unknown>).waitMs === "number" &&
-          ((d as Record<string, unknown>).waitMs as number) >= 30
+          ((d as Record<string, unknown>).waitMs as number) >= 25
       )
     ).toBe(true);
   });
