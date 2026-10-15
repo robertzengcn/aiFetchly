@@ -1726,6 +1726,7 @@ export class AIChatQueryEngine {
     let historySelectionAcceptedIds: readonly string[] = [];
     let historySelectionChangedIds: readonly string[] = [];
     let historySelectionRejectedIds: readonly string[] = [];
+    let resolvedSelectionMetadata: readonly ChatV2HistorySelectionMetadata[] = [];
     let assemblyContent = modelContent;
     let selectedHistoryBlock = "";
     try {
@@ -1734,6 +1735,7 @@ export class AIChatQueryEngine {
         savedUser.messageId,
         request.historySelectionIds ?? []
       );
+      resolvedSelectionMetadata = selectionResolution.metadata;
       selectedHistoryBlock = buildSelectedHistoryContextBlock(
         selectionResolution.excerpts
       );
@@ -1755,6 +1757,24 @@ export class AIChatQueryEngine {
       }
       // Non-capacity failures never block the turn (§13.3).
       log.error("[ai-chat-v2] queued history-selection resolve failed:", err);
+    }
+
+    // AC-18/G02: persist the ACCEPTED references onto the promoted user
+    // row (references/provenance only — never the text; §13.3). The direct
+    // path attaches this metadata at row creation; the queued path promotes
+    // first and resolves after, so it merges here. Best-effort: a metadata
+    // write failure logs but never blocks the turn.
+    if (resolvedSelectionMetadata.length > 0) {
+      try {
+        await module.mergeMessageMetadata(savedUser.messageId, {
+          historySelections: resolvedSelectionMetadata,
+        } as Record<string, unknown>);
+      } catch (metaErr) {
+        log.error(
+          "[ai-chat-v2] queued history-selection provenance persist failed:",
+          metaErr
+        );
+      }
     }
 
     // Codex P2 (round 3): when persisted image contentParts exist, the

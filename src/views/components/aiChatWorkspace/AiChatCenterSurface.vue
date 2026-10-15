@@ -1436,6 +1436,9 @@ function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
 watch(conversationId, (next, previous) => {
   if (!next || next === previous) return;
   composerFocusSignal.value += 1;
+  // Re-read the history rollout flag on selection change (mount-time read
+  // races late flag writers — E2E seeding, operator store toggles).
+  refreshHistoryUiFlag();
 });
 
 function onRemoveGeneratedImage(
@@ -2221,6 +2224,21 @@ function handleAgentTaskCancel(agentTaskId: string): void {
  * backend resolution would no-op.
  */
 const historyUiEnabled = ref(false);
+
+/**
+ * The main-process Token flag is readable at runtime ("a runtime toggle
+ * takes effect without restart") — but a single mount-time read races any
+ * late writer (E2E state seeding, an operator toggling the store while
+ * the app boots). Re-check on every selection change so the drawer
+ * surfaces as soon as the flag is on; still fail-closed per read.
+ */
+function refreshHistoryUiFlag(): void {
+  isHistoryUiEnabled()
+    .then((enabled) => {
+      historyUiEnabled.value = enabled;
+    })
+    .catch(() => undefined);
+}
 const showHistoryDrawer = ref(false);
 const selectedContextItems = ref<SelectedContextItem[]>([]);
 /**
@@ -2944,11 +2962,7 @@ onMounted(async () => {
   ensureDeliveredRowsSubscription();
   // FR-HIS-001: fail-closed rollout flag + start-ack routing + compaction
   // progress subscription (one per owning surface).
-  isHistoryUiEnabled()
-    .then((enabled) => {
-      historyUiEnabled.value = enabled;
-    })
-    .catch(() => undefined);
+  refreshHistoryUiFlag();
   window.addEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     onReasoningVisibilityChanged

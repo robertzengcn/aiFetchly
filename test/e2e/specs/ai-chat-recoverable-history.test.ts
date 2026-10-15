@@ -38,6 +38,7 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 import {
   createTemporaryRoot,
   writeStateManifest,
@@ -67,7 +68,15 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // G02 certification path: `/` → `/aiworkspace` is the default surface;
+  // these scenarios must exercise the workspace center, not the legacy V2
+  // dock. Start a selected conversation through the shell strip so sends
+  // have a target (the workspace store refuses sends with no selection).
+  await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
+  await expect(composer(app)).toBeVisible({ timeout: 30_000 });
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  await newChat.waitFor({ state: "visible", timeout: 5_000 });
+  await newChat.click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -123,7 +132,7 @@ async function sendAndWait(app: LaunchedApp, text: string): Promise<void> {
   const send = app.mainWindow.getByTestId("ai-chat-send");
   await expect(send).toBeEnabled({ timeout: 15_000 });
   await send.click();
-  const root = app.mainWindow.getByTestId("ai-chat-root");
+  const root = app.mainWindow.getByTestId("workspace-transcript");
   // A missed click leaves the empty-state copy and the draft in the
   // composer (seen after heavier prior tests in the same worker). Wait a
   // short interval before retrying so a successful send is not doubled.
@@ -235,7 +244,7 @@ async function firstConversationId(app: LaunchedApp): Promise<string | null> {
  * search controls only render after switching tabs.
  */
 async function openHistorySearchTab(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-history-drawer-toggle").click();
+  await app.mainWindow.getByTestId("workspace-history-toggle").click();
   await expect(app.mainWindow.getByTestId("ai-history-drawer")).toBeVisible({
     timeout: 15_000,
   });
@@ -639,7 +648,7 @@ test("AC-18: a selected passage is persisted as references only and clears its c
       // The streamed reply completes — the `start` event has fired by then,
       // which clears the accepted chip (§13.3: accepted selections are
       // consumed into the turn).
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         STREAM_TEXT_FINAL,
         { timeout: 30_000 }
       );
@@ -938,7 +947,8 @@ test("AC-12: source ids from another conversation resolve to nothing without lea
       expect(convA).toBeTruthy();
 
       // Conversation B: brand-new chat + its own turn.
-      await app.mainWindow.getByTestId("new-conversation").click();
+      await app.mainWindow.getByTestId("workspace-new-chat").click();
+      await expect(composer(app)).toBeVisible({ timeout: 15_000 });
       await sendAndWait(app, `ac12-other-${Date.now()}`);
       const convB = await firstConversationId(app);
       expect(convB).toBeTruthy();

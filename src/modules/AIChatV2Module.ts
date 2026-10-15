@@ -288,6 +288,14 @@ export class AIChatV2Module extends BaseModule {
     return saved;
   }
 
+  /** Delegate: merge patch keys into an existing message's metadata. */
+  async mergeMessageMetadata(
+    messageId: string,
+    patch: Record<string, unknown>
+  ): Promise<void> {
+    await this.chatModule.mergeMessageMetadata(messageId, patch);
+  }
+
   async getConversationMessages(
     conversationId: string,
     limit?: number,
