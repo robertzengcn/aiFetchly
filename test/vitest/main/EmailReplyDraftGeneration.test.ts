@@ -5565,6 +5565,132 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
     expect(result.next_action).toBe("discard_and_retry");
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 20_000);
+
+  // R03: the exhausted deadline must NOT cancel the mandatory refusal
+  // audit. The first submission consumes the whole budget with invalid
+  // JSON; the correction is then gated off (lazy recordFailure rejects
+  // before writing, leaving auditMutationAttempted false), and the
+  // terminal owner must still persist the ONE correlated refusal through
+  // the dedicated TERMINAL_AUDIT_BUDGET_MS race — the R03 defect was a
+  // structured outcome with ZERO audit writes.
+  it("an exhausted budget still writes the ONE correlated terminal refusal audit (R03)", async () => {
+    const messageId = await seedDeadlineMessage();
+    let nowMs = 1_000_000;
+    let calls = 0;
+    const svc = buildService({
+      budget: { now: () => nowMs, budgetMs: 100 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () => {
+          calls += 1;
+          nowMs += 10_000; // the first call outlives the tiny budget
+          return completionResponse("{not valid json}");
+        },
+      }),
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.next_action).toBe("discard_and_retry");
+    // Exactly ONE model call — the correction was gated off by expiry.
+    expect(calls).toBe(1);
+    const requestCorrelationId = result.requestCorrelationId;
+    expect(requestCorrelationId).toBeTruthy();
+    // The mandatory terminal refusal row EXISTS — stage generation, code
+    // provider_error, correlated to THIS invocation.
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const refusals = records.filter((r) => r.action === "reply_skipped");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[provider_error]");
+    const meta = JSON.parse(refusals[0]?.metadataJson ?? "{}") as {
+      correlationId?: string;
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    expect(meta.stage).toBe("generation");
+    expect(meta.code).toBe("provider_error");
+  }, 20_000);
+
+  // R03: a terminal audit that cannot finish inside the dedicated 3s bound
+  // must NOT hang the invocation and must NOT re-audit — the original
+  // timeout outcome stands (bounded completion at the terminal budget, no
+  // second write attempt, no phantom row).
+  it("a hung terminal refusal audit still returns the timeout outcome within the terminal bound (R03)", async () => {
+    const messageId = await seedDeadlineMessage();
+    let nowMs = 1_000_000;
+    const hangingAudit = new EmailReplyAuditLogModule();
+    vi.spyOn(hangingAudit, "create").mockImplementation(
+      () => new Promise(() => {}) as Promise<number>
+    );
+    const svc = buildService({
+      budget: { now: () => nowMs, budgetMs: 100 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () => {
+          nowMs += 10_000;
+          return completionResponse("{not valid json}");
+        },
+      }),
+      replyAuditModuleFactory: () => hangingAudit,
+    });
+    const startedAt = Date.now();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    const elapsed = Date.now() - startedAt;
+    // The terminal race RAN: it waited out the dedicated 3s bound (≥2.5s)
+    // before giving up — but completed far under a hang ceiling.
+    expect(elapsed).toBeGreaterThanOrEqual(2_500);
+    expect(elapsed).toBeLessThan(15_000);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.next_action).toBe("discard_and_retry");
+    // Exactly ZERO refusal rows: the write never finished.
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(0);
+  }, 30_000);
+
+  // R03/B10: a terminal audit PERSISTENCE failure is distinguishable from
+  // the timeout — it propagates fail-stop instead of being masked as the
+  // structured provider_error outcome.
+  it("a rejecting terminal refusal audit propagates the persistence failure (R03/B10)", async () => {
+    const messageId = await seedDeadlineMessage();
+    let nowMs = 1_000_000;
+    const failingAudit = new EmailReplyAuditLogModule();
+    vi.spyOn(failingAudit, "create").mockImplementation(
+      async (): Promise<number> => {
+        throw new Error("terminal audit persistence failed");
+      }
+    );
+    const svc = buildService({
+      budget: { now: () => nowMs, budgetMs: 100 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () => {
+          nowMs += 10_000;
+          return completionResponse("{not valid json}");
+        },
+      }),
+      replyAuditModuleFactory: () => failingAudit,
+    });
+    await expect(
+      svc.createDraft({ messageId, useKnowledgeLibrary: false })
+    ).rejects.toThrow("terminal audit persistence failed");
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------
