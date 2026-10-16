@@ -3096,6 +3096,7 @@ export default {
     field_max_tool_calls: "最大ツール呼び出し数",
     field_max_runtime_seconds: "最大実行時間（秒）",
     field_max_continue_calls: "最大継続呼び出し数",
+    field_unlimited: "無制限",
     field_output_schema: "出力スキーマ（JSON、任意）",
     field_warnings: "警告",
     field_no_warnings: "警告なし",

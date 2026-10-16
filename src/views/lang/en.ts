@@ -3146,6 +3146,7 @@ export default {
     field_max_tool_calls: "Max tool calls",
     field_max_runtime_seconds: "Max runtime (seconds)",
     field_max_continue_calls: "Max continue calls",
+    field_unlimited: "Unlimited",
     field_output_schema: "Output schema (JSON, optional)",
     field_warnings: "Warnings",
     field_no_warnings: "No warnings",

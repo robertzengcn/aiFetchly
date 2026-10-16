@@ -131,6 +131,35 @@ describe("buildToolExecutionGroups (FR-042..050)", () => {
     expect(errorRow?.outputKind).toBe("error");
     expect(errorRow?.status).toBe("failed");
     expect(errorRow?.isError).toBe(true);
+    expect(errorRow?.summary).toBe("network");
+  });
+
+  it("shows a subagent failure reason stored only on toolResult.error", () => {
+    const reason =
+      "Agent claude-blog:blog-researcher exceeded max tool calls (8).";
+    const messages = [
+      view(MessageType.TOOL_CALL, {
+        source: "chat-v2",
+        toolCallId: "tc-sub",
+        toolName: "run_subagent",
+      }),
+      view(MessageType.TOOL_RESULT, {
+        source: "chat-v2",
+        toolCallId: "tc-sub",
+        toolName: "run_subagent",
+        toolResult: {
+          success: false,
+          status: "failed",
+          error: reason,
+        },
+        toolResultStatus: "error",
+        success: false,
+      }),
+    ];
+    const row = buildToolExecutionGroups(messages).flatMap((g) => g.executions)[0];
+    expect(row?.status).toBe("failed");
+    expect(row?.outputKind).toBe("error");
+    expect(row?.summary).toBe(reason);
   });
 
   it("keeps running groups expanded and collapses all-success history", () => {

@@ -30,6 +30,7 @@ describe("ClaudeAgentFormatAdapter", () => {
     expect(d.allowedTools).toEqual(["knowledge_library_search"]);
     expect(d.defaultModel).toBe("gpt-5-mini");
     expect(d.mode).toBe("verifier");
+    expect(d.maxToolCalls).toBeNull();
     expect(d.maxContinueCalls).toBe(8);
     expect(d.source).toBe("plugin");
     expect(d.health).toBe("healthy");
@@ -144,6 +145,48 @@ Write.`;
       "WebSearch",
       "Skill",
     ]);
+  });
+
+  it("leaves tool-call and turn limits unset when the file omits them", () => {
+    const md = `---
+name: blog-researcher
+description: Research specialist.
+tools: [WebSearch, WebFetch]
+---
+
+Find sources.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "claude-blog",
+      sourcePath: "agents/blog-researcher.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.maxToolCalls).toBeNull();
+    expect(r.definition.maxContinueCalls).toBeNull();
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("keeps an authored tool-call cap and ignores an invalid maxTurns", () => {
+    const md = `---
+name: reviewer
+description: Reviews drafts.
+maxToolCalls: 12
+maxTurns: 0
+---
+
+Review.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "p",
+      sourcePath: "agents/reviewer.md",
+      namespaceSegments: [],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.maxToolCalls).toBe(12);
+    expect(r.definition.maxContinueCalls).toBeNull();
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain("maxTurns");
   });
 
   it("rejects missing name", () => {

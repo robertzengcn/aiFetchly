@@ -25,7 +25,10 @@
       {{ t('workspaceChat.execution.imagesGenerated') || 'Images generated' }}
     </template>
     <template v-else-if="outputKind === 'error'">
-      <span class="error-summary">{{ displaySummary }}</span>
+      <span
+        class="error-summary"
+        data-testid="workspace-execution-failure-reason"
+      >{{ displaySummary }}</span>
     </template>
     <template v-else-if="outputKind === 'summary'">
       <span class="result-summary">{{ displaySummary }}</span>
@@ -67,9 +70,10 @@ const displaySummary = computed(() => props.summary ?? "");
 
 <style scoped>
 .semantic-result {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 6px;
+  max-width: 100%;
   font-size: 11.5px;
   color: rgba(var(--v-theme-on-surface), 0.7);
   border-radius: 4px;
@@ -82,12 +86,16 @@ const displaySummary = computed(() => props.summary ?? "");
   background: rgba(var(--v-theme-error), 0.08);
 }
 
-.result-summary,
-.error-summary {
+.result-summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+}
+
+.error-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .artifact-reopen {

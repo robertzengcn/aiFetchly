@@ -85,8 +85,8 @@ The Markdown body must be non-empty.
 | `disallowedTools` | subtracted from `allowedTools` | Claude subtractive filter; stored on the manifest |
 | `model` | `defaultModel` | string; `haiku`/`sonnet`/`opus` are ignored |
 | `mode` | `mode` | `coordinator`/`specialist`/`verifier`/`formatter`; default `specialist` |
-| `maxTurns` | `maxContinueCalls` | integer |
-| `maxToolCalls` | `maxToolCalls` | integer |
+| `maxTurns` | `maxContinueCalls` | positive integer; omitted means no turn limit, matching Claude Code |
+| `maxToolCalls` | `maxToolCalls` | positive integer; omitted means no tool-call cap |
 | `maxRuntimeMs` | `maxRuntimeMs` | integer |
 | `outputSchema` | `outputSchema` | object only |
 | `color` / `background` / `effort` | `manifest.*` | stored for diagnostics only |

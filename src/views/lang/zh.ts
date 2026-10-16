@@ -2986,6 +2986,7 @@ export default {
     field_max_tool_calls: "最大工具调用数",
     field_max_runtime_seconds: "最大运行时间（秒）",
     field_max_continue_calls: "最大继续调用数",
+    field_unlimited: "无限制",
     field_output_schema: "输出模式（JSON，可选）",
     field_warnings: "警告",
     field_no_warnings: "无警告",

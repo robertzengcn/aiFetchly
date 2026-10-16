@@ -187,9 +187,20 @@ export class ClaudeAgentFormatAdapter {
       warnings
     );
     const mode = toMode(frontmatter.mode);
-    const maxToolCalls = toPositiveInt(frontmatter.maxToolCalls, 8);
+    // Claude Code applies maxTurns only when the file sets it, and it has
+    // no tool-call counter. Omitted fields stay uncapped (null). An invalid
+    // value is ignored the same way, with a recoverable warning.
+    const maxToolCalls = optionalPositiveInt(frontmatter.maxToolCalls);
+    if (frontmatter.maxToolCalls !== undefined && maxToolCalls === null) {
+      warnings.push(
+        invalidLimitWarning(name, sourcePath, "maxToolCalls")
+      );
+    }
     const maxRuntimeMs = toPositiveInt(frontmatter.maxRuntimeMs, 300000);
-    const maxContinueCalls = toPositiveInt(frontmatter.maxTurns, 8);
+    const maxContinueCalls = optionalPositiveInt(frontmatter.maxTurns);
+    if (frontmatter.maxTurns !== undefined && maxContinueCalls === null) {
+      warnings.push(invalidLimitWarning(name, sourcePath, "maxTurns"));
+    }
     const outputSchema = toOutputSchema(frontmatter.outputSchema);
 
     // Forbidden fields → warnings only; raw value stashed in manifest for diagnostics.
@@ -305,10 +316,30 @@ function toMode(value: unknown): AgentDefinitionView["mode"] {
 }
 
 function toPositiveInt(value: unknown, fallback: number): number {
+  return optionalPositiveInt(value) ?? fallback;
+}
+
+/** Positive integer, or null when the field is omitted or not a positive integer. */
+function optionalPositiveInt(value: unknown): number | null {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value;
   }
-  return fallback;
+  return null;
+}
+
+function invalidLimitWarning(
+  componentName: string,
+  sourcePath: string,
+  field: "maxToolCalls" | "maxTurns"
+): PluginError {
+  return {
+    code: "agent-frontmatter-invalid",
+    componentType: "agent",
+    componentName,
+    path: sourcePath,
+    message: `Agent field "${field}" must be a positive integer and was ignored.`,
+    recoverable: true,
+  };
 }
 
 function toOutputSchema(value: unknown): Record<string, unknown> {

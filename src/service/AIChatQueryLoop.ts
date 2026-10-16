@@ -3800,10 +3800,15 @@ export class AIChatQueryLoop {
               error: extractToolError(toolPayload),
             };
           }
+          const failureDetail = toolResult.success
+            ? ""
+            : ` error=${JSON.stringify(
+                extractToolError(toolPayload).slice(0, 240)
+              )}`;
           log.info(
             `[ai-chat-v2] tool ${call.name} ok=${
               toolResult.success
-            } needsPermission=${isPermissionPromptResult(toolResult)}`
+            } needsPermission=${isPermissionPromptResult(toolResult)}${failureDetail}`
           );
 
           yield {

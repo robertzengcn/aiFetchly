@@ -169,6 +169,38 @@ function sanitizeValue(key: string, value: unknown): unknown {
   return value;
 }
 
+const AUDIT_ERROR_MAX_CHARS = 300;
+
+function readAuditErrorField(body: Record<string, unknown>): string | undefined {
+  for (const key of ["error", "errorMessage", "message"] as const) {
+    const value = body[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    return trimmed.length > AUDIT_ERROR_MAX_CHARS
+      ? `${trimmed.slice(0, AUDIT_ERROR_MAX_CHARS)}…`
+      : trimmed;
+  }
+  return undefined;
+}
+
+/**
+ * Failure text from a skill body that returned `success: false` without
+ * throwing. `run_subagent` puts the agent error on `result.error`.
+ */
+export function toolBodyErrorText(
+  body: Record<string, unknown> | undefined
+): string | undefined {
+  if (!body) return undefined;
+  const direct = readAuditErrorField(body);
+  if (direct) return direct;
+  const nested = body.result;
+  if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+    return readAuditErrorField(nested as Record<string, unknown>);
+  }
+  return undefined;
+}
+
 /** Sanitize args for logging — redacts sensitive keys and truncates long strings. */
 export function sanitizeForLog(
   args: Record<string, unknown>
@@ -769,7 +801,13 @@ async function execute(
       );
     }
 
-    auditLog(name, hookFinalArgs, result.success, result.execution_time_ms);
+    auditLog(
+      name,
+      hookFinalArgs,
+      result.success,
+      result.execution_time_ms,
+      result.success ? undefined : toolBodyErrorText(result.result)
+    );
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

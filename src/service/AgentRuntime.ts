@@ -171,6 +171,21 @@ export interface AgentRuntimeDeps {
   toolResultStorage?: ToolResultStorageService;
 }
 
+/** Turn a loop failure into the text shown on the subagent result. */
+function failureText(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || error.name || "Agent task failed";
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Agent task failed";
+  }
+}
+
 /**
  * Runs one specialist agent task by wrapping AIChatQueryLoop with an
  * agent-scoped tool policy gate and self-contained task packet prompts.
@@ -302,8 +317,13 @@ export class AgentRuntime {
       ctx
     ) => {
       const startedAt = Date.now();
-      if (executedToolCalls >= definition.maxToolCalls) {
-        const message = `Agent ${definition.id} exceeded max tool calls (${definition.maxToolCalls}).`;
+      const toolCallCap = definition.maxToolCalls;
+      if (
+        typeof toolCallCap === "number" &&
+        toolCallCap > 0 &&
+        executedToolCalls >= toolCallCap
+      ) {
+        const message = `Agent ${definition.id} exceeded max tool calls (${toolCallCap}).`;
         await transcript.recordToolCall({
           agentTaskId,
           toolCallId: ctx.toolCallId,
@@ -546,16 +566,17 @@ export class AgentRuntime {
         );
       } else if (result.type === "failed") {
         finalText = result.partialContent;
+        const failedMessage = failureText(result.error);
         await this.taskModule.setStatus(agentTaskId, "failed", {
           finishedAt: new Date(),
-          errorMessage: String(result.error),
+          errorMessage: failedMessage,
         });
         return this.buildResult(
           agentTaskId,
           definition,
           "failed",
           finalText,
-          String(result.error)
+          failedMessage
         );
       } else {
         // paused_for_permission / paused_for_plan_question fallback. The
