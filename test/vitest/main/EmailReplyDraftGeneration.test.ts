@@ -5574,7 +5574,7 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
 // large-window one; the refusal carries a typed correlated audit.
 // ---------------------------------------------------------------------------
 describe("F06 model-aware input budgeting", () => {
-  async function seedBudgetMessage(): Promise<number> {
+  async function seedBudgetMessage(bodyText = "Hello"): Promise<number> {
     const messageModule = new EmailReceivedMessageModule();
     const msg = new EmailReceivedMessageEntity();
     msg.emailServiceId = 4244;
@@ -5587,7 +5587,7 @@ describe("F06 model-aware input budgeting", () => {
     msg.toAddressesJson = "[]";
     msg.ccAddressesJson = null;
     msg.subject = "Hi";
-    msg.bodyText = "Hello";
+    msg.bodyText = bodyText;
     msg.bodyHtmlSanitized = null;
     msg.snippet = null;
     msg.receivedAt = new Date();
@@ -5639,6 +5639,48 @@ describe("F06 model-aware input budgeting", () => {
     };
     expect(meta.stage).toBe("generation");
     expect(meta.code).toBe("needs_human_review");
+  });
+
+  it("a correction that would exceed the window is refused without a second model call (R05)", async () => {
+    // R05: the correction wraps the admitted original plus a bounded
+    // prefix. With a window sized so the original fits but original+prefix
+    // does not, the retry must be refused (typed needs_human_review with
+    // the correction_over_budget code) — never transmitted over-window.
+    // Body at the builder's 2000-char cap plus the fixed system prompt
+    // measures ~981 estimated tokens; the correction wrapper measures
+    // ~1135. Window 3050 → budget 3050 − 1500 − 512 = 1038 lands between
+    // the two, so the original is admitted but the retry must be refused.
+    const messageId = await seedBudgetMessage("x".repeat(2000));
+    const { factory, requests } = fakeApiFactory([
+      completionResponse("this is not valid reply JSON", "stop"),
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelContextWindow: async () => 3_050,
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe('needs_human_review');
+    // Exactly ONE model call — the over-window correction was never sent,
+    // so the valid second response must remain unconsumed.
+    expect(requests).toHaveLength(1);
+    const draftModule = new EmailReplyDraftModule();
+    expect(await draftModule.listByMessage(messageId)).toHaveLength(0);
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const refusals = records.filter((r) => r.action === "reply_skipped");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("correction_over_budget");
   });
 
   it("the same fixed input proceeds for a large-window model", async () => {

@@ -5,6 +5,7 @@ import {
   fitRenderedPrompt,
   FALLBACK_CONTEXT_WINDOW_TOKENS,
   CONTEXT_SAFETY_MARGIN_TOKENS,
+  CHAT_MESSAGE_FRAMING_TOKENS,
 } from "@/service/emailReply/EmailReplyContextBudget";
 import { markSuppliedKnowledgeAudits } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import type { EmailReplyKnowledgeSourceAudit } from "@/entityTypes/emailReceiveAiTypes";
@@ -36,6 +37,24 @@ describe("estimateTokensConservative", () => {
     expect(estimateTokensConservative("日本語テスト文")).toBe(5);
     // Mixed: 4 ASCII (1) + 3 CJK (2) = 3.
     expect(estimateTokensConservative("abcd日本語")).toBe(3);
+  });
+
+  it("counts emoji per code point, not per UTF-16 unit (R05)", () => {
+    // Family emoji: 7 code points (4 emoji + 3 ZWJ) in 11 UTF-16 units.
+    // Counting units would inflate; counting code points is the documented
+    // rule — ceil(7 / 1.5) = 5.
+    expect(estimateTokensConservative("👨‍👩‍👧‍👦")).toBe(5);
+  });
+
+  it("is monotone in input length (R05)", () => {
+    // No cliff or wraparound: longer inputs never estimate smaller. (This
+    // pins estimator sanity, NOT ground-truth accuracy — there is no
+    // vendored tokenizer; enforcement lives in margin + refusal paths.)
+    const dense = "!@#$%^&*(){}[];:,.<>?/\\|`~".repeat(40);
+    const a = estimateTokensConservative(dense);
+    const b = estimateTokensConservative(dense + dense);
+    expect(b).toBeGreaterThanOrEqual(a);
+    expect(a).toBeGreaterThan(0);
   });
 });
 
@@ -148,6 +167,41 @@ describe("fitRenderedPrompt", () => {
     const result = fit(sources, 0, "c".repeat(1_000_000));
     expect(result.fittedSources).toHaveLength(0);
     expect(result.fittedConversation).toBeNull();
+  });
+
+  it("counts fixed framing overhead in every measurement round (R05)", () => {
+    const sources = [source("1:1", "a", "x".repeat(100))];
+    const render = (list: readonly FakeSource[], conv: string | null) =>
+      [
+        "FRAME:",
+        ...list.map((s) => `[${s.name}] ${s.text}`),
+        conv ?? "",
+        "TAIL:",
+      ].join("\n");
+    const base = { systemContent: "SYSTEM", sources, sourceKey: (s: FakeSource) => s.key, sourceName: (s: FakeSource) => s.name, conversationSection: null as string | null, budgetTokens: 100_000, renderUserMessage: render };
+    const without = fitRenderedPrompt(base);
+    const framing = 2 * CHAT_MESSAGE_FRAMING_TOKENS;
+    const withFraming = fitRenderedPrompt({ ...base, extraFixedTokens: framing });
+    // The fixed overhead shifts the measured total exactly and can flip a
+    // near-budget decision: with a budget between the two totals the same
+    // content fits unframed but drops framed.
+    expect(withFraming.promptTokens - without.promptTokens).toBe(framing);
+    const tight = fitRenderedPrompt({
+      ...base,
+      budgetTokens: without.promptTokens,
+      extraFixedTokens: framing,
+    });
+    expect(tight.truncated).toBe(true);
+    expect(tight.droppedSourceKeys).toEqual(["1:1"]);
+  });
+
+  it("pins the framing allowance contract (R05)", () => {
+    // Two submitted messages (system + user): a small positive allowance
+    // that errs toward refusal, negligible against thousand-token budgets.
+    expect(CHAT_MESSAGE_FRAMING_TOKENS).toBeGreaterThan(0);
+    expect(2 * CHAT_MESSAGE_FRAMING_TOKENS).toBeLessThanOrEqual(
+      CONTEXT_SAFETY_MARGIN_TOKENS
+    );
   });
 });
 

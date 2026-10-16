@@ -19,10 +19,27 @@
  * exceed the budget the caller refuses with a typed correlated audit
  * instead of sending a context-stripped prompt.
  *
- * Token estimation is a deliberately CONSERVATIVE heuristic, not a model
- * tokenizer: ASCII-heavy text ≈ 4 chars/token, non-ASCII (CJK, emoji)
- * ≈ 1.5 chars/token — the direction that over-admits nothing. Non-ASCII
- * counted per code point (surrogate pairs count once).
+ * Token estimation is a heuristic admission aid, NOT a model tokenizer and
+ * NOT a proven upper bound (R05): ASCII-heavy text ≈ 4 chars/token,
+ * non-ASCII (CJK, emoji) ≈ 1.5 chars/token, counted per code point
+ * (surrogate pairs count once). This errs toward refusal for prose-heavy
+ * email content but can UNDERCOUNT dense machine text (code, base64/hex,
+ * punctuation runs) whose BPE density exceeds the average ratio. No
+ * tokenizer dependency is vendored (supported providers span unrelated
+ * model families, so no single BPE vocabulary would be ground truth).
+ * Enforcement therefore comes from layers around the estimate, not from
+ * ratio precision:
+ *  - the fixed safety margin absorbs estimator headroom AND the bounded
+ *    correction-prefix growth (~10 lines, well under the margin);
+ *  - the correction path re-checks the budget explicitly and refuses
+ *    instead of sending an over-window retry;
+ *  - unknown model windows are admitted only up to an explicit documented
+ *    ceiling (FALLBACK_CONTEXT_WINDOW_TOKENS — a cap on what WE send, not
+ *    a claim about the model), and genuinely oversized fixed content is
+ *    refused with a typed audit;
+ *  - operators with a verified smaller/odd window set the provider's
+ *    configured context size, which the models endpoint reports as the
+ *    window (verified configured limits count as confirmed — R04).
  */
 
 export const CONTEXT_SAFETY_MARGIN_TOKENS = 512;
@@ -39,6 +56,17 @@ export const FALLBACK_CONTEXT_WINDOW_TOKENS = 32_768;
 
 const ASCII_CHARS_PER_TOKEN = 4;
 const NON_ASCII_CHARS_PER_TOKEN = 1.5;
+
+/**
+ * R05: per-message transport framing allowance (tokens). The admission
+ * measurement counts message CONTENT; the chat transport wraps each
+ * message with role/delimiter framing the estimator cannot see. The
+ * OpenAI tokenizer cookbook documents ~3 tokens of framing per message
+ * (plus 1 per name); local chat formats vary, so this allowance adds one
+ * token of slack and errs toward refusal (safe direction — a few tokens
+ * against thousand-token budgets). Applied per submitted message.
+ */
+export const CHAT_MESSAGE_FRAMING_TOKENS = 4;
 
 /** Conservative token estimate for already-rendered text. */
 export function estimateTokensConservative(
@@ -101,6 +129,13 @@ export interface FitRenderedPromptInput<T> {
   /** Token budget for system + rendered user content. */
   readonly budgetTokens: number;
   /**
+   * R05: fixed tokens added to EVERY measurement round (transport framing
+   * for the submitted messages, etc.). Keeps the fit loop's invariant
+   * (compare measured total vs budget) honest about non-content overhead.
+   * Defaults to 0; production passes per-message framing.
+   */
+  readonly extraFixedTokens?: number;
+  /**
    * Render the user message for the given fitted inputs and return its
    * exact text (the production closure calls buildReplyUserMessage; tests
    * pass a synthetic renderer). Called once per fit round; pure and cheap.
@@ -137,10 +172,12 @@ export function fitRenderedPrompt<T>(
   input: FitRenderedPromptInput<T>
 ): FitRenderedPromptResult<T> {
   const systemTokens = estimateTokensConservative(input.systemContent);
+  const extraFixedTokens = input.extraFixedTokens ?? 0;
   let fittedSources: readonly T[] = [...input.sources];
   let fittedConversation: string | null = input.conversationSection;
   const measure = () =>
     systemTokens +
+    extraFixedTokens +
     estimateTokensConservative(
       input.renderUserMessage(fittedSources, fittedConversation)
     );

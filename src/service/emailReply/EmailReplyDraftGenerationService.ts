@@ -1495,9 +1495,11 @@ export class EmailReplyDraftGenerationService {
     // message, and caller goal/tone/instructions are NEVER truncated; only
     // retrieved sources (least-relevant last) and conversation history
     // (oldest first) shrink. Dropped source identities feed F07 provenance.
-    const { fitRenderedPrompt, inputTokenBudget } = await import(
-      "@/service/emailReply/EmailReplyContextBudget"
-    );
+    const {
+      fitRenderedPrompt,
+      inputTokenBudget,
+      CHAT_MESSAGE_FRAMING_TOKENS,
+    } = await import("@/service/emailReply/EmailReplyContextBudget");
     const maxOutputTokens = await this.effectiveReplyMaxTokens();
     const contextWindowTokens = await this.effectiveContextWindowTokens();
     const promptBudget = inputTokenBudget(
@@ -1513,6 +1515,9 @@ export class EmailReplyDraftGenerationService {
       sourceName: (s) => s.documentName,
       conversationSection,
       budgetTokens: promptBudget,
+      // R05: submissions carry [system, user] — count both messages'
+      // transport framing in every fit measurement, not just content.
+      extraFixedTokens: 2 * CHAT_MESSAGE_FRAMING_TOKENS,
       renderUserMessage: (sources, conversation) => {
         const rendered = buildReplyUserMessage({
           message,
@@ -1623,7 +1628,9 @@ export class EmailReplyDraftGenerationService {
     //    is no longer re-caught by a transport-error handler and reinterpreted
     //    as a generic provider failure (which previously caused a second audit
     //    attempt and lost the intended stage/code).
-    const attempt = await this.attemptLlmGeneration(systemMsg, userMsg);
+    const attempt = await this.attemptLlmGeneration(systemMsg, userMsg, {
+      promptBudgetTokens: promptBudget,
+    });
     if (attempt.kind !== "ok") {
       // T07: release the reservation on every failure path — the lease must
       // not outlive a failed invocation (§8.2).
@@ -2644,7 +2651,8 @@ export class EmailReplyDraftGenerationService {
    */
   private async attemptLlmGeneration(
     systemMsg: OpenAIChatMessage,
-    userMsg: OpenAIChatMessage
+    userMsg: OpenAIChatMessage,
+    budget: { readonly promptBudgetTokens: number }
   ): Promise<
     | {
         readonly kind: "ok";
@@ -2696,14 +2704,39 @@ export class EmailReplyDraftGenerationService {
         }
       }
       incrementReplyMetric("correction_attempt", { stage: "generation" });
+      const correctionContent = buildCorrectionPrompt({
+        originalUserContent: openAIContentToString(userMsg.content),
+        codes: first.codes,
+      });
+      // R05: the correction wraps the admitted original plus a bounded
+      // prefix — re-check the budget BEFORE sending. A near-budget original
+      // plus the prefix can exceed the window; sending it would overflow a
+      // small model. Refuse with a typed code (the caller routes
+      // validation_failed to needs_human_review) instead of transmitting
+      // an over-window retry. Measured with the same estimator + framing
+      // as admission so the check cannot pass what admission would refuse.
+      const { estimateTokensConservative, CHAT_MESSAGE_FRAMING_TOKENS } =
+        await import("@/service/emailReply/EmailReplyContextBudget");
+      const correctionTokens =
+        estimateTokensConservative(
+          typeof systemMsg.content === "string" ? systemMsg.content : ""
+        ) +
+        2 * CHAT_MESSAGE_FRAMING_TOKENS +
+        estimateTokensConservative(correctionContent);
+      if (correctionTokens > budget.promptBudgetTokens) {
+        incrementReplyMetric("correction_over_budget", {
+          stage: "generation",
+        });
+        return {
+          kind: "validation_failed",
+          codes: [...first.codes, "correction_over_budget"],
+        };
+      }
       const secondSubmission = await this.callLlmRawWithHintFallback(
         systemMsg,
         {
           role: "user",
-          content: buildCorrectionPrompt({
-            originalUserContent: openAIContentToString(userMsg.content),
-            codes: first.codes,
-          }),
+          content: correctionContent,
         },
         { stage: "correction" }
       );
