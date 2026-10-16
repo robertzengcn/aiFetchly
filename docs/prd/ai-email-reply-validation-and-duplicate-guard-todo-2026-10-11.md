@@ -423,3 +423,87 @@ upgrade (populated old-schema suites + healthy-startup E2E). Release gates
 integration proves network boundaries — DONE in-checkout. Still operator:
 hosted-JSON acceptance, §5 baselines against a pre-change baseline, and the
 human release-signoff decision itself, which no checkout can supply.
+
+## 2026-10-16 re-audit resolutions (F01–F09, T01/T02)
+
+The 2026-10-16 re-audit (`...-todo-2026-10-16.md`, reviewed revision
+`456fb62f`) confirmed N01–N09/G01/G02/G04 as fixed and reported narrower
+residual/newly-introduced defects F01–F09 plus test-truth updates T01, UI
+work T02, and acceptance T03 — all code-executable items below are now
+fixed on this branch, each with its stated regression:
+
+- F01 (P1): the sibling-positive cluster branch no longer sits inside a
+  swallowing try/catch — deliberate refusals and audit failures propagate
+  while only the cluster READ is fenced; an unreadable cluster skips the
+  fresh fast-path and forces a verified refresh. Commit `8ffe9b783`;
+  regressions drive the ACTUAL delivery method (mid-flight sibling
+  refusal with zero SMTP + failed finalization + one skip event;
+  unreadable-cluster refresh; dead-claim fence).
+- F02 (P1): submitter liveness spans claim-to-finalization with one
+  encompassing finally (no leak blocks later legitimate reconciliation);
+  a conditional ownership fence re-reads the attempt immediately before
+  SMTP and refuses a dead claim (mapped terminal code, one skip audit,
+  zero submissions under it) — same commit.
+- F03: negative writes are monotonic (late older observations match zero
+  rows) and a write completing past expiry is voided by exact timestamp
+  match (newer negatives and sticky positives untouched). Port interface
+  requires void support (fail-closed). Commit `8044d8e5b`; model-level
+  real-SQLite tests + a service-level deferred-persistence-past-deadline
+  choreography (unknown returned, row voided, later invocation re-probes).
+- F04: acquire takes an absolute owner expiry (refuses `expired` with no
+  writes at entry and at the mutation phase — wall-clock for the queued
+  wait, caller-clock for fast-fail); granted leases clamp to the owner
+  expiry; generation passes its deadline end and converts `expired` to the
+  transport deadline failure. Commit `2f25ead95`; real-mutex queued-expiry
+  test (no live owner, immediate retry unblocked) + clamp/reclaim test.
+- F05: lazy race factories (expired deadlines reject before starting new
+  mutations) + ONE bounded terminal timeout owner (releases, audits at
+  most once — never re-auditing an attempted write — returns the
+  structured provider_error outcome; DB errors still propagate fail-stop).
+  Pre-acquire stages convert deadline errors to the same outcome
+  (uniform return-never-throw contract per the profile-load precedent).
+  Commit `d9432150b`.
+- F06: input budget follows the SELECTED model's context window minus
+  reserved output minus margin over the EXACT rendered prompt (builder
+  caps/framing counted); conservative mixed-script estimator; unknown
+  models get an explicit 32k bound (production resolves exact windows via
+  the catalog limit-source signal); oversized fixed content refuses with a
+  typed correlated needs_human_review audit. F07: retrieval audits persist
+  `suppliedToPrompt` per chunk (dropped chunks keep diagnostics, never
+  presented as grounding); result DTO returns exactly supplied sources;
+  truncation warning names omitted sources. Commit `f01e42257`; budget/
+  marking units (15) + small-window-refusal vs large-window-success
+  contrast tests.
+- F08: readiness defaults to pending; isolated vitest workers explicitly
+  mark passed in the shared setup file via a DEFERRED dynamic import (a
+  static import breaks per-file Token mocking in archive/history suites —
+  diagnosed by bisection). Production background re-asserts pending before
+  async validation. Commit `e23cf6184` + setup fixup `1085f6e0b`.
+- F09: `isHumanReviewPendingForRevision` is the single shared derivation
+  (model flag minus current-revision resolution) used by the approval gate,
+  all three reuse paths, and the new `humanReviewPending` DTO field; raw
+  model provenance retained. Commit `723562746`; flagged/resolved/edited
+  reuse-guidance loop tests.
+- T01: the three failing tests fixed per the re-audit's guidance —
+  capability memo tests rewritten for model-keyed memo + changed-model
+  re-resolution; correction-deadline now returns the typed failure (F05);
+  recovery late-success asserts terminal acceptance preservation + a
+  held-submitter quiescence refusal with restart-eligible retry (F02
+  pre-handoff window retained separately). Full main suite: all
+  email-reply suites green in every run (focused and full); remaining
+  full-run failures are confined to archive/Token-mock/history/ElectronStore
+  suites that pass in isolation and small batches — load-dependent
+  pre-existing flakiness also noted in earlier reports (e.g. the
+  StreamEventProcessor timing race), unrelated to this diff and reproduced
+  with the F08 fixture fully removed.
+- T02: visible review flow — `ReplyDraftReviewCard` (flag chip, original
+  reasons/questions, current/stale resolution, note input, resolve control
+  with loading/disabled/error states, six languages) on a new draft-detail
+  route; detail DTO/API expose `currentRevisionId`; AI tools cannot
+  acknowledge (no tool registration — verified). 6 component tests + an E2E
+  that clicks the real control (renders flag, approve refused, click
+  resolves, UI shows resolved, approve succeeds).
+- T03: loopback coverage retained and extended (5th E2E spec file for local
+  generation; guarded-success spec grew the UI click flow). Live hosted AI,
+  live provider-family IMAP, §5 baselines, and the human signoff remain
+  operator-side and are not claimed here; the pilot plan §5 stays EMPTY.
