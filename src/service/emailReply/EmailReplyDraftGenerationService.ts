@@ -1978,6 +1978,12 @@ export class EmailReplyDraftGenerationService {
       correctionAttempted,
       hintFallbackUsed,
     });
+    // R10: the commit wait itself is INTENTIONALLY not raced against the
+    // invocation deadline. Atomic commit-outcome certainty cannot be
+    // timeout-wrapped: a timeout cannot undo a later-completing write, so
+    // racing it would trade a known outcome (committed-or-rolled-back,
+    // reported truthfully) for ambiguity. Owner-expiry is enforced INSIDE
+    // the transaction instead (R09 final fence with an injected clock).
     let savedDraftId: number;
     try {
       const commitResult = await this.draftModule.commitGeneratedDraft({
@@ -2119,18 +2125,35 @@ export class EmailReplyDraftGenerationService {
     //     transaction with the request correlation id; this broader audit row
     //     carries classification/knowledge/preview provenance and may fail
     //     without affecting the persisted draft).
-    await this.writeAutoAudit({
-      emailServiceId: message.emailServiceId,
-      messageId: message.id,
-      draftId: savedDraftId,
-      classification: authoritativeClassification,
-      confidence: authoritativeConfidence,
-      knowledgeQuery: knowledge.query,
-      knowledgeAudits: suppliedKnowledgeAudits,
-      generatedSubject: subject,
-      generatedBodyPreview: bodyText.slice(0, 400),
-      warnings,
-    });
+    // R10: raced against the REMAINING invocation budget (lazy factory — an
+    // already-exhausted budget skips the write entirely). On timeout or
+    // rejection the already-committed draft is still returned: reporting
+    // this optional write as a generation failure would invite a replacement
+    // generation and risk a duplicate draft, and the required audit trail
+    // already landed atomically. The skip is logged (the UI-visible mirror
+    // row missing for an existing draft is itself diagnosable); no
+    // `audit_failure` stoppage metric fires because the work did NOT stop.
+    try {
+      await this.raceWithDeadline("auto_audit", () =>
+        this.writeAutoAudit({
+          emailServiceId: message.emailServiceId,
+          messageId: message.id,
+          draftId: savedDraftId,
+          classification: authoritativeClassification,
+          confidence: authoritativeConfidence,
+          knowledgeQuery: knowledge.query,
+          knowledgeAudits: suppliedKnowledgeAudits,
+          generatedSubject: subject,
+          generatedBodyPreview: bodyText.slice(0, 400),
+          warnings,
+        })
+      );
+    } catch (error) {
+      console.error(
+        `Optional post-commit auto audit for draft ${savedDraftId} did not complete; returning the committed draft:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
 
     return {
       success: true,

@@ -23,6 +23,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
@@ -5655,5 +5656,93 @@ describe("F06 model-aware input budgeting", () => {
     });
     expect(result.success).toBe(true);
     expect(requests.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R10 — the optional post-commit auto audit is bounded by the remaining
+// budget and never turns a committed draft into a reported failure.
+// ---------------------------------------------------------------------------
+describe("R10 bounded post-commit auto audit", () => {
+  async function seedAutoAuditMessage(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-aa-${Math.random()}`;
+    msg.messageId = `<m-aa-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("a hanging optional audit still returns the committed draft within budget", async () => {
+    const messageId = await seedAutoAuditMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const hangingAutoAudit = new EmailAutoReplyAuditLogModule();
+    vi.spyOn(hangingAutoAudit, "create").mockImplementation(
+      () => new Promise(() => {}) as Promise<number>
+    );
+    const svc = buildService({
+      apiFactory: factory,
+      autoAuditModuleFactory: () => hangingAutoAudit,
+      budget: { budgetMs: 2_000 },
+    });
+    const startedAt = Date.now();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    // Bounded completion (2s race + overhead), NOT a five-minute hang, and
+    // the committed draft is returned — never re-driven as a failure.
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(typeof result.draftId).toBe("number");
+    // Exactly one draft persisted (no duplicate generation was invited).
+    const draftModule = new EmailReplyDraftModule();
+    expect(await draftModule.listByMessage(messageId)).toHaveLength(1);
+  }, 30_000);
+
+  it("a rejecting optional audit still returns the committed draft", async () => {
+    const messageId = await seedAutoAuditMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const failingAutoAudit = new EmailAutoReplyAuditLogModule();
+    vi.spyOn(failingAutoAudit, "create").mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      throw new Error("late auto-audit rejection");
+    });
+    const svc = buildService({
+      apiFactory: factory,
+      autoAuditModuleFactory: () => failingAutoAudit,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const draftModule = new EmailReplyDraftModule();
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.id).toBe(result.draftId);
   });
 });
