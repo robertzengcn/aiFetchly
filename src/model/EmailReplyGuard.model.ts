@@ -51,7 +51,14 @@ export type ReservationAcquireResult =
   | { readonly status: "acquired"; readonly guardId: number }
   | { readonly status: "generation_in_progress" }
   | { readonly status: "reusable"; readonly draftId: number }
-  | { readonly status: "blocked"; readonly code: EmailReplyPolicyCode };
+  | { readonly status: "blocked"; readonly code: EmailReplyPolicyCode }
+  /**
+   * F04: the caller's invocation budget elapsed before the lease could be
+   * claimed — no row was written and no live owner was created. A detached
+   * loser (its `raceWithDeadline` already rejected) discards this; a
+   * synchronous caller converts it to a deadline failure, never a draft.
+   */
+  | { readonly status: "expired" };
 
 /**
  * Result of re-validating a previously-identified reusable draft (R15).
@@ -94,6 +101,17 @@ export interface AcquireReservationInput {
   readonly now: Date;
   /** The seed row's normalized RFC id, used to resolve the canonical cluster. */
   readonly normalizedMessageId: string | null;
+  /**
+   * F04: absolute invocation expiry (the caller's aggregate deadline end).
+   * The acquire refuses with `expired` — writing nothing — once this passes,
+   * checked at transaction entry and again immediately before the mutation
+   * phase, so a request that waited out its budget in the write queue can
+   * never become a live owner. The granted lease is additionally clamped to
+   * this instant, so even a commit landing exactly on the boundary expires
+   * with the invocation instead of outliving it. Absent = no owner deadline
+   * (recovery paths); lease applies as given.
+   */
+  readonly ownerExpiresAt?: Date;
 }
 
 /**
@@ -148,6 +166,15 @@ export class EmailReplyGuardModel extends BaseDb {
     input: AcquireReservationInput
   ): Promise<ReservationAcquireResult> {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
+      // F04 checkpoint 1: fail fast when the owner's budget already elapsed
+      // in the write queue — before any evidence work or mutation.
+      if (
+        input.ownerExpiresAt !== undefined &&
+        input.ownerExpiresAt !== null &&
+        input.now.getTime() >= input.ownerExpiresAt.getTime()
+      ) {
+        return { status: "expired" };
+      }
       const evidence = await readClusterEvidence(manager, {
         emailServiceId: input.emailServiceId,
         normalizedMessageId: input.normalizedMessageId,
@@ -193,6 +220,32 @@ export class EmailReplyGuardModel extends BaseDb {
         },
       });
 
+      // F04 checkpoint 2: the evidence read + row lookup above are awaits —
+      // the owner's budget may have elapsed while queued/reading. Re-check
+      // against TRUE wall time here (input.now is stale by construction once
+      // we waited): an expired owner must not mutate, even though the
+      // cluster verdict above may be reusable/blocked. No writes have
+      // happened yet, so refusing here creates no live owner and disturbs
+      // no guard row.
+      const ownerExpired =
+        input.ownerExpiresAt !== undefined &&
+        input.ownerExpiresAt !== null &&
+        Date.now() >= input.ownerExpiresAt.getTime();
+      if (ownerExpired) {
+        return { status: "expired" };
+      }
+      // F04 lease clamp: a granted lease never outlives the owner's
+      // invocation budget. A commit landing exactly on the expiry boundary
+      // (after checkpoint 2, before the write lands) still expires with the
+      // invocation instead of stranding a five-minute live lease with no
+      // owner to release it — the next retry reclaims immediately.
+      const effectiveLeaseExpiresAt =
+        input.ownerExpiresAt !== undefined &&
+        input.ownerExpiresAt !== null &&
+        input.leaseExpiresAt.getTime() > input.ownerExpiresAt.getTime()
+          ? input.ownerExpiresAt
+          : input.leaseExpiresAt;
+
       if (!existing) {
         const guard = new EmailReplyGuardEntity();
         guard.emailServiceId = input.emailServiceId;
@@ -200,7 +253,7 @@ export class EmailReplyGuardModel extends BaseDb {
         guard.messageId = input.messageId;
         guard.phase = "generating";
         guard.ownerToken = input.ownerToken;
-        guard.leaseExpiresAt = input.leaseExpiresAt;
+        guard.leaseExpiresAt = effectiveLeaseExpiresAt;
         guard.activeDraftId = null;
         guard.activeAttemptId = null;
         try {
@@ -245,12 +298,13 @@ export class EmailReplyGuardModel extends BaseDb {
       const sameOwner = row.ownerToken === input.ownerToken;
 
       if (sameOwner && (row.phase === "generating" || row.phase === "draft_ready")) {
-        // Re-entrant acquire by the same owner — extend the lease.
+        // Re-entrant acquire by the same owner — extend the lease (F04:
+        // clamped to the owner expiry, never beyond the invocation).
         const renewed = await manager
           .getRepository(EmailReplyGuardEntity)
           .update(
             { id: row.id, ownerToken: input.ownerToken },
-            { phase: "generating", leaseExpiresAt: input.leaseExpiresAt, messageId: input.messageId }
+            { phase: "generating", leaseExpiresAt: effectiveLeaseExpiresAt, messageId: input.messageId }
           );
         if ((renewed.affected ?? 0) > 0) {
           return { status: "acquired", guardId: row.id };
@@ -260,7 +314,8 @@ export class EmailReplyGuardModel extends BaseDb {
 
       if (isIdle || leaseExpired) {
         // Reclaim an idle or expired row. Fenced by phase/lease so a
-        // concurrent reclaim by a different owner yields 0 rows.
+        // concurrent reclaim by a different owner yields 0 rows. F04: the
+        // claimed lease is clamped to the owner expiry.
         const reclaimed = await manager
           .getRepository(EmailReplyGuardEntity)
           .update(
@@ -270,7 +325,7 @@ export class EmailReplyGuardModel extends BaseDb {
             {
               phase: "generating" as GuardPhase,
               ownerToken: input.ownerToken,
-              leaseExpiresAt: input.leaseExpiresAt,
+              leaseExpiresAt: effectiveLeaseExpiresAt,
               messageId: input.messageId,
               activeDraftId: null,
               activeAttemptId: null,

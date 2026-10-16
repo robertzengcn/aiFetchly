@@ -655,6 +655,12 @@ export class EmailReplyDraftGenerationService {
     // deadline. The acquire transaction itself reconciles the canonical
     // cluster atomically (the mutation fence); the race only bounds a hung
     // wait and never substitutes for the in-transaction reconciliation.
+    // F04: absolute invocation expiry for the acquire transaction. A request
+    // that waits out its budget in the write queue must fail instead of
+    // becoming a live owner after the caller already gave up; the model
+    // additionally clamps any granted lease to this instant.
+    const ownerExpiresAt =
+      this.deadline !== null ? new Date(this.deadline.endsAtMs()) : undefined;
     const reservation = await this.raceWithDeadline(
       "reservation_acquire",
       this.guardModuleForNow().acquireReservation({
@@ -665,8 +671,21 @@ export class EmailReplyDraftGenerationService {
         leaseExpiresAt,
         now: new Date(this.nowForInvocation()),
         normalizedMessageId: message.normalizedMessageId,
+        ...(ownerExpiresAt !== undefined ? { ownerExpiresAt } : {}),
       })
     );
+    if (reservation.status === "expired") {
+      // The budget elapsed before the lease could be claimed (typically a
+      // detached loser whose race already rejected): surface the same
+      // transport deadline failure the race produces, never a draft.
+      incrementReplyMetric("deadline_exceeded", {
+        stage: "reservation_acquire",
+      });
+      throw new LlmTransportError(
+        "Generation reservation expired before acquire.",
+        { deadlineExceeded: true }
+      );
+    }
     incrementReplyMetric(
       "reservation_outcome",
       reservation.status === "blocked"

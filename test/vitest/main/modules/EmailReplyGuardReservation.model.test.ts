@@ -434,6 +434,106 @@ describe("EmailReplyGuardModel reservation (T07) — DB integration", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // F04 — an acquire that waits out its owner's budget in the write queue
+  // must fail instead of becoming a live owner after the caller gave up.
+  // The transaction checks the absolute owner expiry at entry and again at
+  // the mutation phase (real queued waits through the shared reply mutex —
+  // a mock promise that never writes would not exercise this), and any
+  // granted lease is clamped to the owner expiry so a boundary commit dies
+  // with the invocation instead of stranding a five-minute lease.
+  // ---------------------------------------------------------------------------
+  it("F04: already-expired owner refuses without touching the guard", async () => {
+    const msg = await seedMessage();
+    const replyKey = canonicalReplyKey({
+      normalizedMessageId: msg.normalizedMessageId,
+      rowId: msg.id,
+    });
+    const result = await guardModel.acquireReservation(
+      acquireInput({
+        replyKey,
+        messageId: msg.id,
+        ownerExpiresAt: new Date(Date.now() - 1_000),
+      })
+    );
+    expect(result).toEqual({ status: "expired" });
+    expect(await guardModel.findByReplyKey(SERVICE_ID, replyKey)).toBeNull();
+  });
+
+  it("F04: queued acquire past owner expiry creates no live owner; immediate retry succeeds", async () => {
+    const { runReplyTxn } = await import("@/model/replyTxn");
+    const msg = await seedMessage();
+    const replyKey = canonicalReplyKey({
+      normalizedMessageId: msg.normalizedMessageId,
+      rowId: msg.id,
+    });
+    // Occupy the shared write mutex so the acquire below waits in queue.
+    let releaseQueue!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const holder = runReplyTxn(SqliteDb.getInstance(dbpath), async () => {
+      await gate;
+      return "held";
+    });
+    const acquireP = guardModel.acquireReservation(
+      acquireInput({
+        replyKey,
+        messageId: msg.id,
+        ownerToken: "d".repeat(128),
+        ownerExpiresAt: new Date(Date.now() + 100),
+      })
+    );
+    // Out-wait the owner budget while the acquire is still queued.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    releaseQueue();
+    const result = await acquireP;
+    await holder;
+    expect(result).toEqual({ status: "expired" });
+    // No live owner was created by the dead invocation.
+    expect(await guardModel.findByReplyKey(SERVICE_ID, replyKey)).toBeNull();
+    // An immediate retry is not blocked by the dead invocation.
+    const retry = await guardModel.acquireReservation(
+      acquireInput({
+        replyKey,
+        messageId: msg.id,
+        ownerToken: "e".repeat(128),
+      })
+    );
+    expect(retry.status).toBe("acquired");
+  }, 20_000);
+
+  it("F04: granted lease is clamped to the owner expiry and reclaims right after", async () => {
+    const msg = await seedMessage();
+    const replyKey = canonicalReplyKey({
+      normalizedMessageId: msg.normalizedMessageId,
+      rowId: msg.id,
+    });
+    const ownerExpiry = new Date(Date.now() + 200);
+    const result = await guardModel.acquireReservation(
+      acquireInput({
+        replyKey,
+        messageId: msg.id,
+        ownerToken: "f".repeat(128),
+        leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+        ownerExpiresAt: ownerExpiry,
+      })
+    );
+    expect(result.status).toBe("acquired");
+    if (result.status !== "acquired") throw new Error("expected acquire");
+    const row = await guardModel.read(result.guardId);
+    expect(row?.leaseExpiresAt?.getTime()).toBeLessThanOrEqual(
+      ownerExpiry.getTime()
+    );
+    // Past the clamped lease, the recovery sweep reclaims — no stranded
+    // five-minute owner outlives the dead invocation.
+    const reclaimed = await guardModel.reclaimExpiredReservation({
+      guardId: result.guardId,
+      now: new Date(Date.now() + 1_000),
+    });
+    expect(reclaimed).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
   // D2 (review): the conditional-acquire INSERT path's bare `catch {}` was a
   // silent swallow. The catch now binds the error, rethrows non-unique-constraint
   // failures (R-2: never mask a persistent DB error as a transient retry

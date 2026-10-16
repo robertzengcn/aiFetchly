@@ -92,6 +92,12 @@ export interface GenerationDeadline {
   remainingMs(): number;
   /** True when the budget is exhausted. */
   expired(): boolean;
+  /**
+   * F04: absolute invocation end in the deadline's clock domain
+   * (start + budget). Lets owners clamp leases and pass absolute expiry
+   * into transactions instead of request-relative durations.
+   */
+  endsAtMs(): number;
 }
 
 /**
@@ -115,6 +121,9 @@ export function startGenerationDeadline(opts?: {
     },
     expired(): boolean {
       return this.remainingMs() <= 0;
+    },
+    endsAtMs(): number {
+      return start + budgetMs;
     },
   };
 }
