@@ -200,6 +200,52 @@ function readRepoFile(relPath: string): string {
   return fs.readFileSync(path.join(process.cwd(), relPath), "utf8");
 }
 
+describe("T01 (round 4) — per-worker SETTINGS isolation alongside DB isolation", () => {
+  test("the setupFile assigns a worker-unique ELECTRON_USER_DATA_PATH", () => {
+    const userDataPath = process.env.ELECTRON_USER_DATA_PATH;
+    expect(
+      userDataPath,
+      "ELECTRON_USER_DATA_PATH must be set by the isolatedTmpDir setupFile"
+    ).toBeDefined();
+    // Nested under THIS worker's unique TMPDIR (not a shared location):
+    // upgrade-validation suites intentionally write/clear the kill switch,
+    // and without per-worker settings that state leaks into unrelated
+    // workers' Token stores ("unexpected kill-switch refusal" flakes).
+    const tmpdir = process.env.TMPDIR as string;
+    expect(
+      userDataPath!.startsWith(tmpdir),
+      `settings dir ${userDataPath} must nest under the worker-unique dir ` +
+        `${tmpdir}`
+    );
+  });
+
+  test("the setupFile pins settings isolation with a plain env assignment (no Token chain)", () => {
+    // Same tamper-evident style as the V01/F08 checks above: the mechanism
+    // must stay a side-effect-free env assignment. Importing the Token /
+    // electron-store chain here would reintroduce the vi.mock race this
+    // file exists to prevent.
+    const setup = stripComments(readRepoFile("test/vitest/_setup/isolatedTmpDir.ts"));
+    expect(
+      /process\.env\.ELECTRON_USER_DATA_PATH\s*=/.test(setup),
+      "isolatedTmpDir.ts must assign process.env.ELECTRON_USER_DATA_PATH " +
+        "so ElectronStoreService.resolveUserDataPath prefers the worker dir " +
+        "over Electron userData / project-name storage"
+    ).toBe(true);
+  });
+
+  test("the store resolver prefers the env path (documents the precedence this relies on)", () => {
+    const resolver = stripComments(
+      readRepoFile("src/modules/electronstoreservice.ts")
+    );
+    expect(
+      resolver.indexOf("process.env.ELECTRON_USER_DATA_PATH") <
+        resolver.indexOf('app.getPath("userData")'),
+      "resolveUserDataPath must consult ELECTRON_USER_DATA_PATH before " +
+        "Electron userData — otherwise the worker env assignment has no effect"
+    ).toBe(true);
+  });
+});
+
 describe("F08 fixture — setupFile readiness marking must not race per-file vi.mock", () => {
   test("the shared setupFile performs NO dynamic imports", () => {
     const setup = stripComments(readRepoFile("test/vitest/_setup/isolatedTmpDir.ts"));

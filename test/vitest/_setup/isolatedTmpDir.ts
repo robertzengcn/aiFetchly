@@ -87,6 +87,17 @@ function setupIsolatedTmpDir(): void {
   // `${workerDir}/aifetchly-test` — unique per worker process.
   process.env.TMPDIR = workerDir;
 
+  // T01 (round 4): isolate SETTINGS per worker too, not just SQLite paths.
+  // `ElectronStoreService.resolveUserDataPath` prefers
+  // `ELECTRON_USER_DATA_PATH` over Electron userData / project-name storage,
+  // so every Token/electron-store read (kill switch, upgrade validation,
+  // provider config) lands in this worker's own directory. Without this,
+  // upgrade-validation suites that intentionally write/clear the kill
+  // switch leak that state into unrelated workers' stores, producing the
+  // "unexpected kill-switch refusal" class of parallel-run flakes. Plain
+  // env assignment: no imports, no Token chain, no mock race.
+  process.env.ELECTRON_USER_DATA_PATH = path.join(workerDir, "user-data");
+
   // Best-effort cleanup on worker exit. `recursive + force` so WAL/shm sidecars
   // and any nested explicit-isolation dirs are removed too. Wrapped because the
   // process may be mid-teardown; a failure here must not mask the real exit code.

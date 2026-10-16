@@ -1445,7 +1445,17 @@ describe("createDraft guard + reuse (FR-028)", () => {
     });
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error).toContain("already_replied");
+    // T01 (round 4): capture the ACTUAL failure outcome on mismatch — a
+    // bare "expected already_replied" hides cross-worker pollution like
+    // the observed kill-switch refusal. The assertions below are
+    // unchanged (no refusal is accepted); only the diagnostic is richer.
+    expect(
+      result.error,
+      `expected already_replied refusal; actual outcome: ${JSON.stringify({
+        error: result.error,
+        requestCorrelationId: result.requestCorrelationId,
+      })}`
+    ).toContain("already_replied");
     // No duplicate draft was persisted despite a valid generation.
     const drafts = await draftModule.listByMessage(messageId);
     expect(drafts).toHaveLength(0);
