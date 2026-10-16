@@ -23,7 +23,10 @@ import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { isSubmitterRunning } from "@/service/emailReply/EmailReplySubmitterTracker";
-import { isNegativeObservationUsable } from "@/service/emailReceive/EmailReplyIdentity";
+import {
+  isNegativeObservationUsable,
+  normalizeStoredMessageId,
+} from "@/service/emailReceive/EmailReplyIdentity";
 import { runReplyTxn } from "@/model/replyTxn";
 import {
   readClusterEvidence,
@@ -31,6 +34,7 @@ import {
   bindGuardToSendPhase,
   evidenceToPhase,
   classifyClusterEligibility,
+  LEGACY_SIBLING_SCAN_LIMIT,
   type ClusterEligibilityReason,
 } from "@/model/replyClusterEvidence";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
@@ -908,6 +912,52 @@ export class EmailReplyDraftModel extends BaseDb {
    * flipping to sent between an outside read and this claim can no longer
    * slip through — the sibling check and the claim are one transaction.
    */
+  /**
+   * N04: coherent final-admission snapshot for the pre-SMTP gate and fence.
+   * Reads attempt ownership, the seed message row, and the canonical
+   * cluster TOGETHER in one short Model transaction, so the admission
+   * decision below can never combine a stale attempt snapshot with a newer
+   * cluster (or vice versa). Runs under the shared reply mutex: the driver
+   * cannot run overlapping transaction bodies on one connection, and this
+   * read must not overlap a concurrent write transaction.
+   *
+   * `clusterRows` is null when cluster discovery fails (incomplete
+   * evidence — never permission; the caller refreshes or refuses). The
+   * snapshot is read-only; freshness/age is enforced synchronously by the
+   * caller after it returns (no awaits between the snapshot and transport
+   * except synchronous header building).
+   */
+  async readFinalSendAdmission(input: {
+    attemptId: number;
+    messageId: number;
+  }): Promise<{
+    readonly attempt: EmailReplySendAttemptEntity | null;
+    readonly seedMessage: EmailReceivedMessageEntity | null;
+    readonly clusterRows: EmailReceivedMessageEntity[] | null;
+  }> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const attempt = await manager
+        .getRepository(EmailReplySendAttemptEntity)
+        .findOne({ where: { id: input.attemptId } });
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      const seedMessage = await messageRepo.findOne({
+        where: { id: input.messageId },
+      });
+      let clusterRows: EmailReceivedMessageEntity[] | null = null;
+      if (seedMessage) {
+        try {
+          clusterRows = await readCanonicalClusterForSnapshot(
+            manager,
+            seedMessage
+          );
+        } catch {
+          clusterRows = null;
+        }
+      }
+      return { attempt, seedMessage, clusterRows };
+    });
+  }
+
   async claimApprovedRevisionForSend(
     input: ClaimSendInput
   ): Promise<ClaimSendResult> {
@@ -1791,6 +1841,60 @@ export interface AppendRevisionInput {
    * and for v2 revisions where the service has no configured Reply-To.
    */
   replyToAddress?: string | null;
+}
+
+/**
+ * N04: manager-bound canonical-cluster read for
+ * {@link EmailReplyDraftModel.readFinalSendAdmission}. Mirrors
+ * `EmailReceivedMessageModule.findCanonicalEquivalents` (singleton for
+ * rows without an RFC id, seed-row inclusion, bounded legacy scan that
+ * throws on incomplete discovery) but runs on the caller's transaction
+ * manager so the cluster is read inside the admission snapshot.
+ */
+async function readCanonicalClusterForSnapshot(
+  manager: EntityManager,
+  seedRow: EmailReceivedMessageEntity
+): Promise<EmailReceivedMessageEntity[]> {
+  const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+  const normalizedId =
+    seedRow.normalizedMessageId ??
+    normalizeStoredMessageId(seedRow.messageId);
+  if (!normalizedId) {
+    const self = await messageRepo.findOne({ where: { id: seedRow.id } });
+    return self ? [self] : [];
+  }
+  const equivalents = await messageRepo.find({
+    where: {
+      emailServiceId: seedRow.emailServiceId,
+      normalizedMessageId: normalizedId,
+    },
+    order: { id: "ASC" },
+  });
+  const legacyCandidates = await messageRepo.find({
+    where: {
+      emailServiceId: seedRow.emailServiceId,
+      normalizedMessageId: IsNull(),
+    },
+    order: { id: "ASC" },
+    take: LEGACY_SIBLING_SCAN_LIMIT + 1,
+  });
+  if (legacyCandidates.length > LEGACY_SIBLING_SCAN_LIMIT) {
+    throw new Error(
+      `Canonical discovery incomplete: more than ${LEGACY_SIBLING_SCAN_LIMIT} null-normalized rows in service ${seedRow.emailServiceId} (§4.1)`
+    );
+  }
+  const rows = [...equivalents];
+  for (const candidate of legacyCandidates) {
+    if (normalizeStoredMessageId(candidate.messageId) === normalizedId) {
+      rows.push(candidate);
+    }
+  }
+  rows.sort((a, b) => a.id - b.id);
+  if (!rows.some((r) => r.id === seedRow.id)) {
+    const seed = await messageRepo.findOne({ where: { id: seedRow.id } });
+    if (seed) rows.push(seed);
+  }
+  return rows;
 }
 
 export interface ClaimSendInput {

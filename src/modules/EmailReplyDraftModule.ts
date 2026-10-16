@@ -189,6 +189,28 @@ export class EmailReplyDraftModule extends BaseModule {
   }
 
   /**
+   * N04: coherent final-admission snapshot (attempt ownership + seed row +
+   * canonical cluster in one short transaction) for the pre-SMTP gate and
+   * fence. Read-only; freshness is enforced synchronously by the caller.
+   */
+  async readFinalSendAdmission(input: {
+    attemptId: number;
+    messageId: number;
+  }): Promise<{
+    readonly attempt: import("@/entity/EmailReplySendAttempt.entity").EmailReplySendAttemptEntity | null;
+    readonly seedMessage: import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity | null;
+    readonly clusterRows: import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity[] | null;
+  }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readFinalSendAdmission(input);
+    } catch (error) {
+      console.error("Error reading final send admission:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Atomic generation commit (Step 4, T07): persists draft + revision +
    * content hash + message replyStatus + guard transition + audit in ONE
    * transaction. Delegates to {@link EmailReplyDraftModel.commitGeneratedDraft}.

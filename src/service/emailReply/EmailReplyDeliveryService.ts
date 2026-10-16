@@ -1115,17 +1115,27 @@ export class EmailReplyDeliveryService {
    * here refuses immediately (no second delay); otherwise this fence spends
    * the allowance itself with an excluded forceRefresh probe.
    */
-  private async checkClaimOwnershipBeforeSmtp(input: {
-    message: { id: number; emailServiceId: number };
-    draftId: number;
-    approvalId: number;
-    attemptId: number;
-    emailServiceId: number;
-    guardId: number | null;
-    requestCorrelationId: string;
-    gateRefreshed: boolean;
-  }): Promise<void> {
-    const attempt = await this.attemptModule.read(input.attemptId);
+  /**
+   * N04: coherent admission verdict over ONE snapshot. The attempt,
+   * seed, and cluster observations are mutually consistent (read inside
+   * a single Model transaction), so the decision can never combine a
+   * stale attempt snapshot with newer cluster evidence or vice versa.
+   */
+  private evaluateFinalAdmission(
+    snapshot: Awaited<
+      ReturnType<EmailReplyDraftModule["readFinalSendAdmission"]>
+    >,
+    stage: "gate" | "fence"
+  ):
+    | { readonly kind: "admit" }
+    | {
+        readonly kind: "refuse";
+        readonly code: EmailReplyPolicyCode;
+        readonly reason: string;
+      }
+    | { readonly kind: "stale" } {
+    const where = stage === "gate" ? "Post-claim gate" : "Handoff fence";
+    const attempt = snapshot.attempt;
     if (
       !attempt ||
       (attempt.status !== "claimed" && attempt.status !== "submitted")
@@ -1140,88 +1150,102 @@ export class EmailReplyDeliveryService {
               : "reply_state_unknown";
       const reason =
         attempt == null
-          ? `Send claim lost before SMTP: attempt ${input.attemptId} no longer exists`
-          : `Send claim lost before SMTP: attempt ${input.attemptId} is ${attempt.status} (recovered/reconciled while this operation was paused)`;
-      incrementReplyMetric("send_claim", { outcome: "ownership_fence_refused" });
-      await this.refusePostClaimGate(input, code, reason);
+          ? `Send claim lost before SMTP (${where}): attempt no longer exists`
+          : `Send claim lost before SMTP (${where}): attempt is ${attempt.status} (recovered/reconciled while this operation was paused)`;
+      return { kind: "refuse", code, reason };
+    }
+    const seed = snapshot.seedMessage;
+    if (!seed) {
+      return {
+        kind: "refuse",
+        code: "probe_failed",
+        reason: `${where}: original message not found before SMTP`,
+      };
+    }
+    if (seed.replyDetectedAt != null || seed.replyStatus === "sent") {
+      return {
+        kind: "refuse",
+        code: "already_replied",
+        reason: `${where} found positive reply evidence on the message before SMTP`,
+      };
+    }
+    const clusterRows = snapshot.clusterRows;
+    if (clusterRows !== null) {
+      for (const row of clusterRows) {
+        if (row.id === seed.id) continue;
+        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
+          return {
+            kind: "refuse",
+            code: "already_replied",
+            reason: `${where} found positive reply evidence on an equivalent message before SMTP`,
+          };
+        }
+      }
+    }
+    if (
+      clusterRows !== null &&
+      this.isFreshUsableNegative(
+        seed.replyNegativeCheckAt,
+        seed.replyNegativeOwnerExpiresAt,
+        seed.replyNegativeContextHash
+      )
+    ) {
+      return { kind: "admit" };
+    }
+    return { kind: "stale" };
+  }
+
+  private async checkClaimOwnershipBeforeSmtp(input: {
+    message: { id: number; emailServiceId: number };
+    draftId: number;
+    approvalId: number;
+    attemptId: number;
+    emailServiceId: number;
+    guardId: number | null;
+    requestCorrelationId: string;
+    gateRefreshed: boolean;
+  }): Promise<void> {
+    // N04: ONE coherent snapshot (attempt + seed + cluster in a single
+    // Model transaction) instead of three separately awaited reads. The old
+    // sequence let the attempt flip (e.g. to delivery_unknown) or a sibling
+    // turn positive between the attempt/cluster reads and the final seed
+    // read, then admitted SMTP on the mixed snapshots.
+    let snapshot = await this.draftModule.readFinalSendAdmission({
+      attemptId: input.attemptId,
+      messageId: input.message.id,
+    });
+    let verdict = this.evaluateFinalAdmission(snapshot, "fence");
+    if (verdict.kind === "admit") {
+      // Owned claim, no positives, complete cluster, fresh usable negative
+      // as of the coherent snapshot — proceed to SMTP immediately.
+      incrementReplyMetric("send_claim", {
+        outcome: "handoff_fresh",
+      });
       return;
     }
-    // The claim is still ours. Re-establish evidence AFTER the attempt read:
-    // seed row first (existence + cluster input), cluster next, then the
-    // message row LAST, so the permission below uses the newest observation
-    // with no awaits between it and SMTP. A failed cluster read is
-    // incomplete evidence (never permission) — distinct from a vanished row.
-    const seedMessage = await this.messageModule.read(input.message.id);
-    if (!seedMessage) {
-      await this.refusePostClaimGate(
-        input,
-        "probe_failed",
-        "Original message not found at the SMTP handoff fence"
-      );
+    if (verdict.kind === "refuse") {
+      // Preserve the historical metric: every attempt-ownership loss emits
+      // ownership_fence_refused (whatever its mapped code); seed/sibling
+      // positive refusals carry no send_claim metric.
+      const attempt = snapshot.attempt;
+      if (
+        !attempt ||
+        (attempt.status !== "claimed" && attempt.status !== "submitted")
+      ) {
+        incrementReplyMetric("send_claim", {
+          outcome: "ownership_fence_refused",
+        });
+      }
+      await this.refusePostClaimGate(input, verdict.code, verdict.reason);
       return;
     }
-    let clusterRows:
-      | import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity[]
-      | null = null;
-    try {
-      clusterRows = await this.messageModule.findCanonicalEquivalents(
-        seedMessage
-      );
-    } catch {
+    // Stale, missing, unusable, or incomplete evidence at the handoff.
+    if (snapshot.clusterRows === null) {
       // F01 principle: incomplete cluster evidence can never grant
       // permission — fall through to the refresh/refuse logic below.
       incrementReplyMetric("send_claim", {
         outcome: "handoff_cluster_unreadable",
       });
-      clusterRows = null;
-    }
-    const currentMessage = await this.messageModule.read(input.message.id);
-    if (!currentMessage) {
-      await this.refusePostClaimGate(
-        input,
-        "probe_failed",
-        "Original message vanished during the SMTP handoff fence"
-      );
-      return;
-    }
-    if (
-      currentMessage.replyDetectedAt != null ||
-      currentMessage.replyStatus === "sent"
-    ) {
-      await this.refusePostClaimGate(
-        input,
-        "already_replied",
-        "Handoff fence found positive reply evidence on the message before SMTP"
-      );
-      return;
-    }
-    if (clusterRows !== null) {
-      for (const row of clusterRows) {
-        if (row.id === currentMessage.id) continue;
-        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
-          await this.refusePostClaimGate(
-            input,
-            "already_replied",
-            "Handoff fence found positive reply evidence on an equivalent message before SMTP"
-          );
-          return;
-        }
-      }
-    }
-    if (
-      this.isFreshUsableNegative(
-        currentMessage.replyNegativeCheckAt,
-        currentMessage.replyNegativeOwnerExpiresAt,
-        currentMessage.replyNegativeContextHash
-      ) &&
-      clusterRows !== null
-    ) {
-      // Owned claim, no positives, complete cluster, fresh usable negative
-      // as of the last awaited read — proceed to SMTP immediately.
-      incrementReplyMetric("send_claim", {
-        outcome: "handoff_fresh",
-      });
-      return;
     }
     // Stale, missing, unusable, or incomplete evidence at the handoff.
     if (input.gateRefreshed) {
@@ -1258,39 +1282,32 @@ export class EmailReplyDeliveryService {
       await this.refusePostClaimGate(input, code, reason);
       return;
     }
-    // Re-read after the refresh and require a usable fresh negative NOW —
-    // positives that landed during the refresh still refuse.
-    const afterRefresh = await this.messageModule.read(input.message.id);
-    if (
-      afterRefresh?.replyDetectedAt != null ||
-      afterRefresh?.replyStatus === "sent"
-    ) {
-      await this.refusePostClaimGate(
-        input,
-        "already_replied",
-        "Handoff refresh completed but positive reply evidence appeared before SMTP"
-      );
-      return;
-    }
-    if (
-      !this.isFreshUsableNegative(
-        afterRefresh?.replyNegativeCheckAt ?? null,
-        afterRefresh?.replyNegativeOwnerExpiresAt ?? null,
-        afterRefresh?.replyNegativeContextHash ?? null
-      )
-    ) {
-      await this.refusePostClaimGate(
-        input,
-        "probe_failed",
-        "Handoff refresh completed without a fresh usable negative observation before SMTP"
-      );
-      return;
-    }
-    incrementReplyMetric("detection_outcome", {
-      stage: "pre_send",
-      state: "not_replied",
-      code: "no_reply_observed",
+    // N04: repeat the COMPLETE admission validation after any refresh —
+    // attempt ownership, cluster eligibility, and negative evidence
+    // together in a fresh snapshot, not just the seed re-read. A recovery
+    // flip or sibling positive landing during the refresh still refuses.
+    snapshot = await this.draftModule.readFinalSendAdmission({
+      attemptId: input.attemptId,
+      messageId: input.message.id,
     });
+    verdict = this.evaluateFinalAdmission(snapshot, "fence");
+    if (verdict.kind === "admit") {
+      incrementReplyMetric("detection_outcome", {
+        stage: "pre_send",
+        state: "not_replied",
+        code: "no_reply_observed",
+      });
+      return;
+    }
+    if (verdict.kind === "refuse") {
+      await this.refusePostClaimGate(input, verdict.code, verdict.reason);
+      return;
+    }
+    await this.refusePostClaimGate(
+      input,
+      "probe_failed",
+      "Handoff refresh completed without a fresh usable negative observation before SMTP"
+    );
   }
 
   /**
@@ -1382,89 +1399,41 @@ export class EmailReplyDeliveryService {
     guardId: number | null;
     requestCorrelationId: string;
   }): Promise<{ refreshed: boolean }> {
-    // Re-read the seed's current observation timestamp. The message read at
-    // the top of sendApprovedReply is stale by gate time (awaited claim +
-    // markSubmitted I/O elapsed).
-    const currentMessage = await this.messageModule.read(input.message.id);
-    if (!currentMessage) {
-      // The message vanished between claim and SMTP — the claim still exists,
-      // so it must be safely finalized rather than left as a phantom
-      // in-flight attempt. delivery_unknown is the safe terminal.
-      return this.refusePostClaimGate(input, "probe_failed", "Original message not found at the post-claim freshness gate");
-    }
-    // N03: positive/sent precedence BEFORE freshness permission. A reply
-    // detected or sent locally after the atomic claim (during awaited
-    // markSubmitted/message read) must refuse even when a recent negative
-    // timestamp is still present. Check the seed row first, then equivalent
-    // rows (excluding only this exact owned attempt/draft via the detection
-    // exclude path below — here we check row-level positives which are never
-    // this attempt's own write).
-    if (
-      currentMessage.replyDetectedAt != null ||
-      currentMessage.replyStatus === "sent"
-    ) {
-      return this.refusePostClaimGate(
-        input,
-        "already_replied",
-        "Post-claim gate found positive reply evidence on the message before SMTP"
-      );
-    }
-    // F01: the catch below covers ONLY the cluster read. A deliberate
-    // sibling-positive refusal (refusePostClaimGate throws SendPolicyRejection)
-    // must propagate — never be caught and converted into SMTP permission.
-    // Likewise, audit/finalization failures inside the refusal path must
-    // propagate, never be swallowed into the fresh-negative fast path.
-    let clusterRows:
-      | import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity[]
-      | null = null;
-    try {
-      clusterRows = await this.messageModule.findCanonicalEquivalents(
-        currentMessage
-      );
-    } catch (readError) {
-      // F01: incomplete cluster evidence — the recent negative CANNOT be
-      // trusted as permission (a sibling positive may be hiding behind the
-      // failed read). Fall through to the forced refresh below, which
-      // rereads authoritative evidence; never reuse the recent negative.
-      incrementReplyMetric("send_claim", {
-        outcome: "post_claim_cluster_unreadable",
-      });
-      clusterRows = null;
-    }
-    if (clusterRows !== null) {
-      for (const row of clusterRows) {
-        if (row.id === currentMessage.id) continue;
-        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
-          return this.refusePostClaimGate(
-            input,
-            "already_replied",
-            "Post-claim gate found positive reply evidence on an equivalent message before SMTP"
-          );
-        }
-      }
-    }
-    // R01/R02: the fresh fast-path requires COMPLETE cluster evidence AND a
-    // fresh USABLE negative. When the cluster read failed
-    // (clusterRows === null), skip straight to the verified refresh even
-    // when the seed's negative looks fresh. An expired owner's negative is
-    // treated exactly like a missing one.
-    if (
-      clusterRows !== null &&
-      this.isFreshUsableNegative(
-        currentMessage.replyNegativeCheckAt,
-        currentMessage.replyNegativeOwnerExpiresAt,
-        currentMessage.replyNegativeContextHash
-      )
-    ) {
+    // N04: ONE coherent snapshot (attempt + seed + cluster in a single
+    // Model transaction). The message read at the top of sendApprovedReply
+    // is stale by gate time (awaited claim + markSubmitted I/O elapsed);
+    // re-establishing it with two more separately awaited reads (cluster,
+    // then message again) admits the same torn-snapshot mixes as the old
+    // fence. F01 principle preserved: incomplete cluster evidence can never
+    // grant permission — it routes to the verified refresh below.
+    let snapshot = await this.draftModule.readFinalSendAdmission({
+      attemptId: input.attemptId,
+      messageId: input.message.id,
+    });
+    let verdict = this.evaluateFinalAdmission(snapshot, "gate");
+    if (verdict.kind === "admit") {
       // Fresh — proceed to the handoff fence (§9.4) with NO extra detect
-      // call. N03: the positive check above already ran, so a fresh usable
-      // negative here means no known positive on seed or siblings at gate
-      // time. The handoff fence re-establishes all of this after its own
-      // awaits — this return is permission to continue, not to submit.
+      // call. The positive check inside the evaluator already ran, so a
+      // fresh usable negative here means no known positive on seed or
+      // siblings at gate time. The handoff fence re-establishes all of this
+      // after its own awaits — this return is permission to continue, not
+      // to submit.
       incrementReplyMetric("send_claim", {
         outcome: "post_claim_fresh",
       });
       return { refreshed: false };
+    }
+    if (verdict.kind === 'refuse') {
+      // The message vanished between claim and SMTP but the claim still
+      // exists: refusePostClaimGate safely finalizes it rather than leaving
+      // a phantom in-flight attempt (delivery_unknown is the safe terminal
+      // only where the evaluator maps it; missing rows map to probe_failed).
+      return this.refusePostClaimGate(input, verdict.code, verdict.reason);
+    }
+    if (snapshot.clusterRows === null) {
+      incrementReplyMetric("send_claim", {
+        outcome: "post_claim_cluster_unreadable",
+      });
     }
     // Stale (or null/unusable) → ONE excluded forceRefresh detection
     // retaining the claim. The exclude params make the refresh ignore THIS
@@ -1490,43 +1459,35 @@ export class EmailReplyDeliveryService {
       }
     );
     if (result.state === "not_replied") {
-      // N03/R02: revalidate refresh observation usability immediately
-      // before handoff; refuse a second delay. The refresh itself took wall
-      // time — reread the seed's negative timestamp and require it to be
-      // fresh AND usable NOW. A stale/unusable observation after exactly one
-      // refresh refuses with no SMTP (no second refresh loop).
-      const afterRefresh = await this.messageModule.read(input.message.id);
-      if (
-        afterRefresh?.replyDetectedAt != null ||
-        afterRefresh?.replyStatus === "sent"
-      ) {
-        return this.refusePostClaimGate(
-          input,
-          "already_replied",
-          "Post-claim refresh completed but positive reply evidence appeared before SMTP"
-        );
-      }
-      if (
-        !this.isFreshUsableNegative(
-          afterRefresh?.replyNegativeCheckAt ?? null,
-          afterRefresh?.replyNegativeOwnerExpiresAt ?? null,
-          afterRefresh?.replyNegativeContextHash ?? null
-        )
-      ) {
-        return this.refusePostClaimGate(
-          input,
-          "probe_failed",
-          "Post-claim refresh completed without a fresh usable negative observation before SMTP; refusing second delay"
-        );
-      }
-      // Stale-but-still-eligible with a NOW-fresh usable observation:
-      // proceed to the handoff fence, reporting the consumed allowance.
-      incrementReplyMetric("detection_outcome", {
-        stage: "pre_send",
-        state: "not_replied",
-        code: "no_reply_observed",
+      // N04: repeat the COMPLETE admission validation after the refresh —
+      // attempt ownership, cluster eligibility, and negative evidence
+      // together in a fresh snapshot. The refresh itself took wall time;
+      // a recovery flip or sibling positive landing during it still
+      // refuses. A stale/unusable observation after exactly one refresh
+      // refuses with no SMTP (no second refresh loop).
+      snapshot = await this.draftModule.readFinalSendAdmission({
+        attemptId: input.attemptId,
+        messageId: input.message.id,
       });
-      return { refreshed: true };
+      verdict = this.evaluateFinalAdmission(snapshot, "gate");
+      if (verdict.kind === "admit") {
+        // Stale-but-still-eligible with a NOW-fresh usable observation:
+        // proceed to the handoff fence, reporting the consumed allowance.
+        incrementReplyMetric("detection_outcome", {
+          stage: "pre_send",
+          state: "not_replied",
+          code: "no_reply_observed",
+        });
+        return { refreshed: true };
+      }
+      if (verdict.kind === "refuse") {
+        return this.refusePostClaimGate(input, verdict.code, verdict.reason);
+      }
+      return this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        "Post-claim refresh completed without a fresh usable negative observation before SMTP; refusing second delay"
+      );
     }
     // replied OR unknown → safely finalize the unsent claim + ONE reply_skipped
     // audit + SendPolicyRejection with the typed code.
