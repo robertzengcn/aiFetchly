@@ -37,6 +37,7 @@ import {
   type ReplyDetectionEmailServicePort,
   type ReplyDetectionImapPort,
 } from "@/service/emailReceive/EmailReplyDetectionService";
+import { PENDING_NEGATIVE_CONTEXT } from "@/service/emailReceive/EmailReplyIdentity";
 
 // ---------------------------------------------------------------------------
 // Builders — real entities (no `as Entity` casts), real values.
@@ -1157,10 +1158,21 @@ describe("EmailReplyDetectionService — Sent-search matching (§7.1 step 6, §7
     if (result.state !== "not_replied") throw new Error("expected not_replied");
     expect(result.reasonCode).toBe("no_reply_observed");
     expect(result.coverage).toBe("configured_imap");
-    expect(kit.messagePort.updateCalls.length).toBe(1);
-    const write = kit.messagePort.updateCalls[0];
-    expect(write.replyNegativeCheckAt).toBeDefined();
-    expect(write.replyNegativeContextHash).toBeDefined();
+    // R02 two-phase negative persistence: stage the UNCONFIRMED marker,
+    // then confirm with the real context hash. Exactly two ordered writes;
+    // the first must carry the pending marker (never matchable), the second
+    // the confirmed hash at the same observation instant.
+    expect(kit.messagePort.updateCalls.length).toBe(2);
+    const [staged, confirmed] = kit.messagePort.updateCalls;
+    expect(staged.replyNegativeCheckAt).toBeDefined();
+    expect(staged.replyNegativeContextHash).toBe(PENDING_NEGATIVE_CONTEXT);
+    expect(confirmed.replyNegativeCheckAt).toEqual(
+      staged.replyNegativeCheckAt
+    );
+    expect(confirmed.replyNegativeContextHash).toBeDefined();
+    expect(confirmed.replyNegativeContextHash).not.toBe(
+      PENDING_NEGATIVE_CONTEXT
+    );
   });
 
   it("returns unknown(probe_limit_exceeded) when cap is exhausted without a settled match", async () => {

@@ -160,6 +160,9 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
       contextLimit: 128_000,
       outputLimit: 16_384,
       limitSource: "provider",
+      // R04: per-capability provenance rides along (both provider-reported
+      // in this fixture).
+      outputSource: "provider",
     });
   });
 
