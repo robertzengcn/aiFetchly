@@ -261,6 +261,18 @@ not prove that no reply sent.
   work with a unique owner token, five-minute lease, and atomic claim. Only its
   current owner can commit/release. The complete invocation has a five-minute
   deadline; model calls use at most 120 seconds and cannot exceed remaining time.
+- Deadline/commit-certainty contract (T02 alignment): the five-minute wall
+  covers work stages plus a reserved terminal slice — expiry, terminal
+  refusal audit, and return fit inside it. Commit queue admission and the
+  final mutation fence additionally require a live budget end, so a commit
+  that waited past it is fenced with zero writes. Once admitted with a live
+  budget, the atomic commit itself runs to certainty even past the wall:
+  a timeout cannot undo a later-completing write, so the guarantee is
+  deadline-gated admission (tested), not an absolute return-time bound
+  (not asserted by any wall-clock test — a five-minute CI wait proves
+  nothing about production timing). Owner/lease fencing still applies
+  inside the transaction, and no naive timeout wraps the irreversible
+  commit.
 - Generate outside DB transactions. Commit draft, initial revision, message
   projection, guard binding, and creation audit together.
 - After failure/crash, an expired lease may be reclaimed only without draft/send

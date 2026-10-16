@@ -688,8 +688,8 @@ describe("EmailReply cluster eligibility contract (R01/R02/R03) — DB integrati
   it("G02: commit past the invocation deadline end is fenced with zero writes (live lease)", async () => {
     // The lease is healthy (5min) but the invocation work budget already
     // ended: queue admission must refuse WITHOUT writing — never a
-    // past-deadline success. Isolates the deadline fence from the lease
-    // fence (lease alone would admit).
+    // past-deadline commit start. Isolates the deadline fence from the
+    // lease fence (lease alone would admit).
     const rawId = `<g02-${Math.random()}@x.com>`;
     const normalizedId = normalizeStoredMessageId(rawId)!;
     const seed = await seedMessage({

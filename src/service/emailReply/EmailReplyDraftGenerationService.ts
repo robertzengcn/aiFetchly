@@ -2145,9 +2145,11 @@ export class EmailReplyDraftGenerationService {
         // self-consistent; wall time in production.
         nowForCheck: () => this.nowForInvocation(),
         // G02: the work-budget end for deadline-aware queue admission and
-        // the final mutation fence. A commit that waited past the complete
-        // budget, or whose writes outlive it, is fenced with zero writes
-        // (never a past-deadline success). Absent outside invocations.
+        // the final mutation fence. A commit not yet admitted when the
+        // budget ends is fenced with zero writes (never a past-deadline
+        // START). Once admitted with a live budget, the atomic commit runs
+        // to certainty even past the wall (see PRD FR-035). Absent outside
+        // invocations.
         // The fence clock is the budget clock (same domain as the end);
         // omitting it would default to wall time and fence healthy commits
         // under controlled test clocks.

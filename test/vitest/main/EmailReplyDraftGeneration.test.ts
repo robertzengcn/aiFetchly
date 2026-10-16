@@ -5741,7 +5741,7 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
   }, 30_000);
 
   // G02: the invocation deadline expiring while the commit waits in the
-  // queue fences with zero writes — no detached past-deadline success.
+  // queue fences with zero writes — no past-deadline commit start.
   // Time passes between commit admission and the in-transaction fences;
   // the model enforces the service-propagated deadline end at both.
   it("deadline expiring while queued fences with zero writes (G02)", async () => {

@@ -440,12 +440,16 @@ is split into work stages plus a reserved terminal slice (3s production,
 scaled for small budgets) — work expiry, terminal refusal audit, and return
 fit inside the complete budget. Commit queue admission and the final
 mutation fence additionally require a live invocation budget end, so a
-commit that waited past it is fenced with zero writes (never a
-past-deadline success, never a detached write). Once admitted with a live
-budget, the atomic commit itself runs to certainty even past the wall
-budget: a timeout cannot undo a later-completing write, so certainty is
-kept and only admission is deadline-gated. Owner/lease fencing (R09) still
-applies independently inside the transaction.
+commit not yet admitted when the budget ends is fenced with zero writes
+(never a past-deadline commit START, never a detached write). Once
+admitted with a live budget, the atomic commit itself runs to certainty
+even past the wall budget: a timeout cannot undo a later-completing
+write, so certainty is kept and only admission is deadline-gated.
+Owner/lease fencing (R09) still applies independently inside the
+transaction. Measured as: aggregate work+terminal wall tests (scaled
+budgets), admission/queue fencing tests, and the no-timeout-wrapper
+slow-admission test — no test asserts an absolute five-minute return,
+which CI wall timing cannot meaningfully prove.
 
 Check fresh mailbox evidence before model work. Unknown/positive results audit
 and release the generation reservation. For reuse, perform the same mailbox
