@@ -162,6 +162,18 @@ not prove that no reply sent.
   and is recorded as unavailable metadata.
 - Truncation may use the single correction with shortening instructions. Never
   persist or silently repair a truncated answer.
+- Unknown model capacity follows an explicit bounded-fallback policy (G01):
+  prompt admission budgets UTF-8 byte length (a provable upper bound for
+  byte-level BPE families), and a model whose context window is neither
+  provider-reported nor operator-configured is admitted only up to a
+  32,768-token application ceiling. That ceiling limits request size; it is
+  NOT proof the model can accept it — a smaller unknown model may still
+  reject an admitted request, which surfaces as a provider error with no
+  draft persisted (never a silent send). Operators SHOULD set the
+  provider's verified context size, which the models endpoint reports as
+  the confirmed window. Refusing all unknown-capacity generation is
+  rejected: it would disable reply drafting for mainstream local
+  providers that omit metadata.
 
 ### FR-028 — Guard generation and reuse drafts
 

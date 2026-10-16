@@ -4,7 +4,11 @@ import {
   bumpProviderConfigVersion,
   providerConfigKey,
 } from "@/service/aiProvider/AIProviderConfigVersion";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import { createModelContextResolver } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
+import type { AiChatApi } from "@/api/aiChatApi";
+import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 
 function buildApiMock(resp: OpenAIModelsResponse | Error): {
   api: { listOpenAIModels: ReturnType<typeof vi.fn> };
@@ -580,6 +584,96 @@ describe("AIChatModelCatalogService", () => {
       // Different key → refetch, not cache reuse.
       expect(listOpenAIModels).toHaveBeenCalledTimes(2);
     });
+
+  // G01: real client → normalizer → catalog → generation-resolver chain
+  // (fake transport only). Covers missing windows, synthetic discovery,
+  // explicit small windows, and the configured override end to end.
+  describe("G01 provider chain with a real client", () => {
+    const baseConfig: LocalAIProviderConfig = {
+      preset: "custom",
+      name: "Chain local",
+      baseUrl: "http://127.0.0.1:11434",
+      defaultModel: "chain-model",
+      apiKeyConfigured: false,
+    };
+
+    function modelsResponse(models: unknown, status = 200): Response {
+      return new Response(
+        status === 200 ? JSON.stringify({ object: "list", data: models }) : "",
+        {
+          status,
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+
+    /** Catalog reading through the REAL provider client (fake fetch). */
+    async function catalogThroughClient(
+      config: LocalAIProviderConfig,
+      fetchImpl: typeof fetch
+    ): Promise<AIChatModelCatalogService> {
+      const client = new OpenAICompatibleProviderClient(config, "", fetchImpl);
+      const api = {
+        listOpenAIModels: async () =>
+          (await client.listModelsWithFallbackStatus()).models,
+      } as unknown as AiChatApi;
+      const catalog = new AIChatModelCatalogService(api, 128_000);
+      await catalog.ensureLoaded();
+      return catalog;
+    }
+
+    it("missing window and no configuration → unknown (fallback, resolver undefined)", async () => {
+      const fetchImpl = (async () =>
+        modelsResponse([{ id: "chain-model" }])) as unknown as typeof fetch;
+      const catalog = await catalogThroughClient(baseConfig, fetchImpl);
+      const limits = catalog.resolveLimits("chain-model");
+      expect(limits.limitSource).toBe("fallback");
+      // The generation layer treats fallback as unknown and applies its
+      // conservative bound instead of a 256k assumption.
+      const resolveWindow = createModelContextResolver(catalog);
+      await expect(resolveWindow("chain-model")).resolves.toBeUndefined();
+    });
+
+    it("explicit small window flows through as provider-confirmed", async () => {
+      const fetchImpl = (async () =>
+        modelsResponse([{ id: "chain-model", context_window: 4096 }])) as unknown as typeof fetch;
+      const catalog = await catalogThroughClient(baseConfig, fetchImpl);
+      const limits = catalog.resolveLimits("chain-model");
+      expect(limits.limitSource).toBe("provider");
+      expect(limits.contextLimit).toBe(4096);
+      const resolveWindow = createModelContextResolver(catalog);
+      await expect(resolveWindow("chain-model")).resolves.toBe(4096);
+    });
+
+    it("configured override reaches the catalog for the default model", async () => {
+      const fetchImpl = (async () =>
+        modelsResponse([{ id: "chain-model" }])) as unknown as typeof fetch;
+      const catalog = await catalogThroughClient(
+        { ...baseConfig, contextSize: 16_384 },
+        fetchImpl
+      );
+      const limits = catalog.resolveLimits("chain-model");
+      expect(limits.limitSource).toBe("provider");
+      expect(limits.contextLimit).toBe(16_384);
+      const resolveWindow = createModelContextResolver(catalog);
+      await expect(resolveWindow("chain-model")).resolves.toBe(16_384);
+    });
+
+    it("synthetic discovery carries the configured window, omits it otherwise", async () => {
+      const failing = (async () =>
+        new Response("", { status: 500 })) as unknown as typeof fetch;
+      const configured = await catalogThroughClient(
+        { ...baseConfig, contextSize: 8192 },
+        failing
+      );
+      expect(configured.resolveLimits("chain-model").contextLimit).toBe(8192);
+      expect(
+        configured.resolveLimits("chain-model").limitSource
+      ).toBe("provider");
+      const bare = await catalogThroughClient(baseConfig, failing);
+      expect(bare.resolveLimits("chain-model").limitSource).toBe("fallback");
+    });
+  });
 
     it("invalidate() forces a refetch on next load", async () => {
       const { api, service } = buildApiMock({
