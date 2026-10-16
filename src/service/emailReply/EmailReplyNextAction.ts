@@ -77,14 +77,45 @@ export function nextActionForCode(
  * Derive the next action for an ELIGIBLE reused draft (the `reused: true`
  * success path — a live `draft`/`approved`/`failed` draft the message-level
  * guard cleared for reuse). This is where approval guidance is authoritative:
- * a clean reused draft routes to `approve_existing_draft`, but a draft the
- * model flagged for human review (R21) routes to `await_human_review` instead
- * — the approval service refuses approval while that flag is set, so
- * `approve_existing_draft` guidance would contradict the gate and send the
- * operator to an approval that cannot succeed (R22).
+ * a clean reused draft routes to `approve_existing_draft`, but a draft with
+ * PENDING human review routes to `await_human_review` instead — the approval
+ * service refuses approval while review is pending, so `approve_existing_draft`
+ * guidance would contradict the gate and send the operator to an approval
+ * that cannot succeed (R22).
+ *
+ * F09: pass the EFFECTIVE pending status (see
+ * {@link isHumanReviewPendingForRevision}), not the raw model flag — a
+ * revision-bound human resolution lifts the gate for the reviewed revision,
+ * and guidance must follow the gate, not the immutable model provenance.
  */
 export function nextActionForReuse(
-  requiresHumanReview: boolean
+  humanReviewPending: boolean
 ): EmailReplyNextAction {
-  return requiresHumanReview ? "await_human_review" : "approve_existing_draft";
+  return humanReviewPending ? "await_human_review" : "approve_existing_draft";
+}
+
+/**
+ * F09/G02: effective human-review pending status for a draft row/DTO.
+ * The model's `requiresHumanReview` request is IMMUTABLE provenance (never
+ * cleared); a human resolves it per revision via an explicit acknowledgment
+ * bound to `currentRevisionId`. Review is pending unless a resolution stamp
+ * exists for the CURRENT revision — an edit (new revision) or a stale
+ * acknowledgment restores the pending state. Approval gating and user
+ * guidance MUST derive from this, never from the raw flag alone; the raw
+ * flag stays visible as provenance.
+ */
+export function isHumanReviewPendingForRevision(input: {
+  readonly requiresHumanReview: number | boolean | null | undefined;
+  readonly currentRevisionId: number | null | undefined;
+  readonly humanReviewResolvedAt: unknown;
+  readonly humanReviewResolvedRevisionId: number | null | undefined;
+}): boolean {
+  const flagged =
+    input.requiresHumanReview === true || input.requiresHumanReview === 1;
+  if (!flagged) return false;
+  if (input.currentRevisionId == null) return true;
+  return !(
+    input.humanReviewResolvedAt != null &&
+    input.humanReviewResolvedRevisionId === input.currentRevisionId
+  );
 }

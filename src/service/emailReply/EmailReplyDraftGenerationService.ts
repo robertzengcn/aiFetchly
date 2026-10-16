@@ -46,6 +46,7 @@ import {
 import {
   nextActionForCode,
   nextActionForReuse,
+  isHumanReviewPendingForRevision,
   type EmailReplyNextAction,
 } from "@/service/emailReply/EmailReplyNextAction";
 import {
@@ -910,6 +911,15 @@ export class EmailReplyDraftGenerationService {
           };
         }
         incrementReplyMetric("generation_outcome", { outcome: "reused" });
+        // F09: effective review status for THIS revision drives guidance;
+        // the raw model flag rides along as immutable provenance.
+        const reusedDraftReviewPending = isHumanReviewPendingForRevision({
+          requiresHumanReview: reusedDraft.requiresHumanReview,
+          currentRevisionId: reusedDraft.currentRevisionId,
+          humanReviewResolvedAt: reusedDraft.humanReviewResolvedAt,
+          humanReviewResolvedRevisionId:
+            reusedDraft.humanReviewResolvedRevisionId,
+        });
         return {
           success: true,
           draftId: reusedDraft.id,
@@ -928,6 +938,7 @@ export class EmailReplyDraftGenerationService {
           requiresHumanReview: decodeStoredRequiresHumanReview(
             reusedDraft.requiresHumanReview
           ),
+          humanReviewPending: reusedDraftReviewPending,
           reviewReasons: decodeStoredReviewList(
             reusedDraft.reviewReasonsJson,
             REVIEW_REASON_MAX_ITEMS
@@ -939,11 +950,9 @@ export class EmailReplyDraftGenerationService {
           reused: true,
           code: "allowed",
           // R22: eligible reuse is where approval guidance is authoritative —
-          // derived from the persisted review flag (R21), never from the
-          // refusal-side code map.
-          next_action: nextActionForReuse(
-            decodeStoredRequiresHumanReview(reusedDraft.requiresHumanReview)
-          ),
+          // derived from the EFFECTIVE review status (F09), never from the
+          // refusal-side code map and never from the raw flag alone.
+          next_action: nextActionForReuse(reusedDraftReviewPending),
           requestCorrelationId,
         };
       }
@@ -1223,6 +1232,14 @@ export class EmailReplyDraftGenerationService {
         };
       }
       incrementReplyMetric("generation_outcome", { outcome: "reused" });
+      // F09: effective review status for THIS revision drives guidance;
+      // the raw model flag rides along as immutable provenance.
+      const reusableReviewPending = isHumanReviewPendingForRevision({
+        requiresHumanReview: reusable.requiresHumanReview,
+        currentRevisionId: reusable.currentRevisionId,
+        humanReviewResolvedAt: reusable.humanReviewResolvedAt,
+        humanReviewResolvedRevisionId: reusable.humanReviewResolvedRevisionId,
+      });
       return {
         success: true,
         draftId: reusable.id,
@@ -1241,6 +1258,7 @@ export class EmailReplyDraftGenerationService {
         requiresHumanReview: decodeStoredRequiresHumanReview(
           reusable.requiresHumanReview
         ),
+        humanReviewPending: reusableReviewPending,
         reviewReasons: decodeStoredReviewList(
           reusable.reviewReasonsJson,
           REVIEW_REASON_MAX_ITEMS
@@ -1252,11 +1270,9 @@ export class EmailReplyDraftGenerationService {
         reused: true,
         code: "allowed",
         // R22: eligible reuse is where approval guidance is authoritative —
-        // derived from the persisted review flag (R21), never from the
-        // refusal-side code map.
-        next_action: nextActionForReuse(
-          decodeStoredRequiresHumanReview(reusable.requiresHumanReview)
-        ),
+        // derived from the EFFECTIVE review status (F09), never from the
+        // refusal-side code map and never from the raw flag alone.
+        next_action: nextActionForReuse(reusableReviewPending),
         requestCorrelationId,
       };
     }
@@ -1756,6 +1772,15 @@ export class EmailReplyDraftGenerationService {
         };
       }
       incrementReplyMetric("generation_outcome", { outcome: "reused" });
+      // F09: effective review status for THIS revision drives guidance;
+      // the raw model flag rides along as immutable provenance.
+      const reusableNowReviewPending = isHumanReviewPendingForRevision({
+        requiresHumanReview: reusableNow.requiresHumanReview,
+        currentRevisionId: reusableNow.currentRevisionId,
+        humanReviewResolvedAt: reusableNow.humanReviewResolvedAt,
+        humanReviewResolvedRevisionId:
+          reusableNow.humanReviewResolvedRevisionId,
+      });
       return {
         success: true,
         draftId: reusableNow.id,
@@ -1774,6 +1799,7 @@ export class EmailReplyDraftGenerationService {
         requiresHumanReview: decodeStoredRequiresHumanReview(
           reusableNow.requiresHumanReview
         ),
+        humanReviewPending: reusableNowReviewPending,
         reviewReasons: decodeStoredReviewList(
           reusableNow.reviewReasonsJson,
           REVIEW_REASON_MAX_ITEMS
@@ -1785,11 +1811,9 @@ export class EmailReplyDraftGenerationService {
         reused: true,
         code: "allowed",
         // R22: eligible reuse is where approval guidance is authoritative —
-        // derived from the persisted review flag (R21), never from the
-        // refusal-side code map.
-        next_action: nextActionForReuse(
-          decodeStoredRequiresHumanReview(reusableNow.requiresHumanReview)
-        ),
+        // derived from the EFFECTIVE review status (F09), never from the
+        // refusal-side code map and never from the raw flag alone.
+        next_action: nextActionForReuse(reusableNowReviewPending),
         requestCorrelationId,
       };
     }
@@ -2118,8 +2142,12 @@ export class EmailReplyDraftGenerationService {
       confidence: authoritativeConfidence,
       warnings,
       // R21: surface the persisted review signals so the caller sees the same
-      // flag a later reload/reuse will report.
+      // flag a later reload/reuse will report. F09: a freshly committed
+      // draft cannot carry a resolution yet (resolution columns start null
+      // and bind to an existing revision), so effective pending equals the
+      // model flag here by construction.
       requiresHumanReview,
+      humanReviewPending: requiresHumanReview,
       reviewReasons: generated.reviewReasons ?? [],
       unresolvedQuestions: generated.unresolvedQuestions ?? [],
       reused: false,

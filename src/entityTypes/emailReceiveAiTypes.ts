@@ -233,10 +233,21 @@ export interface AiEmailReplyDraftResult {
    * (`requiresHumanReview` in the strict generation contract). Persisted on
    * the draft and decoded on reuse, so a flagged draft can never silently
    * become lighter-review output. The approval service refuses approval while
-   * this flag is set. `false` when the model did not request review (the
+   * review is pending. `false` when the model did not request review (the
    * field is optional in the contract — its absence is not an error).
+   * IMMUTABLE model provenance — see `humanReviewPending` for the effective
+   * status that guidance and approval actually follow (F09).
    */
   requiresHumanReview: boolean;
+  /**
+   * F09: effective review status for THIS revision — true unless an explicit
+   * human resolution is bound to the draft's current revision. Approval
+   * guidance (`next_action`) and the approval gate derive from this, never
+   * from the raw model flag alone; an edit invalidates the resolution and
+   * restores pending. Always present on fresh results (no resolution can
+   * exist yet, so it equals the model flag there).
+   */
+  humanReviewPending: boolean;
   /** R21: schema-bounded reasons the model gave for the review request. */
   reviewReasons: string[];
   /** R21: schema-bounded unresolved questions the model listed. */

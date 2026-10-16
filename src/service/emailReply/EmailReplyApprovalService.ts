@@ -23,6 +23,7 @@ import {
 import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import { isValidReplyAddress } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import { isHumanReviewPendingForRevision } from "@/service/emailReply/EmailReplyNextAction";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 
@@ -134,26 +135,28 @@ export class EmailReplyApprovalService {
       );
     }
 
-    // R21/G02: the model's persisted review request gates approval the same
-    // way a deterministic review finding does — a draft flagged
-    // `requiresHumanReview` cannot be approved as clean (never silently
-    // lighter-review output). Reading the draft column (not a tool input)
-    // keeps the gate authoritative; the flag can only make review stricter.
-    // G02: an explicit revision-bound human resolution lifts the gate for the
-    // reviewed revision only. The model's original reasons stay immutable as
-    // provenance (resolveHumanReview never clears them); any edit invalidates
-    // the stamp so a stale acknowledgment cannot authorize changed content.
-    if (draft.requiresHumanReview === 1) {
-      const resolved =
-        draft.humanReviewResolvedAt != null &&
-        draft.humanReviewResolvedRevisionId != null &&
-        draft.currentRevisionId != null &&
-        draft.humanReviewResolvedRevisionId === draft.currentRevisionId;
-      if (!resolved) {
-        throw new Error(
-          "Cannot approve: the model flagged this draft as requiring human review before sending — resolve it explicitly for the current revision first"
-        );
-      }
+    // R21/G02/F09: the model's persisted review request gates approval the
+    // same way a deterministic review finding does — a draft with PENDING
+    // review cannot be approved as clean (never silently lighter-review
+    // output). Pending is the EFFECTIVE status (model flag minus a
+    // revision-bound human resolution for the CURRENT revision), computed
+    // by the single shared helper so the gate, reuse guidance, and DTOs
+    // never disagree. Reading draft columns (not tool inputs) keeps the
+    // gate authoritative. The model's original reasons stay immutable as
+    // provenance (resolveHumanReview never clears them); any edit
+    // invalidates the stamp so a stale acknowledgment cannot authorize
+    // changed content.
+    if (
+      isHumanReviewPendingForRevision({
+        requiresHumanReview: draft.requiresHumanReview,
+        currentRevisionId: draft.currentRevisionId,
+        humanReviewResolvedAt: draft.humanReviewResolvedAt,
+        humanReviewResolvedRevisionId: draft.humanReviewResolvedRevisionId,
+      })
+    ) {
+      throw new Error(
+        "Cannot approve: the model flagged this draft as requiring human review before sending — resolve it explicitly for the current revision first"
+      );
     }
 
     const message = await this.messageModule.read(draft.messageId);

@@ -1,10 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
+import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
+import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+
+// createDraft is AI-gated; pass the gate so reuse-guidance tests reach the
+// service instead of short-circuiting on the enable check.
+vi.mock("@/service/AiFeatureGate", () => ({
+  ensureHostedAiEnabled: vi.fn(async () => true),
+  isAiEnabled: vi.fn(() => true),
+}));
 
 /**
  * G02: the model's persisted `requiresHumanReview` flag gates approval until
@@ -41,8 +51,10 @@ async function seedFlaggedDraft(): Promise<{
   msg.snippet = null;
   msg.receivedAt = new Date();
   msg.isUnread = 1;
-  msg.classification = null;
-  msg.classificationConfidence = null;
+  // Deterministic classification skips the model classifier, so reuse
+  // guidance is exercised without any model call.
+  msg.classification = "interested";
+  msg.classificationConfidence = 0.9;
   msg.replyStatus = "not_started";
   msg.processedAt = null;
   const savedMsg = await messageModule.upsertByProviderUid(msg);
@@ -158,5 +170,90 @@ describe("G02 human-review gate on approval", () => {
         approvedByType: "user",
       })
     ).rejects.toThrow(/human review/);
+  });
+});
+
+const NOT_REPLIED: ReplyDetectionResult = {
+  state: "not_replied",
+  replied: false,
+  source: "sent_search",
+  matchedMessageId: null,
+  reasonCode: "no_reply_observed",
+  checkedAt: new Date().toISOString(),
+  fromCache: false,
+  coverage: "configured_imap",
+};
+
+function reuseGuidanceService(): EmailReplyDraftGenerationService {
+  return new EmailReplyDraftGenerationService({
+    detectionServiceFactory: () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockResolvedValue(NOT_REPLIED);
+      return svc;
+    },
+  });
+}
+
+describe("F09 effective review status in reuse guidance", () => {
+  it("flagged → reuse routes to human review but keeps model provenance", async () => {
+    const { draftId, messageId } = await seedFlaggedDraft();
+    const result = await reuseGuidanceService().createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // The AI-tool and renderer DTO consumers read these same fields.
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    expect(result.requiresHumanReview).toBe(true);
+    expect(result.humanReviewPending).toBe(true);
+    expect(result.next_action).toBe("await_human_review");
+  });
+
+  it("resolved current revision → reuse approves guidance while provenance stays true", async () => {
+    const { draftId, revisionId, messageId } = await seedFlaggedDraft();
+    const draftModule = new EmailReplyDraftModule();
+    expect(
+      (
+        await draftModule.resolveHumanReview({
+          draftId,
+          revisionId,
+          resolvedBy: "user:op",
+        })
+      ).resolved
+    ).toBe(true);
+    const result = await reuseGuidanceService().createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    // Original model provenance is retained...
+    expect(result.requiresHumanReview).toBe(true);
+    // ...but effective guidance follows the resolution: approval allowed.
+    expect(result.humanReviewPending).toBe(false);
+    expect(result.next_action).toBe("approve_existing_draft");
+  });
+
+  it("edit after resolution → reuse requires review again", async () => {
+    const { draftId, revisionId, messageId } = await seedFlaggedDraft();
+    const draftModule = new EmailReplyDraftModule();
+    await draftModule.resolveHumanReview({
+      draftId,
+      revisionId,
+      resolvedBy: "user:op",
+    });
+    await draftModule.appendRevision({
+      draftId,
+      actor: "user",
+      subject: "Re: Pricing (edited)",
+      bodyText: `${CLEAN_BODY} Edited.`,
+      bodyHtml: null,
+      senderAddress: "owner@svc.com",
+      recipientAddress: "prospect@example.com",
+      contentHash: `edited-${Math.random()}`,
+    });
+    const result = await reuseGuidanceService().createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.requiresHumanReview).toBe(true);
+    expect(result.humanReviewPending).toBe(true);
+    expect(result.next_action).toBe("await_human_review");
   });
 });
