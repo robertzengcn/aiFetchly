@@ -102,6 +102,21 @@ setupIsolatedTmpDir();
 // transitions (readiness, rollback, upgrade-validation) set their state
 // per-test after this. The readiness module is pure (no DB/Electron),
 // so a static import has no side effects.
-import { setUpgradeValidationStateForTests } from "@/service/emailReply/EmailReplyReadiness";
-
-setUpgradeValidationStateForTests("passed");
+// F08: production readiness defaults to `pending` (no validation has
+// succeeded in a fresh process). Isolated unit/integration fixtures never
+// run the production startup path, so explicitly mark this worker's
+// readiness `passed` here — suites that exercise pending/failed
+// transitions (readiness, rollback, upgrade-validation) set their state
+// per-test after this.
+//
+// Deferred dynamic import (not a static import): evaluating the readiness
+// chain (→ featureFlags → Token) during setup-file evaluation breaks
+// per-file `vi.mock("@/modules/token", ...)` interposition in Token-mocked
+// suites (archive/history flag tests fail). Deferring past setup evaluation
+// keeps those mocks working. The marking lands during test-file loading
+// (module transform + DB synchronize take seconds; this resolves in
+// milliseconds), well before any test body can invoke a guarded path — and
+// any miss would fail loudly as a readiness refusal, never silently.
+void import("@/service/emailReply/EmailReplyReadiness").then((m) =>
+  m.setUpgradeValidationStateForTests("passed")
+);
