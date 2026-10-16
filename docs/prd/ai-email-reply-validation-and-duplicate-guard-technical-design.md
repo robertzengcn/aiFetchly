@@ -435,6 +435,18 @@ cap the complete generation invocation at five minutes, including queueing,
 classification, provider compatibility retries, and mailbox refreshes.
 An expired/replaced owner cannot renew, commit, or release the current lease.
 
+G02 deadline contract (approved residual, 2026-10-16): the five-minute wall
+is split into work stages plus a reserved terminal slice (3s production,
+scaled for small budgets) — work expiry, terminal refusal audit, and return
+fit inside the complete budget. Commit queue admission and the final
+mutation fence additionally require a live invocation budget end, so a
+commit that waited past it is fenced with zero writes (never a
+past-deadline success, never a detached write). Once admitted with a live
+budget, the atomic commit itself runs to certainty even past the wall
+budget: a timeout cannot undo a later-completing write, so certainty is
+kept and only admission is deadline-gated. Owner/lease fencing (R09) still
+applies independently inside the transaction.
+
 Check fresh mailbox evidence before model work. Unknown/positive results audit
 and release the generation reservation. For reuse, perform the same mailbox
 eligibility check and reload draft bindings afterward; never silently return a

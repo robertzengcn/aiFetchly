@@ -5647,10 +5647,11 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
       useKnowledgeLibrary: false,
     });
     const elapsed = Date.now() - startedAt;
-    // The terminal race RAN: it waited out the dedicated 3s bound (≥2.5s)
-    // before giving up — but completed far under a hang ceiling.
-    expect(elapsed).toBeGreaterThanOrEqual(2_500);
-    expect(elapsed).toBeLessThan(15_000);
+    // G02: the terminal race spends the reserve INSIDE the invocation
+    // budget — with a 100ms budget the reserve is 50ms, so the hung audit
+    // gives up in ~50ms, NOT after a stacked 3s (the old ≥2.5s assertion
+    // pinned the over-budget behavior G02 removes).
+    expect(elapsed).toBeLessThan(1_000);
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toContain("[provider_error]");
@@ -5663,6 +5664,178 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
       size: 50,
     });
     expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(0);
+  }, 30_000);
+
+  // G02: work expiry plus the terminal audit stays within the complete
+  // invocation budget (scaled: 2000ms budget → ~1000ms work + ~1000ms
+  // terminal). The old stacked behavior would take ~5000ms here.
+  it("work expiry plus terminal audit completes within the scaled budget (G02)", async () => {
+    const messageId = await seedDeadlineMessage();
+    const { EmailReplyIdentityProfileModel } = await import(
+      "@/model/EmailReplyIdentityProfile.model"
+    );
+    const profileSpy = vi
+      .spyOn(
+        EmailReplyIdentityProfileModel.prototype,
+        "getByEmailServiceId"
+      )
+      .mockImplementation(
+        () => new Promise(() => undefined) // perpetually pending
+      );
+    const createCalls: unknown[] = [];
+    const hangingAudit = new EmailReplyAuditLogModule();
+    vi.spyOn(hangingAudit, "create").mockImplementation(async () => {
+      createCalls.push(1);
+      return new Promise(() => {}) as Promise<number>;
+    });
+    const svc = buildService({
+      // Real clock: wall-time aggregation is the point of this test.
+      budget: { budgetMs: 2_000 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () =>
+          completionResponse(validReplyJson, "stop"),
+      }),
+      replyAuditModuleFactory: () => hangingAudit,
+    });
+    const startedAt = Date.now();
+    let result: Awaited<ReturnType<typeof svc.createDraft>>;
+    try {
+      result = await svc.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+    } finally {
+      profileSpy.mockRestore();
+    }
+    const elapsed = Date.now() - startedAt;
+    // Work (~1000ms) + terminal reserve (~1000ms): comfortably inside the
+    // 2000ms budget plus scheduling slack — and far below the old
+    // 2000+3000 stacked behavior.
+    expect(elapsed).toBeLessThan(4_000);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    // The terminal audit was ATTEMPTED (factory started inside the race)
+    // but never finished: zero rows, original timeout outcome stands.
+    expect(createCalls.length).toBeGreaterThanOrEqual(1);
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(0);
+    // No draft, no model call.
+    const draftModule = new EmailReplyDraftModule();
+    expect(await draftModule.listByMessage(messageId)).toHaveLength(0);
+  }, 30_000);
+
+  // G02: the invocation deadline expiring while the commit waits in the
+  // queue fences with zero writes — no detached past-deadline success.
+  // Time passes between commit admission and the in-transaction fences;
+  // the model enforces the service-propagated deadline end at both.
+  it("deadline expiring while queued fences with zero writes (G02)", async () => {
+    const messageId = await seedDeadlineMessage();
+    let nowMs = 1_000_000;
+    const origCommit = EmailReplyDraftModule.prototype.commitGeneratedDraft;
+    const commitSpy = vi
+      .spyOn(EmailReplyDraftModule.prototype, "commitGeneratedDraft")
+      .mockImplementation(async function (
+        this: EmailReplyDraftModule,
+        ...args: [Parameters<EmailReplyDraftModule["commitGeneratedDraft"]>[0]]
+      ) {
+        // Time passes while queued: past the work-budget end.
+        nowMs += 10_000_000;
+        return origCommit.apply(this, args);
+      });
+    const svc = buildService({
+      budget: { now: () => nowMs, budgetMs: 600_000 },
+      apiFactory: () => ({
+        openAIChatCompletion: async () =>
+          completionResponse(validReplyJson, "stop"),
+      }),
+    });
+    let result: Awaited<ReturnType<typeof svc.createDraft>>;
+    try {
+      result = await svc.createDraft({
+        messageId,
+        useKnowledgeLibrary: false,
+      });
+    } finally {
+      commitSpy.mockRestore();
+    }
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    // Fenced (N07 path): typed denial, outer service owns the one audit
+    // (the commit transaction wrote nothing).
+    expect(result.code).toBe("reply_in_progress");
+    const draftModule = new EmailReplyDraftModule();
+    expect(await draftModule.listByMessage(messageId)).toHaveLength(0);
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const refusals = records.filter((r) => r.action === "reply_skipped");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[reply_in_progress]");
+  }, 20_000);
+
+  // G02: slow commit admission waits instead of manufacturing failure —
+  // no naive timeout wrapper around the commit. The admitted commit runs
+  // to certainty once admission clears: exactly one draft and one
+  // revision. (Slow admission here stands in for a held commit queue:
+  // either way the commit must wait, then succeed exactly once.)
+  it("slow commit admission waits and then commits exactly once (G02)", async () => {
+    const messageId = await seedDeadlineMessage();
+    let releaseAdmission!: () => void;
+    const admissionGate = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const origCommit = EmailReplyDraftModule.prototype.commitGeneratedDraft;
+    const commitSpy = vi
+      .spyOn(EmailReplyDraftModule.prototype, "commitGeneratedDraft")
+      .mockImplementation(async function (
+        this: EmailReplyDraftModule,
+        ...args: [Parameters<EmailReplyDraftModule["commitGeneratedDraft"]>[0]]
+      ) {
+        // Hold admission 300ms past a live deadline, then proceed.
+        await admissionGate;
+        return origCommit.apply(this, args);
+      });
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    // Default budget: admission is live throughout the hold (no expiry
+    // pressure — the deadline interplay is covered by the sibling test).
+    const svc = buildService({ apiFactory: factory });
+    const startedAt = Date.now();
+    const resultPromise = svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    // Wait until admission is actually held (not merely slow pre-commit
+    // work), hold past it a little longer, then release.
+    for (let i = 0; i < 250 && commitSpy.mock.calls.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(commitSpy.mock.calls.length).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    releaseAdmission();
+    const result = await resultPromise;
+    commitSpy.mockRestore();
+    const elapsed = Date.now() - startedAt;
+    // It WAITED (~300ms past admission) instead of failing.
+    expect(elapsed).toBeGreaterThanOrEqual(300);
+    expect(result.success).toBe(true);
+    // Exactly one draft and one revision — the wait duplicated nothing.
+    const draftModule = new EmailReplyDraftModule();
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    const revisionModule = new EmailReplyDraftRevisionModule();
+    const revisions = await revisionModule.listByDraft(drafts[0].id);
+    expect(revisions).toHaveLength(1);
   }, 30_000);
 
   // R03/B10: a terminal audit PERSISTENCE failure is distinguishable from

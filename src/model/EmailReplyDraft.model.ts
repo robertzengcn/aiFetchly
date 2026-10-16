@@ -698,11 +698,20 @@ export class EmailReplyDraftModel extends BaseDb {
       const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const guard = await guardRepo.findOne({ where: { id: input.guardId } });
       const now = input.now ?? new Date();
+      // G02: deadline-aware queue admission — an invocation already past
+      // its complete budget refuses BEFORE any write (no detached commit
+      // can be in flight; the caller surfaces the typed denial). Compared
+      // in the deadline's own clock domain (see input docs) — never
+      // against the invocation-timestamp clock.
+      const deadlineEnd = input.invocationDeadlineEndsAtMs;
+      const deadlineNowMs =
+        input.deadlineNowMs !== undefined ? input.deadlineNowMs() : Date.now();
       if (
         !guard ||
         guard.ownerToken !== input.ownerToken ||
         !guard.leaseExpiresAt ||
-        guard.leaseExpiresAt.getTime() <= checkNowMs()
+        guard.leaseExpiresAt.getTime() <= checkNowMs() ||
+        (deadlineEnd !== undefined && deadlineNowMs >= deadlineEnd)
       ) {
         return { status: "fenced" };
       }
@@ -822,15 +831,18 @@ export class EmailReplyDraftModel extends BaseDb {
         where: { id: input.guardId },
       });
       const finalNowMs = checkNowMs();
+      const finalDeadlineNowMs =
+        input.deadlineNowMs !== undefined ? input.deadlineNowMs() : Date.now();
       if (
         !finalGuard ||
         finalGuard.ownerToken !== input.ownerToken ||
         finalGuard.phase !== "generating" ||
         !finalGuard.leaseExpiresAt ||
-        finalGuard.leaseExpiresAt.getTime() <= finalNowMs
+        finalGuard.leaseExpiresAt.getTime() <= finalNowMs ||
+        (deadlineEnd !== undefined && finalDeadlineNowMs >= deadlineEnd)
       ) {
         throw new CommitFencedError(
-          `Generation reservation ${input.guardId} lost ownership/phase/lease before commit; transaction rolled back`
+          `Generation reservation ${input.guardId} lost ownership/phase/lease/deadline before commit; transaction rolled back`
         );
       }
       const guardUpdate = await guardRepo
@@ -2019,6 +2031,29 @@ export interface CommitGeneratedDraftInput {
    * call-counted clock for deterministic expiry races.
    */
   nowForCheck?: () => number;
+  /**
+   * G02: invocation work-budget end (epoch ms) for deadline-aware queue
+   * admission. When provided, BOTH the admission fence and the final
+   * mutation fence additionally require the invocation to be live — a
+   * commit that waited past the complete budget in the queue, or whose
+   * in-transaction writes outlived it, is fenced with zero writes instead
+   * of completing past the wall contract. Optional so model-level callers
+   * without an invocation deadline keep the lease-only semantics; the
+   * generation service always provides it.
+   *
+   * Compared against {@link deadlineNowMs} below — NEVER against
+   * `nowForCheck`: the deadline lives in the budget-clock domain
+   * (frozen/manual clocks in tests), while `nowForCheck` lives in the
+   * invocation-timestamp domain. Mixing them fences healthy commits.
+   */
+  invocationDeadlineEndsAtMs?: number;
+  /**
+   * G02: clock reading the deadline's domain for the deadline fence above.
+   * Defaults to the wall clock (matching the deadline's own default);
+   * callers with a controlled budget clock pass the same closure. When
+   * `invocationDeadlineEndsAtMs` is absent this is unused.
+   */
+  deadlineNowMs?: () => number;
 }
 
 export type CommitGeneratedDraftResult =

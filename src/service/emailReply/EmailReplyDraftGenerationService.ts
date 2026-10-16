@@ -504,6 +504,14 @@ export class EmailReplyDraftGenerationService {
    */
   private deadline: GenerationDeadline | null = null;
   /**
+   * G02: terminal-audit slice reserved INSIDE the complete invocation
+   * budget. Work stages race the deadline (which ends early by this
+   * reserve); the terminal refusal audit spends the reserve, so total
+   * wall time stays within the full budget. Scaled with tiny test budgets
+   * (never more than half) so the invariant holds at every scale.
+   */
+  private terminalBudgetMs: number = TERMINAL_AUDIT_BUDGET_MS;
+  /**
    * T07/FR-035: injectable guard module (test seam). Tests inject an in-memory
    * stub or a module bound to an isolated temp DB; production constructs the
    * real one lazily (never at module top level — BaseModule TDZ).
@@ -651,7 +659,24 @@ export class EmailReplyDraftGenerationService {
     //     the model calls of THIS invocation, and expiry is re-checked before
     //     persistence so late output cannot be committed under an expired
     //     owner.
-    this.deadline = startGenerationDeadline(this.budgetOptions);
+    // G02: reserve the terminal slice INSIDE the complete invocation
+    // budget (never stacked on top): work stages expire early by the
+    // reserve, the terminal refusal audit spends it, and total wall time
+    // stays within the full budget. Owner/lease stamps derive from the
+    // same (earlier) end — strictly fail-closed direction.
+    const fullBudgetMs =
+      this.budgetOptions?.budgetMs !== undefined &&
+      this.budgetOptions.budgetMs >= 0
+        ? this.budgetOptions.budgetMs
+        : GENERATION_INVOCATION_BUDGET_MS;
+    this.terminalBudgetMs =
+      fullBudgetMs > 0
+        ? Math.min(TERMINAL_AUDIT_BUDGET_MS, Math.floor(fullBudgetMs / 2))
+        : 0;
+    this.deadline = startGenerationDeadline({
+      now: this.budgetOptions?.now,
+      budgetMs: fullBudgetMs - this.terminalBudgetMs,
+    });
     // G01/FR-027: reset the per-invocation capability memo so each invocation
     // re-resolves against the provider's CURRENT state (the model or provider
     // may have changed between invocations — a stale clamp from a previous
@@ -1194,15 +1219,19 @@ export class EmailReplyDraftGenerationService {
     stage: string,
     workFactory: () => Promise<T>
   ): Promise<T> {
+    // G02: the terminal bound is the reserved slice (scaled with the
+    // invocation budget), not the production constant — work + terminal
+    // together stay within the complete budget at every scale.
+    const terminalBoundMs = this.terminalBudgetMs;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         reject(
           new TerminalAuditTimeoutError(
-            `Terminal ${stage} exceeded its ${TERMINAL_AUDIT_BUDGET_MS}ms bound.`
+            `Terminal ${stage} exceeded its ${terminalBoundMs}ms bound.`
           )
         );
-      }, TERMINAL_AUDIT_BUDGET_MS);
+      }, terminalBoundMs);
     });
     const started = workFactory();
     started.catch(() => undefined);
@@ -2077,6 +2106,23 @@ export class EmailReplyDraftGenerationService {
     // racing it would trade a known outcome (committed-or-rolled-back,
     // reported truthfully) for ambiguity. Owner-expiry is enforced INSIDE
     // the transaction instead (R09 final fence with an injected clock).
+    // G02: queue admission IS deadline-aware, synchronously: when the
+    // deadline already expired, refuse WITHOUT queueing — no detached
+    // write can be in flight, so the outcome is truthful (nothing was
+    // submitted). Once admitted (deadline live), the commit runs to
+    // certainty even past the wall budget — the approved residual, stated
+    // in the technical design (§8) rather than hidden.
+    if (this.deadline !== null && this.deadline.expired()) {
+      await this.releaseReservationSafely();
+      return await this.returnDeadlineExceededOutcome(
+        message,
+        requestCorrelationId,
+        new LlmTransportError(
+          "Generation deadline exceeded before commit admission.",
+          { deadlineExceeded: true }
+        )
+      );
+    }
     let savedDraftId: number;
     try {
       const commitResult = await this.draftModule.commitGeneratedDraft({
@@ -2098,6 +2144,15 @@ export class EmailReplyDraftGenerationService {
         // Shares the invocation clock domain so frozen-clock tests stay
         // self-consistent; wall time in production.
         nowForCheck: () => this.nowForInvocation(),
+        // G02: the work-budget end for deadline-aware queue admission and
+        // the final mutation fence. A commit that waited past the complete
+        // budget, or whose writes outlive it, is fenced with zero writes
+        // (never a past-deadline success). Absent outside invocations.
+        // The fence clock is the budget clock (same domain as the end);
+        // omitting it would default to wall time and fence healthy commits
+        // under controlled test clocks.
+        invocationDeadlineEndsAtMs: this.deadline?.endsAtMs(),
+        deadlineNowMs: this.budgetOptions?.now,
       });
       if (commitResult.status === "fenced") {
         // N07: late output — an expired/replaced owner cannot commit (§8.2).
@@ -2105,17 +2160,37 @@ export class EmailReplyDraftGenerationService {
         // commit txn wrote nothing, so the outer service owns it). Invalid /
         // unresolved IDs are not message audits — this path has a valid
         // message id (loaded at entry) so the audit is message-scoped.
+        // G02: the refusal audit goes through the TERMINAL mechanism
+        // (dedicated bound + direct write), not the deadline-gated
+        // recordFailure — fencing happens exactly when the budget is gone
+        // (expiry during queue), so the gated write would always fail and
+        // the refusal would go unrecorded.
         await this.releaseReservationSafely();
         const fencedCode = "reply_in_progress" as const;
         try {
-          await this.recordFailure(
-            message.emailServiceId,
-            message.id,
-            requestCorrelationId,
-            `[${fencedCode}] Generation owner expired before commit; output discarded (no draft persisted)`,
-            { stage: "pre_draft", code: fencedCode }
+          await this.raceTerminalAudit("commit_refusal", () =>
+            this.recordFailureDirect(
+              message.emailServiceId,
+              message.id,
+              requestCorrelationId,
+              `[${fencedCode}] Generation owner expired before commit; output discarded (no draft persisted)`,
+              { stage: "pre_draft", code: fencedCode }
+            )
           );
         } catch (auditError) {
+          if (auditError instanceof TerminalAuditTimeoutError) {
+            // Bounded audit could not finish: the fenced outcome stands
+            // without it (same shape as the terminal-expiry path — never a
+            // re-audit, never a throw).
+            return {
+              success: false,
+              error:
+                "[reply_in_progress] Generation owner expired before commit; output discarded (no draft persisted)",
+              requestCorrelationId,
+              code: fencedCode,
+              next_action: nextActionForCode(fencedCode),
+            };
+          }
           incrementReplyMetric("audit_failure", { stage: "pre_draft" });
           const auditErrMsg =
             auditError instanceof Error

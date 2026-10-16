@@ -684,4 +684,47 @@ describe("EmailReply cluster eligibility contract (R01/R02/R03) — DB integrati
     expect(counts.audits).toHaveLength(0);
     expect(counts.message?.replyStatus).toBe("not_started");
   });
+
+  it("G02: commit past the invocation deadline end is fenced with zero writes (live lease)", async () => {
+    // The lease is healthy (5min) but the invocation work budget already
+    // ended: queue admission must refuse WITHOUT writing — never a
+    // past-deadline success. Isolates the deadline fence from the lease
+    // fence (lease alone would admit).
+    const rawId = `<g02-${Math.random()}@x.com>`;
+    const normalizedId = normalizeStoredMessageId(rawId)!;
+    const seed = await seedMessage({
+      messageId: rawId,
+      normalizedMessageId: normalizedId,
+    });
+    const guardId = await acquireReservation(seed.id, normalizedId);
+    const result = await draftModel.commitGeneratedDraft({
+      ...commitInputFor(guardId, seed.id, "corr-g02"),
+      invocationDeadlineEndsAtMs: Date.now() - 1,
+    });
+    expect(result.status).toBe("fenced");
+    const counts = await rowCounts(seed.id);
+    expect(counts.drafts).toHaveLength(0);
+    expect(counts.revisions).toHaveLength(0);
+    expect(counts.audits).toHaveLength(0);
+    expect(counts.message?.replyStatus).toBe("not_started");
+    // Guard untouched: still owned, generating, live lease.
+    const guard = await guardModel.read(guardId);
+    expect(guard?.phase).toBe("generating");
+    expect(guard?.ownerToken).toBe(OWNER_TOKEN);
+  });
+
+  it("G02: commit with a live deadline end commits normally (no over-refusal)", async () => {
+    const rawId = `<g02ok-${Math.random()}@x.com>`;
+    const normalizedId = normalizeStoredMessageId(rawId)!;
+    const seed = await seedMessage({
+      messageId: rawId,
+      normalizedMessageId: normalizedId,
+    });
+    const guardId = await acquireReservation(seed.id, normalizedId);
+    const result = await draftModel.commitGeneratedDraft({
+      ...commitInputFor(guardId, seed.id, "corr-g02ok"),
+      invocationDeadlineEndsAtMs: Date.now() + 60_000,
+    });
+    expect(result.status).toBe("committed");
+  });
 });
