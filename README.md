@@ -299,7 +299,7 @@ The settings screen can refresh available models, test chat and streaming suppor
 
 Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
 
-The official application website is [sellart-online.com](https://www.sellart-online.com).
+The official application website is [aifetchly.com](https://www.aifetchly.com).
 
 ## Support aiFetchly
 

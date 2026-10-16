@@ -677,7 +677,7 @@ export default {
     login: "ログイン",
     login_out: "ログアウト",
     system_setting: "システム設定",
-    platform_subtitle: "AIマーケティングエージェント",
+    platform_subtitle: "AIエージェント",
     login_title: "AiFetchlyログイン",
     login_description:
       "下のボタンをクリックしてアカウントにログインしてください",
