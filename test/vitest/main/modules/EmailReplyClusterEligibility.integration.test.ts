@@ -11,6 +11,9 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { runReplyTxn } from "@/model/replyTxn";
 import {
   canonicalReplyKey,
   normalizeStoredMessageId,
@@ -531,5 +534,152 @@ describe("EmailReply cluster eligibility contract (R01/R02/R03) — DB integrati
       expect(result.reason).not.toBe("freshness_stale");
       expect(result.reason).toContain("Message-level state blocks send");
     }
+  });
+
+  // ---------------------------------------------------------------
+  // R09 — the commit's final mutation fence uses an advancing clock read
+  // after admission (never a pre-queue timestamp) and requires current
+  // owner + generating phase + unexpired lease, rolling back staged
+  // draft/revision/message/audit writes on failure. Real shared-mutex
+  // queue holds (not mock promises) for the admission race.
+  // ---------------------------------------------------------------
+
+  async function rowCounts(messageId: number) {
+    const connection = SqliteDb.getInstance(dbpath).connection;
+    const drafts = await draftModel.listByMessage(messageId);
+    const revisions = await connection
+      .getRepository(EmailReplyDraftRevisionEntity)
+      .createQueryBuilder("rev")
+      .innerJoin(
+        "email_reply_draft",
+        "draft",
+        "draft.id = rev.draftId AND draft.messageId = :messageId",
+        { messageId }
+      )
+      .getMany();
+    const audits = await connection
+      .getRepository(EmailReplyAuditLogEntity)
+      .find({ where: { messageId } });
+    const message = await connection
+      .getRepository(EmailReceivedMessageEntity)
+      .findOne({ where: { id: messageId } });
+    return { drafts, revisions, audits, message };
+  }
+
+  it("R09: queued commit past lease expiry is fenced with zero writes", async () => {
+    const rawId = `<r09q-${Math.random()}@x.com>`;
+    const normalizedId = normalizeStoredMessageId(rawId)!;
+    const seed = await seedMessage({
+      messageId: rawId,
+      normalizedMessageId: normalizedId,
+    });
+    // Short real lease: it expires while the commit waits in queue.
+    const now = new Date();
+    const acquired = await guardModel.acquireReservation({
+      emailServiceId: SERVICE_ID,
+      replyKey: canonicalReplyKey({
+        normalizedMessageId: normalizedId,
+        rowId: seed.id,
+      }),
+      messageId: seed.id,
+      ownerToken: OWNER_TOKEN,
+      leaseExpiresAt: new Date(now.getTime() + 200),
+      now,
+      normalizedMessageId: normalizedId,
+    });
+    expect(acquired.status).toBe("acquired");
+    if (acquired.status !== "acquired") throw new Error("not acquired");
+
+    // Occupy the shared write mutex, out-wait the lease, then release.
+    let releaseQueue!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const holder = runReplyTxn(SqliteDb.getInstance(dbpath), async () => {
+      await gate;
+      return "held";
+    });
+    const commitP = draftModel.commitGeneratedDraft(
+      commitInputFor(acquired.guardId, seed.id, "corr-r09q")
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    releaseQueue();
+    const result = await commitP;
+    await holder;
+    expect(result.status).toBe("fenced");
+    // Zero writes: no draft, no revision, no creation audit, no message
+    // promotion — and the guard still belongs to the (expired) owner in
+    // generating phase, untouched.
+    const counts = await rowCounts(seed.id);
+    expect(counts.drafts).toHaveLength(0);
+    expect(counts.revisions).toHaveLength(0);
+    expect(counts.audits).toHaveLength(0);
+    expect(counts.message?.replyStatus).toBe("not_started");
+    const guard = await guardModel.read(acquired.guardId);
+    expect(guard?.phase).toBe("generating");
+    expect(guard?.ownerToken).toBe(OWNER_TOKEN);
+  }, 20_000);
+
+  it("R09: lease expiring mid-transaction is fenced at the final mutation fence", async () => {
+    const rawId = `<r09m-${Math.random()}@x.com>`;
+    const normalizedId = normalizeStoredMessageId(rawId)!;
+    const seed = await seedMessage({
+      messageId: rawId,
+      normalizedMessageId: normalizedId,
+    });
+    const guardId = await acquireReservation(seed.id, normalizedId);
+    // Call-counted clock: first read (admission) sees a valid lease, every
+    // later read (the final fence, after the in-transaction draft/revision/
+    // message/audit writes staged) sees expiry. Deterministic, no sleeping.
+    const t0 = Date.now();
+    let calls = 0;
+    const result = await draftModel.commitGeneratedDraft({
+      ...commitInputFor(guardId, seed.id, "corr-r09m"),
+      nowForCheck: () => {
+        calls += 1;
+        return calls === 1 ? t0 : t0 + 10 * 60_000;
+      },
+    });
+    expect(calls).toBeGreaterThan(1);
+    expect(result.status).toBe("fenced");
+    // The staged writes rolled back: nothing persisted anywhere.
+    const counts = await rowCounts(seed.id);
+    expect(counts.drafts).toHaveLength(0);
+    expect(counts.revisions).toHaveLength(0);
+    expect(counts.audits).toHaveLength(0);
+    expect(counts.message?.replyStatus).toBe("not_started");
+    const guard = await guardModel.read(guardId);
+    expect(guard?.phase).toBe("generating");
+    expect(guard?.ownerToken).toBe(OWNER_TOKEN);
+  });
+
+  it("R09: intervening owner replacement is fenced with zero writes", async () => {
+    const rawId = `<r09r-${Math.random()}@x.com>`;
+    const normalizedId = normalizeStoredMessageId(rawId)!;
+    const seed = await seedMessage({
+      messageId: rawId,
+      normalizedMessageId: normalizedId,
+    });
+    const guardId = await acquireReservation(seed.id, normalizedId);
+    // Another owner takes over the guard row (fresh lease, still
+    // generating) before our commit runs.
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReplyGuardEntity)
+      .update(
+        { id: guardId },
+        {
+          ownerToken: "b".repeat(128),
+          leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+        }
+      );
+    const result = await draftModel.commitGeneratedDraft(
+      commitInputFor(guardId, seed.id, "corr-r09r")
+    );
+    expect(result.status).toBe("fenced");
+    const counts = await rowCounts(seed.id);
+    expect(counts.drafts).toHaveLength(0);
+    expect(counts.revisions).toHaveLength(0);
+    expect(counts.audits).toHaveLength(0);
+    expect(counts.message?.replyStatus).toBe("not_started");
   });
 });

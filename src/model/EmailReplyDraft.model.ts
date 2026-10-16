@@ -43,6 +43,15 @@ import {
 } from "@/service/emailReply/replyReliabilityVersions";
 import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
 
+/**
+ * R09: thrown inside the commit transaction when the final mutation fence
+ * fails (lost ownership/phase/lease after earlier writes staged). Caught by
+ * {@link EmailReplyDraftModel.commitGeneratedDraft}, which rolls the
+ * transaction back and returns `{ status: "fenced" }`. Never escapes the
+ * model — callers see the typed result, not an exception.
+ */
+class CommitFencedError extends Error {}
+
 // The shared `replyWriteMutex` lives in `src/model/replyTxn.ts` so that
 // `EmailReplyDraftModel` and `EmailReplyGuardModel` (T07) serialize their
 // transactions on the same in-process mutex — see replyTxn.ts for the
@@ -647,10 +656,41 @@ export class EmailReplyDraftModel extends BaseDb {
   async commitGeneratedDraft(
     input: CommitGeneratedDraftInput
   ): Promise<CommitGeneratedDraftResult> {
-    return await runReplyTxn(this.sqliteDb, async (manager) => {
+    // R09: clock for owner/lease fences, read AFTER transaction admission
+    // (never the pre-queue `input.now`, which is only used for row
+    // timestamps below). Defaults to wall time; tests inject advancing or
+    // call-counted clocks for deterministic expiry races.
+    const checkNowMs = input.nowForCheck ?? Date.now;
+    try {
+      return await runReplyTxn(this.sqliteDb, async (manager) => {
+        return await this.commitGeneratedDraftInTxn(manager, input, checkNowMs);
+      });
+    } catch (error) {
+      if (error instanceof CommitFencedError) {
+        return { status: "fenced" };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * R09: the commit body runs inside the shared reply transaction. The final
+   * guard fence THROWS {@link CommitFencedError} (rolling back the draft,
+   * revision, message-status, and audit writes staged earlier in this same
+   * transaction) instead of returning, because a normal return would COMMIT
+   * partial work. Pre-mutation gates (owner/lease at admission, cluster
+   * eligibility, expected phase) still return normally — no writes have
+   * happened yet at those points.
+   */
+  private async commitGeneratedDraftInTxn(
+    manager: EntityManager,
+    input: CommitGeneratedDraftInput,
+    checkNowMs: () => number
+  ): Promise<CommitGeneratedDraftResult> {
       // 1. Fenced late-result gate: re-check ownership + lease inside the
-      // same transaction that writes. An expired or replaced owner means the
-      // late output is stale — discard it (§8.2).
+      // same transaction that writes, at ADMISSION time (after any queue
+      // wait — never the caller's pre-queue timestamp). An expired or
+      // replaced owner means the late output is stale — discard it (§8.2).
       const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const guard = await guardRepo.findOne({ where: { id: input.guardId } });
       const now = input.now ?? new Date();
@@ -658,7 +698,7 @@ export class EmailReplyDraftModel extends BaseDb {
         !guard ||
         guard.ownerToken !== input.ownerToken ||
         !guard.leaseExpiresAt ||
-        guard.leaseExpiresAt.getTime() <= now.getTime()
+        guard.leaseExpiresAt.getTime() <= checkNowMs()
       ) {
         return { status: "fenced" };
       }
@@ -762,9 +802,33 @@ export class EmailReplyDraftModel extends BaseDb {
         { replyStatus: "draft_created", processedAt: now }
       );
 
-      // 6. Guard transition to draft_ready — fenced by ownerToken. Zero rows
-      // means the owner changed between step 1 and here; THROW so the
-      // transaction rolls back (a normal return would commit).
+      // 6. R09 final mutation fence: re-read the guard row and require the
+      // CURRENT owner, the expected `generating` phase, and an unexpired
+      // lease against a FRESH clock read — the admission check above ran
+      // before the draft/revision/message/audit writes, and the lease may
+      // have elapsed or another owner may have replaced this one since.
+      // On failure THROW CommitFencedError so the already-staged writes
+      // roll back (a normal return would commit a draft whose owner is
+      // gone). The UPDATE itself is additionally fenced by
+      // id + ownerToken + phase (all equality — no datetime SQL comparison,
+      // whose serialization differs across drivers); the lease residual
+      // between the fresh check and the write is microseconds, bounded in
+      // production by F04-clamped short leases at the boundary.
+      const finalGuard = await guardRepo.findOne({
+        where: { id: input.guardId },
+      });
+      const finalNowMs = checkNowMs();
+      if (
+        !finalGuard ||
+        finalGuard.ownerToken !== input.ownerToken ||
+        finalGuard.phase !== "generating" ||
+        !finalGuard.leaseExpiresAt ||
+        finalGuard.leaseExpiresAt.getTime() <= finalNowMs
+      ) {
+        throw new CommitFencedError(
+          `Generation reservation ${input.guardId} lost ownership/phase/lease before commit; transaction rolled back`
+        );
+      }
       const guardUpdate = await guardRepo
         .createQueryBuilder()
         .update(EmailReplyGuardEntity)
@@ -773,13 +837,17 @@ export class EmailReplyDraftModel extends BaseDb {
           activeDraftId: savedDraft.id,
           activeAttemptId: null,
         })
-        .where("id = :guardId AND ownerToken = :ownerToken", {
-          guardId: input.guardId,
-          ownerToken: input.ownerToken,
-        })
+        .where(
+          "id = :guardId AND ownerToken = :ownerToken AND phase = :phase",
+          {
+            guardId: input.guardId,
+            ownerToken: input.ownerToken,
+            phase: "generating" as GuardPhase,
+          }
+        )
         .execute();
       if ((guardUpdate.affected ?? 0) === 0) {
-        throw new Error(
+        throw new CommitFencedError(
           `Generation reservation ${input.guardId} changed owner before commit; transaction rolled back`
         );
       }
@@ -808,7 +876,6 @@ export class EmailReplyDraftModel extends BaseDb {
         revisionNumber: appended.revision.revisionNumber,
         contentHash,
       };
-    });
   }
 
   /**
@@ -1838,6 +1905,13 @@ export interface CommitGeneratedDraftInput {
   requestCorrelationId: string;
   /** Optional clock for deterministic tests. */
   now?: Date;
+  /**
+   * R09: advancing clock for owner/lease fences, read AFTER transaction
+   * admission and again at the final mutation fence (never a pre-queue
+   * timestamp). Defaults to the wall clock; tests inject a manual or
+   * call-counted clock for deterministic expiry races.
+   */
+  nowForCheck?: () => number;
 }
 
 export type CommitGeneratedDraftResult =

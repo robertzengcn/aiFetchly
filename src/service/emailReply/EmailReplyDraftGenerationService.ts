@@ -1994,6 +1994,11 @@ export class EmailReplyDraftGenerationService {
         requestCorrelationId,
         // D7.2: injectable clock for the persisted commit timestamp.
         now: new Date(this.nowForInvocation()),
+        // R09: advancing clock for the commit's owner/lease fences (read
+        // after transaction admission and at the final mutation fence).
+        // Shares the invocation clock domain so frozen-clock tests stay
+        // self-consistent; wall time in production.
+        nowForCheck: () => this.nowForInvocation(),
       });
       if (commitResult.status === "fenced") {
         // N07: late output — an expired/replaced owner cannot commit (§8.2).
