@@ -65,6 +65,32 @@ export function normalizeStoredMessageId(
 }
 
 /**
+ * R02: whether a persisted negative observation is consumable by readers.
+ * A negative observed AFTER its owning probe's deadline end is an expired
+ * owner's result — it must never be trusted, regardless of TTL, and only a
+ * fresh probe may establish a new negative. Observations without owner
+ * tracking (legacy rows, grandfathered) keep the previous age-only
+ * semantics; callers still apply their own TTL/freshness windows on top.
+ * Pure (no DB, no I/O) so the detector, the claim fence, and the post-claim
+ * gate all apply the identical predicate.
+ */
+export function isNegativeObservationUsable(input: {
+  readonly replyNegativeCheckAt: Date | null | undefined;
+  readonly replyNegativeOwnerExpiresAt: Date | null | undefined;
+}): boolean {
+  const observedAt = input.replyNegativeCheckAt;
+  if (observedAt == null) return false;
+  const ownerExpiresAt = input.replyNegativeOwnerExpiresAt;
+  if (
+    ownerExpiresAt != null &&
+    observedAt.getTime() > ownerExpiresAt.getTime()
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Two stored normalized message ids are equivalent when their canonical tokens
  * are byte-equal. Identifiers are case-preserving (per §7.1 of the thread
  * resolver), so equality is exact string equality — no locale-sensitive

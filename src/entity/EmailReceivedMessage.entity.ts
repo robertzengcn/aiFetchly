@@ -171,6 +171,17 @@ export class EmailReceivedMessageEntity extends AuditableEntity {
   @Column("varchar", { length: 64, nullable: true })
   replyNegativeContextHash: string | null;
 
+  /**
+   * R02: end of the probe invocation that owns the negative observation
+   * (epoch ms wall time of the probe deadline). A negative observed AFTER
+   * its owner's deadline is an expired owner's result and must never be
+   * consumed by readers — only a fresh probe may establish a new negative.
+   * Null on legacy rows (grandfathered to previous age-only semantics) and
+   * cleared with the observation itself.
+   */
+  @Column("datetime", { nullable: true })
+  replyNegativeOwnerExpiresAt: Date | null;
+
   /** IMAP folder this message was synced from (UID provenance, §4.1). */
   @Column("varchar", { length: 255, nullable: true })
   providerFolder: string | null;

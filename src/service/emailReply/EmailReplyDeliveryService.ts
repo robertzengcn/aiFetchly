@@ -3,7 +3,10 @@ import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevision
 import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
-import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
+import {
+  canonicalReplyKey,
+  isNegativeObservationUsable,
+} from "@/service/emailReceive/EmailReplyIdentity";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
@@ -772,7 +775,9 @@ export class EmailReplyDeliveryService {
     //     accepted/unknown send. This mirrors the recovery precedent
     //     (EmailReplySendRecoveryService.recoverStaleAttempts finalizes
     //     in-flight attempts as delivery_unknown).
-    await this.runPostClaimFreshnessGate({
+    // R01: the gate reports whether it consumed the single delayed-refresh
+    // allowance; the handoff fence below spends it at most once more.
+    const { refreshed: gateRefreshed } = await this.runPostClaimFreshnessGate({
       message,
       draftId: draft.id,
       approvalId: approval.id,
@@ -800,17 +805,18 @@ export class EmailReplyDeliveryService {
       replyTo: service.replyTo,
     });
 
-    // 7c. F02 final handoff fence — conditional ownership immediately before
-    // SMTP. Recovery or reconciliation may have finalized this attempt while
-    // this operation was paused in the gate (unknown/failed/sent) or a fresh
-    // retry may own the message now. The stale claim must not submit: re-read
-    // the attempt row and proceed ONLY while it is still claimed/submitted
-    // (this operation's own states). A lost claim refuses with ONE skip audit
+    // 7c. F02/R01 final handoff fence — conditional ownership AND freshness
+    // immediately before SMTP. Recovery or reconciliation may have finalized
+    // this attempt while this operation was paused in the gate
+    // (unknown/failed/sent), a fresh retry may own the message now, a
+    // positive may have arrived, or the observation may have aged out during
+    // the fence's own awaits. A lost/stale claim refuses with ONE skip audit
     // via refusePostClaimGate — whose finalize is a safe row-level no-op on
     // the already-terminal attempt (conditional match on claimed|submitted
     // yields 0 rows) — and throws, so no second submission is possible under
     // the old claim alongside a fresh retry.
     await this.checkClaimOwnershipBeforeSmtp({
+      gateRefreshed,
       message,
       draftId: draft.id,
       approvalId: approval.id,
@@ -1087,6 +1093,28 @@ export class EmailReplyDeliveryService {
    * terminal state so operators can tell a recovered attempt from an
    * accepted one without parsing English.
    */
+  /**
+   * F02/R01 — final ownership + freshness fence immediately before the SMTP
+   * handoff. The post-claim gate may have paused (message reads, detection)
+   * while recovery finalized this attempt (unknown) and reconciliation moved
+   * it further (failed) or a late success landed (sent) — and even with the
+   * claim intact, a seed/sibling positive may have arrived or the five-second
+   * observation may have aged out during the fence's own awaits.
+   *
+   * Order is load-bearing: the attempt read runs first, then the cluster
+   * read, then the message read LAST, so the freshness permission is computed
+   * from the newest possible observation with no awaits between it and the
+   * transport (header building is synchronous). Returns normally only when
+   * the claim is still owned AND no positive exists AND a usable negative is
+   * fresh; otherwise refuses with one skip audit via refusePostClaimGate
+   * (whose finalize is a safe row-level no-op on an already-terminal
+   * attempt) and throws — no SMTP under a dead or stale claim, ever.
+   *
+   * Single-refresh allowance is shared with the gate: when the gate already
+   * consumed the one delayed refresh (`gateRefreshed`), a stale observation
+   * here refuses immediately (no second delay); otherwise this fence spends
+   * the allowance itself with an excluded forceRefresh probe.
+   */
   private async checkClaimOwnershipBeforeSmtp(input: {
     message: { id: number; emailServiceId: number };
     draftId: number;
@@ -1095,25 +1123,219 @@ export class EmailReplyDeliveryService {
     emailServiceId: number;
     guardId: number | null;
     requestCorrelationId: string;
+    gateRefreshed: boolean;
   }): Promise<void> {
     const attempt = await this.attemptModule.read(input.attemptId);
-    if (attempt && (attempt.status === "claimed" || attempt.status === "submitted")) {
+    if (
+      !attempt ||
+      (attempt.status !== "claimed" && attempt.status !== "submitted")
+    ) {
+      const code: EmailReplyPolicyCode =
+        attempt?.status === "sent"
+          ? "already_replied"
+          : attempt?.status === "delivery_unknown"
+            ? "delivery_unknown"
+            : attempt?.status === "failed"
+              ? "reply_state_conflict"
+              : "reply_state_unknown";
+      const reason =
+        attempt == null
+          ? `Send claim lost before SMTP: attempt ${input.attemptId} no longer exists`
+          : `Send claim lost before SMTP: attempt ${input.attemptId} is ${attempt.status} (recovered/reconciled while this operation was paused)`;
+      incrementReplyMetric("send_claim", { outcome: "ownership_fence_refused" });
+      await this.refusePostClaimGate(input, code, reason);
       return;
     }
-    const code: EmailReplyPolicyCode =
-      attempt?.status === "sent"
-        ? "already_replied"
-        : attempt?.status === "delivery_unknown"
-          ? "delivery_unknown"
-          : attempt?.status === "failed"
-            ? "reply_state_conflict"
-            : "reply_state_unknown";
-    const reason =
-      attempt == null
-        ? `Send claim lost before SMTP: attempt ${input.attemptId} no longer exists`
-        : `Send claim lost before SMTP: attempt ${input.attemptId} is ${attempt.status} (recovered/reconciled while this operation was paused)`;
-    incrementReplyMetric("send_claim", { outcome: "ownership_fence_refused" });
-    await this.refusePostClaimGate(input, code, reason);
+    // The claim is still ours. Re-establish evidence AFTER the attempt read:
+    // seed row first (existence + cluster input), cluster next, then the
+    // message row LAST, so the permission below uses the newest observation
+    // with no awaits between it and SMTP. A failed cluster read is
+    // incomplete evidence (never permission) — distinct from a vanished row.
+    const seedMessage = await this.messageModule.read(input.message.id);
+    if (!seedMessage) {
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        "Original message not found at the SMTP handoff fence"
+      );
+      return;
+    }
+    let clusterRows:
+      | import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity[]
+      | null = null;
+    try {
+      clusterRows = await this.messageModule.findCanonicalEquivalents(
+        seedMessage
+      );
+    } catch {
+      // F01 principle: incomplete cluster evidence can never grant
+      // permission — fall through to the refresh/refuse logic below.
+      incrementReplyMetric("send_claim", {
+        outcome: "handoff_cluster_unreadable",
+      });
+      clusterRows = null;
+    }
+    const currentMessage = await this.messageModule.read(input.message.id);
+    if (!currentMessage) {
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        "Original message vanished during the SMTP handoff fence"
+      );
+      return;
+    }
+    if (
+      currentMessage.replyDetectedAt != null ||
+      currentMessage.replyStatus === "sent"
+    ) {
+      await this.refusePostClaimGate(
+        input,
+        "already_replied",
+        "Handoff fence found positive reply evidence on the message before SMTP"
+      );
+      return;
+    }
+    if (clusterRows !== null) {
+      for (const row of clusterRows) {
+        if (row.id === currentMessage.id) continue;
+        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
+          await this.refusePostClaimGate(
+            input,
+            "already_replied",
+            "Handoff fence found positive reply evidence on an equivalent message before SMTP"
+          );
+          return;
+        }
+      }
+    }
+    if (
+      this.isFreshUsableNegative(
+        currentMessage.replyNegativeCheckAt,
+        currentMessage.replyNegativeOwnerExpiresAt
+      ) &&
+      clusterRows !== null
+    ) {
+      // Owned claim, no positives, complete cluster, fresh usable negative
+      // as of the last awaited read — proceed to SMTP immediately.
+      incrementReplyMetric("send_claim", {
+        outcome: "handoff_fresh",
+      });
+      return;
+    }
+    // Stale, missing, unusable, or incomplete evidence at the handoff.
+    if (input.gateRefreshed) {
+      // The single delayed-refresh allowance is exhausted — refuse with no
+      // second delay and no SMTP submission.
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        "Handoff observation is stale and the single delayed refresh was already consumed; refusing second delay"
+      );
+      return;
+    }
+    // Spend the single allowance here: one excluded forceRefresh probe
+    // retaining the claim, then re-evaluate once against its result.
+    let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
+    try {
+      result = await this.runExcludedRefresh(input);
+    } catch (error) {
+      const errMsg = sanitizeDetectionError(error);
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        `Handoff detection probe threw: ${errMsg}`
+      );
+      return;
+    }
+    if (result.state !== "not_replied") {
+      const code: EmailReplyPolicyCode =
+        result.state === "replied" ? "already_replied" : result.reasonCode;
+      const reason =
+        result.state === "replied"
+          ? "Handoff freshness refresh found an existing reply before SMTP"
+          : "Handoff freshness refresh was inconclusive before SMTP";
+      await this.refusePostClaimGate(input, code, reason);
+      return;
+    }
+    // Re-read after the refresh and require a usable fresh negative NOW —
+    // positives that landed during the refresh still refuse.
+    const afterRefresh = await this.messageModule.read(input.message.id);
+    if (
+      afterRefresh?.replyDetectedAt != null ||
+      afterRefresh?.replyStatus === "sent"
+    ) {
+      await this.refusePostClaimGate(
+        input,
+        "already_replied",
+        "Handoff refresh completed but positive reply evidence appeared before SMTP"
+      );
+      return;
+    }
+    if (
+      !this.isFreshUsableNegative(
+        afterRefresh?.replyNegativeCheckAt ?? null,
+        afterRefresh?.replyNegativeOwnerExpiresAt ?? null
+      )
+    ) {
+      await this.refusePostClaimGate(
+        input,
+        "probe_failed",
+        "Handoff refresh completed without a fresh usable negative observation before SMTP"
+      );
+      return;
+    }
+    incrementReplyMetric("detection_outcome", {
+      stage: "pre_send",
+      state: "not_replied",
+      code: "no_reply_observed",
+    });
+  }
+
+  /**
+   * R01/R02: a negative timestamp grants SMTP permission only when it is
+   * both fresh (within the forced window as of the LAST awaited read) and
+   * usable (not an expired owner's result). One predicate for the gate and
+   * the handoff fence so the two cannot disagree on what "fresh" means.
+   */
+  private isFreshUsableNegative(
+    replyNegativeCheckAt: Date | null | undefined,
+    replyNegativeOwnerExpiresAt: Date | null | undefined
+  ): boolean {
+    if (replyNegativeCheckAt == null) return false;
+    if (
+      !isNegativeObservationUsable({
+        replyNegativeCheckAt,
+        replyNegativeOwnerExpiresAt,
+      })
+    ) {
+      return false;
+    }
+    return Date.now() - replyNegativeCheckAt.getTime() <= FORCED_FRESHNESS_WINDOW_MS;
+  }
+
+  /**
+   * The single permitted delayed refresh: an excluded forceRefresh probe
+   * retaining this operation's claim (only its own sending draft + submitted
+   * attempt are ignored so the refresh re-probes the mailbox instead of
+   * short-circuiting). Shared by the gate and the handoff fence; each call
+   * site owns the allowance accounting and the result mapping.
+   */
+  private async runExcludedRefresh(input: {
+    message: { id: number; emailServiceId: number };
+    draftId: number;
+    attemptId: number;
+  }): Promise<
+    import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult
+  > {
+    incrementReplyMetric("send_claim", {
+      outcome: "post_claim_stale_refresh",
+    });
+    return await this.detectionServiceForNow().detect({
+      messageId: input.message.id,
+      forceRefresh: true,
+      excludeDraftId: input.draftId,
+      excludeAttemptId: input.attemptId,
+    });
   }
 
   /**
@@ -1127,7 +1349,8 @@ export class EmailReplyDeliveryService {
    * attempt as the current owner (every other pending/sent/unknown record still
    * blocks).
    *
-   * - `not_replied` → proceed to SMTP (the stale-but-still-eligible case).
+   * - `not_replied` → proceed to the handoff fence (the stale-but-still-
+   *   eligible case), reporting whether the single refresh was consumed.
    * - `replied` / `unknown` → the unsent claim is finalized safely as
    *   `delivery_unknown` (NOT left claimed, NOT manufactured as sent), ONE
    *   `reply_skipped` audit (stage pre_send) is written, and a
@@ -1138,8 +1361,10 @@ export class EmailReplyDeliveryService {
    *   `activeAttemptId: null`, consumes the one-time approval, writes the
    *   delivery_unknown audit, and leaves the message `replyStatus` untouched).
    *
-   * Exactly one delayed refresh — §9.4: "Allow one delayed refresh; further
-   * delay refuses with no SMTP submission."
+   * Exactly one delayed refresh across gate + handoff fence — §9.4: "Allow
+   * one delayed refresh; further delay refuses with no SMTP submission."
+   * The gate returns whether it consumed the allowance so the fence spends
+   * it at most once more (never twice total).
    */
   private async runPostClaimFreshnessGate(input: {
     message: { id: number; emailServiceId: number };
@@ -1149,7 +1374,7 @@ export class EmailReplyDeliveryService {
     emailServiceId: number;
     guardId: number | null;
     requestCorrelationId: string;
-  }): Promise<void> {
+  }): Promise<{ refreshed: boolean }> {
     // Re-read the seed's current observation timestamp. The message read at
     // the top of sendApprovedReply is stale by gate time (awaited claim +
     // markSubmitted I/O elapsed).
@@ -1158,8 +1383,7 @@ export class EmailReplyDeliveryService {
       // The message vanished between claim and SMTP — the claim still exists,
       // so it must be safely finalized rather than left as a phantom
       // in-flight attempt. delivery_unknown is the safe terminal.
-      await this.refusePostClaimGate(input, "probe_failed", "Original message not found at the post-claim freshness gate");
-      return;
+      return this.refusePostClaimGate(input, "probe_failed", "Original message not found at the post-claim freshness gate");
     }
     // N03: positive/sent precedence BEFORE freshness permission. A reply
     // detected or sent locally after the atomic claim (during awaited
@@ -1172,12 +1396,11 @@ export class EmailReplyDeliveryService {
       currentMessage.replyDetectedAt != null ||
       currentMessage.replyStatus === "sent"
     ) {
-      await this.refusePostClaimGate(
+      return this.refusePostClaimGate(
         input,
         "already_replied",
         "Post-claim gate found positive reply evidence on the message before SMTP"
       );
-      return;
     }
     // F01: the catch below covers ONLY the cluster read. A deliberate
     // sibling-positive refusal (refusePostClaimGate throws SendPolicyRejection)
@@ -1205,100 +1428,96 @@ export class EmailReplyDeliveryService {
       for (const row of clusterRows) {
         if (row.id === currentMessage.id) continue;
         if (row.replyDetectedAt != null || row.replyStatus === "sent") {
-          await this.refusePostClaimGate(
+          return this.refusePostClaimGate(
             input,
             "already_replied",
             "Post-claim gate found positive reply evidence on an equivalent message before SMTP"
           );
-          return;
         }
       }
     }
-    const observedAt = currentMessage.replyNegativeCheckAt;
-    // F01: the fresh fast-path requires COMPLETE cluster evidence. When the
-    // cluster read failed (clusterRows === null), skip straight to the
-    // verified refresh even when the seed's negative looks fresh.
-    if (clusterRows !== null && observedAt != null) {
-      const ageMs = Date.now() - observedAt.getTime();
-      if (ageMs <= FORCED_FRESHNESS_WINDOW_MS) {
-        // Fresh — proceed to SMTP immediately (§9.4). No extra detect call.
-        // N03: the positive check above already ran, so a fresh negative here
-        // means no known positive on seed or siblings at gate time.
-        incrementReplyMetric("send_claim", {
-          outcome: "post_claim_fresh",
-        });
-        return;
-      }
-    }
-    // Stale (or null) → ONE excluded forceRefresh detection retaining the
-    // claim. The exclude params make the refresh ignore THIS operation's own
-    // sending draft + submitted attempt (the current owner) so it re-probes
-    // the mailbox instead of short-circuiting at reply_in_progress.
-    incrementReplyMetric("send_claim", {
-      outcome: "post_claim_stale_refresh",
-    });
-    let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
-    try {
-      result = await this.detectionServiceForNow().detect({
-        messageId: input.message.id,
-        forceRefresh: true,
-        excludeDraftId: input.draftId,
-        excludeAttemptId: input.attemptId,
+    // R01/R02: the fresh fast-path requires COMPLETE cluster evidence AND a
+    // fresh USABLE negative. When the cluster read failed
+    // (clusterRows === null), skip straight to the verified refresh even
+    // when the seed's negative looks fresh. An expired owner's negative is
+    // treated exactly like a missing one.
+    if (
+      clusterRows !== null &&
+      this.isFreshUsableNegative(
+        currentMessage.replyNegativeCheckAt,
+        currentMessage.replyNegativeOwnerExpiresAt
+      )
+    ) {
+      // Fresh — proceed to the handoff fence (§9.4) with NO extra detect
+      // call. N03: the positive check above already ran, so a fresh usable
+      // negative here means no known positive on seed or siblings at gate
+      // time. The handoff fence re-establishes all of this after its own
+      // awaits — this return is permission to continue, not to submit.
+      incrementReplyMetric("send_claim", {
+        outcome: "post_claim_fresh",
       });
-    } catch (error) {
-      // The refresh threw — treat as an inconclusive probe failure and safely
-      // finalize the unsent claim. Bounded error text (FR-039).
-      const errMsg = sanitizeDetectionError(error);
-      await this.refusePostClaimGate(
-        input,
-        "probe_failed",
-        `Post-claim detection probe threw: ${errMsg}`
-      );
-      return;
+      return { refreshed: false };
     }
+    // Stale (or null/unusable) → ONE excluded forceRefresh detection
+    // retaining the claim. The exclude params make the refresh ignore THIS
+    // operation's own sending draft + submitted attempt (the current owner)
+    // so it re-probes the mailbox instead of short-circuiting at
+    // reply_in_progress.
+    // The refresh threw — treat as an inconclusive probe failure and safely
+    // finalize the unsent claim. Bounded error text (FR-039). The refusal
+    // never returns, so a throw here cannot fall through to the result
+    // handling below with an unassigned outcome.
+    const result = await this.runExcludedRefresh(input).catch(
+      async (
+        error: unknown
+      ): Promise<
+        import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult
+      > => {
+        const errMsg = sanitizeDetectionError(error);
+        return this.refusePostClaimGate(
+          input,
+          "probe_failed",
+          `Post-claim detection probe threw: ${errMsg}`
+        );
+      }
+    );
     if (result.state === "not_replied") {
-      // N03: revalidate refresh observation age immediately before handoff;
-      // refuse a second delay. The refresh itself took wall time — reread the
-      // seed's negative timestamp and require it to be fresh NOW. A stale
-      // observation after exactly one refresh refuses with no SMTP (no second
-      // refresh loop).
+      // N03/R02: revalidate refresh observation usability immediately
+      // before handoff; refuse a second delay. The refresh itself took wall
+      // time — reread the seed's negative timestamp and require it to be
+      // fresh AND usable NOW. A stale/unusable observation after exactly one
+      // refresh refuses with no SMTP (no second refresh loop).
       const afterRefresh = await this.messageModule.read(input.message.id);
       if (
         afterRefresh?.replyDetectedAt != null ||
         afterRefresh?.replyStatus === "sent"
       ) {
-        await this.refusePostClaimGate(
+        return this.refusePostClaimGate(
           input,
           "already_replied",
           "Post-claim refresh completed but positive reply evidence appeared before SMTP"
         );
-        return;
       }
-      const refreshedAt = afterRefresh?.replyNegativeCheckAt ?? null;
-      if (refreshedAt == null) {
-        await this.refusePostClaimGate(
+      if (
+        !this.isFreshUsableNegative(
+          afterRefresh?.replyNegativeCheckAt ?? null,
+          afterRefresh?.replyNegativeOwnerExpiresAt ?? null
+        )
+      ) {
+        return this.refusePostClaimGate(
           input,
           "probe_failed",
-          "Post-claim refresh completed without a fresh negative observation before SMTP"
+          "Post-claim refresh completed without a fresh usable negative observation before SMTP; refusing second delay"
         );
-        return;
       }
-      const refreshedAgeMs = Date.now() - refreshedAt.getTime();
-      if (refreshedAgeMs > FORCED_FRESHNESS_WINDOW_MS) {
-        await this.refusePostClaimGate(
-          input,
-          "probe_failed",
-          "Post-claim refresh observation is stale before SMTP; refusing second delay"
-        );
-        return;
-      }
-      // Stale-but-still-eligible with a NOW-fresh observation: proceed to SMTP.
+      // Stale-but-still-eligible with a NOW-fresh usable observation:
+      // proceed to the handoff fence, reporting the consumed allowance.
       incrementReplyMetric("detection_outcome", {
         stage: "pre_send",
         state: "not_replied",
         code: "no_reply_observed",
       });
-      return;
+      return { refreshed: true };
     }
     // replied OR unknown → safely finalize the unsent claim + ONE reply_skipped
     // audit + SendPolicyRejection with the typed code.
@@ -1308,7 +1527,7 @@ export class EmailReplyDeliveryService {
       result.state === "replied"
         ? "Post-claim freshness refresh found an existing reply before SMTP"
         : "Post-claim freshness refresh was inconclusive before SMTP";
-    await this.refusePostClaimGate(input, code, reason);
+    return this.refusePostClaimGate(input, code, reason);
   }
 
   /**
@@ -1329,6 +1548,11 @@ export class EmailReplyDeliveryService {
    * persistence failure still stops the work (§9.2) but the safe finalize has
    * already run, so the claim is not left dangling.
    */
+  /**
+   * R01: typed as `Promise<never>` — every path finalizes (or no-ops on an
+   * already-terminal attempt) and then throws SendPolicyRejection. Callers
+   * never continue past this call, so no unreachable shims are needed.
+   */
   private async refusePostClaimGate(
     input: {
       message: { id: number; emailServiceId: number };
@@ -1341,7 +1565,7 @@ export class EmailReplyDeliveryService {
     },
     code: EmailReplyPolicyCode,
     reason: string
-  ): Promise<void> {
+  ): Promise<never> {
     incrementReplyMetric("detection_outcome", {
       stage: "pre_send",
       state: code === "already_replied" ? "replied" : "unknown",

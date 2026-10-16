@@ -23,6 +23,7 @@ import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { isSubmitterRunning } from "@/service/emailReply/EmailReplySubmitterTracker";
+import { isNegativeObservationUsable } from "@/service/emailReceive/EmailReplyIdentity";
 import { runReplyTxn } from "@/model/replyTxn";
 import {
   readClusterEvidence,
@@ -899,7 +900,15 @@ export class EmailReplyDraftModel extends BaseDb {
       // "fresh enough" and let the claim proceed to SMTP despite known reply
       // evidence.
       const observedAt = seedMessage.replyNegativeCheckAt;
-      if (observedAt === null) {
+      // R02: an expired owner's negative is not an observation to trust —
+      // treat it exactly like a missing one (fail-closed → freshness_stale
+      // → the delivery service reruns detection outside the transaction).
+      // Legacy rows without owner tracking keep the previous semantics.
+      const ownerUsable = isNegativeObservationUsable({
+        replyNegativeCheckAt: seedMessage.replyNegativeCheckAt,
+        replyNegativeOwnerExpiresAt: seedMessage.replyNegativeOwnerExpiresAt,
+      });
+      if (observedAt === null || !ownerUsable) {
         // Fail-closed: missing negative observation → force the delayed
         // refresh. A null `replyNegativeCheckAt` means either detection never
         // ran, its persistence failed silently (D1b), or a positive was

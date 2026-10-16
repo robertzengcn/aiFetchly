@@ -43,6 +43,7 @@ import type {
 } from "@/service/emailReceive/EmailReceiveClient";
 import {
   hasNamespaceConflict,
+  isNegativeObservationUsable,
   normalizeStoredMessageId,
   normalizedIdsMatch,
   parseNamespacedProviderUid,
@@ -139,6 +140,7 @@ export interface ReplyDetectionMessagePort {
     replyMatchedMessageId?: string | null;
     replyNegativeCheckAt?: Date | null;
     replyNegativeContextHash?: string | null;
+    replyNegativeOwnerExpiresAt?: Date | null;
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean>;
@@ -860,14 +862,16 @@ export class EmailReplyDetectionService {
      * elapses, the racer aborts this signal; the IMAP port tears down the
      * in-flight socket (`client.close()`) instead of lingering. Passed to
      * every port call so an abort between sub-steps also short-circuits.
+     *
+     * N04: the invocation deadline owning this probe is checked after every
+     * awaited closing step (mailbox reads, config/identity reread,
+     * persistence) so an abandoned timed-out probe never persists fresh
+     * negative evidence. R02: its absolute end is also stamped on the
+     * negative write as the owner expiry, so readers reject expired-owner
+     * results even if the compensating void never runs.
      */
     signal?: AbortSignal,
-    /**
-     * N04: invocation deadline owning this probe. Checked after every awaited
-     * closing step (mailbox reads, config/identity reread, persistence) so an
-     * abandoned timed-out probe never persists fresh negative evidence.
-     */
-    deadline?: { expired(): boolean; remainingMs(): number }
+    deadline?: { expired(): boolean; remainingMs(): number; endsAtMs(): number }
   ): Promise<ReplyDetectionResult> {
     // Config normalization + identity resolution happened in runCachedProbe
     // (the cache key needs the pre-probe context hash, which needs both).
@@ -1084,6 +1088,7 @@ export class EmailReplyDetectionService {
         observedAtMs: mailboxObservedAtMs,
         signal,
         isExpired: () => deadline?.expired() ?? false,
+        ownerExpiresAtMs: deadline?.endsAtMs(),
       }
     );
     // N04: the awaited write itself may have completed after expiry — if so,
@@ -1263,6 +1268,21 @@ export class EmailReplyDetectionService {
     if (!message.replyNegativeCheckAt || !message.replyNegativeContextHash) {
       return null;
     }
+    // R02: an expired owner's result is never consumable — not from cache,
+    // regardless of TTL. Only a fresh probe may establish a new negative.
+    // (Legacy rows without owner tracking keep the previous semantics.)
+    if (
+      !isNegativeObservationUsable({
+        replyNegativeCheckAt: message.replyNegativeCheckAt,
+        replyNegativeOwnerExpiresAt: message.replyNegativeOwnerExpiresAt,
+      })
+    ) {
+      incrementReplyMetric("detection_cache", {
+        hit: false,
+        expired_owner: true,
+      });
+      return null;
+    }
     // Future timestamps are invalid (clock skew) — never reuse.
     const observedAt = message.replyNegativeCheckAt.getTime();
     const ageMs = this.now() - observedAt;
@@ -1396,6 +1416,11 @@ export class EmailReplyDetectionService {
       observedAtMs: number;
       signal?: AbortSignal;
       isExpired?: () => boolean;
+      /**
+       * R02: absolute end (epoch ms) of the owning probe's deadline,
+       * stamped on the write as the owner expiry for reader-side rejection.
+       */
+      ownerExpiresAtMs?: number;
     }
   ): Promise<boolean> {
     // N04: expiry fence before the awaited write. An abandoned timed-out probe
@@ -1415,6 +1440,13 @@ export class EmailReplyDetectionService {
         // write time. A late write must not manufacture fresh evidence.
         replyNegativeCheckAt: observedAt,
         replyNegativeContextHash: contextHash,
+        // R02: stamp the owning probe's deadline end so readers reject this
+        // row when the observation outlived its owner — even if the void
+        // below never runs.
+        replyNegativeOwnerExpiresAt:
+          fence?.ownerExpiresAtMs !== undefined
+            ? new Date(fence.ownerExpiresAtMs)
+            : undefined,
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
@@ -1733,6 +1765,7 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
     replyMatchedMessageId?: string | null;
     replyNegativeCheckAt?: Date | null;
     replyNegativeContextHash?: string | null;
+    replyNegativeOwnerExpiresAt?: Date | null;
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {

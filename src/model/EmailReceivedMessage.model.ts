@@ -168,6 +168,7 @@ export class EmailReceivedMessageModel extends BaseDb {
     replyMatchedMessageId?: string | null;
     replyNegativeCheckAt?: Date | null;
     replyNegativeContextHash?: string | null;
+    replyNegativeOwnerExpiresAt?: Date | null;
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {
@@ -200,6 +201,10 @@ export class EmailReceivedMessageModel extends BaseDb {
     // late (expired-owner or reordered) write with an older timestamp matches
     // 0 rows instead of silently replacing fresher evidence. Same-instant
     // re-probes (equal timestamps) still overwrite — redundant but harmless.
+    // R02: the owning probe's deadline end rides along so readers can reject
+    // expired-owner results even if compensating cleanup never runs. A null
+    // owner expiry preserves legacy age-only semantics for rows written
+    // before owner tracking existed.
     const negativeAt = input.replyNegativeCheckAt ?? null;
     const result = await this.repository
       .createQueryBuilder()
@@ -207,6 +212,7 @@ export class EmailReceivedMessageModel extends BaseDb {
       .set({
         replyNegativeCheckAt: negativeAt,
         replyNegativeContextHash: input.replyNegativeContextHash ?? null,
+        replyNegativeOwnerExpiresAt: input.replyNegativeOwnerExpiresAt ?? null,
         ...(input.isAnswered != null ? { isAnswered: input.isAnswered } : {}),
         ...(input.answeredFlagCheckedAt != null
           ? { answeredFlagCheckedAt: input.answeredFlagCheckedAt }
@@ -238,7 +244,11 @@ export class EmailReceivedMessageModel extends BaseDb {
     const result = await this.repository
       .createQueryBuilder()
       .update(EmailReceivedMessageEntity)
-      .set({ replyNegativeCheckAt: null, replyNegativeContextHash: null })
+      .set({
+        replyNegativeCheckAt: null,
+        replyNegativeContextHash: null,
+        replyNegativeOwnerExpiresAt: null,
+      })
       .where(
         "id = :id AND replyDetectedAt IS NULL AND replyNegativeCheckAt = :observedAt",
         { id: input.id, observedAt: input.observedAt }

@@ -185,6 +185,7 @@ export class EmailReceivedMessageModule extends BaseModule {
     replyMatchedMessageId?: string | null;
     replyNegativeCheckAt?: Date | null;
     replyNegativeContextHash?: string | null;
+    replyNegativeOwnerExpiresAt?: Date | null;
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {

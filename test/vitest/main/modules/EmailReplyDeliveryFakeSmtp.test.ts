@@ -1789,10 +1789,11 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
 
   it("F01: unreadable cluster forces a verified refresh instead of trusting the recent negative", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
-    // The module-level cluster read fires twice per send: the pre-send
-    // policy evaluation first, then the post-claim gate (the claim itself
-    // uses the transaction-level helper and detection is mocked). Fail the
-    // SECOND call so policy passes but the gate sees incomplete evidence.
+    // The module-level cluster read fires per send at pre-send policy, the
+    // post-claim gate, and the handoff fence (the claim itself uses the
+    // transaction-level helper and detection is mocked). Fail EXACTLY the
+    // gate's read so policy passes, the gate sees incomplete evidence and
+    // refreshes, and the fence re-establishes complete evidence itself.
     const origFind = EmailReceivedMessageModule.prototype.findCanonicalEquivalents;
     let findCalls = 0;
     vi.spyOn(
@@ -1803,7 +1804,7 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
       seed: EmailReceivedMessageEntity
     ) {
       findCalls += 1;
-      if (findCalls >= 2) throw new Error("db gone");
+      if (findCalls === 2) throw new Error("db gone");
       return origFind.call(this, seed);
     });
     const { delivery, smtpCalls, detectCalls } = buildGateDelivery({
@@ -1822,6 +1823,115 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
     const refusals = await refusalAuditsFor(messageId);
     expect(refusals).toHaveLength(0);
   }, 20_000);
+
+  it("R01: six-second fence hold spends the single refresh and proceeds on fresh evidence", async () => {
+    // The gate passes fast (fresh negative, no refresh consumed), then the
+    // final attempt lookup waits out the five-second window. The fence must
+    // re-establish freshness itself: stale + allowance intact → ONE excluded
+    // refresh retaining the claim → fresh evidence → exactly one SMTP.
+    const { draftId, token, messageId } = await seedValidApproval();
+    const realRead = attemptModule.read.bind(attemptModule);
+    vi.spyOn(
+      EmailReplySendAttemptModule.prototype,
+      "read"
+    ).mockImplementation(async (id: number) => {
+      // The fence's ownership read is the only attemptModule.read in the
+      // send path: hold it past the freshness window, then serve the truth.
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      return realRead(id);
+    });
+    const { delivery, smtpCalls, detectCalls } = buildGateDelivery({
+      holdMs: 0,
+      refreshResult: NOT_REPLIED_DETECTION,
+    });
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+    // Pre-send probe + the fence's own refresh (the gate consumed none).
+    expect(detectCalls.count).toBeGreaterThanOrEqual(2);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  }, 30_000);
+
+  it("R01: positive arriving during the fence hold refuses with zero SMTP", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    // Same single-namespace setup as the F01 sibling test: two legacy
+    // bare-UID rows would (correctly) refuse at pre-send policy before the
+    // gate, never reaching the fence under test.
+    const { createHash } = await import("node:crypto");
+    const folderHash = createHash("sha256")
+      .update("INBOX", "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    const validity = "424242";
+    const { EmailReceivedMessageModel } = await import(
+      "@/model/EmailReceivedMessage.model"
+    );
+    const msgModel = new EmailReceivedMessageModel("");
+    await msgModel.updateProviderUidNamespacing({
+      id: messageId,
+      emailServiceId: FAKE_MAILBOX.id,
+      providerUid: `imap:${folderHash}:${validity}:21`,
+      providerFolder: "INBOX",
+      providerUidValidity: validity,
+    });
+    const seed = await messageModule.read(messageId);
+    const sibling = new EmailReceivedMessageEntity();
+    sibling.emailServiceId = FAKE_MAILBOX.id;
+    sibling.providerUid = `imap:${folderHash}:${validity}:22`;
+    sibling.providerFolder = "INBOX";
+    sibling.providerUidValidity = validity;
+    sibling.messageId = seed?.messageId ?? `<r01-fallback-${Math.random()}@x>`;
+    sibling.threadKey = sibling.messageId;
+    sibling.fromAddress = "prospect@example.com";
+    sibling.toAddressesJson = JSON.stringify(["owner@svc.com"]);
+    sibling.subject = "Pricing";
+    sibling.bodyText = "Hi";
+    sibling.receivedAt = new Date();
+    sibling.isUnread = 1;
+    sibling.replyStatus = "not_started";
+    sibling.processedAt = null;
+    const savedSib = await messageModule.upsertByProviderUid(sibling);
+    const realRead = attemptModule.read.bind(attemptModule);
+    vi.spyOn(
+      EmailReplySendAttemptModule.prototype,
+      "read"
+    ).mockImplementation(async (id: number) => {
+      // Plant strictly after the gate (which already passed fast) and hold
+      // past the window: the fence's own evidence re-read must see it.
+      await messageModule.updateReplyEvidence({
+        id: savedSib.id,
+        replyDetectedAt: new Date(),
+        replyDetectionSource: "sent_search",
+        replyMatchedMessageId: "<r01-reply@x>",
+        isAnswered: 0,
+        answeredFlagCheckedAt: new Date(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return realRead(id);
+    });
+    const { delivery, smtpCalls } = buildGateDelivery({
+      holdMs: 0,
+      refreshResult: NOT_REPLIED_DETECTION,
+    });
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    expect(smtpCalls.count).toBe(0);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[already_replied]");
+  }, 30_000);
 
   it("F02: dead claim at the handoff fence refuses with zero SMTP", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
