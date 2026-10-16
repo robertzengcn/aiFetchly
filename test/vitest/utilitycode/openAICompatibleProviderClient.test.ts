@@ -428,3 +428,65 @@ describe("OpenAICompatibleProviderClient small-model alias", () => {
     expect(wireBody(fetchMock).model).toBe("qwen3:8b");
   });
 });
+
+describe("OpenAICompatibleProviderClient configured context size (G01)", () => {
+  // G01: the operator-verified `contextSize` must reach the models response
+  // (live and synthetic-fallback paths) so the catalog → reply budget chain
+  // treats it as a confirmed window (R04). Without this link the configured
+  // limit would never take effect and unknown small models could be
+  // over-admitted.
+  const sizedConfig: LocalAIProviderConfig = {
+    ...CONFIG,
+    defaultModel: "small-local",
+    contextSize: 4096,
+  };
+  function modelsResponse(models: unknown): Response {
+    return new Response(JSON.stringify({ object: "list", data: models }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("injects the configured contextSize when the server omits context fields", async () => {
+    const fetchImpl = (async (url: unknown) => {
+      expect(String(url)).toContain("/models");
+      return modelsResponse([{ id: "small-local" }]);
+    }) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      sizedConfig,
+      "",
+      fetchImpl
+    );
+    const { models, usedFallback } =
+      await client.listModelsWithFallbackStatus();
+    expect(usedFallback).toBe(false);
+    expect(models.data).toHaveLength(1);
+    expect(models.data[0].context_size).toBe(4096);
+  });
+
+  it("carries the configured contextSize on the synthetic fallback list", async () => {
+    const fetchImpl = (async () =>
+      new Response("", { status: 500 })) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      sizedConfig,
+      "",
+      fetchImpl
+    );
+    const { models, usedFallback } =
+      await client.listModelsWithFallbackStatus();
+    expect(usedFallback).toBe(true);
+    expect(models.data.some((m) => m.context_size === 4096)).toBe(true);
+  });
+
+  it("omits context_size when no contextSize is configured", async () => {
+    const fetchImpl = (async () =>
+      modelsResponse([{ id: "small-local" }])) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      { ...sizedConfig, contextSize: undefined },
+      "",
+      fetchImpl
+    );
+    const { models } = await client.listModelsWithFallbackStatus();
+    expect(models.data[0].context_size).toBeUndefined();
+  });
+});

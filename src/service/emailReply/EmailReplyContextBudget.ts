@@ -19,18 +19,23 @@
  * exceed the budget the caller refuses with a typed correlated audit
  * instead of sending a context-stripped prompt.
  *
- * Token estimation is a heuristic admission aid, NOT a model tokenizer and
- * NOT a proven upper bound (R05): ASCII-heavy text ≈ 4 chars/token,
- * non-ASCII (CJK, emoji) ≈ 1.5 chars/token, counted per code point
- * (surrogate pairs count once). This errs toward refusal for prose-heavy
- * email content but can UNDERCOUNT dense machine text (code, base64/hex,
- * punctuation runs) whose BPE density exceeds the average ratio. No
- * tokenizer dependency is vendored (supported providers span unrelated
- * model families, so no single BPE vocabulary would be ground truth).
- * Enforcement therefore comes from layers around the estimate, not from
- * ratio precision:
- *  - the fixed safety margin absorbs estimator headroom AND the bounded
- *    correction-prefix growth (~10 lines, well under the margin);
+ * Token estimation is a VERIFIED conservative upper bound (G01), not a
+ * model tokenizer and not an average ratio: the estimate for rendered
+ * text is its UTF-8 byte length. Every byte-level BPE tokenizer emits
+ * tokens that each cover at least one UTF-8 byte of input, so actual
+ * tokens ≤ bytes ALWAYS — the bound cannot undercount, for prose, dense
+ * machine text (code, base64/hex, punctuation runs), CJK, rare Unicode,
+ * or emoji alike. Explicitly supported families: byte-level BPE chat
+ * models (GPT-2/3/4, cl100k, o200k, LLaMA, Mistral, Qwen, Gemma) and any
+ * tokenizer with the ≥1-byte-per-token property. No tokenizer dependency
+ * is vendored (no single vocabulary is ground truth across the supported
+ * providers, and the byte bound holds across all of them).
+ *
+ * The bound deliberately overestimates (roughly 3–4× for ASCII prose):
+ * admission errs toward refusal, never toward overflow. Transport-added
+ * specials are counted separately (CHAT_MESSAGE_FRAMING_TOKENS per
+ * message; the fixed safety margin covers request-level specials and
+ * estimator headroom). Enforcement layers around the bound:
  *  - the correction path re-checks the budget explicitly and refuses
  *    instead of sending an over-window retry;
  *  - unknown model windows are admitted only up to an explicit documented
@@ -39,7 +44,9 @@
  *    refused with a typed audit;
  *  - operators with a verified smaller/odd window set the provider's
  *    configured context size, which the models endpoint reports as the
- *    window (verified configured limits count as confirmed — R04).
+ *    window (verified configured limits count as confirmed — R04; the
+ *    client→normalizer→catalog chain is covered by
+ *    openAICompatibleProviderClient tests).
  */
 
 export const CONTEXT_SAFETY_MARGIN_TOKENS = 512;
@@ -54,8 +61,7 @@ export const CONTEXT_SAFETY_MARGIN_TOKENS = 512;
  */
 export const FALLBACK_CONTEXT_WINDOW_TOKENS = 32_768;
 
-const ASCII_CHARS_PER_TOKEN = 4;
-const NON_ASCII_CHARS_PER_TOKEN = 1.5;
+const textEncoder = new TextEncoder();
 
 /**
  * R05: per-message transport framing allowance (tokens). The admission
@@ -68,22 +74,16 @@ const NON_ASCII_CHARS_PER_TOKEN = 1.5;
  */
 export const CHAT_MESSAGE_FRAMING_TOKENS = 4;
 
-/** Conservative token estimate for already-rendered text. */
+/**
+ * G01: conservative token UPPER BOUND for already-rendered text — its
+ * UTF-8 byte length. Never undercounts for the supported families (see
+ * module doc); overestimates prose by design (fail toward refusal).
+ */
 export function estimateTokensConservative(
   text: string | null | undefined
 ): number {
   if (!text) return 0;
-  let ascii = 0;
-  let nonAscii = 0;
-  for (const ch of text) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code <= 127) {
-      ascii += 1;
-    } else {
-      nonAscii += 1;
-    }
-  }
-  return Math.ceil(ascii / ASCII_CHARS_PER_TOKEN + nonAscii / NON_ASCII_CHARS_PER_TOKEN);
+  return textEncoder.encode(text).length;
 }
 
 /** Estimated tokens across rendered message contents. */

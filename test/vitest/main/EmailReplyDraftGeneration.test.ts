@@ -5773,8 +5773,8 @@ describe("F06 model-aware input budgeting", () => {
     // does not, the retry must be refused (typed needs_human_review with
     // the correction_over_budget code) — never transmitted over-window.
     // Body at the builder's 2000-char cap plus the fixed system prompt
-    // measures ~981 estimated tokens; the correction wrapper measures
-    // ~1135. Window 3050 → budget 3050 − 1500 − 512 = 1038 lands between
+    // measures ~3898 byte-bound tokens; the correction wrapper measures
+    // ~4512. Window 6200 → budget 6200 − 1500 − 512 = 4188 lands between
     // the two, so the original is admitted but the retry must be refused.
     const messageId = await seedBudgetMessage("x".repeat(2000));
     const { factory, requests } = fakeApiFactory([
@@ -5783,7 +5783,7 @@ describe("F06 model-aware input budgeting", () => {
     ]);
     const svc = buildService({
       apiFactory: factory,
-      resolveModelContextWindow: async () => 3_050,
+      resolveModelContextWindow: async () => 6_200,
     });
     drainCountersForTest();
     const result = await svc.createDraft({

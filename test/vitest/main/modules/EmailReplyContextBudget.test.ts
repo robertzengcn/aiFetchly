@@ -24,37 +24,49 @@ function source(key: string, name: string, text: string): FakeSource {
 }
 
 describe("estimateTokensConservative", () => {
-  it("estimates ASCII at four chars per token", () => {
-    expect(estimateTokensConservative("abcd")).toBe(1);
-    expect(estimateTokensConservative("abcdefgh")).toBe(2);
+  it("bounds ASCII by byte length (G01 upper bound)", () => {
+    // ASCII is one byte per char — the bound equals length here.
+    expect(estimateTokensConservative("abcd")).toBe(4);
+    expect(estimateTokensConservative("abcdefgh")).toBe(8);
     expect(estimateTokensConservative("")).toBe(0);
     expect(estimateTokensConservative(null)).toBe(0);
   });
 
-  it("estimates non-ASCII conservatively (CJK/code-heavy inputs)", () => {
-    // Seven CJK code points at 1.5 chars/token → ceil(4.67) = 5 tokens,
-    // where a naive chars/4 heuristic would claim 2 and over-admit.
-    expect(estimateTokensConservative("日本語テスト文")).toBe(5);
-    // Mixed: 4 ASCII (1) + 3 CJK (2) = 3.
-    expect(estimateTokensConservative("abcd日本語")).toBe(3);
+  it("bounds CJK by UTF-8 bytes (G01: never undercounts dense text)", () => {
+    // Seven CJK code points × 3 bytes = 21: far above any BPE count for
+    // this string, which is exactly the guarantee (upper bound, not ratio).
+    expect(estimateTokensConservative("日本語テスト文")).toBe(21);
+    // Mixed: 4 ASCII bytes + 3 CJK × 3 bytes = 13.
+    expect(estimateTokensConservative("abcd日本語")).toBe(13);
   });
 
-  it("counts emoji per code point, not per UTF-16 unit (R05)", () => {
-    // Family emoji: 7 code points (4 emoji + 3 ZWJ) in 11 UTF-16 units.
-    // Counting units would inflate; counting code points is the documented
-    // rule — ceil(7 / 1.5) = 5.
-    expect(estimateTokensConservative("👨‍👩‍👧‍👦")).toBe(5);
+  it("bounds emoji and dense machine text by bytes (G01)", () => {
+    // Family emoji: 4 emoji × 4 bytes + 3 ZWJ × 3 bytes = 25 bytes —
+    // above every byte-level BPE count for this string.
+    expect(estimateTokensConservative("👨‍👩‍👧‍👦")).toBe(25);
+    // Dense punctuation/code: 1 byte per char, never undercounted.
+    const dense = "!@#$%^&*(){}[];:,.<>?/\\|`~".repeat(40);
+    expect(estimateTokensConservative(dense)).toBe(dense.length);
+    // Base64-ish ASCII: bytes equal chars.
+    expect(estimateTokensConservative("aGVsbG8gd29ybGQ=")).toBe(16);
   });
 
-  it("is monotone in input length (R05)", () => {
-    // No cliff or wraparound: longer inputs never estimate smaller. (This
-    // pins estimator sanity, NOT ground-truth accuracy — there is no
-    // vendored tokenizer; enforcement lives in margin + refusal paths.)
+  it("is monotone in input length and dominates the old ratios (G01)", () => {
+    // No cliff or wraparound: longer inputs never estimate smaller. The
+    // byte bound dominates every average-ratio estimate (bytes >=
+    // chars/4 for ASCII, bytes >= codepoints/1.5 for non-ASCII since every
+    // non-ASCII char is >= 2 bytes).
     const dense = "!@#$%^&*(){}[];:,.<>?/\\|`~".repeat(40);
     const a = estimateTokensConservative(dense);
     const b = estimateTokensConservative(dense + dense);
     expect(b).toBeGreaterThanOrEqual(a);
     expect(a).toBeGreaterThan(0);
+    expect(estimateTokensConservative("x".repeat(100))).toBeGreaterThanOrEqual(
+      Math.ceil(100 / 4)
+    );
+    expect(estimateTokensConservative("日".repeat(100))).toBeGreaterThanOrEqual(
+      Math.ceil(100 / 1.5)
+    );
   });
 });
 
