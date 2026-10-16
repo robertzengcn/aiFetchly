@@ -1,6 +1,9 @@
 import { BaseDb } from "@/model/Basedb";
 import { IsNull, Repository } from "typeorm";
-import { normalizeStoredMessageId } from "@/service/emailReceive/EmailReplyIdentity";
+import {
+  normalizeStoredMessageId,
+  PENDING_NEGATIVE_CONTEXT,
+} from "@/service/emailReceive/EmailReplyIdentity";
 import { LEGACY_SIBLING_SCAN_LIMIT } from "@/model/replyClusterEvidence";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { SortBy } from "@/entityTypes/commonType";
@@ -150,6 +153,64 @@ export class EmailReceivedMessageModel extends BaseDb {
       .where("id = :id", { id })
       .setParameters({ detectedAt: observedAt, source: "mailbox_flag" })
       .execute();
+  }
+
+  /**
+   * N02: confirm a STAGED pending negative into a matchable one — conditionally
+   * at this transaction boundary, not by blind overwrite.
+   *
+   * The UPDATE matches the exact staged observation (same instant + PENDING
+   * marker) and requires the owning probe to be still live AT CONFIRMATION
+   * time (`owner >= now`), not merely live when observed. A confirm that
+   * arrives after probe expiry matches 0 rows: the row stays permanently
+   * pending (readers reject it via N01), so a timed-out probe can never
+   * leave reusable evidence inside the TTL — no post-confirmation rollback
+   * or compensating fence needed.
+   *
+   * The exact-instant match also closes a replacement race the blind
+   * overwrite had: a newer healthy probe's observation present on the row
+   * rejects this stale confirm (0 rows) instead of being clobbered.
+   * Concurrent positives still win via `replyDetectedAt IS NULL`.
+   *
+   * Null owner (probes without deadline tracking) preserves the previous
+   * semantics: the caller's pre-write liveness fence is the only gate.
+   *
+   * @returns true when exactly one row was confirmed.
+   */
+  async confirmStagedNegativeEvidence(input: {
+    id: number;
+    replyNegativeCheckAt: Date;
+    replyNegativeContextHash: string;
+    replyNegativeOwnerExpiresAt?: Date | null;
+    /** Commit-time clock for the liveness predicate; defaults to wall time. */
+    now?: Date;
+  }): Promise<boolean> {
+    const now = input.now ?? new Date();
+    const owner = input.replyNegativeOwnerExpiresAt ?? null;
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReceivedMessageEntity)
+      .set({
+        replyNegativeContextHash: input.replyNegativeContextHash,
+      })
+      .where(
+        "id = :id" +
+          " AND replyDetectedAt IS NULL" +
+          " AND replyNegativeCheckAt = :observedAt" +
+          " AND replyNegativeContextHash = :pending" +
+          (owner !== null
+            ? " AND replyNegativeOwnerExpiresAt = :owner" +
+              " AND replyNegativeOwnerExpiresAt >= :now"
+            : " AND replyNegativeOwnerExpiresAt IS NULL"),
+        {
+          id: input.id,
+          observedAt: input.replyNegativeCheckAt,
+          pending: PENDING_NEGATIVE_CONTEXT,
+          ...(owner !== null ? { owner, now } : {}),
+        }
+      )
+      .execute();
+    return (result.affected ?? 0) === 1;
   }
 
   /**

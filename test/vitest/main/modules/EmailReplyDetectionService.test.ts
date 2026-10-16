@@ -152,10 +152,14 @@ interface FakeMessagePortOptions {
   readReturnsNull?: () => boolean;
 }
 
-function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePort & {
+function fakeMessagePort(
+  opts: FakeMessagePortOptions
+): ReplyDetectionMessagePort & {
   updateCalls: Array<Record<string, unknown>>;
+  confirmCalls: Array<Record<string, unknown>>;
 } {
   const updateCalls = opts.updateCalls;
+  const confirmCalls: Array<Record<string, unknown>> = [];
   return {
     async read(id: number) {
       if (opts.readReturnsNull?.()) return null;
@@ -169,7 +173,18 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
       if (opts.updateThrows) throw opts.updateThrows;
       return opts.updateResult ? opts.updateResult(input) : true;
     },
+    // N02: the confirm path records separately so tests can distinguish
+    // staging writes from confirmation writes. Same failure semantics as
+    // the stage path (throw / custom result) unless overridden.
+    async confirmStagedNegativeEvidence(input) {
+      confirmCalls.push(input as unknown as Record<string, unknown>);
+      if (opts.updateThrows) throw opts.updateThrows;
+      return opts.updateResult
+        ? opts.updateResult(input as unknown as Record<string, unknown>)
+        : true;
+    },
     updateCalls,
+    confirmCalls,
   };
 }
 
@@ -1158,14 +1173,17 @@ describe("EmailReplyDetectionService — Sent-search matching (§7.1 step 6, §7
     if (result.state !== "not_replied") throw new Error("expected not_replied");
     expect(result.reasonCode).toBe("no_reply_observed");
     expect(result.coverage).toBe("configured_imap");
-    // R02 two-phase negative persistence: stage the UNCONFIRMED marker,
-    // then confirm with the real context hash. Exactly two ordered writes;
-    // the first must carry the pending marker (never matchable), the second
-    // the confirmed hash at the same observation instant.
-    expect(kit.messagePort.updateCalls.length).toBe(2);
-    const [staged, confirmed] = kit.messagePort.updateCalls;
+    // R02 two-phase negative persistence: stage the UNCONFIRMED marker
+    // (one updateReplyEvidence write), then N02-conditional confirm (one
+    // confirmStagedNegativeEvidence write). The stage must carry the
+    // pending marker (never matchable); the confirm carries the real hash
+    // for the same observation instant plus the commit-time clock.
+    expect(kit.messagePort.updateCalls.length).toBe(1);
+    const [staged] = kit.messagePort.updateCalls;
     expect(staged.replyNegativeCheckAt).toBeDefined();
     expect(staged.replyNegativeContextHash).toBe(PENDING_NEGATIVE_CONTEXT);
+    expect(kit.messagePort.confirmCalls.length).toBe(1);
+    const [confirmed] = kit.messagePort.confirmCalls;
     expect(confirmed.replyNegativeCheckAt).toEqual(
       staged.replyNegativeCheckAt
     );
@@ -1580,6 +1598,9 @@ describe("EmailReplyDetectionService.checkReply — DTO wrapper (§4.2)", () => 
         return [];
       },
       async updateReplyEvidence() {
+        return true;
+      },
+      async confirmStagedNegativeEvidence() {
         return true;
       },
     };

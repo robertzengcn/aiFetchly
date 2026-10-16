@@ -145,6 +145,19 @@ export interface ReplyDetectionMessagePort {
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean>;
+  /**
+   * N02: confirm a staged pending negative. Matches the exact staged
+   * observation and requires a still-live owner at confirmation time;
+   * returns false (0 rows) when the probe expired, the row moved on, or a
+   * positive landed first.
+   */
+  confirmStagedNegativeEvidence(input: {
+    id: number;
+    replyNegativeCheckAt: Date;
+    replyNegativeContextHash: string;
+    replyNegativeOwnerExpiresAt?: Date | null;
+    now?: Date;
+  }): Promise<boolean>;
 }
 
 /** Draft lifecycle reads (cluster inspection) the detector needs. */
@@ -1466,25 +1479,29 @@ export class EmailReplyDetectionService {
         return false;
       }
       // R02 stage 2 (confirm): only a still-live probe confirms its staged
-      // observation by overwriting the marker with the real context hash
-      // (same observed instant, so the monotonic condition still holds; the
-      // positive fence re-applies). An expired probe stops here — its staged
-      // row stays permanently unusable, a crash between the stages is
-      // equally safe, and no compensating deletion exists to race.
+      // observation. N02: the confirm is conditional AT the model
+      // transaction boundary — it matches the exact staged instant + PENDING
+      // marker and requires the owner to be still live at confirmation
+      // time (not merely live when observed). An expired probe's confirm
+      // matches 0 rows and its staged row stays permanently unusable; a
+      // crash between the stages is equally safe, and no compensating
+      // deletion exists to race. A newer observation or a concurrent
+      // positive on the row likewise rejects the stale confirm instead of
+      // being clobbered.
       if (fence?.signal?.aborted || fence?.isExpired?.()) {
         return false;
       }
-      const confirmed = await this.messagePort.updateReplyEvidence({
+      const confirmed = await this.messagePort.confirmStagedNegativeEvidence({
         id: message.id,
         replyNegativeCheckAt: observedAt,
         replyNegativeContextHash: contextHash,
-        replyNegativeOwnerExpiresAt: ownerExpiresAt,
-        isAnswered: flags.isAnswered,
-        answeredFlagCheckedAt: flags.answeredCheckedAt,
+        replyNegativeOwnerExpiresAt: ownerExpiresAt ?? null,
+        now: new Date(this.now()),
       });
       if (!confirmed) {
-        // A concurrent positive landed (or the row vanished) between staging
-        // and confirmation — its evidence wins; report failure so the caller
+        // The probe expired before confirming, a newer observation replaced
+        // the staged row, or a concurrent positive landed (or the row
+        // vanished) — current evidence wins; report failure so the caller
         // rereads the current row.
         await this.resolveRejectedWrite(message);
         return false;
@@ -1774,6 +1791,15 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {
     return this.module.updateReplyEvidence(input);
+  }
+  confirmStagedNegativeEvidence(input: {
+    id: number;
+    replyNegativeCheckAt: Date;
+    replyNegativeContextHash: string;
+    replyNegativeOwnerExpiresAt?: Date | null;
+    now?: Date;
+  }): Promise<boolean> {
+    return this.module.confirmStagedNegativeEvidence(input);
   }
 }
 

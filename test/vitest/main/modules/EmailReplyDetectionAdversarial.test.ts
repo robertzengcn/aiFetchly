@@ -205,6 +205,10 @@ function buildMatrixKit(input: {
       updateCalls.push(patch);
       return true;
     },
+    async confirmStagedNegativeEvidence(input) {
+      updateCalls.push({ ...input, confirmed: true });
+      return true;
+    },
   };
   const draftPort: ReplyDetectionDraftPort = {
     async listByMessages() {

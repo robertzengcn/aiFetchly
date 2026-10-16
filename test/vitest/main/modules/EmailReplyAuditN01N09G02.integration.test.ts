@@ -577,6 +577,128 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
   // R02 — expired-owner usability predicate (pure orderings).
   // ---------------------------------------------------------------
 
+  it("N02: confirm matches the exact staged instant and requires a live owner at confirmation time", async () => {
+    const model = await messageModel();
+    // Millisecond-precision instants (production observedAt carries ms —
+    // the exact-instant match must hold for real timestamps, not only
+    // truncated test fixtures).
+    const observedAt = new Date(1_700_000_010_123);
+    const ownerEnd = new Date(1_700_000_025_456);
+    async function stage(): Promise<number> {
+      const seed = await seedMessage({});
+      expect(
+        await model.updateReplyEvidence({
+          id: seed.id,
+          replyNegativeCheckAt: observedAt,
+          replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+          replyNegativeOwnerExpiresAt: ownerEnd,
+          isAnswered: 0,
+          answeredFlagCheckedAt: observedAt,
+        })
+      ).toBe(true);
+      return seed.id;
+    }
+    // Live confirm (confirmation before the owner end): writes the hash.
+    const liveId = await stage();
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: liveId,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-live",
+        replyNegativeOwnerExpiresAt: ownerEnd,
+        now: new Date(ownerEnd.getTime() - 1),
+      })
+    ).toBe(true);
+    expect((await readRow(liveId))?.replyNegativeContextHash).toBe(
+      "ctx-live"
+    );
+    // Late confirm (probe expired before confirming): 0 rows, the staged
+    // marker survives permanently unusable — never a reusable negative.
+    const lateId = await stage();
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: lateId,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-late",
+        replyNegativeOwnerExpiresAt: ownerEnd,
+        now: new Date(ownerEnd.getTime() + 1),
+      })
+    ).toBe(false);
+    expect((await readRow(lateId))?.replyNegativeContextHash).toBe(
+      PENDING_NEGATIVE_CONTEXT
+    );
+    // Confirm at exactly the owner end: inclusive boundary, still live.
+    const edgeId = await stage();
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: edgeId,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-edge",
+        replyNegativeOwnerExpiresAt: ownerEnd,
+        now: new Date(ownerEnd.getTime()),
+      })
+    ).toBe(true);
+    // A newer healthy observation on the row rejects the stale confirm
+    // instead of being clobbered by it.
+    const movedOnId = await stage();
+    await model.updateReplyEvidence({
+      id: movedOnId,
+      replyNegativeCheckAt: new Date(observedAt.getTime() + 5_000),
+      replyNegativeContextHash: "ctx-newer",
+      isAnswered: 0,
+      answeredFlagCheckedAt: new Date(observedAt.getTime() + 5_000),
+    });
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: movedOnId,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-stale",
+        replyNegativeOwnerExpiresAt: ownerEnd,
+        now: new Date(ownerEnd.getTime() - 1),
+      })
+    ).toBe(false);
+    expect((await readRow(movedOnId))?.replyNegativeContextHash).toBe(
+      "ctx-newer"
+    );
+    // A concurrent positive on the row rejects the confirm.
+    const positiveId = await stage();
+    await model.updateReplyEvidence({
+      id: positiveId,
+      replyDetectedAt: new Date(),
+      replyDetectionSource: "sent_search",
+    });
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: positiveId,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-stale",
+        replyNegativeOwnerExpiresAt: ownerEnd,
+        now: new Date(ownerEnd.getTime() - 1),
+      })
+    ).toBe(false);
+    // Null owner (probe without deadline tracking): previous semantics —
+    // the caller's liveness fence is the only gate, the write lands.
+    const legacySeed = await seedMessage({});
+    await model.updateReplyEvidence({
+      id: legacySeed.id,
+      replyNegativeCheckAt: observedAt,
+      replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+      isAnswered: 0,
+      answeredFlagCheckedAt: observedAt,
+    });
+    expect(
+      await model.confirmStagedNegativeEvidence({
+        id: legacySeed.id,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: "ctx-legacy",
+        replyNegativeOwnerExpiresAt: null,
+      })
+    ).toBe(true);
+    expect((await readRow(legacySeed.id))?.replyNegativeContextHash).toBe(
+      "ctx-legacy"
+    );
+  });
+
   it("R02: isNegativeObservationUsable rejects only expired-owner results", () => {
     const t = 2_000_000_000_000;
     const HASH = "abc123context";
@@ -732,6 +854,15 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         if (persistCalls === 1) await writeGate;
         return await model.updateReplyEvidence(input);
       },
+      async confirmStagedNegativeEvidence(input: {
+        id: number;
+        replyNegativeCheckAt: Date;
+        replyNegativeContextHash: string;
+        replyNegativeOwnerExpiresAt?: Date | null;
+        now?: Date;
+      }) {
+        return await model.confirmStagedNegativeEvidence(input);
+      },
     };
     const service = new EmailReplyDetectionService({
       messagePort,
@@ -778,6 +909,149 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     const r2 = await service.detect({ messageId: seed.id });
     expect(r2.state).toBe("not_replied");
     expect(r2.fromCache).toBe(true);
+  }, 30_000);
+
+  it("N02: a confirm completing past the deadline never becomes reusable", async () => {
+    // Companion to the staging-delay test: the STAGE lands on time, but the
+    // CONFIRM waits past the probe deadline. The conditional confirm must
+    // match 0 rows — the row stays staged (never matchable), a second
+    // detection re-probes instead of reusing, and no rollback/cleanup is
+    // needed. Covers the confirmation boundary the staging test misses,
+    // plus a replacement observation racing the confirm.
+    const { EmailReplyDetectionService } = await import(
+      "@/service/emailReceive/EmailReplyDetectionService"
+    );
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
+    const model = await messageModel();
+    let nowMs = 2_100_000_000_000;
+    const rawId = `<n02-${Math.random()}@x.com>`;
+    const seed = await seedMessage({
+      messageId: rawId,
+      providerUid: `imap:0123456789abcdef:424242:n02-${Math.random()}`,
+      providerFolder: "INBOX",
+      providerUidValidity: "424242",
+    });
+    const config = {
+      emailServiceId: SERVICE_ID,
+      protocol: "imap" as const,
+      host: "127.0.0.1",
+      port: 143,
+      ssl: false,
+      username: "owner@x.com",
+      password: "pw",
+      folder: "INBOX",
+    };
+    const identity = {
+      smtpUsername: "owner@x.com",
+      fromAddress: "owner@x.com",
+      replyToAddress: null,
+      receiveUsername: "owner@x.com",
+    };
+    let discoverCalls = 0;
+    const imapPort = {
+      async refreshMessageFlags() {
+        return {
+          uid: "1",
+          isAnswered: false,
+          isSeen: true,
+          flags: ["\\seen"],
+          checkedAt: new Date(nowMs),
+        };
+      },
+      async discoverSentFolders() {
+        discoverCalls += 1;
+        return [{ folder: "Sent", verified: true }];
+      },
+      async searchReplyHeaders() {
+        return { candidates: [], truncated: false, failedFetchCount: 0 };
+      },
+    };
+    // Gate the CONFIRM (not the stage): it starts on time, waits past the
+    // deadline, then completes late.
+    let releaseConfirm: (() => void) | null = null;
+    const confirmGate = new Promise<void>((resolve) => {
+      releaseConfirm = resolve;
+    });
+    const messagePort = {
+      async read(id: number) {
+        return await model.read(id);
+      },
+      async findCanonicalEquivalents() {
+        const row = await model.read(seed.id);
+        return row ? [row] : [];
+      },
+      async updateReplyEvidence(input: {
+        id: number;
+        replyDetectedAt?: Date | null;
+        replyDetectionSource?: string | null;
+        replyMatchedMessageId?: string | null;
+        replyNegativeCheckAt?: Date | null;
+        replyNegativeContextHash?: string | null;
+        replyNegativeOwnerExpiresAt?: Date | null;
+        isAnswered?: number;
+        answeredFlagCheckedAt?: Date | null;
+      }) {
+        return await model.updateReplyEvidence(input);
+      },
+      async confirmStagedNegativeEvidence(input: {
+        id: number;
+        replyNegativeCheckAt: Date;
+        replyNegativeContextHash: string;
+        replyNegativeOwnerExpiresAt?: Date | null;
+        now?: Date;
+      }) {
+        await confirmGate;
+        // Model a slow commit path explicitly: re-stamp the commit-time
+        // clock at actual execution (production's synchronous driver makes
+        // call time == commit time; the gate simulates the delayed case).
+        return await model.confirmStagedNegativeEvidence({
+          ...input,
+          now: new Date(nowMs),
+        });
+      },
+    };
+    const service = new EmailReplyDetectionService({
+      messagePort,
+      draftPort: { async listByMessages() { return []; } },
+      attemptPort: { async listByMessages() { return []; } },
+      emailServicePort: {
+        async getEmailServiceReceiveConfig() { return config; },
+        async readIdentity() { return identity; },
+      },
+      imapPort,
+      now: () => nowMs,
+    });
+
+    // Full real budget: stage completes immediately; the confirm holds.
+    const first = service.detect({ messageId: seed.id });
+    // Wait until the stage landed (row carries the pending marker).
+    let staged = false;
+    for (let i = 0; i < 100 && !staged; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      staged =
+        (await model.read(seed.id))?.replyNegativeContextHash ===
+        PENDING_NEGATIVE_CONTEXT;
+    }
+    expect(staged).toBe(true);
+    // Push the manual clock past the 15s probe deadline while the confirm
+    // is still held, then release it — completion is late.
+    nowMs += 30_000;
+    releaseConfirm!();
+    const r1 = await first;
+    expect(r1.state).toBe("unknown");
+    // The late confirm matched 0 rows: the marker survives, never reusable.
+    expect((await model.read(seed.id))?.replyNegativeContextHash).toBe(
+      PENDING_NEGATIVE_CONTEXT
+    );
+    // A second invocation re-probes (not from cache) and establishes its
+    // own healthy negative — never the expired owner's confirmation.
+    const beforeMid = discoverCalls;
+    const rMid = await service.detect({ messageId: seed.id });
+    expect(discoverCalls).toBeGreaterThan(beforeMid);
+    expect(rMid.fromCache).toBe(false);
+    expect(rMid.state).toBe("not_replied");
   }, 30_000);
 });
 

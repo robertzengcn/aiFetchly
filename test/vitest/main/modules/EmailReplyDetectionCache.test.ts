@@ -174,6 +174,10 @@ function buildKit(opts: {
       updateCalls.push(input);
       return true;
     },
+    async confirmStagedNegativeEvidence(input) {
+      updateCalls.push(input);
+      return true;
+    },
     updateCalls,
   };
   const draftPort: ReplyDetectionDraftPort = {

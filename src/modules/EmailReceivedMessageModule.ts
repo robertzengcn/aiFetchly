@@ -181,6 +181,28 @@ export class EmailReceivedMessageModule extends BaseModule {
   }
 
   /**
+   * N02: confirm a staged pending negative into a matchable one —
+   * conditional at the model transaction boundary (exact staged
+   * instant + PENDING marker + still-live owner). See the model for the
+   * full predicate semantics.
+   */
+  async confirmStagedNegativeEvidence(input: {
+    id: number;
+    replyNegativeCheckAt: Date;
+    replyNegativeContextHash: string;
+    replyNegativeOwnerExpiresAt?: Date | null;
+    now?: Date;
+  }): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.confirmStagedNegativeEvidence(input);
+    } catch (error) {
+      console.error("Error confirming staged negative evidence:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Adopt a legacy bare-UID row into the namespaced providerUid scheme.
    * Collision-safe: refuses (false, no write) when another row already holds
    * the target namespaced key. Caller must validate the source identity
