@@ -20,6 +20,7 @@ import * as path from "path";
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import type { LaunchedApp } from "../fixtures/electronApp";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 
 interface InstallSnapshot {
   sessionId: string;
@@ -120,13 +121,9 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
 
     await installFixture(app, dir);
 
-    // Chat-first boot race: with an approved workspace the app opens the
-    // chat-first workspace shell (composer already present); otherwise the
-    // dock needs opening. Tolerate both orders.
-    const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
-    if (await chatToggle.isVisible().catch(() => false)) {
-      await chatToggle.click();
-    }
+    // G02 certification path: navigate to the default chat workspace — the
+    // legacy dock toggle is NOT accepted as a passing surface.
+    await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
     await expect(
       app.mainWindow.getByTestId("ai-chat-composer")
     ).toBeVisible({ timeout: 30_000 });
@@ -141,7 +138,7 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
     );
     await sendMessage(app, "edit my clip with the runtime skill");
 
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Following the runtime-skill instructions",
       { timeout: 60_000 }
     );
@@ -158,7 +155,7 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
     expect(continuation.messageCount).toBeGreaterThanOrEqual(5);
     // The visible tool result was a SHORT ack, not the full instructions:
     // the second round is still one continuation (no giant JSON card).
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).not.toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).not.toContainText(
       "<invoked_prompt_skill"
     );
 
@@ -190,13 +187,9 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
     const installed = await installFixture(app, dir);
     expect(installed?.installationId).toBeTruthy();
 
-    // Chat-first boot race: with an approved workspace the app opens the
-    // chat-first workspace shell (composer already present); otherwise the
-    // dock needs opening. Tolerate both orders.
-    const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
-    if (await chatToggle.isVisible().catch(() => false)) {
-      await chatToggle.click();
-    }
+    // G02 certification path: navigate to the default chat workspace — the
+    // legacy dock toggle is NOT accepted as a passing surface.
+    await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
     await expect(
       app.mainWindow.getByTestId("ai-chat-composer")
     ).toBeVisible({ timeout: 30_000 });
@@ -210,7 +203,7 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
       "Large skill loaded; checking the tail section."
     );
     await sendMessage(app, "use the large skill on my project");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Large skill loaded",
       { timeout: 60_000 }
     );
@@ -224,7 +217,7 @@ test.describe("Prompt-skill runtime flows (PRD-gap TODO 15)", () => {
     );
     await fakeAi.setFollowupText("Read the skill file back successfully.");
     await sendMessage(app, "read the skill file back");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Read the skill file back",
       { timeout: 60_000 }
     );
@@ -274,13 +267,9 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
     const installationId = installed?.installationId ?? null;
     expect(installationId).toBeTruthy();
 
-    // Chat-first boot race: with an approved workspace the app opens the
-    // chat-first workspace shell (composer already present); otherwise the
-    // dock needs opening. Tolerate both orders.
-    const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
-    if (await chatToggle.isVisible().catch(() => false)) {
-      await chatToggle.click();
-    }
+    // G02 certification path: navigate to the default chat workspace — the
+    // legacy dock toggle is NOT accepted as a passing surface.
+    await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
     await expect(
       app.mainWindow.getByTestId("ai-chat-composer")
     ).toBeVisible({ timeout: 30_000 });
@@ -290,7 +279,7 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
     await fakeAi.setToolCall("use_skill", JSON.stringify({ skill: "compact-skill" }));
     await fakeAi.setFollowupText("Invoked before compaction.");
     await sendMessage(app, "use the compact skill please");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Invoked before compaction.",
       { timeout: 60_000 }
     );
@@ -329,7 +318,7 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
     //     diagnostics — the skill context survived compaction. ---
     await fakeAi.setResponseText("Post-compaction plain turn.");
     await sendMessage(app, "what should I do next");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Post-compaction plain turn.",
       { timeout: 60_000 }
     );
@@ -353,7 +342,7 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
     expect(disabled?.deactivatedInvocations).toBeGreaterThanOrEqual(1);
     await fakeAi.setResponseText("Turn after disabling.");
     await sendMessage(app, "continue with the skill");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Turn after disabling.",
       { timeout: 60_000 }
     );
@@ -377,7 +366,7 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
     await fakeAi.setToolCall("use_skill", JSON.stringify({ skill: "compact-skill" }));
     await fakeAi.setFollowupText("Re-invoked after re-enable.");
     await sendMessage(app, "use the skill again");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Re-invoked after re-enable.",
       { timeout: 60_000 }
     );
@@ -430,13 +419,9 @@ test.describe("Legacy documentation-only delegation (case 12, FR-25)", () => {
     });
     expect(imported?.name).toBe("doc-legacy");
 
-    // Chat-first boot race: with an approved workspace the app opens the
-    // chat-first workspace shell (composer already present); otherwise the
-    // dock needs opening. Tolerate both orders.
-    const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
-    if (await chatToggle.isVisible().catch(() => false)) {
-      await chatToggle.click();
-    }
+    // G02 certification path: navigate to the default chat workspace — the
+    // legacy dock toggle is NOT accepted as a passing surface.
+    await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
     await expect(
       app.mainWindow.getByTestId("ai-chat-composer")
     ).toBeVisible({ timeout: 30_000 });
@@ -445,7 +430,7 @@ test.describe("Legacy documentation-only delegation (case 12, FR-25)", () => {
     await fakeAi.setToolCall("doc-legacy", "{}");
     await fakeAi.setFollowupText("Legacy delegation complete.");
     await sendMessage(app, "run the legacy documentation skill");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Legacy delegation complete.",
       { timeout: 60_000 }
     );

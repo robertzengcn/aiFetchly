@@ -76,6 +76,14 @@ export interface FakeOpenAiController {
   readonly providerBaseUrl: string;
   readonly port: number;
   setScenario(name: FakeAiScenarioName): Promise<void>;
+  /**
+   * Override the text served to a tool-result CONTINUATION request (the
+   * follow-up model round after the app executes an approved tool). Pass
+   * null to fall back to the tool-success-followup scenario. Lost in a
+   * merge and restored (skillInstallRuntimeFlows/skillAcceptanceVideoUse
+   * depend on it).
+   */
+  setFollowupText(text: string | null): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
   /**
@@ -181,6 +189,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  let followupText: string | null = null;
   /** Optional multi-call variant (queue/steering E2E). */
   let toolCallsConfig: {
     calls: ReadonlyArray<{ name: string; arguments: string }>;
@@ -233,6 +242,21 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         res.end();
         return;
       }
+      if (req.method === "POST" && url === "/__e2e/followup-text") {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(c as Buffer);
+        try {
+          const parsed = JSON.parse(
+            Buffer.concat(chunks).toString("utf8")
+          ) as { text?: unknown };
+          followupText = typeof parsed.text === "string" ? parsed.text : null;
+          res.writeHead(204);
+        } catch {
+          res.writeHead(400);
+        }
+        res.end();
+        return;
+      }
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
@@ -240,6 +264,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         toolCallsConfig = null;
         toolCallQueue = [];
         scriptedCallCounter = 0;
+        followupText = null;
         res.writeHead(204);
         res.end();
         return;
@@ -464,7 +489,15 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           ],
         };
       } else if (isContinuation) {
-        plan = resolveScenario("tool-success-followup");
+        plan = followupText
+          ? {
+              kind: "sse" as const,
+              frames: [
+                { delayMs: 0, payload: textChunk(followupText) },
+                { delayMs: 0, payload: stopChunk() },
+              ],
+            }
+          : resolveScenario("tool-success-followup");
       } else if (toolCallsConfig) {
         plan = {
           kind: "sse" as const,
@@ -592,6 +625,13 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
+      });
+    },
+    async setFollowupText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/followup-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
       });
     },
     async setToolCall(name: string, argsJson: string): Promise<void> {
