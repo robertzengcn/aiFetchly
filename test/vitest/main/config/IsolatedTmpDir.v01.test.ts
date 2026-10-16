@@ -22,6 +22,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
 import { getSqliteTestFallbackDir, SqliteDb } from "@/config/SqliteDb";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -152,6 +153,102 @@ describe("V01 — per-worker temp-dir isolation (re-audit checkbox 1 + 3)", () =
       expect(userDb.connection.isInitialized).toBe(true);
     } finally {
       await SqliteDb.destroyInstance();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F08 fixture race — the setupFile's readiness marking must not evaluate the
+// Token chain (featureFlags → token → electron-store) in the worker.
+//
+// Failure mechanism this suite pins (observed 2026-10-16 full main-suite run):
+// the setupFile used a DEFERRED dynamic import of the readiness gate to mark
+// readiness "passed". Under full-suite parallel load that promise resolves at
+// an arbitrary time:
+//   - BEFORE a Token-mocked test file's vi.mock("@/modules/token") runs →
+//     featureFlags/token/electron-store get cached in the module registry
+//     bound to the REAL store; isArchiveReadsEnabled() then returns the real
+//     machine's "true" with an empty mocked store (5 suites / 12 tests red),
+//     and ElectronStoreService's mocked constructor is never called.
+//   - AFTER vitest tears the environment down → EnvironmentTeardownError
+//     "Cannot load electron-store ... after the environment was torn down".
+//
+// The fix under test: the readiness STATE machine lives in a ZERO-IMPORT
+// module and the setupFile marks readiness through it STATICALLY (synchronous
+// call during setup evaluation, before any test file loads). A zero-import
+// module has nothing for vi.mock to interpose and no Token chain to evaluate,
+// so both failure modes are structurally impossible — no timing involved.
+//
+// These assertions are source-structural because the failure is a load-order
+// race: it cannot be reproduced deterministically inside a single test file
+// (this worker's module registry already contains the real token chain via
+// other imports). They are tamper-evident in the same spirit as the V01
+// checks above: reintroduce the dynamic import or point the setupFile back at
+// the Token-chain gate module and these fail RED with a message naming the
+// failure mode.
+// ---------------------------------------------------------------------------
+
+/** Strip block + full-line comments so prose can never trip the assertions. */
+function stripComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
+function readRepoFile(relPath: string): string {
+  // vitest runs with cwd = project root (vite.main.config.mjs root).
+  return fs.readFileSync(path.join(process.cwd(), relPath), "utf8");
+}
+
+describe("F08 fixture — setupFile readiness marking must not race per-file vi.mock", () => {
+  test("the shared setupFile performs NO dynamic imports", () => {
+    const setup = stripComments(readRepoFile("test/vitest/_setup/isolatedTmpDir.ts"));
+    expect(
+      /\bimport\s*\(/.test(setup),
+      "isolatedTmpDir.ts must not use dynamic imports. A deferred dynamic " +
+        "import of the readiness chain resolves at an arbitrary time under " +
+        "parallel load — before per-file vi.mock registration (binding the " +
+        "REAL Token store into Token-mocked suites → 12 false assertions) or " +
+        "after environment teardown (EnvironmentTeardownError). Mark " +
+        "readiness through the zero-import state module with a STATIC import."
+    ).toBe(false);
+  });
+
+  test("readiness marking is a synchronous call into the zero-import state module", () => {
+    const setup = stripComments(readRepoFile("test/vitest/_setup/isolatedTmpDir.ts"));
+    expect(setup).toContain("EmailReplyReadinessState");
+    expect(
+      /setUpgradeValidationStateForTests\(\s*["']passed["']\s*\)/.test(setup),
+      "the setupFile must synchronously mark readiness passed via " +
+        "setUpgradeValidationStateForTests from the zero-import state module"
+    ).toBe(true);
+  });
+
+  test("the readiness state module has ZERO runtime imports — nothing in its graph can collide with vi.mock", () => {
+    const state = stripComments(readRepoFile("src/service/emailReply/EmailReplyReadinessState.ts"));
+    expect(
+      /^\s*import\b/m.test(state) || /\bimport\s*\(/.test(state) || /\brequire\s*\(/.test(state),
+      "EmailReplyReadinessState.ts must contain no imports at all (static, " +
+        "dynamic, or require). Any import pulls the Token/electron-store " +
+        "chain into setup-file evaluation and reintroduces the vi.mock race."
+    ).toBe(false);
+  });
+
+  test("the production readiness gate re-exports the state machine (existing consumers keep working)", () => {
+    const gate = stripComments(readRepoFile("src/service/emailReply/EmailReplyReadiness.ts"));
+    expect(gate).toContain('from "./EmailReplyReadinessState"');
+    for (const name of [
+      "markUpgradeValidationPending",
+      "markUpgradeValidationPassed",
+      "markUpgradeValidationFailed",
+      "getUpgradeValidationState",
+      "setUpgradeValidationStateForTests",
+    ]) {
+      expect(
+        gate.includes(name),
+        `EmailReplyReadiness.ts must re-export ${name} — background.ts and ` +
+          `the N08 integration test import it from the gate module`
+      ).toBe(true);
     }
   });
 });

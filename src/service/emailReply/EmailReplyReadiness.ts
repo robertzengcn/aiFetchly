@@ -1,4 +1,19 @@
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
+import {
+  getUpgradeValidationState,
+  setUpgradeValidationStateForTests as _setState,
+} from "./EmailReplyReadinessState";
+
+export {
+  // Re-exported so background.ts and the N08 integration test keep importing
+  // from this gate module. The state itself lives in EmailReplyReadinessState
+  // (zero imports) so the shared vitest setup file can mark readiness
+  // statically without evaluating this module's Token chain.
+  markUpgradeValidationPending,
+  markUpgradeValidationPassed,
+  markUpgradeValidationFailed,
+  getUpgradeValidationState,
+} from "./EmailReplyReadinessState";
 
 /**
  * N08: shared upgrade-validation readiness gate (FR-038 §5.3).
@@ -11,49 +26,27 @@ import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
  * handlers and never consult this gate) so operators can diagnose and
  * recover.
  *
- * State machine (process-local, main process only):
- *   - `pending` (initial): validation launched but not yet settled.
- *   - `passed`: validation succeeded — new work allowed (unless kill switch).
- *   - `failed`: validation failed / threw / failed to launch — new work
- *     refused (kill switch is also set by the validation path, but this state
- *     refuses even if the Token write itself failed).
+ * The state machine lives in `./EmailReplyReadinessState` (zero imports —
+ * see that file for the F08 fixture-race rationale). This module owns the
+ * admission check, which reads the kill switch through the Token chain.
  *
  * Fail-closed: any unknown state refuses new work. Import/Token-write failures
  * in the startup path set `failed` explicitly.
  */
 
-export type UpgradeValidationState = "pending" | "passed" | "failed";
+export type { UpgradeValidationState } from "./EmailReplyReadinessState";
 
-// F08: default `pending` — no validation has succeeded in a fresh process,
-// so new guarded work is held until validation passes (or an explicit
-// authorized policy path opens admission). Production `background.ts`
-// re-asserts pending synchronously at startup before launching the async
-// validation. Isolated unit/integration fixtures explicitly mark `passed`
-// in the shared vitest setup file (`test/vitest/_setup/isolatedTmpDir.ts`)
-// because they never run the production startup path; suites that exercise
-// pending/failed transitions set them per-test.
-let validationState: UpgradeValidationState = "pending";
-
-export function markUpgradeValidationPending(): void {
-  validationState = "pending";
-}
-
-export function getUpgradeValidationState(): UpgradeValidationState {
-  return validationState;
-}
-
+/**
+ * Test fixture hook (F08): the shared vitest setup file marks readiness
+ * `passed` synchronously during setup evaluation via the zero-import state
+ * module. Re-exported here as a named binding so suites that already import
+ * it from the gate module keep working; the setup file itself imports the
+ * state module directly (never this Token-chain module).
+ */
 export function setUpgradeValidationStateForTests(
-  state: UpgradeValidationState
+  state: Parameters<typeof _setState>[0]
 ): void {
-  validationState = state;
-}
-
-export function markUpgradeValidationPassed(): void {
-  validationState = "passed";
-}
-
-export function markUpgradeValidationFailed(): void {
-  validationState = "failed";
+  _setState(state);
 }
 
 /**
@@ -68,13 +61,13 @@ export function checkNewGuardedWorkReady(): {
   ready: boolean;
   reason: string;
 } {
-  if (validationState === "pending") {
+  if (getUpgradeValidationState() === "pending") {
     return {
       ready: false,
       reason: "Reply upgrade validation is still pending; new guarded work is held until it succeeds",
     };
   }
-  if (validationState === "failed") {
+  if (getUpgradeValidationState() === "failed") {
     return {
       ready: false,
       reason: "Reply upgrade validation failed; new guarded work is disabled",

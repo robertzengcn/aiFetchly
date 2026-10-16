@@ -44,6 +44,14 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
+// F08: the readiness STATE machine, imported statically. This module has ZERO
+// imports of its own (see src/service/emailReply/EmailReplyReadinessState.ts),
+// so this line cannot pull the Token chain (featureFlags → token →
+// electron-store) into setup-file evaluation and cannot race any test file's
+// vi.mock registration. Do NOT import EmailReplyReadiness.ts (the gate) here
+// — it reads the kill switch through featureFlags and would reintroduce the
+// race.
+import { setUpgradeValidationStateForTests } from "@/service/emailReply/EmailReplyReadinessState";
 
 const WORKER_DIR_PREFIX = "aifetchly-vitest-";
 
@@ -100,23 +108,15 @@ setupIsolatedTmpDir();
 // run the production startup path, so explicitly mark this worker's
 // readiness `passed` here — suites that exercise pending/failed
 // transitions (readiness, rollback, upgrade-validation) set their state
-// per-test after this. The readiness module is pure (no DB/Electron),
-// so a static import has no side effects.
-// F08: production readiness defaults to `pending` (no validation has
-// succeeded in a fresh process). Isolated unit/integration fixtures never
-// run the production startup path, so explicitly mark this worker's
-// readiness `passed` here — suites that exercise pending/failed
-// transitions (readiness, rollback, upgrade-validation) set their state
 // per-test after this.
 //
-// Deferred dynamic import (not a static import): evaluating the readiness
-// chain (→ featureFlags → Token) during setup-file evaluation breaks
-// per-file `vi.mock("@/modules/token", ...)` interposition in Token-mocked
-// suites (archive/history flag tests fail). Deferring past setup evaluation
-// keeps those mocks working. The marking lands during test-file loading
-// (module transform + DB synchronize take seconds; this resolves in
-// milliseconds), well before any test body can invoke a guarded path — and
-// any miss would fail loudly as a readiness refusal, never silently.
-void import("@/service/emailReply/EmailReplyReadiness").then((m) =>
-  m.setUpgradeValidationStateForTests("passed")
-);
+// This call is SYNCHRONOUS through the zero-import state module (static
+// import above). Earlier attempts used an import of the gate module — first
+// static, then deferred-dynamic — and both raced per-file vi.mock
+// registration under full-suite parallel load: the real Token store got
+// cached into Token-mocked suites (12 false assertions across 5 files) or
+// the import resolved after environment teardown (EnvironmentTeardownError
+// from EmailReplyD7Seams.test.ts). A zero-import state module has nothing
+// for vi.mock to interpose and no Token chain to evaluate, so the marking
+// completes during setup evaluation with no timing dependence.
+setUpgradeValidationStateForTests("passed");
