@@ -643,21 +643,27 @@ describe("effectiveReplyMaxTokens capability clamp (FR-027, G01)", () => {
     expect(counters.get("capability_resolution{source=error}")).toBe(1);
   });
 
-  it("resolves the capability ONCE per invocation, not once per submission", async () => {
-    // Drive a full correction loop: first generation returns invalid JSON,
-    // correction returns valid JSON. That is ≥2 LLM submissions but the
-    // capability resolver must be invoked exactly ONCE (memoized).
+  it("memoizes the capability per model id: same model never re-resolves", async () => {
+    // G01/N05: the memo is keyed by the actual provider-returned model id.
+    // First submission resolves with no model known (null); once the
+    // provider reports a model, later submissions to the SAME id reuse the
+    // memo. Drive three submissions (unsupported-hint retry + correction)
+    // all returning the same model: exactly 2 resolutions (null, then the
+    // model), never a third.
     const badJson = "{not valid json";
     const messageId = await seedReceivableMessage();
     let resolverCalls = 0;
-    const { factory, requests } = fakeApiFactory([
-      completionResponse(badJson, "stop"),
-      completionResponse(validReplyJson, "stop"),
+    const seenIds: Array<string | null> = [];
+    const { factory, requests } = stagedFactory([
+      { kind: "throw", status: 400, message: "unsupported response_format" },
+      { kind: "respond", content: badJson },
+      { kind: "respond", content: validReplyJson },
     ]);
     const svc = buildService({
       apiFactory: factory,
-      resolveModelOutputCap: async () => {
+      resolveModelOutputCap: async (modelId) => {
         resolverCalls++;
+        seenIds.push(modelId);
         return 900;
       },
     });
@@ -667,15 +673,54 @@ describe("effectiveReplyMaxTokens capability clamp (FR-027, G01)", () => {
       useKnowledgeLibrary: false,
     });
     expect(result.success).toBe(true);
-    // Multiple LLM submissions happened (generation + correction).
-    expect(requests.length).toBeGreaterThanOrEqual(2);
-    // But the capability was resolved exactly once for the whole invocation.
-    expect(resolverCalls).toBe(1);
+    // Three submissions: hinted generation (rejected) + no-hint retry
+    // (invalid JSON) + correction (valid).
+    expect(requests.length).toBe(3);
+    // Resolved for null, then once for the reported model — the third
+    // submission reused the memo.
+    expect(resolverCalls).toBe(2);
+    expect(seenIds[0]).toBeNull();
+    expect(seenIds[1]).toBe("test-model");
     for (const req of requests) {
       expect(req.max_tokens).toBe(900);
     }
-    const counters = drainCountersForTest();
-    expect(counters.get("capability_resolution{source=provider}")).toBe(1);
+  });
+
+  it("resolves per returned model id: the correction does not reuse the pre-model memo", async () => {
+    // G01/N05: the memo is keyed by the actual provider-returned model id.
+    // Generation submits with no model known (null → default cap 1500);
+    // once the provider reports model-a, the correction re-resolves under
+    // model-a (900) instead of reusing the null memo. A stale single memo
+    // would have clamped the correction to 1500.
+    const badJson = "{not valid json";
+    const messageId = await seedReceivableMessage();
+    let resolverCalls = 0;
+    const seenIds: Array<string | null> = [];
+    const { factory, requests } = stagedFactory([
+      { kind: "respond", content: badJson, model: "model-a" },
+      { kind: "respond", content: validReplyJson, model: "model-b" },
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelOutputCap: async (modelId) => {
+        resolverCalls++;
+        seenIds.push(modelId);
+        return modelId === null ? 1500 : 900;
+      },
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBe(2);
+    // Two resolutions across two submissions (null, then the reported
+    // model-a) — the correction did not reuse the pre-model memo.
+    expect(resolverCalls).toBe(2);
+    expect(seenIds).toEqual([null, "model-a"]);
+    expect(requests[0]?.max_tokens).toBe(1500);
+    expect(requests[1]?.max_tokens).toBe(900);
   });
 });
 
@@ -5439,13 +5484,17 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
       apiFactory: factory,
       budget: { budgetMs: 0 },
     });
-    await expect(
-      svc.createDraft({ messageId, useKnowledgeLibrary: false })
-    ).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof LlmTransportError && error.deadlineExceeded === true
-      );
+    // F05: deadline exhaustion RETURNS the typed timeout outcome (it does
+    // NOT reject) — the same contract as every other pre-model stage.
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
     });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.error).toContain("deadline");
+    expect(result.next_action).toBe("discard_and_retry");
     // No model call was ever issued — the invocation died before generation.
     expect(requests).toHaveLength(0);
   }, 20_000);
@@ -5465,13 +5514,15 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
       budget: { budgetMs: 120 },
     });
     const startedAt = Date.now();
-    await expect(
-      svc.createDraft({ messageId, useKnowledgeLibrary: false })
-    ).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof LlmTransportError && error.deadlineExceeded === true
-      );
+    // F05: the hung acquire returns the typed timeout outcome (no throw).
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
     });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.next_action).toBe("discard_and_retry");
     // Bounded: well under a 10s test ceiling (budget was 120ms).
     expect(Date.now() - startedAt).toBeLessThan(10_000);
     expect(requests).toHaveLength(0);
@@ -5479,8 +5530,9 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
 
   it("a hung refusal-audit write aborts within the budget instead of hanging", async () => {
     // Twice-invalid model output reaches the validation_failed path, whose
-    // recordFailure audit write hangs here — the invocation must still abort
-    // as a deadline failure rather than hang forever.
+    // recordFailure audit write hangs here — the invocation must still end
+    // as a deadline failure (returned outcome, never a hang, never a
+    // second audit attempt) rather than throwing.
     const messageId = await seedDeadlineMessage();
     const badJson = JSON.stringify({
       subject: "x",
@@ -5502,15 +5554,14 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
       budget: { budgetMs: 150 },
     });
     const startedAt = Date.now();
-    await expect(
-      svc.createDraft({ messageId, useKnowledgeLibrary: false })
-    ).rejects.toSatisfy((error: unknown) => {
-      // The hung audit write aborts as a deadline (transport) failure —
-      // still a failure, never a success, never a hang.
-      return (
-        error instanceof LlmTransportError && error.deadlineExceeded === true
-      );
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
     });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("[provider_error]");
+    expect(result.next_action).toBe("discard_and_retry");
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 20_000);
 });

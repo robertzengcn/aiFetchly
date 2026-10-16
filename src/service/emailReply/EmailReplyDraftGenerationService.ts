@@ -22,7 +22,10 @@ import type {
   AiEmailReplyDraftResult,
   EmailReplyKnowledgeSourceAudit,
 } from "@/entityTypes/emailReceiveAiTypes";
-import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
+import type {
+  EmailReplyPolicyCode,
+  EmailReplyPolicyDecision,
+} from "@/entityTypes/emailReplyReliabilityTypes";
 import { retrieveReplyKnowledge } from "@/service/emailReply/EmailReplyKnowledgeService";
 import {
   buildReplySystemMessage,
@@ -73,6 +76,7 @@ import {
   type GenerationDeadline,
 } from "@/service/emailReply/EmailReplyGenerationBudget";
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
+import type { ReservationAcquireResult } from "@/model/EmailReplyGuard.model";
 import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
 import {
   EmailReplyDetectionService,
@@ -402,6 +406,14 @@ export class EmailReplyDraftGenerationService {
    */
   private omitJsonHintForModelId: string | null = null;
   /**
+   * F05: whether any audit mutation (refusal/reuse/failure audit or its
+   * mirror write) was STARTED this invocation. The terminal timeout owner
+   * consults this to avoid re-auditing: when set, an audit attempt is
+   * already in flight or landed, so a second attempt could double-commit.
+   * Reset at createDraft entry alongside the other per-invocation memos.
+   */
+  private auditMutationAttempted = false;
+  /**
    * The live deadline for the CURRENT createDraft invocation. Created at
    * entry (after the AI-enable gate) and read by every model-call site so
    * classification, generation, hint-fallback, and correction all draw
@@ -556,21 +568,38 @@ export class EmailReplyDraftGenerationService {
     // memo. A model that rejected the JSON hint in a PREVIOUS invocation must
     // re-prove it this invocation (the provider's support may have changed).
     this.omitJsonHintForModelId = null;
+    // F05: reset the terminal-audit attempt flag (see the field comment).
+    this.auditMutationAttempted = false;
 
     // 2. Load message. G01/FR-035: bounded against the invocation deadline —
     // a hung local read must abort within the aggregate budget instead of
-    // running unbounded (read-only; no mutation fence needed).
+    // running unbounded (read-only; no mutation fence needed). F05: deadline
+    // expiry here returns the terminal timeout outcome (no message is known,
+    // so no audit is attempted) rather than throwing.
     await this.messageModule.ensureConnection();
-    const message = await this.raceWithDeadline(
-      "message_load",
-      this.messageModule.read(input.messageId)
-    );
-    if (!message) {
-      return {
-        success: false,
-        error: "Message not found",
-        requestCorrelationId,
-      };
+    let message: EmailReceivedMessageEntity;
+    try {
+      const loaded = await this.raceWithDeadline(
+        "message_load",
+        this.messageModule.read(input.messageId)
+      );
+      if (!loaded) {
+        return {
+          success: false,
+          error: "Message not found",
+          requestCorrelationId,
+        };
+      }
+      message = loaded;
+    } catch (error) {
+      if (error instanceof LlmTransportError && error.deadlineExceeded) {
+        return await this.returnDeadlineExceededOutcome(
+          undefined,
+          requestCorrelationId,
+          error
+        );
+      }
+      throw error;
     }
 
     // 2b. Pre-draft policy gate (FR-005, P0.3): run the authoritative policy
@@ -587,16 +616,29 @@ export class EmailReplyDraftGenerationService {
     //     committed to generating.
     // G01/FR-035: the policy gate draws from the same aggregate budget — a
     // hung policy evaluation aborts as a transport failure (NOT a validation
-    // strike), never an unbounded wait before any model call.
-    const policyDecision = await this.raceWithDeadline(
-      "policy_evaluation",
-      timedReplyStage("policy", () =>
-        new EmailReplyPolicyOrchestrator().evaluate({
-          stage: "pre_draft",
-          messageId: message.id,
-        })
-      )
-    );
+    // strike), never an unbounded wait before any model call. F05: deadline
+    // expiry returns the terminal timeout outcome rather than throwing.
+    let policyDecision: EmailReplyPolicyDecision;
+    try {
+      policyDecision = await this.raceWithDeadline(
+        "policy_evaluation",
+        timedReplyStage("policy", () =>
+          new EmailReplyPolicyOrchestrator().evaluate({
+            stage: "pre_draft",
+            messageId: message.id,
+          })
+        )
+      );
+    } catch (error) {
+      if (error instanceof LlmTransportError && error.deadlineExceeded) {
+        return await this.returnDeadlineExceededOutcome(
+          message,
+          requestCorrelationId,
+          error
+        );
+      }
+      throw error;
+    }
     incrementReplyMetric("policy_decision", {
       stage: "pre_draft",
       code: policyDecision.code,
@@ -658,22 +700,35 @@ export class EmailReplyDraftGenerationService {
     // F04: absolute invocation expiry for the acquire transaction. A request
     // that waits out its budget in the write queue must fail instead of
     // becoming a live owner after the caller already gave up; the model
-    // additionally clamps any granted lease to this instant.
+    // additionally clamps any granted lease to this instant. Expressed in
+    // WALL time (not the budget clock): the model compares it against the
+    // caller timestamp and the wall clock, and only wall time advances
+    // while queued. (Using the budget clock's end directly would mix
+    // frozen test clocks with wall comparisons and expire healthy
+    // invocations; in production all clocks coincide.)
     const ownerExpiresAt =
-      this.deadline !== null ? new Date(this.deadline.endsAtMs()) : undefined;
-    const reservation = await this.raceWithDeadline(
-      "reservation_acquire",
-      this.guardModuleForNow().acquireReservation({
-        emailServiceId: message.emailServiceId,
-        replyKey,
-        messageId: message.id,
-        ownerToken,
-        leaseExpiresAt,
-        now: new Date(this.nowForInvocation()),
-        normalizedMessageId: message.normalizedMessageId,
-        ...(ownerExpiresAt !== undefined ? { ownerExpiresAt } : {}),
-      })
-    );
+      this.deadline !== null
+        ? new Date(Date.now() + this.deadline.remainingMs())
+        : undefined;
+    // F05: deadline expiry anywhere in the acquire chain (the race, the
+    // owner-expired model refusal, or a nested raced audit) returns the
+    // terminal timeout outcome rather than throwing — the same contract as
+    // every other pre-model stage.
+    let reservation: ReservationAcquireResult;
+    try {
+      reservation = await this.raceWithDeadline(
+        "reservation_acquire",
+        this.guardModuleForNow().acquireReservation({
+          emailServiceId: message.emailServiceId,
+          replyKey,
+          messageId: message.id,
+          ownerToken,
+          leaseExpiresAt,
+          now: new Date(this.nowForInvocation()),
+          normalizedMessageId: message.normalizedMessageId,
+          ...(ownerExpiresAt !== undefined ? { ownerExpiresAt } : {}),
+        })
+      );
     if (reservation.status === "expired") {
       // The budget elapsed before the lease could be claimed (typically a
       // detached loser whose race already rejected): surface the same
@@ -899,6 +954,16 @@ export class EmailReplyDraftGenerationService {
         next_action: nextActionForCode(reservation.code),
       };
     }
+    } catch (error) {
+      if (error instanceof LlmTransportError && error.deadlineExceeded) {
+        return await this.returnDeadlineExceededOutcome(
+          message,
+          requestCorrelationId,
+          error
+        );
+      }
+      throw error;
+    }
     // status === "acquired": hold the reservation for the commit transaction
     // (Step 4) and release it on every failure path below.
     this.reservation = { guardId: reservation.guardId, ownerToken };
@@ -926,42 +991,21 @@ export class EmailReplyDraftGenerationService {
         requestCorrelationId
       );
     } catch (error) {
-      // G01/FR-035: a non-model awaited stage (classification, profile load,
-      // knowledge retrieval, conversation-context build, envelope binding)
-      // exceeded the invocation deadline and re-threw LlmTransportError. This
-      // is a transport failure — NOT a validation strike, NOT a thrown bug —
-      // so convert it to a deadline_exceeded outcome (mirroring the
-      // attemptLlmGeneration transport-error path) rather than letting it
-      // escape createDraft as an unhandled exception. The stage label was
-      // already recorded by raceWithDeadline's deadline_exceeded metric; this
-      // catch adds the generation_outcome rollup + ONE refusal audit, releases
-      // the reservation, and returns. Non-deadline errors re-throw so R16's
-      // invariant (unexpected exceptions still propagate) holds.
+      // F05/G01: a deadline-exceeded transport failure anywhere in the
+      // acquired section converts to the single terminal timeout outcome via
+      // the bounded terminal owner below — which releases the reservation,
+      // audits at most once (never re-auditing an already-attempted write),
+      // and returns instead of throwing. Non-deadline errors re-throw so
+      // R16's invariant (unexpected exceptions still propagate) holds.
       if (
         error instanceof LlmTransportError &&
         error.deadlineExceeded
       ) {
-        await this.releaseReservationSafely();
-        incrementReplyMetric("generation_outcome", {
-          outcome: "deadline_exceeded",
-        });
-        await this.recordFailure(
-          message.emailServiceId,
-          message.id,
+        return await this.returnDeadlineExceededOutcome(
+          message,
           requestCorrelationId,
-          `[provider_error] ${error.message}`,
-          { stage: "generation", code: "provider_error" }
+          error
         );
-        return {
-          success: false,
-          error: `[provider_error] ${error.message}`,
-          requestCorrelationId,
-          // provider_error is NOT a member of EmailReplyPolicyCode, so the
-          // typed `code` slot stays absent — the leading bracket in `error`
-          // is the only signal (same convention as the attemptLlmGeneration
-          // transport-error path).
-          next_action: "discard_and_retry",
-        };
       }
       throw error;
     } finally {
@@ -969,6 +1013,67 @@ export class EmailReplyDraftGenerationService {
         await this.releaseReservationSafely();
       }
     }
+  }
+
+  /**
+   * F05 — the single bounded terminal owner for invocation-deadline failure.
+   * Releases the reservation (no-op when none is held), records the
+   * `generation_outcome{deadline_exceeded}` rollup, and returns the
+   * structured provider_error outcome (typed `code` slot stays absent —
+   * provider_error is not an EmailReplyPolicyCode — with `discard_and_retry`
+   * guidance), instead of letting the timeout escape as an exception.
+   *
+   * Exactly-once terminal audit: when an audit mutation was already
+   * attempted this invocation (`auditMutationAttempted` — e.g. the failing
+   * inner path's own recordFailure), no second audit is attempted, so a
+   * detached loser cannot double-commit a refusal row. Otherwise ONE
+   * terminal refusal audit is attempted through the (possibly already
+   * expired) deadline race. An audit that fails with a persistence error
+   * propagates (fail-stop, B10 — distinguishable from the timeout); an
+   * audit that cannot run inside the expired budget is skipped and the
+   * original timeout outcome is still returned (never a new throw, never
+   * a re-audit).
+   */
+  private async returnDeadlineExceededOutcome(
+    message: { emailServiceId: number; id: number } | null | undefined,
+    requestCorrelationId: string,
+    originalError: LlmTransportError
+  ): Promise<Extract<CreateDraftOutcome, { success: false }>> {
+    await this.releaseReservationSafely();
+    incrementReplyMetric("generation_outcome", {
+      outcome: "deadline_exceeded",
+    });
+    const outcome = {
+      success: false as const,
+      error: `[provider_error] ${originalError.message}`,
+      requestCorrelationId,
+      next_action: "discard_and_retry" as const,
+    };
+    if (message == null || this.auditMutationAttempted) {
+      return outcome;
+    }
+    try {
+      await this.recordFailure(
+        message.emailServiceId,
+        message.id,
+        requestCorrelationId,
+        `[provider_error] ${originalError.message}`,
+        { stage: "generation", code: "provider_error" }
+      );
+    } catch (auditError) {
+      if (
+        auditError instanceof LlmTransportError &&
+        auditError.deadlineExceeded
+      ) {
+        // The terminal audit itself could not run inside the expired
+        // budget: the original timeout stands; no second audit attempted.
+        return outcome;
+      }
+      // Persistence failure stops the work (B10) — propagated, not masked
+      // as the timeout.
+      throw auditError;
+    }
+    return outcome;
   }
 
   /**
@@ -1930,18 +2035,30 @@ export class EmailReplyDraftGenerationService {
    * `deadline_exceeded{stage}`. With no deadline (defensive, non-createDraft
    * callers) the work proceeds unbounded, matching pre-B13 behavior.
    *
-   * The work promise is NOT cancelled (JS cannot cancel a promise); on
-   * timeout the loser keeps running detached and its eventual
+   * F05: `work` may be a LAZY factory invoked only after the expiry
+   * pre-check. An already-expired deadline rejects WITHOUT starting the
+   * work: no new mutation (audit write, reservation release, model call)
+   * begins after expiry, and no detached-work rejection handler is needed
+   * for work that never started. Promise-form callers keep the previous
+   * eager semantics (their promise already runs); audit/cleanup paths MUST
+   * use the factory form so expiry never starts a doomed mutation.
+   *
+   * The started work promise is NOT cancelled (JS cannot cancel a promise);
+   * on timeout the loser keeps running detached and its eventual
    * rejection is explicitly swallowed so it cannot surface as an
    * unhandled rejection.
    */
-  private raceWithDeadline<T>(stage: string, work: Promise<T>): Promise<T> {
+  private raceWithDeadline<T>(
+    stage: string,
+    work: Promise<T> | (() => Promise<T>)
+  ): Promise<T> {
     const deadline = this.deadline;
+    const startWork = typeof work === "function" ? work : () => work;
     if (!deadline) {
       // No deadline started (defensive — every createDraft entry starts one).
       // Do not impose a synthetic timeout; the stage proceeds unbounded exactly
       // as before this slice for any non-createDraft caller.
-      return work;
+      return startWork();
     }
     if (deadline.expired()) {
       incrementReplyMetric("deadline_exceeded", { stage });
@@ -1952,6 +2069,7 @@ export class EmailReplyDraftGenerationService {
         )
       );
     }
+    const started = startWork();
     const remainingMs = deadline.remainingMs();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<never>((_, reject) => {
@@ -1968,8 +2086,8 @@ export class EmailReplyDraftGenerationService {
     // Detached cleanup: whichever settles first clears the timer; if the WORK
     // loses the race, swallow its eventual rejection so the abandoned promise
     // cannot fire an unhandled-rejection event.
-    work.catch(() => undefined);
-    return Promise.race([work, timeout]).finally(() => {
+    started.catch(() => undefined);
+    return Promise.race([started, timeout]).finally(() => {
       if (timer !== null) clearTimeout(timer);
     });
   }
@@ -2588,8 +2706,9 @@ export class EmailReplyDraftGenerationService {
       // G01/FR-035: bound the cleanup write against the invocation deadline.
       // A timeout rejects into the catch below (logged, sweep-recoverable) —
       // cleanup never throws and never blocks the invocation outcome.
-      await this.raceWithDeadline(
-        "reservation_release",
+      // F05: lazy factory so an expired deadline skips the mutation rather
+      // than starting a doomed write.
+      await this.raceWithDeadline("reservation_release", () =>
         this.guardModuleForNow().releaseReservation({
           guardId: reservation.guardId,
           ownerToken: reservation.ownerToken,
@@ -2640,14 +2759,14 @@ export class EmailReplyDraftGenerationService {
     // deadline. Expiry throws LlmTransportError (a transport failure, NOT a
     // validation strike) — still a failure outcome with no draft persisted,
     // preserving the fail-stop contract (an unrecorded refusal never reports
-    // success).
-    await this.raceWithDeadline(
-      "failure_audit",
-      (async () => {
-        await this.replyAuditModuleForNow().create(log);
-        await this.mirrorToAutoReplyAudit(log);
-      })()
-    );
+    // success). F05: LAZY factory — an already-expired deadline rejects
+    // before the mutation starts, and the attempt is recorded so the
+    // terminal timeout owner never re-audits.
+    this.auditMutationAttempted = true;
+    await this.raceWithDeadline("failure_audit", async () => {
+      await this.replyAuditModuleForNow().create(log);
+      await this.mirrorToAutoReplyAudit(log);
+    });
   }
 
   /**
@@ -2711,14 +2830,13 @@ export class EmailReplyDraftGenerationService {
       ruleId: decision.ruleId,
     });
     // G01/FR-035: bound the refusal-audit writes against the invocation
-    // deadline (same fail-stop contract as recordFailure).
-    await this.raceWithDeadline(
-      "refusal_audit",
-      (async () => {
-        await this.replyAuditModuleForNow().create(log);
-        await this.mirrorToAutoReplyAudit(log);
-      })()
-    );
+    // deadline (same fail-stop contract as recordFailure). F05: lazy
+    // factory + attempt recorded (see recordFailure).
+    this.auditMutationAttempted = true;
+    await this.raceWithDeadline("refusal_audit", async () => {
+      await this.replyAuditModuleForNow().create(log);
+      await this.mirrorToAutoReplyAudit(log);
+    });
   }
 
   /**
@@ -2776,10 +2894,12 @@ export class EmailReplyDraftGenerationService {
       knowledgeAuditCount,
     });
     // G01/FR-035: bound the reuse-audit write against the invocation deadline
-    // (same fail-stop contract as recordFailure).
+    // (same fail-stop contract as recordFailure). F05: lazy factory +
+    // attempt recorded (see recordFailure).
+    this.auditMutationAttempted = true;
     await this.raceWithDeadline(
       "reuse_audit",
-      this.replyAuditModuleForNow().create(log)
+      () => this.replyAuditModuleForNow().create(log)
     );
   }
 }

@@ -734,10 +734,13 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
     expect(row?.phase).toBe("draft_ready");
   });
 
-  it("R04: recover→reconcile negative→late success: no second submission, accepted protection preserved", async () => {
+  it("R04/N02: recover→reconcile negative→late success preserves accepted evidence (terminal upgrade)", async () => {
     // The exact todo regression: "hold original SMTP, recover/reconcile
-    // negatively, then deliver late success; no second submission or loss of
-    // accepted protection."
+    // negatively, then deliver late success." Late ACTUAL acceptance is
+    // terminal evidence and must not be lost: the `sent` outcome upgrades
+    // the prematurely downgraded attempt (and its guard/message), so the
+    // accepted reply is protected. No SECOND submission ever occurs — the
+    // upgrade is a ledger transition on the same attempt row.
     const msg = await seedMessage();
     const draft = await seedDraft(msg.id, "sending");
     const old = new Date(Date.now() - 10 * 60 * 1000);
@@ -761,8 +764,9 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
     expect(guardAfterRecovery?.activeAttemptId).toBeNull();
 
     // 2. Operator negatively reconciles the now-eligible delivery_unknown
-    //    target (no sibling in flight). The guard reopens to draft_ready so a
-    //    fresh approval + send can follow.
+    //    target (no sibling in flight, no live submitter held in this test —
+    //    the seeded transport is a row, not a running promise). The guard
+    //    reopens to draft_ready so a fresh approval + send can follow.
     await recovery.reconcileAttempt({
       attemptId: attempt.id,
       action: "confirm_not_sent",
@@ -773,11 +777,9 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
     const guardAfterReconcile = await guardModel.read(guard.id);
     expect(guardAfterReconcile?.phase).toBe("draft_ready");
 
-    // 3. The ORIGINAL submitter's late SMTP success arrives. The strict
-    //    finalize fence matches `status IN (claimed, submitted)` — NOT failed
-    //    — so the late `sent` is rejected (0 rows affected). The reconciled
-    //    `failed` outcome stands: NO second submission ledger entry, no guard
-    //    downgrade from the operator's authoritative finding.
+    // 3. The ORIGINAL submitter's late SMTP success arrives. Actual
+    //    acceptance upgrades the premature downgrade: attempt → sent with
+    //    the provider id, draft → sent, message → sent, guard → sent.
     await draftModel.finalizeSendOutcome({
       attemptId: attempt.id,
       draftId: draft.id,
@@ -792,13 +794,65 @@ describe("EmailReplySendRecoveryService guard transitions (T08)", () => {
       guardId: guard.id,
     });
 
-    // The late success did NOT override the reconciled failed attempt, did NOT
-    // write a providerMessageId, did NOT move the guard to sent.
     const attemptAfterLate = await attemptModule.read(attempt.id);
-    expect(attemptAfterLate?.status).toBe("failed");
-    expect(attemptAfterLate?.providerMessageId).toBeNull();
+    expect(attemptAfterLate?.status).toBe("sent");
+    expect(attemptAfterLate?.providerMessageId).toBe(
+      "late-smtp-after-reconcile"
+    );
+    expect((await draftModel.read(draft.id))?.status).toBe("sent");
     const guardAfterLate = await guardModel.read(guard.id);
-    expect(guardAfterLate?.phase).toBe("draft_ready");
+    expect(guardAfterLate?.phase).toBe("sent");
     expect(guardAfterLate?.activeAttemptId).toBeNull();
+  });
+
+  it("N02/F02: negative reconciliation refuses while the original submitter is still running", async () => {
+    // A REAL held submitter (not just a stale row): the tracker marks the
+    // original transport alive past the recovery threshold. Recovery still
+    // marks the row unknown (it cannot see liveness), but the negative
+    // reconciliation must refuse until quiescence is proven. Clearing the
+    // mark (process death/restart semantics) reopens the downgrade.
+    const {
+      markSubmitterRunning,
+      markSubmitterSettled,
+      clearSubmitterTrackerForTests,
+    } = await import("@/service/emailReply/EmailReplySubmitterTracker");
+    clearSubmitterTrackerForTests();
+    try {
+      const msg = await seedMessage();
+      const draft = await seedDraft(msg.id, "sending");
+      const old = new Date(Date.now() - 10 * 60 * 1000);
+      const attempt = await seedAttempt(msg, draft.id, "submitted", old);
+      await seedSendingGuard(msg, attempt.id, "sending", attempt.id);
+
+      const recovery = new EmailReplySendRecoveryService();
+      const sweep = await recovery.recoverStaleAttempts(5 * 60 * 1000);
+      expect(sweep.recovered).toBe(1);
+
+      // The original transport is STILL RUNNING past the threshold.
+      markSubmitterRunning(attempt.id);
+      await expect(
+        recovery.reconcileAttempt({
+          attemptId: attempt.id,
+          action: "confirm_not_sent",
+          evidence: "operator guess without quiescence",
+        })
+      ).rejects.toThrow(/quiescence not proven/);
+      // Refused: the row stays unknown, nothing reopened.
+      expect((await attemptModule.read(attempt.id))?.status).toBe(
+        "delivery_unknown"
+      );
+
+      // The process dies (restart semantics: empty registry = quiescence) —
+      // the downgrade now proceeds.
+      markSubmitterSettled(attempt.id);
+      await recovery.reconcileAttempt({
+        attemptId: attempt.id,
+        action: "confirm_not_sent",
+        evidence: "operator verified after submitter death",
+      });
+      expect((await attemptModule.read(attempt.id))?.status).toBe("failed");
+    } finally {
+      clearSubmitterTrackerForTests();
+    }
   });
 });
