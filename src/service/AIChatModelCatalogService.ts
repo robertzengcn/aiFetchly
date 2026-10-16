@@ -37,6 +37,14 @@ export class AIChatModelCatalogService {
    * caps. Null when no keyed load has happened yet.
    */
   private loadedConfigKey: string | null = null;
+  /**
+   * N05: invalidation epoch fencing outstanding fetches. `invalidate()` (or
+   * any settings change) bumps the epoch; a fetch that completes under an
+   * older epoch DISCARDS its response instead of reinstalling the previous
+   * provider's capabilities/default model. The waiter that joined the stale
+   * work then refetches under the current key (see `refresh`).
+   */
+  private fetchEpoch = 0;
   private fetchedAt = 0;
   private fetching: Promise<void> | null = null;
   private readonly api: AiChatApi;
@@ -76,6 +84,7 @@ export class AIChatModelCatalogService {
   }
 
   private async doRefresh(configKey?: string): Promise<void> {
+    const myEpoch = this.fetchEpoch;
     try {
       const resp: OpenAIModelsResponse = await this.api.listOpenAIModels();
       const map = new Map<string, AIChatModelCatalogEntry>();
@@ -110,6 +119,10 @@ export class AIChatModelCatalogService {
           isDefault: defaultId ? id === defaultId : false,
         });
       }
+      // N05: discard stale-epoch responses — a settings change landed
+      // while this fetch was in flight. Installing it would reintroduce
+      // the previous provider's caps/default model after invalidation.
+      if (myEpoch !== this.fetchEpoch) return;
       this.cache = map;
       this.defaultModelId = defaultId;
       // Record the key only on success — a failed fetch must not claim the
@@ -147,6 +160,9 @@ export class AIChatModelCatalogService {
    * the current caps.
    */
   invalidate(): void {
+    // N05: bump the epoch FIRST so an in-flight fetch discards on
+    // completion even if it resolves before the clearer below runs.
+    this.fetchEpoch += 1;
     this.cache = null;
     this.loadedConfigKey = null;
   }

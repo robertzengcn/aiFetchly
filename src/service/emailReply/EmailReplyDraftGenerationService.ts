@@ -336,7 +336,12 @@ export function createModelContextResolver(
       if (!shared) {
         shared = new AIChatModelCatalogService();
       }
-      await shared.ensureLoaded();
+      // N05: key by the process provider/config version so a catalog
+      // fetched under a previous provider never satisfies the current one.
+      const { providerConfigKey } = await import(
+        "@/service/aiProvider/AIProviderConfigVersion"
+      );
+      await shared.ensureLoaded(providerConfigKey());
       // resolveLimits reports whether the window came from the provider or
       // the catalog fallback: unknown models yield undefined here so the
       // generation layer applies its conservative unknown-model bound
@@ -363,7 +368,11 @@ export function createModelOutputCapResolver(
       }
       catalog = sharedModelCatalog;
     }
-    await catalog.ensureLoaded();
+    // N05: same version keying as the context resolver (see above).
+    const { providerConfigKey } = await import(
+      "@/service/aiProvider/AIProviderConfigVersion"
+    );
+    await catalog.ensureLoaded(providerConfigKey());
     // On the FIRST generation submission of an invocation no completion has
     // returned yet (modelId is null); fall back to the server-reported default
     // model id so the very first request is clamped too, not just the

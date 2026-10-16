@@ -1,5 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import {
+  bumpProviderConfigVersion,
+  providerConfigKey,
+} from "@/service/aiProvider/AIProviderConfigVersion";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
 
 function buildApiMock(resp: OpenAIModelsResponse | Error): {
@@ -435,6 +439,146 @@ describe("AIChatModelCatalogService", () => {
       await service.ensureLoaded("provider-b");
       expect(listOpenAIModels).toHaveBeenCalledTimes(2);
       expect(service.resolveLimits("shared-id").outputLimit).toBe(4_096);
+    });
+
+  // N05: invalidation fences outstanding fetches — a late response from
+  // the previous provider must be discarded, never reinstalled.
+  describe("N05 epoch-fenced invalidation", () => {
+    function deferredCatalog(): {
+      service: AIChatModelCatalogService;
+      listOpenAIModels: ReturnType<typeof vi.fn>;
+      resolveA: (resp: OpenAIModelsResponse) => void;
+      rejectA: (err: Error) => void;
+    } {
+      let resolveA!: (resp: OpenAIModelsResponse) => void;
+      let rejectA!: (err: Error) => void;
+      const gateA = new Promise<OpenAIModelsResponse>((res, rej) => {
+        resolveA = res;
+        rejectA = rej;
+      });
+      const listOpenAIModels = vi.fn();
+      // First call hangs (provider A's in-flight request); later calls
+      // resolve per-test via mockResolvedValue.
+      listOpenAIModels.mockReturnValueOnce(gateA);
+      const api = { listOpenAIModels } as unknown as ConstructorParameters<
+        typeof AIChatModelCatalogService
+      >[0];
+      const service = new AIChatModelCatalogService(api, 128_000);
+      return {
+        service,
+        listOpenAIModels,
+        resolveA: (resp) => resolveA(resp),
+        rejectA: (err) => rejectA(err),
+      };
+    }
+
+    const responseFor = (
+      owner: string,
+      cap: number,
+      context: number
+    ): OpenAIModelsResponse =>
+      ({
+        object: "list",
+        data: [
+          {
+            id: "shared-id",
+            object: "model",
+            created: 1,
+            owned_by: owner,
+            context_window: context,
+            max_tokens: cap,
+          },
+        ],
+        default_model: "shared-id",
+      }) as OpenAIModelsResponse;
+
+    it("discards A's late response after invalidate when nobody joins (no reinstall)", async () => {
+      // The discard matters here: no B lookup joins the in-flight fetch,
+      // so without epoch fencing A's late response would reinstall the
+      // previous provider's caps and default model.
+      const { service, listOpenAIModels, resolveA } = deferredCatalog();
+      const loadingA = service.ensureLoaded("provider-a");
+      service.invalidate();
+      // A's response completes late with a HIGH cap for the model id.
+      resolveA(responseFor("provider-a", 4_096, 128_000));
+      await loadingA;
+      expect(listOpenAIModels).toHaveBeenCalledTimes(1);
+      const stale = service.resolveLimits("shared-id");
+      expect(stale.limitSource).toBe("fallback");
+      expect(stale.outputLimit).toBe(16_384);
+      expect(service.getDefaultModelId()).toBeNull();
+      // The next lookup refetches from the CURRENT provider (B).
+      listOpenAIModels.mockResolvedValue(responseFor("provider-b", 128, 32_000));
+      await service.ensureLoaded();
+      expect(listOpenAIModels).toHaveBeenCalledTimes(2);
+      expect(service.resolveLimits("shared-id").outputLimit).toBe(128);
+    });
+
+    it("discards A's late response after invalidate; B lookup fetches B's caps", async () => {
+      const { service, listOpenAIModels, resolveA } = deferredCatalog();
+      listOpenAIModels.mockResolvedValue(responseFor("provider-b", 128, 32_000));
+      // Provider A's request is pending; settings switch to B and
+      // invalidate; B's generation joins the outstanding request.
+      const loadingA = service.ensureLoaded("provider-a");
+      service.invalidate();
+      const lookupB = service.ensureLoaded("provider-b");
+      // A's response completes late with a HIGH cap for the same model id.
+      resolveA(responseFor("provider-a", 4_096, 128_000));
+      await Promise.all([loadingA, lookupB]);
+      // Exactly two port calls (A wasted + B real) — and the catalog holds
+      // B's lower cap and B's ownership, never A's reinstalled values.
+      expect(listOpenAIModels).toHaveBeenCalledTimes(2);
+      const limits = service.resolveLimits("shared-id");
+      expect(limits.outputLimit).toBe(128);
+      expect(limits.contextLimit).toBe(32_000);
+      expect(limits.limitSource).toBe("provider");
+      expect(service.getDefaultModelId()).toBe("shared-id");
+      // A subsequent B lookup reuses the cache (no third fetch).
+      await service.ensureLoaded("provider-b");
+      expect(listOpenAIModels).toHaveBeenCalledTimes(2);
+    });
+
+    it("discards a rejected late fetch across rapid invalidations, then loads C", async () => {
+      const { service, listOpenAIModels, rejectA } = deferredCatalog();
+      listOpenAIModels.mockResolvedValue(
+        responseFor("provider-c", 512, 64_000)
+      );
+      const loadingA = service.ensureLoaded("provider-a");
+      // Two rapid settings changes while A is in flight.
+      service.invalidate();
+      service.invalidate();
+      const lookupC = service.ensureLoaded("provider-c");
+      // A's request fails late — failure installs nothing; the C lookup
+      // that joined still fetches C afterward.
+      rejectA(new Error("A gone"));
+      await Promise.all([loadingA, lookupC]);
+      expect(listOpenAIModels).toHaveBeenCalledTimes(2);
+      expect(service.resolveLimits("shared-id").outputLimit).toBe(512);
+      expect(service.resolveLimits("shared-id").contextLimit).toBe(64_000);
+      expect(service.getDefaultModelId()).toBe("shared-id");
+    });
+  });
+
+    it("provider config keys track settings bumps (production keying)", async () => {
+      // The production resolvers key catalog loads by this version; every
+      // settings bump must change it so a previous provider's catalog can
+      // never satisfy the current configuration.
+      const before = providerConfigKey();
+      bumpProviderConfigVersion();
+      expect(providerConfigKey()).not.toBe(before);
+      const listOpenAIModels = vi
+        .fn()
+        .mockResolvedValue({ object: "list", data: [] });
+      const catalog = new AIChatModelCatalogService(
+        { listOpenAIModels } as unknown as ConstructorParameters<
+          typeof AIChatModelCatalogService
+        >[0],
+        128_000
+      );
+      await catalog.ensureLoaded(before);
+      await catalog.ensureLoaded(providerConfigKey());
+      // Different key → refetch, not cache reuse.
+      expect(listOpenAIModels).toHaveBeenCalledTimes(2);
     });
 
     it("invalidate() forces a refetch on next load", async () => {
