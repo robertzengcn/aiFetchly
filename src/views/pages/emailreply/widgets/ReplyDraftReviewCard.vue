@@ -31,6 +31,24 @@
 
       <div class="mt-2 text-body-2">{{ draft.subject }}</div>
 
+      <!-- R07: the exact revision content under review — recipient envelope
+        plus the plain-text body. bodyText is rendered as TEXT (interpolation
+        escapes markup), never as HTML: the model-generated bodyHtml is a
+        derived rendering, not the reviewed content, and must not execute. -->
+      <div v-if="draft.recipientAddress" class="mt-2 text-body-2">
+        <span class="text-subtitle-2">{{ t("emailReply.human_review_recipient") }}: </span>
+        <span data-testid="draft-review-recipient">{{ draft.recipientAddress }}</span>
+      </div>
+      <div class="mt-3">
+        <div class="text-subtitle-2">{{ t("emailReply.human_review_body") }}</div>
+        <pre
+          class="text-body-2"
+          style="white-space: pre-wrap"
+          data-testid="draft-review-body"
+          >{{ draft.bodyText }}</pre
+        >
+      </div>
+
       <!-- Original model reasons + open questions (immutable provenance). -->
       <div v-if="reasons.length > 0" class="mt-3">
         <div class="text-subtitle-2">{{ t("emailReply.human_review_reasons") }}</div>

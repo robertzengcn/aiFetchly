@@ -35,6 +35,8 @@ const i18n = createI18n({
         human_review_questions: "Open questions",
         human_review_note_label: "Review note",
         human_review_no_flag: "No human review requested for this draft.",
+        human_review_body: "Reply body",
+        human_review_recipient: "To",
       },
     },
   },
@@ -48,6 +50,7 @@ function draftDetail(overrides: Partial<ReplyDraftDetail> = {}): ReplyDraftDetai
     subject: "Re: Pricing?",
     bodyText: "Hello",
     bodyHtml: null,
+    recipientAddress: "customer@example.com",
     status: "draft",
     generationSource: "ai",
     confidence: null,
@@ -192,6 +195,44 @@ describe("ReplyDraftReviewCard — revision-bound review flow (T02)", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Could not record your review");
     expect(wrapper.find('[data-testid="draft-review-resolve-btn"]').exists()).toBe(true);
+  });
+
+  it("shows the exact revision body and recipient envelope before acknowledgment (R07)", async () => {
+    // R07: the operator must inspect the complete reply on the screen
+    // that records the review. bodyText renders as text (markup-safe);
+    // the recipient envelope rides along from the detail DTO.
+    vi.mocked(getEmailReplyDraft).mockResolvedValue(
+      draftDetail({
+        bodyText: "Hello, confirming your Tuesday slot.",
+        recipientAddress: "customer@example.com",
+      })
+    );
+    const wrapper = mountCard();
+    await flushPromises();
+    const body = wrapper.find('[data-testid="draft-review-body"]');
+    expect(body.exists()).toBe(true);
+    expect(body.text()).toContain("Hello, confirming your Tuesday slot.");
+    expect(body.html()).not.toContain("<div>");
+    const recipient = wrapper.find(
+      '[data-testid="draft-review-recipient"]'
+    );
+    expect(recipient.exists()).toBe(true);
+    expect(recipient.text()).toContain("customer@example.com");
+  });
+
+  it("omits the recipient line when the envelope is unknown (R07)", async () => {
+    vi.mocked(getEmailReplyDraft).mockResolvedValue(
+      draftDetail({ recipientAddress: null })
+    );
+    const wrapper = mountCard();
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="draft-review-recipient"]').exists()
+    ).toBe(false);
+    // The body still renders — no envelope never hides content.
+    expect(wrapper.find('[data-testid="draft-review-body"]').exists()).toBe(
+      true
+    );
   });
 
   it("renders the no-flag state for a clean draft", async () => {

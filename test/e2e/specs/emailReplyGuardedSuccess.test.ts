@@ -641,4 +641,114 @@ test.describe("Guarded reply success + reconciliation (G04/G02)", () => {
     );
     expect(approve.data.token).toBeTruthy();
   });
+
+  test("operator reaches the review screen through the audit product link, reads the revision, resolves, and an edit restores pending review (R07)", async ({
+    aiApp,
+  }) => {
+    test.setTimeout(180_000);
+    // No mailbox/model servers needed: navigation + review + edit are pure
+    // IPC + DB + renderer.
+    const serviceResult = await invoke(aiApp, "e2e:seed-email-service", {
+      name: "E2E Review Link Sender",
+      from: SENDER,
+      password: IMAP_PASS,
+      host: "127.0.0.1",
+      port: "25",
+      ssl: 0,
+      status: 1,
+    });
+    expect(serviceResult.status).toBe(true);
+    const serviceId = (serviceResult.data as { id: number }).id;
+    const messageResult = await invoke(aiApp, "e2e:seed-received-message", {
+      emailServiceId: serviceId,
+      providerUid: "e2e-review-link-1",
+      messageId: "<e2e-review-link-1@example.com>",
+      fromAddress: RECIPIENT,
+      toAddresses: [SENDER],
+      subject: "E2E review link original",
+      replyStatus: "not_started",
+    });
+    const messageId = (messageResult.data as { id: number }).id;
+    const seed = await seedDraft(aiApp, {
+      emailServiceId: serviceId,
+      messageId,
+      flagged: true,
+    });
+    const auditResult = await invoke(aiApp, "e2e:seed-auto-reply-audit", {
+      emailServiceId: serviceId,
+      messageId,
+      draftId: seed.id,
+      action: "approval_required",
+      decisionStatus: "approval_required",
+      generatedSubject: "E2E review link original",
+      generatedBodyPreview: "E2E guarded reply body",
+    });
+    expect(auditResult.status).toBe(true);
+
+    const page = aiApp.mainWindow;
+    // Audit list → open the row through the real row action (discoverable,
+    // no typed hash).
+    await page.evaluate(() => {
+      window.location.hash = "/emailmarketing/emailreply/audit/list";
+    });
+    await expect(page.getByTestId("email-auto-reply-audit-list")).toBeVisible({
+      timeout: 15_000,
+    });
+    await page
+      .locator("tbody tr")
+      .filter({ hasText: "E2E review link original" })
+      .locator('[data-testid="audit-row-open"]')
+      .click();
+    await expect(page.getByTestId("audit-detail-recheck")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The product link — not a typed hash — reaches the review screen.
+    await page.getByTestId("audit-detail-view-draft").click();
+    await expect(page.getByTestId("draft-review-card")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The exact revision content + recipient envelope render before
+    // acknowledgment.
+    await expect(page.getByTestId("draft-review-body")).toContainText(
+      "E2E guarded reply body with enough detail to send"
+    );
+    await expect(page.getByTestId("draft-review-recipient")).toContainText(
+      RECIPIENT
+    );
+
+    // Resolve through the real control.
+    await page
+      .getByTestId("draft-review-note")
+      .locator("textarea:visible")
+      .fill("e2e link flow checked body");
+    await page.getByTestId("draft-review-resolve-btn").click();
+    await expect(page.getByTestId("draft-review-resolved")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // An edit materializes a new revision: the old resolution no longer
+    // binds the current revision, so review is pending again.
+    const edited = await invoke(aiApp, "email:reply:draft:update", {
+      id: seed.id,
+      subject: "Re: E2E guarded original",
+      bodyText: "E2E guarded reply body with enough detail to send (edited)",
+    });
+    expect(edited.status).toBe(true);
+    await page.reload();
+    await expect(page.getByTestId("draft-review-card")).toBeVisible({
+      timeout: 15_000,
+    });
+    expect(await page.getByTestId("draft-review-resolved").count()).toBe(0);
+    // The resolve control is back: the operator must review the new
+    // revision before approval.
+    await expect(
+      page.getByTestId("draft-review-resolve-btn")
+    ).toBeVisible({ timeout: 15_000 });
+    const refused = (await invoke(aiApp, "email:reply:draft:approve", {
+      draftId: seed.id,
+    })) as { status: boolean };
+    expect(refused.status).toBe(false);
+  });
 });

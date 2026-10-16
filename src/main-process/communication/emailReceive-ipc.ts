@@ -391,6 +391,9 @@ export function registerEmailReceiveIpcHandlers(): void {
         subject: draft.subject,
         bodyText: draft.bodyText,
         bodyHtml: draft.bodyHtml,
+        // R07: the reply envelope the review screen must show before
+        // acknowledgment (who the reply goes to).
+        recipientAddress: draft.recipientAddress,
         status: draft.status,
         generationSource: draft.generationSource,
         confidence: draft.confidence,

@@ -42,6 +42,7 @@ const i18n = createI18n({
         knowledge_source_count: "Knowledge Sources",
         knowledge_sources_supplied:
           "{supplied} of {retrieved} supplied as grounding",
+        view_related_draft: "View related draft",
         created_at: "Date",
         generated_subject: "Generated Subject",
         generated_body_preview: "Generated Body Preview",
@@ -333,6 +334,34 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
     expect(sources.exists()).toBe(true);
     expect(sources.text()).not.toContain("supplied as grounding");
     expect(sources.text()).toContain("3");
+  });
+
+  it("links the related draft's review screen through the real route (R07)", async () => {
+    // R07: the review screen is reachable through the product flow —
+    // audit detail → draft detail — never only by typing the hash.
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({ draftId: 42 })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    const link = wrapper.find('[data-testid="audit-detail-view-draft"]');
+    expect(link.exists()).toBe(true);
+    await link.trigger("click");
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "AI_Reply_Draft_Detail",
+      params: { id: "42" },
+    });
+  });
+
+  it("shows no draft link when the audit touches no draft (R07)", async () => {
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({ draftId: null })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="audit-detail-view-draft"]').exists()
+    ).toBe(false);
   });
 
   it("clears a previous error when a subsequent recheck succeeds", async () => {

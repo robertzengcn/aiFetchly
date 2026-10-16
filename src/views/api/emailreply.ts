@@ -66,6 +66,8 @@ export interface ReplyDraftDetail {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
+  /** R07: reply recipient envelope shown on the review screen. */
+  recipientAddress: string | null;
   status: string;
   generationSource: string;
   confidence: number | null;

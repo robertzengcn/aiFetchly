@@ -106,6 +106,24 @@
         <pre class="text-body-2">{{ audit.sentBodyPreview || "—" }}</pre>
       </v-card>
 
+      <!-- R07: product link into the human-review screen. The audit's
+           draftId is context, not an approval signal (R22) — this button
+           only navigates to the draft's review page, where the revision
+           content and envelope render before acknowledgment. -->
+      <v-card v-if="audit.draftId !== null" variant="outlined" class="pa-3 mt-4">
+        <div class="d-flex align-center flex-wrap">
+          <v-btn
+            color="primary"
+            variant="tonal"
+            size="small"
+            data-testid="audit-detail-view-draft"
+            @click="openRelatedDraft"
+          >
+            {{ t("emailAutoReplyAudit.view_related_draft") }}
+          </v-btn>
+        </div>
+      </v-card>
+
       <!-- T10 (FR-032): diagnostic reply recheck via the AI-gated
            EMAIL_REPLY_CHECK_REPLIED channel. Read-only. -->
       <v-card variant="outlined" class="pa-3 mt-4">
@@ -178,6 +196,18 @@ const router = useRouter();
 
 const audit = ref<AutoReplyAuditDto | null>(null);
 const loading = ref(true);
+
+// R07: navigate to the related draft's human-review screen (route
+// AI_Reply_Draft_Detail). Navigation only — no approval signal crosses
+// here (R22); the review card enforces revision-bound acknowledgment.
+function openRelatedDraft(): void {
+  const draftId = audit.value?.draftId;
+  if (draftId === null || draftId === undefined) return;
+  void router.push({
+    name: "AI_Reply_Draft_Detail",
+    params: { id: String(draftId) },
+  });
+}
 
 // T10 (FR-032): diagnostic reply recheck state.
 const recheckLoading = ref(false);
