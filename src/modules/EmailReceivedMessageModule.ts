@@ -191,7 +191,7 @@ export class EmailReceivedMessageModule extends BaseModule {
     replyNegativeCheckAt: Date;
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
-    now?: Date;
+    now?: Date | (() => number);
   }): Promise<boolean> {
     try {
       await this.ensureConnection();

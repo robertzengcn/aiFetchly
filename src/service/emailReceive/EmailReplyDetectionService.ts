@@ -175,7 +175,9 @@ export interface ReplyDetectionMessagePort {
     replyNegativeCheckAt: Date;
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
-    now?: Date;
+    // C02: execution-time clock — a function evaluated at execution
+    // (after database admission), never a frozen pre-queue Date.
+    now?: Date | (() => number);
   }): Promise<boolean>;
 }
 
@@ -1515,12 +1517,18 @@ export class EmailReplyDetectionService {
       if (fence?.signal?.aborted || fence?.isExpired?.()) {
         return false;
       }
+      // C02: pass the live clock as a FUNCTION evaluated at execution
+      // (after database admission) — never a frozen pre-queue Date. A
+      // confirmation delayed past owner expiry (slow admission, another
+      // async hold) evaluates expiry at execution and matches 0 rows.
+      // (`this.now` is already a this-independent closure.)
+      const liveClock = this.now;
       const confirmed = await this.messagePort.confirmStagedNegativeEvidence({
         id: message.id,
         replyNegativeCheckAt: observedAt,
         replyNegativeContextHash: contextHash,
         replyNegativeOwnerExpiresAt: ownerExpiresAt ?? null,
-        now: new Date(this.now()),
+        now: () => liveClock(),
       });
       if (!confirmed) {
         // The probe expired before confirming, a newer observation replaced
@@ -1832,7 +1840,7 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
     replyNegativeCheckAt: Date;
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
-    now?: Date;
+    now?: Date | (() => number);
   }): Promise<boolean> {
     return this.module.confirmStagedNegativeEvidence(input);
   }

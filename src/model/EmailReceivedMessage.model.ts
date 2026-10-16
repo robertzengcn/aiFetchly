@@ -187,8 +187,13 @@ export class EmailReceivedMessageModel extends BaseDb {
     replyNegativeCheckAt: Date;
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
-    /** Commit-time clock for the liveness predicate; defaults to wall time. */
-    now?: Date;
+    /**
+     * C02: execution-time clock for the liveness predicate — pass a
+     * function evaluated at execution (after database admission), never a
+     * frozen pre-queue Date. A plain Date is still accepted and means
+     * "evaluate as of this instant". Defaults to wall time.
+     */
+    now?: Date | (() => number);
   }): Promise<boolean> {
     // C01: serialized with admission snapshots (see replyTxn).
     return await replyWriteMutex.run(() =>
@@ -201,9 +206,20 @@ export class EmailReceivedMessageModel extends BaseDb {
     replyNegativeCheckAt: Date;
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
-    now?: Date;
+    /**
+     * C02: execution-time clock for the liveness predicate — a function
+     * evaluated HERE (after database admission), never a frozen pre-queue
+     * Date. A plain Date is still accepted for callers without a clock
+     * (tests, legacy paths) and means "evaluate as of this instant".
+     */
+    now?: Date | (() => number);
   }): Promise<boolean> {
-    const now = input.now ?? new Date();
+    // C02: resolve the clock HERE (post-admission execution time). A
+    // function reads the caller's live clock; a Date is a fixed instant.
+    const now =
+      typeof input.now === "function"
+        ? new Date(input.now())
+        : (input.now ?? new Date());
     const owner = input.replyNegativeOwnerExpiresAt ?? null;
     const result = await this.repository
       .createQueryBuilder()

@@ -1000,16 +1000,16 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         replyNegativeCheckAt: Date;
         replyNegativeContextHash: string;
         replyNegativeOwnerExpiresAt?: Date | null;
-        now?: Date;
+        now?: Date | (() => number);
       }) {
         await confirmGate;
-        // Model a slow commit path explicitly: re-stamp the commit-time
-        // clock at actual execution (production's synchronous driver makes
-        // call time == commit time; the gate simulates the delayed case).
-        return await model.confirmStagedNegativeEvidence({
-          ...input,
-          now: new Date(nowMs),
-        });
+        // C02 production-faithful: forward the detector's ORIGINAL input
+        // unchanged (the module does the same). The detector passes its
+        // live clock as a function, evaluated by the model at execution —
+        // already past owner expiry here — so this must match 0 rows.
+        // (Re-stamping `now` at the barrier would test the harness, not
+        // the production route.)
+        return await model.confirmStagedNegativeEvidence(input);
       },
     };
     const service = new EmailReplyDetectionService({
