@@ -295,6 +295,18 @@ export type ModelOutputCapResolver = (
 let sharedModelCatalog: AIChatModelCatalogService | null = null;
 
 /**
+ * R04: drop the process-lifetime catalog cache backing the output-cap
+ * resolver so the next lookup refetches from the CURRENT provider. Call
+ * on AI provider settings changes (mode switch, new local config, API-key
+ * clear) — otherwise a previous provider keeps supplying the current caps
+ * (same model id, lower output cap). The context resolver builds a fresh
+ * catalog per factory call and self-heals without this.
+ */
+export function invalidateEmailReplyModelCatalogs(): void {
+  sharedModelCatalog?.invalidate();
+}
+
+/**
  * G01/FR-027 production resolver: reads the provider's models list through
  * the process-lifetime {@link AIChatModelCatalogService} and returns the
  * reported max output tokens for the given model id (undefined when the

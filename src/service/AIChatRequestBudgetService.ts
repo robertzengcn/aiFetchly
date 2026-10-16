@@ -34,7 +34,18 @@ export type ModelLimitSource = "provider" | "configured" | "fallback";
 export interface ResolvedModelLimits {
   readonly contextLimit: number;
   readonly outputLimit: number;
+  /**
+   * Provenance of the CONTEXT limit (the field budget admission trusts).
+   * "provider" only when the endpoint actually reported the window.
+   */
   readonly limitSource: ModelLimitSource;
+  /**
+   * R04: provenance of the OUTPUT limit, independent of the context
+   * provenance — the output number is defaulted (16,384) whenever the
+   * server omits max_tokens. Optional so existing resolvers keep
+   * compiling; absent means unknown (treat as "fallback").
+   */
+  readonly outputSource?: ModelLimitSource;
 }
 
 /** Injected resolver signature — returns limits for a given model id. */

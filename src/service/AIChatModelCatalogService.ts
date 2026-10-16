@@ -12,6 +12,13 @@ import type { ResolvedModelLimits } from "@/service/AIChatRequestBudgetService";
 export interface AIChatModelCatalogEntry {
   readonly id: string;
   readonly contextWindow: number;
+  /**
+   * R04: per-capability provenance for the context window. `"provider"`
+   * only when the models endpoint actually reported a positive window;
+   * `"fallback"` when the catalog substituted its default. Consumers must
+   * never present a fallback-substituted window as provider-confirmed.
+   */
+  readonly contextWindowSource: "provider" | "fallback";
   readonly maxOutputTokens?: number;
   readonly isDefault?: boolean;
 }
@@ -24,6 +31,12 @@ export interface AIChatModelCatalogEntry {
 export class AIChatModelCatalogService {
   private cache: ReadonlyMap<string, AIChatModelCatalogEntry> | null = null;
   private defaultModelId: string | null = null;
+  /**
+   * R04: provider/config identity the cache was fetched under. A mismatch
+   * forces a refetch so a previous provider can never supply the current
+   * caps. Null when no keyed load has happened yet.
+   */
+  private loadedConfigKey: string | null = null;
   private fetchedAt = 0;
   private fetching: Promise<void> | null = null;
   private readonly api: AiChatApi;
@@ -41,12 +54,20 @@ export class AIChatModelCatalogService {
    * Fetch the catalog and cache it. Safe to call repeatedly. Returns
    * void; callers should getContextWindow() afterwards.
    */
-  async refresh(): Promise<void> {
+  async refresh(configKey?: string): Promise<void> {
     if (this.fetching) {
       await this.fetching;
+      // A keyed caller that arrived mid-fetch still needs ITS key's data:
+      // if the in-flight fetch was for a different key, fetch again.
+      if (
+        configKey !== undefined &&
+        configKey !== this.loadedConfigKey
+      ) {
+        await this.refresh(configKey);
+      }
       return;
     }
-    this.fetching = this.doRefresh();
+    this.fetching = this.doRefresh(configKey);
     try {
       await this.fetching;
     } finally {
@@ -54,7 +75,7 @@ export class AIChatModelCatalogService {
     }
   }
 
-  private async doRefresh(): Promise<void> {
+  private async doRefresh(configKey?: string): Promise<void> {
     try {
       const resp: OpenAIModelsResponse = await this.api.listOpenAIModels();
       const map = new Map<string, AIChatModelCatalogEntry>();
@@ -62,16 +83,38 @@ export class AIChatModelCatalogService {
       for (const m of resp.data) {
         const id = m.id;
         if (!id) continue;
-        const ctx = m.context_window ?? m.context_length ?? m.context_size ?? 0;
+        // R04: only a positive finite reported window counts as
+        // provider-confirmed. Missing, zero, negative, NaN, or non-numeric
+        // capability values are malformed → fallback substitution whose
+        // provenance stays "fallback" (never "provider").
+        const rawCtx =
+          m.context_window ?? m.context_length ?? m.context_size;
+        const ctx =
+          typeof rawCtx === "number" &&
+          Number.isFinite(rawCtx) &&
+          rawCtx > 0
+            ? Math.floor(rawCtx)
+            : 0;
+        const rawMax = m.max_tokens;
+        const maxOut =
+          typeof rawMax === "number" &&
+          Number.isFinite(rawMax) &&
+          rawMax > 0
+            ? Math.floor(rawMax)
+            : undefined;
         map.set(id, {
           id,
           contextWindow: ctx > 0 ? ctx : this.fallbackContextWindow,
-          maxOutputTokens: m.max_tokens,
+          contextWindowSource: ctx > 0 ? "provider" : "fallback",
+          ...(maxOut !== undefined ? { maxOutputTokens: maxOut } : {}),
           isDefault: defaultId ? id === defaultId : false,
         });
       }
       this.cache = map;
       this.defaultModelId = defaultId;
+      // Record the key only on success — a failed fetch must not claim the
+      // new key while still holding the previous provider's rows.
+      if (configKey !== undefined) this.loadedConfigKey = configKey;
       this.fetchedAt = Date.now();
     } catch {
       // Leave previous cache in place if we have one; otherwise mark as
@@ -82,10 +125,30 @@ export class AIChatModelCatalogService {
     }
   }
 
-  /** Ensure the catalog is loaded. Loads once on first call. */
-  async ensureLoaded(): Promise<void> {
-    if (this.cache !== null) return;
-    await this.refresh();
+  /**
+   * Ensure the catalog is loaded. Loads once on first call; a supplied
+   * `configKey` identifying the current provider/config forces a refetch
+   * when it differs from the key the cache was fetched under (R04).
+   */
+  async ensureLoaded(configKey?: string): Promise<void> {
+    if (
+      this.cache !== null &&
+      (configKey === undefined || configKey === this.loadedConfigKey)
+    ) {
+      return;
+    }
+    await this.refresh(configKey);
+  }
+
+  /**
+   * R04: drop the cache so the next `ensureLoaded` refetches from the
+   * current provider. Call on provider settings changes (mode switch, new
+   * local config, API-key clear) so a previous provider can never supply
+   * the current caps.
+   */
+  invalidate(): void {
+    this.cache = null;
+    this.loadedConfigKey = null;
   }
 
   /** Returns the cached entries, empty if not yet loaded. */
@@ -103,6 +166,20 @@ export class AIChatModelCatalogService {
     const entry = this.cache?.get(model);
     if (entry) return entry.contextWindow;
     return this.fallbackContextWindow;
+  }
+
+  /**
+   * R04: provenance of the context window `getContextWindow` would return
+   * for a model ("provider" only when the endpoint reported it). Lets
+   * callers distinguish a confirmed window from a substituted default
+   * without changing the numeric lookup contract.
+   */
+  async getContextWindowSource(
+    model?: string
+  ): Promise<"provider" | "fallback"> {
+    await this.ensureLoaded();
+    if (!model) return "fallback";
+    return this.cache?.get(model)?.contextWindowSource ?? "fallback";
   }
 
   /**
@@ -148,7 +225,20 @@ export class AIChatModelCatalogService {
           // max_tokens. Capping unknown large models at 1,024 truncated
           // `/goal` plans even after the 128k context fallback landed.
           outputLimit: entry.maxOutputTokens ?? 16_384,
-          limitSource: "provider",
+          // R04: per-capability provenance. A fallback-substituted context
+          // window is NEVER labeled "provider" — the reply context resolver
+          // treats "fallback" as unknown and applies its conservative bound
+          // instead of budgeting a possibly-small model as a large one.
+          // The output number is defaulted independently; its provenance is
+          // reported separately because the two fields have different
+          // sources (the output cap resolver already treats an omitted
+          // max_tokens as unknown via getMaxOutputTokens).
+          limitSource:
+            entry.contextWindowSource === "provider"
+              ? "provider"
+              : "fallback",
+          outputSource:
+            entry.maxOutputTokens !== undefined ? "provider" : "fallback",
         };
       }
     }
@@ -156,6 +246,7 @@ export class AIChatModelCatalogService {
       contextLimit: this.fallbackContextWindow,
       outputLimit: 16_384,
       limitSource: "fallback",
+      outputSource: "fallback",
     };
   }
 }
