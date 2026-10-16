@@ -21,7 +21,9 @@ import { safeGoto } from "@/childprocess/google-maps/mapsNavigation";
 import {
   collectMapsPageDiagnostics,
   countMapsResultCards,
+  disposeElementHandles,
   formatMapsPageDiagnostics,
+  openMapsResultCard,
   queryMapsResultCards,
   scrollMapsResultsList,
   waitForMapsResultsReady,
@@ -520,13 +522,17 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       }
 
       try {
-        // Re-query fresh card handles each iteration (DOM changes after goBack)
+        // Re-query fresh card handles each iteration (DOM changes after goBack).
+        // Dispose them immediately: holding ElementHandles across a feed scroll
+        // is what produces "Node is detached from document".
         const freshCards = await queryMapsResultCards(page);
-        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
+        const freshCount = freshCards.length;
+        console.log(`[DEBUG] Fresh card handles on page: ${freshCount}`);
+        await disposeElementHandles(freshCards);
 
-        if (i >= freshCards.length) {
+        if (i >= freshCount) {
           console.log(
-            `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
+            `[DEBUG] Card index ${i} out of range (only ${freshCount} cards). Re-navigating to search URL.`
           );
           await safeGoto(page, searchUrl, {
             timeout: 30000,
@@ -544,20 +550,31 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
             await sleep(1000);
           }
           const retryCards = await queryMapsResultCards(page);
+          const retryCount = retryCards.length;
           console.log(
-            `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
+            `[DEBUG] After re-navigate and scroll: ${retryCount} cards`
           );
-          if (i >= retryCards.length) {
+          await disposeElementHandles(retryCards);
+          if (i >= retryCount) {
             console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
             continue;
           }
-          await retryCards[i].click();
-        } else {
-          await freshCards[i].click();
         }
 
+        // Scroll this card into the feed, then click a fresh node. If Maps
+        // recycles the node, open the place URL captured before the click.
+        const opened = await openMapsResultCard(page, i, {
+          sleep,
+          log: (message) => console.error(`[DEBUG] ${message}`),
+          goto: (url) =>
+            safeGoto(page, url, {
+              timeout: 30000,
+              waitUntil: "domcontentloaded",
+            }),
+        });
+
         console.log(
-          `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
+          `[DEBUG] Opened card ${i + 1} via ${opened}, waiting for detail panel...`
         );
         await randomDelay(1000, 2000);
 
