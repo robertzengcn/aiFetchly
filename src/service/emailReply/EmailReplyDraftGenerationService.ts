@@ -289,6 +289,41 @@ let sharedModelCatalog: AIChatModelCatalogService | null = null;
  * Used by the IPC and AI-tool construction sites of
  * {@link EmailReplyDraftGenerationService}; tests inject their own resolver.
  */
+/**
+ * F06/FR-027 production resolver: reads the provider's context window
+ * through the process-lifetime {@link AIChatModelCatalogService} (exact
+ * when the catalog knows the model, catalog fallback otherwise — the
+ * generation layer applies its own conservative unknown-model bound when
+ * the resolver reports undefined). Never throws; a fetch failure leaves
+ * undefined so the fallback applies. Lazily constructed like the cap
+ * resolver (same TDZ rationale).
+ */
+export function createModelContextResolver(
+  catalog?: AIChatModelCatalogService
+): (modelId: string | null) => Promise<number | undefined> {
+  let shared: AIChatModelCatalogService | null = catalog ?? null;
+  return async (modelId) => {
+    try {
+      if (!shared) {
+        shared = new AIChatModelCatalogService();
+      }
+      await shared.ensureLoaded();
+      // resolveLimits reports whether the window came from the provider or
+      // the catalog fallback: unknown models yield undefined here so the
+      // generation layer applies its conservative unknown-model bound
+      // instead of inheriting a 256k assumption for a possibly-small model.
+      const limits = shared.resolveLimits(modelId ?? undefined);
+      return limits.limitSource === "provider" &&
+        Number.isFinite(limits.contextLimit) &&
+        limits.contextLimit > 0
+        ? limits.contextLimit
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
 export function createModelOutputCapResolver(
   catalog?: AIChatModelCatalogService
 ): ModelOutputCapResolver {
@@ -376,6 +411,16 @@ export class EmailReplyDraftGenerationService {
   private readonly resolveModelOutputCap: (
     modelId: string | null
   ) => Promise<number | undefined>;
+  /** F06/FR-027: provider-reported context window by returned model id. */
+  private readonly resolveModelContextWindow: (
+    modelId: string | null
+  ) => Promise<number | undefined>;
+  /**
+   * F06/FR-027: per-invocation memo of the resolved context window, keyed by
+   * returned model id with the same invalidation as the output-cap memo.
+   */
+  private resolvedContextWindow: number | null = null;
+  private resolvedContextWindowForModelId: string | null = null;
   /**
    * G01/FR-027: per-invocation memo of the clamped output budget. Null until
    * the first model call of the invocation resolves the capability; reset at
@@ -464,6 +509,16 @@ export class EmailReplyDraftGenerationService {
     readonly resolveModelOutputCap?: (
       modelId: string | null
     ) => Promise<number | undefined>;
+    /**
+     * F06/FR-027: resolves the provider-reported context window for the
+     * model actually used (by returned model id). Returns undefined when
+     * unknown — the conservative {@link FALLBACK_CONTEXT_WINDOW_TOKENS}
+     * bound applies. Production wires {@link createModelContextResolver};
+     * tests inject a stub. Defaults to always-undefined.
+     */
+    readonly resolveModelContextWindow?: (
+      modelId: string | null
+    ) => Promise<number | undefined>;
     /** T07: injectable guard module factory (test seam). */
     readonly guardModuleFactory?: () => EmailReplyGuardModule;
     /**
@@ -497,6 +552,8 @@ export class EmailReplyDraftGenerationService {
         : REPLY_MAX_TOKENS_DEFAULT;
     this.resolveModelOutputCap =
       options?.resolveModelOutputCap ?? (async () => undefined);
+    this.resolveModelContextWindow =
+      options?.resolveModelContextWindow ?? (async () => undefined);
     this.guardModuleFactory =
       options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
     this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
@@ -563,6 +620,8 @@ export class EmailReplyDraftGenerationService {
     // invocation must not leak in).
     this.resolvedMaxTokens = null;
     this.resolvedMaxTokensForModelId = null;
+    this.resolvedContextWindow = null;
+    this.resolvedContextWindowForModelId = null;
     this.lastReturnedModelId = null;
     // G01/FR-026: reset the per-invocation remembered-unsupported-JSON-route
     // memo. A model that rejected the JSON hint in a PREVIOUS invocation must
@@ -1351,54 +1410,52 @@ export class EmailReplyDraftGenerationService {
     }
 
     const systemMsg = buildReplySystemMessage(profile);
-    // G01: input-context budgeting — fit retrieved knowledge + conversation
-    // to the conservative context budget BEFORE building the prompt. System /
-    // safety instructions and the original message are NEVER truncated; only
-    // retrieved sources (dropped last-first) and conversation history (oldest
-    // first) shrink. A truncation records a provenance warning so the draft
-    // shows the model did not see the full retrieval set.
-    const { fitInputToBudget, fixedPromptExceedsBudget } = await import(
+    // F06: model-aware rendered-prompt budgeting. Resolve the SELECTED
+    // model's context window and output allowance, then fit retrieved
+    // knowledge + conversation so the EXACT rendered prompt fits:
+    // window − output − margin. Iteration rebuilds the user message
+    // (pure/local) and measures rendered text, so builder caps and framing
+    // are counted, never estimated. System/safety instructions, the original
+    // message, and caller goal/tone/instructions are NEVER truncated; only
+    // retrieved sources (least-relevant last) and conversation history
+    // (oldest first) shrink. Dropped source identities feed F07 provenance.
+    const { fitRenderedPrompt, inputTokenBudget } = await import(
       "@/service/emailReply/EmailReplyContextBudget"
     );
-    const knowledgeTexts = knowledge.sources.map(
-      (s) => `${s.documentName} ${s.documentTitle ?? ""} ${s.content}`
+    const maxOutputTokens = await this.effectiveReplyMaxTokens();
+    const contextWindowTokens = await this.effectiveContextWindowTokens();
+    const promptBudget = inputTokenBudget(
+      contextWindowTokens,
+      maxOutputTokens
     );
-    const budgetCheck = fitInputToBudget({
-      systemText: typeof systemMsg.content === "string" ? systemMsg.content : "",
-      originalText: `${message.subject} ${message.bodyText ?? ""}`,
-      conversationText: conversationSection,
-      knowledgeTexts,
-      extraText: `${input.tone ?? ""} ${input.goal ?? ""} ${input.extraInstructions ?? ""}`,
+    // F06/F07: fit via the extracted helper (measures exact rendered text).
+    const fit = fitRenderedPrompt({
+      systemContent:
+        typeof systemMsg.content === "string" ? systemMsg.content : "",
+      sources: knowledge.sources,
+      sourceKey: (s) => `${s.documentId}:${s.chunkId}`,
+      sourceName: (s) => s.documentName,
+      conversationSection,
+      budgetTokens: promptBudget,
+      renderUserMessage: (sources, conversation) => {
+        const rendered = buildReplyUserMessage({
+          message,
+          knowledgeSources: sources,
+          tone: input.tone,
+          goal: input.goal,
+          extraInstructions: input.extraInstructions,
+          knowledgeAbstained: knowledge.abstained,
+          conversationSection: conversation,
+        });
+        return typeof rendered.content === "string" ? rendered.content : "";
+      },
     });
-    if (
-      fixedPromptExceedsBudget({
-        systemText: typeof systemMsg.content === "string" ? systemMsg.content : "",
-        originalText: `${message.subject} ${message.bodyText ?? ""}`,
-        conversationText: null,
-        knowledgeTexts: [],
-        extraText: `${input.tone ?? ""} ${input.goal ?? ""} ${input.extraInstructions ?? ""}`,
-      })
-    ) {
-      await this.releaseReservationSafely();
-      return {
-        success: false,
-        error:
-          "Input too large for the model's context window even without retrieval; refusing rather than dropping safety instructions",
-        requestCorrelationId,
-        next_action: "await_human_review",
-      };
-    }
-    const fittedSources =
-      budgetCheck.knowledgeTexts.length === knowledge.sources.length
-        ? knowledge.sources
-        : knowledge.sources.slice(0, budgetCheck.knowledgeTexts.length);
-    // `warnings` is declared below at validation (6b); collect here and merge
-    // there so no use-before-declaration occurs.
-    const contextBudgetWarnings: string[] = budgetCheck.truncated
-      ? [
-          `Input context truncated to fit the model context budget (${budgetCheck.estimatedTokens} est. tokens); the model did not see the full retrieval/conversation set.`,
-        ]
-      : [];
+    const fittedSources = [...fit.fittedSources];
+    // F07: dropped identities feed supplied-vs-retrieved provenance below.
+    const droppedSourceKeys = [...fit.droppedSourceKeys];
+    const droppedSourceNames = [...fit.droppedSourceNames];
+    const conversationShortened = fit.conversationShortened;
+    const promptTokens = fit.promptTokens;
     const userMsg = buildReplyUserMessage({
       message,
       knowledgeSources: fittedSources,
@@ -1406,9 +1463,72 @@ export class EmailReplyDraftGenerationService {
       goal: input.goal,
       extraInstructions: input.extraInstructions,
       knowledgeAbstained: knowledge.abstained,
-      conversationSection: budgetCheck.conversationText,
+      conversationSection: fit.fittedConversation,
     });
-    void contextBudgetWarnings;
+    if (promptTokens > promptBudget) {
+      // Even the fixed content (system + original + goal/tone) exceeds the
+      // model's window: refuse with a typed correlated audit rather than a
+      // context-stripped prompt. A human must shorten/split the input.
+      await this.releaseReservationSafely();
+      const oversizedCode = "needs_human_review" as const;
+      const oversizedReason =
+        `[${oversizedCode}] Input too large for the model's context window ` +
+        `(${promptTokens} est. tokens vs ${promptBudget} budget at ` +
+        `${contextWindowTokens} window − ${maxOutputTokens} reserved output); ` +
+        `refusing rather than dropping safety instructions`;
+      try {
+        await this.recordFailure(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          oversizedReason,
+          { stage: "generation", code: oversizedCode }
+        );
+      } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "generation" });
+        const auditErrMsg =
+          auditError instanceof Error
+            ? auditError.message
+            : String(auditError);
+        return {
+          success: false,
+          error: `Oversized-input refusal audit persistence failed: ${auditErrMsg}`,
+          requestCorrelationId,
+        };
+      }
+      return {
+        success: false,
+        error: oversizedReason,
+        requestCorrelationId,
+        code: oversizedCode,
+        next_action: nextActionForCode(oversizedCode),
+      };
+    }
+    // `warnings` is declared below at validation (6b); collect here and merge
+    // there so no use-before-declaration occurs.
+    const truncatedInput =
+      droppedSourceKeys.length > 0 || conversationShortened;
+    if (truncatedInput) {
+      incrementReplyMetric("truncation_detected", {
+        source: "input_context_fit",
+      });
+    }
+    const contextBudgetWarnings: string[] = truncatedInput
+      ? [
+          `Input context truncated to the model's ${contextWindowTokens}-token window ` +
+            `(output reserved ${maxOutputTokens}): supplied ` +
+            `${fittedSources.length}/${knowledge.sources.length} retrieved sources` +
+            (droppedSourceNames.length > 0
+              ? ` (omitted: ${droppedSourceNames.join("; ")}${
+                  droppedSourceKeys.length > droppedSourceNames.length
+                    ? ` and ${droppedSourceKeys.length - droppedSourceNames.length} more`
+                    : ""
+                })`
+              : "") +
+            (conversationShortened ? "; conversation history shortened" : "") +
+            `. The model did not see the omitted context.`,
+        ]
+      : [];
 
     // 6. Call the LLM and STRICTLY validate (FR-011/FR-027): at most one
     //    bounded regeneration carrying only validation codes; a second failure
@@ -1764,7 +1884,17 @@ export class EmailReplyDraftGenerationService {
     draft.requiresHumanReview = requiresHumanReview ? 1 : 0;
     draft.reviewReasonsJson = reviewReasonsJson;
     draft.unresolvedQuestionsJson = unresolvedQuestionsJson;
-    draft.knowledgeSourcesJson = JSON.stringify(knowledge.audits);
+    // F07: persist retrieval diagnostics WITH supplied-vs-retrieved
+    // separation (see markSuppliedKnowledgeAudits): only chunks present in
+    // the fitted prompt are marked supplied.
+    const suppliedSourceKeys = new Set(
+      fittedSources.map((s) => `${s.documentId}:${s.chunkId}`)
+    );
+    const suppliedKnowledgeAudits = markSuppliedKnowledgeAudits(
+      knowledge.audits,
+      suppliedSourceKeys
+    );
+    draft.knowledgeSourcesJson = JSON.stringify(suppliedKnowledgeAudits);
     draft.ownerStyleProfileJson = profile
       ? JSON.stringify({
           ownerName: profile.ownerName,
@@ -1967,7 +2097,7 @@ export class EmailReplyDraftGenerationService {
       classification: authoritativeClassification,
       confidence: authoritativeConfidence,
       knowledgeQuery: knowledge.query,
-      knowledgeAudits: knowledge.audits,
+      knowledgeAudits: suppliedKnowledgeAudits,
       generatedSubject: subject,
       generatedBodyPreview: bodyText.slice(0, 400),
       warnings,
@@ -1981,7 +2111,10 @@ export class EmailReplyDraftGenerationService {
       bodyText,
       bodyHtml: null,
       classification: authoritativeClassification,
-      knowledgeSources: [...knowledge.sources],
+      // F07: return exactly the supplied context — never a dropped source
+      // presented as grounding. Retrieval diagnostics (including dropped
+      // chunks) live in the persisted audits, not here.
+      knowledgeSources: [...fittedSources],
       confidence: authoritativeConfidence,
       warnings,
       // R21: surface the persisted review signals so the caller sees the same
@@ -2136,6 +2269,54 @@ export class EmailReplyDraftGenerationService {
     this.resolvedMaxTokensForModelId = this.lastReturnedModelId;
     incrementReplyMetric("capability_resolution", { source });
     return this.resolvedMaxTokens;
+  }
+
+  /**
+   * F06/FR-027: the context window of the model actually in use
+   * ({@link lastReturnedModelId}), for input budgeting. Memoized per model
+   * id like the output cap. Unknown models (resolver undefined/unusable,
+   * or a rejecting resolver) fall back to the conservative
+   * {@link FALLBACK_CONTEXT_WINDOW_TOKENS} bound — never unlimited, never
+   * 0. Emits `context_window_resolution{source}` (distinct from the output
+   * capability metric). Deadline expiry propagates as a transport failure.
+   */
+  private async effectiveContextWindowTokens(): Promise<number> {
+    const { FALLBACK_CONTEXT_WINDOW_TOKENS } = await import(
+      "@/service/emailReply/EmailReplyContextBudget"
+    );
+    if (
+      this.resolvedContextWindow !== null &&
+      this.resolvedContextWindowForModelId === this.lastReturnedModelId
+    ) {
+      return this.resolvedContextWindow;
+    }
+    let windowTokens: number | undefined;
+    let source: "provider" | "unknown" | "error";
+    try {
+      windowTokens = await this.raceWithDeadline(
+        "context_window_resolution",
+        this.resolveModelContextWindow(this.lastReturnedModelId)
+      );
+      source =
+        windowTokens === undefined ||
+        !Number.isFinite(windowTokens) ||
+        windowTokens <= 0
+          ? "unknown"
+          : "provider";
+    } catch (error) {
+      if (error instanceof LlmTransportError && error.deadlineExceeded) {
+        throw error;
+      }
+      windowTokens = undefined;
+      source = "error";
+    }
+    this.resolvedContextWindow =
+      source === "provider" && windowTokens !== undefined
+        ? Math.floor(windowTokens)
+        : FALLBACK_CONTEXT_WINDOW_TOKENS;
+    this.resolvedContextWindowForModelId = this.lastReturnedModelId;
+    incrementReplyMetric("context_window_resolution", { source });
+    return this.resolvedContextWindow;
   }
 
   /**
@@ -2928,6 +3109,27 @@ export function decodeStoredWarnings(
     return [];
   }
   return parsed.filter((w): w is string => typeof w === "string");
+}
+
+/**
+ * F07: mark which retrieval audits were actually supplied to the model
+ * prompt. Pure (no I/O): every audit whose documentId:chunkId is in the
+ * fitted key set marks `suppliedToPrompt: true`; all others mark false
+ * while KEEPING their retrieval diagnostics (query/score/citation) so
+ * dropped context stays inspectable but is never presented as grounding.
+ * With no drops the fitted set equals retrieval and every audit marks
+ * supplied — no special case needed. Exported for unit testing.
+ */
+export function markSuppliedKnowledgeAudits(
+  audits: readonly EmailReplyKnowledgeSourceAudit[],
+  suppliedKeys: ReadonlySet<string>
+): EmailReplyKnowledgeSourceAudit[] {
+  return audits.map((audit) => ({
+    ...audit,
+    suppliedToPrompt: suppliedKeys.has(
+      `${audit.documentId}:${audit.chunkId}`
+    ),
+  }));
 }
 
 /**

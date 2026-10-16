@@ -10,6 +10,7 @@ import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSync
 import {
   EmailReplyDraftGenerationService,
   createModelOutputCapResolver,
+  createModelContextResolver,
 } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
@@ -363,6 +364,7 @@ export async function createEmailReplyDraft(
     const input = createEmailReplyDraftSchema.parse(args);
     const genService = new EmailReplyDraftGenerationService({
       resolveModelOutputCap: createModelOutputCapResolver(),
+      resolveModelContextWindow: createModelContextResolver(),
     });
     const result = await genService.createDraft({
       messageId: input.message_id,

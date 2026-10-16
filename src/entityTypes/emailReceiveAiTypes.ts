@@ -197,6 +197,13 @@ export interface EmailReplyKnowledgeSource {
  * Stored in {@code EmailReplyDraft.knowledgeSourcesJson} and
  * {@code EmailAutoReplyAuditLog.knowledgeSourcesJson}. No full body content —
  * the snippet is trimmed for audit, the body is never put in the email.
+ *
+ * F07: `suppliedToPrompt` separates RETRIEVED candidates from SUPPLIED
+ * context — true only for chunks actually present in the model prompt after
+ * input-context fitting. A dropped chunk keeps its retrieval diagnostics
+ * here (query/score/citation) but must never be presented as grounding the
+ * draft. Absent (legacy rows) means unknown — consumers must not assume
+ * supplied.
  */
 export interface EmailReplyKnowledgeSourceAudit {
   readonly toolName: "knowledge_library_search";
@@ -207,6 +214,7 @@ export interface EmailReplyKnowledgeSourceAudit {
   readonly documentTitle?: string;
   readonly citation?: string;
   readonly score?: number;
+  readonly suppliedToPrompt?: boolean;
 }
 
 /** Result of {@code create_email_reply_draft}. No source names in the body. */

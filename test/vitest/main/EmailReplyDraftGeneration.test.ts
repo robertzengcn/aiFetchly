@@ -5565,3 +5565,95 @@ describe("G01 invocation-deadline bounding of pre-model stages", () => {
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 20_000);
 });
+
+// ---------------------------------------------------------------------------
+// F06/FR-027 — the input budget follows the SELECTED model's context window
+// (minus reserved output and margin) over the EXACT rendered prompt. The
+// same fixed input is refused for a small-window model and accepted for a
+// large-window one; the refusal carries a typed correlated audit.
+// ---------------------------------------------------------------------------
+describe("F06 model-aware input budgeting", () => {
+  async function seedBudgetMessage(): Promise<number> {
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-ctx-${Math.random()}`;
+    msg.messageId = `<m-ctx-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("a small-window model refuses fixed input with a typed correlated audit and zero model calls", async () => {
+    const messageId = await seedBudgetMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelContextWindow: async () => 1_200,
+    });
+    drainCountersForTest();
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    // Refused (not thrown): fixed content exceeds window − output − margin.
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("needs_human_review");
+    expect(result.next_action).toBe("await_human_review");
+    // Refused BEFORE any model call — the budget gate precedes the LLM.
+    expect(requests).toHaveLength(0);
+    const draftModule = new EmailReplyDraftModule();
+    expect(await draftModule.listByMessage(messageId)).toHaveLength(0);
+    // Exactly ONE correlated refusal audit (stage generation, typed code).
+    const auditModule = new EmailReplyAuditLogModule();
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const refusals = records.filter((r) => r.action === "reply_skipped");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.reason).toContain("[needs_human_review]");
+    const meta = JSON.parse(refusals[0]?.metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.stage).toBe("generation");
+    expect(meta.code).toBe("needs_human_review");
+  });
+
+  it("the same fixed input proceeds for a large-window model", async () => {
+    const messageId = await seedBudgetMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = buildService({
+      apiFactory: factory,
+      resolveModelContextWindow: async () => 128_000,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    expect(requests.length).toBeGreaterThanOrEqual(1);
+  });
+});

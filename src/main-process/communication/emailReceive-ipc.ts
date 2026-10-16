@@ -53,6 +53,7 @@ import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSync
 import {
   EmailReplyDraftGenerationService,
   createModelOutputCapResolver,
+  createModelContextResolver,
 } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
@@ -352,6 +353,7 @@ export function registerEmailReceiveIpcHandlers(): void {
       }
       const genService = new EmailReplyDraftGenerationService({
         resolveModelOutputCap: createModelOutputCapResolver(),
+        resolveModelContextWindow: createModelContextResolver(),
       });
       const result = await genService.createDraft(input);
       if (!result.success) {
