@@ -170,10 +170,16 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     };
 
     processor.processEvent(streamEvent);
-    // The handler defers to an async IIFE; let it resolve.
-    await vi.waitFor(() => {
-      expect(savedMessages.length).toBeGreaterThanOrEqual(1);
-    });
+    // The handler defers to an async IIFE; let it resolve. Timeout is
+    // generous on purpose (T01): under a full parallel-suite run, cold
+    // TypeORM synchronize + FS externalization can stall the polling loop
+    // past the 1s default. The asserted predicate is unchanged.
+    await vi.waitFor(
+      () => {
+        expect(savedMessages.length).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 10_000 }
+    );
 
     // 1. The persisted message content is a ToolResultReceipt (NOT the raw
     //    `rows` body). The receipt carries outputs[] with the artifact ref.
