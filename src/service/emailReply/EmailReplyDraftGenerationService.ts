@@ -71,6 +71,7 @@ import {
   MODEL_CALL_CAP_MS,
   REPLY_MAX_TOKENS_DEFAULT,
   GENERATION_INVOCATION_BUDGET_MS,
+  TERMINAL_AUDIT_BUDGET_MS,
   CLASSIFIER_MAX_TOKENS,
   MODEL_NAME_MAX_CHARS,
   clampReplyMaxTokens,
@@ -212,6 +213,21 @@ export class LlmTransportError extends Error {
     this.unsupportedResponseFormat =
       options?.unsupportedResponseFormat ?? false;
     this.deadlineExceeded = options?.deadlineExceeded ?? false;
+  }
+}
+
+/**
+ * R03: the terminal audit/cleanup bound lapsed. Distinct from both
+ * {@link LlmTransportError} (invocation deadline — the ORIGINAL failure the
+ * terminal owner is already handling) and raw persistence errors (which
+ * propagate fail-stop). Lets the terminal owner distinguish "audit could
+ * not finish in its bound, return the original outcome" from "audit
+ * persistence failed, stop the work".
+ */
+export class TerminalAuditTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TerminalAuditTimeoutError";
   }
 }
 
@@ -1084,8 +1100,8 @@ export class EmailReplyDraftGenerationService {
   }
 
   /**
-   * F05 — the single bounded terminal owner for invocation-deadline failure.
-   * Releases the reservation (no-op when none is held), records the
+   * F05/R03 — the single bounded terminal owner for invocation-deadline
+   * failure. Releases the reservation (no-op when none is held), records the
    * `generation_outcome{deadline_exceeded}` rollup, and returns the
    * structured provider_error outcome (typed `code` slot stays absent —
    * provider_error is not an EmailReplyPolicyCode — with `discard_and_retry`
@@ -1095,12 +1111,13 @@ export class EmailReplyDraftGenerationService {
    * attempted this invocation (`auditMutationAttempted` — e.g. the failing
    * inner path's own recordFailure), no second audit is attempted, so a
    * detached loser cannot double-commit a refusal row. Otherwise ONE
-   * terminal refusal audit is attempted through the (possibly already
-   * expired) deadline race. An audit that fails with a persistence error
+   * terminal refusal audit is attempted through a DEDICATED short race
+   * ({@link TERMINAL_AUDIT_BUDGET_MS}), not the exhausted invocation
+   * deadline — an expired invocation budget must not silently cancel the
+   * mandatory refusal event. An audit that fails with a persistence error
    * propagates (fail-stop, B10 — distinguishable from the timeout); an
-   * audit that cannot run inside the expired budget is skipped and the
-   * original timeout outcome is still returned (never a new throw, never
-   * a re-audit).
+   * audit that cannot finish inside the terminal bound still returns the
+   * original timeout outcome (never a new throw, never a re-audit).
    */
   private async returnDeadlineExceededOutcome(
     message: { emailServiceId: number; id: number } | null | undefined,
@@ -1121,20 +1138,19 @@ export class EmailReplyDraftGenerationService {
       return outcome;
     }
     try {
-      await this.recordFailure(
-        message.emailServiceId,
-        message.id,
-        requestCorrelationId,
-        `[provider_error] ${originalError.message}`,
-        { stage: "generation", code: "provider_error" }
+      await this.raceTerminalAudit("terminal_refusal", () =>
+        this.recordFailureDirect(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          `[provider_error] ${originalError.message}`,
+          { stage: "generation", code: "provider_error" }
+        )
       );
     } catch (auditError) {
-      if (
-        auditError instanceof LlmTransportError &&
-        auditError.deadlineExceeded
-      ) {
-        // The terminal audit itself could not run inside the expired
-        // budget: the original timeout stands; no second audit attempted.
+      if (auditError instanceof TerminalAuditTimeoutError) {
+        // The terminal audit could not finish inside its bound: the
+        // original timeout stands; no second audit attempted.
         return outcome;
       }
       // Persistence failure stops the work (B10) — propagated, not masked
@@ -1142,6 +1158,38 @@ export class EmailReplyDraftGenerationService {
       throw auditError;
     }
     return outcome;
+  }
+
+  /**
+   * R03: race a terminal audit/cleanup write against a short DEDICATED
+   * bound ({@link TERMINAL_AUDIT_BUDGET_MS}), independent of the (possibly
+   * exhausted) invocation deadline. The factory starts only inside this
+   * race; on timeout the loser is detached with its rejection swallowed.
+   * Throws {@link TerminalAuditTimeoutError} when the bound lapses (the
+   * caller returns the original outcome) and propagates genuine write
+   * failures untouched.
+   */
+  private async raceTerminalAudit<T>(
+    stage: string,
+    workFactory: () => Promise<T>
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new TerminalAuditTimeoutError(
+            `Terminal ${stage} exceeded its ${TERMINAL_AUDIT_BUDGET_MS}ms bound.`
+          )
+        );
+      }, TERMINAL_AUDIT_BUDGET_MS);
+    });
+    const started = workFactory();
+    started.catch(() => undefined);
+    try {
+      return await Promise.race([started, timeout]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 
   /**
@@ -2981,6 +3029,43 @@ export class EmailReplyDraftGenerationService {
     reason: string,
     metadata?: { readonly stage: string; readonly code: string }
   ): Promise<void> {
+    // G01/FR-035: bound the refusal-audit writes against the invocation
+    // deadline. Expiry throws LlmTransportError (a transport failure, NOT a
+    // validation strike) — still a failure outcome with no draft persisted,
+    // preserving the fail-stop contract (an unrecorded refusal never reports
+    // success). F05/R03: LAZY factory — an already-expired deadline rejects
+    // before the mutation starts. The attempt flag is set INSIDE the factory
+    // (first statement): only a STARTED mutation counts, so the terminal
+    // timeout owner can distinguish "audit attempted, do not re-audit" from
+    // "audit never started, terminal attempt is safe".
+    await this.raceWithDeadline("failure_audit", async () => {
+      this.auditMutationAttempted = true;
+      await this.recordFailureDirect(
+        emailServiceId,
+        messageId,
+        requestCorrelationId,
+        reason,
+        metadata
+      );
+    });
+  }
+
+  /**
+   * R03: the raw refusal-audit writes without any deadline race. Used ONLY
+   * through {@link raceWithDeadline} (normal paths) or
+   * {@link raceTerminalAudit} (terminal timeout owner). Raw persistence
+   * failures propagate untouched so callers can distinguish them from
+   * timeouts.
+   */
+  private async recordFailureDirect(
+    emailServiceId: number,
+    messageId: number,
+    requestCorrelationId: string,
+    reason: string,
+    metadata?: { readonly stage: string; readonly code: string }
+  ): Promise<void> {
+    // R03: a direct audit mutation counts as attempted (see recordFailure).
+    this.auditMutationAttempted = true;
     const log = new EmailReplyAuditLogEntity();
     log.emailServiceId = emailServiceId;
     log.messageId = messageId;
@@ -2992,18 +3077,8 @@ export class EmailReplyDraftGenerationService {
       messageCorrelationId: correlationIdForMessage(messageId),
       ...(metadata ?? {}),
     });
-    // G01/FR-035: bound the refusal-audit writes against the invocation
-    // deadline. Expiry throws LlmTransportError (a transport failure, NOT a
-    // validation strike) — still a failure outcome with no draft persisted,
-    // preserving the fail-stop contract (an unrecorded refusal never reports
-    // success). F05: LAZY factory — an already-expired deadline rejects
-    // before the mutation starts, and the attempt is recorded so the
-    // terminal timeout owner never re-audits.
-    this.auditMutationAttempted = true;
-    await this.raceWithDeadline("failure_audit", async () => {
-      await this.replyAuditModuleForNow().create(log);
-      await this.mirrorToAutoReplyAudit(log);
-    });
+    await this.replyAuditModuleForNow().create(log);
+    await this.mirrorToAutoReplyAudit(log);
   }
 
   /**
@@ -3067,10 +3142,10 @@ export class EmailReplyDraftGenerationService {
       ruleId: decision.ruleId,
     });
     // G01/FR-035: bound the refusal-audit writes against the invocation
-    // deadline (same fail-stop contract as recordFailure). F05: lazy
-    // factory + attempt recorded (see recordFailure).
-    this.auditMutationAttempted = true;
+    // deadline (same fail-stop contract as recordFailure). F05/R03: lazy
+    // factory with the attempt recorded inside (see recordFailure).
     await this.raceWithDeadline("refusal_audit", async () => {
+      this.auditMutationAttempted = true;
       await this.replyAuditModuleForNow().create(log);
       await this.mirrorToAutoReplyAudit(log);
     });
@@ -3131,13 +3206,12 @@ export class EmailReplyDraftGenerationService {
       knowledgeAuditCount,
     });
     // G01/FR-035: bound the reuse-audit write against the invocation deadline
-    // (same fail-stop contract as recordFailure). F05: lazy factory +
-    // attempt recorded (see recordFailure).
-    this.auditMutationAttempted = true;
-    await this.raceWithDeadline(
-      "reuse_audit",
-      () => this.replyAuditModuleForNow().create(log)
-    );
+    // (same fail-stop contract as recordFailure). F05/R03: lazy factory
+    // with the attempt recorded inside (see recordFailure).
+    await this.raceWithDeadline("reuse_audit", async () => {
+      this.auditMutationAttempted = true;
+      await this.replyAuditModuleForNow().create(log);
+    });
   }
 }
 
