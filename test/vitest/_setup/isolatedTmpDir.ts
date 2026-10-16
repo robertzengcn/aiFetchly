@@ -94,3 +94,14 @@ function setupIsolatedTmpDir(): void {
 }
 
 setupIsolatedTmpDir();
+
+// F08: production readiness defaults to `pending` (no validation has
+// succeeded in a fresh process). Isolated unit/integration fixtures never
+// run the production startup path, so explicitly mark this worker's
+// readiness `passed` here — suites that exercise pending/failed
+// transitions (readiness, rollback, upgrade-validation) set their state
+// per-test after this. The readiness module is pure (no DB/Electron),
+// so a static import has no side effects.
+import { setUpgradeValidationStateForTests } from "@/service/emailReply/EmailReplyReadiness";
+
+setUpgradeValidationStateForTests("passed");

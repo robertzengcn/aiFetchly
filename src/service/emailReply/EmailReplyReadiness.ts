@@ -24,12 +24,15 @@ import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 
 export type UpgradeValidationState = "pending" | "passed" | "failed";
 
-// Default `passed` so isolated unit/integration tests (which never run the
-// production startup path) see the pre-existing open behavior. Production
-// `background.ts` sets `pending` synchronously at startup before launching
-// the async validation, so real guarded work is held until validation
-// succeeds. New N08 regression tests set pending/failed explicitly.
-let validationState: UpgradeValidationState = "passed";
+// F08: default `pending` — no validation has succeeded in a fresh process,
+// so new guarded work is held until validation passes (or an explicit
+// authorized policy path opens admission). Production `background.ts`
+// re-asserts pending synchronously at startup before launching the async
+// validation. Isolated unit/integration fixtures explicitly mark `passed`
+// in the shared vitest setup file (`test/vitest/_setup/isolatedTmpDir.ts`)
+// because they never run the production startup path; suites that exercise
+// pending/failed transitions set them per-test.
+let validationState: UpgradeValidationState = "pending";
 
 export function markUpgradeValidationPending(): void {
   validationState = "pending";

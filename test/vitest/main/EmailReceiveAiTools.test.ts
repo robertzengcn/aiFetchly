@@ -43,6 +43,8 @@ vi.mock("@/service/emailReply/EmailReplyDraftGenerationService", () => ({
   // constructor returns a stub that never invokes it, so a no-op stub keeps
   // the module shape consistent without exercising the real resolver.
   createModelOutputCapResolver: () => async () => undefined,
+  // F06/FR-027: same shape-keeping stub for the context-window resolver.
+  createModelContextResolver: () => async () => undefined,
 }));
 vi.mock("@/service/emailReply/EmailReplyDeliveryService", () => ({
   EmailReplyDeliveryService: function () {
