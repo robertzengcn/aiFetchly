@@ -67,7 +67,17 @@
             <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.knowledge_query") }}</div>
             <div class="text-body-2">{{ audit.knowledgeQuery || "—" }}</div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.knowledge_source_count") }}</div>
-            <div>{{ audit.knowledgeSourceCount }}</div>
+            <div data-testid="audit-detail-knowledge-sources">
+              <template v-if="audit.retrievedKnowledgeSourceCount > audit.knowledgeSourceCount">
+                {{
+                  t("emailAutoReplyAudit.knowledge_sources_supplied", {
+                    supplied: audit.knowledgeSourceCount,
+                    retrieved: audit.retrievedKnowledgeSourceCount,
+                  })
+                }}
+              </template>
+              <template v-else>{{ audit.knowledgeSourceCount }}</template>
+            </div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.created_at") }}</div>
             <div>{{ formatDate(audit.createdAt) }}</div>
           </v-card>

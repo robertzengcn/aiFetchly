@@ -1218,6 +1218,7 @@ export default {
     recheck_failed: "回复检查失败，请重试。",
     knowledge_query: "知识检索",
     knowledge_source_count: "知识来源数",
+    knowledge_sources_supplied: "{retrieved} 个来源中 {supplied} 个用作依据",
     generated_subject: "生成的主题",
     generated_body_preview: "生成的正文预览",
     sent_subject: "已发送主题",

@@ -1268,6 +1268,7 @@ export default {
     recheck_failed: "La comprobación de respuesta falló. Inténtalo de nuevo.",
     knowledge_query: "Consulta de Conocimiento",
     knowledge_source_count: "Fuentes",
+    knowledge_sources_supplied: "{supplied} de {retrieved} usadas como fundamento",
     generated_subject: "Asunto Generado",
     generated_body_preview: "Vista previa generada",
     sent_subject: "Asunto Enviado",

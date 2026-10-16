@@ -2002,6 +2002,23 @@ export class EmailReplyDraftGenerationService {
       knowledgeAbstained: knowledge.abstained,
       knowledgeOutcome: knowledge.relevance?.outcome ?? null,
       conversationContext: contextMeta,
+      // R06/F07: durable input-fitting provenance. `conversationContext`
+      // above describes the PRE-fit conversation build; this block records
+      // what the model prompt ACTUALLY contained (supplied source ids,
+      // dropped source ids, whether conversation was shortened, and the
+      // estimated prompt total vs budget + window/output reservation).
+      // Bounded ids only — no content, no bodies.
+      contextFit: {
+        suppliedSourceIds: fittedSources.map(
+          (s) => `${s.documentId}:${s.chunkId}`
+        ),
+        droppedSourceIds: droppedSourceKeys,
+        conversationShortened,
+        promptTokensEstimate: promptTokens,
+        promptBudgetTokens: promptBudget,
+        contextWindowTokens,
+        reservedOutputTokens: maxOutputTokens,
+      },
       // R21: the optional model review signals, persisted alongside the draft
       // columns so a model-flagged draft is visible from metadata alone. No
       // prompts, no bodies, no raw model output — bounded metadata only.
@@ -2751,12 +2768,16 @@ export class EmailReplyDraftGenerationService {
       log.classification = args.classification;
       log.confidence = args.confidence;
       log.knowledgeQuery = args.knowledgeQuery || null;
+      // R06: preserve supplied/omitted status through audit serialization —
+      // dropped candidates keep their diagnostics but must never read as
+      // supplied grounding in this UI-facing surface.
       log.knowledgeSourcesJson = JSON.stringify(
         args.knowledgeAudits.map((a) => ({
           toolName: a.toolName,
           chunkId: a.chunkId,
           documentId: a.documentId,
           documentName: a.documentName,
+          suppliedToPrompt: a.suppliedToPrompt ?? null,
         }))
       );
       log.generatedSubject = args.generatedSubject;

@@ -5656,6 +5656,36 @@ describe("F06 model-aware input budgeting", () => {
     });
     expect(result.success).toBe(true);
     expect(requests.length).toBeGreaterThanOrEqual(1);
+    // R06: the persisted revision metadata carries the durable input-fit
+    // provenance (what the prompt ACTUALLY contained), not just the pre-fit
+    // conversation build. No sources here → empty supplied/dropped lists
+    // plus the estimated prompt total against the budget and window.
+    if (result.success) {
+      const revisionModule = new EmailReplyDraftRevisionModule();
+      const revision = await revisionModule.readCurrent(result.draftId);
+      expect(revision).not.toBeNull();
+      const meta = JSON.parse(
+        revision?.generationMetadataJson ?? "null"
+      ) as unknown as {
+        contextFit: {
+          suppliedSourceIds: string[];
+          droppedSourceIds: string[];
+          conversationShortened: boolean;
+          promptTokensEstimate: number;
+          promptBudgetTokens: number;
+          contextWindowTokens: number;
+          reservedOutputTokens: number;
+        };
+      };
+      expect(meta.contextFit.suppliedSourceIds).toEqual([]);
+      expect(meta.contextFit.droppedSourceIds).toEqual([]);
+      expect(meta.contextFit.conversationShortened).toBe(false);
+      expect(meta.contextFit.promptTokensEstimate).toBeGreaterThan(0);
+      expect(meta.contextFit.promptTokensEstimate).toBeLessThanOrEqual(
+        meta.contextFit.promptBudgetTokens
+      );
+      expect(meta.contextFit.contextWindowTokens).toBe(128_000);
+    }
   });
 });
 

@@ -767,7 +767,11 @@ function toIdentityProfileDto(
   };
 }
 
-function toAutoReplyAuditDto(e: {
+/**
+ * R06: exported pure DTO mapper (no IPC/DB) so supplied-vs-retrieved
+ * counting is unit-testable at the boundary the UI reads.
+ */
+export function toAutoReplyAuditDto(e: {
   id: number;
   emailServiceId: number;
   messageId: number;
@@ -790,14 +794,29 @@ function toAutoReplyAuditDto(e: {
   metadataJson?: string | null;
   createdAt?: Date | null;
 }): AutoReplyAuditDto {
+  // R06: supplied vs retrieved grounding. Entries explicitly marked
+  // `suppliedToPrompt: false` were retrieved but omitted from the prompt
+  // (input fitting); entries without the flag are legacy rows that predate
+  // supplied tracking and count as supplied (their surfaces always
+  // presented everything retrieved). Malformed JSON counts zero of zero.
   let knowledgeSourceCount = 0;
+  let retrievedKnowledgeSourceCount = 0;
   try {
-    const parsed = e.knowledgeSourcesJson
+    const parsed: unknown = e.knowledgeSourcesJson
       ? JSON.parse(e.knowledgeSourcesJson)
       : [];
-    if (Array.isArray(parsed)) knowledgeSourceCount = parsed.length;
+    if (Array.isArray(parsed)) {
+      retrievedKnowledgeSourceCount = parsed.length;
+      knowledgeSourceCount = (parsed as Array<Record<string, unknown>>).filter(
+        (entry) =>
+          typeof entry !== "object" ||
+          entry === null ||
+          (entry as Record<string, unknown>).suppliedToPrompt !== false
+      ).length;
+    }
   } catch {
     knowledgeSourceCount = 0;
+    retrievedKnowledgeSourceCount = 0;
   }
   // T10 (FR-033): extract the typed stage/code from the row's structured
   // metadataJson (proper JSON fields written by the services). This is
@@ -836,6 +855,7 @@ function toAutoReplyAuditDto(e: {
     reason: e.reason,
     knowledgeQuery: e.knowledgeQuery,
     knowledgeSourceCount,
+    retrievedKnowledgeSourceCount,
     generatedSubject: e.generatedSubject,
     generatedBodyPreview: e.generatedBodyPreview,
     sentSubject: e.sentSubject,

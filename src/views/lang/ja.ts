@@ -1246,6 +1246,7 @@ export default {
     recheck_failed: "返信チェックに失敗しました。もう一度お試しください。",
     knowledge_query: "ナレッジ検索",
     knowledge_source_count: "ソース数",
+    knowledge_sources_supplied: "{retrieved} 件中 {supplied} 件を根拠として使用",
     generated_subject: "生成された件名",
     generated_body_preview: "生成プレビュー",
     sent_subject: "送信件名",

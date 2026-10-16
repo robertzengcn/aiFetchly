@@ -40,6 +40,8 @@ const i18n = createI18n({
         recheck_failed: "Reply check failed. Please try again.",
         knowledge_query: "Knowledge Query",
         knowledge_source_count: "Knowledge Sources",
+        knowledge_sources_supplied:
+          "{supplied} of {retrieved} supplied as grounding",
         created_at: "Date",
         generated_subject: "Generated Subject",
         generated_body_preview: "Generated Body Preview",
@@ -91,6 +93,7 @@ function auditFixture(
     reason: "[ambiguous_match] Reply detection was inconclusive",
     knowledgeQuery: null,
     knowledgeSourceCount: 0,
+    retrievedKnowledgeSourceCount: 0,
     generatedSubject: null,
     generatedBodyPreview: null,
     sentSubject: null,
@@ -295,6 +298,41 @@ describe("AuditDetail — typed evidence + diagnostic recheck (T10)", () => {
 
     const error = wrapper.find('[data-testid="audit-detail-recheck-error"]');
     expect(error.text()).toContain("Reply check failed. Please try again.");
+  });
+
+  it("shows supplied-of-retrieved grounding when fitting omitted sources (R06)", async () => {
+    // R06: with 2 of 5 supplied the count must read as supplied grounding,
+    // never as a plain "5 sources" total.
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({
+        knowledgeSourceCount: 2,
+        retrievedKnowledgeSourceCount: 5,
+      })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    const sources = wrapper.find(
+      '[data-testid="audit-detail-knowledge-sources"]'
+    );
+    expect(sources.exists()).toBe(true);
+    expect(sources.text()).toContain("2 of 5 supplied as grounding");
+  });
+
+  it("shows a plain count when nothing was omitted (R06)", async () => {
+    vi.mocked(getAutoReplyAuditLog).mockResolvedValue(
+      auditFixture({
+        knowledgeSourceCount: 3,
+        retrievedKnowledgeSourceCount: 3,
+      })
+    );
+    const wrapper = mountDetail();
+    await flushPromises();
+    const sources = wrapper.find(
+      '[data-testid="audit-detail-knowledge-sources"]'
+    );
+    expect(sources.exists()).toBe(true);
+    expect(sources.text()).not.toContain("supplied as grounding");
+    expect(sources.text()).toContain("3");
   });
 
   it("clears a previous error when a subsequent recheck succeeds", async () => {

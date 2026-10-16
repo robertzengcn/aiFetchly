@@ -65,6 +65,7 @@ function auditRow(overrides: Partial<AutoReplyAuditDto> = {}): AutoReplyAuditDto
     reason: "[ambiguous_match] Reply detection was inconclusive",
     knowledgeQuery: null,
     knowledgeSourceCount: 0,
+    retrievedKnowledgeSourceCount: 0,
     generatedSubject: null,
     generatedBodyPreview: null,
     sentSubject: null,

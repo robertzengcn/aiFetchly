@@ -115,7 +115,18 @@ export interface AutoReplyAuditDto {
   confidence: number | null;
   reason: string | null;
   knowledgeQuery: string | null;
+  /**
+   * R06: count of sources ACTUALLY SUPPLIED to the model prompt (entries
+   * marked supplied). Legacy rows without the flag count as supplied
+   * (pre-F07 surfaces presented everything retrieved).
+   */
   knowledgeSourceCount: number;
+  /**
+   * R06: total retrieved candidates including omitted ones. Equals
+   * `knowledgeSourceCount` when nothing was dropped; larger when input
+   * fitting omitted context (the UI shows "supplied of retrieved").
+   */
+  retrievedKnowledgeSourceCount: number;
   generatedSubject: string | null;
   generatedBodyPreview: string | null;
   sentSubject: string | null;

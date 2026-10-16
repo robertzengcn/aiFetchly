@@ -1257,6 +1257,7 @@ export default {
     recheck_failed: "La vérification de réponse a échoué. Veuillez réessayer.",
     knowledge_query: "Requête de Connaissance",
     knowledge_source_count: "Sources",
+    knowledge_sources_supplied: "{supplied} sur {retrieved} utilisées comme fondement",
     generated_subject: "Sujet Généré",
     generated_body_preview: "Aperçu Généré",
     sent_subject: "Sujet Envoyé",

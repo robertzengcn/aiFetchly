@@ -1277,6 +1277,7 @@ export default {
     recheck_failed: "Reply check failed. Please try again.",
     knowledge_query: "Knowledge Query",
     knowledge_source_count: "Knowledge Sources",
+    knowledge_sources_supplied: "{supplied} of {retrieved} supplied as grounding",
     generated_subject: "Generated Subject",
     generated_body_preview: "Generated Body Preview",
     sent_subject: "Sent Subject",

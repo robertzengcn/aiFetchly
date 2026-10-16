@@ -1265,6 +1265,7 @@ export default {
     recheck_failed: "Antwortprüfung fehlgeschlagen. Bitte erneut versuchen.",
     knowledge_query: "Wissensabfrage",
     knowledge_source_count: "Quellen",
+    knowledge_sources_supplied: "{supplied} von {retrieved} als Grundlage verwendet",
     generated_subject: "Generierter Betreff",
     generated_body_preview: "Generierte Vorschau",
     sent_subject: "Gesendeter Betreff",
