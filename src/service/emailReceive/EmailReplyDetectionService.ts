@@ -142,6 +142,16 @@ export interface ReplyDetectionMessagePort {
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean>;
+  /**
+   * F03: void a negative write that completed after its probe expired.
+   * Required on every port — a store that cannot void cannot safely serve
+   * expired probes, so the detector treats a missing implementation as a
+   * port error (fail-closed), never as a persisted negative.
+   */
+  voidExpiredNegativeWrite(input: {
+    id: number;
+    observedAt: Date;
+  }): Promise<boolean>;
 }
 
 /** Draft lifecycle reads (cluster inspection) the detector needs. */
@@ -1394,20 +1404,42 @@ export class EmailReplyDetectionService {
     if (fence?.signal?.aborted || fence?.isExpired?.()) {
       return false;
     }
+    // F03: the observation instant this write carries (also the exact key
+    // the expiry-void matches on — the same Date value must flow to both the
+    // write and a later void so only this observation is ever removed).
+    const observedAt = new Date(fence?.observedAtMs ?? this.now());
     try {
       const written = await this.messagePort.updateReplyEvidence({
         id: message.id,
         // N04: stamp the actual mailbox observation time, not the delayed
         // write time. A late write must not manufacture fresh evidence.
-        replyNegativeCheckAt: new Date(fence?.observedAtMs ?? this.now()),
+        replyNegativeCheckAt: observedAt,
         replyNegativeContextHash: contextHash,
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
-      // N04: the awaited write itself may have completed after expiry — treat
-      // as failure (no usable negative) so the caller returns unknown instead
-      // of a decisive negative from an expired probe.
+      // F03/N04: the awaited write itself may have completed after expiry — a
+      // write finishing past the deadline inside the 60s TTL would otherwise
+      // leave a reusable negative for a later invocation to trust. Void
+      // exactly this observation (conditional timestamp match: a newer
+      // probe's negative or a sticky positive is untouched) and report
+      // failure so the caller returns unknown instead of a decisive
+      // negative from an expired probe.
       if (fence?.signal?.aborted || fence?.isExpired?.()) {
+        try {
+          await this.messagePort.voidExpiredNegativeWrite({
+            id: message.id,
+            observedAt,
+          });
+        } catch (voidError) {
+          incrementReplyMetric("detection_persist_failure", {
+            kind: "negative_void",
+          });
+          console.error(
+            `[EmailReplyDetection] voidExpiredNegativeWrite failed for message ${message.id}:`,
+            voidError
+          );
+        }
         return false;
       }
       if (!written) {
@@ -1705,6 +1737,12 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {
     return this.module.updateReplyEvidence(input);
+  }
+  voidExpiredNegativeWrite(input: {
+    id: number;
+    observedAt: Date;
+  }): Promise<boolean> {
+    return this.module.voidExpiredNegativeWrite(input);
   }
 }
 

@@ -401,4 +401,266 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     });
     expect(found.map((r) => r.id)).toContain(legacy.id);
   });
+
+  // ---------------------------------------------------------------
+  // F03 — conditional-commit negative persistence (real SQLite model).
+  // ---------------------------------------------------------------
+
+  async function messageModel() {
+    const { EmailReceivedMessageModel } = await import(
+      "@/model/EmailReceivedMessage.model"
+    );
+    return new EmailReceivedMessageModel(dbpath);
+  }
+
+  async function readRow(id: number) {
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .findOne({ where: { id } });
+  }
+
+  it("F03: a late older negative never overwrites a newer stored one", async () => {
+    const model = await messageModel();
+    const seed = await seedMessage({});
+    const t0 = new Date(1_700_000_000_000);
+    const t1 = new Date(1_700_000_010_000);
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t1,
+        replyNegativeContextHash: "ctx-new",
+        isAnswered: 0,
+        answeredFlagCheckedAt: t1,
+      })
+    ).toBe(true);
+    // Expired owner arrives late with its older observation: 0 rows.
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t0,
+        replyNegativeContextHash: "ctx-old",
+        isAnswered: 0,
+        answeredFlagCheckedAt: t0,
+      })
+    ).toBe(false);
+    const row = await readRow(seed.id);
+    expect(row?.replyNegativeCheckAt?.getTime()).toBe(t1.getTime());
+    expect(row?.replyNegativeContextHash).toBe("ctx-new");
+  });
+
+  it("F03: a newer negative still overwrites an older one", async () => {
+    const model = await messageModel();
+    const seed = await seedMessage({});
+    const t0 = new Date(1_700_000_000_000);
+    const t1 = new Date(1_700_000_010_000);
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t0,
+        replyNegativeContextHash: "ctx-old",
+        isAnswered: 0,
+        answeredFlagCheckedAt: t0,
+      })
+    ).toBe(true);
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t1,
+        replyNegativeContextHash: "ctx-new",
+        isAnswered: 0,
+        answeredFlagCheckedAt: t1,
+      })
+    ).toBe(true);
+    const row = await readRow(seed.id);
+    expect(row?.replyNegativeCheckAt?.getTime()).toBe(t1.getTime());
+  });
+
+  it("F03: void removes exactly the expired observation and nothing else", async () => {
+    const model = await messageModel();
+    const seed = await seedMessage({});
+    const t1 = new Date(1_700_000_010_000);
+    await model.updateReplyEvidence({
+      id: seed.id,
+      replyNegativeCheckAt: t1,
+      replyNegativeContextHash: "ctx",
+      isAnswered: 0,
+      answeredFlagCheckedAt: t1,
+    });
+    expect(await model.voidExpiredNegativeWrite({ id: seed.id, observedAt: t1 })).toBe(true);
+    const row = await readRow(seed.id);
+    expect(row?.replyNegativeCheckAt).toBeNull();
+    expect(row?.replyNegativeContextHash).toBeNull();
+  });
+
+  it("F03: void preserves a newer negative and a sticky positive", async () => {
+    const model = await messageModel();
+    const seed = await seedMessage({});
+    const t1 = new Date(1_700_000_010_000);
+    const t2 = new Date(1_700_000_020_000);
+    await model.updateReplyEvidence({
+      id: seed.id,
+      replyNegativeCheckAt: t1,
+      replyNegativeContextHash: "ctx-old",
+      isAnswered: 0,
+      answeredFlagCheckedAt: t1,
+    });
+    await model.updateReplyEvidence({
+      id: seed.id,
+      replyNegativeCheckAt: t2,
+      replyNegativeContextHash: "ctx-new",
+      isAnswered: 0,
+      answeredFlagCheckedAt: t2,
+    });
+    // Voiding the older observation is a no-op against the newer row.
+    expect(await model.voidExpiredNegativeWrite({ id: seed.id, observedAt: t1 })).toBe(false);
+    expect((await readRow(seed.id))?.replyNegativeCheckAt?.getTime()).toBe(t2.getTime());
+
+    const pos = await seedMessage({});
+    await model.updateReplyEvidence({
+      id: pos.id,
+      replyDetectedAt: t1,
+      replyDetectionSource: "sent_search",
+      replyMatchedMessageId: "<m@x>",
+      isAnswered: 0,
+      answeredFlagCheckedAt: t1,
+    });
+    // A positive fence blocks negatives and the void alike.
+    expect(
+      await model.updateReplyEvidence({
+        id: pos.id,
+        replyNegativeCheckAt: t2,
+        replyNegativeContextHash: "ctx",
+        isAnswered: 0,
+        answeredFlagCheckedAt: t2,
+      })
+    ).toBe(false);
+    expect(await model.voidExpiredNegativeWrite({ id: pos.id, observedAt: t2 })).toBe(false);
+    const kept = await readRow(pos.id);
+    expect(kept?.replyDetectedAt?.getTime()).toBe(t1.getTime());
+    expect(kept?.replyDetectionSource).toBe("sent_search");
+  });
+
+  // ---------------------------------------------------------------
+  // F03 — expired probe voids its late write through the real service.
+  // ---------------------------------------------------------------
+
+  it("F03: a negative completing past the deadline is voided, never reused", async () => {
+    const { EmailReplyDetectionService } = await import(
+      "@/service/emailReceive/EmailReplyDetectionService"
+    );
+    const model = await messageModel();
+    // Manual clock: the probe deadline honors it, while the racer's timer
+    // is real — pre-advancing shrinks the real budget deterministically.
+    let nowMs = 2_000_000_000_000;
+    const rawId = `<f03-${Math.random()}@x.com>`;
+    const seed = await seedMessage({
+      messageId: rawId,
+      providerUid: "imap:0123456789abcdef:424242:1",
+      providerFolder: "INBOX",
+      providerUidValidity: "424242",
+    });
+    const config = {
+      emailServiceId: SERVICE_ID,
+      protocol: "imap" as const,
+      host: "127.0.0.1",
+      port: 143,
+      ssl: false,
+      username: "owner@x.com",
+      password: "pw",
+      folder: "INBOX",
+    };
+    const identity = {
+      smtpUsername: "owner@x.com",
+      fromAddress: "owner@x.com",
+      replyToAddress: null,
+      receiveUsername: "owner@x.com",
+    };
+    let discoverCalls = 0;
+    const imapPort = {
+      async refreshMessageFlags() {
+        return {
+          uid: "1",
+          isAnswered: false,
+          isSeen: true,
+          flags: ["\\seen"],
+          checkedAt: new Date(nowMs),
+        };
+      },
+      async discoverSentFolders() {
+        discoverCalls += 1;
+        return [{ folder: "Sent", verified: true }];
+      },
+      async searchReplyHeaders() {
+        return { candidates: [], truncated: false, failedFetchCount: 0 };
+      },
+    };
+    // Gate the persistence itself: the write starts, waits past the
+    // deadline, then completes late — the audit's exact trigger.
+    let releaseWrite: (() => void) | null = null;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let voidCalls = 0;
+    const messagePort = {
+      async read(id: number) {
+        return await model.read(id);
+      },
+      async findCanonicalEquivalents() {
+        const row = await model.read(seed.id);
+        return row ? [row] : [];
+      },
+      async updateReplyEvidence(input: {
+        id: number;
+        replyDetectedAt?: Date | null;
+        replyDetectionSource?: string | null;
+        replyMatchedMessageId?: string | null;
+        replyNegativeCheckAt?: Date | null;
+        replyNegativeContextHash?: string | null;
+        isAnswered?: number;
+        answeredFlagCheckedAt?: Date | null;
+      }) {
+        await writeGate;
+        return await model.updateReplyEvidence(input);
+      },
+      async voidExpiredNegativeWrite(input: { id: number; observedAt: Date }) {
+        voidCalls += 1;
+        return await model.voidExpiredNegativeWrite(input);
+      },
+    };
+    const service = new EmailReplyDetectionService({
+      messagePort,
+      draftPort: { async listByMessages() { return []; } },
+      attemptPort: { async listByMessages() { return []; } },
+      emailServicePort: {
+        async getEmailServiceReceiveConfig() { return config; },
+        async readIdentity() { return identity; },
+      },
+      imapPort,
+      now: () => nowMs,
+    });
+
+    // Shrink the real race budget to ~500ms, then out-wait it.
+    nowMs += 14_500;
+    const first = service.detect({ messageId: seed.id });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const r1 = await first;
+    expect(r1.state).toBe("unknown");
+    // Expire the manual clock too, then let the late write complete.
+    nowMs += 15_500;
+    releaseWrite!();
+    // Allow the detached probe to settle through the void path.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(voidCalls).toBe(1);
+    // No reusable negative survived inside the TTL.
+    const stored = await model.read(seed.id);
+    expect(stored?.replyNegativeCheckAt).toBeNull();
+    expect(stored?.replyNegativeContextHash).toBeNull();
+    // A later invocation re-probes instead of reusing the expired result.
+    const before = discoverCalls;
+    const r2 = await service.detect({ messageId: seed.id });
+    expect(discoverCalls).toBeGreaterThan(before);
+    expect(r2.state).toBe("not_replied");
+  }, 30_000);
 });
+
+

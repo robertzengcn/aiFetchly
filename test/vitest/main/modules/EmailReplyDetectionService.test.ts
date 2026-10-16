@@ -168,6 +168,10 @@ function fakeMessagePort(opts: FakeMessagePortOptions): ReplyDetectionMessagePor
       if (opts.updateThrows) throw opts.updateThrows;
       return opts.updateResult ? opts.updateResult(input) : true;
     },
+    // F03: stub fakes never expire, so voiding is a no-op report.
+    async voidExpiredNegativeWrite() {
+      return false;
+    },
     updateCalls,
   };
 }
@@ -1569,6 +1573,9 @@ describe("EmailReplyDetectionService.checkReply — DTO wrapper (§4.2)", () => 
       },
       async updateReplyEvidence() {
         return true;
+      },
+      async voidExpiredNegativeWrite() {
+        return false;
       },
     };
     const service = new EmailReplyDetectionService({

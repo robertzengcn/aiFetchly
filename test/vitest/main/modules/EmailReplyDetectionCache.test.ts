@@ -174,6 +174,10 @@ function buildKit(opts: {
       updateCalls.push(input);
       return true;
     },
+    // F03: stub fakes never expire, so voiding is a no-op report.
+    async voidExpiredNegativeWrite() {
+      return false;
+    },
     updateCalls,
   };
   const draftPort: ReplyDetectionDraftPort = {

@@ -195,18 +195,54 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
 
     // Negative observation: only when NO positive evidence exists on the row.
+    // F03: monotonic freshness — a negative write carries its own observation
+    // time and must never overwrite a NEWER observation already stored. A
+    // late (expired-owner or reordered) write with an older timestamp matches
+    // 0 rows instead of silently replacing fresher evidence. Same-instant
+    // re-probes (equal timestamps) still overwrite — redundant but harmless.
+    const negativeAt = input.replyNegativeCheckAt ?? null;
     const result = await this.repository
       .createQueryBuilder()
       .update(EmailReceivedMessageEntity)
       .set({
-        replyNegativeCheckAt: input.replyNegativeCheckAt ?? null,
+        replyNegativeCheckAt: negativeAt,
         replyNegativeContextHash: input.replyNegativeContextHash ?? null,
         ...(input.isAnswered != null ? { isAnswered: input.isAnswered } : {}),
         ...(input.answeredFlagCheckedAt != null
           ? { answeredFlagCheckedAt: input.answeredFlagCheckedAt }
           : {}),
       })
-      .where("id = :id AND replyDetectedAt IS NULL", { id: input.id })
+      .where(
+        "id = :id AND replyDetectedAt IS NULL" +
+          (negativeAt !== null
+            ? " AND (replyNegativeCheckAt IS NULL OR replyNegativeCheckAt <= :negativeAt)"
+            : ""),
+        { id: input.id, ...(negativeAt !== null ? { negativeAt } : {}) }
+      )
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
+  /**
+   * F03 — void a negative write that completed after its probe owner expired.
+   * Removes EXACTLY the given observation (timestamp equality): a newer
+   * probe's negative (different timestamp) and any sticky positive (fence)
+   * are untouched. Returns true when a row was voided. Lets an abandoned
+   * timed-out probe clean up after itself instead of leaving a reusable
+   * negative inside the 60s TTL for a later invocation to trust.
+   */
+  async voidExpiredNegativeWrite(input: {
+    id: number;
+    observedAt: Date;
+  }): Promise<boolean> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReceivedMessageEntity)
+      .set({ replyNegativeCheckAt: null, replyNegativeContextHash: null })
+      .where(
+        "id = :id AND replyDetectedAt IS NULL AND replyNegativeCheckAt = :observedAt",
+        { id: input.id, observedAt: input.observedAt }
+      )
       .execute();
     return (result.affected ?? 0) === 1;
   }
