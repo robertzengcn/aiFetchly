@@ -36,6 +36,15 @@ export const MODEL_CALL_CAP_MS = 120_000;
 export const GENERATION_INVOCATION_BUDGET_MS = 5 * 60_000;
 
 /**
+ * R03: dedicated bound for the terminal timeout audit/cleanup, independent
+ * of the (possibly exhausted) invocation deadline. Long enough for local
+ * SQLite audit writes (milliseconds) with headroom for transient
+ * contention, short enough that a hung store cannot stall the invocation
+ * meaningfully past its budget.
+ */
+export const TERMINAL_AUDIT_BUDGET_MS = 3_000;
+
+/**
  * Default output budget for a reply generation call (FR-027: the 1500-token
  * default, no longer a call-site literal). A 400-word reply can approach
  * ~700 tokens with JSON framing, so the default keeps headroom for strict
