@@ -259,6 +259,7 @@
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
         :reported-message-ids="reportedMessageIds"
+        :awaiting-tool-message-ids="awaitingToolMessageIds"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -990,6 +991,7 @@ import {
 } from "./contextUsageUtil";
 import {
   clearToolProgressForToolResult,
+  collectAwaitingToolMessageIds,
   hasPendingToolExecution,
   markPermissionPromptExecuting,
 } from "./toolExecutionStateUtil";
@@ -3153,6 +3155,22 @@ const hasLoadedPendingToolExecution = computed(() => {
     return false;
   }
   return hasPendingToolExecution(messages.value);
+});
+
+const EMPTY_AWAITING_TOOL_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Tool-call rows that still have no result while this turn is running.
+ * Reads `messages` directly so a second tool starting (or one of several
+ * finishing) refreshes the spinner. Watching only the boolean pending
+ * flag would stay `true` and skip that update.
+ */
+const awaitingToolMessageIds = computed((): ReadonlySet<string> => {
+  const currentMessages = messages.value;
+  if (!hasLoadedPendingToolExecution.value) {
+    return EMPTY_AWAITING_TOOL_IDS;
+  }
+  return collectAwaitingToolMessageIds(currentMessages);
 });
 
 const chatIsRunning = computed(

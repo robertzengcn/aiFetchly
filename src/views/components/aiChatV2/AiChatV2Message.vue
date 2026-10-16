@@ -21,31 +21,25 @@
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
           <strong>{{ t("aiChatV2.tool_call_title") || "Tool Call" }}</strong>
+          <span
+            v-if="showToolRunningBadge"
+            class="tool-progress-badge"
+            data-testid="tool-running-badge"
+            role="status"
+            :aria-label="toolRunningLabel"
+          >
+            <v-icon size="small" color="primary" class="mdi-spin">
+              mdi-loading
+            </v-icon>
+            <span class="text-caption">{{ toolRunningLabel }}</span>
+            <span v-if="toolProgressHasCounts" class="text-caption">
+              ({{ toolProgress?.partialCount }}/{{ toolProgress?.expectedCount }})
+            </span>
+          </span>
         </div>
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
           <span>{{ message.metadata.toolName }}</span>
-          <span
-            v-if="toolProgress"
-            class="tool-progress-badge"
-            style="margin-left: 8px; display: inline-flex; align-items: center; gap: 4px;"
-          >
-            <v-icon size="small" class="mdi-spin">mdi-loading</v-icon>
-            <span class="text-caption">{{
-              toolProgress.message ||
-              t("aiChatV2.tool_running") ||
-              "Running..."
-            }}</span>
-            <span
-              v-if="
-                typeof toolProgress.partialCount === 'number' &&
-                typeof toolProgress.expectedCount === 'number'
-              "
-              class="text-caption"
-            >
-              ({{ toolProgress.partialCount }}/{{ toolProgress.expectedCount }})
-            </span>
-          </span>
         </div>
         <v-progress-linear
           v-if="toolProgress && typeof toolProgress.progress === 'number'"
@@ -441,6 +435,11 @@ const props = defineProps<{
   showReasoning?: boolean;
   /** True when this output was reported this session (parent-owned). */
   reported?: boolean;
+  /**
+   * True while this tool call has no matching result and the turn is still
+   * running. A long tool otherwise looks idle until the result arrives.
+   */
+  toolAwaitingResult?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -908,6 +907,28 @@ const toolProgress = computed<ToolProgressView | null>(() => {
     | { toolProgress?: ToolProgressView }
     | undefined;
   return meta?.toolProgress ?? null;
+});
+
+const showToolRunningBadge = computed(
+  (): boolean =>
+    props.toolAwaitingResult === true || toolProgress.value !== null
+);
+
+const toolRunningLabel = computed((): string => {
+  const message = toolProgress.value?.message;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message;
+  }
+  return t("aiChatV2.tool_running") || "Running...";
+});
+
+const toolProgressHasCounts = computed((): boolean => {
+  const progress = toolProgress.value;
+  if (!progress) return false;
+  return (
+    typeof progress.partialCount === "number" &&
+    typeof progress.expectedCount === "number"
+  );
 });
 
 const needsPermissionPrompt = computed(
@@ -1384,6 +1405,12 @@ watch(
   display: flex;
   align-items: center;
   margin-bottom: 6px;
+}
+.tool-progress-badge {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .v2-message__tool-field {
   display: flex;

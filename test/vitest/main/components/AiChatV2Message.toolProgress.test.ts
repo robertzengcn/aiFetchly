@@ -10,8 +10,9 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
  *
  * These tests verify the conditional rendering in AiChatV2Message.vue that
  * was added to surface `tool_progress` streaming events to the user. The
- * badge lives inside the TOOL_CALL branch of the template and only renders
- * when `message.metadata.toolProgress` is truthy.
+ * badge lives inside the TOOL_CALL branch of the template and renders
+ * when `message.metadata.toolProgress` is truthy, or when the parent marks
+ * the call as still awaiting its result.
  *
  * The component uses `useI18n()` directly (real vue-i18n plugin required,
  * NOT a `$t` mock), and references Vuetify components (`v-icon`,
@@ -75,9 +76,12 @@ function makeBaseMessage(): ChatV2MessageView {
  * the TOOL_RESULT / plan-card / streaming-status branches, none of which
  * are exercised by these tests — stubbing keeps the mount hermetic.
  */
-function mountWith(message: ChatV2MessageView) {
+function mountWith(
+  message: ChatV2MessageView,
+  extra?: { toolAwaitingResult?: boolean }
+) {
   return mount(AiChatV2Message, {
-    props: { message },
+    props: { message, ...extra },
     global: {
       plugins: [i18n],
       stubs: {
@@ -116,6 +120,18 @@ describe("AiChatV2Message tool progress badge", () => {
     const wrapper = mountWith(makeBaseMessage());
     await flushPromises();
     expect(wrapper.find(".tool-progress-badge").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tool-running-badge"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("shows a loading badge while the tool call is awaiting its result", async () => {
+    const wrapper = mountWith(makeBaseMessage(), { toolAwaitingResult: true });
+    await flushPromises();
+    const badge = wrapper.find('[data-testid="tool-running-badge"]');
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain("Running...");
+    expect(badge.attributes("role")).toBe("status");
   });
 
   it("renders progress bar and count when progress and counts are set", async () => {
