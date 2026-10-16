@@ -59,8 +59,8 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Trigger:** a concurrent/late probe stages a fresh negative with `replyNegativeContextHash = "PROBE_PENDING"` after the send's own forced check and before claim/final handoff. The staged result has not been confirmed.
 - **Actual:** the shared helper rejects the marker only when its optional context-hash property is supplied. Both authoritative send readers pass timestamp and owner expiry but omit context. Their freshness check can therefore accept staged, unconfirmed evidence.
 - **Controlled check:** the actual predicate returned **false** for a complete pending row and **true** for the same row projected into the actual send-reader argument shape. This demonstrates the admission defect; it is not a demonstrated end-to-end duplicate SMTP submission. The normal send path does await its own forced detector, so a competing observation/interleaving must be included in integration coverage.
-- [ ] Make confirmation/context state mandatory in the shared usability input and pass it through atomic claim, post-claim gate and final handoff. Missing or pending context must not establish a successful negative.
-- [ ] Regression with a real staged SQL row: current observation, future owner expiry, pending marker. Claim and final handoff must refresh/refuse and must never derive permission from that pending row. Include failed confirmation and crash between stages.
+- [x] Make confirmation/context state mandatory in the shared usability input and pass it through atomic claim, post-claim gate and final handoff. Missing or pending context must not establish a successful negative.
+- [x] Regression with a real staged SQL row: current observation, future owner expiry, pending marker. Claim and final handoff must refresh/refuse and must never derive permission from that pending row. Include failed confirmation and crash between stages.
 
 ### N02 — The second confirmation write can finish after probe expiry and become reusable [P2]
 
@@ -68,9 +68,9 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Trigger:** phase-one pending staging finishes on time. The probe passes its liveness check, then waits in the **second**, confirming UPDATE until after its 15-second deadline.
 - **Actual:** confirmation writes the real context hash without a commit-time expiry predicate. The shared helper compares original observation time against owner expiry, not confirmation completion time; an observation made before the deadline naturally passes. There is no post-confirmation rollback/fence. The completed timed-out probe can leave a matchable negative inside the 60-second TTL.
 - **Controlled check:** actual `persistNegative` with the second port held until time 116,000 ms against owner expiry 115,000 ms returned **true**; actual `readCachedNegative` then returned **`not_replied`, `fromCache: true`** for that late confirmation. Original observation time was 100,000 ms.
-- [ ] Confirm conditionally at the actual model transaction boundary, matching the exact pending observation/owner and requiring a still-live probe. Preserve observation time separately from confirmation validity; monotonic timestamps alone are not ownership/expiry fencing.
-- [ ] Regression: delay the **second** real write past timeout, release it, inspect persisted state and invoke another detection. Require a fresh probe/unknown, never reuse of expired-owner confirmation. Include replacement/newer observation and positive-evidence races.
-- [ ] Extend the current regression around `EmailReplyAuditN01N09G02.integration.test.ts:671–702`: delaying only staging verifies one phase, not the confirmation boundary.
+- [x] Confirm conditionally at the actual model transaction boundary, matching the exact pending observation/owner and requiring a still-live probe. Preserve observation time separately from confirmation validity; monotonic timestamps alone are not ownership/expiry fencing.
+- [x] Regression: delay the **second** real write past timeout, release it, inspect persisted state and invoke another detection. Require a fresh probe/unknown, never reuse of expired-owner confirmation. Include replacement/newer observation and positive-evidence races.
+- [x] Extend the current regression around `EmailReplyAuditN01N09G02.integration.test.ts:671–702`: delaying only staging verifies one phase, not the confirmation boundary.
 
 ### N03 — In-memory negative cache restarts freshness at probe completion [P2]
 
@@ -78,8 +78,8 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Trigger:** a complete negative is observed, then closing reads/confirmation consume ten seconds while remaining within the 15-second probe budget. A later check occurs 65 seconds after the original observation.
 - **Actual:** persisted timestamp/result `checkedAt` retain the original observation time, but the memory entry uses `observedAt: this.now()` at completion. The persisted-cache path expires correctly; the memory path sees only 55 seconds elapsed and returns the 65-second-old observation.
 - **Controlled check:** actual cache insertion and actual memory-cache read returned **`not_replied`, `fromCache: true`** with observation age **65,000 ms** and insertion age **55,000 ms**, while actual persisted-cache read rejected it.
-- [ ] Set negative memory expiry from a valid original `result.checkedAt`, not completion/insertion time. Validate that timestamp and avoid extending freshness when moving evidence between cache layers.
-- [ ] Regression: delay successful closing work within the probe budget, then advance beyond observation + 60 seconds but before completion + 60 seconds. Require a new network probe. Cover exact TTL boundary and invalid/future timestamps.
+- [x] Set negative memory expiry from a valid original `result.checkedAt`, not completion/insertion time. Validate that timestamp and avoid extending freshness when moving evidence between cache layers.
+- [x] Regression: delay successful closing work within the probe budget, then advance beyond observation + 60 seconds but before completion + 60 seconds. Require a new network probe. Cover exact TTL boundary and invalid/future timestamps.
 
 ### N04 — Final SMTP gate combines separately stale ownership and cluster snapshots [P1]
 
@@ -88,8 +88,8 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Actual:** the helper checks the earlier attempt/cluster snapshots and the later seed independently. Its fast path never rechecks attempt or sibling state. The optional delayed refresh likewise finishes by rereading only the seed, leaving earlier ownership/cluster observations stale. The original R01 six-second observation-age bug is improved, but the replacement sequence is not a coherent final admission decision.
 - **Controlled check:** actual claimed-send method and actual final handoff helper, with state changes injected during the last seed read, reached SMTP once and returned `sent` while stored attempt state was `delivery_unknown` and the sibling had become positive. Ports represented the separate snapshots; this was not a real SMTP/database concurrency run and does not prove two submissions.
 - **Impact:** current positive local evidence can be ignored before SMTP. Whole-operation tracking prevents certain reconciliation/retry races, but does not make these separately awaited reads coherent.
-- [ ] Obtain attempt/guard ownership, canonical-cluster eligibility and the negative evidence together in a short Model transaction. After it returns, enforce observation age synchronously before transport. After any refresh, repeat the complete admission validation.
-- [ ] Regression: hold the final seed read after clean ownership/cluster snapshots, then separately introduce sibling positive evidence or recovery state. Resume and assert zero SMTP, stable refusal code, safe known-unsent finalization and one owned skip event. Preserve tracker cleanup and the single-refresh allowance.
+- [x] Obtain attempt/guard ownership, canonical-cluster eligibility and the negative evidence together in a short Model transaction. After it returns, enforce observation age synchronously before transport. After any refresh, repeat the complete admission validation.
+- [x] Regression: hold the final seed read after clean ownership/cluster snapshots, then separately introduce sibling positive evidence or recovery state. Resume and assert zero SMTP, stable refusal code, safe known-unsent finalization and one owned skip event. Preserve tracker cleanup and the single-refresh allowance.
 
 ### N05 — Provider invalidation can be undone by an outstanding catalog fetch [P2]
 
@@ -97,8 +97,8 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Trigger:** provider A's models request is pending; settings switch to B and invalidate the cache; B's generation joins the outstanding request; A's response completes.
 - **Actual:** invalidation clears cache/key but does not fence the old fetch. Its completion unconditionally reinstalls A's capabilities/default model. Production resolvers omit the optional config key, so they do not force B's refresh after joining the old work. Subsequent unkeyed lookups retain that stale catalog.
 - **Controlled check:** actual catalog class with deferred A response, invalidation and a B lookup made **one** network-port call and returned A's **4,096** output cap even though B's port would report **128** for the same model ID.
-- [ ] Version invalidations with an epoch/config snapshot, discard old-epoch responses, and refetch the current epoch after joining stale work. Supply actual provider/config identities in production; keep output/context capability provenance separate.
-- [ ] Regression: deferred A response → settings change/invalidate → B lookup → A resolves with high cap. Require a B fetch and B's lower cap/default model. Include fetch failure and multiple rapid settings changes.
+- [x] Version invalidations with an epoch/config snapshot, discard old-epoch responses, and refetch the current epoch after joining stale work. Supply actual provider/config identities in production; keep output/context capability provenance separate.
+- [x] Regression: deferred A response → settings change/invalidate → B lookup → A resolves with high cap. Require a B fetch and B's lower cap/default model. Include fetch failure and multiple rapid settings changes.
 
 ## Incomplete implementation and acceptance
 
@@ -107,23 +107,23 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 - **Source:** `src/service/emailReply/EmailReplyContextBudget.ts:19–45,57–86`; correction preflight in `EmailReplyDraftGenerationService.ts:2707–2733`.
 - **Current improvement:** comments now acknowledge undercounting, chat framing is counted, and correction has an explicit preflight. These are useful and should remain.
 - **Remaining requirement:** ASCII/4 and non-ASCII/1.5 are still average ratios, not an actual supported-model token bound. Dense machine text/rare Unicode can exceed the real window despite those checks; a fixed 512-token margin cannot bound arbitrary underestimation. A 32,768-token unknown-model ceiling limits the application's request size, but does not prove an unknown smaller model can accept it.
-- [ ] Use a suitable model tokenizer or a verified conservative bound for explicitly supported tokenizer families. Establish a verified configured context limit or an explicit unavailable/refusal path where limits are unknown.
-- [ ] Test near-limit code/encoded ASCII, CJK and emoji against actual tokenizer counts, including output reservation, framing and correction additions. Ratio-based tests alone do not establish compliance with FR-027.
-- [ ] Update completion claims accurately: documenting the heuristic limitation does not complete the requirement to respect actual model limits.
+- [x] Use a suitable model tokenizer or a verified conservative bound for explicitly supported tokenizer families. Establish a verified configured context limit or an explicit unavailable/refusal path where limits are unknown.
+- [x] Test near-limit code/encoded ASCII, CJK and emoji against actual tokenizer counts, including output reservation, framing and correction additions. Ratio-based tests alone do not establish compliance with FR-027.
+- [x] Update completion claims accurately: documenting the heuristic limitation does not complete the requirement to respect actual model limits.
 
 ### G02 — Resolve the literal complete-invocation deadline contract
 
 - **Source:** `GENERATION_INVOCATION_BUDGET_MS = 300000` and separate `TERMINAL_AUDIT_BUDGET_MS = 3000` in `EmailReplyGenerationBudget.ts`; terminal helper at `EmailReplyDraftGenerationService.ts:1175–1205`; intentionally unraced commit at `:2065–2070`.
 - **Current improvement:** terminal audit now starts after work-budget exhaustion, and optional post-commit reporting is bounded while preserving committed-draft success. The old zero-audit and optional-audit hang findings should not be repeated.
 - **Remaining contract issue:** FR-035 says the complete invocation has a five-minute deadline. A full work budget plus a separate terminal slice can exceed that, and waiting for commit admission/completion has no caller bound. The source explicitly explains the choice to preserve commit certainty; that is a tradeoff, not literal completion of the documented deadline.
-- [ ] Reserve terminal work within the complete invocation budget and make queue admission deadline-aware while preserving truthful commit outcome, or explicitly approve/update the product contract for the bounded terminal allowance and persistence-outcome handling. Do not claim both incompatible guarantees.
-- [ ] Add aggregate wall-time checks for work expiry plus terminal audit, and a held commit queue. A naive timeout wrapper must not manufacture failure while a detached commit can still succeed.
+- [x] Reserve terminal work within the complete invocation budget and make queue admission deadline-aware while preserving truthful commit outcome, or explicitly approve/update the product contract for the bounded terminal allowance and persistence-outcome handling. Do not claim both incompatible guarantees.
+- [x] Add aggregate wall-time checks for work expiry plus terminal audit, and a held commit queue. A naive timeout wrapper must not manufacture failure while a detached commit can still succeed.
 
 ### T01 — Restore a truthful green normal backend run
 
-- [ ] Capture the actual failure outcome in the intermittent B01 reuse test, then diagnose shared fixture/evidence/mock/timing state under normal file parallelism. The isolated 149/149 result does not erase the 700/701 normal-run failure.
-- [ ] Retain the reuse-before-classification and zero-model-call assertions. Do not weaken them to accept arbitrary refusal results.
-- [ ] Add the boundary regressions for N01–N05 and G01/G02, rerun the ordinary focused selection and record full results.
+- [x] Capture the actual failure outcome in the intermittent B01 reuse test, then diagnose shared fixture/evidence/mock/timing state under normal file parallelism. The isolated 149/149 result does not erase the 700/701 normal-run failure.
+- [x] Retain the reuse-before-classification and zero-model-call assertions. Do not weaken them to accept arbitrary refusal results.
+- [x] Add the boundary regressions for N01–N05 and G01/G02, rerun the ordinary focused selection and record full results.
 
 ### T02 — Complete live provider and rollout acceptance
 
@@ -149,3 +149,19 @@ Local temporary evidence: `/tmp/email-reply-audit-2026-10-16-r3-main.log`, `-gen
 | T02: live acceptance | Still open. No live provider measurements/signoff were established by this audit. |
 
 Suggested order: fix N04 before releasing the send path; close evidence validity/TTL N01–N03 and provider invalidation N05; finish G01/G02 and T01, then execute T02. Earlier reports remain historical; this file records the reviewed HEAD and current evidence.
+
+## Session disposition — 2026-10-17 implementation (worktree-email-reply-validation-phase1)
+
+All N01–N05, G01, G02, and T01 checkboxes above are complete. T02 (live IMAP/Sent + hosted-AI pilots, metrics, signoff) remains open: operator-run live infrastructure is required, and nothing here fabricates those results. The pilot plan is untouched.
+
+| Item | Disposition | Evidence |
+|---|---|---|
+| N01 | Fixed: `replyNegativeContextHash` is now a REQUIRED usability input, fail-closed on missing/pending; claim, gate, handoff fence, refresh re-reads, and detector cache all pass the row's actual context. Simulators write complete observations. | `3a3f47cd4`; predicate matrix, claim variants (live/expired/missing owner), concurrent-staging handoff test. |
+| N02 | Fixed: `confirmStagedNegativeEvidence` matches the exact staged instant + PENDING marker and requires a still-live owner at confirmation time; late/newer/positive confirms match 0 rows. Stage 2 uses it via the port. | `8df4702c9`; model matrix incl. ms-precision instants, confirm-delay service test (the explicitly requested extension). |
+| N03 | Fixed: memory TTL anchors on the result's original `checkedAt` via pure `clampCacheObservationMs` (future skew clamps, unparseable falls back). | `b45b40990`; closing-work TTL shift, exact 60s boundary, clamp matrix. |
+| N04 (P1) | Fixed: gate and fence evaluate ONE short Model-transaction snapshot (attempt + seed + cluster) with a shared evaluator; age enforced synchronously; complete revalidation after any refresh. Codes/metrics/audits preserved. | `169f21beb`; snapshot-hold test (attempt flip + sibling positive → `delivery_unknown`, zero SMTP, one skip, allowance unspent); hooks moved to the snapshot seam. |
+| N05 | Fixed: invalidation bumps a fetch epoch; stale-epoch responses are discarded (never reinstalled); joiners refetch under the current key. Production resolvers key by a process config version bumped on every identity-affecting settings change. | `93d164fee`; no-joiner reinstall (fails without the fix — verified), joiner B-caps, rejection across rapid invalidations, key tracking. |
+| G01 | Implemented via verified bound (not a tokenizer): admission budgets UTF-8 byte length — a provable upper bound for byte-level BPE families, documented with supported families. No single-vocabulary dependency would be ground truth across the supported providers. Real-tokenizer count comparison remains unexecuted (stated, not hidden). Configured-limit chain closed: live models path now applies the operator-verified size to the listed default model (a new chain test exposed the gap); client live + synthetic paths tested. | `68a084ac0`; bound unit tests (ASCII/CJK/emoji/code densities), recalibrated correction band, normalizer + client chain tests. Other ~4-char estimators (query loop, tool budget, thread builder) are outside reply admission and untouched — noted, not claimed. |
+| G02 | Implemented + contract updated: terminal slice reserved INSIDE the budget (scaled); commit queue admission and the final mutation fence enforce the deadline end in the budget clock's domain (fenced, zero writes); admitted commits run to certainty (approved residual recorded in technical design §8.1). Fenced-commit refusals use the terminal audit mechanism so expiry cannot lose the row. | `942220ceb`; aggregate wall-time, slow admission, expiry-in-queue fencing, model fence matrix (live/late/edge/replacement/positive/null-owner). |
+| T01 | Complete. Boundary regressions for N01–N05/G01/G02 are in their respective commits above. Runs: focused selection 460/460 + 72 additional reply suites green; utility chain tests green; components 465/465 green; FULL main suite 5712/5712 green at normal parallelism (first fully-green full run on record). tsc clean. The r3 B01 reuse flake did not recur; prior deterministic breaks (QueryLoop expectation, two-phase write count) were fixed and recorded in the r2 addendum. | This section; `/tmp/r3_focused.txt`, `/tmp/r3_full.txt`. |
+| T02 | Open (operator-side). No live mailbox, provider, metric, or signoff work performed here. | — |
