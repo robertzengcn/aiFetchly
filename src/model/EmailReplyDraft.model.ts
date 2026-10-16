@@ -973,6 +973,9 @@ export class EmailReplyDraftModel extends BaseDb {
       // Legacy rows without owner tracking keep the previous semantics.
       const ownerUsable = isNegativeObservationUsable({
         replyNegativeCheckAt: seedMessage.replyNegativeCheckAt,
+        // N01: the staged-but-unconfirmed marker must fail this check —
+        // pass the row's actual context state, never omit it.
+        replyNegativeContextHash: seedMessage.replyNegativeContextHash,
         replyNegativeOwnerExpiresAt: seedMessage.replyNegativeOwnerExpiresAt,
       });
       if (observedAt === null || !ownerUsable) {

@@ -1265,6 +1265,9 @@ export class EmailReplyDetectionService {
     if (
       !isNegativeObservationUsable({
         replyNegativeCheckAt: message.replyNegativeCheckAt,
+        // N01: cached negatives are consumable only when confirmed — the
+        // hash was already verified present above; pass it (never omit).
+        replyNegativeContextHash: message.replyNegativeContextHash,
         replyNegativeOwnerExpiresAt: message.replyNegativeOwnerExpiresAt,
       })
     ) {

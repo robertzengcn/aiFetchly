@@ -12,6 +12,7 @@ import {
   canonicalReplyKey,
   isNegativeObservationUsable,
   normalizeStoredMessageId,
+  PENDING_NEGATIVE_CONTEXT,
 } from "@/service/emailReceive/EmailReplyIdentity";
 import { readClusterEvidence, evidenceToPhase } from "@/model/replyClusterEvidence";
 import { runReplyTxn } from "@/model/replyTxn";
@@ -204,6 +205,9 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
       messageId: rawId,
       normalizedMessageId: normalizedId,
       replyNegativeCheckAt: new Date(),
+      // N01: a complete observation carries its context hash; a bare
+      // timestamp is not usable evidence.
+      replyNegativeContextHash: "test-context-hash",
     });
     // Sibling with sticky positive.
     const sib = await seedMessage({
@@ -575,17 +579,20 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
 
   it("R02: isNegativeObservationUsable rejects only expired-owner results", () => {
     const t = 2_000_000_000_000;
+    const HASH = "abc123context";
     // Missing observation is never usable.
     expect(
       isNegativeObservationUsable({
         replyNegativeCheckAt: null,
+        replyNegativeContextHash: HASH,
         replyNegativeOwnerExpiresAt: null,
       })
     ).toBe(false);
-    // Legacy rows (no owner tracking) keep the previous semantics.
+    // Legacy rows (no owner tracking, real hash) keep the previous semantics.
     expect(
       isNegativeObservationUsable({
         replyNegativeCheckAt: new Date(t),
+        replyNegativeContextHash: HASH,
         replyNegativeOwnerExpiresAt: null,
       })
     ).toBe(true);
@@ -593,6 +600,7 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     expect(
       isNegativeObservationUsable({
         replyNegativeCheckAt: new Date(t),
+        replyNegativeContextHash: HASH,
         replyNegativeOwnerExpiresAt: new Date(t + 15_000),
       })
     ).toBe(true);
@@ -600,6 +608,7 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     expect(
       isNegativeObservationUsable({
         replyNegativeCheckAt: new Date(t),
+        replyNegativeContextHash: HASH,
         replyNegativeOwnerExpiresAt: new Date(t),
       })
     ).toBe(true);
@@ -607,9 +616,31 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     expect(
       isNegativeObservationUsable({
         replyNegativeCheckAt: new Date(t),
+        replyNegativeContextHash: HASH,
         replyNegativeOwnerExpiresAt: new Date(t - 1),
       })
     ).toBe(false);
+    // N01: staged-but-unconfirmed marker is never usable — even with a
+    // current timestamp and a live owner.
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: new Date(t),
+        replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+        replyNegativeOwnerExpiresAt: new Date(t + 15_000),
+      })
+    ).toBe(false);
+    // N01: missing context is never usable — even with a current timestamp
+    // and a live owner. The field is mandatory precisely so send readers
+    // cannot omit it and accept staged rows.
+    for (const missing of [null, undefined]) {
+      expect(
+        isNegativeObservationUsable({
+          replyNegativeCheckAt: new Date(t),
+          replyNegativeContextHash: missing,
+          replyNegativeOwnerExpiresAt: new Date(t + 15_000),
+        })
+      ).toBe(false);
+    }
   });
 
   // ---------------------------------------------------------------

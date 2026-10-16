@@ -90,12 +90,21 @@ export const PENDING_NEGATIVE_CONTEXT = "PROBE_PENDING";
  */
 export function isNegativeObservationUsable(input: {
   readonly replyNegativeCheckAt: Date | null | undefined;
-  readonly replyNegativeContextHash?: string | null | undefined;
+  /**
+   * N01: MANDATORY — the confirmation/context state. Optional in the past,
+   * which let send readers omit it and accept staged, unconfirmed rows.
+   * Missing (null/undefined) or pending context must not establish a
+   * successful negative. Legacy rows always carry a real hash (every
+   * historical negative write stored one), so fail-closed changes nothing
+   * for them.
+   */
+  readonly replyNegativeContextHash: string | null | undefined;
   readonly replyNegativeOwnerExpiresAt: Date | null | undefined;
 }): boolean {
   const observedAt = input.replyNegativeCheckAt;
   if (observedAt == null) return false;
-  if (input.replyNegativeContextHash === PENDING_NEGATIVE_CONTEXT) {
+  const contextHash = input.replyNegativeContextHash;
+  if (contextHash == null || contextHash === PENDING_NEGATIVE_CONTEXT) {
     return false;
   }
   const ownerExpiresAt = input.replyNegativeOwnerExpiresAt;

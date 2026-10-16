@@ -499,6 +499,8 @@ describe("EmailReply cluster eligibility contract (R01/R02/R03) — DB integrati
       messageId: rawId,
       normalizedMessageId: normalizedId,
       replyNegativeCheckAt: new Date(),
+      // N01: the fence needs a complete observation (timestamp + context).
+      replyNegativeContextHash: "test-context-hash",
     });
     await seedEquivalent(normalizedId, {
       replyDetectedAt: new Date(),

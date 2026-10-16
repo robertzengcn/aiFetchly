@@ -93,7 +93,7 @@ describe("T11 §5.3 — rollback cannot remove mandatory local duplicate protect
   async function writeObservation(messageId: number): Promise<void> {
     await SqliteDb.getInstance(dbpath).connection
       .getRepository(EmailReceivedMessageEntity)
-      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date(), replyNegativeContextHash: "test-context-hash" });
   }
 
   async function seedIdleGuard(

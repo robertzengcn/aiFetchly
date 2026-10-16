@@ -187,7 +187,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   async function writeObservation(messageId: number): Promise<void> {
     await SqliteDb.getInstance(dbpath).connection
       .getRepository(EmailReceivedMessageEntity)
-      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date(), replyNegativeContextHash: "test-context-hash" });
   }
 
   it("a single claim transitions draft -> sending and inserts a claimed attempt", async () => {
@@ -498,7 +498,7 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
   async function writeObservation(messageId: number): Promise<void> {
     await SqliteDb.getInstance(dbpath).connection
       .getRepository(EmailReceivedMessageEntity)
-      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date(), replyNegativeContextHash: "test-context-hash" });
   }
 
   /** Seed an idle guard row for a message's replyKey. */
@@ -565,6 +565,63 @@ describe("EmailReply send claim — message-level sibling check + guard binding 
       const row = await guardModel.read(guard.id);
       expect(row?.phase).toBe("sending");
       expect(row?.activeAttemptId).toBe(result.attemptId);
+    }
+  });
+
+  it("N01: a staged-but-unconfirmed negative never establishes claim permission", async () => {
+    // A concurrent/late probe staged a fresh negative AFTER the send's own
+    // forced check: current timestamp and (variants) a live, expired, or
+    // missing owner — but the context is still the unconfirmed PENDING
+    // marker. The atomic claim must refuse (freshness_stale) and write
+    // nothing, never deriving permission from the staged row. The confirmed
+    // happy path is covered by the neighboring tests (writeObservation
+    // stores a real context hash).
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
+    const nowMs = Date.now();
+    const variants: Array<{
+      name: string;
+      ownerExpiresAt: Date | null;
+    }> = [
+      // Concurrent probe staged and still alive: unconfirmed all the same.
+      { name: "live owner", ownerExpiresAt: new Date(nowMs + 60_000) },
+      // Failed confirmation (probe died after staging): unusable twice over.
+      { name: "expired owner", ownerExpiresAt: new Date(nowMs - 1_000) },
+      // Crash between staging and owner stamp: no owner, still pending.
+      { name: "missing owner", ownerExpiresAt: null },
+    ];
+    for (const variant of variants) {
+      const msg = await seedMessage(null);
+      const guard = await seedIdleGuard(msg);
+      const seed = await seedApprovedDraft(
+        { draftModel, approvalModel },
+        { messageId: msg.id }
+      );
+      await SqliteDb.getInstance(dbpath).connection
+        .getRepository(EmailReceivedMessageEntity)
+        .update(
+          { id: msg.id },
+          {
+            replyNegativeCheckAt: new Date(),
+            replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+            replyNegativeOwnerExpiresAt: variant.ownerExpiresAt,
+          }
+        );
+      const result = await draftModel.claimApprovedRevisionForSend(
+        claimInputFor(seed, msg.id, guard.id)
+      );
+      expect(`${variant.name}: ${result.status}`).toBe(
+        `${variant.name}: precondition_failed`
+      );
+      if (result.status === "precondition_failed") {
+        expect(result.reason).toContain("freshness_stale");
+      }
+      // No attempt was inserted and the draft never left approved.
+      const attempts = await attemptModel.listByDraft(seed.draftId);
+      expect(attempts).toHaveLength(0);
+      const draft = await draftModel.readAggregate(seed.draftId);
+      expect(draft?.status).toBe("approved");
     }
   });
 
@@ -889,14 +946,23 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
       .save(message);
   }
 
-  /** Write a replyNegativeCheckAt observation directly to the seed message. */
+  /**
+   * Write a complete negative observation directly to the seed message (N01:
+   * timestamp + real context hash — a bare timestamp is not usable evidence).
+   */
   async function writeObservation(
     messageId: number,
     observedAt: Date
   ): Promise<void> {
     await SqliteDb.getInstance(dbpath).connection
       .getRepository(EmailReceivedMessageEntity)
-      .update({ id: messageId }, { replyNegativeCheckAt: observedAt });
+      .update(
+        { id: messageId },
+        {
+          replyNegativeCheckAt: observedAt,
+          replyNegativeContextHash: "test-context-hash",
+        }
+      );
   }
 
   function claimInputFor(
@@ -955,6 +1021,7 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
         { id: msg.id },
         {
           replyNegativeCheckAt: new Date(Date.now() - 1_000),
+          replyNegativeContextHash: "test-context-hash",
           replyNegativeOwnerExpiresAt: new Date(Date.now() - 5_000),
         }
       );
@@ -990,6 +1057,7 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
         { id: msg.id },
         {
           replyNegativeCheckAt: new Date(Date.now() - 1_000),
+          replyNegativeContextHash: "test-context-hash",
           replyNegativeOwnerExpiresAt: new Date(Date.now() + 60_000),
         }
       );
@@ -1265,7 +1333,7 @@ describe("R20 — Send lifecycle audit dual-correlation (model level)", () => {
   async function writeObservation(messageId: number): Promise<void> {
     await SqliteDb.getInstance(dbpath).connection
       .getRepository(EmailReceivedMessageEntity)
-      .update({ id: messageId }, { replyNegativeCheckAt: new Date() });
+      .update({ id: messageId }, { replyNegativeCheckAt: new Date(), replyNegativeContextHash: "test-context-hash" });
   }
 
   function claimInputFor(

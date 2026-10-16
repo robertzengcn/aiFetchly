@@ -1211,7 +1211,8 @@ export class EmailReplyDeliveryService {
     if (
       this.isFreshUsableNegative(
         currentMessage.replyNegativeCheckAt,
-        currentMessage.replyNegativeOwnerExpiresAt
+        currentMessage.replyNegativeOwnerExpiresAt,
+        currentMessage.replyNegativeContextHash
       ) &&
       clusterRows !== null
     ) {
@@ -1274,7 +1275,8 @@ export class EmailReplyDeliveryService {
     if (
       !this.isFreshUsableNegative(
         afterRefresh?.replyNegativeCheckAt ?? null,
-        afterRefresh?.replyNegativeOwnerExpiresAt ?? null
+        afterRefresh?.replyNegativeOwnerExpiresAt ?? null,
+        afterRefresh?.replyNegativeContextHash ?? null
       )
     ) {
       await this.refusePostClaimGate(
@@ -1299,12 +1301,17 @@ export class EmailReplyDeliveryService {
    */
   private isFreshUsableNegative(
     replyNegativeCheckAt: Date | null | undefined,
-    replyNegativeOwnerExpiresAt: Date | null | undefined
+    replyNegativeOwnerExpiresAt: Date | null | undefined,
+    // N01: the row's confirmation/context state. A staged PROBE_PENDING
+    // row — or a row with missing context — is never fresh-usable, even
+    // with a current timestamp and live owner.
+    replyNegativeContextHash: string | null | undefined
   ): boolean {
     if (replyNegativeCheckAt == null) return false;
     if (
       !isNegativeObservationUsable({
         replyNegativeCheckAt,
+        replyNegativeContextHash,
         replyNegativeOwnerExpiresAt,
       })
     ) {
@@ -1445,7 +1452,8 @@ export class EmailReplyDeliveryService {
       clusterRows !== null &&
       this.isFreshUsableNegative(
         currentMessage.replyNegativeCheckAt,
-        currentMessage.replyNegativeOwnerExpiresAt
+        currentMessage.replyNegativeOwnerExpiresAt,
+        currentMessage.replyNegativeContextHash
       )
     ) {
       // Fresh — proceed to the handoff fence (§9.4) with NO extra detect
@@ -1501,7 +1509,8 @@ export class EmailReplyDeliveryService {
       if (
         !this.isFreshUsableNegative(
           afterRefresh?.replyNegativeCheckAt ?? null,
-          afterRefresh?.replyNegativeOwnerExpiresAt ?? null
+          afterRefresh?.replyNegativeOwnerExpiresAt ?? null,
+          afterRefresh?.replyNegativeContextHash ?? null
         )
       ) {
         return this.refusePostClaimGate(

@@ -1933,6 +1933,77 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
     expect(refusals[0]?.reason).toContain("[already_replied]");
   }, 30_000);
 
+  it("N01: a concurrently staged pending negative never grants send permission", async () => {
+    // N01 trigger: our forced check passes in memory, but a concurrent
+    // probe stages its UNCONFIRMED row (current timestamp, live owner,
+    // PROBE_PENDING marker) before the claim/final handoff read it. Neither
+    // the atomic claim nor the final handoff may derive permission from
+    // that row — refresh (which persists nothing new here) must also
+    // refuse, with zero SMTP and the staged row untouched.
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
+    const { draftId, token, messageId } = await seedValidApproval();
+    const smtpCalls = { count: 0 };
+    const detectionServiceFactory = () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(
+        async (input: {
+          messageId: number;
+          forceRefresh?: boolean;
+          excludeDraftId?: number;
+          excludeAttemptId?: number;
+        }) => {
+          const isRefresh =
+            input.excludeAttemptId !== undefined &&
+            input.excludeDraftId !== undefined;
+          if (!isRefresh) {
+            await messageModule.updateReplyEvidence({
+              id: input.messageId,
+              replyNegativeCheckAt: new Date(),
+              replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+              replyNegativeOwnerExpiresAt: new Date(Date.now() + 60_000),
+              isAnswered: 0,
+              answeredFlagCheckedAt: new Date(),
+            });
+            return NOT_REPLIED_DETECTION;
+          }
+          // The single permitted refresh re-probes but persists nothing
+          // new — the concurrent probe never confirmed.
+          return { ...NOT_REPLIED_DETECTION };
+        }
+      );
+      return svc;
+    };
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCalls.count += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: CLEAN_BODY,
+            info: `<prov-n01-${smtpCalls.count}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory,
+    });
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(smtpCalls.count).toBe(0);
+    // The staged row was never consumed as permission nor overwritten.
+    const row = await messageModule.read(messageId);
+    expect(row?.replyNegativeContextHash).toBe(PENDING_NEGATIVE_CONTEXT);
+  });
+
   it("F02: dead claim at the handoff fence refuses with zero SMTP", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
     // The fence's ownership read is the only attemptModule.read in the send
