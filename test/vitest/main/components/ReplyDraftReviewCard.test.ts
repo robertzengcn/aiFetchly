@@ -235,6 +235,82 @@ describe("ReplyDraftReviewCard — revision-bound review flow (T02)", () => {
     );
   });
 
+  it("ignores a superseded load that resolves last (R08)", async () => {
+    // Load A pending; navigate to B (load B starts); B resolves, then
+    // stale A resolves last. A must never overwrite B on screen.
+    let resolveA!: (v: ReplyDraftDetail) => void;
+    let resolveB!: (v: ReplyDraftDetail) => void;
+    const gateA = new Promise<ReplyDraftDetail>((r) => (resolveA = r));
+    const gateB = new Promise<ReplyDraftDetail>((r) => (resolveB = r));
+    vi.mocked(getEmailReplyDraft)
+      .mockReturnValueOnce(gateA)
+      .mockReturnValueOnce(gateB);
+    const wrapper = mountCard(11);
+    await wrapper.setProps({ draftId: 12 });
+    expect(vi.mocked(getEmailReplyDraft).mock.calls).toEqual([[11], [12]]);
+    resolveB(draftDetail({ id: 12, bodyText: "Body B" }));
+    await flushPromises();
+    resolveA(draftDetail({ id: 11, bodyText: "Body A" }));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="draft-review-body"]').text()
+    ).toContain("Body B");
+  });
+
+  it("a stale failure never clears a newer successful result (R08)", async () => {
+    let rejectA!: (e: unknown) => void;
+    let resolveB!: (v: ReplyDraftDetail) => void;
+    const gateA = new Promise<ReplyDraftDetail>((_, rej) => (rejectA = rej));
+    const gateB = new Promise<ReplyDraftDetail>((r) => (resolveB = r));
+    vi.mocked(getEmailReplyDraft)
+      .mockReturnValueOnce(gateA)
+      .mockReturnValueOnce(gateB);
+    const wrapper = mountCard(11);
+    await wrapper.setProps({ draftId: 12 });
+    resolveB(draftDetail({ id: 12, bodyText: "Body B" }));
+    await flushPromises();
+    rejectA(new Error("stale load failed"));
+    await flushPromises();
+    // B's content survives; no loading spinner stuck on.
+    expect(
+      wrapper.find('[data-testid="draft-review-body"]').text()
+    ).toContain("Body B");
+    expect(
+      wrapper.find('[data-testid="draft-review-loading"]').exists()
+    ).toBe(false);
+  });
+
+  it("clears previous content on navigation while the next draft loads (R08)", async () => {
+    vi.mocked(getEmailReplyDraft).mockResolvedValue(
+      draftDetail({ id: 11, bodyText: "Body A" })
+    );
+    const wrapper = mountCard(11);
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="draft-review-body"]').text()
+    ).toContain("Body A");
+    // The next load hangs; A's settled content must vanish immediately.
+    vi.mocked(getEmailReplyDraft).mockReturnValue(
+      new Promise<ReplyDraftDetail>(() => {})
+    );
+    await wrapper.setProps({ draftId: 12 });
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="draft-review-body"]').exists()
+    ).toBe(false);
+  });
+
+  it("never submits a revision loaded for a different draft (R08)", async () => {
+    // A lying backend answers 12's load with 11's row: the resolve submit
+    // must not send draft 12 with revision of draft 11.
+    vi.mocked(getEmailReplyDraft).mockResolvedValue(draftDetail({ id: 11 }));
+    const wrapper = mountCard(12);
+    await flushPromises();
+    await wrapper.find('[data-testid="draft-review-resolve-btn"]').trigger("click");
+    await flushPromises();
+    expect(resolveEmailReplyHumanReview).not.toHaveBeenCalled();
+  });
+
   it("renders the no-flag state for a clean draft", async () => {
     vi.mocked(getEmailReplyDraft).mockResolvedValue(
       draftDetail({ requiresHumanReview: false })

@@ -180,28 +180,56 @@ const canResolve = computed(() => {
   return d !== null && d.requiresHumanReview && !isResolvedForCurrent.value;
 });
 
+/**
+ * R08: request generation + requested id. Load A pending, navigate to B
+ * (load B starts), B resolves, then A resolves last — without these
+ * guards A would overwrite B while the screen still shows B, and a stale
+ * failure could clear a newer successful result. Every load captures its
+ * generation and requested id; only the latest generation for the
+ * currently displayed draft may touch reactive state.
+ */
+let loadGeneration = 0;
+
 async function loadDetail(): Promise<void> {
+  const generation = ++loadGeneration;
+  const requestedId = props.draftId;
   loading.value = true;
   try {
-    draft.value = await getEmailReplyDraft(props.draftId);
+    const detail = await getEmailReplyDraft(requestedId);
+    if (generation !== loadGeneration || requestedId !== props.draftId) {
+      return;
+    }
+    draft.value = detail;
   } catch {
+    if (generation !== loadGeneration || requestedId !== props.draftId) {
+      return;
+    }
     draft.value = null;
   } finally {
-    loading.value = false;
+    if (generation === loadGeneration && requestedId === props.draftId) {
+      loading.value = false;
+    }
   }
 }
 
 async function resolveReview(): Promise<void> {
+  const draftId = props.draftId;
   const revisionId = draft.value?.currentRevisionId;
   if (revisionId == null || resolving.value) return;
+  // R08: never submit a revision loaded for a different draft — the
+  // backend's binding check would refuse, but the screen must not even
+  // send a mismatched draft/revision pair.
+  if (draft.value?.id !== draftId) return;
   resolving.value = true;
   resolveError.value = false;
   try {
     const result = await resolveEmailReplyHumanReview({
-      draftId: props.draftId,
+      draftId,
       revisionId,
       note: note.value || undefined,
     });
+    // Navigated mid-resolve: leave the new draft's loader/state alone.
+    if (props.draftId !== draftId) return;
     if (result.resolved) {
       note.value = "";
       await loadDetail();
@@ -209,6 +237,7 @@ async function resolveReview(): Promise<void> {
       resolveError.value = true;
     }
   } catch {
+    if (props.draftId !== draftId) return;
     resolveError.value = true;
   } finally {
     resolving.value = false;
@@ -224,6 +253,9 @@ watch(
   () => {
     note.value = "";
     resolveError.value = false;
+    // R08: clear previous content on navigation — never show A's settled
+    // content while B loads.
+    draft.value = null;
     void loadDetail();
   }
 );
