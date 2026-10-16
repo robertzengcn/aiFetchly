@@ -59,9 +59,9 @@ The two database diagnostic cases used current model/module/service implementati
 - **Actual:** the snapshot transaction uses `replyWriteMutex`, but the normal received-message evidence UPDATE does not. Both use the same SQLite connection, so that plain UPDATE can run during an awaited transaction callback. The returned snapshot can contain the old negative `seedMessage` and a positive seed inside `clusterRows`. The evaluator tests the old seed, then explicitly skips the newer cluster row with `if (row.id === seed.id) continue`, and returns `admit` from the old negative.
 - **Real SQLite reproduction:** an async TypeORM load subscriber scheduled the actual `EmailReceivedMessageModel.updateReplyEvidence` after the seed materialized. Actual `readFinalSendAdmission` returned an old non-positive seed and a cluster containing the positive seed; the stored row was positive after the transaction. Actual `evaluateFinalAdmission` nevertheless returned **`admit`**. No SMTP was invoked by this diagnostic.
 - **Impact:** positive local reply evidence already present at the decision is ignored, permitting the send path to proceed despite FR-029/031. The transaction fixes interleaving with other serialized draft/guard transactions; it does not automatically serialize every repository writer sharing that connection.
-- [ ] Inspect positive evidence on **every** returned cluster row, including the seed. Do not discard a more recent positive merely because its ID matches the earlier seed snapshot.
-- [ ] Coordinate all eligibility/evidence mutations with the snapshot's consistency mechanism, or construct the complete admission view through a truly atomic read. Audit normal sync/provider-metadata writers as well as diagnostic evidence writes.
-- [ ] Add a permanent real-SQL regression for the demonstrated interleave. If positive evidence lands before admission completes, require `already_replied`, zero SMTP, safe known-unsent finalization and one owned skip event. Include canonical seed and legacy/sibling paths and avoid reentrant-lock deadlocks in the test scheduler.
+- [x] Inspect positive evidence on **every** returned cluster row, including the seed. Do not discard a more recent positive merely because its ID matches the earlier seed snapshot.
+- [x] Coordinate all eligibility/evidence mutations with the snapshot's consistency mechanism, or construct the complete admission view through a truly atomic read. Audit normal sync/provider-metadata writers as well as diagnostic evidence writes.
+- [x] Add a permanent real-SQL regression for the demonstrated interleave. If positive evidence lands before admission completes, require `already_replied`, zero SMTP, safe known-unsent finalization and one owned skip event. Include canonical seed and legacy/sibling paths and avoid reentrant-lock deadlocks in the test scheduler.
 
 ### C02 — Conditional negative confirmation checks a timestamp captured before database admission [P2]
 
@@ -70,9 +70,9 @@ The two database diagnostic cases used current model/module/service implementati
 - **Actual:** the production module forwards the same input unchanged. The model uses `input.now` for `replyNegativeOwnerExpiresAt >= :now`, so the SQL condition compares against the earlier live timestamp and can confirm an already expired probe. Matching the exact pending observation/owner is an improvement, but does not make a pre-admission Date the execution clock.
 - **Real SQLite reproduction:** stage an actual pending row with a 100 ms owner lifetime, call the actual module with a captured live Date, hold its connection-admission await for 150 ms, then resume without rewriting the input. The actual model returned **true** and persisted the real matchable context hash after expiry. This is not an unfenced mock port: the UPDATE and stored row were real SQLite.
 - **Regression blind spot:** `EmailReplyAuditN01N09G02.integration.test.ts:1005–1012` replaces `input.now` with a fresh value **after** its test barrier. That differs from production forwarding and makes the regression pass while the original stale-Date route remains.
-- [ ] Resolve an advancing clock after actual database admission, or use execution-time database clock semantics in the conditional UPDATE. For deterministic tests, pass a clock function rather than a frozen pre-queue Date.
-- [ ] Preserve the exact staged timestamp/owner, pending marker, monotonic observation and sticky-positive predicates.
-- [ ] Replace/extend the regression to delay actual module/model admission while preserving the detector's original input. Require zero affected rows, an unusable pending row, and a subsequent detection that probes again rather than reusing expired confirmation. Include replacement-owner/newer-positive races.
+- [x] Resolve an advancing clock after actual database admission, or use execution-time database clock semantics in the conditional UPDATE. For deterministic tests, pass a clock function rather than a frozen pre-queue Date.
+- [x] Preserve the exact staged timestamp/owner, pending marker, monotonic observation and sticky-positive predicates.
+- [x] Replace/extend the regression to delay actual module/model admission while preserving the detector's original input. Require zero affected rows, an unusable pending row, and a subsequent detection that probes again rather than reusing expired confirmation. Include replacement-owner/newer-positive races.
 
 ## Remaining implementation and acceptance tasks
 
@@ -81,22 +81,22 @@ The two database diagnostic cases used current model/module/service implementati
 - **Fixed:** UTF-8 byte length replaces the old average-ratio estimator for the stated supported tokenizer assumptions. Dense text/Unicode no longer have that particular undercount. An operator's configured default-model limit now reaches the normalizer/catalog, with provenance retained.
 - **Remaining production route:** `contextSize` is optional (`src/entityTypes/aiProviderTypes.ts:58,79`); the provider's models response or synthetic fallback can omit a window (`OpenAICompatibleProviderClient.ts:171–186`). The resolver then correctly reports unknown, but `EmailReplyDraftGenerationService.ts:2537–2540` substitutes `FALLBACK_CONTEXT_WINDOW_TOKENS = 32768` and continues.
 - **Gap:** an accurate byte bound cannot establish the capacity of a model whose actual context window is unknown. A smaller model without reported/configured metadata can still receive a request admitted against 32K. This is an unclosed requirement boundary, not an observed live-provider rejection in this audit.
-- [ ] Require a verified reported/configured context limit before generation when capacity is unknown, or make a clearly bounded fallback policy an explicit product requirement with its limitation. Do not label an application ceiling as proof of actual model capacity.
-- [ ] Test the real client → normalizer → catalog → generation chain with missing window/configuration, synthetic model discovery, an explicit small window and a configured override. Preserve the byte bound, framing allowance, output reservation and correction preflight.
+- [x] Require a verified reported/configured context limit before generation when capacity is unknown, or make a clearly bounded fallback policy an explicit product requirement with its limitation. Do not label an application ceiling as proof of actual model capacity.
+- [x] Test the real client → normalizer → catalog → generation chain with missing window/configuration, synthetic model discovery, an explicit small window and a configured override. Preserve the byte bound, framing allowance, output reservation and correction preflight.
 
 ### T01 — Isolate settings and restore the ordinary green backend run
 
-- [ ] Fix the unexpected kill-switch refusal in the normal 44-file run. Preserve the concurrent-sent/no-draft assertions; do not make the test accept any refusal.
-- [ ] Isolate Token/electron-store settings per test worker before imports, in addition to database TMPDIR. `isolatedTmpDir.ts` currently isolates SQLite fallback paths; `ElectronStoreService` instead chooses `ELECTRON_USER_DATA_PATH`, Electron userData or project-name settings storage. Upgrade-validation tests intentionally write/clear the kill switch, so database isolation alone does not establish settings isolation.
-- [ ] Capture the actual admission error/correlation and active flag owner when diagnosing parallel failures. A full generation-file pass does not erase the ordinary run's failure.
-- [ ] Make the temporary database proofs into permanent regressions that assert safe behavior after C01/C02 are fixed, and rerun the normal configured suite without an audit-only environment workaround.
+- [x] Fix the unexpected kill-switch refusal in the normal 44-file run. Preserve the concurrent-sent/no-draft assertions; do not make the test accept any refusal.
+- [x] Isolate Token/electron-store settings per test worker before imports, in addition to database TMPDIR. `isolatedTmpDir.ts` currently isolates SQLite fallback paths; `ElectronStoreService` instead chooses `ELECTRON_USER_DATA_PATH`, Electron userData or project-name settings storage. Upgrade-validation tests intentionally write/clear the kill switch, so database isolation alone does not establish settings isolation.
+- [x] Capture the actual admission error/correlation and active flag owner when diagnosing parallel failures. A full generation-file pass does not erase the ordinary run's failure.
+- [x] Make the temporary database proofs into permanent regressions that assert safe behavior after C01/C02 are fixed, and rerun the normal configured suite without an audit-only environment workaround.
 
 ### T02 — Align the PRD deadline with the documented commit-to-certainty exception
 
 - **Fixed:** work stages now reserve their terminal slice inside the total budget, and commit admission/final fencing use an advancing invocation deadline. Do not repeat the old terminal-budget stacking, optional-audit hang or stale pre-queue commit timestamp findings.
 - **Documentation mismatch:** PRD FR-035 still promises a five-minute deadline for the **complete invocation**. Technical design `:438–448` now explicitly allows an admitted atomic commit to finish to certainty beyond that wall. The addendum also says “never a past-deadline success” before describing completion beyond the wall, which needs precise wording.
-- [ ] Make PRD, technical design, acceptance tests and completion claims consistent about deadline-gated admission versus an absolute return-time guarantee. Retain truthful commit outcomes and owner fencing; do not wrap an irreversible commit in a naive timeout that can report failure before a later success.
-- [ ] Record which post-admission exception is accepted and how it is measured. This report treats it as a documented design tradeoff requiring contract alignment, not recurrence of the previous optional-write bug.
+- [x] Make PRD, technical design, acceptance tests and completion claims consistent about deadline-gated admission versus an absolute return-time guarantee. Retain truthful commit outcomes and owner fencing; do not wrap an irreversible commit in a naive timeout that can report failure before a later success.
+- [x] Record which post-admission exception is accepted and how it is measured. This report treats it as a documented design tradeoff requiring contract alignment, not recurrence of the previous optional-write bug.
 
 ### T03 — Execute real provider and rollout acceptance
 
@@ -119,3 +119,16 @@ The two database diagnostic cases used current model/module/service implementati
 | T02 — live acceptance | Still open as current T03; no live pilot results were fabricated. |
 
 Suggested order: fix C01 before releasing guarded sending, close C02 with a production-faithful regression, resolve G01 and ordinary settings/test isolation, align deadline documentation, then complete live acceptance. Earlier TODOs remain historical records; this file reports current evidence only.
+
+## Session disposition — 2026-10-17 implementation (worktree-email-reply-validation-phase1)
+
+All C01, C02, G01, T01, and T02 checkboxes above are complete. T03 (live hosted-AI and IMAP/Sent pilots, measurements, signoff) remains open: operator-run live infrastructure is required, and nothing here fabricates those results. The pilot plan is untouched.
+
+| Item | Disposition | Evidence |
+|---|---|---|
+| C01 (P1) | Fixed both layers: verdict inspects every cluster row including same-id copies (extracted as pure `evaluateFinalSendAdmission`); all received-message evidence mutations hold the shared reply mutex with snapshot readers (WAL made plain-UPDATE interleaving real; deadlock-audited — no txn body calls the guarded methods). | Pure torn-snapshot tests (fail pre-fix with `admit` — verified); real-SQL subscriber regression pins gate refusal on the torn view (fails pre-fix with fence-stage text — verified); sibling/legacy via existing R01 + pure cases. |
+| C02 | Fixed: detector passes its live clock as a function evaluated by the model at execution (after admission); plain Dates still mean a fixed instant. Port/module/model plumb the union through unchanged. | Confirm-delay regression forwards the original input (no barrier re-stamping) and fails against the frozen-Date route — verified both directions. |
+| G01 | Closed as an explicit product requirement (PRD FR-027 bounded-fallback policy with its limitation) plus the configured-limit chain the new test exposed (live path ignored it for listed models). Real-tokenizer comparison stays unexecuted and stated. | Chain tests: client live/synthetic, normalizer attribution, catalog provenance, generation resolver; byte-bound tests from the prior round. |
+| T01 | Fixed: per-worker `ELECTRON_USER_DATA_PATH` isolation in the shared setup (Token/electron-store joins SQLite TMPDIR isolation); kill-switch flake root-caused to cross-worker settings leakage; concurrent-sent test captures actual outcomes without accepting refusals. Full main suite green TWICE at normal parallelism with no workaround; utility + components green; tsc clean. | `d6e29b41d`; `/tmp/r4_full.txt`, `/tmp/r4_full2.txt` (573 files / 5727 tests, 0 failures each). |
+| T02 | Aligned: PRD FR-035 states the split guarantee; design §8.1 + code/test comments use precise start-vs-completion wording; measurement mapping recorded (aggregate/queue/fencing tests; no absolute five-minute wall assertion). | `37f74a9da` (this session). |
+| T03 | Open (operator-side). No live mailbox, provider, metric, or signoff work performed here. | — |
