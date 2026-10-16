@@ -398,9 +398,12 @@ export function registerEmailReceiveIpcHandlers(): void {
         // the renderer can surface the flag without a schema migration.
         // G02: the resolution stamp rides along so the UI can show
         // resolved-for-this-revision vs still-awaiting-review.
+        // T02: the current revision id rides along so the review UI can
+        // bind its acknowledgment to the exact revision under review.
         requiresHumanReview: draft.requiresHumanReview === 1,
         reviewReasonsJson: draft.reviewReasonsJson,
         unresolvedQuestionsJson: draft.unresolvedQuestionsJson,
+        currentRevisionId: draft.currentRevisionId,
         humanReviewResolvedAt: draft.humanReviewResolvedAt
           ? new Date(draft.humanReviewResolvedAt).toISOString()
           : null,

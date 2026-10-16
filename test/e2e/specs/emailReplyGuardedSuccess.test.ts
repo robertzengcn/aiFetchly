@@ -567,4 +567,78 @@ test.describe("Guarded reply success + reconciliation (G04/G02)", () => {
       await smtp.close();
     }
   });
+
+  test("operator resolves the review flag by clicking the real UI control (T02)", async ({
+    aiApp,
+  }) => {
+    test.setTimeout(180_000);
+    // No mailbox/model servers needed: resolution is pure IPC + DB.
+    const serviceResult = await invoke(aiApp, "e2e:seed-email-service", {
+      name: "E2E Review UI Sender",
+      from: SENDER,
+      password: IMAP_PASS,
+      host: "127.0.0.1",
+      port: "25",
+      ssl: 0,
+      status: 1,
+    });
+    expect(serviceResult.status).toBe(true);
+    const serviceId = (serviceResult.data as { id: number }).id;
+    const messageResult = await invoke(aiApp, "e2e:seed-received-message", {
+      emailServiceId: serviceId,
+      providerUid: "e2e-review-ui-1",
+      messageId: "<e2e-review-ui-1@example.com>",
+      fromAddress: RECIPIENT,
+      toAddresses: [SENDER],
+      subject: "E2E review UI original",
+      replyStatus: "not_started",
+    });
+    const messageId = (messageResult.data as { id: number }).id;
+    const seed = await seedDraft(aiApp, {
+      emailServiceId: serviceId,
+      messageId,
+      flagged: true,
+    });
+
+    const page = aiApp.mainWindow;
+    await page.evaluate((draftId: number) => {
+      window.location.hash = `/emailmarketing/emailreply/draft/detail/${draftId}`;
+    }, seed.id);
+    await expect(page.getByTestId("draft-review-card")).toBeVisible({
+      timeout: 15_000,
+    });
+    // Original model reasons render; the pending flag shows.
+    await expect(page.getByTestId("draft-review-reasons")).toContainText(
+      "e2e review reason"
+    );
+    // Approval refuses while unresolved (real gate, real channel).
+    const refused = (await invoke(aiApp, "email:reply:draft:approve", {
+      draftId: seed.id,
+    })) as { status: boolean };
+    expect(refused.status).toBe(false);
+
+    // The operator clicks the real control with a note (the testid sits
+    // on the Vuetify field wrapper; fill its inner textarea).
+    await page
+      .getByTestId("draft-review-note")
+      .locator("textarea:visible")
+      .fill("e2e ui checked tone");
+    await page.getByTestId("draft-review-resolve-btn").click();
+    await expect(page.getByTestId("draft-review-resolved")).toContainText(
+      "resolved for this revision",
+      { timeout: 15_000 }
+    );
+    expect(
+      await page.getByTestId("draft-review-resolve-btn").count()
+    ).toBe(0);
+
+    // The click unlocked the real approval gate.
+    const approve = (await invoke(aiApp, "email:reply:draft:approve", {
+      draftId: seed.id,
+    })) as { status: boolean; msg?: string; data: { token: string } };
+    expect(approve.status, `approve failed: ${approve.msg ?? "?"}`).toBe(
+      true
+    );
+    expect(approve.data.token).toBeTruthy();
+  });
 });

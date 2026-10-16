@@ -79,6 +79,8 @@ export interface ReplyDraftDetail {
   humanReviewResolvedAt: string | null;
   /** G02: the revision the human reviewed (must equal current to count). */
   humanReviewResolvedRevisionId: number | null;
+  /** T02: the draft's current revision id (null until materialized). */
+  currentRevisionId: number | null;
   knowledgeSourcesJson: string | null;
   warningsJson: string | null;
   sentAt: string | null;

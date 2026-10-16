@@ -157,6 +157,7 @@ export default {
     email_receive_detail: "Received Email Detail",
     ai_auto_replies: "AI Auto Replies",
     ai_auto_reply_detail: "AI Auto Reply Detail",
+    ai_reply_draft_detail: "Reply Draft Review",
     knowledge_library: "Knowledge Library",
     mcp_tools: "MCP Tools",
     skills: "Skills",
@@ -1200,6 +1201,11 @@ export default {
     // N09: unresolved reconciliation guidance (delivery remains unknown).
     delivery_unresolved: "Delivery status unknown — human review required. This is not a confirmed failure.",
     delivery_unresolved_hint: "Leave unresolved keeps the attempt ambiguous. Confirm sent/not-sent only with verified evidence.",
+    // T02: explicit review-resolution card.
+    human_review_reasons: "Why review was requested",
+    human_review_questions: "Open questions",
+    human_review_note_label: "Review note",
+    human_review_no_flag: "No human review requested for this draft.",
     knowledge_sources: "Knowledge Sources",
     warnings: "Warnings",
     identity_profile: "Reply Identity Profile",
