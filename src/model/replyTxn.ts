@@ -20,6 +20,18 @@ import { AsyncMutex } from "@/utils/asyncMutex";
  */
 const replyWriteMutex = new AsyncMutex();
 
+/**
+ * C01: the shared reliability write mutex, also held by evidence writers.
+ * The final-admission snapshot reads under this mutex (via {@link
+ * runReplyTxn}); every received-message evidence mutation must hold it
+ * too, so no committed write can land between the snapshot's statements
+ * on the shared connection (WAL mode lets plain UPDATEs interleave).
+ * RESTRICTION: never call a mutex-guarded method from inside a mutex-held
+ * body (the mutex is non-reentrant — transaction bodies must use their
+ * manager-bound repositories directly).
+ */
+export { replyWriteMutex };
+
 /** Run a transaction body under the shared reliability write mutex. */
 export function runReplyTxn<T>(
   sqliteDb: {

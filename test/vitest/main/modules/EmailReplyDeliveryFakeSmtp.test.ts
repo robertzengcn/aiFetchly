@@ -2147,6 +2147,106 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
     expect(message?.replyStatus).toBe("not_started");
   }, 30_000);
 
+  it("C01: positive landing mid-snapshot is refused even when only the cluster copy shows it", async () => {
+    // C01: a positive write committing between the snapshot's own
+    // statements leaves a torn view — an old non-positive seed copy plus
+    // a cluster containing the positive seed. The verdict must refuse on
+    // the positive copy, never admit on the stale seed. Reproduced here
+    // with a real-SQL TypeORM load subscriber (the audit's mechanism):
+    // when the gate's snapshot materializes the seed row, the subscriber
+    // synchronously commits a sticky positive through a raw repository
+    // write (no mutex, no transaction — exactly like an unguarded
+    // sync/provider writer would), so the snapshot's later cluster query
+    // observes it. Raw-write scheduling keeps this deadlock-free: it
+    // takes no lock and runs inside query execution, never reentrantly.
+    // (Mutex-serialized writers cannot produce this tear at all — they
+    // queue behind the snapshot. Sibling positives never needed the fix
+    // and stay covered by the R01 tests + the pure evaluator cases.)
+    const { draftId, token, messageId } = await seedValidApproval();
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { SqliteDb } = await import("@/config/SqliteDb");
+    const { EmailReceivedMessageEntity } = await import(
+      "@/entity/EmailReceivedMessage.entity"
+    );
+    // Same worker-shared fallback DB the service modules resolve.
+    const connection = SqliteDb.getInstance(
+      path.join(os.tmpdir(), "aifetchly-test")
+    ).connection;
+    const repo = connection.getRepository(EmailReceivedMessageEntity);
+    const schedulerErrors: unknown[] = [];
+    // Armed at markSubmitted (post-claim): the tear targets the gate/fence
+    // snapshots, never the claim's own reads.
+    let armed = false;
+    let interleaved = false;
+    const subscriber = {
+      listenTo() {
+        return EmailReceivedMessageEntity;
+      },
+      afterLoad(entity: object) {
+        const row = entity as EmailReceivedMessageEntity;
+        if (!armed || row.id !== messageId || interleaved) return;
+        interleaved = true;
+        // Synchronous-executing write (better-sqlite3 runs on call):
+        // committed before the snapshot's cluster query runs.
+        void repo
+          .update(
+            { id: messageId },
+            {
+              replyDetectedAt: new Date(),
+              replyDetectionSource: "sent_search",
+              replyMatchedMessageId: "<c01-reply@x>",
+            }
+          )
+          .catch((error: unknown) => {
+            schedulerErrors.push(error);
+          });
+      },
+    };
+    connection.subscribers.push(
+      subscriber as unknown as (typeof connection.subscribers)[number]
+    );
+    try {
+      const { delivery, smtpCalls, detectCalls } = buildGateDelivery({
+        holdMs: 0,
+        refreshResult: NOT_REPLIED_DETECTION,
+        onMarkSubmitted: async () => {
+          armed = true;
+        },
+      });
+      let rejection: SendPolicyRejection | null = null;
+      try {
+        await delivery.sendApprovedReply({ draftId, approvalToken: token });
+      } catch (error) {
+        if (error instanceof SendPolicyRejection) rejection = error;
+      }
+      expect(schedulerErrors).toEqual([]);
+      expect(interleaved).toBe(true);
+      expect(rejection).toBeInstanceOf(SendPolicyRejection);
+      expect(rejection?.code).toBe("already_replied");
+      expect(smtpCalls.count).toBe(0);
+      // Refused before any refresh: the single allowance was never spent.
+      expect(detectCalls.count).toBe(1);
+      const refusals = await refusalAuditsFor(messageId);
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]?.reason).toContain("[already_replied]");
+      // Discriminating assertion: the GATE's coherent snapshot already
+      // contained the positive seed copy, so the gate (not a later fence)
+      // refused on it. Pre-fix code skipped same-id cluster rows, admitted
+      // here, and only the fence refused with its own stage text.
+      expect(refusals[0]?.reason).toContain(
+        "Post-claim gate found positive reply evidence on the message"
+      );
+    } finally {
+      const idx = (
+        connection.subscribers as unknown[]
+      ).indexOf(subscriber as unknown);
+      if (idx >= 0) {
+        (connection.subscribers as unknown[]).splice(idx, 1);
+      }
+    }
+  }, 30_000);
+
   it("F02: dead claim at the handoff fence refuses with zero SMTP", async () => {
     const { draftId, token, messageId } = await seedValidApproval();
     // Report the claim as already-terminal (recovered + reconciled while

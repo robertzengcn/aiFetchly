@@ -64,6 +64,125 @@ import {
 } from "@/service/emailReply/EmailReplySubmitterTracker";
 
 /**
+ * N04/C01: input shape for the pure final-admission verdict. Structurally
+ * the snapshot rows (entities satisfy it); tests construct torn snapshots
+ * literally to pin verdict logic without a database.
+ */
+export interface FinalSendAdmissionSnapshot {
+  readonly attempt: {
+    readonly status: string;
+  } | null;
+  readonly seedMessage: {
+    readonly id: number;
+    readonly replyDetectedAt: Date | null;
+    readonly replyStatus: string | null;
+    readonly replyNegativeCheckAt: Date | null;
+    readonly replyNegativeContextHash: string | null;
+    readonly replyNegativeOwnerExpiresAt: Date | null;
+  } | null;
+  readonly clusterRows: ReadonlyArray<{
+    readonly id: number;
+    readonly replyDetectedAt: Date | null;
+    readonly replyStatus: string | null;
+  }> | null;
+}
+
+export type FinalSendAdmissionVerdict =
+  | { readonly kind: "admit" }
+  | {
+      readonly kind: "refuse";
+      readonly code: EmailReplyPolicyCode;
+      readonly reason: string;
+    }
+  | { readonly kind: "stale" };
+
+/**
+ * N04/C01: PURE coherent admission verdict over one snapshot (no DB, no
+ * I/O — unit-testable). Refuses on ANY positive evidence anywhere in the
+ * snapshot, including a newer positive copy of the seed row itself: the
+ * old code skipped `row.id === seed.id` cluster rows, so a positive that
+ * landed between the snapshot's own statements (torn snapshot) was
+ * ignored and the stale seed admitted SMTP. The shared reply mutex now
+ * serializes evidence writers with snapshot readers, but the evaluator
+ * does not trust snapshot coherence for positives — every row is
+ * inspected. Freshness/age is enforced synchronously by the caller after
+ * this returns (pass `nowMs`, default wall clock).
+ */
+export function evaluateFinalSendAdmission(
+  snapshot: FinalSendAdmissionSnapshot,
+  stage: "gate" | "fence",
+  nowMs: number = Date.now()
+): FinalSendAdmissionVerdict {
+  const where = stage === "gate" ? "Post-claim gate" : "Handoff fence";
+  const attempt = snapshot.attempt;
+  if (
+    !attempt ||
+    (attempt.status !== "claimed" && attempt.status !== "submitted")
+  ) {
+    const code: EmailReplyPolicyCode =
+      attempt?.status === "sent"
+        ? "already_replied"
+        : attempt?.status === "delivery_unknown"
+          ? "delivery_unknown"
+          : attempt?.status === "failed"
+            ? "reply_state_conflict"
+            : "reply_state_unknown";
+    const reason =
+      attempt == null
+        ? `Send claim lost before SMTP (${where}): attempt no longer exists`
+        : `Send claim lost before SMTP (${where}): attempt is ${attempt.status} (recovered/reconciled while this operation was paused)`;
+    return { kind: "refuse", code, reason };
+  }
+  const seed = snapshot.seedMessage;
+  if (!seed) {
+    return {
+      kind: "refuse",
+      code: "probe_failed",
+      reason: `${where}: original message not found before SMTP`,
+    };
+  }
+  if (seed.replyDetectedAt != null || seed.replyStatus === "sent") {
+    return {
+      kind: "refuse",
+      code: "already_replied",
+      reason: `${where} found positive reply evidence on the message before SMTP`,
+    };
+  }
+  const clusterRows = snapshot.clusterRows;
+  if (clusterRows !== null) {
+    for (const row of clusterRows) {
+      if (row.replyDetectedAt == null && row.replyStatus !== "sent") continue;
+      // C01: NO seed-id skip. The cluster copy of the seed may be NEWER
+      // than the seed snapshot (a positive committed between the
+      // snapshot's own statements); discarding it admits SMTP on known
+      // positive evidence. Same-id positives report as the message (they
+      // ARE the seed message); others report as equivalents.
+      const onSeed = row.id === seed.id;
+      return {
+        kind: "refuse",
+        code: "already_replied",
+        reason: onSeed
+          ? `${where} found positive reply evidence on the message before SMTP`
+          : `${where} found positive reply evidence on an equivalent message before SMTP`,
+      };
+    }
+  }
+  if (
+    clusterRows !== null &&
+    seed.replyNegativeCheckAt != null &&
+    isNegativeObservationUsable({
+      replyNegativeCheckAt: seed.replyNegativeCheckAt,
+      replyNegativeContextHash: seed.replyNegativeContextHash,
+      replyNegativeOwnerExpiresAt: seed.replyNegativeOwnerExpiresAt,
+    }) &&
+    nowMs - seed.replyNegativeCheckAt.getTime() <= FORCED_FRESHNESS_WINDOW_MS
+  ) {
+    return { kind: "admit" };
+  }
+  return { kind: "stale" };
+}
+
+/**
  * Sender interface the delivery service uses for the SMTP handoff. The default
  * factory builds a real {@link ReplyEmailService}; tests inject a fake to drive
  * the accepted / rejected / disconnect / post-SMTP-DB-failure scenarios.
@@ -1116,83 +1235,16 @@ export class EmailReplyDeliveryService {
    * the allowance itself with an excluded forceRefresh probe.
    */
   /**
-   * N04: coherent admission verdict over ONE snapshot. The attempt,
-   * seed, and cluster observations are mutually consistent (read inside
-   * a single Model transaction), so the decision can never combine a
-   * stale attempt snapshot with newer cluster evidence or vice versa.
+   * N04: coherent admission verdict over ONE snapshot. Delegates to the
+   * pure {@link evaluateFinalSendAdmission} (unit-testable without DB).
    */
   private evaluateFinalAdmission(
     snapshot: Awaited<
       ReturnType<EmailReplyDraftModule["readFinalSendAdmission"]>
     >,
     stage: "gate" | "fence"
-  ):
-    | { readonly kind: "admit" }
-    | {
-        readonly kind: "refuse";
-        readonly code: EmailReplyPolicyCode;
-        readonly reason: string;
-      }
-    | { readonly kind: "stale" } {
-    const where = stage === "gate" ? "Post-claim gate" : "Handoff fence";
-    const attempt = snapshot.attempt;
-    if (
-      !attempt ||
-      (attempt.status !== "claimed" && attempt.status !== "submitted")
-    ) {
-      const code: EmailReplyPolicyCode =
-        attempt?.status === "sent"
-          ? "already_replied"
-          : attempt?.status === "delivery_unknown"
-            ? "delivery_unknown"
-            : attempt?.status === "failed"
-              ? "reply_state_conflict"
-              : "reply_state_unknown";
-      const reason =
-        attempt == null
-          ? `Send claim lost before SMTP (${where}): attempt no longer exists`
-          : `Send claim lost before SMTP (${where}): attempt is ${attempt.status} (recovered/reconciled while this operation was paused)`;
-      return { kind: "refuse", code, reason };
-    }
-    const seed = snapshot.seedMessage;
-    if (!seed) {
-      return {
-        kind: "refuse",
-        code: "probe_failed",
-        reason: `${where}: original message not found before SMTP`,
-      };
-    }
-    if (seed.replyDetectedAt != null || seed.replyStatus === "sent") {
-      return {
-        kind: "refuse",
-        code: "already_replied",
-        reason: `${where} found positive reply evidence on the message before SMTP`,
-      };
-    }
-    const clusterRows = snapshot.clusterRows;
-    if (clusterRows !== null) {
-      for (const row of clusterRows) {
-        if (row.id === seed.id) continue;
-        if (row.replyDetectedAt != null || row.replyStatus === "sent") {
-          return {
-            kind: "refuse",
-            code: "already_replied",
-            reason: `${where} found positive reply evidence on an equivalent message before SMTP`,
-          };
-        }
-      }
-    }
-    if (
-      clusterRows !== null &&
-      this.isFreshUsableNegative(
-        seed.replyNegativeCheckAt,
-        seed.replyNegativeOwnerExpiresAt,
-        seed.replyNegativeContextHash
-      )
-    ) {
-      return { kind: "admit" };
-    }
-    return { kind: "stale" };
+  ): FinalSendAdmissionVerdict {
+    return evaluateFinalSendAdmission(snapshot, stage);
   }
 
   private async checkClaimOwnershipBeforeSmtp(input: {
@@ -1308,33 +1360,6 @@ export class EmailReplyDeliveryService {
       "probe_failed",
       "Handoff refresh completed without a fresh usable negative observation before SMTP"
     );
-  }
-
-  /**
-   * R01/R02: a negative timestamp grants SMTP permission only when it is
-   * both fresh (within the forced window as of the LAST awaited read) and
-   * usable (not an expired owner's result). One predicate for the gate and
-   * the handoff fence so the two cannot disagree on what "fresh" means.
-   */
-  private isFreshUsableNegative(
-    replyNegativeCheckAt: Date | null | undefined,
-    replyNegativeOwnerExpiresAt: Date | null | undefined,
-    // N01: the row's confirmation/context state. A staged PROBE_PENDING
-    // row — or a row with missing context — is never fresh-usable, even
-    // with a current timestamp and live owner.
-    replyNegativeContextHash: string | null | undefined
-  ): boolean {
-    if (replyNegativeCheckAt == null) return false;
-    if (
-      !isNegativeObservationUsable({
-        replyNegativeCheckAt,
-        replyNegativeContextHash,
-        replyNegativeOwnerExpiresAt,
-      })
-    ) {
-      return false;
-    }
-    return Date.now() - replyNegativeCheckAt.getTime() <= FORCED_FRESHNESS_WINDOW_MS;
   }
 
   /**

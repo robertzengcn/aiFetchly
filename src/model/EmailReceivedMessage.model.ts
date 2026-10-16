@@ -5,6 +5,7 @@ import {
   PENDING_NEGATIVE_CONTEXT,
 } from "@/service/emailReceive/EmailReplyIdentity";
 import { LEGACY_SIBLING_SCAN_LIMIT } from "@/model/replyClusterEvidence";
+import { replyWriteMutex } from "@/model/replyTxn";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { SortBy } from "@/entityTypes/commonType";
 import {
@@ -142,17 +143,21 @@ export class EmailReceivedMessageModel extends BaseDb {
    * is already written by the provider patch / insert before this runs.
    */
   private async recordSyncAnsweredPositive(id: number): Promise<void> {
-    const observedAt = new Date();
-    await this.repository
-      .createQueryBuilder()
-      .update(EmailReceivedMessageEntity)
-      .set({
-        replyDetectedAt: () => "COALESCE(replyDetectedAt, :detectedAt)",
-        replyDetectionSource: () => "COALESCE(replyDetectionSource, :source)",
-      })
-      .where("id = :id", { id })
-      .setParameters({ detectedAt: observedAt, source: "mailbox_flag" })
-      .execute();
+    // C01: serialized with admission snapshots (see replyTxn) — a sticky
+    // positive must not land between a snapshot's statements.
+    return await replyWriteMutex.run(async () => {
+      const observedAt = new Date();
+      await this.repository
+        .createQueryBuilder()
+        .update(EmailReceivedMessageEntity)
+        .set({
+          replyDetectedAt: () => "COALESCE(replyDetectedAt, :detectedAt)",
+          replyDetectionSource: () => "COALESCE(replyDetectionSource, :source)",
+        })
+        .where("id = :id", { id })
+        .setParameters({ detectedAt: observedAt, source: "mailbox_flag" })
+        .execute();
+    });
   }
 
   /**
@@ -183,6 +188,19 @@ export class EmailReceivedMessageModel extends BaseDb {
     replyNegativeContextHash: string;
     replyNegativeOwnerExpiresAt?: Date | null;
     /** Commit-time clock for the liveness predicate; defaults to wall time. */
+    now?: Date;
+  }): Promise<boolean> {
+    // C01: serialized with admission snapshots (see replyTxn).
+    return await replyWriteMutex.run(() =>
+      this.confirmStagedNegativeEvidenceInner(input)
+    );
+  }
+
+  private async confirmStagedNegativeEvidenceInner(input: {
+    id: number;
+    replyNegativeCheckAt: Date;
+    replyNegativeContextHash: string;
+    replyNegativeOwnerExpiresAt?: Date | null;
     now?: Date;
   }): Promise<boolean> {
     const now = input.now ?? new Date();
@@ -223,6 +241,21 @@ export class EmailReceivedMessageModel extends BaseDb {
    * negatives are not written at all.
    */
   async updateReplyEvidence(input: {
+    id: number;
+    replyDetectedAt?: Date | null;
+    replyDetectionSource?: string | null;
+    replyMatchedMessageId?: string | null;
+    replyNegativeCheckAt?: Date | null;
+    replyNegativeContextHash?: string | null;
+    replyNegativeOwnerExpiresAt?: Date | null;
+    isAnswered?: number;
+    answeredFlagCheckedAt?: Date | null;
+  }): Promise<boolean> {
+    // C01: serialized with admission snapshots (see replyTxn).
+    return await replyWriteMutex.run(() => this.updateReplyEvidenceInner(input));
+  }
+
+  private async updateReplyEvidenceInner(input: {
     id: number;
     replyDetectedAt?: Date | null;
     replyDetectionSource?: string | null;
