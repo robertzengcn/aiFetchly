@@ -29,6 +29,7 @@ import { log } from "@/modules/Logger";
 import {
   EmailReplyDetectionService,
   REPLY_DETECTOR_VERSION,
+  clampCacheObservationMs,
   type ReplyDetectionMessagePort,
   type ReplyDetectionDraftPort,
   type ReplyDetectionAttemptPort,
@@ -1002,5 +1003,85 @@ describe("EmailReplyDetection cache telemetry (T12/FR-039)", () => {
     expect(firstLine).not.toContain(message.messageId);
     expect(firstLine).not.toContain(SENDER);
     expect(firstLine).toContain('"state":"probe"');
+  });
+});
+
+describe("clampCacheObservationMs (N03)", () => {
+  const NOW = 2_000_000_000_000;
+  it("keeps a valid past observation instant", () => {
+    expect(clampCacheObservationMs(new Date(NOW - 1_000).toISOString(), NOW)).toBe(
+      NOW - 1_000
+    );
+    expect(clampCacheObservationMs(NOW - 1_000, NOW)).toBe(NOW - 1_000);
+  });
+  it("clamps future stamps to now (skew must never extend freshness)", () => {
+    expect(clampCacheObservationMs(new Date(NOW + 5_000).toISOString(), NOW)).toBe(
+      NOW
+    );
+  });
+  it("falls back to now for missing or unparseable stamps", () => {
+    for (const bad of [null, undefined, {}, [], "", "not-a-date", NaN]) {
+      expect(clampCacheObservationMs(bad, NOW)).toBe(NOW);
+    }
+  });
+});
+
+describe("EmailReplyDetection memory TTL anchors on observation time (N03)", () => {
+  it("closing work after observation does not restart the 60s TTL", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    // N03: closing reads (config/identity reread after mailbox I/O)
+    // consume 10s inside the probe budget: observation at T, cache
+    // insertion at T+10s.
+    const innerGetConfig = kit.emailServicePort.getEmailServiceReceiveConfig.bind(
+      kit.emailServicePort
+    );
+    kit.emailServicePort.getEmailServiceReceiveConfig = async (id: number) => {
+      clock.advance(10_000);
+      return innerGetConfig(id);
+    };
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("not_replied");
+    expect(r1.fromCache).toBe(false);
+    const observedAt = new Date(r1.checkedAt ?? 0).getTime();
+    const probes1 = kit.imapPort.discoverCalls;
+    // Advance to observation+65s (insertion+55s): the persisted-cache path
+    // rejects this (65s > 60s TTL); the memory path must agree — a new
+    // network probe, not a stale hit.
+    clock.advance(55_000);
+    expect(clock.now()).toBe(observedAt + 65_000);
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+
+  it("exact TTL boundary: observation+60s hits, observation+60s+1ms re-probes", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("not_replied");
+    const observedAt = new Date(r1.checkedAt ?? 0).getTime();
+    const probes1 = kit.imapPort.discoverCalls;
+    // Exactly at the boundary (ageMs <= TTL): memory hit, no re-probe.
+    clock.advance(60_000 - (clock.now() - observedAt));
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.fromCache).toBe(true);
+    expect(kit.imapPort.discoverCalls).toBe(probes1);
+    // 1ms past: expired, re-probes.
+    clock.advance(1);
+    const r3 = await kit.service.detect({ messageId: message.id });
+    expect(r3.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
   });
 });

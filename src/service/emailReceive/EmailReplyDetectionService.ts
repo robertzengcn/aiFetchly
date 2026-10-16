@@ -106,6 +106,25 @@ export type {
  */
 export const REPLY_DETECTOR_VERSION = "reply-detection-v2";
 
+/**
+ * N03: validate + clamp the memory-cache TTL anchor. Returns the original
+ * observation instant when usable; clamps future stamps to `nowMs` (clock
+ * skew must never EXTEND freshness) and falls back to `nowMs` for missing
+ * or unparseable stamps (the result was just produced, so insertion time
+ * is the honest observation time). Pure — unit-tested directly.
+ */
+export function clampCacheObservationMs(
+  checkedAt: unknown,
+  nowMs: number
+): number {
+  if (typeof checkedAt !== "string" && typeof checkedAt !== "number") {
+    return nowMs;
+  }
+  const parsed = new Date(checkedAt).getTime();
+  if (!Number.isFinite(parsed) || parsed > nowMs) return nowMs;
+  return parsed;
+}
+
 /** Negative cache TTL (§7.3): a complete negative is reusable for 60s. */
 const NEGATIVE_CACHE_TTL_MS = 60_000;
 
@@ -638,7 +657,12 @@ export class EmailReplyDetectionService {
       if (result.state === "replied" || result.state === "not_replied") {
         this.cache.set(cacheKey, {
           result,
-          observedAt: this.now(),
+          // N03: expiry anchors on the ORIGINAL observation instant, not
+          // cache insertion. Closing reads/confirmation work after a
+          // complete observation must not restart the 60s TTL — otherwise a
+          // 65s-old observation served at insertion+55s looks fresh while
+          // the persisted-cache path correctly rejects it.
+          observedAt: this.cacheObservationMs(result),
           contextHash,
         });
       }
@@ -1593,6 +1617,17 @@ export class EmailReplyDetectionService {
       fromCache: true,
       coverage: "configured_imap",
     };
+  }
+
+  /**
+   * N03: observation instant anchoring the memory-cache TTL. Uses the
+   * result's ORIGINAL `checkedAt` via {@link clampCacheObservationMs} —
+   * validated so clock skew can never extend freshness. Positives ignore
+   * the TTL (sticky), but share the same anchoring for uniformity.
+   */
+  private cacheObservationMs(result: ReplyDetectionResult): number {
+    const checkedAt: unknown = (result as { checkedAt?: unknown }).checkedAt;
+    return clampCacheObservationMs(checkedAt, this.now());
   }
 
   /**
