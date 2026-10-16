@@ -205,10 +205,6 @@ function buildMatrixKit(input: {
       updateCalls.push(patch);
       return true;
     },
-    // F03: matrix fakes never expire, so voiding is a no-op report.
-    async voidExpiredNegativeWrite() {
-      return false;
-    },
   };
   const draftPort: ReplyDetectionDraftPort = {
     async listByMessages() {

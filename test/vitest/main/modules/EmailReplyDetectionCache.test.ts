@@ -174,10 +174,6 @@ function buildKit(opts: {
       updateCalls.push(input);
       return true;
     },
-    // F03: stub fakes never expire, so voiding is a no-op report.
-    async voidExpiredNegativeWrite() {
-      return false;
-    },
     updateCalls,
   };
   const draftPort: ReplyDetectionDraftPort = {
@@ -920,6 +916,56 @@ describe("EmailReplyDetection cache telemetry (T12/FR-039)", () => {
     ).toBe(1);
     expect(kit.imapPort.discoverCalls).toBe(0);
     expect(kit.imapPort.refreshCalls).toHaveLength(0);
+  });
+
+  it("R02: expired-owner persisted negative is never reused — a fresh probe runs", async () => {
+    const clock = manualClock();
+    // Same fresh-looking negative (30s old, matching context hash), but its
+    // owning probe expired 40s ago (observed AFTER the owner end): an
+    // abandoned timed-out probe whose compensating void never ran. Readers
+    // must reject it even though the TTL has not elapsed.
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
+      replyNegativeOwnerExpiresAt: new Date(1_000_000 - 40_000),
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    // Not served from cache: a full probe ran instead.
+    expect(r.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBeGreaterThan(0);
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{expired_owner=true,hit=false}")
+    ).toBe(1);
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_negative}")
+    ).toBeUndefined();
+  });
+
+  it("R02: legacy persisted negative without owner tracking still reuses", async () => {
+    // Grandfathered rows (written before owner tracking) keep the previous
+    // age-only semantics: a fresh matching negative is served from cache.
+    const clock = manualClock();
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
+      replyNegativeOwnerExpiresAt: null,
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("not_replied");
+    expect(r.fromCache).toBe(true);
   });
 
   it("probe path emits email_reply_detection_duration_ms via the logger (p95-able latency signal)", async () => {

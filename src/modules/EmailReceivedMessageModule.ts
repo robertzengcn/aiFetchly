@@ -156,24 +156,6 @@ export class EmailReceivedMessageModule extends BaseModule {
   }
 
   /**
-   * F03 — void a negative write that completed after its probe owner expired.
-   * Removes exactly the given observation; newer negatives and sticky
-   * positives are untouched. See the model for the conditional semantics.
-   */
-  async voidExpiredNegativeWrite(input: {
-    id: number;
-    observedAt: Date;
-  }): Promise<boolean> {
-    try {
-      await this.ensureConnection();
-      return await this.messageModel.voidExpiredNegativeWrite(input);
-    } catch (error) {
-      console.error("Error voiding expired negative evidence:", error);
-      throw error;
-    }
-  }
-
-  /**
    * Detection-owned evidence write (FR-030/FR-031). Sticky positive: once
    * `replyDetectedAt` is set it is never cleared; negatives only land while
    * no positive evidence exists. See the model for the full fence semantics.

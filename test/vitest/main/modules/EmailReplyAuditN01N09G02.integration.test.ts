@@ -10,6 +10,7 @@ import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import {
   canonicalReplyKey,
+  isNegativeObservationUsable,
   normalizeStoredMessageId,
 } from "@/service/emailReceive/EmailReplyIdentity";
 import { readClusterEvidence, evidenceToPhase } from "@/model/replyClusterEvidence";
@@ -475,24 +476,47 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     expect(row?.replyNegativeCheckAt?.getTime()).toBe(t1.getTime());
   });
 
-  it("F03: void removes exactly the expired observation and nothing else", async () => {
+  it("R02: staged pending rows are stored unconfirmed and confirmed exactly", async () => {
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
     const model = await messageModel();
     const seed = await seedMessage({});
     const t1 = new Date(1_700_000_010_000);
-    await model.updateReplyEvidence({
-      id: seed.id,
-      replyNegativeCheckAt: t1,
-      replyNegativeContextHash: "ctx",
-      isAnswered: 0,
-      answeredFlagCheckedAt: t1,
-    });
-    expect(await model.voidExpiredNegativeWrite({ id: seed.id, observedAt: t1 })).toBe(true);
-    const row = await readRow(seed.id);
-    expect(row?.replyNegativeCheckAt).toBeNull();
-    expect(row?.replyNegativeContextHash).toBeNull();
+    // Stage (what an abandoned probe leaves behind): timestamp + owner +
+    // sentinel hash, never a matchable context.
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t1,
+        replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+        replyNegativeOwnerExpiresAt: new Date(1_700_000_025_000),
+        isAnswered: 0,
+        answeredFlagCheckedAt: t1,
+      })
+    ).toBe(true);
+    const staged = await readRow(seed.id);
+    expect(staged?.replyNegativeCheckAt?.getTime()).toBe(t1.getTime());
+    expect(staged?.replyNegativeContextHash).toBe(PENDING_NEGATIVE_CONTEXT);
+    // Confirm (same instant, real hash): overwrites the staged marker.
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t1,
+        replyNegativeContextHash: "ctx-real",
+        replyNegativeOwnerExpiresAt: new Date(1_700_000_025_000),
+        isAnswered: 0,
+        answeredFlagCheckedAt: t1,
+      })
+    ).toBe(true);
+    const confirmed = await readRow(seed.id);
+    expect(confirmed?.replyNegativeContextHash).toBe("ctx-real");
   });
 
-  it("F03: void preserves a newer negative and a sticky positive", async () => {
+  it("R02: a newer healthy negative overwrites a staged pending row; positives block staging", async () => {
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
     const model = await messageModel();
     const seed = await seedMessage({});
     const t1 = new Date(1_700_000_010_000);
@@ -500,20 +524,26 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     await model.updateReplyEvidence({
       id: seed.id,
       replyNegativeCheckAt: t1,
-      replyNegativeContextHash: "ctx-old",
+      replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+      replyNegativeOwnerExpiresAt: new Date(1_700_000_025_000),
       isAnswered: 0,
       answeredFlagCheckedAt: t1,
     });
-    await model.updateReplyEvidence({
-      id: seed.id,
-      replyNegativeCheckAt: t2,
-      replyNegativeContextHash: "ctx-new",
-      isAnswered: 0,
-      answeredFlagCheckedAt: t2,
-    });
-    // Voiding the older observation is a no-op against the newer row.
-    expect(await model.voidExpiredNegativeWrite({ id: seed.id, observedAt: t1 })).toBe(false);
-    expect((await readRow(seed.id))?.replyNegativeCheckAt?.getTime()).toBe(t2.getTime());
+    // A newer probe's observation (also staged first) replaces the stale
+    // staged row — monotonic condition compares instants, not markers.
+    expect(
+      await model.updateReplyEvidence({
+        id: seed.id,
+        replyNegativeCheckAt: t2,
+        replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+        replyNegativeOwnerExpiresAt: new Date(1_700_000_035_000),
+        isAnswered: 0,
+        answeredFlagCheckedAt: t2,
+      })
+    ).toBe(true);
+    expect((await readRow(seed.id))?.replyNegativeCheckAt?.getTime()).toBe(
+      t2.getTime()
+    );
 
     const pos = await seedMessage({});
     await model.updateReplyEvidence({
@@ -524,27 +554,71 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
       isAnswered: 0,
       answeredFlagCheckedAt: t1,
     });
-    // A positive fence blocks negatives and the void alike.
+    // A positive fence blocks negatives (staged or confirmed) alike.
     expect(
       await model.updateReplyEvidence({
         id: pos.id,
         replyNegativeCheckAt: t2,
-        replyNegativeContextHash: "ctx",
+        replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
         isAnswered: 0,
         answeredFlagCheckedAt: t2,
       })
     ).toBe(false);
-    expect(await model.voidExpiredNegativeWrite({ id: pos.id, observedAt: t2 })).toBe(false);
     const kept = await readRow(pos.id);
     expect(kept?.replyDetectedAt?.getTime()).toBe(t1.getTime());
     expect(kept?.replyDetectionSource).toBe("sent_search");
   });
 
   // ---------------------------------------------------------------
-  // F03 — expired probe voids its late write through the real service.
+  // R02 — expired-owner usability predicate (pure orderings).
   // ---------------------------------------------------------------
 
-  it("F03: a negative completing past the deadline is voided, never reused", async () => {
+  it("R02: isNegativeObservationUsable rejects only expired-owner results", () => {
+    const t = 2_000_000_000_000;
+    // Missing observation is never usable.
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: null,
+        replyNegativeOwnerExpiresAt: null,
+      })
+    ).toBe(false);
+    // Legacy rows (no owner tracking) keep the previous semantics.
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: new Date(t),
+        replyNegativeOwnerExpiresAt: null,
+      })
+    ).toBe(true);
+    // Observed within the owner window: usable.
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: new Date(t),
+        replyNegativeOwnerExpiresAt: new Date(t + 15_000),
+      })
+    ).toBe(true);
+    // Observed exactly at the deadline end: usable (inclusive boundary).
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: new Date(t),
+        replyNegativeOwnerExpiresAt: new Date(t),
+      })
+    ).toBe(true);
+    // Observed after the owner end: expired owner's result, never usable.
+    expect(
+      isNegativeObservationUsable({
+        replyNegativeCheckAt: new Date(t),
+        replyNegativeOwnerExpiresAt: new Date(t - 1),
+      })
+    ).toBe(false);
+  });
+
+  // ---------------------------------------------------------------
+  // R02 — an expired probe's staged write is never consumable, with no
+  // cleanup phase to race (two-phase pending protocol, real service +
+  // real model-backed port).
+  // ---------------------------------------------------------------
+
+  it("R02: a negative completing past the deadline stays staged, never reused", async () => {
     const { EmailReplyDetectionService } = await import(
       "@/service/emailReceive/EmailReplyDetectionService"
     );
@@ -594,13 +668,16 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         return { candidates: [], truncated: false, failedFetchCount: 0 };
       },
     };
-    // Gate the persistence itself: the write starts, waits past the
-    // deadline, then completes late — the audit's exact trigger.
+    // Gate the FIRST persistence call (the stage step): the write starts,
+    // waits past the deadline, then completes late — the audit's exact
+    // trigger. No compensating cleanup exists to hold — validity comes from
+    // the staged marker itself, so a second detection can run at any point
+    // after the late write lands and must still refuse to consume it.
     let releaseWrite: (() => void) | null = null;
     const writeGate = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
-    let voidCalls = 0;
+    let persistCalls = 0;
     const messagePort = {
       async read(id: number) {
         return await model.read(id);
@@ -616,15 +693,13 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         replyMatchedMessageId?: string | null;
         replyNegativeCheckAt?: Date | null;
         replyNegativeContextHash?: string | null;
+        replyNegativeOwnerExpiresAt?: Date | null;
         isAnswered?: number;
         answeredFlagCheckedAt?: Date | null;
       }) {
-        await writeGate;
+        persistCalls += 1;
+        if (persistCalls === 1) await writeGate;
         return await model.updateReplyEvidence(input);
-      },
-      async voidExpiredNegativeWrite(input: { id: number; observedAt: Date }) {
-        voidCalls += 1;
-        return await model.voidExpiredNegativeWrite(input);
       },
     };
     const service = new EmailReplyDetectionService({
@@ -645,21 +720,33 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     const r1 = await first;
     expect(r1.state).toBe("unknown");
-    // Expire the manual clock too, then let the late write complete.
+    // Expire the manual clock too, then let the late write complete. The
+    // expired probe stages its row but never confirms it.
     nowMs += 15_500;
     releaseWrite!();
-    // Allow the detached probe to settle through the void path.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(voidCalls).toBe(1);
-    // No reusable negative survived inside the TTL.
-    const stored = await model.read(seed.id);
-    expect(stored?.replyNegativeCheckAt).toBeNull();
-    expect(stored?.replyNegativeContextHash).toBeNull();
-    // A later invocation re-probes instead of reusing the expired result.
-    const before = discoverCalls;
+    let storedHash: string | null | undefined = null;
+    for (let i = 0; i < 100 && storedHash == null; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      storedHash =
+        (await model.read(seed.id))?.replyNegativeContextHash ?? null;
+    }
+    const { PENDING_NEGATIVE_CONTEXT } = await import(
+      "@/service/emailReceive/EmailReplyIdentity"
+    );
+    // The late write landed STAGED (unconfirmed marker), never matchable.
+    expect(storedHash).toBe(PENDING_NEGATIVE_CONTEXT);
+    // A second invocation refuses to consume the staged row and re-probes
+    // instead — no cleanup phase exists to wait for.
+    const beforeMid = discoverCalls;
+    const rMid = await service.detect({ messageId: seed.id });
+    expect(discoverCalls).toBeGreaterThan(beforeMid);
+    expect(rMid.fromCache).toBe(false);
+    expect(rMid.state).toBe("not_replied");
+    // A later invocation is served normally (the second probe's own healthy
+    // confirmed negative, cached in memory) — never the expired owner's row.
     const r2 = await service.detect({ messageId: seed.id });
-    expect(discoverCalls).toBeGreaterThan(before);
     expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(true);
   }, 30_000);
 });
 

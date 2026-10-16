@@ -939,6 +939,68 @@ describe("EmailReply send claim — forced-freshness fence (T05 step 11, §9.3)"
     }
   });
 
+  it("R02: fresh timestamp from an expired owner -> freshness_stale with NO write", async () => {
+    // The negative was observed 1s ago but its owning probe expired 5s ago
+    // (abandoned timed-out probe whose compensating void never ran). Readers
+    // must reject expired-owner results exactly like missing ones: the
+    // timestamp looks fresh, but the observation outlived its owner.
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update(
+        { id: msg.id },
+        {
+          replyNegativeCheckAt: new Date(Date.now() - 1_000),
+          replyNegativeOwnerExpiresAt: new Date(Date.now() - 5_000),
+        }
+      );
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.reason).toBe("freshness_stale");
+      expect(result.code).toBe("probe_failed");
+    }
+    // NO write: the draft stays approved, and no attempt row was inserted.
+    const draft = await draftModel.readAggregate(seed.draftId);
+    expect(draft?.status).toBe("approved");
+    const attempts = await attemptModel.listByDraft(seed.draftId);
+    expect(attempts).toHaveLength(0);
+  });
+
+  it("R02: fresh timestamp within a live owner window -> claim proceeds", async () => {
+    // Same fresh timestamp, but the owner expiry is in the future: a live
+    // owner's negative is trusted like before (owner tracking must not
+    // break the healthy path).
+    const msg = await seedMessage();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update(
+        { id: msg.id },
+        {
+          replyNegativeCheckAt: new Date(Date.now() - 1_000),
+          replyNegativeOwnerExpiresAt: new Date(Date.now() + 60_000),
+        }
+      );
+
+    const result = await draftModel.claimApprovedRevisionForSend(
+      claimInputFor(seed, msg.id)
+    );
+
+    expect(result.status).toBe("claimed");
+  });
+
   it("observation 6s old -> freshness_stale with NO write (draft stays approved, no attempt)", async () => {
     const msg = await seedMessage();
     const seed = await seedApprovedDraft(

@@ -47,6 +47,7 @@ import {
   normalizeStoredMessageId,
   normalizedIdsMatch,
   parseNamespacedProviderUid,
+  PENDING_NEGATIVE_CONTEXT,
 } from "@/service/emailReceive/EmailReplyIdentity";
 import {
   isAttemptInFlight,
@@ -143,16 +144,6 @@ export interface ReplyDetectionMessagePort {
     replyNegativeOwnerExpiresAt?: Date | null;
     isAnswered?: number;
     answeredFlagCheckedAt?: Date | null;
-  }): Promise<boolean>;
-  /**
-   * F03: void a negative write that completed after its probe expired.
-   * Required on every port — a store that cannot void cannot safely serve
-   * expired probes, so the detector treats a missing implementation as a
-   * port error (fail-closed), never as a persisted negative.
-   */
-  voidExpiredNegativeWrite(input: {
-    id: number;
-    observedAt: Date;
   }): Promise<boolean>;
 }
 
@@ -1429,60 +1420,70 @@ export class EmailReplyDetectionService {
     if (fence?.signal?.aborted || fence?.isExpired?.()) {
       return false;
     }
-    // F03: the observation instant this write carries (also the exact key
-    // the expiry-void matches on — the same Date value must flow to both the
-    // write and a later void so only this observation is ever removed).
+    // F03: the observation instant this write carries. The same Date value
+    // flows to both stages below so the confirm step targets exactly the
+    // staged observation.
     const observedAt = new Date(fence?.observedAtMs ?? this.now());
+    // R02: the owning probe's deadline end, stamped on both stages so
+    // readers reject this row when the observation outlived its owner.
+    const ownerExpiresAt =
+      fence?.ownerExpiresAtMs !== undefined
+        ? new Date(fence.ownerExpiresAtMs)
+        : undefined;
     try {
-      const written = await this.messagePort.updateReplyEvidence({
+      // R02 stage 1 (pending): stage the observation with an UNCONFIRMED
+      // marker instead of the matchable context hash. Monotonic and
+      // sticky-positive fences apply exactly as before (a newer healthy
+      // negative or a concurrent positive rejects staging with 0 rows).
+      // Readers reject unconfirmed rows, so from this point on no reader —
+      // in this or any later invocation — can consume this probe's result
+      // until stage 2 confirms it below. There is no exposure window for a
+      // compensating cleanup to race.
+      const staged = await this.messagePort.updateReplyEvidence({
         id: message.id,
         // N04: stamp the actual mailbox observation time, not the delayed
         // write time. A late write must not manufacture fresh evidence.
         replyNegativeCheckAt: observedAt,
-        replyNegativeContextHash: contextHash,
-        // R02: stamp the owning probe's deadline end so readers reject this
-        // row when the observation outlived its owner — even if the void
-        // below never runs.
-        replyNegativeOwnerExpiresAt:
-          fence?.ownerExpiresAtMs !== undefined
-            ? new Date(fence.ownerExpiresAtMs)
-            : undefined,
+        replyNegativeContextHash: PENDING_NEGATIVE_CONTEXT,
+        replyNegativeOwnerExpiresAt: ownerExpiresAt,
         isAnswered: flags.isAnswered,
         answeredFlagCheckedAt: flags.answeredCheckedAt,
       });
-      // F03/N04: the awaited write itself may have completed after expiry — a
-      // write finishing past the deadline inside the 60s TTL would otherwise
-      // leave a reusable negative for a later invocation to trust. Void
-      // exactly this observation (conditional timestamp match: a newer
-      // probe's negative or a sticky positive is untouched) and report
-      // failure so the caller returns unknown instead of a decisive
-      // negative from an expired probe.
-      if (fence?.signal?.aborted || fence?.isExpired?.()) {
-        try {
-          await this.messagePort.voidExpiredNegativeWrite({
-            id: message.id,
-            observedAt,
-          });
-        } catch (voidError) {
-          incrementReplyMetric("detection_persist_failure", {
-            kind: "negative_void",
-          });
-          console.error(
-            `[EmailReplyDetection] voidExpiredNegativeWrite failed for message ${message.id}:`,
-            voidError
-          );
-        }
-        return false;
-      }
-      if (!written) {
+      if (!staged) {
         // R09: 0 rows affected — the sticky-positive guard rejected the
-        // negative (a concurrent positive landed first) or the row vanished.
-        // Report failure so the caller rereads; caching/reporting the rejected
-        // negative would hide live positive evidence for a full TTL window.
+        // negative (a concurrent positive landed first), a newer observation
+        // already covers this instant, or the row vanished. Report failure
+        // so the caller rereads; caching/reporting the rejected negative
+        // would hide live positive evidence for a full TTL window.
         incrementReplyMetric("detection_persist_failure", {
           kind: "negative",
           rejected: true,
         });
+        await this.resolveRejectedWrite(message);
+        return false;
+      }
+      // R02 stage 2 (confirm): only a still-live probe confirms its staged
+      // observation by overwriting the marker with the real context hash
+      // (same observed instant, so the monotonic condition still holds; the
+      // positive fence re-applies). An expired probe stops here — its staged
+      // row stays permanently unusable, a crash between the stages is
+      // equally safe, and no compensating deletion exists to race.
+      if (fence?.signal?.aborted || fence?.isExpired?.()) {
+        return false;
+      }
+      const confirmed = await this.messagePort.updateReplyEvidence({
+        id: message.id,
+        replyNegativeCheckAt: observedAt,
+        replyNegativeContextHash: contextHash,
+        replyNegativeOwnerExpiresAt: ownerExpiresAt,
+        isAnswered: flags.isAnswered,
+        answeredFlagCheckedAt: flags.answeredCheckedAt,
+      });
+      if (!confirmed) {
+        // A concurrent positive landed (or the row vanished) between staging
+        // and confirmation — its evidence wins; report failure so the caller
+        // rereads the current row.
+        await this.resolveRejectedWrite(message);
         return false;
       }
       return true;
@@ -1770,12 +1771,6 @@ class DefaultMessagePort implements ReplyDetectionMessagePort {
     answeredFlagCheckedAt?: Date | null;
   }): Promise<boolean> {
     return this.module.updateReplyEvidence(input);
-  }
-  voidExpiredNegativeWrite(input: {
-    id: number;
-    observedAt: Date;
-  }): Promise<boolean> {
-    return this.module.voidExpiredNegativeWrite(input);
   }
 }
 

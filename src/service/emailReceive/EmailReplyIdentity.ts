@@ -65,21 +65,39 @@ export function normalizeStoredMessageId(
 }
 
 /**
+ * R02: sentinel context hash marking a negative write whose owning probe
+ * has not confirmed it. persistNegative stages every negative as PENDING
+ * first and overwrites it with the real context hash only after the probe
+ * is verified live; an expired probe stops after staging, so its row can
+ * never become consumable — no compensating cleanup window exists at all.
+ * A staged row whose probe crashed is equally unusable; the next healthy
+ * probe overwrites it (monotonic condition) and confirms its own
+ * observation. The value is not valid hex, so it can never equal a
+ * recomputed context hash.
+ */
+export const PENDING_NEGATIVE_CONTEXT = "PROBE_PENDING";
+
+/**
  * R02: whether a persisted negative observation is consumable by readers.
- * A negative observed AFTER its owning probe's deadline end is an expired
- * owner's result — it must never be trusted, regardless of TTL, and only a
- * fresh probe may establish a new negative. Observations without owner
- * tracking (legacy rows, grandfathered) keep the previous age-only
- * semantics; callers still apply their own TTL/freshness windows on top.
- * Pure (no DB, no I/O) so the detector, the claim fence, and the post-claim
- * gate all apply the identical predicate.
+ * Unusable when the timestamp is missing, when the row still carries the
+ * unconfirmed PENDING marker, or when the observation outlived its owning
+ * probe's deadline end (expired owner's result — only a fresh probe may
+ * establish a new negative). Observations without owner tracking (legacy
+ * rows, grandfathered) keep the previous age-only semantics; callers still
+ * apply their own TTL/freshness windows on top. Pure (no DB, no I/O) so the
+ * detector, the claim fence, and the post-claim gate all apply the
+ * identical predicate.
  */
 export function isNegativeObservationUsable(input: {
   readonly replyNegativeCheckAt: Date | null | undefined;
+  readonly replyNegativeContextHash?: string | null | undefined;
   readonly replyNegativeOwnerExpiresAt: Date | null | undefined;
 }): boolean {
   const observedAt = input.replyNegativeCheckAt;
   if (observedAt == null) return false;
+  if (input.replyNegativeContextHash === PENDING_NEGATIVE_CONTEXT) {
+    return false;
+  }
   const ownerExpiresAt = input.replyNegativeOwnerExpiresAt;
   if (
     ownerExpiresAt != null &&

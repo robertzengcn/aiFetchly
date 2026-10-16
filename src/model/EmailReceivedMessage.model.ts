@@ -229,33 +229,7 @@ export class EmailReceivedMessageModel extends BaseDb {
     return (result.affected ?? 0) === 1;
   }
 
-  /**
-   * F03 — void a negative write that completed after its probe owner expired.
-   * Removes EXACTLY the given observation (timestamp equality): a newer
-   * probe's negative (different timestamp) and any sticky positive (fence)
-   * are untouched. Returns true when a row was voided. Lets an abandoned
-   * timed-out probe clean up after itself instead of leaving a reusable
-   * negative inside the 60s TTL for a later invocation to trust.
-   */
-  async voidExpiredNegativeWrite(input: {
-    id: number;
-    observedAt: Date;
-  }): Promise<boolean> {
-    const result = await this.repository
-      .createQueryBuilder()
-      .update(EmailReceivedMessageEntity)
-      .set({
-        replyNegativeCheckAt: null,
-        replyNegativeContextHash: null,
-        replyNegativeOwnerExpiresAt: null,
-      })
-      .where(
-        "id = :id AND replyDetectedAt IS NULL AND replyNegativeCheckAt = :observedAt",
-        { id: input.id, observedAt: input.observedAt }
-      )
-      .execute();
-    return (result.affected ?? 0) === 1;
-  }
+
 
   /**
    * Adopt a legacy bare-UID row into the namespaced providerUid scheme
