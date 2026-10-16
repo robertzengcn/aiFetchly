@@ -62,7 +62,7 @@ import { ref, computed, onMounted,reactive } from 'vue'
 import { SearchResult } from '@/views/api/types'
 // import router from '@/views/router';
 import { ExtraModule, ExtraModuleItem } from "@/entityTypes/extramoduleType"
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 import { CapitalizeFirstLetter } from '@/views/utils/function'
 import ErrorDialog from "@/views/components/widgets/errorDialog.vue"
 import {Header,CommonDialogMsg} from "@/entityTypes/commonType"

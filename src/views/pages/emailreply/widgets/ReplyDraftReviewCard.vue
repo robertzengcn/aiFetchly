@@ -127,7 +127,7 @@ const props = defineProps<{
   draftId: number;
 }>();
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 const draft = ref<ReplyDraftDetail | null>(null);
 const loading = ref(true);

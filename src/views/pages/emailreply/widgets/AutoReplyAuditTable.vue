@@ -99,7 +99,7 @@ import { CapitalizeFirstLetter } from "@/views/utils/function";
 import { listAutoReplyAuditLogs } from "@/views/api/emailreply";
 import type { AutoReplyAuditDto } from "@/entityTypes/emailReceiveTypes";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const router = useRouter();
 
 const serverItems = ref<AutoReplyAuditDto[]>([]);

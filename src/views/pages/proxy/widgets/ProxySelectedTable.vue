@@ -13,7 +13,7 @@ import { ref,watch,computed} from 'vue'
 import { SearchProxyResp,ProxyListEntity } from "@/entityTypes/proxyType";
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 import { useI18n } from "vue-i18n";
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 type Fetchparam = {
     // id:number
     page: number,

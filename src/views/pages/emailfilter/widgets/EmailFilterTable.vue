@@ -54,7 +54,7 @@ import {CapitalizeFirstLetter} from "@/views/utils/function"
 import { useRouter } from 'vue-router';
 import {Header} from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 const router = useRouter();
 
 // const campaignId = i18n.t("campaignId");

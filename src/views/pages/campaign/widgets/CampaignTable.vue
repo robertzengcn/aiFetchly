@@ -62,7 +62,7 @@ import { ref,computed } from 'vue'
 import { SearchResult } from '@/views/api/types'
 // import type { VDataTable } from 'vuetify/lib/components/index.mjs'
 import router from '@/views/router';
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {

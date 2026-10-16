@@ -184,7 +184,7 @@ import {
   isBlankProxyCsvRow,
 } from "@/views/utils/proxyImportParse";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const showtable = ref(false);
 const files = ref([]);
 const items = ref<Array<ProxyParseItem>>([]);

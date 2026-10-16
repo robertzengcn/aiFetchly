@@ -100,7 +100,7 @@ import { getEmailServiceList } from "@/views/api/emailservice";
 import type { EmailServiceListdata } from "@/entityTypes/emailmarketingType";
 import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const router = useRouter();
 const route = useRoute();
 

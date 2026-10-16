@@ -173,7 +173,7 @@ import { ProxyEntity, ProxyListEntity } from "@/entityTypes/proxyType";
 import { LocalBrowerList } from "@/config/searchSetting"
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 

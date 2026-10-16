@@ -70,7 +70,7 @@ import router from '@/views/router';
 // import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 import { useRoute } from "vue-router";
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 const $route = useRoute();
 // Define props
 defineProps({
