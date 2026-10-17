@@ -514,18 +514,43 @@ export class EmailReceivedMessageModel extends BaseDb {
     await this.repository.update({ id: messageId }, fields);
   }
 
+  /**
+   * Set the app-delivery lifecycle projection (replyStatus + processedAt).
+   *
+   * D01: TARGETED write — this method owns ONLY `replyStatus` and the
+   * explicitly requested `processedAt`. The former load-and-full-entity-save
+   * wrote every stale column back to the row, erasing concurrently landed
+   * sticky reply evidence (replyDetectedAt/source/matched id/answered
+   * metadata), negative cache/owner fields, and normalization. Un-owned
+   * columns are never written; a missing row stays a no-op without loading
+   * the complete entity.
+   *
+   * Status-only calls: when `processedAt` is null the caller means "change
+   * only the status" — an existing processedAt (e.g. a concurrent send
+   * projection) is preserved, never nulled and never moved.
+   *
+   * R-2026-10-17/D01 coordination: this is the one remaining writer of an
+   * eligibility-relevant `email_received_message` column outside the commit/
+   * claim transactions (`replyStatus === "sent"` feeds the canonical
+   * eligibility ladder). The single-statement UPDATE runs under the shared
+   * `replyWriteMutex` (C01) so it cannot land between a final-admission
+   * snapshot's statements. Narrow by design: no load, no other entity, no
+   * transaction, no nested mutex call.
+   */
   async updateReplyStatus(
     id: number,
     status: EmailReplyStatus,
     processedAt: Date | null = null
   ): Promise<void> {
-    const entity = await this.repository.findOne({ where: { id } });
-    if (!entity) return;
-    entity.replyStatus = status;
-    if (processedAt) {
-      entity.processedAt = processedAt;
-    }
-    await this.repository.save(entity);
+    await replyWriteMutex.run(() =>
+      this.repository.update(
+        { id },
+        {
+          replyStatus: status,
+          ...(processedAt ? { processedAt } : {}),
+        }
+      )
+    );
   }
 
   /** Record classification provenance so deterministic results are auditable (FR-007). */
@@ -544,23 +569,36 @@ export class EmailReceivedMessageModel extends BaseDb {
     );
   }
 
+  /**
+   * Set the classifier-owned columns (D01). TARGETED update — owns ONLY
+   * `classification` + `classificationConfidence`. The former
+   * load-and-full-entity-save could write a stale `isUnread`/`replyStatus`/
+   * evidence snapshot back over newer facts (D01). Missing rows stay a
+   * no-op; nothing else on the row is read or written.
+   */
   async updateClassification(
     id: number,
     classification: EmailMessageClassification | null,
     confidence: number | null
   ): Promise<void> {
-    const entity = await this.repository.findOne({ where: { id } });
-    if (!entity) return;
-    entity.classification = classification;
-    entity.classificationConfidence = confidence;
-    await this.repository.save(entity);
+    await this.repository.update(
+      { id },
+      {
+        classification,
+        classificationConfidence: confidence,
+      }
+    );
   }
 
+  /**
+   * Set the reader-owned unread flag (D01). TARGETED update — owns ONLY
+   * `isUnread`. The former load-and-full-entity-save on message open could
+   * erase a sticky positive that landed between the load and the save (the
+   * D01 diagnostic for `markRead` proved the loss). Missing rows stay a
+   * no-op; nothing else on the row is read or written.
+   */
   async markRead(id: number, isUnread: boolean): Promise<void> {
-    const entity = await this.repository.findOne({ where: { id } });
-    if (!entity) return;
-    entity.isUnread = isUnread ? 1 : 0;
-    await this.repository.save(entity);
+    await this.repository.update({ id }, { isUnread: isUnread ? 1 : 0 });
   }
 
   async listByEmailService(

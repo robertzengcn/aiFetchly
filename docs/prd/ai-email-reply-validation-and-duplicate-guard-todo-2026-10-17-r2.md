@@ -2,7 +2,7 @@
 
 ## Verdict and scope
 
-**The full PRD cannot yet be accepted.** The previously reported C01/C02 races are fixed in their reviewed paths, the normal focused backend suite is now green, and the PRD explicitly defines the bounded unknown-model fallback and commit-to-certainty exception. One retained correctness finding remains: unrelated whole-entity message saves can erase newer sticky reply evidence. Live provider/rollout acceptance also remains open.
+**The full PRD cannot yet be accepted.** The previously reported C01/C02 races are fixed in their reviewed paths, the normal focused backend suite is now green, and the PRD explicitly defines the bounded unknown-model fallback and commit-to-certainty exception. The one retained correctness finding — unrelated whole-entity message saves erasing newer sticky reply evidence (D01) — was fixed on October 17 after this report (see "Round 2 completion" below); remaining acceptance work is live provider/rollout acceptance (T02).
 
 - Worktree: `/Users/cengjianze/project/aiFetchly/.claude/worktrees/email-reply-validation-phase1`.
 - Reviewed source HEAD: **`a89bd0b0628dd5b60b59aae6742021acf6096af2`**, branch `worktree-email-reply-validation-phase1`.
@@ -88,20 +88,20 @@ FR-030/FR-037 require positive evidence to survive later observations and unrela
 
 ### Required work
 
-- [ ] Replace load–mutate–save with targeted updates containing **only** the method-owned columns: unread state; classification/confidence; or the explicitly allowed status/processed timestamp change. Missing rows can remain a no-op without loading the complete entity.
-- [ ] Preserve positive timestamp, source, matched ID, answered-observation metadata, negative cache/owner fields, normalization and concurrent lifecycle fields when those are not owned by the operation.
-- [ ] Coordinate eligibility/lifecycle mutations with the shared reliability transaction mechanism where required. Preserve allowed status-transition checks and historical sent protection; do not solve this by broad writes inside another mutex.
-- [ ] Add permanent real-SQL regressions for all three methods. Load the old entity, persist a positive through the actual guarded writer, resume, and assert positive timestamp/source/matched ID/flag metadata survive. After the fix, the test must assert the **safe** result rather than copy the diagnostic's unsafe expectations.
-- [ ] Cover unread/classification racing a successful send projection and a newer negative/context/normalization update. Assert unrelated fields remain unchanged and no stale save reopens eligibility.
-- [ ] Run the relevant model, sync, admission and tool/IPC suites after fixing the writers. Include a subsequent guard/detection check proving the preserved positive still refuses new work.
+- [x] Replace load–mutate–save with targeted updates containing **only** the method-owned columns: unread state; classification/confidence; or the explicitly allowed status/processed timestamp change. Missing rows can remain a no-op without loading the complete entity. *(Done 2026-10-17: `updateReplyStatus` now issues a single `replyStatus`/`processedAt`-only UPDATE inside the shared `replyWriteMutex`, `updateClassification` a `classification`/`classificationConfidence`-only UPDATE, `markRead` an `isUnread`-only UPDATE — no `findOne`, no full-entity save, missing rows no-op. `src/model/EmailReceivedMessage.model.ts`.)*
+- [x] Preserve positive timestamp, source, matched ID, answered-observation metadata, negative cache/owner fields, normalization and concurrent lifecycle fields when those are not owned by the operation. *(Structurally guaranteed — the writers touch only their owned columns; verified by the regressions below, including equal-fact pre-state plus no-load probe.)*
+- [x] Coordinate eligibility/lifecycle mutations with the shared reliability transaction mechanism where required. Preserve allowed status-transition checks and historical sent protection; do not solve this by broad writes inside another mutex. *(Done: only the reply-status lifecycle writer holds the shared `replyWriteMutex` for its single-statement UPDATE, matching the C01 snapshot-serialization rationale — it is the one remaining plain writer of an eligibility-relevant column. No transaction, no nested mutex call, no broad writes; existing fenced transitions in the draft/guard/attempt models untouched.)*
+- [x] Add permanent real-SQL regressions for all three methods. Load the old entity, persist a positive through the actual guarded writer, resume, and assert positive timestamp/source/matched ID/flag metadata survive. After the fix, the test must assert the **safe** result rather than copy the diagnostic's unsafe expectations. *(Done: `test/vitest/main/modules/EmailReceivedMessageTargetedWriters.model.test.ts` — for each method the stale pre-evidence view is materialized, a negative observation and the sticky positive land through the real `updateReplyEvidence` writer, the writer under test resumes, and the safe result is asserted as safe expectations. Each test also enforces the no-load contract ("Missing rows can remain a no-op without loading the complete entity") via a findOne counter probe, which fails deterministically when the old load–mutate–save writers are reintroduced — verified by reverting the three methods temporarily: 3 failed on the old shape, 5/5 pass on the fix.)*
+- [x] Cover unread/classification racing a successful send projection and a newer negative/context/normalization update. Assert unrelated fields remain unchanged and no stale save reopens eligibility. *(Done: the send-projection race test seeds the finalize-style `{replyStatus: "sent", processedAt}` projection, a newer guarded negative and a newer normalization update; `markRead` + `updateClassification` must apply only their owned columns while sent projection, negative cache/owner fields and normalization survive unchanged, and the real guard `acquireReservation` still refuses with `already_replied`.)*
+- [x] Run the relevant model, sync, admission and tool/IPC suites after fixing the writers. Include a subsequent guard/detection check proving the preserved positive still refuses new work. *(Done 2026-10-17: full focused backend selection `yarn testmain` = 574 files / 5732 tests passed, `tsc --noEmit` 0 errors, lint 0 errors; the per-method regressions each end with a real `EmailReplyGuardModel.acquireReservation` refusal check.)*
 
 ## Remaining acceptance tasks
 
 ### T01 — Complete regression coverage for D01 without reopening earlier findings
 
-- [ ] Add the targeted column-ownership and concurrency regressions above. Current green suites do not establish absence of D01: the three additional real-SQL diagnostics reproduced it.
-- [ ] Retain the current final-admission tests for a positive copy of the seed, shared-mutex writer exclusion, advancing confirmation clocks and ordinary settings isolation.
-- [ ] Verify any claim of preserved concurrent `sent` state against the actual model/transaction path. Avoid treating a mocked fresh entity as proof that a stale full save is safe.
+- [x] Add the targeted column-ownership and concurrency regressions above. Current green suites do not establish absence of D01: the three additional real-SQL diagnostics reproduced it. *(Done: `EmailReceivedMessageTargetedWriters.model.test.ts` — safe-result regressions for all three writers plus the send-projection/negative/normalization race and a real guard acquire refusal check.)*
+- [x] Retain the current final-admission tests for a positive copy of the seed, shared-mutex writer exclusion, advancing confirmation clocks and ordinary settings isolation. *(Retained and re-run 2026-10-17 after the D01 fix: `EmailReplyFinalAdmission` + `EmailReplyGuardReservation` + `EmailReplyClusterEligibility` focused run = 3 files / 40 tests passed; full `yarn testmain` selection = 574 files / 5732 tests passed, 0 type errors.)*
+- [x] Verify any claim of preserved concurrent `sent` state against the actual model/transaction path. Avoid treating a mocked fresh entity as proof that a stale full save is safe. *(Actually verified: with the targeted writers, no writer outside the send commit/reconciliation transactions touches `replyStatus`; classification/unread/idle writes structurally cannot revert a `sent` projection. Evidence asserted by the send-projection race regression directly against the real column-scoped UPDATEs, plus the D01 whole-entity save paths no longer exist.)*
 
 ### T02 — Execute live provider and release acceptance
 
@@ -122,3 +122,22 @@ FR-030/FR-037 require positive evidence to survive later observations and unrela
 | T03 — real provider rollout evidence | Still open as current T02; no live measurements/signoff were established here. |
 
 Suggested order: fix D01 and add safe-result regressions, retain the verified prior fixes, then complete the real provider/release acceptance. Earlier TODOs remain historical records; this file identifies the current source and remaining work.
+
+## Round 2 completion — D01 fix (October 17, 2026)
+
+Implementation commit recorded against this worktree. What changed:
+
+- `src/model/EmailReceivedMessage.model.ts` — `updateReplyStatus`, `updateClassification`, and `markRead` replaced load–mutate–save with targeted single-statement UPDATEs owning exactly their columns (`replyStatus`+`processedAt` / `classification`+`classificationConfidence` / `isUnread`). The reply-status writer holds the shared `replyWriteMutex` (C01 rationale: the one remaining plain writer of an eligibility-relevant column); missing rows stay no-ops with no load.
+- `test/vitest/main/modules/EmailReceivedMessageTargetedWriters.model.test.ts` — five permanent real-SQL regressions: per-method stale-load → guarded positive/negative interleave → safe-result assertions with a no-load probe, the unread/classification vs send-projection/negative/normalization race, and the post-presence guard `acquireReservation` refusal (`already_replied`).
+
+Fresh verification executed after the fix:
+
+| Check | Result |
+|---|---|
+| Full focused backend selection (`yarn testmain`) | **574 files / 5732 tests passed**, 0 type errors (`tsc --noEmit`), lint 0 errors |
+| Final-admission / guard reservation / cluster eligibility focused re-run | **3 files / 40 tests passed** |
+| No-load probe against the temporarily reverted old writers | **3 failed deterministically** (old shape re-introduced → loads detected); **5/5 passed** on the fix |
+
+Verification method note: the regressions assert the SAFE result (never the diagnostic's unsafe expectations). Because the old code's fresh internal load would have re-written identical values in a pure sequential run, the decisive regression signal is the no-load contract prescribed by this report ("Missing rows can remain a no-op without loading the complete entity") — confirmed by a temporary revert/re-apply experiment in the same session.
+
+Remaining open: **T02** (live hosted-AI JSON compatibility + IMAP/Sent pilots, latency/cache/guard-conflict metrics vs a real baseline, release signoff). It requires real provider/mailbox access and release ownership and cannot be produced from this code session.
