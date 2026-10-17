@@ -98,6 +98,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
@@ -113,6 +114,7 @@ import {
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
+  AIChatPlanContinuationRecoveryView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
@@ -1738,6 +1740,32 @@ async function handlePlanState(
   }
 }
 
+/**
+ * R12 — plan-continuation commit-to-response crash recovery. Read-only
+ * reconcile of the persisted decision transitions against deterministic
+ * pending continuation ids; never writes or dispatches.
+ */
+async function handlePlanContinuationRecover(
+  data: string
+): Promise<CommonMessage<AIChatPlanContinuationRecoveryView | null>> {
+  const chatAccess = await canUseChatWithReconcile();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+  try {
+    const req = data ? JSON.parse(data) : {};
+    if (typeof req.conversationId !== "string") {
+      return denied("conversationId must be a string");
+    }
+    const planModule = new AIChatPlanModule();
+    const recovery =
+      await planModule.getRecoverablePlanContinuation(req.conversationId);
+    return ok(recovery);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
@@ -2428,6 +2456,11 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
     handlePlanVersions((data as string) ?? "")
+  );
+  ipcMain.handle(
+    AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
+    async (_e, data: unknown) =>
+      handlePlanContinuationRecover((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleGetToolApprovalMode((data as string) ?? "")

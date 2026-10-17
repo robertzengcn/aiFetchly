@@ -21,6 +21,7 @@ import type {
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
+  AIChatPlanContinuationRecoveryView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
@@ -51,6 +52,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_DENY_TOOL_PERMISSION,
@@ -732,6 +734,21 @@ export async function getChatV2PlanVersions(
 ): Promise<AIChatPlanVersionView[]> {
   const resp = await windowInvoke(AI_CHAT_V2_PLAN_VERSIONS, { planId });
   return (resp as AIChatPlanVersionView[] | null) ?? [];
+}
+
+/**
+ * R12 — ask main to reconcile persisted plan decision transitions against
+ * the deterministic pending continuation ids. Returns the one recoverable
+ * continuation intent (a decision committed in main but whose follow-up
+ * turn was never accepted), or null. Read-only; never executes anything.
+ */
+export async function recoverChatV2PlanContinuationIntent(
+  conversationId: string
+): Promise<AIChatPlanContinuationRecoveryView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_PLAN_CONTINUATION_RECOVER, {
+    conversationId,
+  });
+  return (resp as AIChatPlanContinuationRecoveryView | null) ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ const getLocalAiRuntimeStatusMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const startChatRunMock = vi.fn();
 const exportGeneratedImageMock = vi.fn();
+const recoverPlanContinuationMock = vi.fn();
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...args: unknown[]) => getWorkspaceMock(...args),
@@ -60,6 +61,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
   requestChatV2PlanChanges: vi.fn(),
+  // R12: main-side plan-continuation reconcile (commit-to-response gap).
+  recoverChatV2PlanContinuationIntent: (...args: unknown[]) =>
+    recoverPlanContinuationMock(...args),
   answerChatV2Question: vi.fn(),
   clearChatV2Conversation: vi.fn(),
   // Pending-message queue store contract (message-queue §7)
@@ -154,6 +158,14 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
+import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
+import type { PlanContinuationDecision } from "@/views/utils/planContinuationIdentity";
+import {
+  savePlanContinuationIntent,
+  markPlanContinuationDismissed,
+  clearPlanContinuationIntent,
+  loadPlanContinuationIntent,
+} from "@/views/utils/planContinuationStore";
 import type {
   ChatToolApprovalMode,
   ChatV2MessageView,
@@ -235,8 +247,15 @@ const i18n = createI18n({
       },
       aiChatV2Plan: {
         approve_failed: "Plan approval did not complete. Please try again.",
+        reject_failed: "Plan rejection did not complete. Please try again.",
+        changes_request_failed:
+          "Requesting plan changes did not complete. Please try again.",
         approved_continue_message:
           "Plan approved. Please begin executing the plan now.",
+        rejected_continue_message:
+          "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
+        changes_requested_continue_message:
+          "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
       },
 
     },
@@ -399,8 +418,10 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  getWorkspaceMock.mockResolvedValue(null);
-  workspaceMemoryListMock.mockResolvedValue({ status: true, data: [] });
+  // R12: main reconcile defaults to "nothing recoverable" — every existing
+  // selection path then keeps banner-less behavior.
+  recoverPlanContinuationMock.mockResolvedValue(null);
+  getWorkspaceMock.mockResolvedValue(null);  workspaceMemoryListMock.mockResolvedValue({ status: true, data: [] });
   acquireWorkspaceWatchMock.mockResolvedValue(null);
   releaseWorkspaceWatchMock.mockResolvedValue(undefined);
   previewWorkspaceAgentsMock.mockResolvedValue("");
@@ -2034,6 +2055,285 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         activeRunId: null,
         title: "Selected chat",
       } as never);
+    });
+  });
+
+  /**
+   * R12 (FR-PLN-005..008): plan-continuation commit-to-response crash
+   * recovery. A decision that committed in main but whose follow-up send
+   * never landed must resurface through main's reconcile when nothing was
+   * renderer-saved, keep localStorage intents authoritative, and never
+   * resurrect a banner the user dismissed (identity-scoped tombstones).
+   */
+  describe("plan continuation recovery (R12)", () => {
+    const savedPlanMessage: ChatV2MessageView = {
+      id: "plan-msg-x",
+      conversationId: "conv-rec",
+      role: "assistant",
+      content: "plan",
+      timestamp: "2026-10-12T00:00:00.000Z",
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        planStateView: {
+          planId: "plan-rec",
+          conversationId: "conv-rec",
+          title: "T",
+          objective: "O",
+          currentVersion: 2,
+          latestVersion: {
+            planId: "plan-rec",
+            version: 2,
+            planMarkdown: "# P",
+            createdAt: "2026-10-12T00:00:00.000Z",
+            createdBy: "user",
+          },
+          status: "awaiting_approval",
+        },
+      },
+    };
+
+    async function mountOnConv(conversationId: string): Promise<ReturnType<typeof mountSurface>> {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const wrapper = mountSurface(pinia);
+      useChatWorkspaceStore().setSelected(conversationId);
+      await flushPromises();
+      return wrapper;
+    }
+
+    it("resurfaces a main-recovered intent and retries it with the deterministic identity", async () => {
+      const expectedId = await planContinuationRequestId(
+        "plan-rec",
+        2,
+        "approve-plan" as PlanContinuationDecision
+      );
+      recoverPlanContinuationMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "approve-plan",
+        feedback: "",
+        clientRequestId: expectedId,
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      });
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+
+      const banner = wrapper.find(
+        '[data-testid="workspace-plan-continuation-banner"]'
+      );
+      expect(banner.exists()).toBe(true);
+
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        runId: "run-rec",
+        status: "running",
+        acceptedAt: "",
+      });
+      await wrapper
+        .get('[data-testid="workspace-plan-continuation-retry"]')
+        .trigger("click");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+        conversationId: "conv-rec",
+        mode: "chat",
+        message: "Plan approved. Please begin executing the plan now.",
+        clientRequestId: expectedId,
+      });
+      // Acceptance clears the durable renderer state...
+      expect(loadPlanContinuationIntent("conv-rec")).toBeNull();
+      await flushPromises();
+      // ...and the banner.
+      expect(
+        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+      ).toBe(false);
+    });
+
+    it("preserves recovered rejected/changes feedback in the retry message", async () => {
+      const expectedId = await planContinuationRequestId(
+        "plan-rec",
+        2,
+        "reject-plan" as PlanContinuationDecision
+      );
+      recoverPlanContinuationMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "reject-plan",
+        feedback: "Too vague",
+        clientRequestId: expectedId,
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      });
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+      expect(
+        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+      ).toBe(true);
+
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        runId: "run-rec",
+        status: "running",
+        acceptedAt: "",
+      });
+      await wrapper
+        .get('[data-testid="workspace-plan-continuation-retry"]')
+        .trigger("click");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      expect(startChatRunMock.mock.calls[0][0].message).toBe(
+        "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.\n\nFeedback: Too vague"
+      );
+      expect(startChatRunMock.mock.calls[0][0].clientRequestId).toBe(expectedId);
+    });
+
+    it("renderer-saved intents stay authoritative over main reconcile", async () => {
+      const savedId = await planContinuationRequestId(
+        "plan-rec",
+        2,
+        "request-plan-changes" as PlanContinuationDecision
+      );
+      savePlanContinuationIntent({
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "request-plan-changes",
+        feedback: "From localStorage",
+        savedAt: "2026-10-17T00:00:00.000Z",
+      });
+      // Main contradicting the renderer must never override the saved intent.
+      recoverPlanContinuationMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "approve-plan",
+        feedback: "",
+        clientRequestId: "plan-cont-contradicting",
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      });
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+      expect(recoverPlanContinuationMock).not.toHaveBeenCalled();
+
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        runId: "run-rec",
+        status: "running",
+        acceptedAt: "",
+      });
+      await wrapper
+        .get('[data-testid="workspace-plan-continuation-retry"]')
+        .trigger("click");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      expect(startChatRunMock.mock.calls[0][0].message).toContain(
+        "Feedback: From localStorage"
+      );
+      expect(startChatRunMock.mock.calls[0][0].clientRequestId).toBe(savedId);
+      // Acceptance also cleared the (unused) recovery state.
+      expect(recoverPlanContinuationMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a dismissed recovered continuation dismissed for its exact identity", async () => {
+      const recovered = {
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "approve-plan" as const,
+        feedback: "",
+        clientRequestId: await planContinuationRequestId(
+          "plan-rec",
+          2,
+          "approve-plan" as PlanContinuationDecision
+        ),
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      };
+      // Main is conversation-scoped: it reconciles the id you asked about.
+      recoverPlanContinuationMock.mockImplementation(async (cid: unknown) =>
+        cid === "conv-rec" ? recovered : null
+      );
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+      const bannerSel = '[data-testid="workspace-plan-continuation-banner"]';
+      expect(wrapper.find(bannerSel).exists()).toBe(true);
+
+      await wrapper
+        .get('[data-testid="workspace-plan-continuation-dismiss"]')
+        .trigger("click");
+      await flushPromises();
+      expect(wrapper.find(bannerSel).exists()).toBe(false);
+
+      // Reselecting (leave + return) re-runs main's reconcile — main is
+      // stateless and still reports the recoverable identity, but the
+      // tombstone keeps the banner hidden.
+      useChatWorkspaceStore().setSelected("conv-other");
+      await flushPromises();
+      useChatWorkspaceStore().setSelected("conv-rec");
+      await flushPromises();
+      // Every selection asks main once (cheap read): leave + return.
+      expect(recoverPlanContinuationMock).toHaveBeenCalledTimes(3);
+      const replyIds = recoverPlanContinuationMock.mock.calls.map(
+        (c) => c[0]
+      );
+      expect(replyIds.slice(-2)).toEqual(["conv-other", "conv-rec"]);
+      expect(wrapper.find(bannerSel).exists()).toBe(false);
+      expect(startChatRunMock).not.toHaveBeenCalled();
+    });
+
+    it("does not resurface an already-accepted continuation (main null reconcile)", async () => {
+      // Nothing saved, nothing recoverable: the banner must never appear
+      // and no continuation send may be triggered by selection alone.
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+      expect(recoverPlanContinuationMock).toHaveBeenCalledTimes(1);
+      expect(
+        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+      ).toBe(false);
+      expect(startChatRunMock).not.toHaveBeenCalled();
+    });
+
+    it("drops a recovered banner once main reports the continuation accepted", async () => {
+      const recovered = {
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "approve-plan" as const,
+        feedback: "",
+        clientRequestId: await planContinuationRequestId(
+          "plan-rec",
+          2,
+          "approve-plan" as PlanContinuationDecision
+        ),
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      };
+      recoverPlanContinuationMock.mockImplementation(async (cid: unknown) =>
+        cid === "conv-rec" ? recovered : null
+      );
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+      const bannerSel = '[data-testid="workspace-plan-continuation-banner"]';
+      expect(wrapper.find(bannerSel).exists()).toBe(true);
+
+      // The queue accepted the continuation (queue dispatch / retry from
+      // elsewhere). Re-selecting asks main again — accepted rows (ANY
+      // status) make the reconcile return null and the banner goes away.
+      recoverPlanContinuationMock.mockResolvedValue(null);
+      useChatWorkspaceStore().setSelected("conv-other");
+      await flushPromises();
+      useChatWorkspaceStore().setSelected("conv-rec");
+      await flushPromises();
+      expect(wrapper.find(bannerSel).exists()).toBe(false);
+    });
+
+    afterEach(async () => {
+      clearPlanContinuationIntent("conv-rec");
+      // Drain an in-flight adopt so it cannot leak into the next test.
+      await flushPromises();
     });
   });
 

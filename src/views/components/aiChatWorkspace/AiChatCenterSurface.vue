@@ -662,6 +662,7 @@ import {
   approveChatV2Plan,
   rejectChatV2Plan,
   requestChatV2PlanChanges,
+  recoverChatV2PlanContinuationIntent,
   answerChatV2Question,
   clearChatV2Conversation,
   startCompaction,
@@ -713,9 +714,13 @@ import {
   savePlanContinuationIntent,
   loadPlanContinuationIntent,
   clearPlanContinuationIntent,
+  isPlanContinuationDismissed,
+  markPlanContinuationDismissed,
+  clearPlanContinuationDismissal,
   type PlanContinuationAction,
   type PlanContinuationIntent,
 } from "@/views/utils/planContinuationStore";
+import type { AIChatPlanContinuationRecoveryView } from "@/entityTypes/aiChatPlanTypes";
 import {
   readAiChatReasoningVisible,
   writeAiChatReasoningVisible,
@@ -2691,20 +2696,96 @@ const planDecisionError = ref<string | null>(null);
 // receipt card lacks.
 const pendingPlanContinuation = ref<PlanContinuationIntent | null>(null);
 
+/**
+ * R12: reconcile the visible continuation banner from durable sources.
+ * The renderer-saved intent (localStorage) is authoritative when present;
+ * otherwise an in-memory MAIN-recovered intent for the CURRENT conversation
+ * survives the refresh (e.g. after a failed retry that did not clear it).
+ */
 function refreshPendingPlanContinuation(): void {
   const id = conversationId.value;
-  pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
+  const persisted = id ? loadPlanContinuationIntent(id) : null;
+  if (persisted) {
+    pendingPlanContinuation.value = persisted;
+    return;
+  }
+  const current = pendingPlanContinuation.value;
+  if (id && current && current.conversationId === id) return;
+  pendingPlanContinuation.value = null;
+}
+
+/**
+ * R12 (FR-PLN-005..008): close the commit-to-response crash gap from the
+ * renderer side. With NO renderer-saved intent, ask main to reconcile the
+ * persisted decision transitions against their deterministic pending
+ * continuation ids — a decision that committed durably in main but whose
+ * follow-up was never accepted still recovers here, after reload, restart
+ * or any later selection.
+ *
+ * Fire-and-forget: adoption must never block or break selection.
+ */
+async function adoptRecoveredPlanContinuation(
+  id: string,
+  persisted: PlanContinuationIntent | null
+): Promise<void> {
+  if (persisted) {
+    // The renderer wrote its own intent before the crash — that is the most
+    // specific recovery record and always wins over main's reconstruction.
+    pendingPlanContinuation.value = persisted;
+    return;
+  }
+  let recovered: AIChatPlanContinuationRecoveryView | null = null;
+  try {
+    recovered = await recoverChatV2PlanContinuationIntent(id);
+  } catch {
+    // Denied/unavailable main handler — treat as "nothing to recover".
+    recovered = null;
+  }
+  if (conversationId.value !== id) {
+    // Selection moved on during the awaited reconcile; never publish into
+    // a different chat. The reopened selection runs its own adoption.
+    return;
+  }
+  if (!recovered) {
+    // Main says the continuation was already accepted (pending row exists —
+    // any status) or nothing can be recovered: stop resurfacing anything.
+    pendingPlanContinuation.value = null;
+    return;
+  }
+  const candidate: PlanContinuationIntent = {
+    conversationId: recovered.conversationId,
+    planId: recovered.planId,
+    version: recovered.version,
+    action: recovered.action as PlanContinuationAction,
+    feedback: recovered.feedback,
+    savedAt: recovered.decidedAt,
+  };
+  if (isPlanContinuationDismissed(candidate)) {
+    // The user explicitly dismissed this exact continuation identity —
+    // recovering is stateless in main, so only the renderer tombstone can
+    // keep a dismissed banner dismissed.
+    pendingPlanContinuation.value = null;
+    return;
+  }
+  pendingPlanContinuation.value = candidate;
 }
 
 // B08: surface a saved continuation intent whenever its conversation is
 // selected (covers reload/crash recovery: the decision committed in main,
 // the follow-up never sent, the intent survived in localStorage). Placed
 // after the ref declaration — an immediate watcher above would read the ref
-// before initialization.
+// before initialization. R12: when nothing is renderer-saved, main's plan-
+// continuation reconcile reconstructs the intent from the persisted
+// decision (commit-to-response crash gap).
 watch(
   conversationId,
   (id) => {
-    pendingPlanContinuation.value = id ? loadPlanContinuationIntent(id) : null;
+    const persisted = id ? loadPlanContinuationIntent(id) : null;
+    if (!id) {
+      pendingPlanContinuation.value = null;
+      return;
+    }
+    void adoptRecoveredPlanContinuation(id, persisted);
   },
   { immediate: true }
 );
@@ -2862,6 +2943,9 @@ async function onLegacyPlanAction(
     // (the old code ignored it).
     if (continued && conversationId.value === targetConversationId) {
       clearPlanContinuationIntent(targetConversationId);
+      // R12: the continuation was accepted — a stale dismissal tombstone
+      // must not suppress a future decision for this conversation.
+      clearPlanContinuationDismissal(targetConversationId);
       pendingPlanContinuation.value = null;
     } else {
       refreshPendingPlanContinuation();
@@ -2930,6 +3014,10 @@ async function onRetryPlanContinuation(): Promise<void> {
     );
     if (continued && conversationId.value === intent.conversationId) {
       clearPlanContinuationIntent(intent.conversationId);
+      // R12: an accepted continuation is durably settled in main (pending
+      // row). Forget any dismissal tombstone for the conversation — a
+      // future NEW decision must resurface without a stale suppression.
+      clearPlanContinuationDismissal(intent.conversationId);
       pendingPlanContinuation.value = null;
     } else {
       refreshPendingPlanContinuation();
@@ -2945,7 +3033,18 @@ async function onRetryPlanContinuation(): Promise<void> {
 function onDismissPlanContinuation(): void {
   const intent = pendingPlanContinuation.value;
   if (intent) {
+    // Renderer-saved intents are removeable from disk; main-recovered ones
+    // are merely held in memory (recovery re-derives them from the
+    // persisted decision). Clear both that and — for an exact identity —
+    // tombstone the dismissal so the banner does not resurrect on
+    // reselection (R12).
     clearPlanContinuationIntent(intent.conversationId);
+    markPlanContinuationDismissed({
+      conversationId: intent.conversationId,
+      planId: intent.planId,
+      version: intent.version,
+      action: intent.action,
+    });
   }
   pendingPlanContinuation.value = null;
 }
