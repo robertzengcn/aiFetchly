@@ -323,10 +323,19 @@ export class AIChatTurnQueueService {
    * (fire-and-forget resume); its later terminal arrives via
    * notifyExternalTurnTerminal, which must settle THIS run envelope
    * (not a new one) and release lease/capacity exactly once.
+   * R03: the continuation entry also retains the dispatch's terminal
+   * gate — the resumed engine turn emits its terminal INTO that gate, so
+   * the gate must be flushed (exactly once) only after the parked run's
+   * terminal is durably settled; the parked path stays
+   * persistence-before-publication like the queue-owned path.
    */
   private readonly parkedRuns = new Map<
     string,
-    { runId: string; pendingMessageId: string }
+    {
+      runId: string;
+      pendingMessageId: string;
+      gate: AIChatTerminalGate;
+    }
   >();
 
   constructor(private readonly deps: AIChatTurnQueueServiceDeps) {}
@@ -388,6 +397,48 @@ export class AIChatTurnQueueService {
     ) {
       this.schedulerDeferred.delete(conversationId);
     }
+  }
+
+  /**
+   * R03: settle a parked run's continuation (permission/plan grant paths that
+   * resumed OUTSIDE the queue). Persistence before publication like the
+   * queue-owned terminal path: the strict bridge transition commits the
+   * terminal row FIRST; only then is the retained gate flushed exactly once
+   * so the buffered `complete`/`cancelled`/`error` reaches the renderer as a
+   * settled terminal.
+   * On persistence failure nothing is published or advanced: the gate keeps
+   * its buffered terminal and the parked identity stays mapped (retry info),
+   * so a later external-terminal notification retries the settlement. The
+   * bridge itself already releases scheduler capacity (and R01 recorded
+   * admissions) for the run id in both outcomes.
+   * Returns true when the run settled durably and the gate flushed.
+   */
+  private async settleParkedRunContinuation(
+    conversationId: string,
+    parked: {
+      runId: string;
+      pendingMessageId: string;
+      gate: AIChatTerminalGate;
+    },
+    outcome: "completed" | "cancelled" | "failed"
+  ): Promise<boolean> {
+    const bridge = this.deps.dispatchBridge;
+    let persisted: boolean;
+    if (bridge?.finishRunStrict) {
+      persisted = await bridge.finishRunStrict(parked.runId, outcome);
+    } else {
+      await bridge?.finishRun(parked.runId, outcome);
+      persisted = true;
+    }
+    if (!persisted) {
+      log.error(
+        `[ai-chat-queue] parked run terminal persistence failed conv=${conversationId} run=${parked.runId} pending=${parked.pendingMessageId} — holding for reconciliation (retained gate + identity; no terminal publication)`
+      );
+      return false;
+    }
+    this.parkedRuns.delete(conversationId);
+    await parked.gate.flush();
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -650,6 +701,11 @@ export class AIChatTurnQueueService {
    * without this, Activity/reconstruction shows `awaiting_user` forever
    * after the actual execution ended. Exactly one terminal per parked run;
    * lease/capacity were already released at park time.
+   * R03: the settle is strict (persistence before publication) and flushes
+   * the parked continuation's retained gate exactly once, so the resumed
+   * turn's buffered `complete`/`cancelled`/`error` reaches the renderer as a
+   * settled terminal. A persistence failure publishes nothing and retains
+   * the continuation for the next notification (recovery retry).
    */
   async notifyExternalTurnTerminal(
     conversationId: string,
@@ -657,20 +713,30 @@ export class AIChatTurnQueueService {
   ): Promise<void> {
     const parked = this.parkedRuns.get(conversationId);
     if (parked) {
-      this.parkedRuns.delete(conversationId);
-      await this.deps.dispatchBridge?.finishRun(parked.runId, outcome);
-      // B06: background summary — parked run settled (bounded, no bodies).
-      this.deps.summarySink?.({
+      const persisted = await this.settleParkedRunContinuation(
         conversationId,
-        runId: parked.runId,
-        reason:
-          outcome === "completed"
-            ? "run_completed"
-            : outcome === "cancelled"
-              ? "run_cancelled"
-              : "run_failed",
-      });
-      this.drainSchedulerWaiters(conversationId);
+        parked,
+        outcome
+      );
+      if (persisted) {
+        // B06: background summary — parked run settled (bounded, no bodies).
+        this.deps.summarySink?.({
+          conversationId,
+          runId: parked.runId,
+          reason:
+            outcome === "completed"
+              ? "run_completed"
+              : outcome === "cancelled"
+                ? "run_cancelled"
+                : "run_failed",
+        });
+        this.drainSchedulerWaiters(conversationId);
+      } else {
+        // R03: nothing published, nothing advanced — followers keep their
+        // parked-era hold and the settled terminal stays buffered for the
+        // recovery retry above.
+        return;
+      }
     }
     const rows = await this.deps.pendingModule.listViews(conversationId);
     if (rows.length === 0) return;
@@ -721,11 +787,16 @@ export class AIChatTurnQueueService {
   async clearConversation(conversationId: string): Promise<void> {
     this.deps.engine.stopActiveTurn(conversationId);
     // B04: settle a parked envelope as cancelled so it never stays stale
-    // `awaiting_*` after its rows are dropped.
+    // `awaiting_*` after its rows are dropped. R03: the settle is strict and
+    // publishes the buffered terminal (stopActiveTurn emitted `cancelled`
+    // into the retained gate) only after the durable cancellation commits.
     const parked = this.parkedRuns.get(conversationId);
     if (parked) {
-      this.parkedRuns.delete(conversationId);
-      await this.deps.dispatchBridge?.finishRun(parked.runId, "cancelled");
+      await this.settleParkedRunContinuation(
+        conversationId,
+        parked,
+        "cancelled"
+      );
     }
     this.schedulerDeferred.delete(conversationId);
     const views = await this.deps.pendingModule.listViews(conversationId);
@@ -1126,9 +1197,13 @@ export class AIChatTurnQueueService {
           await bridge?.parkRun?.(bridgeRunIdValue);
         }
         if (bridgeRunIdValue) {
+          // R03: retain the gate with the parked identity — the resumed
+          // engine turn emits into THIS gate, so the later settle must flush
+          // it exactly once after the durable terminal commits.
           this.parkedRuns.set(conversationId, {
             runId: bridgeRunIdValue,
             pendingMessageId: row.pendingMessageId,
+            gate: terminalGate,
           });
         }
         // B06: background attention summary — parked on permission/question
