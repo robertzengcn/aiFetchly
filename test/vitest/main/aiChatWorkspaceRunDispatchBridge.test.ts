@@ -189,6 +189,132 @@ describe("AIChatWorkspaceRunDispatchBridge (T1, AD-002/003)", () => {
   });
 
   /**
+   * R02 (FR-QUE-012/013; FR-LIF-005): cancelling a pending message whose
+   * envelope is durably queued must reconcile the durable envelope AND the
+   * scheduler book — and later admission of the same run id must stay
+   * idempotent (no resurrection, no stray slot, no recorded admission).
+   */
+  it("reconciles a cancelled pending message's queued envelope; admission races no-op", async () => {
+    await SqliteDb.ensureInitialized();
+    const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+    const bridge = new AIChatWorkspaceRunDispatchBridge(
+      new AIChatRunModule(),
+      scheduler
+    );
+    const occupied = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r02-occ",
+        conversationId: "v2-r02-occ",
+        resourceClass: "general",
+      })
+    )!;
+    const deferredCandidate = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r02-c",
+        conversationId: "v2-r02-c",
+        resourceClass: "general",
+      })
+    )!;
+    expect(deferredCandidate.admitted).toBe(false);
+    await bridge.finishRun(occupied.runId, "completed");
+
+    // Queue-service cancel path: reconcile by durable pending/run identity.
+    expect(
+      await bridge.cancelForPendingMessage("pending-r02-c")
+    ).toBe(true);
+    const model = new AIChatRunModel(tmpDir);
+    expect(
+      (await model.getByRunId(deferredCandidate.runId))?.status
+    ).toBe("cancelled");
+    expect(scheduler.queueDepth()).toBe(0);
+    expect(scheduler.stats().active).toBe(0);
+
+    // A later admission attempt of the cancelled run id must be a no-op:
+    // no resurrection, no transition, no scheduler footprint.
+    expect(await bridge.admitDeferred(deferredCandidate.runId)).toBe(false);
+    expect(
+      (await model.getByRunId(deferredCandidate.runId))?.status
+    ).toBe("cancelled");
+    expect(scheduler.stats().active).toBe(0);
+    expect(scheduler.stats().queued).toBe(0);
+
+    // Replays and unknown ids are idempotent no-ops.
+    expect(await bridge.cancelForPendingMessage("pending-r02-c")).toBe(false);
+    expect(await bridge.cancelForPendingMessage("pending-r02-never")).toBe(
+      false
+    );
+  });
+
+  /**
+   * R02: the cancel race with a cross-candidate pump (R01): the cancelled
+   * envelope's scheduler entry was dispatched to ACTIVE while its durable
+   * row stayed queued. Cancelling must release that occupied slot — the
+   * cancelled intent must neither keep capacity nor block unrelated work.
+   */
+  it("cancel releases a raced-in cross-candidate slot; other work proceeds", async () => {
+    await SqliteDb.ensureInitialized();
+    const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+    const bridge = new AIChatWorkspaceRunDispatchBridge(
+      new AIChatRunModule(),
+      scheduler
+    );
+    const occupied = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r02x-occ",
+        conversationId: "v2-r02x-occ",
+        resourceClass: "general",
+      })
+    )!;
+    const candidateC = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r02x-c",
+        conversationId: "v2-r02x-c",
+        resourceClass: "general",
+      })
+    )!;
+    expect(candidateC.admitted).toBe(false);
+    // The slot frees WITHOUT pumping: the next claim's pump is what
+    // dispatches cross-candidate.
+    await bridge.finishRun(occupied.runId, "completed");
+    // B's later claim pumps the scheduler; selected C wins the slot
+    // cross-candidate while C's durable envelope stays queued (R01 state).
+    scheduler.setSelectedConversation("v2-r02x-c");
+    const retriedB = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r02x-b",
+        conversationId: "v2-r02x-b",
+        resourceClass: "general",
+      })
+    )!;
+    expect(retriedB.admitted).toBe(false);
+    expect(scheduler.isActive(candidateC.runId)).toBe(true);
+    const model = new AIChatRunModel(tmpDir);
+    expect((await model.getByRunId(candidateC.runId))?.status).toBe("queued");
+
+    // Cancel C: its queued envelope settles durably and the STEAMROLLED
+    // slot is released to other runnable work.
+    expect(await bridge.cancelForPendingMessage("pending-r02x-c")).toBe(true);
+    expect(
+      (await model.getByRunId(candidateC.runId))?.status
+    ).toBe("cancelled");
+    expect(scheduler.isActive(candidateC.runId)).toBe(false);
+    expect(scheduler.queueDepth()).toBe(1); // B's own entry untouched
+
+    // B (unrelated, still valid) admits now — the slot is genuinely free.
+    const bClaim = await bridge.schedule({
+      pendingMessageId: "pending-r02x-b",
+      conversationId: "v2-r02x-b",
+      resourceClass: "general",
+    });
+    expect(bClaim?.admitted).toBe(true);
+
+    // Cleanup: leave no scheduler footprint.
+    await bridge.finishRun(bClaim!.runId, "completed");
+    expect(scheduler.stats().active).toBe(0);
+    expect(scheduler.stats().queued).toBe(0);
+  });
+
+  /**
    * R01: admitDeferred's own pump must also record other candidates'
    * admissions (the discarded `() => undefined` callback of the defect) so
    * the dispatched candidate's own submission-claim can consume it.

@@ -326,6 +326,266 @@ describe("queue dispatch via global scheduler (B02)", () => {
     });
   });
 
+  /**
+   * R02 (audit; FR-QUE-012/013, FR-LIF-005; AD-002/004): cancelling a
+   * capacity-deferred pending message must settle that message's durable run
+   * envelope AND its scheduler queue entry — never just the pending row.
+   * Otherwise a cancelled intent keeps a non-terminal queued run plus a
+   * scheduler entry that later pumps dispatch cross-candidate (R01), and the
+   * cancelled run then OCCUPIES the only slot forever while unrelated
+   * runnable work starves.
+   */
+  describe("deferred cancellation reconcile (R02)", () => {
+    interface ConvEvent {
+      readonly conversationId: string;
+      readonly status: string;
+    }
+    function lastEventFor(
+      events: readonly ConvEvent[],
+      conversationId: string
+    ): ConvEvent | undefined {
+      return events.filter((e) => e.conversationId === conversationId).at(-1);
+    }
+
+    it("cancel before admission settles the envelope and unrelated runnable work proceeds", async () => {
+      const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+      const bridge = new AIChatWorkspaceRunDispatchBridge(
+        undefined,
+        scheduler
+      );
+
+      const gates = new Map<string, Deferred<AIChatTurnTerminalEvent>>();
+      const submitted: string[] = [];
+      const pendingEvents: ConvEvent[] = [];
+      const engineStatus = new Map<string, ChatV2RuntimeStatus>();
+      const engine: AIChatTurnQueueEngine = {
+        getConversationRuntimeStatus: (conversationId: string) =>
+          engineStatus.get(conversationId) ?? "idle",
+        submitPersistedUserMessage: (async (input: {
+          savedUser: { conversationId: string };
+        }) => {
+          const conv = input.savedUser.conversationId;
+          submitted.push(conv);
+          const gate =
+            gates.get(conv) ?? createDeferred<AIChatTurnTerminalEvent>();
+          gates.set(conv, gate);
+          return await gate.promise;
+        }) as AIChatTurnQueueEngine["submitPersistedUserMessage"],
+        reserveSteering: (() => null) as never,
+        cancelSteeringReservation: (() => undefined) as never,
+        commitSteering: (() => true) as never,
+        stopActiveTurn: (() => undefined) as never,
+      };
+
+      const service = new AIChatTurnQueueService({
+        engine,
+        pendingModule: new AIChatPendingMessageModule(),
+        eventSink: {
+          emit: (event) => {
+            pendingEvents.push({
+              conversationId: event.conversationId,
+              status: event.status,
+            });
+          },
+        },
+        streamSinkFactory: () => ({ emit: () => undefined }) as never,
+        tryAcquireLease: () => ({ release: () => undefined }) as never,
+        isAiEnabled: () => true,
+        isQueueEnabled: () => true,
+        isSteeringEnabled: () => true,
+        dispatchBridge: bridge,
+        scheduler,
+      });
+
+      const convA = "v2-r02-a";
+      const convB = "v2-r02-b";
+      const receiptA = await service.submit({
+        clientRequestId: "cr-r02-a",
+        request: { message: "a", conversationId: convA },
+      });
+      await vi.waitFor(() => expect(submitted).toEqual([convA]));
+      const receiptB = await service.submit({
+        clientRequestId: "cr-r02-b",
+        request: { message: "b", conversationId: convB },
+      });
+      const pendingIdB = receiptB.pendingMessage!.pendingMessageId;
+      const runModel = new AIChatRunModel(resolveTestDbPath());
+
+      // B defers on capacity: queued envelope + scheduler queue entry, and
+      // ZERO provider calls. The deferred branch's final emit is `queued`
+      // (after the dispatch claim is released) — nothing re-claims B1
+      // afterwards, so that state is stable and cancellable.
+      await vi.waitFor(() => expect(scheduler.stats().queued).toBe(1));
+      await vi.waitFor(() => {
+        expect(lastEventFor(pendingEvents, convB)?.status).toBe("queued");
+      });
+      const envelopeB = await runModel.findBySourceId(
+        "interactive",
+        pendingIdB
+      );
+      expect(envelopeB?.status).toBe("queued");
+
+      // Cancel the deferred message: the durable envelope and the scheduler
+      // queue entry must be reconciled away, not just the pending row.
+      await service.cancel({
+        conversationId: convB,
+        pendingMessageId: pendingIdB,
+      });
+      await vi.waitFor(async () => {
+        const row = await runModel.findBySourceId("interactive", pendingIdB);
+        expect(row?.status).toBe("cancelled");
+      });
+      expect(scheduler.queueDepth()).toBe(0);
+      expect(submitted).not.toContain(convB);
+
+      // Free capacity and pump unrelated runnable work: it must admit — not
+      // starve behind the cancelled intent's stale scheduler entry.
+      gates.get(convA)!.resolve(completed(convA));
+      await vi.waitFor(async () => {
+        const rowA = await runModel.findBySourceId(
+          "interactive",
+          receiptA.pendingMessage!.pendingMessageId
+        );
+        expect(rowA?.status).toBe("completed");
+      });
+
+      const convD = "v2-r02-d";
+      await service.submit({
+        clientRequestId: "cr-r02-d",
+        request: { message: "d", conversationId: convD },
+      });
+      await vi.waitFor(() => expect(submitted).toContain(convD));
+      gates.get(convD)!.resolve(completed(convD));
+
+      // Final invariants: cancelled intent never ran; every admitted run
+      // executed exactly once; the scheduler is left empty.
+      await vi.waitFor(() => expect(scheduler.stats().active).toBe(0));
+      await vi.waitFor(() => expect(scheduler.stats().queued).toBe(0));
+      expect(submitted.filter((c) => c === convA)).toHaveLength(1);
+      expect(submitted.filter((c) => c === convD)).toHaveLength(1);
+      expect(submitted).not.toContain(convB);
+      expect(
+        (await runModel.findBySourceId("interactive", pendingIdB))?.status
+      ).toBe("cancelled");
+    });
+
+    it("clearing a conversation with a capacity-deferred queue settles its envelopes", async () => {
+      const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+      const bridge = new AIChatWorkspaceRunDispatchBridge(
+        undefined,
+        scheduler
+      );
+
+      const gates = new Map<string, Deferred<AIChatTurnTerminalEvent>>();
+      const submitted: string[] = [];
+      const pendingEvents: ConvEvent[] = [];
+      const engineStatus = new Map<string, ChatV2RuntimeStatus>();
+      const engine: AIChatTurnQueueEngine = {
+        getConversationRuntimeStatus: (conversationId: string) =>
+          engineStatus.get(conversationId) ?? "idle",
+        submitPersistedUserMessage: (async (input: {
+          savedUser: { conversationId: string };
+        }) => {
+          const conv = input.savedUser.conversationId;
+          submitted.push(conv);
+          const gate =
+            gates.get(conv) ?? createDeferred<AIChatTurnTerminalEvent>();
+          gates.set(conv, gate);
+          return await gate.promise;
+        }) as AIChatTurnQueueEngine["submitPersistedUserMessage"],
+        reserveSteering: (() => null) as never,
+        cancelSteeringReservation: (() => undefined) as never,
+        commitSteering: (() => true) as never,
+        stopActiveTurn: (() => undefined) as never,
+      };
+
+      const service = new AIChatTurnQueueService({
+        engine,
+        pendingModule: new AIChatPendingMessageModule(),
+        eventSink: {
+          emit: (event) => {
+            pendingEvents.push({
+              conversationId: event.conversationId,
+              status: event.status,
+            });
+          },
+        },
+        streamSinkFactory: () => ({ emit: () => undefined }) as never,
+        tryAcquireLease: () => ({ release: () => undefined }) as never,
+        isAiEnabled: () => true,
+        isQueueEnabled: () => true,
+        isSteeringEnabled: () => true,
+        dispatchBridge: bridge,
+        scheduler,
+      });
+
+      const convA = "v2-r02c-a";
+      const convB = "v2-r02c-b";
+      await service.submit({
+        clientRequestId: "cr-r02c-a",
+        request: { message: "a", conversationId: convA },
+      });
+      await vi.waitFor(() => expect(submitted).toEqual([convA]));
+      // B1 defers on capacity. B2 joins the SAME held queue WITHOUT
+      // triggering another drain (forceQueue, coordinator-style delegation)
+      // — so B1 is the conversation's single deferred envelope and no drain
+      // chain is in flight when the clear runs.
+      const receiptB1 = await service.submit({
+        clientRequestId: "cr-r02c-b1",
+        request: { message: "b1", conversationId: convB },
+      });
+      const pendingIdB1 = receiptB1.pendingMessage!.pendingMessageId;
+      const receiptB2 = await service.submit({
+        clientRequestId: "cr-r02c-b2",
+        forceQueue: true,
+        request: { message: "b2", conversationId: convB },
+      });
+      const pendingIdB2 = receiptB2.pendingMessage!.pendingMessageId;
+      const runModel = new AIChatRunModel(resolveTestDbPath());
+      await vi.waitFor(() => expect(scheduler.stats().queued).toBe(1));
+      await vi.waitFor(() => {
+        expect(lastEventFor(pendingEvents, convB)?.status).toBe("queued");
+      });
+      const envelopeB1 = await runModel.findBySourceId(
+        "interactive",
+        pendingIdB1
+      );
+      expect(envelopeB1?.status).toBe("queued");
+      expect(
+        await runModel.findBySourceId("interactive", pendingIdB2)
+      ).toBeNull();
+
+      // Clear the whole deferred queue: its envelopes (and scheduler book)
+      // must be reconciled, never left queued behind deleted rows.
+      await service.clearConversation(convB);
+      await vi.waitFor(async () => {
+        const row = await runModel.findBySourceId("interactive", pendingIdB1);
+        expect(row?.status).toBe("cancelled");
+      });
+      expect(scheduler.queueDepth()).toBe(0);
+      expect(
+        await runModel.findBySourceId("interactive", pendingIdB2)
+      ).toBeNull();
+      expect(submitted).not.toContain(convB);
+      expect(await service.list(convB)).toHaveLength(0);
+
+      // Unrelated runnable work proceeds after capacity is released.
+      gates.get(convA)!.resolve(completed(convA));
+      const convD = "v2-r02c-d";
+      await service.submit({
+        clientRequestId: "cr-r02c-d",
+        request: { message: "d", conversationId: convD },
+      });
+      await vi.waitFor(() => expect(submitted).toContain(convD));
+      gates.get(convD)!.resolve(completed(convD));
+      await vi.waitFor(() => expect(scheduler.stats().active).toBe(0));
+      await vi.waitFor(() => expect(scheduler.stats().queued).toBe(0));
+      expect(submitted.filter((c) => c === convA)).toHaveLength(1);
+      expect(submitted.filter((c) => c === convD)).toHaveLength(1);
+      expect(submitted).not.toContain(convB);
+    });
+  });
+
   it("steering-consumed messages never enter scheduler admission", async () => {
     const scheduler = new AIChatExecutionScheduler();
     const before = scheduler.stats();

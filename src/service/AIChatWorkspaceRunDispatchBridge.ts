@@ -83,6 +83,19 @@ export interface WorkspaceRunDispatchBridge {
   admitDeferred(runId: string | null): Promise<boolean>;
   /** Remove a deferred envelope from scheduler admission (cancel path). */
   cancelDeferred(runId: string | null): void;
+  /**
+   * R02: settle the queued envelope of a pending message whose queue-owned
+   * life just ended by user cancellation (pending Remove or queue clear).
+   * Resolves the envelope by its durable pending/run identity
+   * (sourceId = pendingMessageId), removes its scheduler book, and
+   * transitions the durable row to `cancelled`. Only DURABLY QUEUED
+   * envelopes are settled: a `running`/`awaiting_*` envelope belongs to a
+   * live turn that owns its own terminal (or the parked-run settle), so
+   * force-cancelling those here would mislabel an executing turn. Replays
+   * and ids without an envelope are no-ops. Returns true when an envelope
+   * was settled.
+   */
+  cancelForPendingMessage(pendingMessageId: string | null): Promise<boolean>;
 }
 
 export type TerminalRunStatus = Extract<
@@ -328,6 +341,31 @@ export class AIChatWorkspaceRunDispatchBridge
     // R01: the cancelled entry cannot hold a consumable admission.
     this.dropRecordedAdmission(runId);
     this.scheduler.cancelQueued(runId);
+  }
+
+  /**
+   * R02: reconcile a cancelled pending message's run envelope (FR-QUE-012/
+   * 013, FR-LIF-005). The scheduler-level entry is removed FIRST so a pump
+   * racing this cancel can neither dispatch nor record the doomed
+   * admission; the durable terminal below makes any concurrent admission
+   * fail its CAS (first terminal wins — races with admission are
+   * idempotent), and finishRunStrict releases a raced-in slot.
+   */
+  async cancelForPendingMessage(
+    pendingMessageId: string | null
+  ): Promise<boolean> {
+    if (!pendingMessageId) return false;
+    try {
+      const run = await this.findInteractiveRunBySource(pendingMessageId);
+      if (!run || run.status !== "queued") return false;
+      this.cancelDeferred(run.runId);
+      await this.finishRunStrict(run.runId, "cancelled");
+      return true;
+    } catch {
+      // Durable lookup/transition failure: there is no safe local
+      // settlement to undo — leave reconciliation to the next wake/claim.
+      return false;
+    }
   }
 
   /**

@@ -153,6 +153,15 @@ export interface AIChatTurnQueueServiceDeps {
     admitDeferred?(runId: string | null): Promise<boolean>;
     /** Remove a deferred envelope from admission (cancel path, B02). */
     cancelDeferred?(runId: string | null): void;
+    /**
+     * R02: settle the queued run envelope of a pending message whose
+     * queue-owned life ended by cancellation (pending Remove / queue
+     * clear). Terminal-guarded and idempotent against admission races.
+     * True when a non-terminal envelope was durably settled.
+     */
+    cancelForPendingMessage?(
+      pendingMessageId: string | null
+    ): Promise<boolean>;
   };
   /**
    * B02: shared global execution scheduler (AD-002/004). When present, the
@@ -340,6 +349,44 @@ export class AIChatTurnQueueService {
         continue;
       }
       this.scheduleDrain(conversationId);
+    }
+  }
+
+  /**
+   * R02: reconcile cancelled pending messages' deferred run envelopes
+   * (FR-QUE-012/013, FR-LIF-005). Settlement goes through the bridge's
+   * durable pending/run identity (sourceId = pendingMessageId) — no
+   * in-memory deferred-run tracking — is terminal-guarded so races with
+   * admission are idempotent, and a settle that released a raced-in slot
+   * wakes the capacity waiters. When nothing remains claimable in the
+   * conversation its schedulerDeferred reservation is dropped.
+   */
+  private async cancelRunEnvelopesForPending(
+    conversationId: string,
+    pendingMessageIds: readonly string[]
+  ): Promise<void> {
+    if (this.deps.dispatchBridge === undefined) return;
+    let settled = false;
+    for (const pendingMessageId of pendingMessageIds) {
+      if (
+        await this.deps.dispatchBridge.cancelForPendingMessage?.(
+          pendingMessageId
+        )
+      ) {
+        settled = true;
+      }
+    }
+    if (settled) {
+      // A raced-in pump could have had the cancelled entry dispatched to
+      // ACTIVE: its removal frees a slot — wake deferred conversations.
+      this.drainSchedulerWaiters();
+    }
+    if (
+      (await this.deps.pendingModule
+        .getModel()
+        .countNonTerminalByConversation(conversationId)) === 0
+    ) {
+      this.schedulerDeferred.delete(conversationId);
     }
   }
 
@@ -566,6 +613,13 @@ export class AIChatTurnQueueService {
   }): Promise<AIChatPendingMessageView> {
     const view = await this.deps.pendingModule.cancelPending(input);
     this.emitEvent(view, "cancelled");
+    // R02: the cancelled pending row may still own a capacity-deferred
+    // durable envelope + scheduler queue entry — reconcile both away or a
+    // later pump dispatches an entry whose pending owner no longer exists
+    // (nonterminal run + orphaned capacity, R01 combined).
+    await this.cancelRunEnvelopesForPending(input.conversationId, [
+      input.pendingMessageId,
+    ]);
     return view;
   }
 
@@ -675,6 +729,15 @@ export class AIChatTurnQueueService {
     }
     this.schedulerDeferred.delete(conversationId);
     const views = await this.deps.pendingModule.listViews(conversationId);
+    // R02: rows dropped here may still own capacity-deferred envelopes +
+    // scheduler entries — settle those first so a clear never leaves a
+    // nonterminal run or a queued scheduler entry behind deleted rows.
+    await this.cancelRunEnvelopesForPending(
+      conversationId,
+      views
+        .filter((view) => view.status === "queued" || view.status === "paused")
+        .map((view) => view.pendingMessageId)
+    );
     await this.deps.pendingModule.clearConversation(conversationId);
     for (const view of views) {
       this.emitEvent({ ...view, status: "cancelled" }, "cancelled");
