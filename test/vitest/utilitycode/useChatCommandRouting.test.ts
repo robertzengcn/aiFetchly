@@ -552,3 +552,64 @@ describe("useChatCommandRouting slash suggestions scope", () => {
     expect(seen).toEqual([{ conversationId: "v2-cmd-test" }]);
   });
 });
+
+/**
+ * R09 (audit 2026-10-17): loop commands have no attachment channel and
+ * control failures must surface as failures — never silently "completed".
+ */
+describe("loop command attachment + control-failure handling (R09)", () => {
+  it("rejects a scheduled loop staged with file attachments instead of dropping them", async () => {
+    const { ports, state } = makePorts();
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/loop 10m summarize emails", {
+      files: [new File(["x"], "a.png", { type: "image/png" })],
+    });
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("loop_attachments_not_supported");
+    }
+    // Nothing was staged — the approval dialog must not open for a payload
+    // that could never carry the attachments.
+    expect(state.scheduledCreates).toHaveLength(0);
+  });
+
+  it("rejects a loop command carrying pasted blocks", async () => {
+    const { ports } = makePorts();
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/loop 5m check the logs", {
+      pastedContents: { "paste-1": "log body" },
+    });
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("loop_attachments_not_supported");
+    }
+  });
+
+  it("reports a failed control (transport throw) as rejected with a localized error", async () => {
+    const { ports, state } = makePorts({
+      controlScheduledLoop: async () => {
+        throw new Error("ipc down");
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/loop stop", {});
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("loop_control_failed");
+    }
+    expect(state.errors).toHaveLength(1);
+  });
+
+  it("reports a no-op control (null view) as rejected instead of completed", async () => {
+    const { ports, state } = makePorts({
+      controlScheduledLoop: async () => null,
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/loop pause", {});
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("loop_control_failed");
+    }
+    expect(state.errors).toHaveLength(1);
+  });
+});

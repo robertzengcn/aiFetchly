@@ -3642,6 +3642,9 @@ export default {
       noConversation: "Aucune conversation sélectionnée — la commande n'a pas été exécutée.",
       busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
       filesNotSupported: "Cette commande ne prend pas en charge les pièces jointes. Retirez les fichiers ou envoyez votre message sans le préfixe /commande.",
+      loopAttachmentsNotSupported:
+        "Les commandes de boucle ne prennent pas en charge les pièces jointes ni les blocs collés. Envoyez la commande de boucle seule, puis partagez le contenu dans un message suivant.",
+      loopControlFailed: "Impossible de {operation} la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
     },
     errors: {
       queueLimit:

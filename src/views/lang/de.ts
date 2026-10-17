@@ -3656,6 +3656,9 @@ export default {
       noConversation: "Kein Chat ausgewählt — der Befehl wurde nicht ausgeführt.",
       busy: "Befehle sind nicht verfügbar, während dieser Chat läuft. Warte auf das Ende oder stoppe ihn zuerst.",
       filesNotSupported: "Dieser Befehl unterstützt keine Dateianhänge. Entferne die Dateien oder sende deine Nachricht ohne den /Befehl-Präfix.",
+      loopAttachmentsNotSupported:
+        "Schleifenbefehle unterstützen keine Dateianhänge oder eingefügten Blöcke. Sende den Schleifenbefehl allein und teile den Inhalt in einer Folgenachricht.",
+      loopControlFailed: "Die geplante Schleife konnte nicht {operation} werden. Prüfe den /loop-Status und versuche es erneut.",
     },
     errors: {
       queueLimit:

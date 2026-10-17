@@ -269,16 +269,41 @@ export function useChatCommandRouting(
     return { kind: "completed" };
   }
 
-  /** `/loop pause|resume|stop` — selected conversation only (FR-CMD-008). */
+  /**
+   * `/loop pause|resume|stop` — selected conversation only (FR-CMD-008).
+   * R09: a control that fails (transport throw) or does nothing (null view —
+   * no loop in the required state) is a FAILURE disposition with a localized
+   * error, never a silent "completed": a failed stop must not erase the
+   * retryable command input while the schedule keeps running.
+   */
   async function runScheduledLoopControl(
     operation: "pause" | "resume" | "stop"
   ): Promise<ChatCommandDisposition> {
     const conversationId = await ports.ensureConversationId();
     if (!conversationId) return { kind: "rejected", code: "no_conversation", message: "" };
+    const failureMessage = (): string =>
+      ports.translate(
+        "workspaceChat.command.loopControlFailed",
+        "Could not {operation} the scheduled loop. Check /loop status and try again.",
+        { operation }
+      );
     try {
-      await ports.controlScheduledLoop(conversationId, operation);
+      const view = await ports.controlScheduledLoop(conversationId, operation);
+      if (view === null || view === undefined) {
+        ports.setError(failureMessage());
+        return {
+          kind: "rejected",
+          code: "loop_control_failed",
+          message: failureMessage(),
+        };
+      }
     } catch {
-      // Non-fatal (V2 parity): the status refresh reconciles the view.
+      ports.setError(failureMessage());
+      return {
+        kind: "rejected",
+        code: "loop_control_failed",
+        message: failureMessage(),
+      };
     }
     return { kind: "completed" };
   }
@@ -400,6 +425,27 @@ export function useChatCommandRouting(
         message: ports.translate(
           "workspaceChat.command.busy",
           "Commands are unavailable while this chat is running. Wait for it to finish or stop it first."
+        ),
+      };
+    }
+
+    // R09 (FR-SUB-001, FR-CMD-007): loop-family commands have NO attachment
+    // or pasted-block channel — the scheduled prompt is a plain string, so
+    // files/pasted bodies staged with the composer draft would silently
+    // vanish when the loop is created. Reject explicitly (draft retained),
+    // mirroring the generic-command B11 contract, instead of dropping them.
+    const loopHasAttachments =
+      loopCmd.type !== "none" &&
+      loopCmd.type !== "invalid_loop" &&
+      ((options.files?.length ?? 0) > 0 ||
+        Object.keys(options.pastedContents ?? {}).length > 0);
+    if (loopHasAttachments) {
+      return {
+        kind: "rejected",
+        code: "loop_attachments_not_supported",
+        message: ports.translate(
+          "workspaceChat.command.loopAttachmentsNotSupported",
+          "Loop commands do not support file attachments or pasted blocks. Send the loop command on its own, then share the content in a follow-up message."
         ),
       };
     }

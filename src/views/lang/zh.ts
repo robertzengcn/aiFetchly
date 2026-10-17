@@ -3452,6 +3452,9 @@ export default {
       noConversation: "未选择对话——命令未执行。",
       busy: "当前对话正在运行，暂无法使用命令。请等待其完成或先停止。",
       filesNotSupported: "此命令不支持文件附件。请移除文件，或去掉 /命令前缀后发送消息。",
+      loopAttachmentsNotSupported:
+        "循环命令不支持文件附件或粘贴内容。请单独发送循环命令，之后再通过后续消息分享内容。",
+      loopControlFailed: "无法{operation}定时循环。请查看 /loop 状态后重试。",
     },
     errors: {
       queueLimit: "消息队列已满。请等待当前回复完成或先将其停止后再发送。",

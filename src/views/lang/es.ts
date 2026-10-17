@@ -3657,6 +3657,9 @@ export default {
       noConversation: "No hay chat seleccionado: el comando no se ejecutó.",
       busy: "Los comandos no están disponibles mientras este chat está en ejecución. Espera a que termine o detenlo primero.",
       filesNotSupported: "Este comando no admite archivos adjuntos. Quita los archivos o envía tu mensaje sin el prefijo /comando.",
+      loopAttachmentsNotSupported:
+        "Los comandos de bucle no admiten archivos adjuntos ni bloques pegados. Envía el comando de bucle por sí solo y comparte el contenido en un mensaje posterior.",
+      loopControlFailed: "No se pudo {operation} el bucle programado. Consulta el estado de /loop e inténtalo de nuevo.",
     },
     errors: {
       queueLimit:
