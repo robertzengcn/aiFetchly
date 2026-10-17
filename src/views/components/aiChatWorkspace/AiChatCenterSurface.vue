@@ -1602,6 +1602,43 @@ const defaultModelId = ref<string | undefined>(undefined);
 const modelContextWindows = ref<Map<string, number>>(new Map());
 const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
 /**
+ * FR-SUB-007 / FR-PER-004 (audit R04): the approval policy is per
+ * conversation. Every load binds to a selection generation observed at
+ * start; replies from superseded generations — including A→B→A, where the
+ * conversation id matches again, and the mount-time hydration — are
+ * ignored (same owner-guard shape as hydrateActiveGoal, extended with a
+ * monotonic generation so a same-id stale reply cannot win). A manual user
+ * change also starts a new generation so the user's explicit choice
+ * outranks an in-flight persisted read.
+ */
+let toolApprovalModeGeneration = 0;
+
+async function loadApprovalMode(id: string): Promise<void> {
+  const generation = ++toolApprovalModeGeneration;
+  // Conservative pending state: the previous conversation's policy must
+  // never linger (or reach a request) while this conversation's loads.
+  toolApprovalMode.value = "ask_for_approval";
+  try {
+    const saved = await getChatV2ToolApprovalMode(id);
+    if (generation !== toolApprovalModeGeneration) return; // superseded load
+    if (saved) toolApprovalMode.value = saved;
+  } catch {
+    // A failed read keeps the conservative default; it is not a policy change.
+  }
+}
+
+async function onToolApprovalModeChange(next: ChatToolApprovalMode): Promise<void> {
+  const conversation = conversationId.value;
+  if (!conversation) return;
+  // The user's explicit choice outranks any in-flight persisted read.
+  toolApprovalModeGeneration += 1;
+  try {
+    await setChatV2ToolApprovalMode(conversation, next);
+  } catch {
+    // Preference persists on the next change.
+  }
+}
+/**
  * PRD §13.4: bounded loading — loading ends when the catalog request
  * settles (success OR failure); a settled empty list is the actionable
  * no-model state, never an indefinite spinner.
@@ -1643,24 +1680,6 @@ async function loadModels(): Promise<void> {
   }
 }
 
-async function loadApprovalMode(id: string): Promise<void> {
-  try {
-    const saved = await getChatV2ToolApprovalMode(id);
-    if (saved) toolApprovalMode.value = saved;
-  } catch {
-    // Default stays ask_for_approval.
-  }
-}
-
-async function onToolApprovalModeChange(next: ChatToolApprovalMode): Promise<void> {
-  if (!conversationId.value) return;
-  try {
-    await setChatV2ToolApprovalMode(conversationId.value, next);
-  } catch {
-    // Preference persists on the next change.
-  }
-}
-
 const contextUsedTokens = computed(() => {
   for (let i = selectedStore.messages.length - 1; i >= 0; i -= 1) {
     const tokens = selectedStore.messages[i].tokensUsed;
@@ -1692,6 +1711,13 @@ watch(conversationId, (id, previous) => {
     void loadApprovalMode(id);
     // Review C4: /loop's goal precondition must survive selection reloads.
     void hydrateActiveGoal(id);
+  }
+  if (!id) {
+    // FR-PER-004: nothing is selected — the last viewed chat's policy must
+    // not linger (an empty-state send would otherwise inherit it) and any
+    // in-flight read must not repopulate the deselected surface.
+    toolApprovalModeGeneration += 1;
+    toolApprovalMode.value = "ask_for_approval";
   }
   // Review C6: control/status responses are per-conversation.
   authoritativeLoopStatus.value = null;

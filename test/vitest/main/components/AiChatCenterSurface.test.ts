@@ -154,7 +154,10 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatToolApprovalMode,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 import {
   AI_CHAT_V2_GOAL_CREATE,
@@ -326,7 +329,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           ],
           template: '<div data-testid="model-selector-stub" />',
         }),
-        AiChatV2ToolApprovalModeSelector: true,
+        AiChatV2ToolApprovalModeSelector: defineComponent({
+          name: "AiChatV2ToolApprovalModeSelector",
+          props: ["modelValue", "disabled"],
+          emits: ["update:modelValue"],
+          template:
+            '<div data-testid="approval-mode-selector-stub">{{ modelValue }}</div>',
+        }),
         AiChatV2ContextBadge: true,
         AiChatVoiceOutputToggle: defineComponent({
           name: "AiChatVoiceOutputToggle",
@@ -2856,5 +2865,305 @@ describe("AiChatCenterSurface model availability states (PRD §13.4)", () => {
     await flushPromises();
     expect(selector.props("loading")).toBe(false);
     expect(selector.props("noModels")).toBe(false);
+  });
+});
+
+/**
+ * Audit R04 (FR-SUB-007 / FR-LIF-002 / FR-PER-004): the tool-approval policy
+ * is per conversation. Loading it is scoped to the selection generation
+ * observed at load start — a late reply from another chat (reversed
+ * completion ordering included, even for the same conversation id) must
+ * never overwrite the current conversation's policy, the load is hydration-
+ * guarded on mount, and a send issued before the current conversation's
+ * policy is known carries the conservative default — never the previous
+ * chat's value.
+ */
+describe("AiChatCenterSurface approval-mode load scoping (audit R04)", () => {
+  afterEach(() => {
+    // clearAllMocks clears calls but not implementations — restore the
+    // module-factory default so later tests see settled approval loads.
+    getToolApprovalMock.mockReset();
+    getToolApprovalMock.mockResolvedValue("ask_for_approval");
+  });
+
+  interface PendingApprovalReply {
+    id: string;
+    reply: {
+      promise: Promise<ChatToolApprovalMode>;
+      resolve: (mode: ChatToolApprovalMode) => void;
+      reject: (reason?: unknown) => void;
+    };
+  }
+
+  /** Every approval-mode read waits for manual resolution, in call order. */
+  function stageUnsettledReplies(): PendingApprovalReply[] {
+    const pending: PendingApprovalReply[] = [];
+    getToolApprovalMock.mockImplementation((id: string) => {
+      let resolve!: (mode: ChatToolApprovalMode) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<ChatToolApprovalMode>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      pending.push({ id, reply: { promise, resolve, reject } });
+      return promise;
+    });
+    return pending;
+  }
+
+  function approvalSelector(wrapper: ReturnType<typeof mountSurface>) {
+    return wrapper.findComponent({
+      name: "AiChatV2ToolApprovalModeSelector",
+    });
+  }
+
+  function sendViaComposer(
+    wrapper: ReturnType<typeof mountSurface>,
+    text: string
+  ): void {
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", text, []);
+  }
+
+  it("drops a late reply from conversation A after B is selected (reversed completion)", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-b",
+      runId: "run-b",
+      status: "running",
+      acceptedAt: "",
+    });
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+
+    // A reads auto-approve, slowly. B reads full_access and settles first.
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    pending[1].reply.resolve("full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+
+    // A's reply lands LAST — it must never retarget B's policy…
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+    // …nor B's request.
+    sendViaComposer(wrapper, "hello from B");
+    await flushPromises();
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "conv-b",
+      toolApprovalMode: "full_access",
+    });
+    expect(getToolApprovalMock.mock.calls.map((call) => call[0])).toEqual([
+      "conv-a",
+      "conv-b",
+    ]);
+  });
+
+  it("ignores overlapping replies for the same conversation id across generations (A→B→A)", async () => {
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+
+    chatWorkspace.setSelected("conv-a"); // load A (generation 1)
+    await flushPromises();
+    chatWorkspace.setSelected("conv-b"); // load B (generation 2)
+    await flushPromises();
+    chatWorkspace.setSelected("conv-a"); // load A again (generation 3)
+    await flushPromises();
+
+    // A's ORIGINAL reply lands — the id matches the selection again, but it
+    // belongs to a superseded load for the same conversation.
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "ask_for_approval"
+    );
+
+    // B's late reply is stale too — the selection is A again.
+    pending[1].reply.resolve("full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "ask_for_approval"
+    );
+
+    // Only the freshly started A load may apply.
+    pending[2].reply.resolve("approve_for_me");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "approve_for_me"
+    );
+  });
+
+  it("keeps the conservative default when the policy load fails and never sends a stale one", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-b",
+      runId: "run-b",
+      status: "running",
+      acceptedAt: "",
+    });
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+
+    chatWorkspace.setSelected("conv-a"); // A: auto-approve succeeds.
+    await flushPromises();
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+
+    chatWorkspace.setSelected("conv-b"); // B's read FAILS.
+    await flushPromises();
+    pending[1].reply.reject(new Error("policy read failed"));
+    await flushPromises();
+
+    // Rejection ends the load with A's value nowhere — display…
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "ask_for_approval"
+    );
+    // …or sent request.
+    sendViaComposer(wrapper, "hello from B");
+    await flushPromises();
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "conv-b",
+      toolApprovalMode: "ask_for_approval",
+    });
+  });
+
+  it("sends the conservative default while the policy is still loading (never the previous chat's)", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-b",
+      runId: "run-b",
+      status: "running",
+      acceptedAt: "",
+    });
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "approve_for_me"
+    );
+
+    // Switch to B; its policy read is STILL in flight when the user sends.
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    sendViaComposer(wrapper, "hello before load");
+    await flushPromises();
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "conv-b",
+      toolApprovalMode: "ask_for_approval",
+    });
+
+    // B's own policy settles afterwards and takes over the display.
+    pending[1].reply.resolve("full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+  });
+
+  it("prefers a manual policy change over the still-in-flight persisted load", async () => {
+    const { setChatV2ToolApprovalMode } = await import("@/views/api/aiChatV2");
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    useChatWorkspaceStore().setSelected("conv-b"); // persisted value pending
+    await flushPromises();
+
+    // The user picks a policy before the persisted load resolves.
+    approvalSelector(wrapper).vm.$emit("update:modelValue", "full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+    expect(setChatV2ToolApprovalMode).toHaveBeenCalledWith(
+      "conv-b",
+      "full_access"
+    );
+
+    // The stale persisted reply must not clobber the user's choice.
+    pending[0].reply.resolve("ask_for_approval");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+  });
+
+  it("hydrates the policy on mount and drops the hydration reply when the selection changes mid-flight", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    useChatWorkspaceStore().setSelected("conv-a");
+    const pending = stageUnsettledReplies(); // armed BEFORE mount
+    const wrapper = mountSurface(pinia);
+    await flushPromises();
+
+    // Mount hydration starts for the conversation that was already selected.
+    expect(getToolApprovalMock.mock.calls.map((call) => call[0])).toEqual([
+      "conv-a",
+    ]);
+
+    // The user switches while the mount hydration is still in flight.
+    useChatWorkspaceStore().setSelected("conv-b");
+    await flushPromises();
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+    // The stale mount reply must not describe B.
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "ask_for_approval"
+    );
+
+    pending[1].reply.resolve("full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+  });
+
+  it("hydrates the selected conversation's persisted policy when mounting without a race", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    useChatWorkspaceStore().setSelected("conv-a");
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface(pinia);
+    await flushPromises();
+    pending[0].reply.resolve("full_access");
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe("full_access");
+  });
+
+  it("resets the policy on deselection so a fresh-chat send never inherits it", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "fresh-chat",
+      runId: "run-fresh",
+      status: "running",
+      acceptedAt: "",
+    });
+    const pending = stageUnsettledReplies();
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    pending[0].reply.resolve("approve_for_me");
+    await flushPromises();
+
+    chatWorkspace.setSelected(null);
+    await flushPromises();
+    expect(approvalSelector(wrapper).props("modelValue")).toBe(
+      "ask_for_approval"
+    );
+
+    // The empty-state send creates a NEW chat — it must not inherit A's mode.
+    sendViaComposer(wrapper, "hello fresh chat");
+    await flushPromises();
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "fresh-chat",
+      toolApprovalMode: "ask_for_approval",
+    });
   });
 });
