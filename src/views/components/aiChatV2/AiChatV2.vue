@@ -4016,6 +4016,62 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   }
 };
 
+/**
+ * Insert tool rows that were saved but never arrived as live chunks.
+ * A full history reload is not safe here: it also resets plan approval,
+ * reasoning, and the task badge from whatever the history response contains.
+ */
+const reconcileMissedToolMessages = async (
+  conversationId: string,
+  messageList: MessageListController,
+  assistantMessageId: string
+): Promise<void> => {
+  try {
+    const resp = await getChatV2History(conversationId);
+    if (activeConversationId.value !== conversationId) return;
+    if (activeSuccessorTurns.value.has(conversationId)) return;
+    const runtime = conversationRuntime.value.get(conversationId);
+    if (runtime?.isStreaming) return;
+
+    const current = messageList.get();
+    const missing = (resp?.messages ?? [])
+      .filter((message) => {
+        if (
+          message.messageType !== MessageType.TOOL_CALL &&
+          message.messageType !== MessageType.TOOL_RESULT
+        ) {
+          return false;
+        }
+        const toolCallId = message.metadata?.toolCallId;
+        return !current.some((live) => {
+          if (live.id === message.id) return true;
+          return (
+            typeof toolCallId === "string" &&
+            toolCallId.length > 0 &&
+            live.messageType === message.messageType &&
+            live.metadata?.toolCallId === toolCallId
+          );
+        });
+      })
+      .map((message) =>
+        ensureToolOutputMetadata(ensureArtifactMetadata(message))
+      );
+    if (missing.length === 0) return;
+    if (activeConversationId.value !== conversationId) return;
+    if (conversationRuntime.value.get(conversationId)?.isStreaming) return;
+
+    const next = [...messageList.get()];
+    const assistantIndex = next.findIndex(
+      (message) => message.id === assistantMessageId
+    );
+    const insertAt = assistantIndex === -1 ? next.length : assistantIndex;
+    next.splice(insertAt, 0, ...missing);
+    messageList.set(next);
+  } catch {
+    // A failed history read must leave the live transcript in place.
+  }
+};
+
 const onNewConversation = (): void => {
   activeConversationId.value = null;
   messages.value = [];
@@ -5643,14 +5699,18 @@ const onSend = async (
           streamMessageListController.set([
             ...streamMessageListController.get(),
           ]);
-          // Tool rows are committed before this complete event. Reload the
-          // persisted transcript so a tool call or result that was saved but
-          // missed by the live chunk handler still appears in the chat.
+          // Tool rows are committed before this complete event. Pull in any
+          // saved call or result the live handler missed, without replacing
+          // the transcript or the task/plan state built during the turn.
           if (
             isCurrentStreamView() &&
             !activeSuccessorTurns.value.has(streamConversationId)
           ) {
-            void loadHistory(streamConversationId);
+            void reconcileMissedToolMessages(
+              streamConversationId,
+              streamMessageListController,
+              assistant.id
+            );
           }
         });
         void loadConversations();
