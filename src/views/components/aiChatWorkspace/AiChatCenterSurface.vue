@@ -664,7 +664,7 @@ import {
   requestChatV2PlanChanges,
   answerChatV2Question,
   clearChatV2Conversation,
-  compactChatV2Conversation,
+  startCompaction,
   exportGeneratedImage,
   isHistoryUiEnabled,
   getCompactionStatus,
@@ -2557,7 +2557,12 @@ async function onRename(): Promise<void> {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    await compactChatV2Conversation(conversationId.value);
+    // B05/G02 repair: the legacy ai-chat-v2:compact-conversation channel
+    // had NO main handler and NO preload allowlist entry — the header
+    // Compact action silently no-oped. The bounded incremental coordinator
+    // path (§13.1) is compaction-start; the center already subscribes to
+    // its progress events.
+    await startCompaction(conversationId.value);
   } catch {
     // Non-fatal — the run strip still shows progress.
   }

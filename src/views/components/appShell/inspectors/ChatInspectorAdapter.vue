@@ -25,7 +25,7 @@ import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useAppShellStore } from "@/views/store/appShell";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
-import { compactChatV2Conversation } from "@/views/api/aiChatV2";
+import { startCompaction } from "@/views/api/aiChatV2";
 
 const inspector = useAppInspectorStore();
 const shell = useAppShellStore();
@@ -41,7 +41,9 @@ const conversationId = computed<string | null>(() => {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    await compactChatV2Conversation(conversationId.value);
+    // B05/G02 repair: legacy channel had no handler/allowlist — use the
+    // bounded coordinator path (§13.1).
+    await startCompaction(conversationId.value);
   } catch {
     // Non-fatal — the activity tab still shows run progress.
   }

@@ -62,7 +62,6 @@ vi.mock("@/views/api/aiChatV2", () => ({
   requestChatV2PlanChanges: vi.fn(),
   answerChatV2Question: vi.fn(),
   clearChatV2Conversation: vi.fn(),
-  compactChatV2Conversation: vi.fn(),
   // Pending-message queue store contract (message-queue §7)
   listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
@@ -1448,6 +1447,14 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       expect(compaction.exists()).toBe(true);
       expect(compaction.props("busy")).toBe(false);
+
+      // Retry/manual compact routes through the bounded coordinator's
+      // compaction-start (§13.1) — the legacy ai-chat-v2:compact-conversation
+      // channel had no handler and silently no-oped (B05/G02 repair).
+      compaction.vm.$emit("retry");
+      await flushPromises();
+      const { startCompaction } = await import("@/views/api/aiChatV2");
+      expect(vi.mocked(startCompaction)).toHaveBeenCalledWith("conv-his");
 
       compaction.vm.$emit("cancel");
       await flushPromises();

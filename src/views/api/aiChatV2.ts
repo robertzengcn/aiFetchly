@@ -64,7 +64,6 @@ import {
   AI_CHAT_V2_HISTORY_UI_ENABLED,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
-  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_COMPACTION_PROGRESS,
 } from "@/config/channellist";
@@ -1025,20 +1024,8 @@ export async function isHistoryUiEnabled(): Promise<boolean> {
 
 
 /**
- * Legacy synchronous manual compact (dev shell surface). Kept for the
- * inspector + center-surface compact actions; the bounded incremental
- * coordinator path is startCompaction (§13.1).
+ * REMOVED (G02/B05 repair): the legacy ai-chat-v2:compact-conversation
+ * channel had no main-process handler and no preload allowlist entry —
+ * every call silently no-oped. Use startCompaction (bounded incremental
+ * coordinator, §13.1) instead.
  */
-export async function compactChatV2Conversation(
-  conversationId: string,
-  model?: string
-): Promise<import("@/entityTypes/aiChatCompactTypes").AIChatCompactSummaryView | null> {
-  const resp = await windowInvoke(AI_CHAT_V2_COMPACT_CONVERSATION, {
-    conversationId,
-    model,
-  });
-  return (
-    (resp as import("@/entityTypes/aiChatCompactTypes").AIChatCompactSummaryView | null) ??
-    null
-  );
-}
