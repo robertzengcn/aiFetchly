@@ -155,6 +155,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
 import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenterSurface.vue";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
+import { useComposerDraftStore } from "@/views/store/composerDrafts";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
@@ -2806,8 +2807,10 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     // While the turn streams, the tray keeps the selection.
     expect(trayReferences(wrapper)).toHaveLength(1);
 
-    // Terminal `complete` (presenter → "idle") clears the sent draft.
+    // Terminal `complete` (presenter → streamStatus AND runtimeStatus both
+    // "idle") clears the submitted draft.
     selected.streamStatus = "idle";
+    selected.runtimeStatus = "idle";
     await flushPromises();
     expect(trayReferences(wrapper)).toEqual([]);
   });
@@ -3465,5 +3468,360 @@ describe("AiChatCenterSurface approval-mode load scoping (audit R04)", () => {
       conversationId: "fresh-chat",
       toolApprovalMode: "ask_for_approval",
     });
+  });
+});
+
+/**
+ * Audit R05 (FR-SUB-002/003, FR-IMG-002/015, FR-LIF-002): the generated-
+ * image reference tray clears ONLY against the accepted submission's own
+ * snapshot, when THAT conversation's run completes while selected. Arming
+ * before acceptance (or clearing on any streaming→idle transition — a
+ * selection switch included) destroyed newer or rejected drafts. These
+ * tests drive the REAL selection handshake and the REAL presenter through
+ * `applyDetailEvent` so terminal transitions match production exactly.
+ *
+ * Placed LAST: `vi.clearAllMocks()` in the root beforeEach clears call
+ * history but not mock implementations, so earlier describes' mocked
+ * snapshots would otherwise leak into these assertions.
+ */
+describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
+  /** Tray references currently bound to the composer stub, order preserved. */
+  function trayReferences(wrapper: ReturnType<typeof mountSurface>): unknown[] {
+    return wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .props("selectedGeneratedImages")
+      .map((v: { reference: unknown }) => v.reference);
+  }
+
+  /** Draft references persisted for one conversation (app-scoped state). */
+  function draftReferences(conversationId: string): unknown[] {
+    return [
+      ...(useComposerDraftStore().getDraft(conversationId)
+        ?.generatedImageReferences ?? []),
+    ];
+  }
+
+  /** Select a conversation and let the surface re-render. */
+  async function selectConversationId(conversationId: string): Promise<void> {
+    useChatWorkspaceStore().setSelected(conversationId);
+    await flushPromises();
+  }
+
+  /** Switch through the REAL selection handshake (dispose + snapshot). */
+  async function loadConversation(conversationId: string): Promise<void> {
+    await useSelectedConversationStore().loadSelection(conversationId);
+    await flushPromises();
+  }
+
+  /** Point the snapshot API at an idle (or custom) persisted state. */
+  function mockSelectionSnapshot(
+    runtimeStatus: "idle" | "running" = "idle",
+    activeRunId: string | null = null
+  ): void {
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus,
+      activeRunId,
+      title: "Selected chat",
+    } as never);
+  }
+
+  /** A send accepted straight into a running turn. */
+  function acceptRun(conversationId: string, runId: string): void {
+    startChatRunMock.mockResolvedValue({
+      conversationId,
+      runId,
+      status: "running",
+      acceptedAt: "",
+    });
+  }
+
+  /** Drive the engine's terminal `complete` through the real presenter. */
+  async function completeRun(
+    conversationId: string,
+    runId: string,
+    sequence = 1
+  ): Promise<void> {
+    useSelectedConversationStore().applyDetailEvent({
+      conversationId,
+      runId,
+      sequence,
+      emittedAt: "2026-10-17T00:00:00.000Z",
+      eventType: "complete",
+      payload: { eventType: "complete" },
+    });
+    await flushPromises();
+  }
+
+  it("removes only the submitted snapshot when its run completes; references added during the run survive", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    // Submit [m1] — accepted, streams.
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+    expect(useSelectedConversationStore().streamStatus).toBe("streaming");
+
+    // While run-1 streams the user stages the NEXT draft's reference.
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 1,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
+
+    // run-1 completes: only ITS snapshot ([m1]) may be removed.
+    await completeRun("conv-1", "run-1");
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 1 }]);
+  });
+
+  it("keeps the tray when an image send is rejected while another turn streams and the user switches away", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+
+    // First send (plain text) streams.
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "first turn", []);
+    await flushPromises();
+    expect(useSelectedConversationStore().streamStatus).toBe("streaming");
+
+    // The user stages an image reference and sends it while the turn
+    // streams — but the queue REJECTS it, slowly (never accepted).
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    let rejectImageSend: (reason?: unknown) => void = () => undefined;
+    startChatRunMock.mockImplementationOnce(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectImageSend = reject;
+        })
+    );
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "edit this image", []);
+    await flushPromises(); // the send is parked on the slow rejection
+    expect(startChatRunMock).toHaveBeenCalledTimes(2);
+
+    // …then the user switches to an idle conversation while the rejection
+    // is still in flight.
+    await loadConversation("conv-2");
+
+    // The switch must NOT clear conv-1's tray: the send was never accepted.
+    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    // The rejection lands afterwards — still no destruction.
+    rejectImageSend(new Error("queue limit reached"));
+    await flushPromises();
+    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+  });
+
+  it("keeps the tray when a send is rejected while idle and recovers on the next accepted send", async () => {
+    mockSelectionSnapshot();
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    // The image send is rejected while the conversation is idle.
+    startChatRunMock.mockRejectedValueOnce(new Error("queue limit reached"));
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "edit this image", []);
+    await flushPromises();
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    // FR-SUB-003: the rejection retains the draft.
+    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    // The user stages one more reference and recovers with an ordinary
+    // send — the staged references ride along with it (tray semantics).
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    acceptRun("conv-1", "run-recovery");
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "hello", []);
+    await flushPromises();
+    await completeRun("conv-1", "run-recovery");
+
+    // The recovery run submitted exactly the staged snapshot ([m1, m2]) —
+    // its completion removes exactly that, and nothing more.
+    expect(trayReferences(wrapper)).toEqual([]);
+  });
+
+  it("does not clear either tray on a streaming→idle selection switch; a delayed completion clears only its snapshot", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    // Submit [m1] in A — accepted, streams.
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+    expect(useSelectedConversationStore().streamStatus).toBe("streaming");
+
+    // Switch A → B while run-1 streams remotely.
+    await loadConversation("conv-2");
+
+    // A's tray must survive the switch…
+    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    // …B stages its own reference, untouched by A's transition. The real
+    // handshake remounts the transcript (loading state) — re-find it.
+    const transcriptB = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcriptB.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+
+    // Return to A, whose turn is still running remotely (snapshot says so).
+    mockSelectionSnapshot("running", "run-1");
+    await loadConversation("conv-1");
+    const transcriptA = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+
+    // Stage the next draft's reference while run-1 finishes remotely. The
+    // accepted snapshot [m1] survived BOTH switches.
+    transcriptA.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    // run-1 completes: its snapshot clears, the later addition stays.
+    await completeRun("conv-1", "run-1");
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+  });
+
+  it("clears each accepted submission's own snapshot across queued, overlapping runs", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    // Submit [m1] → run-1 streams.
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "", []);
+    await flushPromises();
+
+    // Stage a second reference and submit BOTH while run-1 streams —
+    // the coordinator QUEUES the second send (never rejects).
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-run-2",
+      status: "queued",
+      acceptedAt: "",
+    });
+    composer.vm.$emit("send", "another edit", []);
+    await flushPromises();
+
+    // Queue acceptance itself clears nothing.
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    // run-1 completes → only ITS snapshot ([m1]) is removed.
+    await completeRun("conv-1", "run-1");
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+
+    // run-2 drains and completes → its own submitted snapshot ([m1, m2]) clears.
+    useSelectedConversationStore().applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-2",
+      sequence: 1,
+      emittedAt: "2026-10-17T00:00:01.000Z",
+      eventType: "start",
+      payload: { eventType: "start", messageId: "a-2" },
+    });
+    await flushPromises();
+    await completeRun("conv-1", "run-2", 2);
+    expect(trayReferences(wrapper)).toEqual([]);
+  });
+
+  it("keeps never-submitted tray selections across an unrelated turn's completion", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+
+    // A plain text turn streams.
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "plain text turn", []);
+    await flushPromises();
+
+    // The user stages references mid-run but never sends them.
+    wrapper
+      .findComponent({ name: "AiChatWorkspaceTranscript" })
+      .vm.$emit("use-generated-image", { messageId: "m1", imageIndex: 0 });
+    await flushPromises();
+
+    // The text turn completes — nothing was armed, so nothing is cleared.
+    await completeRun("conv-1", "run-1");
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
   });
 });

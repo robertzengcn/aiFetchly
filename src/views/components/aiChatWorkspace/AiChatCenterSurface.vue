@@ -1090,8 +1090,6 @@ function ensureDeliveredRowsSubscription(): void {
 const composerDraftKey = computed(() => composerDraftKeyFor(conversationId.value));
 
 const composerFocusSignal = ref(0);
-/** Draft key whose selection is cleared once its turn completes (see below). */
-const pendingDraftClearKey = ref<string | null>(null);
 const generatedImageNotice = ref<string | null>(null);
 
 const sameGeneratedImageRef = (
@@ -1468,21 +1466,85 @@ function onReorderGeneratedImages(
 }
 
 /**
- * Clear the sent draft only when its turn is ACCEPTED end-to-end: the
- * presenter maps the terminal `complete` detail event to streamStatus
- * "idle". Error/cancel paths intentionally keep the selection so the user
- * can retry without re-picking (legacy parity).
+ * Accepted image submissions awaiting their turn's completion (audit R05 /
+ * FR-SUB-002): per conversation, a FIFO of the EXACT reference snapshots
+ * submitted by accepted sends. Arming happens only AFTER the store accepts
+ * the submission (see performOrdinarySend) — a rejected send (queue limit,
+ * gate, transport failure) never arms, so no later transition can clear its
+ * retained draft. Per-conversation runs serialize (coordinator queue), so
+ * completions dequeue snapshots in submission order. A plain Map is
+ * deliberate: the registry only changes alongside explicit store
+ * transitions, never through UI reactivity.
+ */
+const pendingDraftClears = new Map<string, ChatV2GeneratedImageReference[][]>();
+
+/**
+ * Consume one accepted submission's snapshot when ITS turn completes.
+ * Fire conditions (audit R05): the previous state was live (streaming, or a
+ * queued/awaiting runtime), the new state is terminal AND the run id is
+ * set — the presenter keeps the completed run's id on `complete`/`error`/
+ * `cancelled`, while a selection switch away from a live conversation also
+ * lands on "idle" but disposes the presenter (run id null). That switch is
+ * NOT a completion and must never touch a draft (FR-LIF-002). On a real
+ * completion the snapshot's exact references are removed from the CURRENT
+ * draft, preserving everything the user added after the submission; other
+ * terminals keep the tray (legacy retry parity) but still dequeue so the
+ * FIFO stays aligned with the serialized run completions.
  */
 watch(
-  () => selectedStore.streamStatus,
-  (status, previous) => {
-    if (previous !== "streaming") return;
-    const key = pendingDraftClearKey.value;
-    if (!key) return;
-    pendingDraftClearKey.value = null;
-    if (status === "idle") {
-      composerDrafts.setGeneratedImageReferences(key, []);
-    }
+  () =>
+    [
+      selectedStore.streamStatus,
+      selectedStore.runtimeStatus,
+      selectedStore.activeRunId,
+    ] as const,
+  (
+    [status, runtime, runId],
+    [previousStatus, previousRuntime, previousRunId]
+  ) => {
+    const isTerminal =
+      status === "idle" || status === "error" || status === "cancelled";
+    // Live→terminal: the store observed the turn's own lifecycle (accepted
+    // send → terminal event). The run id guard excludes selection switches:
+    // the handshake disposes the presenter to null BEFORE any snapshot.
+    const liveToTerminal =
+      (previousStatus === "streaming" ||
+        previousRuntime === "running" ||
+        previousRuntime === "queued" ||
+        previousRuntime === "awaiting_user") &&
+      isTerminal &&
+      runtime === "idle" &&
+      runId !== null;
+    // Late completion (audit R05): a queue acceptance resets the shared
+    // runtime to idle/null (the store's post-acceptance sync copies the
+    // presenter's view), so the in-flight run's terminal event later
+    // arrives from an already-idle state — a run id APPEARING on an
+    // idle+idle view is that completion. Well-formed idle snapshots never
+    // carry an active run id, and every selection handshake disposes to
+    // null first, so re-selection cannot produce this shape.
+    const lateCompletion =
+      previousStatus === "idle" &&
+      previousRuntime === "idle" &&
+      previousRunId === null &&
+      status === "idle" &&
+      runtime === "idle" &&
+      runId !== null;
+    if (!liveToTerminal && !lateCompletion) return;
+    const draftKey = composerDraftKeyFor(conversationId.value);
+    const queue = pendingDraftClears.get(draftKey);
+    const submitted = queue?.shift();
+    if (queue && queue.length === 0) pendingDraftClears.delete(draftKey);
+    if (!submitted || status !== "idle") return;
+    const current =
+      composerDrafts.getDraft(draftKey)?.generatedImageReferences ?? [];
+    if (current.length === 0) return;
+    composerDrafts.setGeneratedImageReferences(
+      draftKey,
+      current.filter(
+        (reference) =>
+          !submitted.some((sent) => sameGeneratedImageRef(reference, sent))
+      )
+    );
   }
 );
 
@@ -1994,9 +2056,6 @@ async function performOrdinarySend(
     }
   }
   voice.beginAssistantResponse(options?.fromVoice === true);
-  if (generatedImageReferences.length > 0) {
-    pendingDraftClearKey.value = composerDraftKey.value;
-  }
   // FR-HIS-002/004: drafted history selections submit as OPAQUE archive
   // references with a retry-stable submission identity; the chips clear only
   // on the engine's start acknowledgement (accepted ids only).
@@ -2036,6 +2095,24 @@ async function performOrdinarySend(
   // would clear the draft of a rejected send whenever the previous run's id
   // was still live (queue limit, gate, transport failure).
   if (accepted) {
+    // Audit R05: arm the reference clear ONLY on authoritative acceptance,
+    // with the EXACT snapshot this submission sent (pre-acceptance arming
+    // let an unrelated transition sweep a newer or rejected draft). The
+    // confirmed batch rides its own trusted channel — the explicit tray
+    // resolves empty for it — so whichever channel carried references is
+    // the one cleared. References added after acceptance are outside the
+    // snapshot and survive the turn's completion.
+    const submittedRefs =
+      confirmedBatch && confirmedBatch.length > 0
+        ? [...confirmedBatch]
+        : generatedImageReferences;
+    if (submittedRefs.length > 0) {
+      const clearKey = composerDraftKeyFor(sendConversationId);
+      pendingDraftClears.set(clearKey, [
+        ...(pendingDraftClears.get(clearKey) ?? []),
+        submittedRefs,
+      ]);
+    }
     options?.onAccepted?.();
   }
   return accepted;
