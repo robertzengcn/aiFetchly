@@ -1477,7 +1477,15 @@ async function handleConversations(
     return denied(chatAccess.message);
   }
   try {
-    const req = data ? JSON.parse(data) : {};
+    // Accept both the stringified production payloads and object payloads
+    // (direct window.api.invoke callers in E2E) — same tolerance as the
+    // resume/deny handlers; an object used to throw in JSON.parse and deny.
+    let req: { searchQuery?: unknown } = {};
+    if (typeof data === "string" && data) {
+      req = JSON.parse(data) as { searchQuery?: unknown };
+    } else if (data && typeof data === "object") {
+      req = data as { searchQuery?: unknown };
+    }
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
@@ -1921,9 +1929,15 @@ async function handleCompactionStart(
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as { conversationId?: string; model?: string })
-    : {};
+  // Accept both stringified and object payloads (same tolerance as the
+  // resume/deny/conversations handlers; raw window.api.invoke callers in
+  // E2E pass objects).
+  let parsed: { conversationId?: string; model?: string } = {};
+  if (typeof data === "string" && data) {
+    parsed = JSON.parse(data) as { conversationId?: string; model?: string };
+  } else if (data && typeof data === "object") {
+    parsed = data as { conversationId?: string; model?: string };
+  }
   if (!parsed.conversationId) {
     return denied("conversationId is required");
   }
