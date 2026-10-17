@@ -3644,7 +3644,14 @@ export default {
       filesNotSupported: "Cette commande ne prend pas en charge les pièces jointes. Retirez les fichiers ou envoyez votre message sans le préfixe /commande.",
       loopAttachmentsNotSupported:
         "Les commandes de boucle ne prennent pas en charge les pièces jointes ni les blocs collés. Envoyez la commande de boucle seule, puis partagez le contenu dans un message suivant.",
-      loopControlFailed: "Impossible de {operation} la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+      loopControlFailed: {
+        pause:
+          "Impossible de mettre en pause la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+        resume:
+          "Impossible de reprendre la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+        stop:
+          "Impossible d'arrêter la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+      },
       clearFailed: "Impossible de vider cette conversation. Réessayez.",
     },
     errors: {

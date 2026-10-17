@@ -294,16 +294,20 @@ export function useChatCommandRouting(
   ): Promise<ChatCommandDisposition> {
     const conversationId = await ports.ensureConversationId();
     if (!conversationId) return { kind: "rejected", code: "no_conversation", message: "" };
+    // R09 (i18n): the operation is localized BY KEY (loopControlFailed.pause/
+    // resume/stop) instead of interpolating the English verb into CJK locales.
     const failureMessage = (): string =>
       ports.translate(
-        "workspaceChat.command.loopControlFailed",
-        "Could not {operation} the scheduled loop. Check /loop status and try again.",
-        { operation }
+        `workspaceChat.command.loopControlFailed.${operation}`,
+        `Could not ${operation} the scheduled loop. Check /loop status and try again.`
       );
     try {
       const view = await ports.controlScheduledLoop(conversationId, operation);
       if (view === null || view === undefined) {
-        ports.setError(failureMessage());
+        // R10: the control IPC awaited — a mid-flight switch must not drop
+        // the failure notice into another conversation, so the port receives
+        // the commanding conversation id.
+        ports.setError(failureMessage(), conversationId);
         return {
           kind: "rejected",
           code: "loop_control_failed",
@@ -311,7 +315,8 @@ export function useChatCommandRouting(
         };
       }
     } catch {
-      ports.setError(failureMessage());
+      // R10: same origin-scoping for transport failures.
+      ports.setError(failureMessage(), conversationId);
       return {
         kind: "rejected",
         code: "loop_control_failed",
@@ -574,7 +579,11 @@ export function useChatCommandRouting(
           `No installed prompt skill matches '${skillCmd.name}'.`,
           { name: skillCmd.name }
         );
-        ports.setError(message);
+        // R10: the acknowledgement resolved AFTER an await — a mid-flight
+        // switch must not land this failure in the newly selected chat. The
+        // router has no selection-guard hook, so origin-scoping of the
+        // notice (the port filters stale origins) is the contract here.
+        ports.setError(message, conversationId);
         return { kind: "rejected", code: "skill_not_found", message };
       }
       return {

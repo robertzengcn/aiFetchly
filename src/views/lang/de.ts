@@ -3658,7 +3658,14 @@ export default {
       filesNotSupported: "Dieser Befehl unterstützt keine Dateianhänge. Entferne die Dateien oder sende deine Nachricht ohne den /Befehl-Präfix.",
       loopAttachmentsNotSupported:
         "Schleifenbefehle unterstützen keine Dateianhänge oder eingefügten Blöcke. Sende den Schleifenbefehl allein und teile den Inhalt in einer Folgenachricht.",
-      loopControlFailed: "Die geplante Schleife konnte nicht {operation} werden. Prüfe den /loop-Status und versuche es erneut.",
+      loopControlFailed: {
+        pause:
+          "Der geplante Loop konnte nicht pausiert werden. Prüfe den /loop-Status und versuche es erneut.",
+        resume:
+          "Der geplante Loop konnte nicht fortgesetzt werden. Prüfe den /loop-Status und versuche es erneut.",
+        stop:
+          "Der geplante Loop konnte nicht gestoppt werden. Prüfe den /loop-Status und versuche es erneut.",
+      },
       clearFailed: "Dieser Chat konnte nicht geleert werden. Versuche es erneut.",
     },
     errors: {

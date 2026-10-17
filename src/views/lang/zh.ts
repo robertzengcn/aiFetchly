@@ -3454,7 +3454,11 @@ export default {
       filesNotSupported: "此命令不支持文件附件。请移除文件，或去掉 /命令前缀后发送消息。",
       loopAttachmentsNotSupported:
         "循环命令不支持文件附件或粘贴内容。请单独发送循环命令，之后再通过后续消息分享内容。",
-      loopControlFailed: "无法{operation}定时循环。请查看 /loop 状态后重试。",
+      loopControlFailed: {
+        pause: "无法暂停定时循环。请查看 /loop 状态后重试。",
+        resume: "无法继续定时循环。请查看 /loop 状态后重试。",
+        stop: "无法停止定时循环。请查看 /loop 状态后重试。",
+      },
       clearFailed: "无法清空此对话。请重试。",
     },
     errors: {

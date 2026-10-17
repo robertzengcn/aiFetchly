@@ -602,6 +602,9 @@ describe("loop command attachment + control-failure handling (R09)", () => {
       expect(result.code).toBe("loop_control_failed");
     }
     expect(state.errors).toHaveLength(1);
+    // R10: the failure notice is scoped to the commanding conversation — a
+    // mid-flight switch must not drop it into another chat.
+    expect(state.errorOrigins).toEqual(["v2-cmd-test"]);
   });
 
   it("reports a no-op control (null view) as rejected instead of completed", async () => {
@@ -615,6 +618,57 @@ describe("loop command attachment + control-failure handling (R09)", () => {
       expect(result.code).toBe("loop_control_failed");
     }
     expect(state.errors).toHaveLength(1);
+    // R10: origin-scoped like the transport failure.
+    expect(state.errorOrigins).toEqual(["v2-cmd-test"]);
+  });
+
+  it("localizes the control operation by key instead of interpolating the English verb (R09 i18n)", async () => {
+    const { ports, state } = makePorts({
+      controlScheduledLoop: async () => null,
+    });
+    const router = useChatCommandRouting(ports);
+    await router.routeCommand("/loop pause", {});
+    await router.routeCommand("/loop resume", {});
+    // The translate mock renders "T(key:fallback)" — the key names the
+    // operation so CJK locales deliver a fully localized verb.
+    expect(state.errors[0]).toContain("workspaceChat.command.loopControlFailed.pause");
+    expect(state.errors[1]).toContain("workspaceChat.command.loopControlFailed.resume");
+  });
+
+  /**
+   * R10 (audit 2026-10-17): async command failures are scoped to the
+   * conversation that owns the command — the router passes the captured
+   * origin through setError so the surface can filter a mid-flight switch.
+   */
+  it("scopes a delayed /skill failure to the commanding conversation after a switch (R10)", async () => {
+    // Mirror the surface's origin filter: only the CURRENTLY selected
+    // conversation receives a scoped error.
+    let currentSelection = "v2-cmd-test";
+    const noticeOrigins: Array<string | null> = [];
+    const deliveredNotices: Array<string | null> = [];
+    const { ports, state } = makePorts({
+      invokePromptSkill: async (input): Promise<boolean> => {
+        state.skillInvokes.push({ skill: input.skill, args: input.arguments });
+        // The lookup resolves AFTER the user switched chats.
+        currentSelection = "chat-b";
+        return false;
+      },
+      setError: (message, origin) => {
+        noticeOrigins.push(origin ?? null);
+        if (origin !== undefined && origin !== currentSelection) return;
+        deliveredNotices.push(message);
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/skill missing-skill do things", {});
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("skill_not_found");
+    }
+    // The notice carries the commanding conversation's id...
+    expect(noticeOrigins).toEqual(["v2-cmd-test"]);
+    // ...and the switched-to chat (chat-b) shows NO stale error.
+    expect(deliveredNotices).toHaveLength(0);
   });
 
   /**

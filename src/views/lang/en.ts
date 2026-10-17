@@ -3628,8 +3628,14 @@ export default {
         "This command does not support file attachments. Remove the files or send your message without the /command prefix.",
       loopAttachmentsNotSupported:
         "Loop commands do not support file attachments or pasted blocks. Send the loop command on its own, then share the content in a follow-up message.",
-      loopControlFailed:
-        "Could not {operation} the scheduled loop. Check /loop status and try again.",
+      loopControlFailed: {
+        pause:
+          "Could not pause the scheduled loop. Check /loop status and try again.",
+        resume:
+          "Could not resume the scheduled loop. Check /loop status and try again.",
+        stop:
+          "Could not stop the scheduled loop. Check /loop status and try again.",
+      },
       clearFailed: "Could not clear this chat. Try again.",
     },
     errors: {
