@@ -367,8 +367,24 @@ describe("AiChatV2 accepted-send contract (R11)", () => {
 
   it("clears the draft exactly once when the confirm durably creates the loop (R11-1)", async () => {
     const { createScheduledLoop } = await import("@/views/api/aiChatScheduledLoop");
+    // Full envelope type — the routing only reads conversationId.
     vi.mocked(createScheduledLoop).mockResolvedValueOnce({
       conversationId: "conv-scheduled",
+      commandMessageId: "cmd-1",
+      resultMessageId: "res-1",
+      loop: {
+        scheduleId: 1,
+        taskId: 2,
+        conversationId: "conv-scheduled",
+        prompt: "summarize emails",
+        status: "active",
+        intervalMs: 600_000,
+        maxRuns: 0,
+        claimedRuns: 0,
+        successfulRuns: 0,
+        consecutiveFailures: 0,
+        expiresAt: "",
+      },
     });
     const wrapper = mountChat();
     await flushPromises();
