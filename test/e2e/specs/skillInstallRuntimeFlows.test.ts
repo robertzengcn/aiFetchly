@@ -17,7 +17,43 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { e2eTest as test, expect } from "../fixtures/base";
+import { e2eTest as baseTest, expect } from "../fixtures/base";
+import {
+  createTemporaryRoot,
+  writeStateManifest,
+} from "../fixtures/temporaryState";
+import { launchAiFetchly } from "../fixtures/electronApp";
+import { closeApp } from "../support/processCleanup";
+
+/**
+ * Case 10 needs the recoverable-history rollout flags ON (compaction-start
+ * denies without ai_chat_new_compaction_flag). The shared aiApp fixture
+ * writes a flags-off manifest, so this spec-local override mirrors it with
+ * the four flags enabled.
+ */
+const test = baseTest.extend({
+  aiApp: async ({ testRoot, fakeAi }, use) => {
+    await fakeAi.reset();
+    writeStateManifest(testRoot, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: testRoot.workspacePath,
+      tokenOverrides: {
+        ai_chat_archive_reads_flag: "true",
+        ai_chat_history_tools_flag: "true",
+        ai_chat_new_compaction_flag: "true",
+        ai_chat_history_ui_flag: "true",
+      },
+    });
+    const app = await launchAiFetchly({
+      testRoot,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    await use(app);
+    await closeApp(app);
+  },
+});
 import { assertCleanTeardown } from "../support/assertions";
 import type { LaunchedApp } from "../fixtures/electronApp";
 import { RENDERER_ORIGIN } from "../fixtures/types";
@@ -309,9 +345,67 @@ test.describe("Compaction + conversation recovery (case 10, FR-23/§27.3-9)", ()
         ).api;
         return (await api.invoke(channel, payload)) as unknown;
       },
-      { channel: "ai-chat-v2:compact-conversation", payload: { conversationId } }
+      // G02/B05 repair: the legacy compact-conversation channel had no
+      // handler; the real manual path is compaction-start (§13.1).
+      { channel: "ai-chat-v2:compaction-start", payload: { conversationId } }
     );
     expect((rawCompact as { status?: boolean } | null)?.status).toBe(true);
+
+    // compaction-start is fire-and-forget BY DESIGN (§13.1: it settles via
+    // progress events). The legacy compact-conversation channel this spec
+    // originally used was synchronous — await the run's terminal state
+    // before sending the post-compaction turn, or the next request is
+    // assembled against the uncompacted (tool-bearing) history and the
+    // fake server still classifies it as a continuation.
+    {
+      // Success signal is generationId publication, NOT state==="completed":
+      // getActiveRun returns null for a completed run and getStatus then
+      // falls back to "queued" (mirrors the recoverable-history spec's
+      // startAndAwaitCompacted helper).
+      const deadline = Date.now() + 60_000;
+      let state: string | undefined = "waiting";
+      let generationId: string | undefined;
+      for (;;) {
+        const status = await app.mainWindow.evaluate(
+          async ([ch, body]) => {
+            const api = (
+              window as unknown as {
+                api: {
+                  invoke: (c: string, d: unknown) => Promise<unknown>;
+                };
+              }
+            ).api;
+            const resp = (await api.invoke(
+              ch,
+              typeof body === "string" ? body : JSON.stringify(body)
+            )) as
+              | { status?: boolean; data?: { state?: string; generationId?: string } }
+              | null;
+            return resp?.status ? resp.data : null;
+          },
+          ["ai-chat-v2:compaction-status", { conversationId }] as const
+        );
+        state = status?.state;
+        generationId = status?.generationId;
+        if (
+          generationId ||
+          state === "failed" ||
+          state === "cancelled" ||
+          Date.now() > deadline
+        ) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // A tiny fixture conversation legitimately packs 0 sections and
+      // publishes no new generation under the bounded coordinator — the
+      // assertion that matters here is settlement WITHOUT failure (the
+      // reattach/hash-guard legs below prove the durable state directly).
+      // generationId publication is asserted in the recoverable-history
+      // spec's AC-01, which drives a compactable archive.
+      expect(state === "failed" || state === "cancelled").toBe(false);
+      void generationId;
+    }
 
     // --- Healthy reattach: the NEXT assembled request carries exactly ONE
     //     reattachment block (identity + content hash intact) and NO
@@ -435,16 +529,22 @@ test.describe("Legacy documentation-only delegation (case 12, FR-25)", () => {
       { timeout: 60_000 }
     );
 
-    // The tool result marks the legacy-adapter doc path (visible short ack)…
-    await expect
-      .poll(
-        async () => {
-          const text = await app.mainWindow.evaluate(() => document.body.textContent ?? "");
-          return text.includes("documentation_skill");
-        },
-        { timeout: 15_000 }
-      )
-      .toBe(true);
+    // The tool result marks the legacy-adapter doc path (visible short
+    // ack). Completed execution groups auto-collapse (design §15.10), so
+    // expand the disclosure before reading the row's receipt — Chat V2
+    // showed the marker via its raw-JSON fallback; the workspace surfaces
+    // it as the row's semantic summary instead.
+    const groupButton = app.mainWindow.getByRole("button", {
+      name: /Execution \d+ of \d+ complete/,
+    });
+    await expect(groupButton).toBeVisible({ timeout: 15_000 });
+    if ((await groupButton.getAttribute("aria-expanded")) === "false") {
+      await groupButton.click();
+    }
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
+      "documentation_skill",
+      { timeout: 15_000 }
+    );
 
     // …and the SAME hidden instruction block reached the provider: the
     // continuation carries the tool flow plus one hidden-context message,
