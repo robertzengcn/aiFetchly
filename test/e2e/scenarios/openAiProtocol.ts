@@ -148,6 +148,14 @@ export const MODELS_RESPONSE = {
       object: "model",
       created: 0,
       owned_by: "aifetchly-e2e",
+      // Advertise a large context window so the production request-budget
+      // guard measures against a realistic provider contract. Without it the
+      // catalog falls back to 256k CHAR units, and the char-conservative
+      // accounting (§8.2) rejects the ~200k-char full tool catalog plus even
+      // a tiny conversation — an environment artifact, not the behavior
+      // under test (the guard still enforces whatever is advertised).
+      context_window: 1_000_000,
+      max_tokens: 16_384,
     },
   ],
 };
