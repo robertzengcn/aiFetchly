@@ -821,6 +821,7 @@ import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
 import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
 import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
+import { useConversationScopedOverlays } from "@/views/composables/aiChatWorkspace/useConversationScopedOverlays";
 import {
   createGoal,
   getActiveGoal,
@@ -1930,6 +1931,42 @@ function resetScheduledLoopViewState(): void {
   showScheduledLoopApproval.value = false;
 }
 
+// ---------------------------------------------------------------------------
+// Conversation-bound overlay ownership (G01, AD-008): this surface registers
+// its selection-bound dialogs with the SAME shared host the workspace
+// center uses, replacing the scattered per-dialog watch(selectedId) resets
+// that drifted out of sync. A dialog can never describe — or submit into —
+// a conversation the user navigated away from.
+// ---------------------------------------------------------------------------
+const scopedOverlays = useConversationScopedOverlays(
+  () => activeConversationId.value
+);
+// An open report dialog must never describe a conversation the user
+// navigated away from — close without submitting so a later open rebuilds
+// a fresh snapshot (Journey 11.5, §19; FR-RPT-008 rebinds single-output).
+scopedOverlays.registerSelectionBoundOverlay("report-dialogs", () => {
+  if (conversationReportDialogOpen.value) {
+    conversationReportDialogOpen.value = false;
+    conversationReportSnapshot.value = null;
+  }
+  if (singleReportDialogOpen.value) {
+    singleReportDialogOpen.value = false;
+    activeSingleDescriptor.value = null;
+  }
+});
+// Conversation switch: image-dialog state never replays into the newly
+// selected chat (stale chooser state is discarded, not replayed).
+scopedOverlays.registerSelectionBoundOverlay("generated-image-dialogs", () => {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  showBatchConfirmDialog.value = false;
+});
+// Conversation-scoped staging never leaks across selections (FR-CMD-008).
+scopedOverlays.registerSelectionBoundOverlay("scheduled-loop-staging", () => {
+  resetScheduledLoopViewState();
+});
+
 /**
  * Handle the auto full-compact broadcast: the main process compacted the
  * conversation after a turn pushed the context near the model's window.
@@ -2359,13 +2396,12 @@ function onWorkspaceApproved(
 }
 
 // Workspace badge refresh on conversation change is owned by the shared
-// useConversationWorkspace composable (design §9.1).
+// useConversationWorkspace composable (design §9.1). The scheduled-loop /
+// ambiguity-chooser / dialog resets moved to the shared overlay host above
+// (G01, AD-008) — this watcher keeps only the draft stash/restore and the
+// per-conversation refreshes.
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
-    resetScheduledLoopViewState();
-    // Drop any stale ambiguity-chooser / pending send from the previous
-    // conversation so it can never replay into the newly active one.
-    cancelAmbiguityChooser();
     // Per-conversation drafts (§13.3): stash the outgoing draft and restore
     // the incoming one so switching preserves work without cross-chat leaks.
     if (previousId) {
@@ -3158,15 +3194,8 @@ const conversationReportDisabledReason = computed(() => {
   return "";
 });
 
-// Journey 11.5, §19: if the active conversation changes while the report
-// dialog is open, the frozen snapshot would describe a conversation the user
-// is no longer viewing. Close the dialog without submitting so a later open
-// rebuilds a fresh snapshot against the new conversation.
-watch(activeConversationId, () => {
-  if (!conversationReportDialogOpen.value) return;
-  conversationReportDialogOpen.value = false;
-  conversationReportSnapshot.value = null;
-});
+// Journey 11.5, §19: the report dialog's close-on-switch rule moved to the
+// shared overlay host registration above (G01, AD-008) — no local watcher.
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
