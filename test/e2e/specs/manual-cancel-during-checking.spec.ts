@@ -54,12 +54,12 @@ async function openChat(app: LaunchedApp): Promise<void> {
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
-test("Stop during an enrolled turn cancels the stream and the conversation recovers", async (_fixtures, testInfo) => {
+test("Stop during an enrolled turn cancels the stream and the conversation recovers", async () => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
-    testId: testInfo.titlePath.join(" "),
-    workerIndex: testInfo.workerIndex,
+    testId: test.info().titlePath.join(" "),
+    workerIndex: test.info().workerIndex,
   });
   try {
     writeStateManifest(root, {
