@@ -10,6 +10,7 @@ import { AIChatTurnQueueService } from "@/service/AIChatTurnQueueService";
 import type { AIChatTurnQueueEngine } from "@/service/AIChatTurnQueueService";
 import type { AIChatTurnTerminalEvent } from "@/service/AIChatQueryEvents";
 import { AIChatRunModel } from "@/model/AIChatRun.model";
+import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-run-bridge");
 
@@ -115,6 +116,139 @@ describe("AIChatWorkspaceRunDispatchBridge (T1, AD-002/003)", () => {
     // Idempotent: a replayed terminal is ignored (terminal rows immutable).
     await bridge.finishRun(runId, "failed");
     expect((await model.getByRunId(runId))?.status).toBe("completed");
+  });
+
+  /**
+   * R01 (audit): admissions dispatched while another claim pumps must be
+   * consumable by their own pending claim — never discarded. Here B's
+   * retry pump admits the higher-priority C: B stays unadmitted, and C's
+   * admission is preserved as consumable ownership that C's own next
+   * submission-claim consumes (the defect left C durably queued forever
+   * while it held the scheduler slot).
+   */
+  it("records cross-candidate pump admissions and hands them to their claim", async () => {
+    await SqliteDb.ensureInitialized();
+    const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+    const bridge = new AIChatWorkspaceRunDispatchBridge(
+      new AIChatRunModule(),
+      scheduler
+    );
+    const occupied = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r01-occupied",
+        conversationId: "v2-r01-occupied",
+        resourceClass: "general",
+      })
+    )!;
+    expect(occupied.admitted).toBe(true);
+    const deferredCandidate = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r01-c",
+        conversationId: "v2-r01-c",
+        resourceClass: "general",
+      })
+    )!;
+    expect(deferredCandidate.admitted).toBe(false);
+
+    // C becomes the selected conversation; then the slot frees and B claims.
+    scheduler.setSelectedConversation("v2-r01-c");
+    await bridge.finishRun(occupied.runId, "completed");
+    const retried = await bridge.schedule({
+      pendingMessageId: "pending-r01-b",
+      conversationId: "v2-r01-b",
+      resourceClass: "general",
+    });
+    expect(retried?.admitted).toBe(false);
+
+    // The preserved ownership: C holds the slot (dispatched cross-candidate)
+    // while its durable envelope stayed queued without an executer.
+    const model = new AIChatRunModel(tmpDir);
+    expect(scheduler.isActive(deferredCandidate.runId)).toBe(true);
+    expect((await model.getByRunId(deferredCandidate.runId))?.status).toBe(
+      "queued"
+    );
+
+    // C's own submission-claim consumes the preserved admission: admitted.
+    const cClaim = await bridge.schedule({
+      pendingMessageId: "pending-r01-c",
+      conversationId: "v2-r01-c",
+      resourceClass: "general",
+    });
+    expect(cClaim?.runId).toBe(deferredCandidate.runId);
+    expect(cClaim?.admitted).toBe(true);
+    expect((await model.getByRunId(deferredCandidate.runId))?.status).toBe(
+      "running"
+    );
+
+    // Cleanup: no scheduler slots or recorded admissions leak.
+    await bridge.finishRun(deferredCandidate.runId, "completed");
+    bridge.cancelDeferred(retried!.runId);
+    await bridge.finishRun(retried!.runId, "cancelled");
+    expect(scheduler.stats().active).toBe(0);
+    expect(scheduler.stats().queued).toBe(0);
+  });
+
+  /**
+   * R01: admitDeferred's own pump must also record other candidates'
+   * admissions (the discarded `() => undefined` callback of the defect) so
+   * the dispatched candidate's own submission-claim can consume it.
+   */
+  it("records admissions pumped by admitDeferred for their own claims", async () => {
+    await SqliteDb.ensureInitialized();
+    const scheduler = new AIChatExecutionScheduler({ generalCapacity: 1 });
+    const bridge = new AIChatWorkspaceRunDispatchBridge(
+      new AIChatRunModule(),
+      scheduler
+    );
+    const occupied = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r01d-occupied",
+        conversationId: "v2-r01d-occupied",
+        resourceClass: "general",
+      })
+    )!;
+    const candidate = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r01d-c",
+        conversationId: "v2-r01d-c",
+        resourceClass: "general",
+      })
+    )!;
+    const other = (
+      await bridge.schedule({
+        pendingMessageId: "pending-r01d-d",
+        conversationId: "v2-r01d-d",
+        resourceClass: "general",
+      })
+    )!;
+    expect(candidate.admitted).toBe(false);
+    expect(other.admitted).toBe(false);
+
+    // D is selected; the slot frees; C's admitDeferred pump dispatches D
+    // (cross-candidate) while C itself stays unadmitted this attempt.
+    scheduler.setSelectedConversation("v2-r01d-d");
+    await bridge.finishRun(occupied.runId, "completed");
+    expect(await bridge.admitDeferred(candidate.runId)).toBe(false);
+
+    // D's own submission-claim consumes the preserved admission.
+    const model = new AIChatRunModel(tmpDir);
+    expect(
+      (
+        await bridge.schedule({
+          pendingMessageId: "pending-r01d-d",
+          conversationId: "v2-r01d-d",
+          resourceClass: "general",
+        })
+      )?.admitted
+    ).toBe(true);
+    expect((await model.getByRunId(other.runId))?.status).toBe("running");
+
+    // Cleanup.
+    await bridge.finishRun(other.runId, "completed");
+    bridge.cancelDeferred(candidate.runId);
+    await bridge.finishRun(candidate.runId, "cancelled");
+    expect(scheduler.stats().active).toBe(0);
+    expect(scheduler.stats().queued).toBe(0);
   });
 });
 

@@ -102,6 +102,17 @@ export class AIChatWorkspaceRunDispatchBridge
 {
   private readonly runModule: AIChatRunModule;
   private readonly scheduler: AIChatExecutionScheduler | null;
+  /**
+   * R01: admitted-yet-unconsumed ownership. When a pump dispatches a
+   * run whose claimant came for a DIFFERENT run id, the admission cannot be
+   * discarded — the dispatched run then occupies scheduler capacity while
+   * its durable envelope stays queued and nobody executes it. Recording it
+   * here hands the admission to its own pending claim: the next
+   * schedule/admitDeferred call for that run id consumes it and runs the
+   * turn. Entries are removed on consumption and whenever the corresponding
+   * scheduler slot is released (complete/requeue/cancel/terminal).
+   */
+  private readonly recordedAdmissions = new Set<string>();
 
   constructor(
     runModule?: AIChatRunModule,
@@ -208,8 +219,10 @@ export class AIChatWorkspaceRunDispatchBridge
       );
       return false;
     } finally {
-      // B02: always release global capacity on terminal outcomes so a
-      // deferred fourth run can admit. Safe to call twice (idempotent).
+      // R01: the slot is gone — no recorded admission for this run id can
+      // remain consumable. B02: always release global capacity on terminal
+      // outcomes so a deferred fourth run can admit. Safe to call twice.
+      this.dropRecordedAdmission(runId);
       this.scheduler?.complete(runId);
     }
     return true;
@@ -226,8 +239,10 @@ export class AIChatWorkspaceRunDispatchBridge
     } finally {
       // B02: a lease-race release returns the scheduler slot with its
       // original enqueue time preserved (requeue, not cancel+resubmit, so
-      // scheduling age must not restart — design AD-002).
+      // scheduling age must not restart — design AD-002). R01: the slot
+      // went back to the queue — a recorded admission no longer holds it.
       if (this.scheduler?.isActive(runId)) {
+        this.dropRecordedAdmission(runId);
         this.scheduler.requeue(runId);
       }
     }
@@ -252,6 +267,8 @@ export class AIChatWorkspaceRunDispatchBridge
       // B02: a parked turn is not executing — release capacity so other
       // conversations can admit while this run waits for the user. The
       // resume path re-admits through admitDeferred (same run id).
+      // R01: the slot is gone — the recorded admission cannot stay consumable.
+      this.dropRecordedAdmission(runId);
       this.scheduler?.complete(runId);
     }
   }
@@ -261,10 +278,21 @@ export class AIChatWorkspaceRunDispatchBridge
     try {
       const row = await this.runModule.getByRunId(runId);
       if (!row || TERMINAL_RUN_STATUSES.has(row.status)) {
+        // R01: terminal - release the slot and forget a stale admission.
+        this.dropRecordedAdmission(runId);
         this.scheduler?.complete(runId);
         return false;
       }
       if (!this.scheduler) {
+        if (row.status === "queued") {
+          await this.runModule.transition(runId, "running");
+        }
+        return true;
+      }
+      // R01: consume an admission a previous pump recorded for THIS run id
+      // (its claimant came for a different run id; the admission was
+      // preserved until its own claim came back).
+      if (this.consumeRecordedAdmission(runId)) {
         if (row.status === "queued") {
           await this.runModule.transition(runId, "running");
         }
@@ -279,7 +307,10 @@ export class AIChatWorkspaceRunDispatchBridge
       // Still queued in the scheduler (or unknown): pump once and recheck.
       // The caller re-drains on capacity-free notifications; a pump here
       // covers the race where capacity freed between notification and drain.
-      this.scheduler.pump(() => undefined);
+      // R01: every dispatch reaches its pending claim — this run id either
+      // dispatches here or a recorded admission consumes it; OTHER admitted
+      // run ids are recorded for their own claimants (never discarded).
+      this.pumpAdmissionsFor(runId);
       if (this.scheduler.isActive(runId)) {
         if (row.status === "queued") {
           await this.runModule.transition(runId, "running");
@@ -294,6 +325,8 @@ export class AIChatWorkspaceRunDispatchBridge
 
   cancelDeferred(runId: string | null): void {
     if (!runId || !this.scheduler) return;
+    // R01: the cancelled entry cannot hold a consumable admission.
+    this.dropRecordedAdmission(runId);
     this.scheduler.cancelQueued(runId);
   }
 
@@ -301,10 +334,11 @@ export class AIChatWorkspaceRunDispatchBridge
    * B02: admit one envelope through the global scheduler. Without a
    * scheduler the envelope transitions to running immediately (legacy).
    * With a scheduler the envelope is submitted (idempotent) and pumped;
-   * `admitted` is true only when the scheduler dispatched THIS run id.
-   * A deferred envelope stays `queued` in BOTH the run table and the
-   * scheduler queue with its original enqueue time — scheduling age is
-   * preserved for the later admitDeferred.
+   * `admitted` is true when THIS run id dispatches here OR a previously
+   * recorded pump admission for it is consumed (R01). A deferred envelope
+   * stays `queued` in BOTH the run table and the scheduler queue with its
+   * original enqueue time — scheduling age is preserved for the later
+   * admitDeferred.
    */
   private async admitEnvelope(
     runId: string,
@@ -314,21 +348,59 @@ export class AIChatWorkspaceRunDispatchBridge
       await this.runModule.transition(runId, "running");
       return { runId, admitted: true };
     }
+    // R01: an earlier pump may have admitted this run id cross-candidate
+    // (its dispatch landed while another claim was pumping). That
+    // ownership was recorded, never discarded — consume it now.
+    const recorded = this.consumeRecordedAdmission(runId);
     this.scheduler.submit({
       runId,
       conversationId: candidate.conversationId,
       owner: "interactive",
       resourceClass: candidate.resourceClass,
     });
-    let admitted = false;
-    this.scheduler.pump((dispatch) => {
-      if (dispatch.runId === runId) admitted = true;
-    });
+    const admitted = this.pumpAdmissionsFor(runId) || recorded;
     if (admitted) {
       await this.runModule.transition(runId, "running");
       return { runId, admitted: true };
     }
     return { runId, admitted: false };
+  }
+
+  /**
+   * R01: THE one admission dispatcher. Every scheduler pump call funnels
+   * through here so every pump result reaches a pending claim: the
+   * requested run id resolves the caller's own admission, and every OTHER
+   * admitted run id is recorded as consumable admitted ownership for its
+   * own claimant. A discarded dispatch strands its run durably queued
+   * while it occupies scheduler capacity forever.
+   */
+  private pumpAdmissionsFor(requestedRunId: string | null): boolean {
+    if (!this.scheduler) return false;
+    let admitted = false;
+    this.scheduler.pump((dispatch) => {
+      if (dispatch.runId === requestedRunId) {
+        admitted = true;
+        return;
+      }
+      this.recordedAdmissions.add(dispatch.runId);
+    });
+    return admitted;
+  }
+
+  /**
+   * R01: consume one recorded admission for a run id. True when the
+   * recorded admission still owns a scheduler slot (the pending claim may
+   * proceed to run); the record is always removed so it cannot be
+   * double-consumed.
+   */
+  private consumeRecordedAdmission(runId: string): boolean {
+    if (!this.recordedAdmissions.delete(runId)) return false;
+    return this.scheduler?.isActive(runId) ?? false;
+  }
+
+  /** R01: forget a recorded admission — its scheduler slot is gone. */
+  private dropRecordedAdmission(runId: string | null): void {
+    if (runId) this.recordedAdmissions.delete(runId);
   }
 
   private findInteractiveRunBySource(
