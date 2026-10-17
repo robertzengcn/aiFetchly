@@ -19,7 +19,7 @@ export class AiMessageTaskRunEntity extends AuditableEntity {
   task_id: number;
 
   @Column("integer", { nullable: true })
-  schedule_id: number;
+  schedule_id: number | null;
 
   @Column("varchar", { length: 255, nullable: true })
   conversation_id: string;
@@ -110,4 +110,24 @@ export class AiMessageTaskRunEntity extends AuditableEntity {
       "scheduled-loop:<scheduleId>:<occurrence> retry/restart dedupe key",
   })
   idempotency_key: string | null;
+
+  // ----- Task-completion-policy V1 additive columns (technical-design §6.1) -----
+  // All nullable so existing rows remain valid under synchronize. Slice 1
+  // writes are feature-flagged; null = legacy run (no execution binding).
+
+  /** Stable execution identity this run is bound to (FK-shaped, no DB FK). */
+  @Column("varchar", { length: 100, nullable: true })
+  execution_id: string | null;
+
+  /** Final task outcome (verified_complete | incomplete | blocked_by_policy | ...). */
+  @Column("varchar", { length: 32, nullable: true })
+  task_outcome: string | null;
+
+  /** Machine-readable outcome reason code (e.g. CRITERIA_SATISFIED). */
+  @Column("varchar", { length: 64, nullable: true })
+  task_outcome_reason: string | null;
+
+  /** Human-readable outcome summary (2 KiB cap, FR-16). */
+  @Column("text", { nullable: true })
+  task_result_summary: string | null;
 }

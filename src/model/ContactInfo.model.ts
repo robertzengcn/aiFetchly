@@ -3,6 +3,7 @@ import { ContactInfoEntity } from '../entity/ContactInfo.entity';
 import { SqliteDb } from '../config/SqliteDb';
 import { Token } from '../modules/token';
 import { USERSDBPATH } from '../config/usersetting';
+import { toSqliteCurrentTimestampText } from './sqliteDatetime';
 
 /**
  * Repository for ContactInfo entity
@@ -50,7 +51,7 @@ export class ContactInfoRepository {
      */
     async findByResultId(resultId: number): Promise<ContactInfoEntity | null> {
         const repository = await this.getRepository();
-        return repository.findOne({ where: { resultId } as any });
+        return repository.findOne({ where: { resultId } });
     }
 
     /**
@@ -73,7 +74,7 @@ export class ContactInfoRepository {
     ): Promise<void> {
         const repository = await this.getRepository();
         await repository.update(
-            { resultId } as any,
+            { resultId },
             {
                 extractionStatus: status,
                 extractionError: error || null,
@@ -87,7 +88,7 @@ export class ContactInfoRepository {
      */
     async findByStatus(status: string): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
-        return repository.find({ where: { extractionStatus: status } as any });
+        return repository.find({ where: { extractionStatus: status } });
     }
 
     /**
@@ -96,9 +97,9 @@ export class ContactInfoRepository {
     async findPendingExtractions(limit = 10): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
         return repository.find({
-            where: { extractionStatus: 'pending' } as any,
+            where: { extractionStatus: 'pending' },
             take: limit,
-            order: { id: 'ASC' } as any
+            order: { id: 'ASC' }
         });
     }
 
@@ -108,9 +109,9 @@ export class ContactInfoRepository {
     async findFailedExtractions(limit = 10): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
         return repository.find({
-            where: { extractionStatus: 'failed' } as any,
+            where: { extractionStatus: 'failed' },
             take: limit,
-            order: { id: 'ASC' } as any
+            order: { id: 'ASC' }
         });
     }
 
@@ -122,8 +123,17 @@ export class ContactInfoRepository {
         const existing = await this.findByResultId(resultId);
 
         if (existing) {
-            await repository.update({ resultId } as any, data);
-            return this.findByResultId(resultId) as Promise<ContactInfoEntity>;
+            await repository.update({ resultId }, data);
+            // The row exists (checked above); a null re-read means it was
+            // deleted concurrently — a real invariant violation, not a
+            // fallible cast to hide.
+            const updated = await this.findByResultId(resultId);
+            if (!updated) {
+                throw new Error(
+                    `ContactInfo row ${resultId} disappeared during saveOrUpdate`
+                );
+            }
+            return updated;
         } else {
             const newContactInfo = repository.create({ resultId, ...data });
             return repository.save(newContactInfo);
@@ -135,7 +145,7 @@ export class ContactInfoRepository {
      */
     async deleteByResultId(resultId: number): Promise<void> {
         const repository = await this.getRepository();
-        await repository.delete({ resultId } as any);
+        await repository.delete({ resultId });
     }
 
     /**
@@ -158,13 +168,111 @@ export class ContactInfoRepository {
             analyzing
         ] = await Promise.all([
             repository.count(),
-            repository.count({ where: { extractionStatus: 'completed' } as any }),
-            repository.count({ where: { extractionStatus: 'failed' } as any }),
-            repository.count({ where: { extractionStatus: 'pending' } as any }),
-            repository.count({ where: { extractionStatus: 'analyzing' } as any })
+            repository.count({ where: { extractionStatus: 'completed' } }),
+            repository.count({ where: { extractionStatus: 'failed' } }),
+            repository.count({ where: { extractionStatus: 'pending' } }),
+            repository.count({ where: { extractionStatus: 'analyzing' } })
         ]);
 
         return { total, completed, failed, pending, analyzing };
+    }
+
+    /**
+     * Count contact rows created at/after a timestamp (execution-scoped freshness
+     * bound, AC-03). `extraction_date` is a `@CreateDateColumn`, stored by the
+     * better-sqlite3 driver as SQLite `CURRENT_TIMESTAMP` text
+     * (`"YYYY-MM-DD HH:MM:SS"`, space separator, no offset marker). Binding
+     * `toISOString()` (`"YYYY-MM-DDTHH:MM:SS.sssZ"`, 'T' separator) breaks the
+     * TEXT comparison — space (0x20) < 'T' (0x54) so same-day rows sort before
+     * the bound and are excluded. Bind the matching space-format text instead.
+     */
+    async countSince(startedAt: Date): Promise<number> {
+        const repository = await this.getRepository();
+        return repository
+            .createQueryBuilder('contact')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .getCount();
+    }
+
+    /**
+     * Find the freshest contact row created at/after a timestamp, returning its
+     * `extraction_date`. Used by the observation provider so `observedAt` is the
+     * real row time, not `now()` — a historical row can no longer masquerade as
+     * a fresh observation (AC-04/AC-03). Returns null when no in-window row
+     * exists (fail-closed → unknown).
+     */
+    async findLatestSince(
+        startedAt: Date
+    ): Promise<{ extractionDate: Date } | null> {        const repository = await this.getRepository();
+        const row = await repository
+            .createQueryBuilder('contact')
+            .select('contact.extraction_date', 'extractionDate')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .orderBy('contact.extraction_date', 'DESC')
+            .limit(1)
+            .getRawOne<{ extractionDate: string } | undefined>();
+        if (!row || !row.extractionDate) return null;
+        return { extractionDate: new Date(row.extractionDate) };
+    }
+
+    /**
+     * B03 (FR-02/03/10/24; AC-01/04/11/17/27): count contact rows created
+     * at/after a timestamp ATTRIBUTED to the given search keywords (via
+     * `contact_info.result_id → search_result.keyword_id`). Time-bounding
+     * alone lets a concurrent extraction for another campaign satisfy this
+     * request's count — the keyword join is the target attribution. Empty
+     * keyword list counts nothing (fail-closed, never a global fallback).
+     */
+    async countSinceForKeywords(
+        startedAt: Date,
+        keywordIds: readonly number[]
+    ): Promise<number> {
+        if (keywordIds.length === 0) return 0;
+        const repository = await this.getRepository();
+        return repository
+            .createQueryBuilder('contact')
+            .innerJoin('contact.searchResult', 'result')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .andWhere('result.keyword_id IN (:...keywordIds)', {
+                keywordIds: [...keywordIds],
+            })
+            .getCount();
+    }
+
+    /**
+     * B03: freshest contact row created at/after a timestamp attributed to
+     * the given search keywords, returning its id (row-bound observation
+     * reference) and `extraction_date` (the real observation time). Null
+     * when no attributed in-window row exists (fail-closed → unknown).
+     */
+    async findLatestSinceForKeywords(
+        startedAt: Date,
+        keywordIds: readonly number[]
+    ): Promise<{ id: number; extractionDate: Date } | null> {
+        if (keywordIds.length === 0) return null;
+        const repository = await this.getRepository();
+        const row = await repository
+            .createQueryBuilder('contact')
+            .select('contact.id', 'id')
+            .addSelect('contact.extraction_date', 'extractionDate')
+            .innerJoin('contact.searchResult', 'result')
+            .where('contact.extraction_date >= :startedAt', {
+                startedAt: toSqliteCurrentTimestampText(startedAt),
+            })
+            .andWhere('result.keyword_id IN (:...keywordIds)', {
+                keywordIds: [...keywordIds],
+            })
+            .orderBy('contact.extraction_date', 'DESC')
+            .limit(1)
+            .getRawOne<{ id: number; extractionDate: string } | undefined>();
+        if (!row || !row.extractionDate) return null;
+        return { id: row.id, extractionDate: new Date(row.extractionDate) };
     }
 }
 

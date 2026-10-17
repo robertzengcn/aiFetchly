@@ -91,6 +91,9 @@ import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.en
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
+import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
 import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
 import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
@@ -621,6 +624,10 @@ export class SqliteDb {
           AIFetchlyWorkspaceTrustEntity,
           HookConfigEntity,
           HookAuditEntryEntity,
+          // Task-completion-policy V1 (Slice 1): execution/ledger/operation tables.
+          AiTaskExecutionEntity,
+          AiTaskExecutionLedgerEntity,
+          AiTaskOperationEntity,
         ],
         synchronize: true,
         migrations: [],

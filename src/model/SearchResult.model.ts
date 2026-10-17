@@ -124,6 +124,52 @@ export class SearchResultModel extends BaseDb {
       .getCount();
   }
 
+  /**
+   * Count search results by keyword ids created at/after a timestamp
+   * (execution-scoped freshness bound, AC-03 — unrelated old results for the
+   * same task cannot satisfy execution-local work). `record_time` is stored as
+   * an ISO string (see :38), so the lexicographic `>=` is format-correct.
+   */
+  async countByKeywordsSince(
+    keywords: number[],
+    startedAt: Date
+  ): Promise<number> {
+    if (keywords.length === 0) return 0;
+    return this.repository
+      .createQueryBuilder("result")
+      .where("result.keyword_id IN (:...keywords)", { keywords })
+      .andWhere("result.record_time >= :startedAt", {
+        startedAt: startedAt.toISOString(),
+      })
+      .getCount();
+  }
+
+  /**
+   * Find the freshest search result for the given keyword ids created at/after
+   * a timestamp, returning its `record_time`. Used by the observation provider
+   * so `observedAt` is the real row time, not `now()` (AC-04/AC-03). Returns
+   * null when no in-window row exists (fail-closed → unknown).
+   */
+  async findLatestByKeywordsSince(
+    keywords: number[],
+    startedAt: Date
+  ): Promise<{ recordTime: Date; id: number } | null> {
+    if (keywords.length === 0) return null;
+    const row = await this.repository
+      .createQueryBuilder("result")
+      .select("result.record_time", "recordTime")
+      .addSelect("result.id", "id")
+      .where("result.keyword_id IN (:...keywords)", { keywords })
+      .andWhere("result.record_time >= :startedAt", {
+        startedAt: startedAt.toISOString(),
+      })
+      .orderBy("result.record_time", "DESC")
+      .limit(1)
+      .getRawOne<{ recordTime: string; id: number } | undefined>();
+    if (!row || !row.recordTime) return null;
+    return { recordTime: new Date(row.recordTime), id: row.id };
+  }
+
   async aggregateByDateRange(
     startDate: Date,
     endDate: Date,

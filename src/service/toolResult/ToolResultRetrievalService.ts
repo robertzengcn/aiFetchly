@@ -4,7 +4,6 @@ import type {
   ToolOutputFormat,
   ToolResultErrorCode,
   ToolResultReadPage,
-  ToolResultSearchMatch,
   ToolResultSearchPage,
 } from "@/entityTypes/toolResultTypes";
 import {
@@ -437,7 +436,10 @@ export class ToolResultRetrievalService {
     const scanCeiling = config.searchMaxScanBytes;
     const deadline = Date.now() + config.searchMaxMs;
 
-    const matches: ToolResultSearchMatch[] = [];
+    const matches: FoldedSearchMatch[] = [];
+    // Set when the next hit would open a window past `maxMatches`. The
+    // continuation cursor starts AT that hit so the next page shows new text.
+    let resumePosition: number | null = null;
     let scanned = 0;
     let scanComplete = false;
     // Explicitly typed: `combined.subarray()` widens to Buffer<ArrayBufferLike>,
@@ -447,7 +449,7 @@ export class ToolResultRetrievalService {
     let carryStart = position;
     let cursorPosition = position;
 
-    while (scanned < scanCeiling) {
+    scan: while (scanned < scanCeiling) {
       if (Date.now() >= deadline) break;
       const budget = Math.min(64 * 1024, scanCeiling - scanned);
       let window: { buffer: Buffer; totalBytes: number };
@@ -482,8 +484,17 @@ export class ToolResultRetrievalService {
         // Suppress a match that a previous call already committed, which is
         // what a query spanning a buffer boundary would otherwise duplicate.
         if (absolute >= lastMatchEnd) {
-          matches.push(
-            buildMatch({
+          const previous = matches[matches.length - 1];
+          if (previous && absolute < previous.excerptEndByte) {
+            // Same window of text. Counting the hit is enough; another
+            // excerpt would repeat the prefix the model already has.
+            previous.matchCountInWindow += 1;
+            lastMatchEnd = absolute + queryBytes.byteLength;
+          } else if (matches.length >= maxMatches) {
+            resumePosition = absolute;
+            break scan;
+          } else {
+            const folded = buildMatch({
               outputId: input.target.outputId,
               revision: input.target.revision,
               combined,
@@ -493,11 +504,11 @@ export class ToolResultRetrievalService {
               indexInBuffer: absolute - carryStart,
               absolute,
               queryBytes,
-            })
-          );
-          lastMatchEnd = absolute + queryBytes.byteLength;
-          committedAnyMatch = true;
-          if (matches.length >= maxMatches) break;
+            });
+            matches.push(folded);
+            lastMatchEnd = absolute + queryBytes.byteLength;
+            committedAnyMatch = true;
+          }
         }
         offset = combined.indexOf(queryBytes, offset + 1);
       }
@@ -519,7 +530,6 @@ export class ToolResultRetrievalService {
       carry = combined.subarray(Math.max(0, combined.byteLength - overlap));
       carryStart = cursorPosition - carry.byteLength;
 
-      if (matches.length >= maxMatches) break;
       if (cursorPosition >= window.totalBytes) {
         // Only here is it true that EVERY byte of the captured representation
         // was examined.
@@ -538,31 +548,41 @@ export class ToolResultRetrievalService {
           // Resume at the first byte that could still begin an UNCOMMITTED
           // match, NOT at the end of the last window.
           //
-          // Two different stop reasons need two different positions:
+          // Three stop reasons need three positions:
           //
-          //  - Match budget filled: `lastMatchEnd` is where the last COMMITTED
-          //    match ended. Everything from there on was never examined, so
-          //    resuming at the window end would skip the entire remaining body
-          //    and under-report matches.
+          //  - Match budget filled: `resumePosition` is the first hit that
+          //    would open another excerpt window. Hits inside the returned
+          //    windows were counted, so the next page starts at new text.
           //  - Ceiling/deadline: the whole window WAS examined, so only the
           //    trailing overlap can still begin an uncommitted match, and
           //    resuming at `carryStart` avoids re-scanning megabytes.
+          //  - A match was committed and the scan stopped for another reason:
+          //    resume at `lastMatchEnd`, never past bytes that were not read.
           //
           // Clamped so the cursor is MONOTONIC when nothing was committed: with no
           // match in this page, `lastMatchEnd` is still 0 and using it would
           // rewind to the very start, re-scanning the same bytes forever.
-          position: committedAnyMatch
-            ? Math.min(lastMatchEnd, carryStart)
-            : carryStart,
+          position:
+            resumePosition !== null
+              ? resumePosition
+              : committedAnyMatch
+                ? Math.min(lastMatchEnd, carryStart)
+                : carryStart,
           queryDigest,
-          lastMatchEnd,
+          lastMatchEnd: resumePosition !== null ? resumePosition : lastMatchEnd,
         });
 
     return {
       ok: true,
       page: {
         outputId: input.target.outputId,
-        matches,
+        matches: matches.map((match) => ({
+          startByte: match.startByte,
+          endByte: match.endByte,
+          excerpt: match.excerpt,
+          readCursor: match.readCursor,
+          matchCountInWindow: match.matchCountInWindow,
+        })),
         scanComplete,
         nextCursor,
         // Deliberately the PRODUCER's completeness, not the scan's: a fully
@@ -573,7 +593,17 @@ export class ToolResultRetrievalService {
   }
 }
 
-/** Build a bounded excerpt plus a read cursor anchored at the match. */
+/** A search hit plus the absolute end of its excerpt, used to fold neighbors. */
+interface FoldedSearchMatch {
+  startByte: number;
+  endByte: number;
+  excerpt: string;
+  readCursor: string;
+  matchCountInWindow: number;
+  excerptEndByte: number;
+}
+
+/** Build a bounded excerpt plus a read cursor anchored at the match byte. */
 function buildMatch(input: {
   outputId: string;
   revision: number;
@@ -583,7 +613,7 @@ function buildMatch(input: {
   /** Index of the match in the whole captured output. */
   absolute: number;
   queryBytes: Buffer;
-}): ToolResultSearchMatch {
+}): FoldedSearchMatch {
   const context = 120;
   const start = Math.max(0, input.indexInBuffer - context);
   const end = Math.min(
@@ -593,15 +623,18 @@ function buildMatch(input: {
   const slice = input.combined.subarray(start, end);
   // Snap the excerpt to text boundaries so a multi-byte character is never cut.
   const excerpt = decodeUtf8Window(slice, input.absolute - (input.indexInBuffer - start));
+  const excerptStartAbsolute = input.absolute - (input.indexInBuffer - start);
   return {
     startByte: input.absolute,
     endByte: input.absolute + input.queryBytes.byteLength,
     excerpt,
+    matchCountInWindow: 1,
+    excerptEndByte: excerptStartAbsolute + (end - start),
     readCursor: encodeToolResultCursor({
       outputId: input.outputId,
       revision: input.revision,
       mode: "read",
-      position: input.absolute - (input.indexInBuffer - start),
+      position: input.absolute,
     }),
   };
 }

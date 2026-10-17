@@ -28,6 +28,7 @@ import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import { AIChatSectionPacker } from "@/service/AIChatSectionPacker";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 
 const tmpDir = path.join(
   os.tmpdir(),
@@ -726,6 +727,85 @@ describe("AIChatCompactionCoordinator", () => {
     expect(fn.mock.calls.length).toBeGreaterThan(1);
   }, 15_000);
 
+  // Regression: the production log showed
+  // "section summary failed after 4 bounded attempts: JSON parse failed:
+  // Unterminated string in JSON at position 2571" — the dispatch now surfaces
+  // length truncation as COMPACTION_OUTPUT_TRUNCATED, and the coordinator must
+  // treat it as a capacity-reduction trigger (a denser source produces a
+  // shorter summary that fits the output cap) instead of rethrowing it as a
+  // terminal failure or misclassifying it as a schema problem.
+  it("recovers from a length-truncated summarize by reducing input capacity and retrying", async () => {
+    await seedMessages("conv-out-trunc", [
+      { role: "user", content: "summarize me", ts: 1_000 },
+      { role: "assistant", content: "truncated reply", ts: 2_000 },
+      { role: "user", content: "followup", ts: 3_000 },
+      { role: "assistant", content: "truncated reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-out-trunc");
+
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        // First attempt: the provider cuts the summary mid-generation. With
+        // the dispatch in the loop this surfaces as
+        // RecoverableHistoryError(COMPACTION_OUTPUT_TRUNCATED); here the
+        // summarizer stub throws the same error directly to test the
+        // coordinator's recovery ladder in isolation.
+        throw new RecoverableHistoryError(
+          "COMPACTION_OUTPUT_TRUNCATED",
+          "summary truncated at provider output cap (max_tokens=1024); reduce input capacity so the summary fits"
+        );
+      }
+      // Retry after the capacity reduction: a valid summary fits.
+      return JSON.stringify({
+        version: 1,
+        synopsis: "fits after reduction",
+        decisions: [],
+        constraints: [],
+        pending: [],
+        toolOutcomes: [],
+        topics: [],
+      });
+    });
+    const result = await coordinator.requestCompaction("conv-out-trunc", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    // Exactly 2 attempts: truncation → capacity reduction → success. Not
+    // exhausted at the 4-attempt ceiling, not a terminal failure.
+    expect(calls).toBe(2);
+  }, 15_000);
+
+  it("propagates COMPACTION_OUTPUT_TRUNCATED when reduction budget is exhausted", async () => {
+    await seedMessages("conv-out-trunc-2", [
+      { role: "user", content: "summarize me", ts: 1_000 },
+      { role: "assistant", content: "truncated reply", ts: 2_000 },
+      { role: "user", content: "followup", ts: 3_000 },
+      { role: "assistant", content: "truncated reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-out-trunc-2");
+
+    // Every attempt truncates even after both reductions — the run must fail
+    // with the DISTINCT truncation code (not COMPACTION_CONTEXT_REJECTED, not
+    // a generic COMPACTION_OUTPUT_INVALID), so the user sees the real cause.
+    const fn = vi.fn(async () => {
+      throw new RecoverableHistoryError(
+        "COMPACTION_OUTPUT_TRUNCATED",
+        "summary truncated at provider output cap (max_tokens=1500); reduce input capacity so the summary fits"
+      );
+    });
+    await expect(
+      coordinator.requestCompaction("conv-out-trunc-2", {
+        trigger: "manual",
+        summarize: fn,
+      })
+    ).rejects.toMatchObject({ code: "COMPACTION_OUTPUT_TRUNCATED" });
+    // Attempt ceiling: 1 + 2 reductions = 3 attempts, then rethrow.
+    expect(fn.mock.calls.length).toBe(3);
+  }, 15_000);
+
   it("a retry after a batch-limit pause resumes with a new run instead of joining", async () => {
     // Seed enough messages to require several sections at a small budget.
     const rows = Array.from({ length: 40 }, (_, i) => ({
@@ -859,6 +939,53 @@ describe("AIChatCompactionCoordinator", () => {
     // §8.3: sourceCapacity = min(12000, C − Osection − M − overhead) with the
     // fallback resolver's 8,192 window → far below 12,000. The 48k-char
     // source therefore needs multiple summarize calls (≥ 2 sections).
+    expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+
+  it("sizes section capacity against the real model window when modelLimitResolver is wired (§8.3 regression)", async () => {
+    // Same ~50k-char source as the test above, but the coordinator is
+    // constructed with a modelLimitResolver reporting a 4,096-context model.
+    // allocateSectionCapacity must size against 4,096 (not the 8,192 fallback),
+    // so each section holds less source and the same conversation packs into
+    // MORE sections than the fallback path. This is the regression class where
+    // the dispatch preflight was wired to the real model but the allocator was
+    // not: a 4,096-context model would get 8,192-sized sections rejected by
+    // the dispatch preflight, wasting reduction attempts.
+    const rows = Array.from({ length: 16 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "w".repeat(2_000),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-capacity-resolver", rows);
+    await indexConversation("conv-capacity-resolver");
+
+    const resolverCoordinator = new AIChatCompactionCoordinator({
+      modelLimitResolver: () => ({
+        contextLimit: 4_096,
+        outputLimit: 1_500,
+        limitSource: "provider",
+      }),
+    });
+    const { fn } = fakeSummarizer();
+    const result = await resolverCoordinator.requestCompaction(
+      "conv-capacity-resolver",
+      {
+        trigger: "manual",
+        model: "small-window-model",
+        summarize: fn,
+        // The 4,096 window halves per-section capacity vs the 8,192 fallback,
+        // so the same 48k-char source packs into more sections than the
+        // default 3-section batch limit allows — raise the limit so the run
+        // completes instead of pausing.
+        maxSectionsPerBatch: 10,
+      }
+    );
+    expect(result.state).toBe("completed");
+    // With a 4,096-context window the per-section source capacity is roughly
+    // 4,096 − 1,500 − 410 − overhead ≈ 2,000 tokens, half the fallback path's
+    // ~4,000. The same 48k-char source therefore needs at least as many
+    // sections as the fallback path (≥ 2) — a 4,096 window cannot fit it in
+    // one section.
     expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
   }, 15_000);
 

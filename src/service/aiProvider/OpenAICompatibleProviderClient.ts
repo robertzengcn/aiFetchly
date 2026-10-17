@@ -7,6 +7,7 @@ import type {
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type {
   ChatProviderClient,
+  OpenAIChatCompletionOptions,
   OpenAIChatCompletionStreamOptions,
 } from "./ChatProviderClient";
 import {
@@ -191,7 +192,8 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   }
 
   async complete(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: OpenAIChatCompletionOptions
   ): Promise<OpenAIChatCompletionResponse> {
     const payload = buildNonStreamingPayload({
       ...request,
@@ -224,6 +226,25 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         controller.abort();
       } else {
         headersTimer = setTimeout(() => controller.abort(), headersTimeout);
+      }
+    }
+    // T04 (merged from test): an external caller-provided AbortSignal must be
+    // able to abort an in-flight completion. The B13 inline controller is the
+    // single fetch signal, so the caller signal is linked in: an abort on the
+    // caller's signal aborts the inline controller (and is therefore
+    // indistinguishable from a local deadline abort for fetch), while local
+    // deadline aborts never propagate back to the caller's signal. The
+    // listener is removed in the body-phase finally block below so a
+    // long-lived caller signal is not retained after this call returns.
+    const callerSignal = options?.signal;
+    const abortFromCaller = (): void => controller.abort();
+    if (callerSignal !== undefined) {
+      if (callerSignal.aborted) {
+        controller.abort();
+      } else {
+        callerSignal.addEventListener("abort", abortFromCaller, {
+          once: true,
+        });
       }
     }
     let res: Response;
@@ -305,6 +326,12 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     } finally {
       if (bodyTimer !== undefined) {
         clearTimeout(bodyTimer);
+      }
+      // T04: detach the caller-signal listener once the call settles so a
+      // long-lived caller signal (e.g. one shared by a whole query loop) does
+      // not accumulate listeners across completions.
+      if (callerSignal !== undefined) {
+        callerSignal.removeEventListener("abort", abortFromCaller);
       }
     }
   }

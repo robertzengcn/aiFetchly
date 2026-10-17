@@ -10,8 +10,9 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
  *
  * These tests verify the conditional rendering in AiChatV2Message.vue that
  * was added to surface `tool_progress` streaming events to the user. The
- * badge lives inside the TOOL_CALL branch of the template and only renders
- * when `message.metadata.toolProgress` is truthy.
+ * badge lives inside the TOOL_CALL branch of the template and renders
+ * when `message.metadata.toolProgress` is truthy, or when the parent marks
+ * the call as still awaiting its result.
  *
  * The component uses `useI18n()` directly (real vue-i18n plugin required,
  * NOT a `$t` mock), and references Vuetify components (`v-icon`,
@@ -36,6 +37,8 @@ const i18n = createI18n({
       aiChatV2: {
         tool_call_title: "Tool Call",
         tool_name: "Tool",
+        tool_result_title: "Tool Result",
+        tool_result_details: "Details",
         tool_running: "Running...",
         tool_arguments: "Arguments",
       },
@@ -75,9 +78,12 @@ function makeBaseMessage(): ChatV2MessageView {
  * the TOOL_RESULT / plan-card / streaming-status branches, none of which
  * are exercised by these tests — stubbing keeps the mount hermetic.
  */
-function mountWith(message: ChatV2MessageView) {
+function mountWith(
+  message: ChatV2MessageView,
+  extra?: { toolAwaitingResult?: boolean }
+) {
   return mount(AiChatV2Message, {
-    props: { message },
+    props: { message, ...extra },
     global: {
       plugins: [i18n],
       stubs: {
@@ -116,6 +122,25 @@ describe("AiChatV2Message tool progress badge", () => {
     const wrapper = mountWith(makeBaseMessage());
     await flushPromises();
     expect(wrapper.find(".tool-progress-badge").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tool-running-badge"]').exists()).toBe(
+      false
+    );
+    // A finished tool call with empty content must still render its card.
+    // Empty content used to collapse the row under content-visibility.
+    expect(wrapper.text()).toContain("Tool Call");
+    expect(wrapper.text()).toContain("run_subagent");
+    const card = wrapper.find(".v2-message--tool-call");
+    expect(card.exists()).toBe(true);
+    expect(card.attributes("data-message-type")).toBe(MessageType.TOOL_CALL);
+  });
+
+  it("shows a loading badge while the tool call is awaiting its result", async () => {
+    const wrapper = mountWith(makeBaseMessage(), { toolAwaitingResult: true });
+    await flushPromises();
+    const badge = wrapper.find('[data-testid="tool-running-badge"]');
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain("Running...");
+    expect(badge.attributes("role")).toBe("status");
   });
 
   it("renders progress bar and count when progress and counts are set", async () => {
@@ -134,6 +159,32 @@ describe("AiChatV2Message tool progress badge", () => {
     expect(bar.exists()).toBe(true);
     // The count text "(4/10)" is rendered inside the badge.
     expect(wrapper.text()).toContain("4/10");
+  });
+});
+
+describe("AiChatV2Message persisted tool rows", () => {
+  it("renders a tool result card and its saved content", async () => {
+    const message = makeBaseMessage();
+    message.id = "tool-result-tc1";
+    message.messageType = MessageType.TOOL_RESULT;
+    message.content = '{"documents":[{"title":"Pricing"}]}';
+    message.metadata = {
+      source: "chat-v2",
+      toolCallId: "tc1",
+      toolName: "knowledge_library_list_documents",
+      success: true,
+      toolResult: { success: true, documents: [{ title: "Pricing" }] },
+    };
+
+    const wrapper = mountWith(message);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Tool Result");
+    expect(wrapper.text()).toContain("knowledge_library_list_documents");
+    expect(wrapper.text()).toContain("Pricing");
+    const card = wrapper.find(".v2-message--tool-result");
+    expect(card.exists()).toBe(true);
+    expect(card.attributes("data-message-type")).toBe(MessageType.TOOL_RESULT);
   });
 });
 

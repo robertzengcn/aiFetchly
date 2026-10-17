@@ -23,6 +23,17 @@ import type {
   AIChatRecoveryReason,
   ChatV2RecoveryMetadata,
 } from "@/service/AIChatRecoveryTypes";
+// Type-only: the loop-input binding field. TaskLoopConsult defines the local
+// closure-shaped interface (no runtime objects) so this file never imports
+// the controller/budget modules — keeps the events module renderer-safe.
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+// T12: TaskOutcome carried on the complete event so terminal delivery is
+// bound to a durable finalization decision, not to a generic stream-end.
+import type {
+  AiTaskExecutionStatus,
+  TaskExecutionRoute,
+  TaskOutcome,
+} from "@/entityTypes/aiTaskExecutionTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -188,6 +199,30 @@ export interface AIChatQueryCompleteEvent {
   completionTokens?: number;
   /** Final accumulated reasoning so the renderer can recover if live deltas were missed. */
   reasoningContent?: string;
+  /**
+   * T12 / FR-10/12/14/24 / NFR-10/11 / AC-15/24/25/30/32: when the turn was
+   * enrolled in the completion policy and reached a durable finalization
+   * decision, the semantic task outcome carried into terminal delivery. A
+   * generic `complete` event is NOT proof that an enrolled task is
+   * `verified_complete` — the renderer must read this field (absent on
+   * unenrolled turns) to badge honestly. Present only when the engine's
+   * finalization gate committed (or recorded) an outcome for the bound
+   * execution; absent for flag-off / response-only / transport-reuse turns.
+   */
+  taskOutcome?: TaskOutcome;
+  /**
+   * T12: the bound execution id whose durable finalization produced
+   * {@link taskOutcome}. Carries final event identity so the renderer can
+   * dedup repeated delivery (same executionId) and route follow-up actions
+   * (Continue/Retry) at the right execution.
+   */
+  taskExecutionId?: string;
+  /**
+   * T12: stable reason code for the outcome (e.g. `CRITERIA_SATISFIED`,
+   * `CONTINUATION_LIMIT`, `RESPONSE_ENDED`). Lets the renderer show an honest
+   * explanation and pick safe actions without re-deriving the reason.
+   */
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryCancelledEvent {
@@ -195,6 +230,15 @@ export interface AIChatQueryCancelledEvent {
   conversationId: string;
   messageId?: string;
   fullContent: string;
+  /**
+   * T12: when the cancelled turn was enrolled in the completion policy, the
+   * durable outcome carried into terminal delivery (`cancelled` /
+   * `USER_CANCELLED`). Lets the renderer badge honestly and dedup repeated
+   * delivery by executionId.
+   */
+  taskOutcome?: TaskOutcome;
+  taskExecutionId?: string;
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryErrorEvent {
@@ -202,6 +246,15 @@ export interface AIChatQueryErrorEvent {
   conversationId: string;
   messageId?: string;
   errorMessage: string;
+  /**
+   * T12: when the failed turn was enrolled in the completion policy, the
+   * durable outcome carried into terminal delivery (`failed` /
+   * `MODEL_FAILURE` or the recorded decision's outcome). Lets the renderer
+   * badge honestly and dedup repeated delivery by executionId.
+   */
+  taskOutcome?: TaskOutcome;
+  taskExecutionId?: string;
+  taskReasonCode?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {
@@ -245,6 +298,37 @@ export interface AIChatQueryRecoveryStatusEvent {
   message?: string;
 }
 
+/**
+ * T13 (PRD FR-13/14, NFR-10/11, AC-16/24/25/27/32): task-execution lifecycle
+ * state chunk. Emitted at enrollment (active), at the durable finalization
+ * gate (terminal + outcome + reasonCode), and at intermediate consult-derived
+ * transitions (verifying/continuing/waiting_*). One terminal event per
+ * execution, fired AFTER durable finalization so a stale callback cannot
+ * affect a newer execution (NFR-10). The renderer dedups by executionId and
+ * ignores late chunks for a superseded execution.
+ */
+export interface AIChatQueryTaskExecutionStateEvent {
+  type: "task_execution_state";
+  conversationId: string;
+  /** The execution this state describes. The renderer keys badge identity by
+   * this id so a late chunk for a prior execution cannot overwrite a newer
+   * one (NFR-10/11, AC-32). */
+  executionId: string;
+  status: AiTaskExecutionStatus;
+  /** Terminal reason code (TASK_EXECUTION_REASON_CODES) when status is terminal. */
+  reasonCode?: string;
+  /** Honest outcome (TaskOutcome) when finalized. */
+  outcome?: TaskOutcome;
+  /** Human-readable remaining work / blocker summary (PRD FR-13). */
+  remainingWork?: string;
+  /**
+   * G02 (design §6.3, NFR-10): durable delivery identity
+   * (`execution-result:<executionId>`), stamped by finalization in the same
+   * transaction as the outcome. IPC and consumers dedup on it.
+   */
+  finalEventIdentity?: string;
+}
+
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
@@ -261,7 +345,8 @@ export type AIChatQueryEvent =
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
-  | AIChatQueryUsageUpdateEvent;
+  | AIChatQueryUsageUpdateEvent
+  | AIChatQueryTaskExecutionStateEvent;
 
 /**
  * Result returned by AIChatQueryLoop.run().
@@ -383,6 +468,23 @@ export interface PendingPermissionTurn {
    * the user grants permission (AC-8). Present only when deferred mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /**
+   * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
+   * the originating turn's loopInput so the resumed loop still consults the
+   * same controller/budget after permission grant — budget persists across
+   * the pause. Undefined when the policy flag is off (byte-identical legacy
+   * resume). Closures capture the runtime controller/budget, so this is a
+   * main-process reference, never serialized.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * Carried across the permission pause so the resumed loop's
+   * `goalAutoContinue` consult still knows whether this is goal-scoped
+   * task work (task/preparation) or an ordinary response_only turn. An
+   * unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -409,6 +511,21 @@ export interface PendingPlanQuestionTurn {
    * mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /**
+   * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
+   * the originating turn's loopInput so the resumed loop still consults the
+   * same controller/budget after the plan question is answered — budget
+   * persists across the pause. Undefined when the policy flag is off.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * Carried across the plan-question pause so the resumed loop's
+   * `goalAutoContinue` consult still knows whether this is goal-scoped
+   * task work (task/preparation) or an ordinary response_only turn. An
+   * unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
 
 /** Plan context carried through the loop. */
@@ -588,9 +705,27 @@ export interface AIChatQueryLoopInput {
    * current messages and lets preflight reject.
    */
   relieveBudgetPressure?: () => Promise<OpenAIChatMessage[] | null>;
+  /**
+   * Task-completion-policy binding for this turn (technical-design §7,
+   * Slice 2 Unit 4). Constructed by the engine's enrollment seam from the
+   * coordinator's `TaskExecutionBinding` when the feature flag is on and
+   * enrollment created/reused a binding; undefined otherwise (flag off →
+   * existing loop behavior byte-identical). Carries closures so the loop
+   * never imports controller/budget runtime types. Threaded through the
+   * pause/resume paths so budget persists across pending states.
+   */
+  taskExecutionBinding?: LoopTaskExecutionBinding;
+  /**
+   * T15 (FR-20, NFR-11): the route this turn classified into at enrollment.
+   * The engine computes this once before the flag-gated enrollment block so
+   * it is available regardless of whether the policy flag enrolled a binding.
+   * Threaded into `paused_for_permission` / `paused_for_plan_question` pending
+   * state so the resumed loop's `goalAutoContinue` consult still knows whether
+   * this is goal-scoped task work (task/preparation) or a response_only turn —
+   * an unrelated active goal must not seize a response_only resume.
+   */
+  taskRoute?: TaskExecutionRoute;
 }
-
-/** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {
   toolId: string;
   conversationId?: string;

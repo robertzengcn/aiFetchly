@@ -261,7 +261,7 @@ export class ScheduleTaskModel extends BaseDb {
    */
   async getActiveSchedules(): Promise<ScheduleTaskEntity[]> {
     return await this.repository.find({
-      where: { is_active: true },
+      where: { is_active: true, status: ScheduleStatus.ACTIVE },
       order: { next_run_time: "ASC" },
     });
   }
@@ -275,6 +275,7 @@ export class ScheduleTaskModel extends BaseDb {
     return await this.repository
       .createQueryBuilder("schedule")
       .where("schedule.is_active = :isActive", { isActive: true })
+      .andWhere("schedule.status = :status", { status: ScheduleStatus.ACTIVE })
       .andWhere("schedule.next_run_time <= :now", { now })
       .andWhere("schedule.trigger_type = :triggerType", {
         triggerType: TriggerType.CRON,
@@ -507,6 +508,7 @@ export class ScheduleTaskModel extends BaseDb {
     await this.repository.update(
       { id },
       {
+        is_active: false,
         status: ScheduleStatus.PAUSED,
         last_modified: new Date(),
       }
@@ -521,6 +523,7 @@ export class ScheduleTaskModel extends BaseDb {
     await this.repository.update(
       { id },
       {
+        is_active: true,
         status: ScheduleStatus.ACTIVE,
         last_modified: new Date(),
       }
@@ -620,6 +623,7 @@ export class ScheduleTaskModel extends BaseDb {
     return await this.repository
       .createQueryBuilder("schedule")
       .where("schedule.is_active = :isActive", { isActive: true })
+      .andWhere("schedule.status = :status", { status: ScheduleStatus.ACTIVE })
       .andWhere("schedule.trigger_type = :triggerType", {
         triggerType: TriggerType.INTERVAL,
       })
@@ -858,18 +862,28 @@ export class ScheduleTaskModel extends BaseDb {
   /**
    * Update schedule counters and optional terminal state after a run result.
    * Resets the consecutive-failure counter on success; increments on failure.
+   *
+   * `incrementFailure: false` is NEUTRAL: the streak is left untouched (neither
+   * incremented nor reset) and the run can never terminalize the schedule on
+   * its own. Used by the crash-retry `reused` branch — a transport duplicate is
+   * not a task failure (PRD §advice L276: "interruption remains distinct").
    */
   async updateIntervalAfterResult(input: IntervalResultUpdate): Promise<void> {
     assertNotWorker("updateIntervalAfterResult");
-    const update: Partial<ScheduleTaskEntity> = {
+    const update: QueryDeepPartialEntity<ScheduleTaskEntity> = {
       next_run_time: input.nextRunAt,
       last_modified: new Date(),
     };
-    if (input.success) {
+    if (input.incrementFailure === false) {
+      // Neutral outcome (e.g. a crash-retry `reused` duplicate): advance the
+      // next-run slot but leave the failure streak exactly as it was.
+    } else if (input.success) {
       update.consecutive_failure_count = 0;
     } else {
-      update.consecutive_failure_count = (() =>
-        "consecutive_failure_count + 1") as unknown as number;
+      // SQL expression lambda (TypeORM increments the column in-database);
+      // matches incrementExecutionCount's pattern. A plain number would need
+      // a read-modify-write, which races concurrent occurrences.
+      update.consecutive_failure_count = () => "consecutive_failure_count + 1";
     }
     if (input.terminalStatus === "expired") {
       update.is_active = false;
@@ -884,7 +898,7 @@ export class ScheduleTaskModel extends BaseDb {
       update.status = ScheduleStatus.STOPPED;
       update.terminal_reason = input.terminalReason ?? "STOPPED";
     }
-    await this.repository.update({ id: input.scheduleId }, update as never);
+    await this.repository.update({ id: input.scheduleId }, update);
   }
 
   /** Mark a schedule paused with a stable terminal reason (history kept). */

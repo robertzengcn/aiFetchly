@@ -163,11 +163,41 @@ export type RecoverableHistoryErrorCode =
   | "HISTORY_UNAVAILABLE"
   | "COMPACTION_BUSY"
   | "COMPACTION_OUTPUT_INVALID"
+  | "COMPACTION_OUTPUT_TRUNCATED"
   | "COMPACTION_CONTEXT_REJECTED"
   | "COMPACTION_STALE_CLAIM"
   | "COMPACTION_STORAGE_FAILED"
   | "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
   | "MODEL_BUDGET_UNAVAILABLE"
+  /**
+   * T05 (FR-08/10/23, AC-06/08/22/27/29): the execution's provider-attempt
+   * budget is exhausted (max 60 attempts including retries/compaction/
+   * fallback) OR the durable ledger persist failed (lease released or
+   * superseded by a Continue successor). The loop's provider-dispatch gate
+   * throws this fail-closed so the controller's incomplete route owns the
+   * finish. Distinct from `MODEL_BUDGET_UNAVAILABLE` (no budget at all):
+   * here a budget exists but is spent.
+   */
+  | "MODEL_ATTEMPT_LIMIT"
+  /**
+   * B13a (FR-08/10/23, AC-27): the execution's tool-execution budget is
+   * exhausted (max 50 manual tool attempts) OR the durable ledger persist
+   * failed (lease released or superseded). The loop's tool-dispatch gate
+   * throws this fail-closed BEFORE deps.executeTool runs, so no unfunded
+   * tool dispatches. Mirrors MODEL_ATTEMPT_LIMIT for the tool lane.
+   */
+  | "TOOL_BUDGET_EXHAUSTED"
+  /**
+   * B13c (FR-08/10/23, AC-06/08/22/27/29): a dispatch-time remaining
+   * allowance is spent — tokens (128k cap), active runtime (10-minute
+   * cap), or cumulative waits (1-hour cap). The loop's provider/tool gates
+   * throw these fail-closed when a new dispatch cannot be funded, and the
+   * token-estimate preflight throws TOKEN_BUDGET_EXHAUSTED when the next
+   * round cannot possibly fit. Mirrors TOOL_BUDGET_EXHAUSTED per resource.
+   */
+  | "TOKEN_BUDGET_EXHAUSTED"
+  | "ACTIVE_RUNTIME_EXHAUSTED"
+  | "WAIT_BUDGET_EXHAUSTED"
   /**
    * The serialized request body exceeds the transport ceiling even though the
    * token preflight passed. Distinct from
@@ -178,8 +208,12 @@ export type RecoverableHistoryErrorCode =
 
 export class RecoverableHistoryError extends Error {
   readonly code: RecoverableHistoryErrorCode;
-  constructor(code: RecoverableHistoryErrorCode, message: string) {
-    super(message);
+  constructor(
+    code: RecoverableHistoryErrorCode,
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
     this.name = "RecoverableHistoryError";
     this.code = code;
   }

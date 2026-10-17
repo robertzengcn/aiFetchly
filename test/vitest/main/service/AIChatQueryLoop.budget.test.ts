@@ -3,8 +3,27 @@
  * "serialized input (6551) + output (1024) + safety (820) exceeds context (8192)"
  * because the query loop's budget resolver read an unloaded catalog and
  * treated every model as the 8,192-token unknown-model fallback.
+ *
+ * The recoverable-large-tool-results rollout flags are forced OFF here: the
+ * fat raw tool results this test drives pressure with are externalized to
+ * bounded receipts when the capture pipeline is active, so the transcript
+ * would never reach budget pressure and the relief mechanism under test
+ * would never fire. The pipeline's own ON-path behavior is covered by
+ * AIChatQueryLoopToolResults.test.ts.
  */
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/config/featureFlags", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/config/featureFlags")
+  >("@/config/featureFlags");
+  return {
+    ...actual,
+    isToolOutputCaptureEnabled: () => false,
+    isToolOutputModelRefsEnabled: () => false,
+  };
+});
+
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";

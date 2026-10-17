@@ -1348,6 +1348,53 @@ function initialize() {
         );
       }
 
+      // Task completion policy (T24, PRD NFR-05/AC-13): finalize executions
+      // left unfinalized by a crash/kill as interrupted.
+      // G02: await a bounded recovery barrier BEFORE scheduler/effect
+      // startup so a recovered row cannot race a fresh dispatch. The sweep
+      // itself is bounded (capped sweeps); the barrier additionally times
+      // out instead of hanging boot — on timeout the sweep continues in the
+      // background and startup proceeds (logged, never fatal).
+      // Pure no-op when the completion-policy flag is off (§17 rollback);
+      // never fatal.
+      try {
+        const {
+          TaskExecutionRestartRecovery,
+          awaitRecoveryBarrier,
+        } = await import(
+          "@/service/aiTaskExecution/TaskExecutionRestartRecovery"
+        );
+        const gated = await awaitRecoveryBarrier(
+          new TaskExecutionRestartRecovery()
+            .recoverInterruptedExecutions()
+            .catch((err: unknown) => {
+              log.warn(
+                "[task-recovery] sweep failed:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return {
+                scanned: 0,
+                recovered: 0,
+                skipped: 0,
+                failed: 0,
+                overflow: 0,
+                listError: true,
+                ledgersReleased: 0,
+              };
+            })
+        );
+        if (!gated.completed) {
+          log.warn(
+            "[task-recovery] sweep barrier timed out; schedulers starting while recovery continues in the background"
+          );
+        }
+      } catch (err) {
+        log.warn(
+          "[task-recovery] startup sweep failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Preserved tool outputs: install the persistent cursor key and run the
       // reconciliation sweep (technical design §12.2). Without this the cursor
       // key is ephemeral per process, so every cursor a model received before a

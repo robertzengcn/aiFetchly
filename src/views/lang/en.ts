@@ -686,7 +686,7 @@ export default {
     login: "Login",
     login_out: "Login Out",
     system_setting: "System Setting",
-    platform_subtitle: "AI Marketing Agent",
+    platform_subtitle: "AI Agent",
     login_title: "AiFetchly Login",
     login_description: "Click the button below to login to your account",
     login_with_browser: "Login with Browser",
@@ -2689,6 +2689,93 @@ export default {
         PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
       },
     },
+    taskExecution: {
+      status_resolving: "resolving",
+      status_preparing: "preparing",
+      status_active: "working",
+      status_verifying: "checking",
+      status_continuing: "continuing",
+      status_waiting_permission: "awaiting permission",
+      status_waiting_input: "needs input",
+      status_waiting_approval: "awaiting approval",
+      status_waiting_external_job: "awaiting external job",
+      status_terminal: "completed",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): honest terminal-outcome
+      // labels. Only verified_complete reuses the success label; the other
+      // six outcomes describe what actually happened at the terminal gate.
+      outcome_verified_complete: "completed",
+      outcome_incomplete: "incomplete",
+      outcome_needs_user_input: "needs your input",
+      outcome_blocked_by_policy: "blocked by policy",
+      outcome_failed: "failed",
+      outcome_cancelled: "cancelled",
+      outcome_timeout: "timed out",
+      actions: {
+        continue: "Continue",
+        retry: "Retry",
+        cancel: "Stop task",
+      },
+      successor_reused:
+        "This task is already running; no new attempt was started.",
+      successor_error: "Could not start the task follow-up.",
+      errors: {
+        CRITERIA_SATISFIED: "All completion criteria were satisfied.",
+        NO_PROGRESS: "The task made no further progress.",
+        CONTINUATION_LIMIT:
+          "The continuation limit was reached; the task stopped incomplete.",
+        MODEL_ATTEMPT_LIMIT:
+          "The model attempt limit was reached; the task stopped incomplete.",
+        TOOL_LIMIT: "The tool execution limit was reached.",
+        TOKEN_LIMIT: "The token limit was reached.",
+        ACTIVE_RUNTIME_LIMIT: "The active runtime limit was reached.",
+        WAIT_LIMIT: "The cumulative wait limit was reached.",
+        VERIFICATION_UNAVAILABLE:
+          "Completion could not be verified because no checker was available.",
+        INVALID_VERIFIER_RESPONSE:
+          "The verifier returned an invalid response; completion unverified.",
+        EVIDENCE_UNAVAILABLE:
+          "Required evidence was unavailable; completion unverified.",
+        UNKNOWN_ACTION_OUTCOME:
+          "A consequential action has an unknown outcome and needs reconciliation.",
+        INPUT_REQUIRED: "The task needs input before it can continue.",
+        PERMISSION_DENIED: "A required permission was denied.",
+        CONTENT_RESTRICTED: "The content was restricted by policy.",
+        AI_DISABLED: "AI functionality is disabled for this account.",
+        AUTH_QUOTA_ERROR: "An authentication or quota error stopped the task.",
+        AUTH_FAILURE: "Authentication failed; the task stopped.",
+        QUOTA_EXHAUSTED: "The usage quota was exhausted; the task stopped.",
+        NON_RECOVERABLE: "An unrecoverable error stopped the task.",
+        PROVIDER_ERROR: "The AI provider reported an error; the task stopped.",
+        REMOTE_AI_ERROR: "The AI service could not be reached; the task stopped.",
+        RUN_INTERRUPTED: "The run was interrupted before it completed.",
+        BLOCKED_BY_POLICY: "The task was blocked by policy.",
+        STREAM_INCOMPLETE: "The stream ended before the task completed.",
+        OUTPUT_TRUNCATED: "The output was truncated before completion.",
+        PERSISTENCE_FAILED: "Saving the task result failed.",
+        STATE_CONFLICT:
+          "The task state changed during the operation; no duplicate was written.",
+        MISSING_TASK_OUTCOME:
+          "No task outcome was recorded; the task stopped incomplete.",
+        SUBMISSION_CONFLICT:
+          "A submission conflict prevented the task from starting.",
+        ALREADY_FINALIZED:
+          "The task was already finalized; no duplicate outcome was written.",
+        OPERATION_NOT_FOUND: "The referenced operation could not be found.",
+        INTENT_CONFLICT:
+          "A conflicting intent is in flight; the task was not started.",
+        INTENT_UNRESOLVED: "The task intent could not be resolved.",
+        PREPARATION_REQUIRED:
+          "Preparation is required before the task can run.",
+        USER_CANCELLED: "The task was cancelled by the user.",
+        TASK_REPLACED:
+          "The task was replaced by new input before it completed.",
+        SCHEDULE_STOPPED: "The schedule was stopped; the task did not recur.",
+        RESPONSE_ENDED:
+          "The response ended before the task was verified complete.",
+        SHADOW_EVALUATION:
+          "Shadow evaluation only; no live behavior was applied.",
+      },
+    },
     voice: {
       microphone: "Voice input",
       start_recording: "Start recording",
@@ -2860,6 +2947,8 @@ export default {
       quota_reached: "Storage quota reached; only part of this result was kept",
       deleted: "This saved output is no longer available",
       not_available: "This saved output is not available",
+      retrieval_not_enabled:
+        "Saved-output retrieval is not enabled for this conversation",
       binary_unsupported: "This output cannot be displayed as text; export it instead",
       close: "Close",
     },

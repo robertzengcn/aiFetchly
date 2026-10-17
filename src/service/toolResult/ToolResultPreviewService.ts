@@ -48,6 +48,13 @@ export interface PreviewResult {
 /** Marker inserted where a head/tail preview omitted the middle. */
 export const OMITTED_REGION_MARKER = "\n… [middle of output omitted] …\n";
 
+const READ_MORE =
+  "use the output_id from this receipt, then pass next_cursor until complete is true";
+
+function withReadMore(body: string, detail: string): string {
+  return `${body}\n… [${detail}; ${READ_MORE}]`;
+}
+
 export class ToolResultPreviewService {
   private readonly maxBytes: number;
 
@@ -73,16 +80,27 @@ export class ToolResultPreviewService {
    * so a record is not cut in half when a boundary is nearby.
    */
   private textPreview(request: PreviewRequest): PreviewResult {
+    const fromValue = request.text === undefined;
     const source = request.text ?? this.stringifyShallow(request.value);
+    // A shallow copy drops array items and keys. Fitting that copy in the
+    // preview budget does not mean the captured output was shown.
+    const dropped = fromValue && shallowFormDropsContent(request.value);
     if (source.length === 0) {
-      return { text: "(empty output)", previewComplete: request.isComplete };
+      return {
+        text: "(empty output)",
+        previewComplete: request.isComplete && !dropped,
+      };
     }
-    if (request.isComplete && utf8ByteLength(source) <= this.maxBytes) {
+    if (
+      request.isComplete &&
+      !dropped &&
+      utf8ByteLength(source) <= this.maxBytes
+    ) {
       return { text: source, previewComplete: true };
     }
     const body = truncateAtLineBoundary(source, this.maxBytes);
     return {
-      text: `${body}\n… [preview truncated; use the saved output reference to read more]`,
+      text: withReadMore(body, "preview truncated"),
       previewComplete: false,
     };
   }
@@ -93,8 +111,14 @@ export class ToolResultPreviewService {
    * suffix without a marker would read as if the two were continuous.
    */
   private headTailPreview(request: PreviewRequest): PreviewResult {
+    const fromValue = request.text === undefined;
     const source = request.text ?? this.stringifyShallow(request.value);
-    if (request.isComplete && utf8ByteLength(source) <= this.maxBytes) {
+    const dropped = fromValue && shallowFormDropsContent(request.value);
+    if (
+      request.isComplete &&
+      !dropped &&
+      utf8ByteLength(source) <= this.maxBytes
+    ) {
       return { text: source, previewComplete: true };
     }
     // Split the allowance so both ends are represented.
@@ -108,7 +132,10 @@ export class ToolResultPreviewService {
     // The tail is a SUFFIX of the source, not another prefix.
     const tail = takeUtf8Suffix(source, tailBudget);
     return {
-      text: `${head}${OMITTED_REGION_MARKER}${tail}\n… [preview truncated; use the saved output reference to read more]`,
+      text: withReadMore(
+        `${head}${OMITTED_REGION_MARKER}${tail}`,
+        "preview truncated"
+      ),
       previewComplete: false,
     };
   }
@@ -150,7 +177,10 @@ export class ToolResultPreviewService {
     return {
       text: previewComplete
         ? body
-        : `${body}\n… [showing ${sampleLines.length} of ${records.length} records; use the saved output reference to read more]`,
+        : withReadMore(
+            body,
+            `showing ${sampleLines.length} of ${records.length} records`
+          ),
       previewComplete,
       recordCount: records.length,
       fieldNames,
@@ -192,7 +222,7 @@ export class ToolResultPreviewService {
     }
     const body = lines.length > 0 ? lines.join("\n") : "(no top-level fields)";
     return {
-      text: `${body}\n… [structural preview only; use the saved output reference to read more]`,
+      text: withReadMore(body, "structural preview only"),
       previewComplete: false,
       fieldNames,
     };
@@ -214,6 +244,46 @@ export class ToolResultPreviewService {
       return String(value);
     }
   }
+}
+
+const SHALLOW_LIMITS = {
+  maxKeys: TOOL_RESULT_CONFIG.controlMaxKeys,
+  maxArrayItems: TOOL_RESULT_CONFIG.controlMaxArrayItems,
+  maxStringChars: 500,
+};
+
+/** Same depth cap as `boundUntrustedValue`. */
+const SHALLOW_MAX_DEPTH = 6;
+
+/**
+ * True when the bounded shallow copy used for a text preview is not the
+ * whole value. Walking stops at the first dropped array, key, or string.
+ */
+function shallowFormDropsContent(value: unknown, depth = 0): boolean {
+  if (value === null || value === undefined) return false;
+  const type = typeof value;
+  if (type === "string") {
+    return (value as string).length > SHALLOW_LIMITS.maxStringChars;
+  }
+  if (type !== "object") return false;
+  if (depth >= SHALLOW_MAX_DEPTH) return true;
+  if (Array.isArray(value)) {
+    if (value.length > SHALLOW_LIMITS.maxArrayItems) return true;
+    return value
+      .slice(0, SHALLOW_LIMITS.maxArrayItems)
+      .some((item) => shallowFormDropsContent(item, depth + 1));
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return true;
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source);
+  if (keys.length > SHALLOW_LIMITS.maxKeys) return true;
+  return keys.some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    const child =
+      descriptor && "value" in descriptor ? descriptor.value : undefined;
+    return shallowFormDropsContent(child, depth + 1);
+  });
 }
 
 /**

@@ -15,6 +15,7 @@ import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
 import { OUTBOUND_EMAIL_SEND_TOOL } from "@/service/AIChatQueryLoop";
 import {
   ScheduledLoopEventSink,
+  type ScheduledLoopPolicyBinding,
   type ScheduledTurnOutcome,
 } from "@/service/ScheduledLoopEventSink";
 import {
@@ -32,10 +33,19 @@ import {
   nextFutureOccurrence,
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
+import { ScheduleStatus } from "@/entity/ScheduleTask.entity";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import { showNotification } from "@/modules/lib/function";
+import { isAiTaskCompletionPolicyV1Enabled } from "@/config/featureFlags";
+import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import type { FinalizeScheduledInput } from "@/model/AiTaskExecution.model";
+import { buildScheduledBudgetLimits } from "@/service/aiTaskExecution/budgetDefaults";
+import { enrollScheduledExecution } from "@/service/aiTaskExecution/ScheduledExecutionEnroller";
+import type { LoopTaskExecutionBinding } from "@/service/aiTaskExecution/TaskLoopConsult";
+import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConflictMetrics";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -130,6 +140,21 @@ export class ScheduledAiMessageRunner {
       );
     }
 
+    if (scheduleId !== undefined) {
+      const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+      if (
+        !schedule ||
+        !schedule.is_active ||
+        schedule.status !== ScheduleStatus.ACTIVE
+      ) {
+        return this.failFast(
+          taskId,
+          scheduleId,
+          `Schedule ${scheduleId} is not active (status: ${String(schedule?.status)}), skipping execution.`
+        );
+      }
+    }
+
     const conversationId = await this.ensureV2Conversation(task);
     const workspaceError = await this.bindTaskWorkspace(task, conversationId);
     if (workspaceError) {
@@ -189,6 +214,14 @@ export class ScheduledAiMessageRunner {
     readonly occurrence: number;
     readonly catchUp: boolean;
     readonly scheduledFor: Date;
+    /**
+     * Occurrence idempotency key from the scheduler's atomic claim (Unit 6).
+     * Forwarded into the completion-policy enrollment's `occurrenceKey` so the
+     * execution row, run row, and claim share one identity — a crash-retry
+     * with the same key CAS-collides on the existing execution instead of
+     * enrolling a duplicate. Falls back to the schedule/occurrence composite.
+     */
+    readonly idempotencyKey?: string;
   }): Promise<ScheduledAiMessageRunResult> {
     const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
       input;
@@ -250,7 +283,7 @@ export class ScheduledAiMessageRunner {
     }
 
     // 4. Schedule must still be active.
-    if (!schedule.is_active) {
+    if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
       return this.finalizeChatRun({
         runId,
         taskId,
@@ -266,6 +299,14 @@ export class ScheduledAiMessageRunner {
     });
 
     // 5. Acquire the conversation turn lease (FR-7) + register the abort handle.
+    //
+    // T04 (NFR-02/04, AC-24): the run-scoped `abortController` is created
+    // BEFORE enrollment so the enroller can capture `() => abortController.signal`
+    // and thread it into the consult closure (Stop / run-cancel propagates to
+    // the checker dispatch; §9 line 445: a hanging request cannot hold the
+    // gate). Previously created at the lease step (after enrollment), the
+    // controller now precedes both — the lease acquisition below still reads
+    // `abortController.signal` exactly as before.
     const coordinator = AIChatConversationTurnCoordinator.getInstance();
     const abortController = new AbortController();
     const timeoutHandle = setTimeout(
@@ -274,6 +315,99 @@ export class ScheduledAiMessageRunner {
     );
     this.runRegistry.register(runId, abortController);
     let lease: ConversationTurnLease | null = null;
+
+    // Unit 6 (GAP-S2 #8/#9) + T02: enroll this occurrence into the completion
+    // policy BEFORE the engine runs, through the SAME trusted decision
+    // boundary as manual runs (resolver → criteria compile → contract freeze
+    // → startScheduled, see ScheduledExecutionEnroller). The enrollment
+    // creates the durable execution row (single owner via the claim's
+    // idempotency key) and builds the loop binding the engine consults with
+    // at round_cap/response_end (same-occurrence continuation, FR-05/07).
+    // Fail-closed: any enrollment error leaves policyBinding undefined and
+    // the run proceeds with the legacy blind mapping (no consult, no
+    // missing-outcome rejection) — the scheduled turn itself must never crash
+    // on policy plumbing. Flag-off: skipped entirely.
+    let policyBinding: ScheduledLoopPolicyBinding | undefined;
+    // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
+    // execution row after the turn ends. Fresh scheduled executions start at
+    // execution_state_version = 0; T03 evidence writes bump it during the run,
+    // so finalizeScheduledPolicyRun re-reads the version before finalizing.
+    let policyExecution: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    } | null = null;
+    // T02 (D1): the loop binding built by the enroller, passed into
+    // submitMessage so the loop's maybeConsultPolicy consults for scheduled
+    // turns identically to manual ones.
+    let loopBinding: LoopTaskExecutionBinding | undefined;
+    if (isAiTaskCompletionPolicyV1Enabled()) {
+      try {
+        const enrollResult = await enrollScheduledExecution({
+          conversationId,
+          sourceUserMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+          taskMessage: task.message || "",
+          taskId,
+          runId,
+          scheduleId,
+          occurrence,
+          occurrenceKey:
+            input.idempotencyKey ??
+            `scheduled-loop:${scheduleId}:${occurrence}`,
+          budgetLimits: buildScheduledBudgetLimits({
+            maxContinueCalls: task.max_continue_calls,
+            maxToolCalls: task.max_tool_calls,
+            maxRuntimeMs: task.max_runtime_ms,
+          }),
+          // T04: thread the run-scoped abort signal into the consult closure
+          // so the checker dispatch races Stop / run-cancel + a deadline.
+          getAbortSignal: () => abortController.signal,
+        });
+        if (enrollResult.status === "created") {
+          policyBinding = enrollResult.policyBinding;
+          policyExecution = enrollResult.policyExecution ?? null;
+          loopBinding = enrollResult.loopBinding;
+        } else if (enrollResult.status === "reused") {
+          // Crash-retry of the same occurrence: the execution row already
+          // exists (same occurrence key). No fresh binding — the existing
+          // row's status is authoritative and its finalization already
+          // happened (or belongs to another attempt). Finalize the run row
+          // with the existing state so the claim is not stuck "running".
+          console.log(
+            `[scheduled-loop] occurrence already enrolled (runId=${runId}) — transport retry, no fresh consult`
+          );
+          return this.finalizeChatRun({
+            runId,
+            taskId,
+            scheduleId,
+            startedAt,
+            outcome: { kind: "failed", errorMessage: "OCCURRENCE_ALREADY_ENROLLED" },
+            errorCode: "OCCURRENCE_ALREADY_ENROLLED",
+            conversationId,
+            // A crash-retry duplicate is NOT a task failure: the original
+            // attempt's outcome is authoritative. Counting it would
+            // terminalize a healthy schedule after 3 transport retries
+            // (PRD §advice L276: "interruption remains distinct").
+            incrementFailure: false,
+          });
+        } else if (enrollResult.status === "skipped") {
+          // T02 (D5): the resolver classified the task message as not
+          // actionable (response_only/preparation). No execution row, no
+          // consult — run the turn with the legacy blind mapping and record
+          // the honest reason on the run row.
+          console.log(
+            `[scheduled-loop] occurrence not actionable (route=${enrollResult.skipReason}, runId=${runId}) — skipping enrollment`
+          );
+        } else {
+          console.error(
+            `[scheduled-loop] occurrence enrollment conflict (runId=${runId}) — skipping consult`
+          );
+        }
+      } catch (err) {
+        console.error("[scheduled-loop] completion-policy enrollment failed:", err);
+        policyBinding = undefined;
+      }
+    }
 
     const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
     let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
@@ -358,7 +492,8 @@ export class ScheduledAiMessageRunner {
         clearPermissionBackstop,
       });
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const sink = new ScheduledLoopEventSink(
+        (event) => {
         // Gated tool paused for permission: suspend the runtime timeout,
         // notify, broadcast, publish pending metadata, and start the
         // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
@@ -471,16 +606,17 @@ export class ScheduledAiMessageRunner {
             contentDelta: event.contentDelta,
           });
         } else if (event.type === "complete" || event.type === "error") {
-          this.broadcaster.emitScheduledStream({
-            conversationId,
-            runId,
-            messageId: assistantMessageId,
-            kind: event.type === "error" ? "error" : "done",
-            errorMessage:
-              event.type === "error" ? event.errorMessage : undefined,
-          });
+          // B07: absorb — do NOT broadcast done/error until the scheduled
+          // transaction commits (see post-commit delivery below). The sink
+          // captures the outcome independently, so absorbing delivery never
+          // starves finalization. The terminal message identity is the
+          // deterministic `scheduled-assistant-<scheduleId>-<occurrence>`
+          // recomputed at the delivery site, so no cross-scope mutable
+          // buffer is needed.
         }
-      });
+        },
+        policyBinding
+      );
       await engine.submitMessage({
         eventSink: sink,
         request: {
@@ -499,6 +635,11 @@ export class ScheduledAiMessageRunner {
           userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
+        // T02 (D1): the loop binding from the enroller — the engine consults
+        // at round_cap/response_end for scheduled turns (same-occurrence
+        // continuation). Undefined when the flag is off, enrollment failed,
+        // or the route skipped enrollment (legacy blind mapping).
+        taskExecutionBinding: loopBinding,
         outboundSendPreAuthorized,
       });
       // `submitMessage` resolves on a permission pause (the engine parks the
@@ -519,20 +660,97 @@ export class ScheduledAiMessageRunner {
       if (lease) lease.release();
     }
 
-    return this.finalizeChatRun({
-      runId,
-      taskId,
-      scheduleId,
-      startedAt,
-      outcome,
-      conversationId,
-    });
+    // B07 (FR-12/14, NFR-10): terminal delivery happens ONLY after the
+    // scheduled transaction commits. On success the committed result
+    // decides the stream kind (completed → done, anything else → error);
+    // on transaction failure no success delivery escapes — an error
+    // streams instead and the throw propagates (no success count).
+    // The terminal message identity is deterministic
+    // (`scheduled-assistant-<scheduleId>-<occurrence>`, the same ID the
+    // engine used pre-commit); the committed result supplies the verdict.
+    const terminalMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
+    // B13c (FR-08/23, AC-08/27/29): await in-flight durable accounting
+    // before the scheduled transaction releases the ledger owner — funded
+    // spend must land before owner release, never after.
+    await loopBinding?.flushPersistedBudget?.();
+    let finalized: ScheduledAiMessageRunResult;
+    try {
+      finalized = await this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome,
+        conversationId,
+        policyExecution,
+        policyBinding,
+      });
+    } catch (err) {
+      try {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "error",
+          errorMessage:
+            err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        /* broadcast failure is non-fatal */
+      }
+      throw err;
+    }
+    try {
+      if (finalized.status === "completed") {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "done",
+        });
+        // Post-commit success notification uses the committed identity
+        // (the engine's pre-commit notify is suppressed for scheduled
+        // turns — see AIChatQueryEngine completed-case B07 gate).
+        try {
+          const { DesktopNotifyService } = await import(
+            "@/service/DesktopNotifyService"
+          );
+          await DesktopNotifyService.getInstance().show({
+            type: "turn_complete",
+            title: "Scheduled run ready",
+            body: "Your scheduled AI run completed.",
+            conversationId,
+          });
+        } catch {
+          /* notification must never fail the run */
+        }
+      } else {
+        this.broadcaster.emitScheduledStream({
+          conversationId,
+          runId,
+          messageId: terminalMessageId,
+          kind: "error",
+          errorMessage: finalized.errorMessage ?? "scheduled run failed",
+        });
+      }
+    } catch {
+      /* broadcast failure is non-fatal */
+    }
+    return finalized;
   }
 
   /**
    * Finalize a chat-bound occurrence: map the engine outcome to a run status,
    * persist the run + schedule counters, and broadcast a refresh hint (FR-11,
    * FR-12, FR-15). Status mapping per technical-design §17.3.
+   *
+   * Unit 6 (GAP-S2 #9, FR-12/13/15/17/18): when the occurrence was enrolled
+   * into the completion policy (policyExecution present) and the flag is on,
+   * finalization delegates to the atomic single-transaction
+   * `finalizeScheduledExecution` — CAS execution + ledger release + run row +
+   * schedule counters + pause, exactly once (AC-16/20/21/22) — and the legacy
+   * inline run-row persistence + schedule accounting are SKIPPED (the model
+   * transaction owns both; running them too would double-account).
    */
   private async finalizeChatRun(input: {
     runId: number;
@@ -543,6 +761,26 @@ export class ScheduledAiMessageRunner {
     conversationId?: string;
     errorCode?: string;
     pauseSchedule?: boolean;
+    policyExecution?: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    } | null;
+    policyBinding?: ScheduledLoopPolicyBinding | undefined;
+    /**
+     * Whether the run increments the schedule's consecutive-failure streak.
+     * Defaults to `true` (every failed/incomplete run is a genuine failure).
+     * The `reused` crash-retry branch sets it to `false`: a transport
+     * duplicate that found the occurrence already enrolled is NOT a task
+     * failure — the original attempt's outcome (running elsewhere or already
+     * finalized) is authoritative. Counting it would terminalize a healthy
+     * schedule after `SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES` transport
+     * retries (PRD §advice L276: "interruption remains distinct" from
+     * failure). Neutral means do-not-increment-and-do-not-reset: we don't
+     * know whether the original succeeded, so we leave the streak untouched
+     * and never go terminal from a duplicate.
+     */
+    incrementFailure?: boolean;
   }): Promise<ScheduledAiMessageRunResult> {
     const {
       runId,
@@ -553,9 +791,31 @@ export class ScheduledAiMessageRunner {
       conversationId,
       errorCode,
       pauseSchedule,
+      policyExecution,
+      policyBinding,
+      incrementFailure = true,
     } = input;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    // T16: a policyExecution captured at enrollment means the run was
+    // accepted under the flag. Finalize it through the policy path even if
+    // the flag was turned off midstream — never convert accepted unfinished
+    // scheduled work to unchecked success via the legacy switch below
+    // (NFR-12, AC-12/32). The live flag controls only NEW enrollment
+    // (line 302 above).
+    if (policyExecution) {
+      return this.finalizeScheduledPolicyRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome,
+        conversationId,
+        policyExecution,
+        policyBinding,
+      });
+    }
 
     let status: ScheduledAiMessageRunResult["status"] = "failed";
     let assistantMessageId: string | undefined;
@@ -624,8 +884,12 @@ export class ScheduledAiMessageRunner {
         finished_at: finishedAt,
         duration_ms: durationMs,
       } as never);
-    } catch {
-      // Persistence failures are logged by the module; the run is best-effort.
+    } catch (err) {
+      // AC-15: persistence failures are never swallowed — the run row is the
+      // durable record of the occurrence; a silent failure would leave the
+      // claim's run stuck and the scheduler blind to the crash.
+      console.error("[scheduled-loop] run-row persistence failed:", err);
+      throw err instanceof Error ? err : new Error(String(err));
     }
 
     // Update schedule counters + terminal state (FR-15).
@@ -649,17 +913,27 @@ export class ScheduledAiMessageRunner {
           resultErrorCode ?? "BLOCKED_BY_POLICY"
         );
       } else {
+        // The streak increments only for genuine failures. A `reused`
+        // crash-retry (incrementFailure=false) is a transport duplicate, not
+        // a task failure, so it is neutral: the streak is neither incremented
+        // nor reset, and it can never terminalize the schedule by itself.
+        const countsAsFailure = !scheduleSuccess && incrementFailure;
         const consecutive =
           (schedule?.consecutive_failure_count ?? 0) +
-          (scheduleSuccess ? 0 : 1);
+          (countsAsFailure ? 1 : 0);
         const terminal =
-          !scheduleSuccess &&
+          countsAsFailure &&
           consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES
             ? ("failed" as const)
             : undefined;
         await this.scheduleModel.updateIntervalAfterResult({
           scheduleId,
+          // `scheduleSuccess` stays the honest success/failure signal for the
+          // run-row's accounting semantics. `incrementFailure` (false for a
+          // `reused` duplicate) is the authoritative streak override: when
+          // false the model leaves the streak untouched.
           success: scheduleSuccess,
+          incrementFailure,
           nextRunAt,
           terminalStatus: terminal,
           terminalReason: terminal ? "REPEATED_RUN_FAILURE" : undefined,
@@ -697,6 +971,183 @@ export class ScheduledAiMessageRunner {
       toolCallsCount: 0,
       blockedToolCalls: [],
       errorMessage: status === "completed" ? undefined : resultErrorCode,
+    };
+  }
+
+  /**
+   * Flag-on finalization for an enrolled occurrence (Unit 6, FR-12/13/15/17/18,
+   * AC-16/20/21/22): map the turn outcome to a `FinalizeScheduledInput` and
+   * delegate to the model's atomic single-transaction
+   * `finalizeScheduledExecution` (CAS execution + ledger release + run row +
+   * schedule counters + pause, exactly once). Skips the legacy inline run-row
+   * persistence + schedule accounting in {@link finalizeChatRun} — the
+   * transaction owns both, and running them too would double-account.
+   *
+   * Outcome mapping (§6.1): verified_complete → "verified_complete";
+   * incomplete / missing_outcome / failed / cancelled → honest outcome with
+   * incrementFailure=true except cancelled (FR-12: cancelled never increments
+   * the failure streak); blocked → "blocked_by_policy" + schedule pause.
+   * A finalization failure is thrown (AC-15: never swallow — the scheduler's
+   * claim must see the failure), while a `!ok` typed result is logged and
+   * surfaced on the returned error message.
+   */
+  private async finalizeScheduledPolicyRun(input: {
+    runId: number;
+    taskId: number;
+    scheduleId: number;
+    startedAt: Date;
+    outcome: ScheduledTurnOutcome;
+    conversationId?: string;
+    policyExecution: {
+      readonly executionId: string;
+      readonly expectedVersion: number;
+      readonly idempotencyKey: string;
+    };
+    policyBinding?: ScheduledLoopPolicyBinding | undefined;
+  }): Promise<ScheduledAiMessageRunResult> {
+    const { runId, scheduleId, startedAt, outcome, conversationId } = input;
+    const policyExecution = input.policyExecution;
+    const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    // T03 (FR-24, AC-32): read the CAS token fresh before finalizing.
+    // Evidence writes (loop consult + sink fallback consult) bump
+    // execution_state_version during the run, so the enrollment snapshot
+    // (policyExecution.expectedVersion) is stale by finalize time. The
+    // binding's `resolveExpectedStateVersion` reads the authoritative row
+    // version; if it returns undefined (binding missing or read failed) we
+    // fall back to the snapshot — `finalizeScheduled` has no CAS retry, so a
+    // stale token surfaces STATE_CONFLICT rather than silently double-
+    // finalizing, and the runner maps that to missing_outcome (never
+    // success, AC-15/17).
+    const freshVersion = await input.policyBinding?.evidenceContext
+      ?.resolveExpectedStateVersion?.()
+      .catch(() => undefined);
+    const expectedVersion = freshVersion ?? policyExecution.expectedVersion;
+
+    // Compute the next occurrence + terminal state from the schedule row —
+    // same derivation as the legacy block so the transaction's schedule
+    // accounting matches regardless of which path finalizes.
+    const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+    const nowMs = Date.now();
+    const nextRunAt =
+      schedule && schedule.interval_ms && schedule.interval_anchor_at
+        ? new Date(
+            nextFutureOccurrence(
+              schedule.interval_anchor_at.getTime(),
+              schedule.interval_ms,
+              nowMs
+            ).timeMs
+          )
+        : new Date(nowMs);
+
+    const mapping = mapOutcomeToFinalizeInput(outcome, durationMs);
+    // Same threshold derivation as the legacy block: a failed/incomplete
+    // outcome past the repeated-failure threshold marks the schedule terminal
+    // inside the transaction. Computed BEFORE the literal so the input stays
+    // immutable (no post-construction mutation of readonly fields).
+    const consecutive = (schedule?.consecutive_failure_count ?? 0) + 1;
+    const thresholdHit =
+      mapping.terminalStatus === undefined &&
+      mapping.taskOutcome !== "verified_complete" &&
+      mapping.incrementFailure &&
+      consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES;
+    const finalizeInput: FinalizeScheduledInput = {
+      executionId: policyExecution.executionId,
+      expectedVersion,
+      runId,
+      scheduleId,
+      taskOutcome: mapping.taskOutcome,
+      reasonCode: mapping.reasonCode,
+      summary: mapping.summary,
+      evidenceIds: [],
+      remainingWork: mapping.remainingWork,
+      idempotencyKey: policyExecution.idempotencyKey,
+      incrementFailure: mapping.incrementFailure,
+      nextRunAt,
+      terminalStatus:
+        mapping.terminalStatus ?? (thresholdHit ? "failed" : undefined),
+      terminalReason:
+        mapping.terminalReason ??
+        (thresholdHit ? "REPEATED_RUN_FAILURE" : undefined),
+      pause: mapping.pause,
+      assistantResultMessageId: mapping.assistantResultMessageId ?? null,
+    };
+
+    try {
+      const result = await new TaskExecutionCoordinator().finalizeScheduled(
+        finalizeInput
+      );
+      if (!result.ok) {
+        // §17 "finalization conflicts" monitor: a scheduled CAS loss
+        // (STATE_CONFLICT / ALREADY_FINALIZED / MISSING_TASK_OUTCOME) is a
+        // return value, not a durable row — emit the structured conflict
+        // line here so rollout operators can grep the rate (the manual seam
+        // emits the same event from TaskExecutionCoordinator). The route
+        // comes from the execution row (authoritative), read on this error
+        // path only so the happy path stays a single finalize round-trip.
+        if (
+          result.reasonCode === "STATE_CONFLICT" ||
+          result.reasonCode === "ALREADY_FINALIZED"
+        ) {
+          const execRow = await new AiTaskExecutionModule()
+            .getExecution(policyExecution.executionId)
+            .catch(() => null);
+          logFinalizationConflict({
+            surface: "scheduled_finalize",
+            executionId: policyExecution.executionId,
+            origin: "scheduled",
+            route: execRow?.route ?? "task_best_effort",
+            reasonCode: result.reasonCode,
+            attempt: 0,
+          });
+        }
+        console.error(
+          `[scheduled-loop] scheduled finalization not applied (runId=${runId}):`,
+          result.reasonCode
+        );
+        throw new Error(
+          `SCHEDULED_FINALIZATION_FAILED: ${result.reasonCode ?? "unknown"}`
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[scheduled-loop] scheduled finalization transaction failed:",
+        err
+      );
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+
+    // Broadcast a narrow refresh hint to any open renderer (FR-11).
+    if (conversationId) {
+      const event: ChatV2ConversationUpdatedEvent = {
+        conversationId,
+        reason:
+          mapping.taskOutcome === "verified_complete"
+            ? "scheduled_turn_completed"
+            : "scheduled_turn_failed",
+        scheduleId,
+        runId,
+        assistantMessageId: mapping.assistantResultMessageId ?? undefined,
+        occurredAt: new Date().toISOString(),
+      };
+      try {
+        this.broadcaster.emit(event);
+      } catch {
+        // Renderer delivery failure does not fail the run (FR-12).
+      }
+    }
+
+    return {
+      runId,
+      status: mapOutcomeToRunStatus(mapping.taskOutcome),
+      assistantFinalMessage: mapping.summary,
+      toolCallsCount: 0,
+      blockedToolCalls: [],
+      errorMessage:
+        mapping.taskOutcome === "verified_complete"
+          ? undefined
+          : mapping.reasonCode,
     };
   }
 
@@ -1205,5 +1656,118 @@ export class ScheduledAiMessageRunner {
         errorMessage,
       };
     }
+  }
+}
+
+/** Pure mapping from a turn outcome to the scheduled finalize input fields. */
+interface ScheduledFinalizeMapping {
+  readonly taskOutcome: FinalizeScheduledInput["taskOutcome"];
+  readonly reasonCode: string;
+  readonly summary: string;
+  readonly remainingWork: readonly string[];
+  readonly incrementFailure: boolean;
+  readonly terminalStatus?: "expired" | "failed" | "stopped";
+  readonly terminalReason?: string;
+  readonly pause?: { readonly reason: string };
+  readonly assistantResultMessageId?: string | null;
+}
+
+/**
+ * Map a ScheduledTurnOutcome onto the scheduled finalization's typed fields
+ * (Unit 6, §6.1). Pure — no I/O — so the mapping stays testable in one place.
+ * incrementFailure follows FR-12: failed/incomplete/missing increment the
+ * failure streak; cancelled and blocked never do.
+ */
+export function mapOutcomeToFinalizeInput(
+  outcome: ScheduledTurnOutcome,
+  // Kept in the public mapping signature (test call sites pass it) even
+  // though the current mapping does not consume the duration.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  durationMs: number
+): ScheduledFinalizeMapping {
+  switch (outcome.kind) {
+    case "completed":
+      return {
+        taskOutcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        summary: outcome.content,
+        remainingWork: [],
+        incrementFailure: false,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "incomplete":
+      return {
+        taskOutcome: "incomplete",
+        reasonCode: outcome.reasonCode,
+        summary: outcome.content || outcome.reasonCode,
+        remainingWork: outcome.remainingWork,
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "missing_outcome":
+      return {
+        taskOutcome: "incomplete",
+        reasonCode: outcome.reasonCode,
+        summary: outcome.reasonCode,
+        remainingWork: [],
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "failed":
+      return {
+        taskOutcome: "failed",
+        // D7: the durable reason-code column (varchar(64)) and the §17
+        // histogram must see a STABLE typed code, never raw provider/transport
+        // text (a 200-char model error would overflow the column and poison
+        // the histogram with one bucket per failure). Prefer the controller's
+        // classified reasonCode when present (mapDecisionToOutcome threads it
+        // from decision.reasonCode on the failed/timeout branch); fall back to
+        // REMOTE_AI_ERROR when the failure was a blind transport error with no
+        // controller consult (flag-off / no binding). Raw display text stays
+        // in `summary` (a text column) for the run row + renderer.
+        reasonCode: outcome.reasonCode ?? "REMOTE_AI_ERROR",
+        summary: outcome.errorMessage || "REMOTE_AI_ERROR",
+        remainingWork: [],
+        incrementFailure: true,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+    case "blocked":
+      return {
+        taskOutcome: "blocked_by_policy",
+        reasonCode: outcome.reason || "BLOCKED_BY_POLICY",
+        summary: outcome.reason || "BLOCKED_BY_POLICY",
+        remainingWork: [],
+        incrementFailure: false,
+        pause: { reason: outcome.reason || "BLOCKED_BY_POLICY" },
+      };
+    case "cancelled":
+      return {
+        taskOutcome: "cancelled",
+        reasonCode: "RUN_INTERRUPTED",
+        summary: outcome.content || "RUN_INTERRUPTED",
+        remainingWork: [],
+        incrementFailure: false,
+        assistantResultMessageId: outcome.assistantMessageId ?? null,
+      };
+  }
+}
+
+/** Map a TaskOutcome to the run row's terminal status (§17.3). */
+export function mapOutcomeToRunStatus(
+  outcome: FinalizeScheduledInput["taskOutcome"]
+): ScheduledAiMessageRunResult["status"] {
+  switch (outcome) {
+    case "verified_complete":
+      return "completed";
+    case "blocked_by_policy":
+      return "blocked_by_policy";
+    case "cancelled":
+      return "failed";
+    case "timeout":
+      return "timeout";
+    case "incomplete":
+    case "needs_user_input":
+    case "failed":
+      return "failed";
   }
 }

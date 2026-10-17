@@ -139,11 +139,16 @@ export function resetFeatureFlagCacheForTest(): void {
 /**
  * Recoverable large tool results rollout flags (technical design §13.4).
  *
- * Three independently gated stages, all DEFAULT OFF and FAIL CLOSED: a broken
- * Token store must never silently enable capture, model-visible references, or
- * the new viewer. Read live on each call (a local electron-store file, invoked
- * per user action, not on a hot path) so support staff can toggle a stage at
- * runtime without an app restart.
+ * Three independently gated stages, all DEFAULT ON and FAIL OPEN: the feature
+ * shipped through its audit (T01–T18 closed) and the release gate, so a fresh
+ * install must have tool_result_read/search working without an operator step.
+ * The default-off posture left the feature dormant — `enableToolResultFlags`
+ * had no production caller, so every call returned RETRIEVAL_NOT_ENABLED and
+ * the catalog still advertised the tools into that dead end. The explicit
+ * value "false" is the per-install opt-out; any other value (including an
+ * unreadable store) keeps the stage enabled. Read live on each call (a local
+ * electron-store file, invoked per user action, not on a hot path) so support
+ * staff can toggle a stage at runtime without an app restart.
  *
  * Rollback semantics are asymmetric on purpose:
  *   - capture off  -> no NEW file writes; readers for existing committed
@@ -157,38 +162,65 @@ export function resetFeatureFlagCacheForTest(): void {
 /** Stage 1: additive schema/read support and new file capture. */
 export function isToolOutputCaptureEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.capture) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.capture) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /** Stage 2: emit model-readable output references (requires read/search). */
 export function isToolOutputModelRefsEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.modelRefs) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.modelRefs) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /** Stage 3: the paged result viewer. */
 export function isToolOutputUiEnabled(): boolean {
   try {
-    return new Token().getValue(TOOL_RESULT_FLAGS.ui) === "true";
+    return new Token().getValue(TOOL_RESULT_FLAGS.ui) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 /**
- * Operator helper — write all three Token keys to "true" in stage order.
- * Fail-loud: a Token-store error propagates rather than silently claiming
- * the stages are enabled.
+ * Operator helper — write all three Token keys to "true" (explicit re-enable
+ * after an opt-out). Fail-loud: a Token-store error propagates rather than
+ * silently claiming the stages are enabled.
  */
 export function enableToolResultFlags(): void {
   const token = new Token();
   token.setValue(TOOL_RESULT_FLAGS.capture, "true");
   token.setValue(TOOL_RESULT_FLAGS.modelRefs, "true");
   token.setValue(TOOL_RESULT_FLAGS.ui, "true");
+}
+
+/**
+ * AI Task Completion Policy V1 rollout flag (PRD §12 slice 1; technical-design
+ * §17 rollout/rollback).
+ *
+ * DEFAULT OFF and FAIL CLOSED: a broken Token store must never silently
+ * enable the completion-policy enrollment path. The flag gates execution
+ * enrollment, request resolution, shadow evaluation, and contract freezing.
+ * Read live on each call (per user action, not a hot path) so support staff
+ * can toggle a stage without a restart.
+ *
+ * Rollback (§17): setting this OFF stops new enrollment/continuations.
+ * Active enrolled runs use frozen policy or stop incomplete/cancelled; no
+ * fallback success. Additive columns/operation records are retained.
+ */
+export const AI_TASK_COMPLETION_POLICY_V1_FLAG =
+  "ai_task_completion_policy_v1_enabled";
+
+export function isAiTaskCompletionPolicyV1Enabled(): boolean {
+  try {
+    return new Token().getValue(AI_TASK_COMPLETION_POLICY_V1_FLAG) === "true";
+  } catch {
+    // Unreadable store: keep the feature OFF so a storage hiccup cannot
+    // silently enroll tasks into completion-policy handling.
+    return false;
+  }
 }

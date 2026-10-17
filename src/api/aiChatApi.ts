@@ -2128,11 +2128,22 @@ export class AiChatApi {
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
+   * T04 (NFR-02/04, AC-24): `options.signal` is the caller's abort handle.
+   * The checker dispatch (QualitativeEvaluator) threads a per-dispatch
+   * AbortController linked to the turn/run signal + a checker deadline
+   * through this param so a Stop or a hanging provider stall cannot hold the
+   * verification gate. The signal propagates to the local provider's
+   * `fetchWithResponseTimeout` (caller-abort preserved) and to the hosted
+   * `postJson` fetch. Entitlement is re-checked at the start of every call
+   * (including retries) via `resolveForChat()` / `ensureAIEnabled()` (NFR-04).
+   *
    * @param request - Chat completion request with messages and optional parameters
+   * @param options - Optional abort signal for cancellation/deadline propagation
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2141,13 +2152,14 @@ export class AiChatApi {
       }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).complete(
-          request
+          request,
+          { signal: options?.signal }
         );
       }
-      return this.openAIChatCompletionHosted(request);
+      return this.openAIChatCompletionHosted(request, options);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request);
+    return this.openAIChatCompletionHosted(request, options);
   }
 
   /**
@@ -2169,9 +2181,14 @@ export class AiChatApi {
     };
   }
 
-  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  /**
+   * Hosted aiFetchly non-streaming completion. T04: `options.signal`
+   * propagates to both `postJson` calls (initial + small-model 404 retry)
+   * so a caller abort (Stop / checker deadline) cancels the in-flight fetch.
+   */
   private async openAIChatCompletionHosted(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2218,6 +2235,21 @@ export class AiChatApi {
     // and must not get a short body timeout.
     if (request.callBudgetMs !== undefined) {
       const controller = new AbortController();
+      // T04: link the caller's signal into the B13 budget controller so an
+      // external abort (Stop / checker deadline) cancels the budgeted fetch
+      // immediately instead of waiting out the remaining budget. The listener
+      // lives only for this call (detached in the finally below).
+      const callerSignal = options?.signal;
+      const abortFromCaller = (): void => controller.abort();
+      if (callerSignal !== undefined) {
+        if (callerSignal.aborted) {
+          controller.abort();
+        } else {
+          callerSignal.addEventListener("abort", abortFromCaller, {
+            once: true,
+          });
+        }
+      }
       const timer = setTimeout(() => controller.abort(), request.callBudgetMs);
       try {
         return await this.postHostedCompletionWithSmallModelRetry(
@@ -2227,12 +2259,17 @@ export class AiChatApi {
         );
       } finally {
         clearTimeout(timer);
+        if (callerSignal !== undefined) {
+          callerSignal.removeEventListener("abort", abortFromCaller);
+        }
       }
     }
+    // No per-call budget: the caller signal threads through to postJson
+    // directly so an external abort still cancels the in-flight fetch (T04).
     return await this.postHostedCompletionWithSmallModelRetry(
       request,
       data,
-      undefined
+      options?.signal
     );
   }
 

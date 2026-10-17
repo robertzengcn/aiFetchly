@@ -1,12 +1,13 @@
-import * as puppeteer from 'puppeteer';
+import puppeteer, { Browser, LaunchOptions } from 'puppeteer';
 import { addExtra } from 'puppeteer-extra';
 import { detectBrowserPlatform, install, canDownload, Browser as PuppeteerBrowser, getInstalledBrowsers, resolveBuildId } from '@puppeteer/browsers';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { finalizePuppeteerLaunchOptions } from '@/modules/puppeteerLaunchPolicy';
 // Create enhanced puppeteer with stealth plugin
-const puppeteerExtra = addExtra(puppeteer as any);
+const puppeteerExtra = addExtra(puppeteer);
 //const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteerExtra.use(StealthPlugin());
 
@@ -156,7 +157,7 @@ export class BrowserManager {
         let executablePath: string | undefined;
         let isSystemBrowser = false;
         let isCachedBrowser = false;
-        let buildId = this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
+        const buildId = this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
 
         // 1. Check for local browser path from environment
         if (this.options.localBrowserPath && fs.existsSync(this.options.localBrowserPath)) {
@@ -223,7 +224,7 @@ export class BrowserManager {
     /**
      * Get comprehensive anti-detection launch options
      */
-    getStealthLaunchOptions(): puppeteer.LaunchOptions {
+    getStealthLaunchOptions(): LaunchOptions {
         return {
             headless: false, // Use non-headless mode for better stealth
             args: [
@@ -314,7 +315,7 @@ export class BrowserManager {
     /**
      * Get default launch options for Puppeteer
      */
-    getDefaultLaunchOptions(): puppeteer.LaunchOptions {
+    getDefaultLaunchOptions(): LaunchOptions {
         return {
             args: [
                 '--no-sandbox',
@@ -329,29 +330,32 @@ export class BrowserManager {
     }
 
     /**
+     * Merge stealth/default launch options with caller overrides.
+     * Headless launches drop flags that prevent Chrome from painting, which
+     * otherwise makes Page.captureScreenshot wait until protocolTimeout.
+     */
+    buildLaunchOptions(customOptions?: LaunchOptions): LaunchOptions {
+        const baseOptions = this.options.enableStealth ?
+            this.getStealthLaunchOptions() :
+            this.getDefaultLaunchOptions();
+        return finalizePuppeteerLaunchOptions(baseOptions, customOptions);
+    }
+
+    /**
      * Create launch options with browser executable path and stealth mode
      */
-    async createLaunchOptions(customOptions?: puppeteer.LaunchOptions): Promise<puppeteer.LaunchOptions> {
+    async createLaunchOptions(customOptions?: LaunchOptions): Promise<LaunchOptions> {
         const browserInfo = await this.getBrowserExecutablePath();
-        const baseOptions = this.options.enableStealth ? 
-            this.getStealthLaunchOptions() : 
-            this.getDefaultLaunchOptions();
-        
         return {
-            ...baseOptions,
-            ...customOptions,
+            ...this.buildLaunchOptions(customOptions),
             executablePath: browserInfo.executablePath || undefined,
-            args: [
-                ...baseOptions.args || [],
-                ...(customOptions?.args || [])
-            ]
         };
     }
 
     /**
      * Launch browser with stealth mode using puppeteer-extra
      */
-    async launchWithStealth(options?: puppeteer.LaunchOptions): Promise<puppeteer.Browser> {
+    async launchWithStealth(options?: LaunchOptions): Promise<Browser> {
         const launchOptions = await this.createLaunchOptions(options);
         return puppeteerExtra.launch(launchOptions);
     }
@@ -359,7 +363,7 @@ export class BrowserManager {
     /**
      * Launch browser without stealth mode using regular puppeteer
      */
-    async launchWithoutStealth(options?: puppeteer.LaunchOptions): Promise<puppeteer.Browser> {
+    async launchWithoutStealth(options?: LaunchOptions): Promise<Browser> {
         const launchOptions = await this.createLaunchOptions(options);
         return puppeteer.launch(launchOptions);
     }

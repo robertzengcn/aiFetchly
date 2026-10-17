@@ -307,6 +307,23 @@ export interface IntervalResultUpdate {
   readonly terminalReason?: string;
   readonly terminalStatus?: "expired" | "failed" | "stopped";
   readonly coalescedDelta?: number;
+  /**
+   * Completion-policy task outcome driving the accounting (Unit 6, FR-12).
+   * When set, `incrementFailure` derives from the outcome (cancelled never
+   * counts as a failure) instead of the legacy boolean `success` flag.
+   */
+  readonly taskOutcome?: import("@/entityTypes/aiTaskExecutionTypes").TaskOutcome;
+  /** Reason code from the completion policy decision (Unit 6, FR-12). */
+  readonly outcomeReasonCode?: string;
+  /**
+   * Explicit override for whether the consecutive-failure streak changes.
+   * `false` = NEUTRAL: the streak is neither incremented nor reset and the
+   * schedule can never go terminal from this run alone. Used by the crash-retry
+   * `reused` branch — a transport duplicate is not a task failure (PRD §advice
+   * L276: "interruption remains distinct"). When omitted, the legacy
+   * `success` boolean drives the streak (true resets to 0, false increments).
+   */
+  readonly incrementFailure?: boolean;
 }
 
 /** Input for persistently creating a scheduled-loop occurrence run row. */

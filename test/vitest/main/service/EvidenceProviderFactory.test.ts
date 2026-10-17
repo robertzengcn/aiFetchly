@@ -1,0 +1,1156 @@
+// test/vitest/main/service/EvidenceProviderFactory.test.ts
+//
+// T03 (FR-03/04/24, AC-03/04/32) — unit tests for the shared evidence provider
+// factory both production seams (manual + scheduled) call. The factory builds
+// a module-backed TaskEvidenceService whose `mergeEvidenceCas` calls
+// `AiTaskExecutionModule.mergeExecutionStateEvidence` (the atomic CAS), plus
+// authoritative provider-backed record-count / observation / operation-receipt
+// lookups and a bounded tool-free checker dispatch.
+//
+// What these tests lock (the approved plan File 9):
+//   - 54/100 contacts: recordCountProvider("camp-1", "cumulative") returns 54
+//     → record_count { minimum: 100 } unmet.
+//   - 100/100 contacts: returns 100 → pass.
+//   - Operation receipt: operationReceiptProvider("send-email") returns
+//     { state: "completed" } → pass for required "accepted".
+//   - Checker dispatch: checkerDispatch(prompt) calls openAIChatCompletion
+//     with max_tokens: 16 → returns "PASS" → qualitative pass.
+//   - Evidence persistence: factory-built service + expectedStateVersion from
+//     the mocked execution row → mergeEvidenceCas called with merged evidence.
+//   - AI-enable gate: ensureAIEnabled throws → openAIChatCompletion rejects →
+//     checker returns unknown (fail-closed via the catch in criteriaAdapters).
+//
+// Mocks: AiTaskExecutionModule (getExecution + mergeExecutionStateEvidence),
+// AiTaskOperationModule (getOperation), SearchModule (countSearchResult),
+// ContactInfoRepository (getStatistics), AiChatApi (openAIChatCompletion).
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { buildEvidenceService, deriveOperationKey } from "@/service/aiTaskExecution/EvidenceProviderFactory";
+import { buildTextEvidence } from "@/service/aiTaskExecution/criteriaAdapters";
+import { TaskEvidenceService } from "@/service/aiTaskExecution/TaskEvidenceService";
+import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
+import { z } from "zod/v4";
+import {
+  taskCompletionContractSchema,
+  taskEndCandidateSchema,
+} from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  TaskCompletionContract,
+  TaskEndCandidate,
+} from "@/entityTypes/aiTaskExecutionTypes";
+
+// vi.mock factories are hoisted above top-level vars, so declare mock fns
+// inside vi.hoisted() to make them visible to the factories (BaseModule TDZ
+// crash class — never reference a top-level let inside a factory).
+const {
+  getExecutionMock,
+  mergeEvidenceCasMock,
+  getOperationMock,
+  listOperationsByExecutionMock,
+  updateStateMock,
+  countSearchResultMock,
+  countSearchResultSinceMock,
+  findLatestSearchResultSinceMock,
+  getKeywordTextsByTaskMock,
+  getAllKeywordTextsMock,
+  countSearchResultSinceForKeywordsMock,
+  findLatestSearchResultSinceForKeywordsMock,
+  countSinceMock,
+  findLatestSinceMock,
+  countSinceForKeywordsMock,
+  findLatestSinceForKeywordsMock,
+  getStatisticsMock,
+  openAIChatCompletionMock,
+} = vi.hoisted(() => ({
+  getExecutionMock: vi.fn(),
+  mergeEvidenceCasMock: vi.fn(),
+  getOperationMock: vi.fn(),
+  listOperationsByExecutionMock: vi.fn().mockResolvedValue([]),
+  updateStateMock: vi.fn().mockResolvedValue({ ok: true }),
+  countSearchResultMock: vi.fn(),
+  countSearchResultSinceMock: vi.fn(),
+  findLatestSearchResultSinceMock: vi.fn(),
+  getKeywordTextsByTaskMock: vi.fn().mockResolvedValue([]),
+  getAllKeywordTextsMock: vi.fn().mockResolvedValue([]),
+  countSearchResultSinceForKeywordsMock: vi.fn(),
+  findLatestSearchResultSinceForKeywordsMock: vi.fn(),
+  countSinceMock: vi.fn(),
+  findLatestSinceMock: vi.fn(),
+  countSinceForKeywordsMock: vi.fn(),
+  findLatestSinceForKeywordsMock: vi.fn(),
+  getStatisticsMock: vi.fn(),
+  openAIChatCompletionMock: vi.fn(),
+}));
+
+vi.mock("@/modules/AiTaskExecutionModule", () => ({
+  AiTaskExecutionModule: vi.fn().mockImplementation(function () {
+    return {
+      getExecution: getExecutionMock,
+      mergeExecutionStateEvidence: mergeEvidenceCasMock,
+      persistBudgetConsumption: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
+}));
+
+vi.mock("@/modules/AiTaskOperationModule", () => ({
+  AiTaskOperationModule: vi.fn().mockImplementation(function () {
+    return {
+      getOperation: getOperationMock,
+      listOperationsByExecution: listOperationsByExecutionMock,
+      updateState: updateStateMock,
+    };
+  }),
+}));
+
+vi.mock("@/modules/SearchModule", () => ({
+  SearchModule: vi.fn().mockImplementation(function () {
+    return {
+      countSearchResult: countSearchResultMock,
+      countSearchResultSince: countSearchResultSinceMock,
+      findLatestSearchResultSince: findLatestSearchResultSinceMock,
+      getKeywordTextsByTask: getKeywordTextsByTaskMock,
+      getAllKeywordTexts: getAllKeywordTextsMock,
+      countSearchResultSinceForKeywords: countSearchResultSinceForKeywordsMock,
+      findLatestSearchResultSinceForKeywords: findLatestSearchResultSinceForKeywordsMock,
+    };
+  }),
+}));
+
+vi.mock("@/model/ContactInfo.model", () => ({
+  contactInfoRepository: {
+    getStatistics: getStatisticsMock,
+    countSince: countSinceMock,
+    findLatestSince: findLatestSinceMock,
+    countSinceForKeywords: countSinceForKeywordsMock,
+    findLatestSinceForKeywords: findLatestSinceForKeywordsMock,
+  },
+  ContactInfoRepository: vi.fn(),
+}));
+
+vi.mock("@/api/aiChatApi", () => ({
+  AiChatApi: vi.fn().mockImplementation(function () {
+    return { openAIChatCompletion: openAIChatCompletionMock };
+  }),
+  openAIContentToString: (content: unknown): string => {
+    if (content == null) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((part: { text?: string; type?: string }) =>
+          part && typeof part === "object" && part.type === "text" ? part.text ?? "" : ""
+        )
+        .join("\n");
+    }
+    return String(content);
+  },
+}));
+
+// Token mock: the modules extend BaseModule, which reads USERSDBPATH via
+// Token at construction. Return a temp path so it never touches a real DB.
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn().mockReturnValue("/tmp/test-factory-db") };
+  }),
+}));
+
+function baseCandidate(overrides: Partial<TaskEndCandidate> = {}): TaskEndCandidate {
+  return taskEndCandidateSchema.parse({
+    candidateId: "cand-factory-1",
+    executionId: "exec-factory-1",
+    content: "Saved 100 contacts.",
+    finishReason: "stop",
+    provenance: "provider",
+    streamTerminalSeen: true,
+    boundary: "response_end",
+    pendingPermission: false,
+    pendingQuestion: false,
+    pendingPlanApproval: false,
+    safetyRestriction: false,
+    ...overrides,
+  });
+}
+
+function makeContract(
+  criteria: z.infer<typeof taskCompletionContractSchema>["criteria"]
+): TaskCompletionContract {
+  return taskCompletionContractSchema.parse({
+    schemaVersion: 1,
+    contractId: "contract-factory-1",
+    contractHash: "hash-factory",
+    objective: "Save contacts",
+    sourceUserMessageId: "msg-factory-1",
+    approvedSourceMessageIds: ["msg-factory-1"],
+    mode: "best_effort",
+    criteria,
+  });
+}
+
+const EXEC_VERSION = 7;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // The execution row the factory scopes its providers to. createdAt anchors
+  // the AC-03 freshness window (providers count/observe only rows created
+  // at/after it — a null window is fail-closed); schedule_id 1 carries the
+  // task linkage.
+  getExecutionMock.mockResolvedValue({
+    executionId: "exec-factory-1",
+    execution_state_json: null,
+    execution_state_version: EXEC_VERSION,
+    finalized: false,
+    schedule_id: 1,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+  });
+  mergeEvidenceCasMock.mockResolvedValue(true);
+  getStatisticsMock.mockResolvedValue({
+    total: 0,
+    completed: 0,
+    failed: 0,
+    pending: 0,
+    analyzing: 0,
+  });
+  countSearchResultMock.mockResolvedValue(0);
+  countSearchResultSinceMock.mockResolvedValue(0);
+  findLatestSearchResultSinceMock.mockResolvedValue(null);
+  getKeywordTextsByTaskMock.mockResolvedValue([]);
+  getAllKeywordTextsMock.mockResolvedValue([]);
+  countSearchResultSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSearchResultSinceForKeywordsMock.mockResolvedValue(null);
+  countSinceMock.mockResolvedValue(0);
+  findLatestSinceMock.mockResolvedValue(null);
+  countSinceForKeywordsMock.mockResolvedValue(0);
+  findLatestSinceForKeywordsMock.mockResolvedValue(null);
+  getOperationMock.mockResolvedValue(null);
+  openAIChatCompletionMock.mockResolvedValue({
+    choices: [{ message: { content: "UNKNOWN" } }],
+  });
+});
+
+describe("buildEvidenceService — T03 factory wiring (FR-03/04/24, AC-03/04/32)", () => {
+  it("recordCountProvider: cumulative scope returns ContactInfo.getStatistics().total (54 → unmet 100; 100 → pass)", async () => {
+    getStatisticsMock.mockResolvedValue({
+      total: 54,
+      completed: 54,
+      failed: 0,
+      pending: 0,
+      analyzing: 0,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const service = providers.evidenceService as TaskEvidenceService;
+    const contract = makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "record_count",
+        description: "save 100 contacts",
+        adapterKey: "record_count",
+        targetId: "camp-1",
+        scope: "cumulative",
+        minimum: 100,
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const result = await service.checkCandidate(baseCandidate(), contract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+    });
+    // 54 < 100 → fail (unmet).
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+    expect(getStatisticsMock).toHaveBeenCalled();
+
+    // 100/100 → pass.
+    getStatisticsMock.mockResolvedValueOnce({
+      total: 100,
+      completed: 100,
+      failed: 0,
+      pending: 0,
+      analyzing: 0,
+    });
+    const result2 = await service.checkCandidate(baseCandidate(), contract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+    });
+    expect(result2.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("operationReceiptProvider: completed operation meets accepted threshold → pass; absent → unknown", async () => {
+    // The provider derives the key as op:<executionId>:<targetId>.
+    getOperationMock.mockImplementation(async (key: string) => {
+      if (key === deriveOperationKey("exec-factory-1", "send-email")) {
+        return { operation_state: "completed" };
+      }
+      return null;
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const service = providers.evidenceService as TaskEvidenceService;
+    const contract = makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "operation_receipt",
+        description: "send the email",
+        adapterKey: "operation_receipt",
+        targetId: "send-email",
+        requiredState: "accepted",
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const result = await service.checkCandidate(baseCandidate(), contract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    // completed >= accepted → pass.
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+    expect(getOperationMock).toHaveBeenCalledWith(
+      deriveOperationKey("exec-factory-1", "send-email")
+    );
+
+    // Absent → unknown (unmet).
+    getOperationMock.mockResolvedValueOnce(null);
+    const result2 = await service.checkCandidate(baseCandidate(), contract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    expect(result2.passedCriterionIds).toEqual([]);
+    expect(result2.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B19a: operationReceiptProvider links a lone execution send despite a non-matching compiler slug", async () => {
+    // The compiler emits a free-text slug ("send-weekly-report") while the
+    // guard writes volatile keys ("op:exec:outbound_batch:11"), so the exact
+    // key derivation always misses. With exactly ONE operation row in the
+    // execution, the provider links it (guard rows are send-dispatch rows;
+    // a singleton cannot be the wrong send).
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue(null);
+    listOperationsByExecutionMock.mockResolvedValue([
+      {
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "completed",
+        claim_generation: 2,
+        receipt_reference: "attempt:7",
+      },
+    ]);
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.operationReceiptProvider("send-weekly-report");
+    expect(receipt).toEqual({ state: "completed" });
+    expect(listOperationsByExecutionMock).toHaveBeenCalledWith("exec-factory-1", 50);
+  });
+
+  it("B19a: zero or ambiguous execution sends stay unlinked (fail-closed)", async () => {
+    const build = async () =>
+      buildEvidenceService({
+        executionId: "exec-factory-1",
+        execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+        operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+        searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+        contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      });
+    // Zero rows → null (nothing to link).
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue(null);
+    listOperationsByExecutionMock.mockResolvedValue([]);
+    expect(await (await build()).operationReceiptProvider("send-email")).toBeNull();
+    // Two rows → null (ambiguous: linking either could cite the wrong send).
+    listOperationsByExecutionMock.mockResolvedValue([
+      { operation_key: "op:exec-factory-1:outbound_batch:11", operation_state: "completed" },
+      { operation_key: "op:exec-factory-1:outbound_batch:22", operation_state: "accepted" },
+    ]);
+    expect(await (await build()).operationReceiptProvider("send-email")).toBeNull();
+  });
+
+  it("checkerDispatch: calls openAIChatCompletion with max_tokens 256 temperature 0; §8.2 JSON → qualitative pass (T04)", async () => {
+    // T04: the §8.2 JSON contract needs more room than a one-word verdict;
+    // CHECKER_MAX_TOKENS is 256 (a single criterion result: verdict + evidence
+    // ids + a short reason). The mock returns the JSON the parser accepts —
+    // B04: the pass cites this check's deliverable-text evidence id (the
+    // criterion id alone no longer verifies).
+    const textId = buildTextEvidence(
+      "Hello, I hope you are well.",
+      "rec-1",
+      "exec-factory-1"
+    ).evidenceId;
+    openAIChatCompletionMock.mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite" },
+        ],
+      }) } }],
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    // The dispatch is a closure the factory returns; call it directly.
+    const verdict = await providers.checkerDispatch("Is this polite?");
+    expect(verdict).toBe(JSON.stringify({
+      criteria: [
+        { criterionId: "rec-1", verdict: "pass", evidenceIds: [textId], reason: "polite" },
+      ],
+    }));
+    expect(openAIChatCompletionMock).toHaveBeenCalledTimes(1);
+    const call = openAIChatCompletionMock.mock.calls[0][0] as {
+      messages: { role: string; content: string }[];
+      max_tokens: number;
+      temperature: number;
+    };
+    expect(call.max_tokens).toBe(256);
+    expect(call.temperature).toBe(0);
+    expect(call.messages[0].role).toBe("user");
+    expect(call.messages[0].content).toBe("Is this polite?");
+
+    // End-to-end through the service: qualitative criterion with the factory
+    // dispatch + a Reserved budget → pass.
+    const service = providers.evidenceService as TaskEvidenceService;
+    const contract = makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "qualitative",
+        description: "response is polite",
+        sourceSelectorKeys: ["provider"],
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "Hello, I hope you are well." }),
+      contract,
+      {
+        content: "Hello, I hope you are well.",
+        source: "factory-test",
+        sourceRevision: "slice2-t04",
+        expectedStateVersion: EXEC_VERSION,
+        checkerDispatch: providers.checkerDispatch,
+        budgetReserveChecker: () => BudgetReservationResult.Reserved,
+      }
+    );
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("checkerDispatch: forwards the per-dispatch abort signal to openAIChatCompletion (T04, NFR-02/04, AC-24)", async () => {
+    // T04: the QualitativeEvaluator creates a per-dispatch AbortController and
+    // passes its signal to checkerDispatch(prompt, signal); the factory closure
+    // must forward that signal to openAIChatCompletion so a Stop or deadline
+    // aborts the in-flight fetch (catching an eventual AbortError does not
+    // itself abort the request — the signal must reach the transport).
+    openAIChatCompletionMock.mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify({
+        criteria: [
+          { criterionId: "rec-1", verdict: "pass", evidenceIds: ["rec-1"], reason: "ok" },
+        ],
+      }) } }],
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-signal",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const controller = new AbortController();
+    await providers.checkerDispatch("verify", controller.signal);
+    expect(openAIChatCompletionMock).toHaveBeenCalledTimes(1);
+    const optionsArg = openAIChatCompletionMock.mock.calls[0][1] as
+      | { signal?: AbortSignal }
+      | undefined;
+    expect(optionsArg).toBeDefined();
+    expect(optionsArg?.signal).toBe(controller.signal);
+  });
+
+  it("checkerDispatch: AI-enable gate off → openAIChatCompletion rejects → dispatch returns the rejected promise (QualitativeEvaluator catches → unknown)", async () => {
+    // The AI-enable-first mandate: openAIChatCompletion calls ensureAIEnabled
+    // internally; when AI is disabled it throws. The factory's dispatch does
+    // NOT swallow that — it surfaces the rejection so the QualitativeEvaluator
+    // catch block records unknown (fail-closed, never a false pass).
+    const aiDisabledError = new Error("AI feature is not enabled for this user");
+    openAIChatCompletionMock.mockRejectedValue(aiDisabledError);
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    // Direct call: the rejection surfaces (the caller — QualitativeEvaluator —
+    // is responsible for the try/catch that turns it into unknown).
+    await expect(providers.checkerDispatch("check")).rejects.toThrow(
+      "AI feature is not enabled for this user"
+    );
+
+    // Through the service: the QualitativeEvaluator catches → unknown → unmet.
+    const service = providers.evidenceService as TaskEvidenceService;
+    const contract = makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "qualitative",
+        description: "response is polite",
+        sourceSelectorKeys: ["provider"],
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const result = await service.checkCandidate(
+      baseCandidate({ content: "Hello." }),
+      contract,
+      {
+        content: "Hello.",
+        source: "factory-test",
+        sourceRevision: "slice2-t03",
+        expectedStateVersion: EXEC_VERSION,
+        checkerDispatch: providers.checkerDispatch,
+        budgetReserveChecker: () => BudgetReservationResult.Reserved,
+      }
+    );
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("AC-32: evidence persists via mergeExecutionStateEvidence with the merged evidence array + expectedStateVersion from the execution row", async () => {
+    getStatisticsMock.mockResolvedValue({
+      total: 100,
+      completed: 100,
+      failed: 0,
+      pending: 0,
+      analyzing: 0,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const service = providers.evidenceService as TaskEvidenceService;
+    const contract = makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "record_count",
+        description: "save 100 contacts",
+        adapterKey: "record_count",
+        targetId: "camp-1",
+        scope: "cumulative",
+        minimum: 100,
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const result = await service.checkCandidate(baseCandidate(), contract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      // The expectedStateVersion the consult closure would read from the row.
+      expectedStateVersion: EXEC_VERSION,
+    });
+
+    // The factory-built store's mergeEvidenceCas is the module method — verify
+    // it was called with the right executionId + the version from the row +
+    // a JSON payload whose `evidence` array contains the criterion's row.
+    expect(mergeEvidenceCasMock).toHaveBeenCalledTimes(1);
+    const mergedInput = mergeEvidenceCasMock.mock.calls[0][0] as {
+      executionId: string;
+      expectedVersion: number;
+      mergedStateJson: string;
+    };
+    expect(mergedInput.executionId).toBe("exec-factory-1");
+    expect(mergedInput.expectedVersion).toBe(EXEC_VERSION);
+    const merged = JSON.parse(mergedInput.mergedStateJson) as {
+      evidence: { criterionId: string; state: string; evidenceId: string }[];
+    };
+    expect(Array.isArray(merged.evidence)).toBe(true);
+    expect(merged.evidence).toHaveLength(result.evidenceIds.length);
+    const row = merged.evidence[0];
+    expect(row.criterionId).toBe("rec-1");
+    expect(row.state).toBe("pass");
+    expect(result.evidenceIds).toContain(row.evidenceId);
+  });
+
+  it("observationProvider: task-scoped in-window SearchResult row → fresh observation receipt with the row's time (AC-04)", async () => {
+    // schedule_id 1 → taskId 1. The D1 AC-03 bound: the provider queries the
+    // FRESHEST row at/after the execution's createdAt (not a global count) —
+    // a historical row can no longer masquerade as a fresh observation.
+    // B03: the target ("production") attributes to the matching keyword
+    // (id 5 — the foreign keyword 6 is excluded), and the reference cites
+    // the actual row id, not a generic task slug.
+    const windowStart = new Date("2026-01-01T00:00:00Z");
+    const rowTime = new Date("2026-01-02T12:00:00Z");
+    getKeywordTextsByTaskMock.mockResolvedValue([
+      { id: 5, keyword: "production deployment" },
+      { id: 6, keyword: "roofing dallas" },
+    ]);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue({
+      recordTime: rowTime,
+      id: 77,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.observationProvider("production");
+    expect(receipt).not.toBeNull();
+    expect(receipt!.referenceId).toBe("search-result:77");
+    // observedAt is the ROW's time, not now() — the AC-04 fix.
+    expect(receipt!.observedAt).toBe(rowTime.toISOString());
+    expect(findLatestSearchResultSinceForKeywordsMock).toHaveBeenCalledWith([5], windowStart);
+  });
+
+  it("observationProvider: no in-window row → null (fail-closed; a pre-window row cannot pass)", async () => {
+    getKeywordTextsByTaskMock.mockResolvedValue([
+      { id: 5, keyword: "production deployment" },
+    ]);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue(null);
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.observationProvider("production");
+    expect(receipt).toBeNull();
+  });
+
+  it("observationProvider: null createdAt window → null (fail-closed, no global fallback — AC-03)", async () => {
+    // A window-less execution cannot bound freshness, so the provider must
+    // NOT fall back to a global count/row (the pre-D1 behavior) — it returns
+    // null → unknown → unmet.
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: 1,
+      createdAt: null,
+    });
+    getStatisticsMock.mockResolvedValue({
+      total: 50,
+      completed: 50,
+      failed: 0,
+      pending: 0,
+      analyzing: 0,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const receipt = await providers.observationProvider("production");
+    expect(receipt).toBeNull();
+    // The global fallbacks must never fire for a window-less execution.
+    expect(findLatestSinceMock).not.toHaveBeenCalled();
+    expect(getStatisticsMock).not.toHaveBeenCalled();
+  });
+
+  it("getExecution throws → observationProvider fail-closed (returns null, never throws)", async () => {
+    getExecutionMock.mockRejectedValue(new Error("DB offline"));
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    // The scope read fails inside observationProvider. The provider must catch
+    // and return null (fail-closed) — never throw out of the consult closure,
+    // which would kill the controller's whole evidence evaluation.
+    const receipt = await providers.observationProvider("production");
+    expect(receipt).toBeNull();
+  });
+
+  it("artifactBaseDir: resolves to a string in the main process (Electron app.getPath) — null when Electron is absent", async () => {
+    // The factory resolves artifactBaseDir lazily via require("electron").
+    // In the test process Electron is not present → null (fail-closed).
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    // In vitest (no Electron) the lazy require throws → null.
+    expect(providers.artifactBaseDir).toBeNull();
+  });
+
+  it("B19b: accepted + natively completed attempt reconciles to completed with a CAS write-back", async () => {
+    // The guard settles `accepted` at job-START; the worker finishes later.
+    // Bounded native polling upgrades the row on terminal-completion
+    // evidence so reload/history paths (which read stored state) converge.
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: "attempt:7",
+    });
+    updateStateMock.mockResolvedValue({ ok: true });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "completed" });
+    expect(readStatus).toHaveBeenCalledWith(7);
+    expect(updateStateMock).toHaveBeenCalledWith({
+      operationKey: "op:exec-factory-1:outbound_batch:11",
+      expectedClaimGeneration: 2,
+      newState: "completed",
+    });
+  });
+
+  it("B19b: accepted + non-terminal native status stays accepted with no write-back", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: "attempt:7",
+    });
+    const readStatus = vi.fn().mockResolvedValue("sending");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "accepted" });
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: accepted without a receipt reference never touches native state", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 1,
+      receipt_reference: null,
+    });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "accepted" });
+    expect(readStatus).not.toHaveBeenCalled();
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: CAS conflict on write-back converges by re-reading (no throw, no invented state)", async () => {
+    getOperationMock.mockReset();
+    getOperationMock
+      .mockResolvedValueOnce({
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "accepted",
+        claim_generation: 2,
+        receipt_reference: "attempt:7",
+      })
+      .mockResolvedValueOnce({
+        operation_key: "op:exec-factory-1:outbound_batch:11",
+        execution_id: "exec-factory-1",
+        tool_identity: "start_email_send_task",
+        domain_target: "outbound_batch:11",
+        intent_hash: "sha256:abc",
+        operation_state: "completed",
+        claim_generation: 3,
+        receipt_reference: "attempt:7",
+      });
+    updateStateMock.mockResolvedValue({ ok: false, reasonCode: "STATE_CONFLICT" });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "completed" });
+  });
+
+  it("B19b: unknown rows never complete by assertion (no native read, no upgrade path)", async () => {
+    getOperationMock.mockReset();
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "unknown",
+      claim_generation: 3,
+      receipt_reference: "attempt:7",
+    });
+    const readStatus = vi.fn().mockResolvedValue("completed");
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+      deliveryStatusReader: { readSendAttemptStatus: readStatus },
+    });
+    // unknown must reconcile through dispatched/accepted first — the
+    // provider reports it as-is even when native state looks terminal.
+    const receipt = await providers.operationReceiptProvider("outbound_batch:11");
+    expect(receipt).toEqual({ state: "unknown" });
+    expect(readStatus).not.toHaveBeenCalled();
+    expect(updateStateMock).not.toHaveBeenCalled();
+  });
+
+  it("B19b: accepted start satisfies a start criterion but not a finish criterion (§10.3, AC-09)", async () => {
+    getOperationMock.mockResolvedValue({
+      operation_key: "op:exec-factory-1:outbound_batch:11",
+      execution_id: "exec-factory-1",
+      tool_identity: "start_email_send_task",
+      domain_target: "outbound_batch:11",
+      intent_hash: "sha256:abc",
+      operation_state: "accepted",
+      claim_generation: 2,
+      receipt_reference: null,
+    });
+    const providers = buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+    const service = providers.evidenceService as TaskEvidenceService;
+    const startContract = makeContract([
+      {
+        id: "rec-start",
+        required: true,
+        kind: "operation_receipt",
+        description: "start the email send",
+        adapterKey: "operation_receipt",
+        targetId: "outbound_batch:11",
+        requiredState: "accepted",
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const startResult = await service.checkCandidate(baseCandidate(), startContract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    expect(startResult.passedCriterionIds).toEqual(["rec-start"]);
+    const finishContract = makeContract([
+      {
+        id: "rec-finish",
+        required: true,
+        kind: "operation_receipt",
+        description: "send the email",
+        adapterKey: "operation_receipt",
+        targetId: "outbound_batch:11",
+        requiredState: "completed",
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+    const finishResult = await service.checkCandidate(baseCandidate(), finishContract, {
+      content: "",
+      source: "factory-test",
+      sourceRevision: "slice2-t03",
+      expectedStateVersion: EXEC_VERSION,
+      operationReceiptProvider: providers.operationReceiptProvider,
+    });
+    expect(finishResult.passedCriterionIds).toEqual([]);
+    expect(finishResult.unmetCriterionIds).toEqual(["rec-finish"]);
+  });
+});
+
+describe("buildEvidenceService — B03 target-attributed evidence (FR-02/03/10/24, AC-01/04/11/17/27)", () => {
+  const TASK_KEYWORDS = [
+    { id: 11, keyword: "plumbers austin" },
+    { id: 22, keyword: "roofers dallas" },
+  ];
+
+  async function build() {
+    return buildEvidenceService({
+      executionId: "exec-factory-1",
+      execModule: new (await import("@/modules/AiTaskExecutionModule")).AiTaskExecutionModule(),
+      operationModule: new (await import("@/modules/AiTaskOperationModule")).AiTaskOperationModule(),
+      searchModule: new (await import("@/modules/SearchModule")).SearchModule(),
+      contactInfoRepository: (await import("@/model/ContactInfo.model")).contactInfoRepository,
+    });
+  }
+
+  function countContract(
+    targetId: string,
+    minimum = 100,
+    scope: "execution" | "lineage" | "cumulative" = "execution"
+  ) {
+    return makeContract([
+      {
+        id: "rec-1",
+        required: true,
+        kind: "record_count",
+        description: `count ${targetId}`,
+        adapterKey: "record_count",
+        targetId,
+        scope,
+        minimum,
+        sourceRefs: [{ messageId: "msg-factory-1", startOffset: 0, endOffset: 10 }],
+      },
+    ]);
+  }
+
+  function checkContext(content = ""): {
+    content: string;
+    source: string;
+    sourceRevision: string;
+    expectedStateVersion: number;
+  } {
+    return {
+      content,
+      source: "factory-b03",
+      sourceRevision: "slice-b03",
+      expectedStateVersion: EXEC_VERSION,
+    };
+  }
+
+  it("B03a: contacts target matching one task keyword counts ONLY that keyword (foreign rows excluded)", async () => {
+    // Task 1 holds two keywords; the "plumber-contacts" target selects id
+    // 11 only. The roofer extraction's rows (id 22) must not satisfy this
+    // request's count — the attributed subset (100) verifies.
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-contacts"),
+      checkContext()
+    );
+    expect(countSinceForKeywordsMock).toHaveBeenCalledWith(
+      new Date("2026-01-01T00:00:00Z"),
+      [11]
+    );
+    // The unattributed legacy counters never fire for an attributed target.
+    expect(countSinceMock).not.toHaveBeenCalled();
+    expect(countSearchResultSinceMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03b: results target matching one task keyword counts ONLY that keyword's search rows", async () => {
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSearchResultSinceForKeywordsMock.mockResolvedValue(60);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-results", 50),
+      checkContext()
+    );
+    expect(countSearchResultSinceForKeywordsMock).toHaveBeenCalledWith(
+      [11],
+      new Date("2026-01-01T00:00:00Z")
+    );
+    // Wrong-kind table untouched: contact rows can never satisfy a results
+    // criterion.
+    expect(countSinceForKeywordsMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03c: unmatchable target without task linkage → unknown (no global fallback)", async () => {
+    // schedule_id null: no task scope. The opaque target matches no global
+    // keyword — the old global count (foreign rows satisfy anything) stays
+    // shut: null → unknown → unmet.
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    getAllKeywordTextsMock.mockResolvedValue(TASK_KEYWORDS);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("camp-9"),
+      checkContext()
+    );
+    expect(countSinceMock).not.toHaveBeenCalled();
+    expect(countSinceForKeywordsMock).not.toHaveBeenCalled();
+    expect(result.passedCriterionIds).toEqual([]);
+    expect(result.unmetCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03d: no-task target matching a global keyword attributes the count (genuine rows still verify)", async () => {
+    getExecutionMock.mockResolvedValue({
+      executionId: "exec-factory-1",
+      execution_state_json: null,
+      execution_state_version: EXEC_VERSION,
+      finalized: false,
+      schedule_id: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    getAllKeywordTextsMock.mockResolvedValue(TASK_KEYWORDS);
+    countSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-contacts"),
+      checkContext()
+    );
+    expect(countSinceForKeywordsMock).toHaveBeenCalledWith(
+      new Date("2026-01-01T00:00:00Z"),
+      [11]
+    );
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03e: lineage scope on a Continue successor bounds by the ROOT creation (ancestor progress counts)", async () => {
+    // Successor created in February with a January root: the lineage window
+    // is January — ancestor rows satisfy; the successor's own February
+    // creation would wrongly exclude them.
+    const rootStart = new Date("2026-01-05T00:00:00Z");
+    getExecutionMock.mockImplementation(async (id: string) => {
+      if (id === "exec-factory-1") {
+        return {
+          executionId: "exec-factory-1",
+          execution_state_json: null,
+          execution_state_version: EXEC_VERSION,
+          finalized: false,
+          schedule_id: 1,
+          createdAt: new Date("2026-02-01T00:00:00Z"),
+          parent_execution_id: "exec-root-1",
+        };
+      }
+      if (id === "exec-root-1") {
+        return {
+          executionId: "exec-root-1",
+          execution_state_json: null,
+          execution_state_version: 3,
+          finalized: false,
+          schedule_id: 1,
+          createdAt: rootStart,
+          parent_execution_id: null,
+        };
+      }
+      return null;
+    });
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    countSearchResultSinceForKeywordsMock.mockResolvedValue(100);
+    const providers = await build();
+    const service = providers.evidenceService as TaskEvidenceService;
+    const result = await service.checkCandidate(
+      baseCandidate(),
+      countContract("plumbers-austin-results", 100, "lineage"),
+      checkContext()
+    );
+    expect(countSearchResultSinceForKeywordsMock).toHaveBeenCalledWith([11], rootStart);
+    expect(result.passedCriterionIds).toEqual(["rec-1"]);
+  });
+
+  it("B03f: observation cites the attributed ROW id (never a generic slug)", async () => {
+    getKeywordTextsByTaskMock.mockResolvedValue(TASK_KEYWORDS);
+    findLatestSearchResultSinceForKeywordsMock.mockResolvedValue({
+      recordTime: new Date("2026-01-03T00:00:00Z"),
+      id: 4242,
+    });
+    const providers = await build();
+    const receipt = await providers.observationProvider("plumbers austin");
+    expect(receipt).not.toBeNull();
+    expect(receipt!.referenceId).toBe("search-result:4242");
+    expect(receipt!.observedAt).toBe("2026-01-03T00:00:00.000Z");
+    expect(findLatestSearchResultSinceForKeywordsMock).toHaveBeenCalledWith(
+      [11],
+      new Date("2026-01-01T00:00:00Z")
+    );
+  });
+
+  it("B03g: matchTargetKeywordIds matches exactly/substring, rejects short-token noise", async () => {
+    const { matchTargetKeywordIds } = await import(
+      "@/service/aiTaskExecution/EvidenceProviderFactory"
+    );
+    const keywords = [
+      { id: 1, keyword: "plumbers austin" },
+      { id: 2, keyword: "roofers dallas" },
+    ];
+    // Exact (normalized) match.
+    expect(matchTargetKeywordIds("plumbers-austin", keywords)).toEqual([1]);
+    // Target contains keyword / keyword contains target.
+    expect(matchTargetKeywordIds("plumbers-austin-campaign", keywords)).toEqual([1]);
+    expect(matchTargetKeywordIds("plu", keywords)).toEqual([]);
+    // Short tokens require equality ("ai" must not match "campaign").
+    expect(
+      matchTargetKeywordIds("campaign", [{ id: 3, keyword: "ai" }])
+    ).toEqual([]);
+    expect(matchTargetKeywordIds("ai", [{ id: 3, keyword: "ai" }])).toEqual([3]);
+    // Empty universe / empty target → no match (fail-closed).
+    expect(matchTargetKeywordIds("anything", [])).toEqual([]);
+    expect(matchTargetKeywordIds("", keywords)).toEqual([]);
+  });
+});

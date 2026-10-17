@@ -269,6 +269,21 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
     HookCommandTrustService.resetForTests();
   });
 
+  // B22: 30s budget (was the 5s default). The un-wired path builds the
+  // runtime resolver per test (beforeEach resets the cache by design, so
+  // every run pays a full skill-registry filesystem init before the
+  // instant fallback assertion). That init cost is environmental
+  // (machine/pool load), not product behavior — budgeting for it keeps
+  // this fallback-preservation test deterministic under full-suite load.
+  // This is the only test that exercises the un-wired runtime-resolver
+  // path: with no injected resolver, dispatchSkillRef dynamically imports
+  // the full skillsRegistry/SkillExecutor graph (TypeORM modules, MCP,
+  // fs…). That cold import measured ~4.2s in isolation against the 5s
+  // default budget, so ordinary parallel-worker CPU contention pushed it
+  // over (intermittent "Test timed out in 5000ms" in full-suite runs).
+  // The larger budget keeps headroom for the one-time import; the
+  // assertions are unchanged and the test still fails on behavior, not
+  // on load.
   it(
     "a skill-ref hook with no resolver wired emits skill-registry-not-available (fallback preserved)",
     async () => {
@@ -288,14 +303,6 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
         )
       ).toBe(true);
     },
-    // This is the only test that exercises the un-wired runtime-resolver
-    // path: with no injected resolver, dispatchSkillRef dynamically imports
-    // the full skillsRegistry/SkillExecutor graph (TypeORM modules, MCP,
-    // fs…). That cold import measured ~4.2s in isolation against the 5s
-    // default budget, so ordinary parallel-worker CPU contention pushed it
-    // over (intermittent "Test timed out in 5000ms" in full-suite runs).
-    // 20s keeps headroom for the one-time import; the assertions are
-    // unchanged and the test still fails on behavior, not on load.
-    20_000
+    30_000
   );
 });

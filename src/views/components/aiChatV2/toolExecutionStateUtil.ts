@@ -19,32 +19,50 @@ const isPlanModeUiToolCall = (message: ChatV2MessageView): boolean => {
   return isEnterPlanModeToolName(toolName) || isPlanToolName(toolName);
 };
 
-export const hasPendingToolExecution = (
+/**
+ * Message ids of tool calls that still have no matching result.
+ * Plan-mode UI tools are omitted: they never emit `tool_result`.
+ * Named calls pair by `toolCallId`; calls without an id pair in order.
+ */
+export const collectAwaitingToolMessageIds = (
   messages: ChatV2MessageView[]
-): boolean => {
-  const pendingToolCallIds = new Set<string>();
-  let anonymousToolCalls = 0;
+): ReadonlySet<string> => {
+  const awaiting = new Set<string>();
+  const messageIdsByToolCallId = new Map<string, string[]>();
+  const anonymousToolCallIds: string[] = [];
 
   for (const message of messages) {
     const toolCallId = message.metadata?.toolCallId;
     if (message.messageType === MessageType.TOOL_CALL) {
       if (isPlanModeUiToolCall(message)) continue;
+      awaiting.add(message.id);
       if (toolCallId) {
-        pendingToolCallIds.add(toolCallId);
+        const ids = messageIdsByToolCallId.get(toolCallId) ?? [];
+        ids.push(message.id);
+        messageIdsByToolCallId.set(toolCallId, ids);
       } else {
-        anonymousToolCalls += 1;
+        anonymousToolCallIds.push(message.id);
       }
-    } else if (message.messageType === MessageType.TOOL_RESULT) {
-      if (toolCallId) {
-        pendingToolCallIds.delete(toolCallId);
-      } else if (anonymousToolCalls > 0) {
-        anonymousToolCalls -= 1;
-      }
+      continue;
     }
+    if (message.messageType !== MessageType.TOOL_RESULT) continue;
+    if (toolCallId) {
+      const ids = messageIdsByToolCallId.get(toolCallId);
+      if (!ids) continue;
+      for (const id of ids) awaiting.delete(id);
+      ids.length = 0;
+      continue;
+    }
+    const resolvedId = anonymousToolCallIds.shift();
+    if (resolvedId) awaiting.delete(resolvedId);
   }
 
-  return pendingToolCallIds.size > 0 || anonymousToolCalls > 0;
+  return awaiting;
 };
+
+export const hasPendingToolExecution = (
+  messages: ChatV2MessageView[]
+): boolean => collectAwaitingToolMessageIds(messages).size > 0;
 
 export const clearToolProgressForToolResult = (
   messages: ChatV2MessageView[],

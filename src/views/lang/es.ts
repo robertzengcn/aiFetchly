@@ -689,7 +689,7 @@ export default {
     login: "Iniciar sesión",
     login_out: "Cerrar sesión",
     system_setting: "Configuración del sistema",
-    platform_subtitle: "Agente de marketing con IA",
+    platform_subtitle: "Agente de IA",
     login_title: "Inicio de sesión en AiFetchly",
     login_description:
       "Haga clic en el botón de abajo para iniciar sesión en su cuenta",
@@ -2691,6 +2691,86 @@ export default {
         PROMPT_REQUIRED: "Se requiere un prompt para un bucle programado.",
       },
     },
+    taskExecution: {
+      status_resolving: "resolviendo",
+      status_preparing: "preparando",
+      status_active: "trabajando",
+      status_verifying: "verificando",
+      status_continuing: "continuando",
+      status_waiting_permission: "esperando permiso",
+      status_waiting_input: "necesita entrada",
+      status_waiting_approval: "esperando aprobación",
+      status_waiting_external_job: "esperando trabajo externo",
+      status_terminal: "completado",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): etiquetas honestas de resultado terminal.
+      outcome_verified_complete: "completado",
+      outcome_incomplete: "incompleto",
+      outcome_needs_user_input: "necesita tu entrada",
+      outcome_blocked_by_policy: "bloqueado por política",
+      outcome_failed: "fallido",
+      outcome_cancelled: "cancelado",
+      outcome_timeout: "expirado",
+      actions: {
+        continue: "Continuar",
+        retry: "Reintentar",
+        cancel: "Detener tarea",
+      },
+      successor_reused:
+        "Esta tarea ya se está ejecutando; no se inició un nuevo intento.",
+      successor_error: "No se pudo iniciar la continuación de la tarea.",
+      errors: {
+        CRITERIA_SATISFIED: "Se cumplieron todos los criterios de finalización.",
+        NO_PROGRESS: "La tarea no hizo más progreso.",
+        CONTINUATION_LIMIT:
+          "Se alcanzó el límite de continuaciones; la tarea quedó incompleta.",
+        MODEL_ATTEMPT_LIMIT:
+          "Se alcanzó el límite de intentos del modelo; la tarea quedó incompleta.",
+        TOOL_LIMIT: "Se alcanzó el límite de ejecución de herramientas.",
+        TOKEN_LIMIT: "Se alcanzó el límite de tokens.",
+        ACTIVE_RUNTIME_LIMIT: "Se alcanzó el límite de tiempo de ejecución.",
+        WAIT_LIMIT: "Se alcanzó el límite de espera acumulada.",
+        VERIFICATION_UNAVAILABLE:
+          "No se pudo verificar la finalización porque no había verificador disponible.",
+        INVALID_VERIFIER_RESPONSE:
+          "El verificador devolvió una respuesta inválida; finalización no verificada.",
+        EVIDENCE_UNAVAILABLE:
+          "La evidencia necesaria no estaba disponible; finalización no verificada.",
+        UNKNOWN_ACTION_OUTCOME:
+          "Una acción consecuente tiene un resultado desconocido y requiere reconciliación.",
+        INPUT_REQUIRED: "La tarea necesita entrada antes de continuar.",
+        PERMISSION_DENIED: "Se denegó un permiso necesario.",
+        CONTENT_RESTRICTED: "El contenido fue restringido por la política.",
+        AI_DISABLED: "La funcionalidad de IA está deshabilitada para esta cuenta.",
+        AUTH_QUOTA_ERROR: "Un error de autenticación o cuota detuvo la tarea.",
+        AUTH_FAILURE: "La autenticación falló; la tarea se detuvo.",
+        QUOTA_EXHAUSTED: "La cuota de uso se agotó; la tarea se detuvo.",
+        NON_RECOVERABLE: "Un error no recuperable detuvo la tarea.",
+        PROVIDER_ERROR: "El proveedor de IA informó un error; la tarea se detuvo.",
+        REMOTE_AI_ERROR: "No se pudo acceder al servicio de IA; la tarea se detuvo.",
+        RUN_INTERRUPTED: "La ejecución se interrumpió antes de completarse.",
+        BLOCKED_BY_POLICY: "La tarea fue bloqueada por la política.",
+        STREAM_INCOMPLETE: "El flujo terminó antes de que completara la tarea.",
+        OUTPUT_TRUNCATED: "La salida se truncó antes de completarse.",
+        PERSISTENCE_FAILED: "No se pudo guardar el resultado de la tarea.",
+        STATE_CONFLICT:
+          "El estado de la tarea cambió durante la operación; no se escribió un duplicado.",
+        MISSING_TASK_OUTCOME:
+          "No se registró ningún resultado; la tarea quedó incompleta.",
+        SUBMISSION_CONFLICT:
+          "Un conflicto de envío impidió que la tarea iniciara.",
+        ALREADY_FINALIZED:
+          "La tarea ya estaba finalizada; no se escribió un resultado duplicado.",
+        OPERATION_NOT_FOUND: "No se encontró la operación referenciada.",
+        INTENT_CONFLICT: "Hay un intento conflictivo en curso; la tarea no inició.",
+        INTENT_UNRESOLVED: "No se pudo resolver el intento de la tarea.",
+        PREPARATION_REQUIRED: "Se requiere preparación antes de que la tarea ejecute.",
+        USER_CANCELLED: "La tarea fue cancelada por el usuario.",
+        TASK_REPLACED: "La tarea fue reemplazada por nueva entrada antes de completarse.",
+        SCHEDULE_STOPPED: "La programación se detuvo; la tarea no se repitió.",
+        RESPONSE_ENDED: "La respuesta terminó antes de verificar la tarea.",
+        SHADOW_EVALUATION: "Solo evaluación sombra; no se aplicó comportamiento real.",
+      },
+    },
     voice: {
       microphone: "Entrada de voz",
       start_recording: "Comenzar grabación",
@@ -2867,6 +2947,8 @@ export default {
       quota_reached: "Cuota de almacenamiento agotada; solo se conservó parte del resultado",
       deleted: "Esta salida guardada ya no está disponible",
       not_available: "Esta salida guardada no está disponible",
+      retrieval_not_enabled:
+        "La recuperación de salidas guardadas no está habilitada para esta conversación",
       binary_unsupported: "Esta salida no puede mostrarse como texto; expórtela",
       close: "Cerrar",
     },

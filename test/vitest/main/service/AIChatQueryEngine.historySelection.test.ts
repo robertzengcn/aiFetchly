@@ -29,9 +29,17 @@ const holders = vi.hoisted(() => ({
   assembleInput: undefined as { currentUserMessage?: string } | undefined,
 }));
 
-vi.mock("@/config/featureFlags", () => ({
-  isArchiveReadsEnabled: vi.fn(() => holders.archiveReadsEnabled),
-}));
+vi.mock("@/config/featureFlags", async (importOriginal) => {
+  // Spread the actual module: the engine imports other flags from it
+  // (e.g. isAiTaskCompletionPolicyV1Enabled at the completion-policy
+  // enrollment seam) — replacing the whole module leaves them undefined and
+  // the enrollment call throws before the loop runs.
+  const actual = await importOriginal<typeof import("@/config/featureFlags")>();
+  return {
+    ...actual,
+    isArchiveReadsEnabled: vi.fn(() => holders.archiveReadsEnabled),
+  };
+});
 
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
