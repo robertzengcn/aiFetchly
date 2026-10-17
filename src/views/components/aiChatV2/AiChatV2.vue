@@ -1936,6 +1936,7 @@ function resetScheduledLoopViewState(): void {
   liveScheduledAssistant.value = null;
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
+  stagedScheduledLoopAccept = null;
   showScheduledLoopApproval.value = false;
 }
 
@@ -2303,7 +2304,12 @@ function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   }
 }
 
-/** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
+/**
+ * Handle /loop <duration> <prompt>: create a bounded scheduled loop (FR-16).
+ * R11-1: returns TRUE only when the loop is durably persisted — the caller
+ * fires the composer acceptance exactly once on that outcome; a failed
+ * create keeps the retryable draft in the composer.
+ */
 async function runScheduledLoopCreate(
   action: {
     intervalMs: number;
@@ -2319,7 +2325,7 @@ async function runScheduledLoopCreate(
     allowMcp: boolean;
     allowSubagents: boolean;
   }
-): Promise<void> {
+): Promise<boolean> {
   const conversationId = ensureWorkspaceConversationId();
   try {
     const created = await createScheduledLoop({
@@ -2341,7 +2347,7 @@ async function runScheduledLoopCreate(
         "Could not create the scheduled loop.";
       appendLocalCommandExchange(conversationId, rawCommand, message);
       streamError.value = message;
-      return;
+      return false;
     }
     // The backend persisted the command + confirmation rows; switch to the
     // resolved conversation and reload history so they render immediately.
@@ -2354,6 +2360,7 @@ async function runScheduledLoopCreate(
     await loadHistory(created.conversationId);
     void loadConversations();
     await refreshScheduledLoopStatus();
+    return true;
   } catch (e) {
     const message =
       e instanceof Error
@@ -2362,12 +2369,14 @@ async function runScheduledLoopCreate(
           "Could not create the scheduled loop.";
     appendLocalCommandExchange(conversationId, rawCommand, message);
     streamError.value = message;
+    return false;
   }
 }
 
-
-/** Handle /loop pause|resume|stop (conversation-scoped control). */
-/** R11: TRUE only when the control ran — see runLoopCommand. */
+/**
+ * Handle /loop pause|resume|stop (conversation-scoped control).
+ * R11: returns TRUE only when the control ran — see runLoopCommand.
+ */
 async function runScheduledLoopControl(
   operation: "pause" | "resume" | "stop"
 ): Promise<boolean> {
@@ -2933,8 +2942,19 @@ type PendingScheduledLoop = {
 };
 const pendingScheduledLoop = ref<PendingScheduledLoop | null>(null);
 const showScheduledLoopApproval = ref(false);
+/**
+ * R11-1: the composer's acceptance callback captured when a scheduled loop
+ * was staged. Staging is NOT acceptance (R11): the callback fires exactly
+ * once, when the approval durably persists the loop; a failed create keeps
+ * the retryable draft in the composer.
+ */
+let stagedScheduledLoopAccept: (() => void) | null = null;
 
-/** Confirm tool approval and create the staged scheduled loop. */
+/**
+ * Confirm tool approval and create the staged scheduled loop (FR-16).
+ * R11-1: acceptance follows DURABLE creation only — a failed create already
+ * surfaced its error and keeps the composer draft for retry.
+ */
 async function onScheduledLoopApprovalConfirm(payload: {
   allowedTools: string[];
   autoApproveTools: boolean;
@@ -2949,12 +2969,19 @@ async function onScheduledLoopApprovalConfirm(payload: {
   }
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
-  await runScheduledLoopCreate(staged.action, staged.rawCommand, payload);
+  // Consume the stashed acceptance BEFORE the durable-create await: a loop
+  // re-staged mid-confirm can never inherit this callback (exactly once).
+  const accept = stagedScheduledLoopAccept;
+  stagedScheduledLoopAccept = null;
+  if (await runScheduledLoopCreate(staged.action, staged.rawCommand, payload)) {
+    accept?.();
+  }
 }
 
 /** Cancel staged scheduled-loop creation (user closed the approval dialog). */
 function onScheduledLoopApprovalCancel(): void {
   pendingScheduledLoop.value = null;
+  stagedScheduledLoopAccept = null;
   showScheduledLoopApproval.value = false;
 }
 /** Set when a scheduled turn completes while an interactive stream is active;
@@ -4414,10 +4441,12 @@ const onSend = async (
   if (loopCmd.type === "scheduled_loop") {
     // Stage the parsed loop and ask the user to approve any read-only tools
     // before persisting (FR-16). Unattended execution cannot prompt at run
-    // time, so approval happens once, up front. R11: staging is NOT
+    // time, so approval happens once, up front. R11 + R11-1: staging is NOT
     // acceptance — the draft survives until the approval persists the loop
-    // (a cancelled dialog must leave the command retryable).
+    // (a cancelled dialog must leave the command retryable), and the stashed
+    // acceptance fires exactly once on durable creation.
     pendingScheduledLoop.value = { action: loopCmd, rawCommand: text };
+    stagedScheduledLoopAccept = options?.onAccepted ?? null;
     showScheduledLoopApproval.value = true;
     return;
   }

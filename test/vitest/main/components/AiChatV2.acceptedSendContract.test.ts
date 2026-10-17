@@ -163,6 +163,9 @@ const i18n = createI18n({
           enable_spoken_responses: "Enable spoken responses",
           disable_spoken_responses: "Disable spoken responses",
         },
+        scheduledLoop: {
+          createFailed: "Could not create the scheduled loop.",
+        },
       },
       workspace: {
         badgeLabel: "Workspace",
@@ -177,14 +180,16 @@ const TEST_IMAGE_FILE = new File(["x"], "a.png", { type: "image/png" });
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
   emits: ["send"],
-  data: () => ({ accepted: false, testFile: TEST_IMAGE_FILE }),
+  data: () => ({ accepted: false, acceptCount: 0, testFile: TEST_IMAGE_FILE }),
   methods: {
     send(text: string, files?: File[], options?: Record<string, unknown>): void {
       this.accepted = false;
+      this.acceptCount = 0;
       this.$emit("send", text, files ?? [], {
         ...options,
         onAccepted: () => {
           this.accepted = true;
+          this.acceptCount += 1;
         },
       });
     },
@@ -194,10 +199,19 @@ const ComposerStub = defineComponent({
     <button data-testid="send-file" @click="send('with file', [testFile])">file</button>
     <button data-testid="send-goal" @click="send('/goal')">goal</button>
     <button data-testid="send-loop" @click="send('/loop')">loop</button>
+    <button data-testid="send-scheduled-loop" @click="send('/loop 10m summarize emails')">scheduled loop</button>
     <button data-testid="send-slash" @click="send('/plugin:thing')">slash</button>
     <span data-testid="accepted">{{ accepted }}</span>
+    <span data-testid="accepted-count">{{ acceptCount }}</span>
     <slot name="prepend" />
   </div>`,
+});
+
+const ScheduledLoopApprovalStub = defineComponent({
+  name: "ScheduledLoopToolApprovalDialog",
+  props: ["modelValue", "rawCommand", "prompt"],
+  emits: ["confirm", "cancel", "update:modelValue"],
+  template: '<div data-testid="scheduled-loop-approval-stub" />',
 });
 
 function mountChat() {
@@ -206,9 +220,9 @@ function mountChat() {
       plugins: [i18n],
       stubs: {
         AiChatV2Messages: {
-          props: ["messages"],
+          props: ["messages", "errorMessage"],
           template:
-            '<div data-testid="messages">{{ messages.map((m) => `${m.content}|${m.timestamp}`).join("\\n") }}</div>',
+            '<div data-testid="messages"><span data-testid="stream-error">{{ errorMessage ?? "" }}</span>{{ messages.map((m) => `${m.content}|${m.timestamp}`).join("\\n") }}</div>',
         },
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
@@ -225,7 +239,7 @@ function mountChat() {
         WorkspaceBadge: true,
         WorkspaceMemoryPanel: true,
         WorkspaceMemoryStatusBadge: true,
-        ScheduledLoopToolApprovalDialog: true,
+        ScheduledLoopToolApprovalDialog: ScheduledLoopApprovalStub,
         VBtn: {
           template:
             '<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>',
@@ -328,6 +342,86 @@ describe("AiChatV2 accepted-send contract (R11)", () => {
     await flushPromises();
     await wrapper.find('[data-testid="send-slash"]').trigger("click");
     expect(await acceptedText(wrapper)).toBe("false");
+    wrapper.unmount();
+  });
+
+  /**
+   * R11-1: the /loop draft must survive until the approval durably creates
+   * the scheduled loop — staging opens the dialog WITHOUT consuming the
+   * draft, the confirm fires acceptance exactly once on durable success,
+   * and a failed create keeps the retryable draft (same contract the
+   * workspace center adopts for the same staged-command flow).
+   */
+  it("stages a scheduled loop WITHOUT consuming the draft (R11-1)", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="send-scheduled-loop"]').trigger("click");
+    expect(await acceptedText(wrapper)).toBe("false");
+    expect(
+      wrapper.find('[data-testid="scheduled-loop-approval-stub"]').exists()
+    ).toBe(true);
+    const { createScheduledLoop } = await import("@/views/api/aiChatScheduledLoop");
+    expect(createScheduledLoop).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("clears the draft exactly once when the confirm durably creates the loop (R11-1)", async () => {
+    const { createScheduledLoop } = await import("@/views/api/aiChatScheduledLoop");
+    vi.mocked(createScheduledLoop).mockResolvedValueOnce({
+      conversationId: "conv-scheduled",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="send-scheduled-loop"]').trigger("click");
+    expect(await acceptedText(wrapper)).toBe("false");
+
+    wrapper
+      .findComponent(ScheduledLoopApprovalStub)
+      .vm.$emit("confirm", {
+        allowedTools: [],
+        autoApproveTools: false,
+        allowSkills: false,
+        allowMcp: false,
+        allowSubagents: false,
+      });
+    await flushPromises();
+
+    // Durable create → the composer draft is consumed exactly once.
+    expect(
+      wrapper.find('[data-testid="accepted-count"]').text()
+    ).toBe("1");
+    expect(await acceptedText(wrapper)).toBe("true");
+    expect(createScheduledLoop).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("retains the draft when the confirm fails to create the loop (R11-1)", async () => {
+    const { createScheduledLoop } = await import("@/views/api/aiChatScheduledLoop");
+    vi.mocked(createScheduledLoop).mockResolvedValueOnce(null);
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="send-scheduled-loop"]').trigger("click");
+
+    wrapper
+      .findComponent(ScheduledLoopApprovalStub)
+      .vm.$emit("confirm", {
+        allowedTools: [],
+        autoApproveTools: false,
+        allowSkills: false,
+        allowMcp: false,
+        allowSubagents: false,
+      });
+    await flushPromises();
+
+    expect(await acceptedText(wrapper)).toBe("false");
+    expect(
+      wrapper.find('[data-testid="accepted-count"]').text()
+    ).toBe("0");
+    // The failure is visible: the localized create error surfaced through
+    // the stream error (same channel Chat V2 uses for local command errors).
+    expect(
+      wrapper.find('[data-testid="stream-error"]').text()
+    ).toContain("Could not create the scheduled loop.");
     wrapper.unmount();
   });
 });
