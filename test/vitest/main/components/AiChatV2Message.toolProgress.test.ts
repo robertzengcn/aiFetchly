@@ -37,6 +37,8 @@ const i18n = createI18n({
       aiChatV2: {
         tool_call_title: "Tool Call",
         tool_name: "Tool",
+        tool_result_title: "Tool Result",
+        tool_result_details: "Details",
         tool_running: "Running...",
         tool_arguments: "Arguments",
       },
@@ -123,6 +125,13 @@ describe("AiChatV2Message tool progress badge", () => {
     expect(wrapper.find('[data-testid="tool-running-badge"]').exists()).toBe(
       false
     );
+    // A finished tool call with empty content must still render its card.
+    // Empty content used to collapse the row under content-visibility.
+    expect(wrapper.text()).toContain("Tool Call");
+    expect(wrapper.text()).toContain("run_subagent");
+    const card = wrapper.find(".v2-message--tool-call");
+    expect(card.exists()).toBe(true);
+    expect(card.attributes("data-message-type")).toBe(MessageType.TOOL_CALL);
   });
 
   it("shows a loading badge while the tool call is awaiting its result", async () => {
@@ -150,6 +159,32 @@ describe("AiChatV2Message tool progress badge", () => {
     expect(bar.exists()).toBe(true);
     // The count text "(4/10)" is rendered inside the badge.
     expect(wrapper.text()).toContain("4/10");
+  });
+});
+
+describe("AiChatV2Message persisted tool rows", () => {
+  it("renders a tool result card and its saved content", async () => {
+    const message = makeBaseMessage();
+    message.id = "tool-result-tc1";
+    message.messageType = MessageType.TOOL_RESULT;
+    message.content = '{"documents":[{"title":"Pricing"}]}';
+    message.metadata = {
+      source: "chat-v2",
+      toolCallId: "tc1",
+      toolName: "knowledge_library_list_documents",
+      success: true,
+      toolResult: { success: true, documents: [{ title: "Pricing" }] },
+    };
+
+    const wrapper = mountWith(message);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Tool Result");
+    expect(wrapper.text()).toContain("knowledge_library_list_documents");
+    expect(wrapper.text()).toContain("Pricing");
+    const card = wrapper.find(".v2-message--tool-result");
+    expect(card.exists()).toBe(true);
+    expect(card.attributes("data-message-type")).toBe(MessageType.TOOL_RESULT);
   });
 });
 

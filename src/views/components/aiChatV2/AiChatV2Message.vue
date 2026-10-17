@@ -9,7 +9,13 @@
       @request-changes="(fb) => emit('request-plan-changes', fb)"
     />
   </div>
-  <div v-else class="v2-message" :class="`v2-message--${message.role}`" :data-message-id="message.id">
+  <div
+    v-else
+    class="v2-message"
+    :class="messageShellClass"
+    :data-message-id="message.id"
+    :data-message-type="message.messageType"
+  >
     <div class="v2-message__bubble">
       <div class="v2-message__meta">
         <span class="v2-message__role">{{ roleLabel }}</span>
@@ -539,6 +545,16 @@ onBeforeUnmount(() => {
     clearTimeout(copyResetTimer);
     copyResetTimer = null;
   }
+});
+
+const messageShellClass = computed((): string[] => {
+  const classes = [`v2-message--${props.message.role}`];
+  if (props.message.messageType === MessageType.TOOL_CALL) {
+    classes.push("v2-message--tool-call");
+  } else if (props.message.messageType === MessageType.TOOL_RESULT) {
+    classes.push("v2-message--tool-result");
+  }
+  return classes;
 });
 
 const roleLabel = computed(() => {
@@ -1272,9 +1288,19 @@ watch(
      the scrollbar is sized correctly before a message is scrolled into view;
      the browser corrects the real height the moment it renders the message.
      The streaming message (last child) is always on-screen, so this never
-     delays token paint. */
+     delays token paint.
+     Do not use the `auto` keyword here. It remembers the last laid-out size,
+     and a row skipped before it has height is remembered as 0px. Those rows
+     then take no space, never intersect the scrollport, and stay blank.
+     Tool calls and results sit between the user prompt and the assistant
+     reply, so they were the rows that disappeared. */
   content-visibility: auto;
-  contain-intrinsic-size: auto 120px;
+  contain-intrinsic-size: 120px;
+}
+.v2-message--tool-call,
+.v2-message--tool-result {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 .v2-message--plan {
   justify-content: stretch;

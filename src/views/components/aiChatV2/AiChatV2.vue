@@ -5643,6 +5643,15 @@ const onSend = async (
           streamMessageListController.set([
             ...streamMessageListController.get(),
           ]);
+          // Tool rows are committed before this complete event. Reload the
+          // persisted transcript so a tool call or result that was saved but
+          // missed by the live chunk handler still appears in the chat.
+          if (
+            isCurrentStreamView() &&
+            !activeSuccessorTurns.value.has(streamConversationId)
+          ) {
+            void loadHistory(streamConversationId);
+          }
         });
         void loadConversations();
       },
