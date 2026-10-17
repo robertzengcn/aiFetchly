@@ -616,6 +616,83 @@ describe("loop command attachment + control-failure handling (R09)", () => {
     }
     expect(state.errors).toHaveLength(1);
   });
+
+  /**
+   * R09-1: confirmScheduledLoop reports DURABLE persistence so the surface
+   * can fire the composer acceptance exactly once (cancel/failed-create
+   * retain, success consumes the draft exactly once).
+   */
+  it("confirm resolves TRUE exactly when the create is durable (R09-1)", async () => {
+    const { ports, state } = makePorts();
+    const router = useChatCommandRouting(ports);
+    await router.routeCommand("/loop 10m summarize emails", {});
+    const persisted = await router.confirmScheduledLoop({
+      allowedTools: [],
+      autoApproveTools: false,
+      allowSkills: false,
+      allowMcp: false,
+      allowSubagents: false,
+    });
+    expect(persisted).toBe(true);
+    expect(state.scheduledCreates).toHaveLength(1);
+    // No error surfaced on success.
+    expect(state.errors).toHaveLength(0);
+  });
+
+  it("confirm resolves FALSE when the create envelope is null (R09-1)", async () => {
+    const { ports, state } = makePorts({
+      createScheduledLoop: async (input) => {
+        state.scheduledCreates.push({ rawCommand: input.rawCommand });
+        return null;
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    await router.routeCommand("/loop 10m summarize emails", {});
+    const persisted = await router.confirmScheduledLoop({
+      allowedTools: [],
+      autoApproveTools: false,
+      allowSkills: false,
+      allowMcp: false,
+      allowSubagents: false,
+    });
+    expect(persisted).toBe(false);
+    expect(state.errors).toHaveLength(1);
+  });
+
+  it("confirm resolves FALSE when the create transport throws (R09-1)", async () => {
+    const { ports, state } = makePorts({
+      createScheduledLoop: async (input) => {
+        state.scheduledCreates.push({ rawCommand: input.rawCommand });
+        throw new Error("ipc down");
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    await router.routeCommand("/loop 10m summarize emails", {});
+    const persisted = await router.confirmScheduledLoop({
+      allowedTools: [],
+      autoApproveTools: false,
+      allowSkills: false,
+      allowMcp: false,
+      allowSubagents: false,
+    });
+    expect(persisted).toBe(false);
+    expect(state.errors).toHaveLength(1);
+    expect(state.statusRefreshes).toBe(0);
+  });
+
+  it("confirm resolves FALSE when nothing was staged (R09-1)", async () => {
+    const { ports, state } = makePorts();
+    const router = useChatCommandRouting(ports);
+    const persisted = await router.confirmScheduledLoop({
+      allowedTools: [],
+      autoApproveTools: false,
+      allowSkills: false,
+      allowMcp: false,
+      allowSubagents: false,
+    });
+    expect(persisted).toBe(false);
+    expect(state.scheduledCreates).toHaveLength(0);
+  });
 });
 
 

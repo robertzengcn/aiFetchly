@@ -186,8 +186,14 @@ export interface ChatCommandRouter {
     text: string,
     options: RouteCommandOptions
   ): Promise<ChatCommandDisposition>;
-  /** User approved the staged scheduled loop — persist it now. */
-  confirmScheduledLoop(approval: ScheduledLoopApprovalPayload): Promise<void>;
+  /**
+   * User approved the staged scheduled loop — persist it now. TRUE exactly
+   * when the loop is durably created; FALSE when there was no stage or the
+   * create failed (the error is already surfaced via setError) — a FALSE
+   * means the composer draft is still needed (R09-1: acceptance only after
+   * durable persistence).
+   */
+  confirmScheduledLoop(approval: ScheduledLoopApprovalPayload): Promise<boolean>;
   /** User cancelled the approval dialog — discard the staged loop. */
   cancelScheduledLoop(): void;
   /** Selection changed — discard conversation-scoped staging state. */
@@ -606,16 +612,33 @@ export function useChatCommandRouting(
     return { kind: "not_command" };
   }
 
+  /**
+   * R09-1: reports whether the staged loop is DURABLY created so the caller
+   * can fire the composer acceptance exactly once — a failed create must
+   * retain the retryable draft instead of consuming it. Both failure modes
+   * (transport throw and null envelope) surface the localized error first.
+   */
   async function confirmScheduledLoop(
     approval: ScheduledLoopApprovalPayload
-  ): Promise<void> {
+  ): Promise<boolean> {
     const staged = stagedLoop;
     stagedLoop = null;
-    if (!staged) return;
+    if (!staged) return false;
     const conversationId = await ports.ensureConversationId();
-    if (!conversationId) return;
+    if (!conversationId) return false;
+    const createFailedMessage = (): string =>
+      ports.translate(
+        "aiChatV2.scheduledLoop.createFailed",
+        "Could not create the scheduled loop."
+      );
+    const failed = (message: string): boolean => {
+      ports.appendLocalExchange(staged.rawCommand, message, conversationId);
+      ports.setError(message, conversationId);
+      return false;
+    };
+    let created: { conversationId: string } | null = null;
     try {
-      const created = await ports.createScheduledLoop({
+      created = await ports.createScheduledLoop({
         conversationId,
         rawCommand: staged.rawCommand,
         prompt: staged.action.prompt,
@@ -628,29 +651,21 @@ export function useChatCommandRouting(
         allowMcp: approval.allowMcp,
         allowSubagents: approval.allowSubagents,
       });
-      if (!created) {
-        const message = ports.translate(
-          "aiChatV2.scheduledLoop.createFailed",
-          "Could not create the scheduled loop."
-        );
-        ports.appendLocalExchange(staged.rawCommand, message, conversationId);
-        ports.setError(message, conversationId);
-        return;
-      }
-      // Reload history/summaries so the persisted command + confirmation
-      // rows render immediately (V2 parity — the port owns the reload).
-      await ports.getScheduledLoopStatus(conversationId);
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : ports.translate(
-              "aiChatV2.scheduledLoop.createFailed",
-              "Could not create the scheduled loop."
-            );
-      ports.appendLocalExchange(staged.rawCommand, message, conversationId);
-      ports.setError(message, conversationId);
+    } catch (err: unknown) {
+      return failed(
+        err instanceof Error ? err.message : createFailedMessage()
+      );
     }
+    if (!created) {
+      return failed(createFailedMessage());
+    }
+    // Reload history/summaries so the persisted command + confirmation
+    // rows render immediately (V2 parity — the port owns the reload).
+    // R09-1: the reload is BEST-EFFORT — the loop is already durable, so a
+    // stale view refresh must not reclassify success as failure (the user
+    // would retry against a schedule that actually exists).
+    await ports.getScheduledLoopStatus(conversationId).catch(() => undefined);
+    return true;
   }
 
   function cancelScheduledLoop(): void {

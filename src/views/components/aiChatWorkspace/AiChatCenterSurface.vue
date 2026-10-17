@@ -1931,11 +1931,13 @@ async function applyCommandDisposition(
   }
   if (disposition.kind === "needs_scheduled_approval") {
     // Staged (not persisted): the approval dialog owns the continuation
-    // (FR-CMD-007). The command text is consumed — mirrors the Chat V2
-    // reference, which clears the draft when the staging dialog opens.
+    // (FR-CMD-007). R09-1 (one behavior, multiple presentations): staging is
+    // NOT acceptance — the composer keeps the command draft while the dialog
+    // is open, the stashed acceptance fires exactly once after the loop is
+    // durably created, and cancel/failed-create retain the retryable draft.
     pendingScheduledLoop.value = disposition;
+    stagedScheduledLoopAccept.value = options?.onAccepted ?? null;
     showScheduledLoopApproval.value = true;
-    options?.onAccepted?.();
     return;
   }
   if (disposition.kind === "rejected") {
@@ -2138,6 +2140,13 @@ const pendingScheduledLoop = ref<{
   rawCommand: string;
 } | null>(null);
 const showScheduledLoopApproval = ref(false);
+/**
+ * R09-1: the composer's acceptance callback captured when a scheduled loop
+ * was staged. Staging is NOT acceptance — the callback fires exactly once
+ * (onScheduledLoopApprovalConfirm) after the staged loop is DURABLY created;
+ * cancel/failed-create retain the draft for retry instead of consuming it.
+ */
+const stagedScheduledLoopAccept = ref<(() => void) | null>(null);
 
 const commandRouter = useChatCommandRouting({
   isBusy: () => selectedStore.isBusy,
@@ -2285,7 +2294,12 @@ const commandRouter = useChatCommandRouting({
   },
 });
 
-/** Confirm tool approval and persist the staged scheduled loop (FR-CMD-007). */
+/**
+ * Confirm tool approval and persist the staged scheduled loop (FR-CMD-007).
+ * R09-1: acceptance follows DURABLE creation only — a failed create already
+ * surfaced its error through the port and MUST keep the composer draft so
+ * the user can retry the /loop command.
+ */
 async function onScheduledLoopApprovalConfirm(
   approval: ScheduledLoopApprovalPayload
 ): Promise<void> {
@@ -2296,7 +2310,17 @@ async function onScheduledLoopApprovalConfirm(
   }
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
-  await commandRouter.confirmScheduledLoop(approval);
+  // Consume the stashed acceptance BEFORE the durable-create await: a loop
+  // re-staged mid-confirm can never inherit this callback (exactly once).
+  const accept = stagedScheduledLoopAccept.value;
+  stagedScheduledLoopAccept.value = null;
+  const created = await commandRouter.confirmScheduledLoop(approval);
+  if (!created) {
+    // Nothing persisted — the draft is still in the composer.
+    return;
+  }
+  // The staged loop is durable — the composer draft may finally be cleared.
+  accept?.();
   // The backend persisted the command + confirmation rows — reload history
   // and sidebar so they render immediately (Chat V2 parity).
   if (conversationId.value) {
@@ -2309,6 +2333,7 @@ async function onScheduledLoopApprovalConfirm(
 function onScheduledLoopApprovalCancel(): void {
   pendingScheduledLoop.value = null;
   commandRouter.cancelScheduledLoop();
+  stagedScheduledLoopAccept.value = null;
   showScheduledLoopApproval.value = false;
 }
 
@@ -2317,6 +2342,7 @@ function onScheduledLoopApprovalCancel(): void {
 scopedOverlays.registerSelectionBoundOverlay("scheduled-loop-staging", () => {
   commandRouter.resetConversationState();
   pendingScheduledLoop.value = null;
+  stagedScheduledLoopAccept.value = null;
   showScheduledLoopApproval.value = false;
 });
 

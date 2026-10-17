@@ -765,6 +765,141 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       ).toBe(false);
     });
 
+    /**
+     * R09-1: staging is NOT acceptance — the workspace keeps the composer
+     * draft while the approval dialog is open and clears it exactly once
+     * when the staged loop is durably created. Cancel/failed-confirm keep
+     * the retryable draft, matching Chat V2's staging-retention semantics.
+     */
+    it("does not consume the draft when staging opens the approval dialog (R09-1)", async () => {
+      mockInvokeByChannel({
+        [AI_CHAT_V2_SCHEDULED_LOOP_CREATE]: {
+          status: true,
+          data: { conversationId: "fresh-chat" },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 10m summarize emails", [], {
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+
+      expect(
+        wrapper.findComponent({ name: "ScheduledLoopToolApprovalDialog" }).exists()
+      ).toBe(true);
+      // Nothing persisted yet AND nothing accepted yet.
+      expect(
+        invokeMock().mock.calls.filter(
+          (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_CREATE
+        )
+      ).toHaveLength(0);
+      expect(acceptedSpy).not.toHaveBeenCalled();
+    });
+
+    it("keeps the draft retryable when the approval dialog is cancelled (R09-1)", async () => {
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 10m summarize emails", [], {
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+
+      const dialog = wrapper.findComponent({
+        name: "ScheduledLoopToolApprovalDialog",
+      });
+      expect(dialog.exists()).toBe(true);
+      dialog.vm.$emit("cancel");
+      await flushPromises();
+
+      // No create, no acceptance — the user can re-send the /loop draft.
+      expect(
+        invokeMock().mock.calls.filter(
+          (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_CREATE
+        )
+      ).toHaveLength(0);
+      expect(acceptedSpy).not.toHaveBeenCalled();
+    });
+
+    it("fires the composer acceptance exactly once when the confirm durably creates the loop (R09-1)", async () => {
+      mockInvokeByChannel({
+        [AI_CHAT_V2_SCHEDULED_LOOP_CREATE]: {
+          status: true,
+          data: { conversationId: "fresh-chat" },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 10m summarize emails", [], {
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+      expect(acceptedSpy).not.toHaveBeenCalled();
+
+      const dialog = wrapper.findComponent({
+        name: "ScheduledLoopToolApprovalDialog",
+      });
+      dialog.vm.$emit("confirm", {
+        allowedTools: [],
+        autoApproveTools: false,
+        allowSkills: false,
+        allowMcp: false,
+        allowSubagents: false,
+      });
+      await flushPromises();
+
+      expect(acceptedSpy).toHaveBeenCalledTimes(1);
+      expect(
+        invokeMock().mock.calls.filter(
+          (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_CREATE
+        )
+      ).toHaveLength(1);
+    });
+
+    it("keeps the draft when the confirm fails to create the loop (R09-1)", async () => {
+      mockInvokeByChannel({
+        // windowInvoke unwraps data — a null payload maps to create null.
+        [AI_CHAT_V2_SCHEDULED_LOOP_CREATE]: { status: true, data: null },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/loop 10m summarize emails", [], {
+        onAccepted: acceptedSpy,
+      });
+      await flushPromises();
+
+      const dialog = wrapper.findComponent({
+        name: "ScheduledLoopToolApprovalDialog",
+      });
+      dialog.vm.$emit("confirm", {
+        allowedTools: [],
+        autoApproveTools: false,
+        allowSkills: false,
+        allowMcp: false,
+        allowSubagents: false,
+      });
+      await flushPromises();
+
+      // Failure never accepts — the composer draft survives for retry, and
+      // the retryable failure notice is visible above the composer.
+      expect(acceptedSpy).not.toHaveBeenCalled();
+      expect(
+        wrapper.find('[data-testid="workspace-command-error"]').exists()
+      ).toBe(true);
+    });
+
     it("rejects command input while the selected conversation is busy (FR-SUB-009)", async () => {
       startChatRunMock.mockResolvedValue({
         conversationId: "fresh-chat",
