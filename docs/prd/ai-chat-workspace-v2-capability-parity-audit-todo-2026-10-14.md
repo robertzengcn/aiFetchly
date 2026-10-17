@@ -245,10 +245,11 @@ Temporary command logs are `/tmp/workspace-parity-audit-{typecheck,vue-typecheck
 ### G01 — P2: Complete shared orchestration and overlay ownership
 
 - [x] Extract common submission, commands, plan, permission, image and reporting behavior into typed shared modules consumed by both surfaces.
-- [ ] Centralize conversation-bound overlay ownership/reset as required by AD-008, using an equivalent host if the proposed filename is not chosen.
-- **Evidence:** `useChatCommandRouting` is used by workspace but not by `AiChatV2.vue`; V2 still implements command/skill/plan flows itself (e.g. lines 4407 and 4051). Center still owns extensive image, plan, history, report and submission algorithms rather than acting only as a composition root. The old TODO explicitly defers V2 extraction.
+- [x] Centralize conversation-bound overlay ownership/reset as required by AD-008, using an equivalent host if the proposed filename is not chosen.
+  - 2026-10-17: BOTH surfaces now register their selection-bound dialogs on the one shared host — `AiChatV2.vue` registers report-dialogs / generated-image-dialogs / scheduled-loop-staging through `useConversationScopedOverlays` (its scattered per-dialog watchers removed), matching the center's registrations. The Journey 11.5 §19 characterization tests (close-on-switch while open, no reopen while closed) pin the rollback behavior; 1037/1037 component tests green.
+- **Evidence:** `useChatCommandRouting` is used by workspace but not by `AiChatV2.vue`; V2 still implements command/skill/plan flows itself (e.g. lines 4407 and 4051). Center still owns extensive image, plan, history, report and submission algorithms rather than acting only as a composition root. The old TODO explicitly defers V2 extraction. *(Overlay ownership is now centralized on both surfaces — the remaining open item is the full command-flow extraction below.)*
 - **Important:** Shared voice/workspace composables and several report utilities already exist. Do not rewrite these needlessly or claim all sharing is absent. Freezing V2 may be a migration choice, but without an approved requirement change it does not satisfy the current PRD DoD 2 or design §10.1/AD-008.
-- **Acceptance:** Both surfaces exercise the same orchestration contracts; characterization tests preserve rollback behavior, including acceptance failures, ownership switches and dialog cleanup.
+- **Acceptance:** Both surfaces exercise the same orchestration contracts; characterization tests preserve rollback behavior, including acceptance failures, ownership switches and dialog cleanup. *(Overlay/dialog-cleanup contracts: met. Full orchestration-contract parity (V2 onto `useChatCommandRouting`): open — owner decision required on freezing V2 vs. extraction.)*
 
 ### G02 — P1: Complete and execute default-route acceptance coverage
 
