@@ -59,3 +59,14 @@ export function isWorkspaceSteeringEnabled(): boolean {
 export function isWorkspaceRedesignEnabled(): boolean {
   return flagOn(WorkspaceRolloutFlag.WorkspaceRedesign, false);
 }
+
+/**
+ * Chat V2 visibility (design §23.1's fifth control): the legacy dock stays
+ * reachable whenever the workspace shell is not the active surface — the
+ * exact §23.2 rollback state. Routing (layout.vue) mounts the dock when the
+ * redesign flag is off; this accessor names that inverse explicitly so the
+ * control is auditable instead of implicit.
+ */
+export function isChatV2DockVisible(): boolean {
+  return !isWorkspaceRedesignEnabled();
+}
