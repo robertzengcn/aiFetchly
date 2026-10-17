@@ -2246,7 +2246,7 @@ const commandRouter = useChatCommandRouting({
       { pastedContents, onAccepted }
     );
   },
-  onClearConversation: async (targetConversationId): Promise<void> => {
+  onClearConversation: async (targetConversationId): Promise<boolean> => {
     // Codex High (cross-conversation /clear): only clear when the command
     // still owns the CURRENT selection — a switch mid-dispatch aborts
     // rather than erasing the newly selected conversation.
@@ -2254,14 +2254,33 @@ const commandRouter = useChatCommandRouting({
       commandErrorNotice.value =
         t("workspaceChat.command.staleAborted") ||
         "Selection changed — the command was not run.";
-      return;
+      return false;
     }
     try {
-      await clearChatV2Conversation(targetConversationId);
+      const cleared = await clearChatV2Conversation(targetConversationId);
+      if (cleared === null) {
+        // R10: the clear was not executed (denied/empty envelope) — retryable
+        // feedback instead of a silent no-op that still consumed the draft.
+        commandErrorNotice.value =
+          t("workspaceChat.command.clearFailed") ||
+          "Could not clear this chat. Try again.";
+        return false;
+      }
       await workspaceStore.bootstrap();
+      // R10: the awaits may have spanned a selection switch — a late clear
+      // must not reload the OLD conversation into the newly selected
+      // surface. The clear itself ran; only the reload is selection-bound.
+      if (conversationId.value !== targetConversationId) {
+        return true;
+      }
       await selectedStore.loadSelection(targetConversationId);
+      return true;
     } catch {
-      // Non-fatal — clearing can be retried.
+      // R10: surfaced as retryable feedback — the draft must be retained.
+      commandErrorNotice.value =
+        t("workspaceChat.command.clearFailed") ||
+        "Could not clear this chat. Try again.";
+      return false;
     }
   },
 });

@@ -3630,6 +3630,7 @@ export default {
         "Loop commands do not support file attachments or pasted blocks. Send the loop command on its own, then share the content in a follow-up message.",
       loopControlFailed:
         "Could not {operation} the scheduled loop. Check /loop status and try again.",
+      clearFailed: "Could not clear this chat. Try again.",
     },
     errors: {
       queueLimit:

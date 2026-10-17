@@ -3659,6 +3659,7 @@ export default {
       loopAttachmentsNotSupported:
         "Schleifenbefehle unterstützen keine Dateianhänge oder eingefügten Blöcke. Sende den Schleifenbefehl allein und teile den Inhalt in einer Folgenachricht.",
       loopControlFailed: "Die geplante Schleife konnte nicht {operation} werden. Prüfe den /loop-Status und versuche es erneut.",
+      clearFailed: "Dieser Chat konnte nicht geleert werden. Versuche es erneut.",
     },
     errors: {
       queueLimit:

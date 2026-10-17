@@ -158,7 +158,11 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import { useComposerDraftStore } from "@/views/store/composerDrafts";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
 import { useAppInspectorStore } from "@/views/store/appInspector";
-import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
+import {
+  approveChatV2Plan,
+  isHistoryUiEnabled,
+  clearChatV2Conversation,
+} from "@/views/api/aiChatV2";
 import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
@@ -207,6 +211,7 @@ const i18n = createI18n({
           recovering: "Recovering via {layer}: {reason}",
         },
         command: {
+          clearFailed: "Could not clear this chat. Try again.",
           busy:
             "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
           staleAborted: "Selection changed — the command was not run.",
@@ -4093,6 +4098,94 @@ describe("AiChatCenterSurface speech cancellation (R07)", () => {
     wrapper.findComponent({ name: "AiChatRunStrip" }).vm.$emit("stop");
     await flushPromises();
     expect(vi.mocked(cancelVoiceJob).mock.calls.length).toBe(beforeStop + 1);
+
+    wrapper.unmount();
+  });
+});
+
+
+/**
+ * R10 (audit 2026-10-17): /clear must not reload the OLD conversation into
+ * a newly selected surface, and a denied/failed clear surfaces retryable
+ * feedback instead of silently consuming the command.
+ */
+describe("AiChatCenterSurface /clear ownership after awaits (R10)", () => {
+  beforeEach(() => {
+    // The REAL dispatchSlashCommand runs — route the registry channel
+    // through the global window.api stub (production path, like FR-CMD-001).
+    const invoke = window.api.invoke as unknown as ReturnType<typeof vi.fn>;
+    invoke.mockReset();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === SLASH_COMMAND_DISPATCH) {
+        return Promise.resolve({
+          status: true,
+          data: {
+            status: true,
+            action: "show_result",
+            content: "",
+            commandId: "built-in:command:clear",
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    vi.mocked(clearChatV2Conversation).mockReset();
+  });
+
+  function sendClear(wrapper: ReturnType<typeof mountSurface>): void {
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/clear", []);
+  }
+
+  it("does not reload the cleared conversation after the selection moved on", async () => {
+    vi.mocked(clearChatV2Conversation).mockResolvedValue({ deleted: 5 });
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    expect(clearChatV2Conversation).not.toHaveBeenCalled();
+
+    // The clear IPC resolves slowly; the user switches to B mid-flight.
+    let resolveClear!: (value: { deleted: number } | null) => void;
+    vi.mocked(clearChatV2Conversation).mockImplementationOnce(
+      () =>
+        new Promise<{ deleted: number } | null>((res) => {
+          resolveClear = res;
+        })
+    );
+    sendClear(wrapper);
+    await flushPromises();
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    resolveClear({ deleted: 5 });
+    await flushPromises();
+
+    // The clear RAN for A, but A must not be re-loaded into the selected
+    // store after B was chosen.
+    expect(clearChatV2Conversation).toHaveBeenCalledWith("conv-a");
+    expect(selectConversation).not.toHaveBeenCalledWith(
+      "conv-a",
+      expect.anything()
+    );
+
+    wrapper.unmount();
+  });
+
+  it("surfaces retryable feedback and reports non-acceptance when the clear is denied", async () => {
+    vi.mocked(clearChatV2Conversation).mockResolvedValue(null);
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+
+    sendClear(wrapper);
+    await flushPromises();
+
+    expect(clearChatV2Conversation).toHaveBeenCalledWith("conv-a");
+    expect(wrapper.text()).toContain("Could not clear this chat");
 
     wrapper.unmount();
   });

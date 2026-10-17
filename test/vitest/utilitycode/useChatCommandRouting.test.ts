@@ -25,6 +25,7 @@ interface PortState {
   scheduledCreates: Array<{ rawCommand: string }>;
   loopControls: Array<"pause" | "resume" | "stop">;
   statusRefreshes: number;
+  errorOrigins: Array<string | null>;
 }
 
 function makePorts(overrides: Partial<ChatCommandRoutingPorts> = {}): {
@@ -34,6 +35,7 @@ function makePorts(overrides: Partial<ChatCommandRoutingPorts> = {}): {
   const state: PortState = {
     ensureCalls: 0,
     localExchanges: [],
+    errorOrigins: [] as Array<string | null>,
     errors: [],
     goalCreates: [],
     goalLoopStarts: [],
@@ -55,8 +57,9 @@ function makePorts(overrides: Partial<ChatCommandRoutingPorts> = {}): {
     appendLocalExchange: (user, assistant) => {
       state.localExchanges.push({ user, assistant });
     },
-    setError: (message) => {
+    setError: (message, origin) => {
       state.errors.push(message);
+      state.errorOrigins.push(origin ?? null);
     },
     translate: (key, fallback, vars) =>
       vars && "name" in vars ? `T(${key}:${vars.name})` : `T(${key}:${fallback})`,
@@ -100,8 +103,9 @@ function makePorts(overrides: Partial<ChatCommandRoutingPorts> = {}): {
       state.expandedPrompts.push({ prompt, pastedContents });
       return true;
     },
-    onClearConversation: async (): Promise<void> => {
+    onClearConversation: async (): Promise<boolean> => {
       state.clears += 1;
+      return true;
     },
     ...overrides,
   };
@@ -611,5 +615,54 @@ describe("loop command attachment + control-failure handling (R09)", () => {
       expect(result.code).toBe("loop_control_failed");
     }
     expect(state.errors).toHaveLength(1);
+  });
+});
+
+
+/**
+ * R10 (audit 2026-10-17): the /clear outcome propagates (a stale/denied/
+ * failed clear never accepts the command) and async command failures are
+ * scoped to the conversation that owns the command.
+ */
+describe("command ownership after awaits (R10)", () => {
+  const clearDispatch = () => ({
+    status: true as const,
+    action: "show_result" as const,
+    content: "",
+    commandId: "built-in:command:clear",
+  });
+
+  it("keeps the draft when /clear was stale-aborted or failed (port returns false)", async () => {
+    const { ports, state } = makePorts({
+      dispatchSlashCommand: async () => clearDispatch(),
+      onClearConversation: async (): Promise<boolean> => {
+        state.clears += 1;
+        return false;
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/clear", {});
+    expect(result).toMatchObject({ kind: "completed", acceptedSend: false });
+    expect(state.clears).toBe(1);
+  });
+
+  it("accepts the clear when the port ran it", async () => {
+    const { ports } = makePorts({
+      dispatchSlashCommand: async () => clearDispatch(),
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/clear", {});
+    expect(result).toMatchObject({ kind: "completed", acceptedSend: true });
+  });
+
+  it("scopes a goal-loop start failure to the owning conversation", async () => {
+    const { ports, state } = makePorts({
+      activeGoal: () => ({ goalId: "g-1" }),
+      startGoalLoop: async () => false,
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/loop 3", {});
+    expect(result.kind).toBe("rejected");
+    expect(state.errorOrigins[0]).toBe("v2-cmd-test");
   });
 });

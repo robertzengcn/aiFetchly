@@ -3660,6 +3660,7 @@ export default {
       loopAttachmentsNotSupported:
         "Los comandos de bucle no admiten archivos adjuntos ni bloques pegados. Envía el comando de bucle por sí solo y comparte el contenido en un mensaje posterior.",
       loopControlFailed: "No se pudo {operation} el bucle programado. Consulta el estado de /loop e inténtalo de nuevo.",
+      clearFailed: "No se pudo vaciar este chat. Inténtalo de nuevo.",
     },
     errors: {
       queueLimit:

@@ -147,9 +147,12 @@ export interface ChatCommandRoutingPorts {
      */
     files?: readonly File[]
   ) => Promise<boolean>;
-  /** Built-in `/clear` handler (clear + reload). */
-  /** Built-in `/clear` — receives the conversation the command was issued in. */
-  readonly onClearConversation: (conversationId: string) => Promise<void>;
+  /**
+   * Built-in `/clear` — receives the conversation the command was issued in.
+   * R10: TRUE when the clear actually ran (draft may be cleared); FALSE when
+   * it was stale-aborted, denied or failed (draft must be retained).
+   */
+  readonly onClearConversation: (conversationId: string) => Promise<boolean>;
 }
 
 export interface RouteCommandOptions {
@@ -258,11 +261,15 @@ export function useChatCommandRouting(
       maxIterations: count,
     });
     if (!started) {
+      // R10: the await may have spanned a selection switch — scope the
+      // error to the conversation that owns the command so B never shows
+      // A's failure notice.
       ports.setError(
         ports.translate(
           "aiChatV2.goalLoop.startFailed",
           "Could not start the loop."
-        )
+        ),
+        conversationId
       );
       return { kind: "rejected", code: "goal_loop_start_failed", message: "" };
     }
@@ -396,8 +403,10 @@ export function useChatCommandRouting(
       return { kind: "rejected_files", message };
     }
     if (result.commandId === "built-in:command:clear") {
-      await ports.onClearConversation(conversationId);
-      return { kind: "handled", acceptedSend: true };
+      // R10: a stale-aborted / denied / failed clear never accepted the
+      // command — the caller keeps the draft instead of silently dropping it.
+      const cleared = await ports.onClearConversation(conversationId);
+      return { kind: "handled", acceptedSend: cleared };
     }
     ports.appendLocalExchange(rawInput, result.content, conversationId);
     return { kind: "handled", acceptedSend: true };

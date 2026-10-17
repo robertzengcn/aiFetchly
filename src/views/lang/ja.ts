@@ -3584,6 +3584,7 @@ export default {
       loopAttachmentsNotSupported:
         "ループコマンドはファイル添付や貼り付けブロックに対応していません。ループコマンドだけを送信し、内容は後続のメッセージで共有してください。",
       loopControlFailed: "スケジュール済みループを{operation}できませんでした。/loop の状態を確認して再試行してください。",
+      clearFailed: "このチャットを消去できませんでした。再試行してください。",
     },
     errors: {
       queueLimit:
