@@ -1829,7 +1829,12 @@ async function refreshActiveGoal(): Promise<void> {
 }
 
 /** Handle /loop: validate bounds + active goal, then start the loop run. */
-async function runLoopCommand(count: number | null): Promise<void> {
+/**
+ * R11: returns TRUE only when the loop actually started — the caller clears
+ * the composer draft exclusively on that outcome, so validation failures
+ * and start failures leave the retryable command input in place.
+ */
+async function runLoopCommand(count: number | null): Promise<boolean> {
   const command = `/loop${count === null ? "" : ` ${count}`}`;
   if (count === null) {
     appendLocalCommandExchange(
@@ -1837,7 +1842,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       command,
       t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count."
     );
-    return;
+    return false;
   }
   if (!isValidLoopCount(count)) {
     appendLocalCommandExchange(
@@ -1846,7 +1851,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       t("aiChatV2.goalLoop.countRange") ||
         "Iteration count must be between 1 and 10."
     );
-    return;
+    return false;
   }
   const goal = activeGoal.value;
   if (!goal) {
@@ -1856,7 +1861,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       t("aiChatV2.goalLoop.noActiveGoal") ||
         "Set a goal first with /goal <objective>."
     );
-    return;
+    return false;
   }
   try {
     const started = await startGoalLoop({
@@ -1867,12 +1872,15 @@ async function runLoopCommand(count: number | null): Promise<void> {
     if (!started) {
       streamError.value =
         t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+      return false;
     }
   } catch {
     streamError.value =
       t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+    return false;
   }
   await refreshActiveGoal();
+  return true;
 }
 
 /** Stop the active loop run (user pressed Stop). */
@@ -2359,15 +2367,16 @@ async function runScheduledLoopCreate(
 
 
 /** Handle /loop pause|resume|stop (conversation-scoped control). */
+/** R11: TRUE only when the control ran — see runLoopCommand. */
 async function runScheduledLoopControl(
   operation: "pause" | "resume" | "stop"
-): Promise<void> {
+): Promise<boolean> {
   const id = activeConversationId.value;
   if (!id) {
     streamError.value =
       t("aiChatV2.scheduledLoop.noActiveLoop") ||
       "No active conversation for this command.";
-    return;
+    return false;
   }
   try {
     await controlScheduledLoop(id, operation);
@@ -2378,7 +2387,9 @@ async function runScheduledLoopControl(
         ? e.message
         : t("aiChatV2.scheduledLoop.controlFailed") ||
           "Could not update the scheduled loop.";
+    return false;
   }
+  return true;
 }
 
 /**
@@ -4364,11 +4375,11 @@ const onSend = async (
   if (isCommandLike && chatIsRunning.value) {
     return;
   }
-  // The composer owns the draft and clears it only after this handler accepts
-  // the request. Runtime status can change between the child's render and this
-  // synchronous guard (especially while switching conversations), so clearing
-  // before acknowledgement would silently discard a rejected message.
-  options?.onAccepted?.();
+  // R11 (PRD acceptance 36 / §3.4): the composer clears text/files/paste ONLY
+  // when this handler reports acceptance — after successful command handling
+  // or a DURABLE enqueue. Validation failures (goal objective, skill lookup,
+  // loop syntax), attachment preparation errors, image-chooser parking and
+  // transport rejections all leave the retryable draft in place.
   streamError.value = null;
   // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
   // (§13.3) — never the passage text. The backend re-resolves each reference
@@ -4395,13 +4406,17 @@ const onSend = async (
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
   if (loopCmd.type === "goal_loop") {
-    await runLoopCommand(loopCmd.maxIterations);
+    if (await runLoopCommand(loopCmd.maxIterations)) {
+      options?.onAccepted?.();
+    }
     return;
   }
   if (loopCmd.type === "scheduled_loop") {
     // Stage the parsed loop and ask the user to approve any read-only tools
     // before persisting (FR-16). Unattended execution cannot prompt at run
-    // time, so approval happens once, up front.
+    // time, so approval happens once, up front. R11: staging is NOT
+    // acceptance — the draft survives until the approval persists the loop
+    // (a cancelled dialog must leave the command retryable).
     pendingScheduledLoop.value = { action: loopCmd, rawCommand: text };
     showScheduledLoopApproval.value = true;
     return;
@@ -4409,8 +4424,9 @@ const onSend = async (
   if (loopCmd.type === "scheduled_loop_control") {
     if (loopCmd.operation === "status") {
       await refreshScheduledLoopStatus();
-    } else {
-      await runScheduledLoopControl(loopCmd.operation);
+      options?.onAccepted?.();
+    } else if (await runScheduledLoopControl(loopCmd.operation)) {
+      options?.onAccepted?.();
     }
     return;
   }
@@ -4423,7 +4439,9 @@ const onSend = async (
   let modelMessage = text;
   let requestMode: ChatV2Mode = mode.value;
   if (cmd.type === "loop") {
-    await runLoopCommand(cmd.count);
+    if (await runLoopCommand(cmd.count)) {
+      options?.onAccepted?.();
+    }
     return;
   }
   // `/skill <name> [task]` — explicit prompt-skill invocation (PRD §9.5):
@@ -4512,11 +4530,20 @@ const onSend = async (
     cmd.type === "none" &&
     text.trim().startsWith("/")
   ) {
-    const handled = await handleSlashCommandSubmission(
+    const outcome = await handleSlashCommandSubmission(
       text.trim(),
-      options?.pastedContents
+      options?.pastedContents,
+      options?.onAccepted
     );
-    if (handled) return;
+    // R11: handled commands accept; expansions accept inside their own send;
+    // failures retain the draft; unhandled falls through to the ordinary
+    // send, which accepts at durable enqueue below.
+    if (outcome !== "unhandled") {
+      if (outcome === "handled") {
+        options?.onAccepted?.();
+      }
+      return;
+    }
   }
 
   // Process attachments if present
@@ -5327,6 +5354,10 @@ const onSend = async (
           "The message could not be queued. Please try again."
       );
     }
+    // R11: the durable pending row exists — THIS is acceptance. Both the
+    // dispatched and the parked-behind-running-turn dispositions keep the
+    // row, so the draft clears exactly once, after durability.
+    options?.onAccepted?.();
     if (receipt.disposition === "dispatch_scheduled") {
       await queuedTurn.promise;
       return;
@@ -5370,10 +5401,23 @@ const onSend = async (
   }
 };
 
+/**
+ * R11 outcome contract:
+ *  - "handled":   the command completed (receipt/clear) — the caller accepts.
+ *  - "expanded":  a submit_prompt expansion was submitted through onSend;
+ *                 acceptance belongs to THAT send's durable enqueue (the
+ *                 composer's onAccepted is threaded through), never to the
+ *                 outer command — so an enqueue failure keeps the draft.
+ *  - "failed":    transport failure or an explicit server denial — the local
+ *                 receipt explains it and the draft is RETAINED for retry
+ *                 (FR-SUB-002/003; mirrors the workspace B07 contract).
+ *  - "unhandled": not registry-owned — continue the ordinary send path.
+ */
 async function handleSlashCommandSubmission(
   rawInput: string,
-  pastedContents?: Record<string, string>
-): Promise<boolean> {
+  pastedContents?: Record<string, string>,
+  onAccepted?: () => void
+): Promise<"handled" | "expanded" | "failed" | "unhandled"> {
   const conversationId = ensureWorkspaceConversationId();
   let result: Awaited<ReturnType<typeof dispatchSlashCommand>>;
   try {
@@ -5387,12 +5431,12 @@ async function handleSlashCommandSubmission(
       rawInput,
       err instanceof Error ? err.message : String(err)
     );
-    return true;
+    return "failed";
   }
 
   if (!result.status) {
     appendLocalCommandExchange(conversationId, rawInput, result.msg);
-    return true;
+    return "failed";
   }
 
   if (result.action === "submit_prompt") {
@@ -5402,17 +5446,18 @@ async function handleSlashCommandSubmission(
     await onSend(result.prompt, [], {
       isExpandedPrompt: true,
       pastedContents,
+      onAccepted,
     });
-    return true;
+    return "expanded";
   }
 
   if (result.commandId === "built-in:command:clear") {
     await clearCurrentConversation();
-    return true;
+    return "handled";
   }
 
   appendLocalCommandExchange(conversationId, rawInput, result.content);
-  return true;
+  return "handled";
 }
 
 function appendLocalCommandExchange(
