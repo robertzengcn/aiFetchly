@@ -116,6 +116,19 @@ export class AIChatPendingMessageModel extends BaseDb {
   }
 
   /**
+   * Global lookup by `clientRequestId` (unique index). Mirrors the dedupe
+   * semantics of `create()`: ANY row with this id — queued, paused, sent,
+   * applied, cancelled or failed — means the request was already accepted.
+   * Used by plan-continuation recovery (R12) to decide whether a persisted
+   * decision's follow-up turn ever landed.
+   */
+  async getByClientRequestId(
+    clientRequestId: string
+  ): Promise<AIChatPendingMessageEntity | null> {
+    return await this.repository.findOne({ where: { clientRequestId } });
+  }
+
+  /**
    * Non-terminal rows for a conversation in FIFO order (`id ASC`, design
    * §8.2 FR-6), followed by terminal rows so the renderer can reconcile
    * stale bubbles.
