@@ -2340,6 +2340,14 @@ const selectedContextItems = ref<SelectedContextItem[]>([]);
  * in the history-selection pinia store (survives switches AND route
  * remounts). The working copy below always mirrors the selected
  * conversation; syncActiveHistoryDraft persists it back.
+ * R06: restoration must also run at SETUP — a route return mounts the
+ * center with the conversation already selected, so no id transition is
+ * ever observed (the same mount-never-observes-a-transition gap
+ * onMounted's composer-focus transfer covers). Owner-safe: the working
+ * copy binds to the conversation observed at call time; the read is
+ * synchronous against the conversation-keyed store draft, so a stale
+ * restoration can never leak across conversations (same owner-guard shape
+ * as loadApprovalMode — no in-flight reply can supersede the active id).
  */
 const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
 let unsubscribeCompactionProgress: (() => void) | null = null;
@@ -2351,6 +2359,12 @@ function syncActiveHistoryDraft(): void {
   if (id) {
     historySelStore.setItems(id, selectedContextItems.value);
   }
+}
+
+/** R06: re-derive the working copy from the selected conversation's draft. */
+function restoreActiveHistoryDraft(): void {
+  const id = conversationId.value;
+  selectedContextItems.value = id ? historySelStore.getItems(id) : [];
 }
 
 /**
@@ -2448,27 +2462,33 @@ scopedOverlays.registerSelectionBoundOverlay("generated-image-dialogs", () => {
   showBatchConfirmDialog.value = false;
 });
 
-watch(conversationId, (next) => {
-  // B14: restore this conversation's chips (and keep its submission
-  // identity) from the store — survives switches and route remounts.
-  selectedContextItems.value = next ? historySelStore.getItems(next) : [];
-  showHistoryDrawer.value = false;
-  compactionStatus.value = null;
-  void refreshCompactionStatus();
-  // Review F8: exports queued while viewing another conversation (its
-  // workspace_required path) drain when the user returns and the target
-  // workspace is already approved — the approval-change watcher alone
-  // never fires for an already-approved state.
-  if (next && conversationWorkspace.workspace.value?.approvalState === "approved") {
-    const queued = pendingImageExports.value.get(next) ?? [];
-    if (queued.length > 0) {
-      pendingImageExports.value = new Map(pendingImageExports.value).set(next, []);
-      for (const reference of queued) {
-        void attemptGeneratedImageExport(next, reference);
+watch(
+  conversationId,
+  (next) => {
+    // B14 + R06: restore this conversation's chips (and keep its submission
+    // identity) from the store — survives switches AND route remounts.
+    // Immediate: the mount never observes the id transition, so an
+    // already-selected conversation must restore at setup.
+    restoreActiveHistoryDraft();
+    showHistoryDrawer.value = false;
+    compactionStatus.value = null;
+    void refreshCompactionStatus();
+    // Review F8: exports queued while viewing another conversation (its
+    // workspace_required path) drain when the user returns and the target
+    // workspace is already approved — the approval-change watcher alone
+    // never fires for an already-approved state.
+    if (next && conversationWorkspace.workspace.value?.approvalState === "approved") {
+      const queued = pendingImageExports.value.get(next) ?? [];
+      if (queued.length > 0) {
+        pendingImageExports.value = new Map(pendingImageExports.value).set(next, []);
+        for (const reference of queued) {
+          void attemptGeneratedImageExport(next, reference);
+        }
       }
     }
-  }
-});
+  },
+  { immediate: true }
+);
 
 /**
  * FR-HIS-003: the engine start acknowledgement reports which opaque

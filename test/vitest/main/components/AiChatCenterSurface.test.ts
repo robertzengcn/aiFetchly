@@ -156,6 +156,7 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useComposerDraftStore } from "@/views/store/composerDrafts";
+import { useHistorySelectionStore } from "@/views/store/historySelection";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
@@ -1491,6 +1492,144 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
       const { cancelCompaction } = await import("@/views/api/aiChatV2");
       expect(vi.mocked(cancelCompaction)).toHaveBeenCalledWith("conv-his");
+    });
+
+    /**
+     * R06: route remount restoration. Leaving the chat center unmounts the
+     * surface while the app-scoped pinia (and its conversation-keyed
+     * history draft) survives; the return mount starts with the conversation
+     * ALREADY selected, so it never observes the id transition a
+     * non-immediate watcher keys on. The chips must restore at setup from
+     * the store draft — invisible chips would also omit the restored
+     * references from the next send.
+     */
+    describe("route remount restoration (R06)", () => {
+      async function mountForRemount(
+        conversation: string
+      ): Promise<{
+        wrapper: ReturnType<typeof mountSurface>;
+        pinia: ReturnType<typeof createPinia>;
+      }> {
+        const pinia = createPinia();
+        setActivePinia(pinia);
+        vi.mocked(isHistoryUiEnabled).mockResolvedValue(true);
+        startChatRunMock.mockResolvedValue({
+          conversationId: conversation,
+          runId: "run-his",
+          status: "running",
+          acceptedAt: "",
+        });
+        const wrapper = mountSurface(pinia);
+        useChatWorkspaceStore().setSelected(conversation);
+        await flushPromises();
+        return { wrapper, pinia };
+      }
+
+      function chipSourceIds(
+        wrapper: ReturnType<typeof mountSurface>
+      ): string[] {
+        const chips = wrapper
+          .findComponent({ name: "AiChatSelectedContext" })
+          .props("selections") as Array<{ sourceId: string }>;
+        return chips.map((c) => c.sourceId);
+      }
+
+      it("restores the store's chips when remounting with the conversation already selected", async () => {
+        const { wrapper, pinia } = await mountForRemount("conv-rem");
+        emitDrawerSelect(wrapper, "src-r1", "restored passage one");
+        emitDrawerSelect(wrapper, "src-r2", "restored passage two");
+        await flushPromises();
+        wrapper.unmount();
+
+        // Route back: fresh mount, same app-scoped pinia, same selection.
+        const remounted = mountSurface(pinia);
+        await flushPromises();
+        expect(chipSourceIds(remounted)).toEqual(["src-r1", "src-r2"]);
+      });
+
+      it("submits restored chips with opaque ids and the unchanged submission identity", async () => {
+        const { wrapper, pinia } = await mountForRemount("conv-rem");
+        emitDrawerSelect(wrapper, "src-r1", "restored passage one");
+        await flushPromises();
+        const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+        composer.vm.$emit("send", "summarize the passage", []);
+        await flushPromises();
+        const firstPayload = startChatRunMock.mock.calls[0][0];
+        expect(firstPayload.historySelectionIds).toEqual(["src-r1"]);
+
+        wrapper.unmount();
+        const remounted = mountSurface(pinia);
+        await flushPromises();
+        // Pre-fix the working copy starts empty on remount: the chips are
+        // invisible AND the next send omits them entirely.
+        expect(chipSourceIds(remounted)).toEqual(["src-r1"]);
+
+        const composerAgain = remounted.findComponent({
+          name: "AiChatV2Composer",
+        });
+        composerAgain.vm.$emit("send", "summarize the passage again", []);
+        await flushPromises();
+        const secondPayload = startChatRunMock.mock.calls[1][0];
+        expect(secondPayload.historySelectionIds).toEqual(["src-r1"]);
+        // Unchanged retry identity: the remount neither mints nor rotates.
+        expect(secondPayload.submissionId).toBe(firstPayload.submissionId);
+        // Opaque references only — never the passage body.
+        expect(JSON.stringify(secondPayload)).not.toContain("restored passage");
+      });
+
+      it("still removes only accepted chips from the restored draft on a mixed ack", async () => {
+        const { wrapper, pinia } = await mountForRemount("conv-rem");
+        emitDrawerSelect(wrapper, "src-accepted", "accepted passage");
+        emitDrawerSelect(wrapper, "src-changed", "changed passage");
+        emitDrawerSelect(wrapper, "src-rejected", "rejected passage");
+        await flushPromises();
+        wrapper.unmount();
+
+        const remounted = mountSurface(pinia);
+        await flushPromises();
+        expect(chipSourceIds(remounted)).toHaveLength(3);
+
+        useSelectedConversationStore().applyDetailEvent({
+          sequence: 1,
+          runId: "run-his",
+          conversationId: "conv-rem",
+          eventType: "start",
+          emittedAt: "2026-10-11T00:00:00.000Z",
+          payload: {
+            eventType: "start",
+            messageId: "a-1",
+            historySelectionAcceptedIds: ["src-accepted"],
+            historySelectionChangedIds: ["src-changed"],
+            historySelectionRejectedIds: ["src-rejected"],
+          },
+        });
+        await flushPromises();
+
+        const chips = remounted
+          .findComponent({ name: "AiChatSelectedContext" })
+          .props("selections") as Array<{
+          sourceId: string;
+          refreshed?: boolean;
+          rejected?: boolean;
+        }>;
+        expect(chips.map((c) => c.sourceId).sort()).toEqual([
+          "src-changed",
+          "src-rejected",
+        ]);
+        expect(chips.find((c) => c.sourceId === "src-changed")?.refreshed).toBe(
+          true
+        );
+        expect(chips.find((c) => c.sourceId === "src-rejected")?.rejected).toBe(
+          true
+        );
+        // The store draft reconciles with the ack for the NEXT remount.
+        expect(
+          useHistorySelectionStore()
+            .getItems("conv-rem")
+            .map((i) => i.sourceId)
+            .sort()
+        ).toEqual(["src-changed", "src-rejected"]);
+      });
     });
   });
 
