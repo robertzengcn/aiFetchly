@@ -962,6 +962,11 @@ const recoveryDetailText = computed<string | null>(() => {
 /** One primary stop action (PRD §13.3): goal → loop → active run. */
 async function onStopFromStrip(): Promise<void> {
   if (!conversationId.value) return;
+  // R07 (FR-VOI-008): stopping the turn must also stop its spoken output —
+  // queued/playing utterances must not outlive the text run the user just
+  // cancelled. Applies to every branch below (goal / loop / run).
+  resetSpeechFeed();
+  void voice.stopSpeaking();
   if (activeGoalObjective.value) {
     try {
       await stopGoalLoop(conversationId.value);
@@ -1754,6 +1759,15 @@ async function onNewChat(): Promise<void> {
 }
 
 watch(conversationId, (id, previous) => {
+  if (id !== previous) {
+    // R07 (FR-VOI-009): the previous conversation's spoken output must not
+    // follow the selection — cancel playback AND invalidate the feed
+    // identity so a late terminal projection of the old chat cannot flush
+    // text into the newly selected one. Text execution itself continues in
+    // the background; only the audio feed is conversation-bound.
+    resetSpeechFeed();
+    void voice.stopSpeaking();
+  }
   if (id && id !== previous) {
     void loadApprovalMode(id);
     // Review C4: /loop's goal precondition must survive selection reloads.
@@ -1773,6 +1787,17 @@ watch(conversationId, (id, previous) => {
 // --- Spoken-response feed (deltas from the bounded store projection) --------
 let fedMessageId: string | null = null;
 let fedLength = 0;
+
+/**
+ * R07: forget the tracked speech feed. Called when the feed's owning turn is
+ * cancelled (Stop) or its conversation is deselected, so stale deltas or a
+ * terminal projection from the OLD conversation can neither resume speech
+ * nor be flushed as a completion for the new one.
+ */
+function resetSpeechFeed(): void {
+  fedMessageId = null;
+  fedLength = 0;
+}
 
 watch(
   [() => selectedStore.activeAssistantMessageId, () => selectedStore.messages],

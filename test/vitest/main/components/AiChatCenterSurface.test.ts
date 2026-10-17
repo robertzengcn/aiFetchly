@@ -159,6 +159,7 @@ import { useComposerDraftStore } from "@/views/store/composerDrafts";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { approveChatV2Plan, isHistoryUiEnabled } from "@/views/api/aiChatV2";
+import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
 import type { PlanContinuationDecision } from "@/views/utils/planContinuationIdentity";
@@ -4047,5 +4048,52 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     // is the only transition allowed to pop the armed snapshot.
     await completeRun("conv-1", "run-1", 3);
     expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+  });
+});
+
+/**
+ * R07 (audit 2026-10-17, FR-VOI-008/009): spoken output is conversation-
+ * bound. Switching the selected conversation or pressing Stop must cancel
+ * playback AND the pending synthesis job; a stale terminal projection of
+ * the old conversation must not flush speech into the new one.
+ */
+describe("AiChatCenterSurface speech cancellation (R07)", () => {
+  beforeEach(() => {
+    vi.mocked(cancelVoiceJob).mockClear();
+  });
+
+  it("cancels the voice job when the selection changes conversation", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    // null→A is itself a selection change (cancels any prior speech); the
+    // assertion is that switching A→B cancels AGAIN.
+    const afterFirstSelect = vi.mocked(cancelVoiceJob).mock.calls.length;
+    expect(afterFirstSelect).toBeGreaterThanOrEqual(0);
+
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    expect(vi.mocked(cancelVoiceJob).mock.calls.length).toBe(
+      afterFirstSelect + 1
+    );
+
+    wrapper.unmount();
+  });
+
+  it("cancels the voice job when the run strip Stop fires", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    const beforeStop = vi.mocked(cancelVoiceJob).mock.calls.length;
+
+    wrapper.findComponent({ name: "AiChatRunStrip" }).vm.$emit("stop");
+    await flushPromises();
+    expect(vi.mocked(cancelVoiceJob).mock.calls.length).toBe(beforeStop + 1);
+
+    wrapper.unmount();
   });
 });
