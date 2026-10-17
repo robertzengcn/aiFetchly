@@ -454,8 +454,6 @@ export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
 /** Renderer->Main: read whether the recoverable-history UI stage is enabled (design §18, stage 3). */
 export const AI_CHAT_V2_HISTORY_UI_ENABLED = "ai-chat-v2:history-ui-enabled";
 /** Renderer->Main: read the active compaction run status (§13.1). */
-export const AI_CHAT_V2_COMPACT_CONVERSATION =
-  "ai-chat-v2:compact-conversation";
 export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
 /** Renderer->Main: cancel the active compaction run (§13.1). */
 export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";

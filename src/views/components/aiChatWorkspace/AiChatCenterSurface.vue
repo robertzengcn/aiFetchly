@@ -459,7 +459,7 @@ import {
   requestChatV2PlanChanges,
   answerChatV2Question,
   clearChatV2Conversation,
-  compactChatV2Conversation,
+  startCompaction,
 } from "@/views/api/aiChatV2";
 import { stopGoalLoop } from "@/views/api/aiChatGoal";
 import { controlScheduledLoop } from "@/views/api/aiChatScheduledLoop";
@@ -1257,9 +1257,14 @@ async function onRename(): Promise<void> {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    await compactChatV2Conversation(conversationId.value);
+    // Repair: the legacy ai-chat-v2:compact-conversation channel has NO
+    // main-process handler (removed by the §13.1 "START-only" contract) —
+    // it rejected and the header Compact action silently no-oped. Route the
+    // action through the bounded incremental coordinator (compaction-start).
+    await startCompaction(conversationId.value);
   } catch {
-    // Non-fatal — the run strip still shows progress.
+    // Non-fatal — compaction runs in the main process; progress events
+    // broadcast on ai-chat-v2:compaction-progress.
   }
 }
 
