@@ -24,10 +24,7 @@ import {
   setHookAuditLoggerForTests,
   type HookAuditLogger,
 } from "@/service/hooks/HookAuditService";
-import type {
-  CommandHookExecutionResult,
-  HookExecutionClient,
-} from "@/service/hooks/hookExecutionClient";
+import type { HookExecutionClient } from "@/service/hooks/hookExecutionClient";
 import type { ToolExecutionResult } from "@/api/aiChatApi";
 
 const NULL_LOGGER: HookAuditLogger = { log: () => undefined };
@@ -272,21 +269,33 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
     HookCommandTrustService.resetForTests();
   });
 
-  it("a skill-ref hook with no resolver wired emits skill-registry-not-available (fallback preserved)", async () => {
-    const hook = skillRefHook("user:hook:unwired", "skill:anything");
-    HookRegistry.replaceSource("user", [hook]);
-    HookCommandTrustService.setTrusted(hook.id, true);
+  it(
+    "a skill-ref hook with no resolver wired emits skill-registry-not-available (fallback preserved)",
+    async () => {
+      const hook = skillRefHook("user:hook:unwired", "skill:anything");
+      HookRegistry.replaceSource("user", [hook]);
+      HookCommandTrustService.setTrusted(hook.id, true);
 
-    const result = await HookDispatcher.executeHooks({
-      eventName: "PreToolUse",
-      input: baseInput(),
-    });
+      const result = await HookDispatcher.executeHooks({
+        eventName: "PreToolUse",
+        input: baseInput(),
+      });
 
-    expect(result.blocked).toBe(false);
-    expect(
-      result.hookErrors.some((e) =>
-        e.message.includes("skill-registry-not-available")
-      )
-    ).toBe(true);
-  });
+      expect(result.blocked).toBe(false);
+      expect(
+        result.hookErrors.some((e) =>
+          e.message.includes("skill-registry-not-available")
+        )
+      ).toBe(true);
+    },
+    // This is the only test that exercises the un-wired runtime-resolver
+    // path: with no injected resolver, dispatchSkillRef dynamically imports
+    // the full skillsRegistry/SkillExecutor graph (TypeORM modules, MCP,
+    // fs…). That cold import measured ~4.2s in isolation against the 5s
+    // default budget, so ordinary parallel-worker CPU contention pushed it
+    // over (intermittent "Test timed out in 5000ms" in full-suite runs).
+    // 20s keeps headroom for the one-time import; the assertions are
+    // unchanged and the test still fails on behavior, not on load.
+    20_000
+  );
 });
