@@ -731,7 +731,29 @@ export function createWorkspaceStreamPresenter(
         conversationId = event.conversationId;
       }
       activeRunId = event.runId;
+      // Mid-run liveness re-arm (audit R05): after a presentation reset
+      // (selection switch away and back) the first NON-terminal chunk for
+      // the still-running run proves the turn is live — re-attach the view
+      // instead of leaving a falsely idle snapshot on which "a run id
+      // appeared while idle" could be misread as a late completion. Opening
+      // and terminal events already set the status fields themselves.
+      const resumedMidRun =
+        event.eventType !== "start" &&
+        event.eventType !== "queued" &&
+        event.eventType !== "complete" &&
+        event.eventType !== "error" &&
+        event.eventType !== "cancelled" &&
+        streamStatus === "idle";
+      if (resumedMidRun) {
+        streamStatus = "streaming";
+        runtimeStatus = "running";
+      }
       applyChunk(event.runId, chunkOf(event));
+      if (resumedMidRun) {
+        // Buffered token mutations signal on their own flush window; the
+        // re-arm itself is visible state and must reach the store now.
+        notifyMutate?.();
+      }
       return true;
     },
     setGoal(nextGoal: GoalRunInfo | null): void {

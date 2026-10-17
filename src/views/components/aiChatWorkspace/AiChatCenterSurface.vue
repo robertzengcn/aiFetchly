@@ -741,6 +741,7 @@ import type {
   ChatV2Mode,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import type { ChatRunTerminalRecord } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
@@ -1467,74 +1468,51 @@ function onReorderGeneratedImages(
 
 /**
  * Accepted image submissions awaiting their turn's completion (audit R05 /
- * FR-SUB-002): per conversation, a FIFO of the EXACT reference snapshots
- * submitted by accepted sends. Arming happens only AFTER the store accepts
- * the submission (see performOrdinarySend) — a rejected send (queue limit,
- * gate, transport failure) never arms, so no later transition can clear its
- * retained draft. Per-conversation runs serialize (coordinator queue), so
- * completions dequeue snapshots in submission order. A plain Map is
- * deliberate: the registry only changes alongside explicit store
- * transitions, never through UI reactivity.
+ * FR-SUB-002): per conversation, the EXACT reference snapshots submitted by
+ * accepted sends, each tagged with that send's per-conversation accepted-run
+ * ordinal (the store's acceptance registry). Arming happens only AFTER the
+ * store accepts the submission (see performOrdinarySend) — a rejected send
+ * (queue limit, gate, transport failure) never arms, so no later transition
+ * can clear its retained draft. Registered entries are consumed ONLY by
+ * genuine terminal records (see the watcher below); identity verification
+ * keeps an unrelated completion (unarmed plain-text turn, coalesced or
+ * dropped terminal) from consuming — or misaligning — another run's entry.
+ * A plain Map is deliberate: the registry only changes alongside explicit
+ * store transitions, never through UI reactivity.
  */
-const pendingDraftClears = new Map<string, ChatV2GeneratedImageReference[][]>();
+interface PendingImageReferenceClear {
+  readonly runOrdinal: number;
+  readonly references: ChatV2GeneratedImageReference[];
+}
+
+const pendingDraftClears = new Map<string, PendingImageReferenceClear[]>();
 
 /**
- * Consume one accepted submission's snapshot when ITS turn completes.
- * Fire conditions (audit R05): the previous state was live (streaming, or a
- * queued/awaiting runtime), the new state is terminal AND the run id is
- * set — the presenter keeps the completed run's id on `complete`/`error`/
- * `cancelled`, while a selection switch away from a live conversation also
- * lands on "idle" but disposes the presenter (run id null). That switch is
- * NOT a completion and must never touch a draft (FR-LIF-002). On a real
- * completion the snapshot's exact references are removed from the CURRENT
- * draft, preserving everything the user added after the submission; other
- * terminals keep the tray (legacy retry parity) but still dequeue so the
- * FIFO stays aligned with the serialized run completions.
+ * Consume one accepted submission's snapshot when ITS run's terminal event
+ * is reported by the store (audit R05). The trigger is `lastTerminalRun` —
+ * `complete`/`error`/`cancelled` events the store actually consumed for a
+ * conversation — never a view-state shape: after an A→B→A re-selection the
+ * handshake leaves the view idle while the run streams on, and a resumed
+ * mid-run chunk (which re-arms the presenter's liveness instead of
+ * clearing) must never be mistaken for a completion (FR-LIF-002). The
+ * entry matching the terminal's accepted-run ordinal is consumed exactly
+ * once; on `complete` its snapshot is removed from the CURRENT draft, so
+ * references added after the submission survive (legacy retry parity:
+ * `error`/`cancelled` dequeue but keep the tray).
  */
 watch(
-  () =>
-    [
-      selectedStore.streamStatus,
-      selectedStore.runtimeStatus,
-      selectedStore.activeRunId,
-    ] as const,
-  (
-    [status, runtime, runId],
-    [previousStatus, previousRuntime, previousRunId]
-  ) => {
-    const isTerminal =
-      status === "idle" || status === "error" || status === "cancelled";
-    // Live→terminal: the store observed the turn's own lifecycle (accepted
-    // send → terminal event). The run id guard excludes selection switches:
-    // the handshake disposes the presenter to null BEFORE any snapshot.
-    const liveToTerminal =
-      (previousStatus === "streaming" ||
-        previousRuntime === "running" ||
-        previousRuntime === "queued" ||
-        previousRuntime === "awaiting_user") &&
-      isTerminal &&
-      runtime === "idle" &&
-      runId !== null;
-    // Late completion (audit R05): a queue acceptance resets the shared
-    // runtime to idle/null (the store's post-acceptance sync copies the
-    // presenter's view), so the in-flight run's terminal event later
-    // arrives from an already-idle state — a run id APPEARING on an
-    // idle+idle view is that completion. Well-formed idle snapshots never
-    // carry an active run id, and every selection handshake disposes to
-    // null first, so re-selection cannot produce this shape.
-    const lateCompletion =
-      previousStatus === "idle" &&
-      previousRuntime === "idle" &&
-      previousRunId === null &&
-      status === "idle" &&
-      runtime === "idle" &&
-      runId !== null;
-    if (!liveToTerminal && !lateCompletion) return;
-    const draftKey = composerDraftKeyFor(conversationId.value);
+  () => selectedStore.lastTerminalRun,
+  (terminal: ChatRunTerminalRecord | null) => {
+    if (!terminal) return;
+    const draftKey = composerDraftKeyFor(terminal.conversationId);
     const queue = pendingDraftClears.get(draftKey);
-    const submitted = queue?.shift();
-    if (queue && queue.length === 0) pendingDraftClears.delete(draftKey);
-    if (!submitted || status !== "idle") return;
+    const matched = queue
+      ? queue.findIndex((entry) => entry.runOrdinal === terminal.ordinal)
+      : -1;
+    if (!queue || matched < 0) return;
+    const submitted = queue.splice(matched, 1)[0];
+    if (queue.length === 0) pendingDraftClears.delete(draftKey);
+    if (!submitted || terminal.kind !== "complete") return;
     const current =
       composerDrafts.getDraft(draftKey)?.generatedImageReferences ?? [];
     if (current.length === 0) return;
@@ -1542,7 +1520,9 @@ watch(
       draftKey,
       current.filter(
         (reference) =>
-          !submitted.some((sent) => sameGeneratedImageRef(reference, sent))
+          !submitted.references.some((sent) =>
+            sameGeneratedImageRef(reference, sent)
+          )
       )
     );
   }
@@ -2107,10 +2087,16 @@ async function performOrdinarySend(
         ? [...confirmedBatch]
         : generatedImageReferences;
     if (submittedRefs.length > 0) {
+      // Identity note (review of audit R05): the entry carries the send's
+      // per-conversation accepted-run ordinal — popped only by the matching
+      // terminal record, so an unrelated completion (or a resumed mid-run
+      // chunk off an idle view) cannot consume another run's snapshot.
+      const runOrdinal =
+        selectedStore.acceptedRunOrdinalFor(sendConversationId);
       const clearKey = composerDraftKeyFor(sendConversationId);
       pendingDraftClears.set(clearKey, [
         ...(pendingDraftClears.get(clearKey) ?? []),
-        submittedRefs,
+        { runOrdinal: runOrdinal ?? -1, references: submittedRefs },
       ]);
     }
     options?.onAccepted?.();

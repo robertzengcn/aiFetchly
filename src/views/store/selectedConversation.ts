@@ -4,6 +4,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatRunDetailEvent,
+  ChatRunTerminalRecord,
   ConversationRuntimeStatus,
 } from "@/entityTypes/aiChatWorkspaceTypes";
 import {
@@ -160,6 +161,15 @@ export const useSelectedConversationStore = defineStore(
     const errorMessage = ref<string | null>(null);
     const runtimeStatus = ref<ConversationRuntimeStatus>("idle");
     const activeRunId = ref<string | null>(null);
+    /**
+     * Audit R05: the last terminal detail event consumed for the selected
+     * conversation (`complete`/`error`/`cancelled` as the presenter reports
+     * them) with a per-conversation accepted-run ordinal. Surfaces key
+     * accepted-submission bookkeeping (e.g. image-reference draft clears)
+     * on this record — never on a view-state shape, which a selection
+     * switch or a mid-run re-attach can impersonate.
+     */
+    const lastTerminalRun = ref<ChatRunTerminalRecord | null>(null);
     const loading = ref(false);
     const loadError = ref<string | null>(null);
     const hasOlder = ref(false);
@@ -257,6 +267,36 @@ export const useSelectedConversationStore = defineStore(
       goal.value = state.goal;
     }
 
+    /**
+     * Per-conversation runtime order registries (audit R05): every accepted
+     * send takes the next ordinal; every consumed terminal takes the next
+     * one. Runs serialize per conversation (durable pending queue drains
+     * FIFO at the turn terminal), so the k-th ordinal identifies exactly
+     * one accepted run and pairs with the k-th consumed terminal. A plain
+     * Map: these change alongside store transitions only, never through UI
+     * reactivity. Both lag reselection equally — a run that completes while
+     * deselected leaves its terminal uncounted (documented R05 gap), never
+     * a mismatched pop.
+     */
+    const acceptedRunOrdinalByConversation = new Map<string, number>();
+    const consumedTerminalOrdinalByConversation = new Map<string, number>();
+
+    /** Ordinal of the most recent accepted send for one conversation. */
+    function acceptedRunOrdinalFor(conversationId: string): number | null {
+      return acceptedRunOrdinalByConversation.get(conversationId) ?? null;
+    }
+
+    function recordTerminalRun(
+      conversationId: string,
+      runId: string,
+      kind: ChatRunTerminalRecord["kind"]
+    ): void {
+      const ordinal =
+        (consumedTerminalOrdinalByConversation.get(conversationId) ?? 0) + 1;
+      consumedTerminalOrdinalByConversation.set(conversationId, ordinal);
+      lastTerminalRun.value = { conversationId, runId, kind, ordinal };
+    }
+
     /** Ensure exactly one detail subscription exists for this renderer. */
     function ensureDetailSubscription(): void {
       if (detailUnsubscribe) return;
@@ -283,13 +323,20 @@ export const useSelectedConversationStore = defineStore(
       }
       // A terminal event for the selected conversation means durable state
       // changed — the view is authoritative enough (the presenter applied
-      // the full content) but clear unread locally.
+      // the full content) but clear unread locally. Audit R05: the store
+      // reports the genuine terminal identity — a consumed event, never a
+      // view-state shape a selection switch can impersonate.
       if (
         event.eventType === "complete" ||
         event.eventType === "error" ||
         event.eventType === "cancelled"
       ) {
         workspaceStore.markConversationReadLocally(event.conversationId);
+        recordTerminalRun(
+          event.conversationId,
+          event.runId,
+          event.eventType
+        );
       }
     }
 
@@ -482,6 +529,13 @@ export const useSelectedConversationStore = defineStore(
         // and is never collapsed into this row. (Rejections keep the entry
         // so an ambiguous retry reconciles by reuse.)
         lastSubmitByConversation.delete(originConversationId);
+        // Audit R05: this send is the origin conversation's next accepted
+        // run — its ordinal is the identity accepted-submission bookkeeping
+        // (image-reference draft clears) verifies against terminal records.
+        acceptedRunOrdinalByConversation.set(
+          originConversationId,
+          (acceptedRunOrdinalByConversation.get(originConversationId) ?? 0) + 1
+        );
         // B07: only when the selection still owns this send — after a
         // switch, A's durable row renders via subscription/summary when the
         // user returns; touching B's presenter/status here would corrupt it.
@@ -841,6 +895,8 @@ export const useSelectedConversationStore = defineStore(
       errorMessage,
       runtimeStatus,
       activeRunId,
+      lastTerminalRun,
+      acceptedRunOrdinalFor,
       loading,
       loadError,
       hasOlder,

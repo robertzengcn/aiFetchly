@@ -151,6 +151,23 @@ export interface ChatRunDetailEvent {
   readonly payload: Record<string, unknown>;
 }
 
+/**
+ * Identity of one terminal detail event consumed by the selected-
+ * conversation store (audit R05): only these records count as genuine
+ * completions — view-state transitions (e.g. a run id appearing on an idle
+ * view after a selection switch) never do. `ordinal` is the run's
+ * per-conversation accepted-send order (1-based); the coordinator
+ * serializes each conversation's runs, so terminal ordinals arrive in
+ * accepted-send order and pair the k-th accepted send with the k-th
+ * consumed terminal.
+ */
+export interface ChatRunTerminalRecord {
+  readonly conversationId: string;
+  readonly runId: string;
+  readonly kind: "complete" | "error" | "cancelled";
+  readonly ordinal: number;
+}
+
 // ---------------------------------------------------------------------------
 // Commands (design §11.2–§11.3)
 // ---------------------------------------------------------------------------

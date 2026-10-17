@@ -2807,10 +2807,17 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     // While the turn streams, the tray keeps the selection.
     expect(trayReferences(wrapper)).toHaveLength(1);
 
-    // Terminal `complete` (presenter → streamStatus AND runtimeStatus both
-    // "idle") clears the submitted draft.
-    selected.streamStatus = "idle";
-    selected.runtimeStatus = "idle";
+    // Terminal `complete` — driven through the store's real detail-event
+    // path so the draft clear consumes the genuine terminal record (the
+    // R05 watcher keys on it, never on raw view states).
+    selected.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 1,
+      emittedAt: "2026-10-17T00:00:00.000Z",
+      eventType: "complete",
+      payload: { eventType: "complete" },
+    });
     await flushPromises();
     expect(trayReferences(wrapper)).toEqual([]);
   });
@@ -2839,7 +2846,14 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     expect(startChatRunMock).toHaveBeenCalledTimes(1);
 
     const selected = useSelectedConversationStore();
-    selected.streamStatus = "error";
+    selected.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 1,
+      emittedAt: "2026-10-17T00:00:00.000Z",
+      eventType: "error",
+      payload: { eventType: "error", errorMessage: "provider busy" },
+    });
     await flushPromises();
     // Error keeps the selection (legacy parity) — no data loss on failure.
     expect(trayReferences(wrapper)).toEqual([
@@ -3823,5 +3837,76 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     // The text turn completes — nothing was armed, so nothing is cleared.
     await completeRun("conv-1", "run-1");
     expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+  });
+
+  it("keeps the armed snapshot when a mid-run tool event follows an A→B→A re-selection; only the real terminal clears it", async () => {
+    mockSelectionSnapshot(); // conv-1 selected while idle.
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectConversationId("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    // Submit [m1] — accepted, streams.
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+    expect(useSelectedConversationStore().streamStatus).toBe("streaming");
+
+    // A → B → A through the real handshake while run-1 streams remotely.
+    mockSelectionSnapshot("running", "run-1");
+    await loadConversation("conv-2");
+    await loadConversation("conv-1");
+    const store = useSelectedConversationStore();
+
+    // The selection handshake clobbers the snapshot's runtime state onto the
+    // presenter's disposed (idle, null) view — a mere mid-run event must not
+    // be mistaken for a completion off that shape.
+    expect(store.streamStatus).toBe("idle");
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.activeRunId).toBeNull();
+
+    // Stage the next draft's reference while run-1 continues.
+    const transcriptA = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcriptA.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    // A MID-RUN tool event arrives (the run is still live): the view must
+    // re-attach to the live turn, and the armed snapshot must survive.
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 2,
+      emittedAt: "2026-10-17T00:00:02.000Z",
+      eventType: "tool_call",
+      payload: { eventType: "tool_call", toolCallId: "t-1", toolName: "search" },
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+    expect(store.streamStatus).toBe("streaming");
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.activeRunId).toBe("run-1");
+
+    // The REAL terminal — a genuine event, sequence beyond the tool event —
+    // is the only transition allowed to pop the armed snapshot.
+    await completeRun("conv-1", "run-1", 3);
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
   });
 });
