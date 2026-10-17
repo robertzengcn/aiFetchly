@@ -3,6 +3,10 @@ import {
   savePlanContinuationIntent,
   loadPlanContinuationIntent,
   clearPlanContinuationIntent,
+  markPlanContinuationDismissed,
+  isPlanContinuationDismissed,
+  clearPlanContinuationDismissal,
+  loadPlanContinuationDismissed,
 } from "@/views/utils/planContinuationStore";
 
 beforeEach(() => {
@@ -54,5 +58,122 @@ describe("planContinuationStore (B08)", () => {
       "not-json{{{"
     );
     expect(loadPlanContinuationIntent("conv-y")).toBeNull();
+  });
+});
+
+/**
+ * R12: dismissing a continuation bar must stick across reselection, but
+ * only for the exact identity (planId + version + action) — recovered
+ * intents for a NEW decision must still surface.
+ */
+describe("planContinuationStore dismissal tombstones (R12)", () => {
+  it("marks + reports an exact identity as dismissed", () => {
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-a",
+        planId: "plan-1",
+        version: 1,
+        action: "approve-plan",
+      })
+    ).toBe(false);
+    markPlanContinuationDismissed({
+      conversationId: "conv-a",
+      planId: "plan-1",
+      version: 1,
+      action: "approve-plan",
+    });
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-a",
+        planId: "plan-1",
+        version: 1,
+        action: "approve-plan",
+      })
+    ).toBe(true);
+    expect(loadPlanContinuationDismissed("conv-a")?.planId).toBe("plan-1");
+  });
+
+  it("a different identity for the same conversation is NOT dismissed", () => {
+    markPlanContinuationDismissed({
+      conversationId: "conv-a",
+      planId: "plan-1",
+      version: 1,
+      action: "approve-plan",
+    });
+    // New version.
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-a",
+        planId: "plan-1",
+        version: 2,
+        action: "approve-plan",
+      })
+    ).toBe(false);
+    // Different action.
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-a",
+        planId: "plan-1",
+        version: 1,
+        action: "reject-plan",
+      })
+    ).toBe(false);
+  });
+
+  it("per-conversation isolation", () => {
+    markPlanContinuationDismissed({
+      conversationId: "conv-a",
+      planId: "plan-1",
+      version: 1,
+      action: "approve-plan",
+    });
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-b",
+        planId: "plan-1",
+        version: 1,
+        action: "approve-plan",
+      })
+    ).toBe(false);
+  });
+
+  it("clearPlanContinuationDismissal forgets the tombstone", () => {
+    markPlanContinuationDismissed({
+      conversationId: "conv-a",
+      planId: "plan-1",
+      version: 1,
+      action: "approve-plan",
+    });
+    clearPlanContinuationDismissal("conv-a");
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-a",
+        planId: "plan-1",
+        version: 1,
+        action: "approve-plan",
+      })
+    ).toBe(false);
+    expect(loadPlanContinuationDismissed("conv-a")).toBeNull();
+  });
+
+  it("rejects malformed tombstones instead of surfacing them", () => {
+    localStorage.setItem(
+      "aifetchly.plan-continuation-dismissed.conv-y",
+      "not-json{{{"
+    );
+    expect(loadPlanContinuationDismissed("conv-y")).toBeNull();
+    expect(
+      isPlanContinuationDismissed({
+        conversationId: "conv-y",
+        planId: "plan-1",
+        version: 1,
+        action: "approve-plan",
+      })
+    ).toBe(false);
+    localStorage.setItem(
+      "aifetchly.plan-continuation-dismissed.conv-z",
+      JSON.stringify({ planId: 42 })
+    );
+    expect(loadPlanContinuationDismissed("conv-z")).toBeNull();
   });
 });

@@ -100,3 +100,100 @@ export function clearPlanContinuationIntent(conversationId: string): void {
     // Non-fatal — a stale intent simply re-surfaces the retry banner.
   }
 }
+
+/**
+ * Dismissal tombstone (R12). Dismissing a continuation banner must stick:
+ * the intent is durable (localStorage for renderer-saved intents, main-side
+ * reconcile for reconstructed ones) and re-selecting the conversation must
+ * not resurrect a banner the user explicitly dismissed.
+ *
+ * The tombstone stores the exact continuation identity (planId + version +
+ * action) because main-side recovery is stateless — a recovered intent is
+ * only suppressed when it matches what was dismissed. A NEW decision (new
+ * version/new action) still resurfaces.
+ */
+const DISMISSED_PREFIX = "aifetchly.plan-continuation-dismissed.";
+
+export interface PlanContinuationDismissedIntent {
+  readonly conversationId: string;
+  readonly planId: string;
+  readonly version: number;
+  readonly action: PlanContinuationAction;
+}
+
+function dismissedStorageKey(conversationId: string): string {
+  return `${DISMISSED_PREFIX}${conversationId}`;
+}
+
+function sameDismissedIdentity(
+  dismissed: PlanContinuationDismissedIntent,
+  intent: PlanContinuationDismissedIntent
+): boolean {
+  return (
+    dismissed.planId === intent.planId &&
+    dismissed.version === intent.version &&
+    dismissed.action === intent.action
+  );
+}
+
+export function markPlanContinuationDismissed(
+  intent: PlanContinuationDismissedIntent
+): void {
+  safeStorage()?.setItem(
+    dismissedStorageKey(intent.conversationId),
+    JSON.stringify({
+      conversationId: intent.conversationId,
+      planId: intent.planId,
+      version: intent.version,
+      action: intent.action,
+    })
+  );
+}
+
+export function loadPlanContinuationDismissed(
+  conversationId: string
+): PlanContinuationDismissedIntent | null {
+  const raw = safeStorage()?.getItem(dismissedStorageKey(conversationId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<PlanContinuationDismissedIntent>;
+    if (
+      typeof parsed.conversationId !== "string" ||
+      typeof parsed.planId !== "string" ||
+      typeof parsed.version !== "number" ||
+      (parsed.action !== "approve-plan" &&
+        parsed.action !== "reject-plan" &&
+        parsed.action !== "request-plan-changes")
+    ) {
+      return null;
+    }
+    return {
+      conversationId: parsed.conversationId,
+      planId: parsed.planId,
+      version: parsed.version,
+      action: parsed.action,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Was this exact continuation identity dismissed by the user? */
+export function isPlanContinuationDismissed(
+  intent: PlanContinuationDismissedIntent
+): boolean {
+  const dismissed = loadPlanContinuationDismissed(intent.conversationId);
+  return dismissed !== null && sameDismissedIdentity(dismissed, intent);
+}
+
+/**
+ * Clear the dismissal tombstone. Called when the continuation was accepted
+ * (retry success) or a new decision commits for the conversation.
+ */
+export function clearPlanContinuationDismissal(conversationId: string): void {
+  try {
+    safeStorage()?.removeItem(dismissedStorageKey(conversationId));
+  } catch {
+    // Non-fatal.
+  }
+}
