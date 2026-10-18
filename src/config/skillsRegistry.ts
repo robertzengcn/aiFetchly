@@ -255,7 +255,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "scrape_urls_from_search_engine",
     description:
       "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
-      "This tool always runs ASYNCHRONOUSLY via a background job (same pattern as heavy search_maps_businesses calls): the query loop registers a ToolJobRegistry job with no synchronous 90s ceiling, emits progress while the SERP scrape runs, and returns the final result when the worker finishes (up to ~30 minutes). Do not retry while a job for the same call is still running; use cancel_tool_job(job_id) if the user wants to stop early.\n\n" +
+      "This tool always runs via a background job internally (same pattern as heavy search_maps_businesses calls): the call blocks until the SERP scrape finishes and returns the final result directly (it can take several minutes — up to ~30 in the worst case). Do not retry the call while waiting for its result. You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id; never invent or guess a job_id — a fabricated id always returns not_found.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid tool account ID. Only tool accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that tool account ID in the `account` field.\n" +
@@ -885,8 +885,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
       "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
-      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
+      "When the urls array contains 8 or more entries, this tool runs as a background job internally: the call blocks until extraction finishes and returns the real result directly (large batches can take several minutes — do not retry while waiting). " +
+      "You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch.",
     parameters: {
       type: "object",
@@ -914,8 +914,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     //   the model gets the full result in one turn.
     // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
     //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
-    //   loop returns { async: true, job_id } within ~2s and the model
-    //   polls with check_tool_job_status every 15-30s. This matches the
+    //   loop registers the job and blocks on pollAsyncJobToCompletion, so
+    //   the model sees the real result in one turn. This matches the
     //   search_maps_businesses pattern (see lines ~329).
     //
     // Before this routing, large URL batches hit the 240s browser ceiling
@@ -3597,7 +3597,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "check_tool_job_status",
     description:
-      "Check the status of an async tool job. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id.",
+      "Check the status of an async tool job by its job_id. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id. " +
+      "Only call this with a job_id that a previous tool RESULT explicitly returned to you — job ids are never listed anywhere else, and one invented or reused from an earlier session always returns not_found. If you get not_found, do not retry the same id and do not fabricate a new one: re-run the original tool call instead.",
     parameters: {
       type: "object",
       properties: {
@@ -3634,6 +3635,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         started_at: snap.startedAt,
         completed_at: snap.completedAt,
       };
+      if (snap.status === "not_found") {
+        // The id never existed, belongs to another conversation, or the
+        // registry lost it (in-memory registry: cleared on app restart and
+        // cancelled when the owning turn aborted). Tell the model why and
+        // what to do instead of a bare not_found stub it tends to re-poll.
+        result.note =
+          "No job with this job_id exists in this conversation. Jobs only live in memory for the current app session, and a job_id is only ever issued inside a tool result. Do not retry this id or invent a new one — re-run the original tool call if you still need its output.";
+      }
       if (wantPartial && snap.partial) {
         result.partial = snap.partial;
       }
@@ -3646,7 +3655,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "cancel_tool_job",
     description:
-      "Cancel a running async tool job. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist.",
+      "Cancel a running async tool job by its job_id. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist. Only use a job_id that a previous tool RESULT explicitly returned to you.",
     parameters: {
       type: "object",
       properties: {
@@ -3673,7 +3682,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       if (snap.status === "not_found") {
         return {
           success: true,
-          result: { cancelled: false, reason: "not_found" },
+          result: {
+            cancelled: false,
+            reason: "not_found",
+            note: "No job with this job_id exists in this conversation. Do not retry this id or invent a new one — re-run the original tool call if you still need its output.",
+          },
         };
       }
       const result = reg.cancel(jobId);

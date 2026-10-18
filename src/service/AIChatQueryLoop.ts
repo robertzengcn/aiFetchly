@@ -4473,7 +4473,6 @@ export class AIChatQueryLoop {
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
-    const shortId = jobId.slice(0, 8);
 
     const emitProgress = (
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
@@ -4499,7 +4498,7 @@ export class AIChatQueryLoop {
 
     emitProgress(
       "running",
-      `Background job started (job_id: ${shortId})`,
+      `Background job started (job_id: ${jobId})`,
       null,
       null,
       null

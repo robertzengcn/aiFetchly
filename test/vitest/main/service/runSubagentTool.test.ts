@@ -90,10 +90,23 @@ describe("run_subagent tool definition", () => {
     expect(prompt.description).not.toMatch(/concise/i);
   });
 
-  it("exposes the async contract so models know to poll", () => {
+  it("exposes the blocking async contract without a polling instruction", () => {
+    // The loop blocks internally on pollAsyncJobToCompletion and returns the
+    // real result, so the description must NOT promise the removed
+    // { async: true, job_id } envelope or tell the model to poll — that
+    // contract made models fabricate job ids and poll check_tool_job_status
+    // for jobs they were never given ids for (always not_found).
     expect(RUN_SUBAGENT_TOOL.async).toBe(true);
-    expect(RUN_SUBAGENT_TOOL.description).toMatch(/ASYNCHRONOUSLY/i);
-    expect(RUN_SUBAGENT_TOOL.description).toMatch(/check_tool_job_status/i);
+    expect(RUN_SUBAGENT_TOOL.description).toMatch(/background job/i);
+    expect(RUN_SUBAGENT_TOOL.description).toMatch(
+      /blocks until the specialist finishes/i
+    );
+    expect(RUN_SUBAGENT_TOOL.description).not.toMatch(
+      /it returns \{ async: true, job_id \}/i
+    );
+    expect(RUN_SUBAGENT_TOOL.description).toMatch(
+      /Never invent or guess a job_id/i
+    );
   });
 
   it("does not contradict the multi-batch delegation contract", () => {
