@@ -265,6 +265,7 @@ export const useSelectedConversationStore = defineStore(
       recovery.value = state.recovery;
       retry.value = state.retry;
       goal.value = state.goal;
+      const sig = `${streamStatus.value}/${runtimeStatus.value}`;
     }
 
     /**

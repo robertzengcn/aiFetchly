@@ -56,6 +56,27 @@ function imageScenario(b64: string): ScriptedToolCall {
   };
 }
 
+/**
+ * The batch flow may raise MULTIPLE sequential permission requests (the
+ * batch tool itself, plus child permissions inside the isolated
+ * agent-batch-worker). Each transcript row renders the same single
+ * decision UI, so grant every pending card until none remain — bounded to
+ * four cycles to avoid spinning on a reposting request.
+ */
+async function drainBatchApprovals(app: {
+  readonly mainWindow: import("@playwright/test").Page;
+}): Promise<void> {
+  const allowOnce = app.mainWindow.getByTestId("ai-chat-permission-allow-once");
+  await expect(allowOnce.first()).toBeVisible({ timeout: 30_000 });
+  for (let i = 0; i < 4; i += 1) {
+    if ((await allowOnce.count()) === 0) return;
+    await allowOnce.first().click();
+    // Decision settles and the next request (if any) needs a beat to land.
+    await app.mainWindow.waitForTimeout(1_500);
+    if ((await allowOnce.count()) === 0) return;
+  }
+}
+
 test.describe("Generated-image batch — live (Electron integration)", () => {
   test.setTimeout(240_000);
   test.afterEach(({ app, aiApp }) => {
@@ -65,15 +86,10 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     }
   });
 
-  // DEFERRED (chat-first shell): the >3-reference batch confirmation dialog
-  // and the legacy ambiguity/inference offers are legacy-dock surfaces the
-  // shell explicitly excluded (its preflight rejects over-limit references
-  // with a notice). Porting the batch surface to the shell is tracked in
-  // docs/todo/; these scenarios stay skipped until then.
-  test.skip(
-    true,
-    "batch confirmation surface not yet ported to the chat-first shell"
-  );
+  // The batch confirmation surface IS ported to the chat-first shell
+  // (AiChatCenterSurface mounts GeneratedImageBatchConfirmDialog and the
+  // shell transcript renders AiChatV2Message batch classes), so the
+  // former skip ("surface not ported") was obsolete — V01 item.
 
   test("R-1: a no-workspace 4-image batch renders progress and durable re-homed outputs", async ({
     aiApp,
@@ -150,12 +166,14 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
       .getByTestId("ai-chat-generated-batch-confirm-accept")
       .click();
 
-    // process_artifact_batch is permission-gated (filesystem category); approve
-    // it so the batch execution can start.
-    const permCard = aiApp.mainWindow.getByTestId("ai-chat-permission-card");
+    // process_artifact_batch is permission-gated (filesystem category);
+    // grant every approval the batch flow raises (tool + worker children).
+    // The transcript renders one approval card per pending message row
+    // (both carry the same single decision UI).
+    const permCard = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
     await expect(permCard).toBeVisible({ timeout: 30_000 });
     await expect(permCard).toContainText("process_artifact_batch");
-    await aiApp.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
+    await drainBatchApprovals(aiApp);
 
     // The batch progress card appears with the evolving surface (N of M,
     // concurrency). The summary line lives in .v2-message__batch-summary.
@@ -224,13 +242,19 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     expect(serialized).not.toContain("outputFilePaths");
     expect(serialized).not.toContain("data:image/");
     expect(serialized).not.toContain("b64_json");
-    // The batch ran all 4 items.
-    const result = batchToolResult as {
+    // The batch ran all 4 items. The durable toolResult is the bounded
+    // receipt envelope; the aggregate record rides inside `toolOutputPreview`
+    // (the preview that the renderer's batch card parses), so unwrap it.
+    const unwrappedPreview = (batchToolResult as {
+      toolOutputPreview?: unknown;
+    }).toolOutputPreview;
+    expect(typeof unwrappedPreview).toBe("string");
+    const batchRecord = JSON.parse(unwrappedPreview as string) as {
       requestedCount?: number;
       completedCount?: number;
     };
-    expect(result.requestedCount).toBe(4);
-    expect(result.completedCount).toBe(4);
+    expect(batchRecord.requestedCount).toBe(4);
+    expect(batchRecord.completedCount).toBe(4);
 
     // All 4 successful batch outputs render as durable generated images.
     const finalTiles = await root
@@ -299,9 +323,9 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     await aiApp.mainWindow
       .getByTestId("ai-chat-generated-batch-confirm-accept")
       .click();
-    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card");
+    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
     await expect(pc).toBeVisible({ timeout: 30_000 });
-    await aiApp.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
+    await drainBatchApprovals(aiApp);
 
     // While work is active the batch tool_call card carries the live progress
     // badge AND the Stop action (the batch-summary only renders on the settled
@@ -437,9 +461,9 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     await aiApp.mainWindow
       .getByTestId("ai-chat-generated-batch-confirm-accept")
       .click();
-    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card");
+    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
     await expect(pc).toBeVisible({ timeout: 30_000 });
-    await aiApp.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
+    await drainBatchApprovals(aiApp);
     await expect(composerTextarea(aiApp)).not.toBeDisabled({ timeout: 90_000 });
 
     // After the batch completes, batch-produced images render in the parent

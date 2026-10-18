@@ -1351,9 +1351,11 @@ function deserializeBatchRecord(
   if (isBatchShapedRecord(input)) return input;
   const candidates: readonly unknown[] = [
     ...(Array.isArray(result.toolOutputRefs) ? result.toolOutputRefs : []),
+    ...(Array.isArray(result.outputRefs) ? result.outputRefs : []),
     typeof result.toolOutputPreview === "string"
       ? result.toolOutputPreview
       : null,
+    typeof result.preview === "string" ? result.preview : null,
   ];
   for (const candidate of candidates) {
     let preview: string | null = null;

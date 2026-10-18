@@ -113,6 +113,10 @@ import {
   installFirstToolCounterKey,
   INSTALLER_TOOL_NAMES,
 } from "@/service/SkillInstallationToolPolicy";
+import {
+  TOOL_RESULT_CONFIG,
+  BATCH_PREVIEW_TOOL_NAMES as TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES,
+} from "@/config/toolResultConfig";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import {
@@ -3699,6 +3703,16 @@ export class AIChatQueryLoop {
                   previewKind: Array.isArray(toolResult.result)
                     ? "records"
                     : "text",
+                  // Batch aggregate receipts are parsed by the renderer's
+                  // batch progress card, so their preview needs the larger
+                  // budget — a 2KB default cut lands mid-JSON and the card
+                  // cannot render.
+                  ...(TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES.has(call.name)
+                    ? {
+                        previewMaxBytes:
+                          TOOL_RESULT_CONFIG.batchPreviewMaxBytes,
+                      }
+                    : {}),
                   // A timeout that produced partial data is the PRODUCER
                   // being incomplete, which is a separate fact from what we
                   // manage to capture.
@@ -3752,12 +3766,16 @@ export class AIChatQueryLoop {
                 // is exactly the bulk this feature exists to keep out of the
                 // renderer and the transcript. For an externalized result the
                 // payload is rebuilt from the trusted outcome plus bounded
-                // descriptors; the body lives only in the artifact.
+                // descriptors; the body lives only in the artifact. The LIVE
+                // metadata uses the SAME display envelope the durable row
+                // saves (toolResultReceiptUiMetadata) — the preparation
+                // service's own snake_case uiMetadata would otherwise give
+                // the renderer two shapes for one receipt.
                 toolPayload = {
                   success: toolResult.success,
                   executionTimeMs: toolResult.execution_time_ms,
                   toolResultReceipt: prepared.receipt,
-                  ...prepared.uiMetadata,
+                  ...toolResultReceiptUiMetadata(prepared.receipt),
                 } as Record<string, unknown>;
               }
             } catch (err: unknown) {

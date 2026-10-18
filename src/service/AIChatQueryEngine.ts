@@ -59,6 +59,10 @@ import {
   ToolResultPipeline,
   ToolResultPublicationError,
 } from "@/service/toolResult/ToolResultPipeline";
+import {
+  TOOL_RESULT_CONFIG,
+  BATCH_PREVIEW_TOOL_NAMES as TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES,
+} from "@/config/toolResultConfig";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import {
@@ -2893,6 +2897,17 @@ export class AIChatQueryEngine {
               previewKind: Array.isArray(toolResult.result)
                 ? "records"
                 : "text",
+              // Batch aggregate receipts are parsed by the renderer's batch
+              // progress card, so their preview needs the larger budget —
+              // a 2KB default cut lands mid-JSON and the card cannot render.
+              ...(TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES.has(
+                matchedByToolId.toolName
+              )
+                ? {
+                    previewMaxBytes:
+                      TOOL_RESULT_CONFIG.batchPreviewMaxBytes,
+                  }
+                : {}),
               sourceCompleteness: toolResult.partial ? "partial" : "complete",
               isEmpty:
                 Object.keys(toolResult.result).length === 0 &&
@@ -2918,12 +2933,16 @@ export class AIChatQueryEngine {
           toolContent = prepared.modelContent;
           if (prepared.receipt) {
             // Rebuilt from the trusted outcome plus bounded descriptors: the
-            // legacy payload spread the producer's whole body.
+            // legacy payload spread the producer's whole body. The LIVE
+            // metadata uses the SAME display envelope the durable row saves
+            // (toolResultReceiptUiMetadata) — the preparation service's own
+            // snake_case uiMetadata would otherwise make the renderer two
+            // shapes (live event camelCase vs durable row) for one receipt.
             toolPayload = {
               success: toolResult.success,
               executionTimeMs: toolResult.execution_time_ms,
               toolResultReceipt: prepared.receipt,
-              ...prepared.uiMetadata,
+              ...toolResultReceiptUiMetadata(prepared.receipt),
             } as Record<string, unknown>;
           }
         } catch (err: unknown) {

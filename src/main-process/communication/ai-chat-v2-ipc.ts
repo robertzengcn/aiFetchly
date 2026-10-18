@@ -1433,6 +1433,7 @@ export async function handleResumeToolAfterPermission(
     });
     return ok(result);
   }
+
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
@@ -1558,9 +1559,9 @@ async function handleConversations(
     }
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
+    const engine = getQueryEngine();
     const module = new AIChatV2Module();
     const summaries = await module.getConversations(searchQuery);
-    const engine = getQueryEngine();
     return ok(
       summaries.map((summary) => ({
         ...summary,

@@ -474,7 +474,6 @@ export class AIChatCoordinator {
         error: "No pending action for this run (stale or already consumed).",
       };
     }
-
     live.status = "queued";
     live.resumeClaim = claim;
     live.cancelRequested = false;

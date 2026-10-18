@@ -441,16 +441,26 @@ export function createWorkspaceStreamPresenter(
           );
           if (pausedIdx !== -1) {
             const updated = [...messages];
+            // REPLACE, not MERGE: the parked row was a permission prompt
+            // ("Permission required" error, parked toolResult envelope).
+            // Keeping those fields would keep rendering the old state, so
+            // the resumed row carries only the fresh event metadata plus
+            // the arguments block (which the event never re-sends).
             updated[pausedIdx] = {
               ...updated[pausedIdx],
               content: str(chunk.fullContent) ?? "",
-              // `permissionResumed` is presentation-only: it tells the
-              // transcript projection to keep the owning execution group
-              // expanded so the just-approved output stays visible instead
-              // of auto-collapsing the moment the result completes.
               metadata: {
-                ...updated[pausedIdx].metadata,
+                ...(updated[pausedIdx].metadata?.toolArguments !== undefined
+                  ? {
+                      toolArguments:
+                        updated[pausedIdx].metadata.toolArguments,
+                    }
+                  : {}),
                 ...metadata,
+                // `permissionResumed` is presentation-only: it tells the
+                // transcript projection to keep the owning execution group
+                // expanded so the just-approved output stays visible instead
+                // of auto-collapsing the moment the result completes.
                 permissionResumed: true,
               },
             };
