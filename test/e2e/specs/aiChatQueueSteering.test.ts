@@ -115,6 +115,20 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     }
   });
 
+  test("0. default landing route redirects into the chat workspace (§21.6-0)", async ({
+    aiApp,
+  }) => {
+    // G02 route-level certification: loading the bare root hash must land
+    // in the chat workspace (`AI_Chat_Workspace` child redirect), not any
+    // legacy dock or settings page.
+    await aiApp.mainWindow.goto(`${RENDERER_ORIGIN}/#/`);
+    await aiApp.mainWindow.waitForURL(/#\/aiworkspace/, { timeout: 30_000 });
+    // The fresh profile has no selected conversation, so the shell renders
+    // its empty state (no transcript element yet) — certify the chat
+    // workspace surface via the composer.
+    await expect(composer(aiApp)).toBeVisible({ timeout: 30_000 });
+  });
+
   test("1. queues B behind delayed A and auto-dispatches B after A (§21.6-1)", async ({
     aiApp,
     fakeAi,
