@@ -144,6 +144,7 @@ import {
 } from "@/utils/loadHtmlFileWithUrlFallback";
 import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
 import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
+import { resolveGpuStartupPolicy } from "@/main-process/startup/GpuStartupPolicy";
 // Application exit & system tray (docs/prd/application-exit-and-system-tray-*.md)
 import { getApplicationLifecycleService } from "@/main-process/lifecycle/ApplicationLifecycleService";
 import type { ApplicationExitReason } from "@/entityTypes/applicationLifecycleTypes";
@@ -354,12 +355,13 @@ try {
   // electron ipcMain unavailable in non-Electron test hosts
 }
 
-if (
-  isDevelopment &&
-  process.platform === "linux" &&
-  process.env.LIBGL_ALWAYS_INDIRECT === "1"
-) {
-  log.info("[dev] Disabling GPU acceleration for indirect GL session");
+const gpuStartupDecision = resolveGpuStartupPolicy(
+  process.env,
+  process.platform,
+  isDevelopment
+);
+if (gpuStartupDecision.disableGpu) {
+  log.info(`[startup] Disabling GPU acceleration (${gpuStartupDecision.reason})`);
   const appWithGpuControls = app as typeof app & {
     disableHardwareAcceleration: () => void;
     commandLine: {
