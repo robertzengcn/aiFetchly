@@ -152,7 +152,26 @@ async function handleExportGeneratedImage(
     return denied(chatAccess.message);
   }
 
-  const parsed = parseExportImageRequest(data);
+  // Renderer convention: the Electron preload transport stringifies invoke
+  // payloads (see ipcTransport.serializeForElectron), so the raw first
+  // argument is a JSON string. Unwrap it here — the same unwrap the shared
+  // registerValidatedHandler applies — instead of rejecting every object
+  // payload as malformed (FR-IMG-015 defect found by the E2E save journey).
+  let parsedData: unknown = data;
+  if (typeof data === "string") {
+    if (data.trim().length === 0) {
+      parsedData = undefined;
+    } else {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        log.warn("[generated-image-export] received malformed JSON payload");
+        return denied("Malformed request payload");
+      }
+    }
+  }
+
+  const parsed = parseExportImageRequest(parsedData);
   if (!parsed) {
     return denied(
       "conversationId and a {messageId, imageIndex} reference are required"

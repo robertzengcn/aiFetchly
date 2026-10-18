@@ -15,6 +15,7 @@ import {
 import { _electron as electronLauncher } from "playwright";
 import * as path from "path";
 import { E2E_ENV, RENDERER_ORIGIN, type E2ETestRoot } from "./types";
+import type { E2EStateManifestInput } from "./temporaryState";
 
 export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
@@ -38,6 +39,14 @@ export interface LaunchOptions {
    * install pipeline target the deterministic hub fixture (UPD-GAP-05).
    */
   readonly hubBaseUrl?: string;
+  /**
+   * Deterministic native-dialog responses (design §15.6). Patched into the
+   * state manifest AFTER the fixture's write (launch happens last), so a
+   * confirm-pick flow (e.g. workspace folder selection) can automate the
+   * otherwise-native dialog. Paths must be inside the E2E root — the
+   * manifest loader rejects out-of-root paths fail-closed.
+   */
+  readonly dialogResponses?: E2EStateManifestInput["dialogResponses"];
 }
 
 export interface NetworkViolation {
@@ -219,6 +228,23 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
+  // Deterministic native-dialog responses must be patched into the state
+  // manifest BEFORE spawn: the E2E dialog service reads it once at launch.
+  // The patch preserves every field the fixture already wrote.
+  if (options.dialogResponses) {
+    const fs = await import("fs");
+    const existing = JSON.parse(
+      fs.readFileSync(options.testRoot.stateFilePath, "utf8")
+    ) as Record<string, unknown>;
+    fs.writeFileSync(
+      options.testRoot.stateFilePath,
+      JSON.stringify({
+        ...existing,
+        dialogResponses: options.dialogResponses,
+      }),
+      "utf8"
+    );
+  }
   // Single sanitized-environment construction with all required arguments
   // (B01): initialMaximized + hubBaseUrl must flow through, then explicit
   // test extras apply once post-sanitization (host env never leaks in).

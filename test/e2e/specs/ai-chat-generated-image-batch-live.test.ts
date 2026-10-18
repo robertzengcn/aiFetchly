@@ -1,5 +1,5 @@
 /**
- * Live generated-image batch E2E (R-1, R-2, R-3).
+ * Live generated-image batch E2E (R-1..R-7).
  *
  * Drives a REAL `process_artifact_batch` execution against the FakeOpenAI
  * loopback server — no seeded history. The fake server's tool-call queue
@@ -17,13 +17,32 @@
  *        successful outputs render as durable re-homed generated images,
  *        serialized parent tool result carries SlimmedOutputImage only
  *        (no local_path / outputFilePaths / data:image / base64).
- *   R-2  Stop mid-batch → completed retained, queued cancelled, Retry-failed
- *        resumes only failed/cancelled.
+ *   R-2  Stop mid-batch → completed retained, queued cancelled.
  *   R-3  Use a batch-produced image as reference in a follow-up edit →
  *        resolves under the PARENT conversation/message identity.
+ *   R-4  The batch confirm executes in the user's reference order: clicking
+ *        the four tiles in reverse order yields a persisted record whose
+ *        items (bounded, per-item receipt) carry the reversed imageIndex
+ *        sequence — no silent reordering between confirm and execution.
+ *   R-5  Partial success: one worker 500 → the settled record is status
+ *        "partial" (3 of 4), exactly one failed item + one failure row, and
+ *        the Retry-failed action appears with count (1).
+ *   R-6  Retry failed only: the retry action resubmits exactly the failed
+ *        reference — exactly one new worker (image-edit) provider request,
+ *        not a full 4-request re-run — and the retry turn's record is 1/1.
+ *   R-7  Trusted Save: with no approved workspace the export is queued and
+ *        the request-workspace card opens; confirming the folder (deterministic
+ *        E2E dialog) approves the workspace, auto-retries the export, and the
+ *        file exists under the approved workspace root.
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
+import {
+  launchAiFetchly,
+  type LaunchedApp,
+} from "../fixtures/electronApp";
+import { writeStateManifest } from "../fixtures/temporaryState";
+import { closeApp } from "../support/processCleanup";
 import { assertCleanTeardown } from "../support/assertions";
 import {
   chatRoot,
@@ -34,6 +53,23 @@ import {
   createConversationWithStreamedTurn,
 } from "../support/generatedImageSeed";
 import type { ScriptedToolCall } from "../fixtures/fakeOpenAiServer";
+import type { FakeAiScenarioName } from "../scenarios/openAiProtocol";
+import type { E2ETestRoot } from "../fixtures/types";
+import * as fs from "fs";
+import * as path from "path";
+
+/**
+ * Minimal shape of the fake Ai fixture used by these tests (only the
+ * controls the spec relies on — keeps the script independent of the full
+ * FakeAi surface).
+ */
+interface FakeAiShape {
+  setScenario: (name: FakeAiScenarioName) => Promise<void>;
+  setToolCallQueue: (calls: readonly ScriptedToolCall[]) => Promise<void>;
+  getRequests: () => Promise<
+    readonly { imagePartHashes: readonly string[] }[]
+  >;
+}
 
 /** Four distinct valid 1x1 PNGs (red/green/blue/yellow) so each worker
  * serves a resolvable, distinguishable generated image. */
@@ -77,6 +113,24 @@ async function drainBatchApprovals(app: {
   }
 }
 
+/**
+ * Soft drain for the TRUSTED retry path: the confirmed-batch channel is
+ * pre-approved on the server side, so NO permission card is raised (run
+ * evidence: the retry settles without any card). Grant any card that does
+ * appear, but never fail when none shows.
+ */
+async function drainBatchApprovalsIfAny(app: {
+  readonly mainWindow: import("@playwright/test").Page;
+}): Promise<void> {
+  const allowOnce = app.mainWindow.getByTestId("ai-chat-permission-allow-once");
+  for (let i = 0; i < 4; i += 1) {
+    if ((await allowOnce.count()) === 0) return;
+    await allowOnce.first().click();
+    // Decision settles and a follow-up request (if any) needs a beat.
+    await app.mainWindow.waitForTimeout(1_500);
+  }
+}
+
 test.describe("Generated-image batch — live (Electron integration)", () => {
   test.setTimeout(240_000);
   test.afterEach(({ app, aiApp }) => {
@@ -90,6 +144,30 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
   // (AiChatCenterSurface mounts GeneratedImageBatchConfirmDialog and the
   // shell transcript renders AiChatV2Message batch classes), so the
   // former skip ("surface not ported") was obsolete — V01 item.
+
+  // R-7 launches under an extended fixture whose state manifest presets the
+  // deterministic native dialog response: the workspace folder pick resolves
+  // to the E2E root's workspace path (approval flow, FR-WSP-007).
+  const batchTest = test.extend<{ aiAppWithWorkspacePick: LaunchedApp }>({
+    aiAppWithWorkspacePick: async ({ testRoot, fakeAi }, use) => {
+      await fakeAi.reset();
+      writeStateManifest(testRoot, {
+        authState: "authenticated",
+        aiState: "local-enabled",
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: testRoot.workspacePath,
+        dialogResponses: {
+          open: { action: "confirmed", paths: [testRoot.workspacePath] },
+        },
+      });
+      const app = await launchAiFetchly({
+        testRoot,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+      await use(app);
+      await closeApp(app);
+    },
+  });
 
   test("R-1: a no-workspace 4-image batch renders progress and durable re-homed outputs", async ({
     aiApp,
@@ -543,5 +621,410 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
       expect(url).not.toContain("agent-v2-");
       expect(url).not.toContain("agent-assistant-");
     }
+  });
+
+  /**
+   * Shared setup for R-4..R-6: seed a conversation with 4 generated images
+   * and select them as batch references in the given tile order.
+   */
+  async function seedAndSelectBatchInputs(
+    aiApp: LaunchedApp,
+    fakeAi: FakeAiShape,
+    testRoot: E2ETestRoot,
+    marker: string,
+    /** Tile order to click (default R-1's left-to-right). */
+    clickOrder: readonly number[] = [0, 1, 2, 3]
+  ): Promise<import("@playwright/test").Locator> {
+    await fakeAi.setScenario("stream-text");
+    await createConversationWithStreamedTurn(aiApp, marker);
+    await seedGeneratedImagesOnLastTurn(aiApp, testRoot, marker, [
+      { fileName: "a.png", pngBase64: PNG_A },
+      { fileName: "b.png", pngBase64: PNG_B },
+      { fileName: "c.png", pngBase64: PNG_C },
+      { fileName: "d.png", pngBase64: PNG_D },
+    ]);
+    await startNewConversation(aiApp);
+    await switchToConversationByMarker(aiApp, marker);
+
+    const root = chatRoot(aiApp);
+    const imageBlocks = root.locator(".v2-message__generated-image");
+    await expect(imageBlocks).toHaveCount(4);
+    for (const i of clickOrder) {
+      await imageBlocks
+        .nth(i)
+        .getByRole("button", { name: "Use as reference" })
+        .click();
+    }
+    return root;
+  }
+
+  /**
+   * Read the settled `process_artifact_batch` result from persisted history
+   * (first conversation that carries one). Returns the durable tool_result.
+   */
+  async function readSettledBatchRecord(
+    aiApp: LaunchedApp
+  ): Promise<Record<string, unknown> | null> {
+    return (await aiApp.mainWindow.evaluate(async () => {
+      const api = (
+        window as unknown as {
+          api: {
+            invoke: (
+              c: string,
+              d?: unknown
+            ) => Promise<{ status: boolean; data: unknown } | undefined>;
+          };
+        }
+      ).api;
+      const convResp = await api.invoke(
+        "ai-chat-v2:conversations",
+        JSON.stringify({})
+      );
+      const convs = (convResp?.data ?? []) as Array<{ conversationId: string }>;
+      for (const conv of convs) {
+        const histResp = await api.invoke(
+          "ai-chat-v2:history",
+          JSON.stringify({ conversationId: conv.conversationId })
+        );
+        const histData = (histResp?.data ?? {}) as {
+          messages?: Array<{
+            messageType?: string;
+            metadata?: { toolName?: string; toolResult?: unknown };
+          }>;
+        };
+        // The LAST batch tool_result in history — a retry turn adds a
+        // second record, and the newest one is the assertion target.
+        const batches = (histData.messages ?? []).filter(
+          (m) =>
+            m.messageType === "tool_result" &&
+            m.metadata?.toolName === "process_artifact_batch"
+        );
+        const batch = batches[batches.length - 1];
+        if (batch) return batch.metadata?.toolResult ?? null;
+      }
+      return null;
+    })) as Record<string, unknown> | null;
+  }
+
+  /** Unwrap the bounded receipt envelope's aggregate record (toolOutputPreview). */
+  function unwrapBatchRecord(
+    toolResult: Record<string, unknown> | null
+  ): Record<string, unknown> {
+    const preview =
+      toolResult?.toolOutputPreview ??
+      toolResult ??
+      null;
+    if (typeof preview === "string") {
+      return JSON.parse(preview) as Record<string, unknown>;
+    }
+    return preview as Record<string, unknown>;
+  }
+
+  /** Questionless common script for a plain 4-image batch. */
+  function batchQueue(
+    extraWorkerEntries: readonly ScriptedToolCall[] = []
+  ): ScriptedToolCall[] {
+    return [
+      {
+        name: "tool_catalog_search",
+        arguments: JSON.stringify({ query: "batch edit" }),
+      },
+      {
+        name: "process_artifact_batch",
+        arguments: JSON.stringify({
+          instruction: "make the lighting warmer",
+          generatedImageReferences: [
+            { messageId: "placeholder", imageIndex: 0 },
+          ],
+          processor: "image_edit",
+        }),
+      },
+      ...extraWorkerEntries,
+      { scenario: "stream-text" },
+    ];
+  }
+
+  test("R-4: the batch executes in the user's confirmed reference order (FR-IMG-008)", async ({
+    aiApp,
+    fakeAi,
+    testRoot,
+  }) => {
+    // Select tiles in REVERSE order: the tray captures click order, so a
+    // faithful execution keeps [3,2,1,0] in the persisted record.
+    const root = await seedAndSelectBatchInputs(
+      aiApp,
+      fakeAi,
+      testRoot,
+      `e2e-batch-order-${Date.now()}`,
+      [3, 2, 1, 0]
+    );
+
+    await fakeAi.setToolCallQueue(
+      batchQueue([
+        imageScenario(PNG_A),
+        imageScenario(PNG_B),
+        imageScenario(PNG_C),
+        imageScenario(PNG_D),
+      ])
+    );
+
+    await composerTextarea(aiApp).fill("make the lighting warmer");
+    await aiApp.mainWindow.getByTestId("ai-chat-send").click();
+    const confirmDialog = aiApp.mainWindow.getByTestId(
+      "ai-chat-generated-batch-confirm"
+    );
+    await expect(confirmDialog).toBeVisible({ timeout: 30_000 });
+    await expect(confirmDialog).toContainText("Process as batch?");
+    await expect(confirmDialog).toContainText("All 4 selected images");
+    await aiApp.mainWindow
+      .getByTestId("ai-chat-generated-batch-confirm-accept")
+      .click();
+
+    const permCard = aiApp.mainWindow
+      .getByTestId("ai-chat-permission-card")
+      .first();
+    await expect(permCard).toBeVisible({ timeout: 30_000 });
+    await drainBatchApprovals(aiApp);
+    await expect(composerTextarea(aiApp)).not.toBeDisabled({
+      timeout: 90_000,
+    });
+
+    const record = unwrapBatchRecord(await readSettledBatchRecord(aiApp));
+    expect(record.requestedCount).toBe(4);
+    expect(record.completedCount).toBe(4);
+    const items = (record.items ?? []) as Array<{
+      input?: { reference?: { messageId?: string; imageIndex?: number } };
+    }>;
+    expect(items.length).toBe(4);
+    // The confirmed click order is preserved end-to-end: items sit in the
+    // exact reverse order the user made (imageIndexes 3,2,1,0).
+    expect(
+      items.map((it) => it.input?.reference?.imageIndex)
+    ).toEqual([3, 2, 1, 0]);
+    // All four sources participated (no item dropped or duplicated).
+    expect(
+      new Set(items.map((it) => it.input?.reference?.imageIndex)).size
+    ).toBe(4);
+    // Durable outputs still render (4 seeded + >=4 batch outputs).
+    const tiles = await root.locator(".v2-message__generated-image").count();
+    expect(tiles).toBeGreaterThanOrEqual(4);
+  });
+
+  test("R-5: partial success surfaces a failed item with its error and the retry action", async ({
+    aiApp,
+    fakeAi,
+    testRoot,
+  }) => {
+    const root = await seedAndSelectBatchInputs(
+      aiApp,
+      fakeAi,
+      testRoot,
+      `e2e-batch-partial-${Date.now()}`
+    );
+
+    // The FIRST scripted worker entry is the 5xx — whichever worker pops it,
+    // exactly one item fails and three complete.
+    await fakeAi.setToolCallQueue(
+      batchQueue([
+        { scenario: "http-500" },
+        imageScenario(PNG_A),
+        imageScenario(PNG_B),
+        imageScenario(PNG_C),
+      ])
+    );
+
+    await composerTextarea(aiApp).fill("make the lighting warmer");
+    await aiApp.mainWindow.getByTestId("ai-chat-send").click();
+    const dlg = aiApp.mainWindow.getByTestId("ai-chat-generated-batch-confirm");
+    await expect(dlg).toBeVisible({ timeout: 30_000 });
+    await aiApp.mainWindow
+      .getByTestId("ai-chat-generated-batch-confirm-accept")
+      .click();
+    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
+    await expect(pc).toBeVisible({ timeout: 30_000 });
+    await drainBatchApprovals(aiApp);
+    await expect(composerTextarea(aiApp)).not.toBeDisabled({
+      timeout: 90_000,
+    });
+
+    // The settled record is partial: 3 of 4 with exactly one failed item.
+    const record = unwrapBatchRecord(await readSettledBatchRecord(aiApp));
+    expect(record.status).toBe("partial");
+    expect(record.requestedCount).toBe(4);
+    expect(record.completedCount).toBe(3);
+    const items = (record.items ?? []) as Array<{
+      status?: string;
+      error?: string;
+      input?: { reference?: { imageIndex?: number } };
+    }>;
+    expect(items.length).toBe(4);
+    const failedItems = items.filter((it) => it.status === "failed");
+    expect(failedItems.length).toBe(1);
+    expect(failedItems[0].error).toBeTruthy();
+    expect(
+      new Set(items.map((it) => it.input?.reference?.imageIndex)).size
+    ).toBe(4);
+
+    // The transcript card surfaces the status, the failure rows and the
+    // Retry-failed action for exactly 1 item.
+    await expect(root.locator(".v2-message__batch-summary").first())
+      .toContainText("partial", { timeout: 30_000 });
+    const failureRows = root.locator(".v2-message__batch-failure-row");
+    await expect(failureRows).toHaveCount(1, { timeout: 30_000 });
+    // Localized batch failure text (translatedBatchError maps the worker
+    // 5xx to "AI provider returned a server error. Try again later.").
+    await expect(failureRows.first()).toContainText(
+      "AI provider returned a server error"
+    );
+    await expect(root.locator(".v2-message__batch-retry").first())
+      .toContainText("(1)", { timeout: 30_000 });
+  });
+
+  test("R-6: Retry failed only resubmits the failed reference, never the whole batch", async ({
+    aiApp,
+    fakeAi,
+    testRoot,
+  }) => {
+    const root = await seedAndSelectBatchInputs(
+      aiApp,
+      fakeAi,
+      testRoot,
+      `e2e-batch-retry-${Date.now()}`
+    );
+
+    await fakeAi.setToolCallQueue(
+      batchQueue([
+        { scenario: "http-500" },
+        imageScenario(PNG_A),
+        imageScenario(PNG_B),
+        imageScenario(PNG_C),
+      ])
+    );
+    await composerTextarea(aiApp).fill("make the lighting warmer");
+    await aiApp.mainWindow.getByTestId("ai-chat-send").click();
+    const dlg = aiApp.mainWindow.getByTestId("ai-chat-generated-batch-confirm");
+    await expect(dlg).toBeVisible({ timeout: 30_000 });
+    await aiApp.mainWindow
+      .getByTestId("ai-chat-generated-batch-confirm-accept")
+      .click();
+    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
+    await expect(pc).toBeVisible({ timeout: 30_000 });
+    await drainBatchApprovals(aiApp);
+    // REAL settle gate (the composer never disables while a turn runs):
+    // the run strip's "Working…" pill disappears only at the turn terminal.
+    await expect(
+      aiApp.mainWindow.getByText("Working…")
+    ).toHaveCount(0, { timeout: 120_000 });
+    // Worker requests (image-edit provider calls) are identifiable by their
+    // image_url parts (the isolated worker's packet). A full re-run would be
+    // THREE new worker requests; a failed-only retry must be exactly ONE.
+    const countImageRequests = (
+      rs: readonly { imagePartHashes: readonly string[] }[]
+    ): number => rs.filter((r) => r.imagePartHashes.length > 0).length;
+    const beforeRetry = countImageRequests(await fakeAi.getRequests());
+
+    // Script ONLY the retry's own provider interactions: the retry turn is
+    // a queued turn whose confirmed refs are STAGED at dispatch (FR-IMG-011)
+    // and consumed by its process_artifact_batch call — so the model must
+    // raise the tool (catalog search + batch call) again; the staged set
+    // replaces the placeholder arg refs. If the retry re-ran all four, the
+    // remaining three pops would stream text and the record would not
+    // settle 1/1.
+    await fakeAi.setToolCallQueue(batchQueue([imageScenario(PNG_D)]));
+
+    await root.locator(".v2-message__batch-retry").first().click();
+    // The retry runs on the TRUSTED confirmed-batch channel — no permission
+    // card is expected; grant one only if the flow still raises it.
+    await drainBatchApprovalsIfAny(aiApp);
+    // Settle gate: the retried turn's terminal (run strip clears).
+    await expect(
+      aiApp.mainWindow.getByText("Working…")
+    ).toHaveCount(0, { timeout: 120_000 });
+
+    const imageRequestsAfter = countImageRequests(await fakeAi.getRequests());
+    expect(imageRequestsAfter - beforeRetry).toBe(1);
+
+    // The retry turn's own settled record is the 1-item batch: 1/1.
+    const retryRecord = unwrapBatchRecord(await readSettledBatchRecord(aiApp));
+    expect(retryRecord.requestedCount).toBe(1);
+    expect(retryRecord.completedCount).toBe(1);
+    const retryItems = (retryRecord.items ?? []) as Array<{
+      status?: string;
+    }>;
+    expect(retryItems.length).toBe(1);
+    expect(retryItems[0].status).toBe("completed");
+  });
+
+  batchTest("R-7: trusted Save queues without a workspace and lands the file after approval", async ({
+    aiAppWithWorkspacePick: aiApp,
+    fakeAi,
+    testRoot,
+  }) => {
+    const root = await seedAndSelectBatchInputs(
+      aiApp,
+      fakeAi,
+      testRoot,
+      `e2e-batch-save-${Date.now()}`
+    );
+
+    await fakeAi.setToolCallQueue(
+      batchQueue([
+        imageScenario(PNG_A),
+        imageScenario(PNG_B),
+        imageScenario(PNG_C),
+        imageScenario(PNG_D),
+      ])
+    );
+    await composerTextarea(aiApp).fill("make the lighting warmer");
+    await aiApp.mainWindow.getByTestId("ai-chat-send").click();
+    const dlg = aiApp.mainWindow.getByTestId("ai-chat-generated-batch-confirm");
+    await expect(dlg).toBeVisible({ timeout: 30_000 });
+    await aiApp.mainWindow
+      .getByTestId("ai-chat-generated-batch-confirm-accept")
+      .click();
+    const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
+    await expect(pc).toBeVisible({ timeout: 30_000 });
+    await drainBatchApprovals(aiApp);
+    await expect(composerTextarea(aiApp)).not.toBeDisabled({
+      timeout: 90_000,
+    });
+
+    // The save is queued — the toast names the missing workspace and the
+    // request-workspace card opens.
+    const tiles = root.locator(".v2-message__generated-image");
+    const tileCount = await tiles.count();
+    expect(tileCount).toBeGreaterThanOrEqual(4);
+    await tiles
+      .nth(tileCount - 1)
+    .getByRole("button", { name: "Save to workspace" })
+    .click();
+    // The workspace shell reports export outcomes in its deferred-image
+    // notice (the ai-chat-generated-error-toast id belongs to AiChatV2).
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-genimg-notice")
+    ).toContainText("approved workspace is required", { timeout: 15_000 });
+    const wsCard = aiApp.mainWindow.getByTestId("workspace-required");
+    await expect(wsCard).toBeVisible({ timeout: 15_000 });
+
+    // Confirm the folder pick through the deterministic E2E dialog: the
+    // workspace is created + approved in the MAIN process, the card's
+    // approved event adopts it, and the queued export auto-retries.
+    await wsCard.getByRole("button", { name: "Pick folder" }).click();
+
+    // The saved toast carries the file name; the file must exist under the
+    // approved workspace root (written by the trusted export path).
+    const savedToast = aiApp.mainWindow.getByTestId(
+      "workspace-genimg-notice"
+    );
+    await expect(savedToast).toContainText("Saved", { timeout: 60_000 });
+    const toastText = await savedToast.textContent();
+    const nameMatch = toastText?.match(/Saved (.+?) to your workspace\./);
+    expect(nameMatch).not.toBeNull();
+    const savedFile = path.join(
+      testRoot.workspacePath,
+      "generated-artifacts",
+      nameMatch?.[1] ?? ""
+    );
+    expect(fs.existsSync(savedFile)).toBe(true);
   });
 });
