@@ -79,6 +79,9 @@ import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   getRunOwnerResumeRouter,
 } from "@/service/aiChatWorkspaceRuntime";
+import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -653,7 +656,6 @@ function broadcastQueueSummary(input: {
   });
 }
 
-/**
 export function getQueueService(): AIChatTurnQueueService {
   if (!queueService) {
     const pendingModule = new AIChatPendingMessageModule();
