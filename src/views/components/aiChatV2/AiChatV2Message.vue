@@ -1324,6 +1324,61 @@ function asNonNegativeInteger(value: unknown): number | null {
     : null;
 }
 
+/** A record is batch-shaped when it carries a recognized aggregate status. */
+function isBatchShapedRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  // Capture the status read so the Set-membership call sees the string the
+  // typeof guard proved (re-reading the property loses the narrowing).
+  const status = (value as Record<string, unknown>).status;
+  return typeof status === "string" && BATCH_RESULT_STATUSES.has(status);
+}
+
+/**
+ * Unwrap the serialized batch payload. The settled `process_artifact_batch`
+ * result is externalized by design (SlimmedOutput: no inlined outputs in the
+ * durable tool_result), so the batch record rides in the first
+ * `toolOutputRefs[].toolOutputPreview` JSON string. Preview content is
+ * already producer-sanitized, but unwrapping is still defensive: anything
+ * that does not parse into a batch-shaped record is rejected.
+ */
+function deserializeBatchRecord(
+  result: Record<string, unknown>
+): Record<string, unknown> | null {
+  // Route the guard through an `unknown` alias: narrowing Record<string,
+  // unknown> by its own type predicate would leave the fall-through branch
+  // typed `never` and break the property reads below.
+  const input: unknown = result;
+  if (isBatchShapedRecord(input)) return input;
+  const candidates: readonly unknown[] = [
+    ...(Array.isArray(result.toolOutputRefs) ? result.toolOutputRefs : []),
+    typeof result.toolOutputPreview === "string"
+      ? result.toolOutputPreview
+      : null,
+  ];
+  for (const candidate of candidates) {
+    let preview: string | null = null;
+    if (typeof candidate === "string") {
+      preview = candidate;
+    } else if (
+      candidate &&
+      typeof candidate === "object" &&
+      typeof (candidate as Record<string, unknown>).toolOutputPreview ===
+        "string"
+    ) {
+      preview = (candidate as Record<string, unknown>)
+        .toolOutputPreview as string;
+    }
+    if (!preview) continue;
+    try {
+      const parsed = JSON.parse(preview) as unknown;
+      if (isBatchShapedRecord(parsed)) return parsed;
+    } catch {
+      // Not JSON — skip this preview rather than guessing at its content.
+    }
+  }
+  return null;
+}
+
 /** Workspace-file items are identified by file name only — never the path. */
 function pathBaseName(path: string): string {
   const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
@@ -1363,7 +1418,11 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return null;
   }
-  const record = result as Record<string, unknown>;
+  const unwrapped = deserializeBatchRecord(result);
+  if (!unwrapped) {
+    return null;
+  }
+  const record = unwrapped;
   const status =
     typeof record.status === "string" && BATCH_RESULT_STATUSES.has(record.status)
       ? record.status

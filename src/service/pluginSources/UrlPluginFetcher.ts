@@ -59,11 +59,14 @@ function isE2ELoopbackHttpZipUrl(raw: string): boolean {
 
 export function classifyUrlKind(raw: string): UrlClass {
   if (!raw) return "unknown";
-  if (raw.startsWith("http://")) return "rejected";
   // GitHub FIRST (git-free GitHub plugin installation design §6.3): an
   // eligible github.com URL — including a trailing .git — must take the
   // archive path, never native Git. Non-GitHub .git stays Git.
   if (/^https:\/\/github\.com\//i.test(raw)) return "github";
+  // Insecure http is rejected EXCEPT the E2E-only loopback .zip gate below
+  // (both AIFETCHLY_E2E variables set). The unconditional early reject that
+  // used to sit above the GitHub check made this branch unreachable and
+  // broke the gate — non-loopback http still lands on "rejected" here.
   if (raw.startsWith("http://")) {
     return isE2ELoopbackHttpZipUrl(raw) ? "zip" : "rejected";
   }
