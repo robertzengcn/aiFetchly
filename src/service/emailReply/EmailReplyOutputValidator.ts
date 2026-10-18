@@ -4,24 +4,29 @@ import { REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVe
  * Deterministic validation of generated reply content (technical design §13,
  * FR-010, FR-012, P0.4). Pure function: takes subject + body, returns
  * machine-readable findings + a version. The approval service blocks any
- * revision with a `block` or `review` finding from reaching `approved`.
+ * revision with a `block` finding from reaching `approved`.
  *
- * Finding severities:
+ * Finding severities (two tiers since 2026-10-18):
  *  - block:   AI disclosure / prompt / tool / retrieval leakage; configured
- *             forbidden phrases. Never sendable.
- *  - review:  unsupported commitments (refund/discount/guaranteed price or date,
+ *             forbidden phrases. Never sendable — approval refuses.
+ *  - warning: unsupported commitments (refund/discount/guaranteed price or date,
  *             legal/credential/account), new URLs, payment instructions, new
- *             recipients, attachment-inspection claims. Visible as a draft but
- *             approval is blocked until resolved (no resolve-UI yet, so review
- *             also blocks approval in this release).
- *  - warning: informational; does not block.
+ *             recipients, attachment-inspection claims. Advisory only: persisted
+ *             in `validationFindingsJson` for audit and does NOT gate approval —
+ *             the send tool's `requiresConfirmation` gesture (or the renderer's
+ *             explicit approve action) is the human gate for advisory content.
+ *
+ * Revisions materialized before 2026-10-18 may persist the retired `review`
+ * severity in their stored findings JSON; that value was non-gating after the
+ * demotion and is never re-read for decisions.
  *
  * Patterns are intentionally broad and multilingual; they err toward flagging
- * (review) rather than letting an unsafe claim through. Obfuscation (leetspeak,
- * zero-width spacing, inserted punctuation) is normalized before matching.
+ * (as warnings) rather than letting an unsafe claim pass unnoticed.
+ * Obfuscation (leetspeak, zero-width spacing, inserted punctuation) is
+ * normalized before matching.
  */
 
-export type EmailReplyValidationSeverity = "block" | "review" | "warning";
+export type EmailReplyValidationSeverity = "block" | "warning";
 
 export interface EmailReplyValidationFinding {
   readonly code: string;
@@ -31,7 +36,6 @@ export interface EmailReplyValidationFinding {
 }
 
 export interface EmailReplyValidationResult {
-  readonly validForReview: boolean;
   readonly sendableAfterApproval: boolean;
   readonly findings: readonly EmailReplyValidationFinding[];
   readonly validatorVersion: string;
@@ -61,27 +65,27 @@ const LEAKAGE_PATTERNS: readonly CompiledPattern[] = [
   code("leakage_angle_brackets", /<[#/]?(?:system|imagine|instructions?|context|tool)>/i, "Generated text contains prompt-style angle-bracket tags"),
 ];
 
-// ---- Unsupported commitments (review) ----
+// ---- Unsupported commitments (advisory warning) ----
 const COMMITMENT_PATTERNS: readonly CompiledPattern[] = [
-  review("commitment_refund", /\brefund[s]?\b|reimburse/i, "Draft mentions a refund/reimbursement (unsupported commitment)"),
-  review("commitment_discount", /\bdiscount\b|\b\d+\s*%\s*off\b|\bcoupon\b/i, "Draft offers a discount (unsupported commitment)"),
-  review("commitment_guaranteed_price", /\bguarantee(?:d)?\s+(?:price|rate|cost|quote)\b|\block(?:ed)?[- ]?in price\b/i, "Draft guarantees a price (unsupported commitment)"),
-  review("commitment_guaranteed_date", /\bguarantee(?:d)?\s+(?:delivery|arrival|by|date)|definitely (?:arrive|deliver|ship)/i, "Draft guarantees a delivery date (unsupported commitment)"),
-  review("commitment_legal", /\blawsuit\b|\battorney\b|\blegal (?:action|counsel|advice)\b|\bsue\b/i, "Draft makes a legal commitment/interpretation (review)"),
-  review("commitment_credential", /\bpassword\b|\bcredentials?\b|\breset (?:your )?(?:password|login)\b|\b2fa\b|\bauth code\b/i, "Draft references credentials/password (review)"),
-  review("commitment_account_change", /\b(?:delete|close|cancel|upgrade|downgrade)\s+(?:your\s+)?account\b|\bchange(?:\s+the)?\s+account\b/i, "Draft promises an account change (review)"),
-  review("commitment_payment_instruction", /\bwire (?:transfer|funds?)\b|\bbank (?:account|routing)\b|\bcredit card number\b|\bpaypal\b|\bbitcoin\b|\bcrypto(?:currency)? wallet\b|\bvenmo\b|\bzelle\b/i, "Draft gives payment instructions (review)"),
+  warn("commitment_refund", /\brefund[s]?\b|reimburse/i, "Draft mentions a refund/reimbursement (unsupported commitment)"),
+  warn("commitment_discount", /\bdiscount\b|\b\d+\s*%\s*off\b|\bcoupon\b/i, "Draft offers a discount (unsupported commitment)"),
+  warn("commitment_guaranteed_price", /\bguarantee(?:d)?\s+(?:price|rate|cost|quote)\b|\block(?:ed)?[- ]?in price\b/i, "Draft guarantees a price (unsupported commitment)"),
+  warn("commitment_guaranteed_date", /\bguarantee(?:d)?\s+(?:delivery|arrival|by|date)|definitely (?:arrive|deliver|ship)/i, "Draft guarantees a delivery date (unsupported commitment)"),
+  warn("commitment_legal", /\blawsuit\b|\battorney\b|\blegal (?:action|counsel|advice)\b|\bsue\b/i, "Draft makes a legal commitment/interpretation"),
+  warn("commitment_credential", /\bpassword\b|\bcredentials?\b|\breset (?:your )?(?:password|login)\b|\b2fa\b|\bauth code\b/i, "Draft references credentials/password"),
+  warn("commitment_account_change", /\b(?:delete|close|cancel|upgrade|downgrade)\s+(?:your\s+)?account\b|\bchange(?:\s+the)?\s+account\b/i, "Draft promises an account change"),
+  warn("commitment_payment_instruction", /\bwire (?:transfer|funds?)\b|\bbank (?:account|routing)\b|\bcredit card number\b|\bpaypal\b|\bbitcoin\b|\bcrypto(?:currency)? wallet\b|\bvenmo\b|\bzelle\b/i, "Draft gives payment instructions"),
 ];
 
-// ---- Attachment-inspection claims (review) ----
+// ---- Attachment-inspection claims (advisory warning) ----
 const ATTACHMENT_CLAIM_PATTERNS: readonly CompiledPattern[] = [
-  review("attachment_inspection_claim", /\b(?:i|we)\s+(?:opened|read|checked|verified|inspected|reviewed)\s+(?:the\s+)?attach/i, "Draft claims the attachment was opened/read (the system never opens attachments)"),
+  warn("attachment_inspection_claim", /\b(?:i|we)\s+(?:opened|read|checked|verified|inspected|reviewed)\s+(?:the\s+)?attach/i, "Draft claims the attachment was opened/read (the system never opens attachments)"),
 ];
 
-// ---- URL detection (review) ----
+// ---- URL detection (advisory warning) ----
 const URL_PATTERN = /https?:\/\/[^\s)]+|www\.[^\s)]+/i;
 
-// ---- Recipient-in-body detection (review) ----
+// ---- Recipient-in-body detection (advisory warning) ----
 const NEW_RECIPIENT_PATTERN = /\b(?:cc|bcc|reply-all|forward to)\b/i;
 
 /** Default forbidden phrases (merged with any config-supplied list). */
@@ -93,8 +97,8 @@ const DEFAULT_FORBIDDEN_PHRASES: readonly string[] = [
 function code(codeStr: string, re: RegExp, message: string): CompiledPattern {
   return { code: codeStr, severity: "block", message, re };
 }
-function review(codeStr: string, re: RegExp, message: string): CompiledPattern {
-  return { code: codeStr, severity: "review", message, re };
+function warn(codeStr: string, re: RegExp, message: string): CompiledPattern {
+  return { code: codeStr, severity: "warning", message, re };
 }
 
 /**
@@ -104,7 +108,7 @@ function review(codeStr: string, re: RegExp, message: string): CompiledPattern {
  */
 export function normalizeForValidation(text: string): string {
   return text
-    .replace(/[​-‍﻿]/g, "") // zero-width chars
+    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width chars
     .replace(/[4@]/g, "a")
     .replace(/[3]/g, "e")
     .replace(/[1!|]/g, "i")
@@ -149,7 +153,7 @@ export function validateReplyOutput(
   if (urlMatch) {
     findings.push({
       code: "new_url",
-      severity: "review",
+      severity: "warning",
       message: "Draft introduces a URL not present in the inbound message",
       evidence: urlMatch[0].slice(0, 120),
     });
@@ -158,7 +162,7 @@ export function validateReplyOutput(
   if (recipientMatch) {
     findings.push({
       code: "new_recipient_directive",
-      severity: "review",
+      severity: "warning",
       message: "Draft references cc/bcc/forward/reply-all (reply-all is off by default)",
       evidence: recipientMatch[0],
     });
@@ -177,10 +181,8 @@ export function validateReplyOutput(
   }
 
   const hasBlock = findings.some((f) => f.severity === "block");
-  const hasReview = findings.some((f) => f.severity === "review");
   return {
-    validForReview: !hasBlock,
-    sendableAfterApproval: !hasBlock && !hasReview,
+    sendableAfterApproval: !hasBlock,
     findings,
     validatorVersion: REPLY_VALIDATOR_VERSION,
   };

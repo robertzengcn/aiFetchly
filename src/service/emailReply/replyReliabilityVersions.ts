@@ -5,6 +5,12 @@
  * forbidden-phrase lists, or submission classification change.
  */
 export const REPLY_POLICY_VERSION = "reply-policy-v2-1";
+// 2026-10-18: the review→warning severity demotion deliberately does NOT bump
+// REPLY_VALIDATOR_VERSION. This constant is folded into the revision content
+// hash (EmailReplyRevisionHasher), so bumping it would strand every existing
+// revision as "content hash is stale" and refuse approval — recreating the
+// send deadlock the demotion fixed. Bump only when the PATTERNS change, and
+// pair any bump with a migration for in-flight revisions.
 export const REPLY_VALIDATOR_VERSION = "reply-validator-v2-1";
 
 /** Recovery threshold: an in-flight attempt older than this is ambiguous. */

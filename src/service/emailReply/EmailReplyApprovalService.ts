@@ -121,17 +121,20 @@ export class EmailReplyApprovalService {
 
     // Re-run the deterministic output validator against the trusted revision
     // content (do not trust persisted JSON alone) and refuse approval for any
-    // block/review finding (FR-012, P0.4). Block findings are never sendable;
-    // review findings need a resolution path that doesn't exist yet, so they
-    // also block approval in this release.
+    // `block` finding (FR-012, P0.4). Block findings (AI/leakage disclosure,
+    // forbidden phrases) are never sendable. Advisory findings (commitments,
+    // URLs, payment instructions, recipients, attachment claims) are recorded
+    // as warnings on the revision and do NOT gate approval here — the send
+    // tool's `requiresConfirmation` confirmation gesture (or the renderer's
+    // explicit approve action) is the human gate for advisory content.
     const validation = validateReplyOutput(revision.subject, revision.bodyText);
     if (!validation.sendableAfterApproval) {
       const codes = validation.findings
-        .filter((f) => f.severity !== "warning")
+        .filter((f) => f.severity === "block")
         .map((f) => f.code)
         .join(",");
       throw new Error(
-        `Cannot approve: validation findings [${codes}] require review before sending`
+        `Cannot approve: validation findings [${codes}] are hard blocks and cannot be sent`
       );
     }
 
