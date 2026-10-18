@@ -242,6 +242,29 @@ Every functional requirement range in the PRD is represented below. **Present** 
 | PRD §19/20; design §17/18 | Bounded history, summary routing, batching, counters and performance tests exist; this audit did not certify every metric/resource limit | R01/R02 capacity; V01/V02 performance/privacy evidence |
 | PRD §28 / design §26 Definition of Done | Not met despite passing static/component/selected unit gates | Resolve bugs, A01/A02 and V01–V03 before declaring parity |
 
+## Remediation addendum (2026-10-18 session)
+
+- R01–R06, R08, R12 were remediated in earlier commits on this branch
+  (dd38eb9d, 2a76291f, a26d20b6, 0aeee490, 212e3519/89588306/de912e48,
+  6a04807a/f9b066b6, 076b910d, d62ab9de).
+- R07 (speech cancellation on switch/Stop): c10e44cd.
+- R09 (loop attachments + control failures): e3fb90bc.
+- R10 (command error//clear ownership): a71a9f2c.
+- R11 (V2 accepted-send contract): 8d50cd25-era commit series — see
+  `AiChatV2.acceptedSendContract.test.ts`.
+- R13 (background acknowledgement reconciliation): 46e613d3.
+- A02 partial: mount-time shell enforcement never overwrites an explicit
+  rollback (5607302e). The remaining §23.1 independent adapters stay open.
+- Verified review fixes landed alongside: preload invoke-allowlist gaps
+  (AGENT_TASK_CANCEL + platform/social/login/paste channels) with a
+  source-scan parity guard, the (owner, sourceId) run index, the
+  AgentRuntime abort-map leak, static guidance for PREPARATION_FAILED/
+  DISPATCH_PROMOTE_FAILED, and the shared image-URL allowlist.
+- Still open: A01 (full shared orchestration / V2 extraction — owner
+  decision), A02 remainder (independent rollout adapters + renderer
+  rollback drill through the real V2 entry), A03 doc reconciliation
+  (done in this session), V01/V02/V03 release gates.
+
 ## Suggested execution order
 
 1. Fix R01–R04 and R12 with real scheduler/parked-continuation/selection/crash tests; they can stall work or select the wrong approval policy.

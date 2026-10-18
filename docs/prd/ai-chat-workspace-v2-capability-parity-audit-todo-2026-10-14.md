@@ -1,5 +1,15 @@
 # Workspace / Chat V2 capability parity — current audit and TODO
 
+> **HISTORICAL REMEDIATION RECORD (A03, audit 2026-10-17).** This file and
+> the 2026-10-14 audit todo are point-in-time remediation records, NOT
+> current acceptance evidence. The current authority for remaining work is
+> [the 2026-10-17 audit](./ai-chat-workspace-v2-capability-parity-audit-todo-2026-10-17.md):
+> its R01–R13 findings, A01–A03 architecture items and V01–V03 release
+> gates supersede the checked/unchecked tables preserved below. Do not
+> re-litigate closed B01–B16/T1–T9 items from here without checking that
+> audit first — several of its descriptions of then-current bugs are
+> already fixed on this branch.
+
 Audit date: 2026-10-14  
 Audited branch: `workspace-v2-capability-parity`  
 Audited source HEAD: `db58c9a2627c2697fe54d79d903f7093b6adf4ba`  
