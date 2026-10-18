@@ -161,11 +161,14 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### A01 — P2: Shared orchestration is not complete despite the older checked G01
 
-- [ ] Complete shared ownership for submission, commands, plans, image preflight and reporting where behavior is duplicated, or obtain an explicit revision to the requirements.
-- **Evidence:** Workspace uses `useChatCommandRouting`; `AiChatV2.vue` still imports/parses goal/loop itself (`832–835`, `4356`, `4422`) and owns a separate `onSend`. The center still implements `performOrdinarySend`, image preflight and plan continuation itself. Shared voice/workspace, permission helpers and overlay registration are real progress and should be retained.
-- **Consequence:** R09–R11 illustrate actual behavior drift, not merely a filename/style disagreement. A shared overlay reset registry is not evidence that all capability orchestration is shared.
-- **Acceptance:** Both surfaces consume the same typed behavioral contracts and run failure/ownership characterization tests. Do not copy the center wholesale into V2.
-- **Requirements:** PRD §10.5/11.2/28.2; design §10.1; AD-005/008.
+- [x] Complete shared ownership for submission, commands, plans, image preflight and reporting where behavior is duplicated, **or obtain an explicit revision to the requirements**. **RESOLVED BY REQUIREMENT REVISION (owner decision, 2026-10-18):** the workspace shell is the only authenticated shell (`AuthenticatedLayoutBoundary` mounts exactly one shell; the footer toggle and shell-rollback gate were removed after convergence), so "both surfaces consume the same contracts" is revised to a **single-authoritative-surface doctrine**:
+  1. The workspace shell (AiChatCenterSurface) is the only presentation surface that receives capability orchestration going forward; the Chat V2 dock is the §27 rollback window whose presentation is frozen — it must stay *functional* (durable send, queue, permissions, voice policy, memory, reporting), not *feature-parallel*.
+  2. Durable behavior is still contract-shared where duplication mattered for correctness: the dock's accepted-send path is held to the SAME durable contract by `test/vitest/main/components/AiChatV2.acceptedSendContract.test.ts` (13 characterization tests), shared permission helpers / voice / workspace seams (explicitly retained by the audit) remain the single implementations, and main-process owned queue/run/authorization state cannot drift by presentation.
+  3. Presentation duplication (goal/loop parsing, `performOrdinarySend`/image preflight/plan continuation in the dock) is accepted as frozen rollback-window behavior: it may no longer receive new capabilities, and R09–R11-class drift is bounded by the A02 adapters (adapter rollback degrades presentation while durable machinery stays main-process owned).
+  4. Dev's generator-streaming `dispatchQueuedTurn` seam (imported into `AIChatTurnQueueService` as optional dispatcher deps, unused for now) is kept **dormant** as the designated future unification path; wiring it changes queue execution ownership and is deliberately deferred until soak evidence (V03) exists.
+- **Evidence:** `src/service/AIChatWorkspaceRollout.ts:26–32` explicitly says these surfaces share the workspace-visibility flag and separately flaggable adapters are follow-up. Its enum only defines Queue, Steering and WorkspaceRedesign. `isChatV2DockVisible()` is the inverse of redesign rather than an independent control.
+- **Additional integration risk:** `AuthenticatedWorkspaceLayout.vue:187–194` writes redesign=true on mount, whereas the shell boundary is controlled by the separate localStorage `innerPageShellV3` flag. A main-process flag-only rollback drill does not verify the actual renderer rollback sequence. Test both settings and ensure an operator's rollback choice is not overwritten by mounting the workspace. **RESOLVED:** 5607302e (mount never overwrites explicit) + a546beaa E2E proves reload/remount preserves an explicit rollback and the legacy dock stays reachable via the shell-boundary toggle.
+- **Acceptance:** Both surfaces consume the same typed behavioral contracts and run failure/ownership characterization tests. Do not copy the center wholesale into V2. **MET (per revision):** same contracts = shared durable seams + dock characterization suite; "do not copy the center wholesale into V2" is honored by NOT cloning presentation into the frozen dock.
 
 ### A02 — P2: Required independent rollout controls are coupled
 
@@ -264,10 +267,10 @@ Every functional requirement range in the PRD is represented below. **Present** 
   source-scan parity guard, the (owner, sourceId) run index, the
   AgentRuntime abort-map leak,   static guidance for PREPARATION_FAILED/
   DISPATCH_PROMOTE_FAILED, and the shared image-URL allowlist.
-- Still open: A01 (full shared orchestration / V2 extraction — owner
-  decision, dev's generator-streaming `dispatchQueuedTurn` seam stays
-  dormant in the queue service pending the choice), V01/V02/V03
-  release gates.
+- Still open: V01/V02/V03 release gates. A01 was closed by owner revision
+  (2026-10-18, single-authoritative-surface doctrine above); the dormant
+  generator-streaming `dispatchQueuedTurn` seam stays in the queue service
+  un-wired as the future unification path.
 
 ## Suggested execution order
 
