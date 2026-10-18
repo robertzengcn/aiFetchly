@@ -13,7 +13,8 @@
  * UTF-8 (CJK) split across chunk boundaries is never corrupted — the exact
  * bug the legacy client had.
  */
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, execFile, type ChildProcess } from "child_process";
+import { promisify } from "util";
 import { TextDecoder } from "util";
 import { log } from "@/modules/Logger";
 import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
@@ -67,6 +68,27 @@ const DEFAULTS = {
   terminateCloseMs: 3_000,
 } as const;
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * H5 (win32): kill a whole process tree via taskkill /T /F. Return value is
+ * log-only — callers treat this as best-effort (the direct child SIGKILL
+ * already went out).
+ */
+async function killWindowsTree(pid: number): Promise<void> {
+  try {
+    await execFileAsync("taskkill", ["/pid", String(pid), "/T", "/F"]);
+  } catch (err) {
+    // Exit 128 + "not found" = the tree is already gone; anything else is
+    // still log-only here (the forced terminator owns verified tree death).
+    log.warn(
+      `[mcp tree-kill] taskkill /T /F for ${pid} failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+}
+
 /**
  * A JSON-RPC line that exceeds the inbound cap. Distinct class so callers can
  * classify protocol abuse vs transport death.
@@ -99,6 +121,12 @@ export class SupervisedStdioTransport implements Transport {
     >;
 
   private child: ChildProcess | null = null;
+  /**
+   * H5: process-group id of the spawned child (detached: true → pgid ===
+   * pid on POSIX). Non-null only when THIS transport created the group —
+   * group signals are otherwise forbidden (registry §8 guard).
+   */
+  private processGroupId: number | null = null;
   /** Byte buffer of the partially-received line. */
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private stderrBytes = 0;
@@ -151,15 +179,35 @@ export class SupervisedStdioTransport implements Transport {
       ? { ...sanitizedEnv, ELECTRON_RUN_AS_NODE: "1" }
       : sanitizedEnv;
 
-    const child = spawnOwned(this.options.ownerId ?? "mcp-server", () =>
-      spawn(command, argv, {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: childEnv,
-        cwd: this.options.cwd,
-        shell: false,
-        windowsHide: true,
-      })
+    // H5: detached spawn puts the child in its own process group; the group
+    // id is captured during launch() and read back by the registration
+    // getter BELOW (spawnOwned registers after launch() returns).
+    const groupRegistration: { isolatedProcessGroupId?: number } = {};
+    const child = spawnOwned(
+      this.options.ownerId ?? "mcp-server",
+      () => {
+        const c = spawn(command, argv, {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: childEnv,
+          cwd: this.options.cwd,
+          shell: false,
+          windowsHide: true,
+          // H5 (PRD §11.8): the child leads its OWN process group
+          // (pgid === pid on POSIX), so the escalation below can signal the
+          // whole tree — the plugin's Playwright browser descendants are in
+          // this group. On Windows the tree walk is taskkill /T (killChild).
+          detached: true,
+        });
+        groupRegistration.isolatedProcessGroupId = c.pid ?? undefined;
+        return c;
+      },
+      {
+        get isolatedProcessGroupId() {
+          return groupRegistration.isolatedProcessGroupId;
+        },
+      } as unknown as Parameters<typeof spawnOwned>[2]
     );
+    this.processGroupId = child.pid ?? null;
     this.child = child;
     this.started = true;
 
@@ -302,13 +350,39 @@ export class SupervisedStdioTransport implements Transport {
     });
   }
 
-  /** Hard kill: SIGKILL the direct child; tree reaping is owned by the registry. */
+  /**
+   * Hard kill (H5, PRD §11.8): the ENTIRE tree — the plugin child AND its
+   * browser descendants — not only the MCP parent.
+   *  - POSIX: the child is a detached process-group leader (pgid === pid),
+   *    so a single group SIGKILL reaches every browser descendant.
+   *  - Windows: `taskkill /PID <pid> /T /F` walks the tree; the group call
+   *    is skipped there (pid alone is NOT a valid pgid on Windows).
+   * The direct-child signals run too — group membership is best-effort and
+   * the direct SIGKILL remains the authoritative kill for the leader.
+   */
   private killChild(): void {
     try {
       this.child?.kill("SIGKILL");
     } catch {
       /* already dead */
     }
+    const pgid = this.processGroupId;
+    if (process.platform !== "win32" && pgid !== null) {
+      try {
+        // Group of which this transport is the sole creator (isolated at
+        // spawn) — never signals a foreign group.
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        /* group already reaped */
+      }
+    } else {
+      const pid = this.child?.pid;
+      if (process.platform === "win32" && typeof pid === "number") {
+        // Fire-and-forget tree walk; results are log-only.
+        void killWindowsTree(pid);
+      }
+    }
+    this.processGroupId = null;
   }
 
   /** Fire onclose exactly once and clear buffer state. */

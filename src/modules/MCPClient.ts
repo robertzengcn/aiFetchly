@@ -12,6 +12,11 @@ import {
 } from "@/service/PluginMcpRuntimeResolver";
 import type { HostAuthorizedRecoveryV1 } from "@/entityTypes/pluginExecutionTypes";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  MCP_PLUGIN_PARTIAL_METHOD,
+  registerPluginPartialHandler,
+  type PluginPartialGateOutcome,
+} from "@/modules/mcp/pluginPartial";
 import type { WebSocket as WSWebSocket } from "ws";
 
 // WebSocket import - use dynamic import for optional dependency
@@ -135,6 +140,14 @@ export class MCPClient {
   private sdk: McpSdkClient | null = null;
   /** Trusted host-runtime launch adopted by connectStdioHostRuntime. */
   private hostLaunch: ResolvedPluginLaunch | null = null;
+  /**
+   * H5: plugin-partial snapshot sink — set by MCPToolService for managed
+   * async calls; validates + maps `notifications/aifetchly/plugin-partial`
+   * snapshots onto the registry and the renderer stream.
+   */
+  private pluginPartialSink:
+    | ((raw: unknown) => PluginPartialGateOutcome)
+    | null = null;
   private pendingRequests: Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -145,6 +158,17 @@ export class MCPClient {
       timeout: 30000,
       ...config,
     };
+  }
+
+  /**
+   * H5: install the plugin-partial snapshot sink for a managed-async call.
+   * Must be called BEFORE connect() — the SDK notification route is bound
+   * during the handshake and reads the sink when delivery arrives.
+   */
+  setPluginPartialSink(
+    sink: (raw: unknown) => PluginPartialGateOutcome
+  ): void {
+    this.pluginPartialSink = sink;
   }
 
   /**
@@ -358,6 +382,23 @@ export class MCPClient {
     // Client: connect() rejects a server whose negotiated protocolVersion is
     // outside SUPPORTED_PROTOCOL_VERSIONS.
 
+    // H5: route plugin-partial snapshots through the host gate. The SDK
+    // discards unknown notification methods silently when no sink is set,
+    // so generic (non-plugin) servers are unaffected. An abusive plugin can
+    // terminate its own call below.
+    registerPluginPartialHandler(client, (notification) => {
+      const sink = this.pluginPartialSink;
+      if (!sink) return;
+      const outcome = sink(
+        (notification as { params?: unknown }).params ?? notification
+      );
+      if (outcome.terminateCall) {
+        log.warn(
+          `[mcp-partial] terminating MCP call after repeated invalid ${MCP_PLUGIN_PARTIAL_METHOD} snapshots`
+        );
+        this.terminateCallForPartialAbuse();
+      }
+    });
     this.sdk = client;
     this.connection = null; // the SDK owns the child via the transport
   }
@@ -495,6 +536,23 @@ export class MCPClient {
         reject(new Error("Connection not available"));
       }
     });
+  }
+
+  /**
+   * H5 (abuse): hard-fail the in-flight managed-async call after repeated
+   * invalid plugin-partial snapshots. Closing the SDK client rejects every
+   * pending request ("Connection closed") and closes the supervised
+   * transport, which escalates to the process-group kill.
+   */
+  private terminateCallForPartialAbuse(): void {
+    const sdk = this.sdk;
+    this.sdk = null;
+    this.connected = false;
+    if (sdk) {
+      void sdk.close().catch(() => {
+        /* transport close escalates to the tree kill */
+      });
+    }
   }
 
   /**

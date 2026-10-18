@@ -14,6 +14,8 @@ import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import { sanitizeMcpToolMetadata } from "@/service/ToolSchemaSanitizer";
 import { TOOL_CATALOG_DEFAULTS } from "@/config/toolCatalogConfig";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { PluginPartialGate } from "@/modules/mcp/pluginPartial";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
@@ -297,6 +299,7 @@ export class MCPToolService {
     executeContext?: {
       readonly executionId: string;
       readonly deadlineEpochMs?: number;
+      readonly deadlinePerfMs?: number;
       /** Recovery attempt the ledger authorized for this call (H1/H3). */
       readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
     }
@@ -854,9 +857,12 @@ export class MCPToolService {
     this.assertStdioTrusted(server);
 
     const remainingMs =
-      options.deadlineEpochMs !== undefined
-        ? options.deadlineEpochMs - Date.now()
-        : Number.POSITIVE_INFINITY;
+      options.deadlinePerfMs !== undefined
+        ? // H5: monotonic-clock budget when the caller anchored one.
+          Math.max(0, options.deadlinePerfMs - performance.now())
+        : options.deadlineEpochMs !== undefined
+          ? options.deadlineEpochMs - Date.now()
+          : Number.POSITIVE_INFINITY;
     if (remainingMs <= HOST_CLEANUP_RESERVE_MS) {
       throw new MCPTimeoutError(
         toolName,
@@ -873,6 +879,29 @@ export class MCPToolService {
       executionId,
       deadlineEpochMs: options.deadlineEpochMs,
       authorizedRecovery: options.authorizedRecovery,
+    });
+
+    // H5: the plugin-partial gate — snapshots are validated against THIS
+    // call's execution id, monotonic sequence, byte cap, and the live job,
+    // then mapped onto the registry tool record and the renderer
+    // tool_progress stream (phase included). Set BEFORE connect so the
+    // notification route is bound in time.
+    const jobRegistry = getDefaultToolJobRegistry();
+    const gate = new PluginPartialGate(executionId, () =>
+      jobRegistry.isJobActive(executionId)
+    );
+    client.setPluginPartialSink?.((raw) => {
+      const outcome = gate.observe(raw);
+      if (outcome.accept && outcome.partial && outcome.mapping) {
+        // Bounded counts only — full records never enter the registry.
+        jobRegistry.updatePartial(executionId, {
+          data: outcome.partial.data,
+          collectedCount: outcome.partial.collectedCount,
+          expectedCount: outcome.partial.expectedCount ?? 0,
+        });
+        options.onProgress?.(outcome.mapping);
+      }
+      return outcome;
     });
     try {
       await client.connect();

@@ -98,4 +98,18 @@ export class MCPToolModel extends BaseDb {
     const result = await this.repository.delete({ pluginName });
     return result.affected ?? 0;
   }
+
+  /**
+   * Enable or disable every MCP server owned by a plugin in one update.
+   * Used by the activation gate (HOST-04) so a plugin whose manifest failed
+   * policy / host-requirement registration has no discoverable servers.
+   * Returns the number of rows updated.
+   */
+  async setEnabledByPluginName(
+    pluginName: string,
+    enabled: boolean
+  ): Promise<number> {
+    const result = await this.repository.update({ pluginName }, { enabled });
+    return result.affected ?? 0;
+  }
 }

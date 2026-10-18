@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
+import type { PluginCapabilities } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -47,6 +48,8 @@ export interface PluginManifest {
   readonly dependencies?: readonly PluginDependency[];
   readonly homepage?: string;
   readonly repository?: string;
+  /** Declared host capability surface (browser execution, file artifacts). */
+  readonly capabilities?: PluginCapabilities;
   readonly agents?: PluginAgentDeclaration;
   /** Unknown top-level fields are allowed but preserved under diagnostics only. */
   readonly [extra: string]: unknown;
@@ -166,6 +169,7 @@ export type PluginErrorCode =
   | "skill-import-failed"
   | "mcp-config-invalid"
   | "mcp-server-conflict"
+  | "mcp-discovery-failed"
   | "permission-denied"
   | "dependency-unsatisfied"
   | "install-io-failed"

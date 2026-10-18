@@ -868,6 +868,7 @@ async function executeViaToolExecutor(
         emitProgress: context.emitProgress,
         signal: context.signal,
         deadlineEpochMs: context.deadlineEpochMs,
+        deadlinePerfMs: context.deadlinePerfMs,
       }
     );
     // Preserve a plugin domain envelope's `success: false` instead of

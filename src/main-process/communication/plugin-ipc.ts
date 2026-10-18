@@ -555,6 +555,14 @@ export function registerPluginIpcHandlers(): void {
     PLUGIN_TOGGLE,
     pluginToggleInputSchema,
     async (input) => {
+      // H5: when disabling, abort + await the plugin's active MCP children
+      // BEFORE their binaries/browser capability is dropped — throws a
+      // retryable error instead of tearing down under a running scrape.
+      if (!input.enabled) {
+        await PluginComponentRegistryService.stopActiveJobsForPlugin(
+          input.name
+        );
+      }
       const module = new PluginManagementModule();
       const ok = await module.togglePlugin(input.name, input.enabled);
       if (!ok) {
@@ -571,6 +579,9 @@ export function registerPluginIpcHandlers(): void {
     PLUGIN_UNINSTALL,
     pluginByNameInputSchema,
     async (input) => {
+      // H5: quiesce (seal admission, abort + tree-kill, await cleanup)
+      // BEFORE removing files so a running scrape cannot race the delete.
+      await PluginComponentRegistryService.stopActiveJobsForPlugin(input.name);
       const module = new PluginManagementModule();
       const result = await module.uninstallPlugin(input.name);
       if (!result.removedPlugin) {

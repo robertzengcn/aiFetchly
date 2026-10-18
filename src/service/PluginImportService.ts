@@ -28,6 +28,8 @@ import {
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
 import { MCPToolService } from "@/service/MCPToolService";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
 import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
@@ -510,9 +512,14 @@ export class PluginImportService {
         ],
       };
     }
-    // If overwrite, uninstall the old one first (rows + files). Capture the
-    // user's previously-disabled agent IDs first so reinstall honors them (D5).
+    // If overwrite, the old generation is uninstalled later in this flow
+    // (see the deferred overwrite teardown before the file swap) so a
+    // validation failure up to that point aborts without touching it.
+    // H6/update-transaction: BEFORE any teardown the plugin's MCP children
+    // are quiesced — admission sealed, jobs aborted + awaited; a timeout is
+    // a retryable error and the previous generation stays untouched.
     let preservedDisabledAgentIds = new Set<string>();
+    let deferredOverwriteTeardown = false;
     if (existing && overwrite) {
       try {
         const prevAgents =
@@ -525,8 +532,27 @@ export class PluginImportService {
       } catch {
         // best-effort
       }
-      await pluginModule.uninstallPlugin(manifest.name);
-      removePath(getPluginInstallRoot(manifest.name));
+      try {
+        const { PluginComponentRegistryService } = await import(
+          "@/service/PluginComponentRegistryService"
+        );
+        await PluginComponentRegistryService.stopActiveJobsForPlugin(
+          manifest.name
+        );
+      } catch (e) {
+        return {
+          success: false,
+          errors: [
+            {
+              code: "uninstall-failed",
+              pluginName: manifest.name,
+              message: `Active MCP tool jobs for "${manifest.name}" did not quiesce; the previous generation was left intact. Retry the update.`,
+              recoverable: true,
+            },
+          ],
+        };
+      }
+      deferredOverwriteTeardown = true;
     }
 
     // 5. Validate skill components
@@ -682,14 +708,32 @@ export class PluginImportService {
       };
     }
     const stagingDir = `${installPath}.staging-${Date.now()}`;
+    const backupDir = `${installPath}.backup-${Date.now()}`;
     try {
       copyDirSync(localRoot, stagingDir);
-      // Remove any pre-existing install path (shouldn't exist after overwrite
-      // handling, but be safe).
-      removePath(installPath);
+      // H6_update-transaction: the previous generation is moved aside (a
+      // rename, not a delete) so a failed swap can restore it. The rename
+      // keeps artifacts readable throughout — nothing old is removed until
+      // the new generation is fully promoted.
+      if (deferredOverwriteTeardown && fs.existsSync(installPath)) {
+        fs.renameSync(installPath, backupDir);
+      }
       fs.renameSync(stagingDir, installPath);
+      // Old rows must die after the files swapped so a rename failure never
+      // leaves rows pointing at a gone generation.
+      if (deferredOverwriteTeardown) {
+        await pluginModule.uninstallPlugin(manifest.name);
+      }
     } catch (e: unknown) {
       removePath(stagingDir);
+      // Restore the previous generation when the swap itself failed.
+      if (fs.existsSync(backupDir) && !fs.existsSync(installPath)) {
+        try {
+          fs.renameSync(backupDir, installPath);
+        } catch {
+          // best-effort restore — do not mask the original error
+        }
+      }
       return {
         success: false,
         errors: [
@@ -705,10 +749,36 @@ export class PluginImportService {
       };
     }
 
+    // 7b. HOST-04 activation gate: validate the manifest's tool policies and
+    // host requirements through the SAME registry the query loop consults.
+    // An unknown required host capability or an invalid policy shape is an
+    // activation failure: the plugin STILL installs (so the user sees a
+    // stable diagnostic), but as `invalid` health with no discoverable MCP
+    // servers — the model can never fall through to the 90-second
+    // name-inference timeout for a tool the plugin declared managed-async.
+    const policyGate = getPluginToolPolicyRegistry().registerFromManifest(
+      manifest.name,
+      manifest
+    );
+    const policyGateBlocked = policyGate.errors.length > 0;
+
+    // H6: a plugin that DECLARES browser execution survives a missing
+    // browser as `needs_configuration` — a user-resolvable dependency, not
+    // an activation failure. Its MCP rows persist DISABLED so the scrape
+    // tool is never exposed until the browser resolves; re-enabling happens
+    // on the next apply/discovery after the browser dependency flow
+    // completes (PluginBrowserCapabilityService).
+    const browserMissing =
+      !policyGateBlocked &&
+      manifest.capabilities?.browserExecutable === true &&
+      getPluginBrowserCapabilityService().describe() === null;
+
     // 8. Persist InstalledPlugin row.
     // Per Design §15.5, plugin import never prepares Python environments.
     // Flag the plugin as needs_configuration when any skill uses the Python
-    // runtime so the UI can warn the user before first execution.
+    // runtime so the UI can warn the user before first execution. A failed
+    // policy / host-requirement registration is worse: the manifest cannot
+    // be repaired by configuration, so the plugin is `invalid`.
     const hasPythonSkill = skills.some((s) => s.manifest.runtime === "python");
     let pluginId: number | null = null;
     try {
@@ -726,7 +796,11 @@ export class PluginImportService {
         permissionsJson: JSON.stringify(manifest.permissions ?? []),
         componentStateJson: "{}",
         enabled: 1,
-        health: hasPythonSkill ? "needs_configuration" : "healthy",
+        health: policyGateBlocked
+          ? "invalid"
+          : browserMissing || hasPythonSkill
+          ? "needs_configuration"
+          : "healthy",
         sourceKind: provenance?.sourceKind,
         sourceUri: provenance?.sourceUri,
         sourceRef: provenance?.sourceRef,
@@ -734,6 +808,16 @@ export class PluginImportService {
           ? JSON.stringify(provenance.sourceMeta)
           : "{}",
       });
+      // Persist the stable diagnostic for a blocked activation (HOST-04):
+      // the caller sees one machine-readable error per issue, and the plugin
+      // row keeps `invalid` health so it is never reported healthy.
+      if (policyGateBlocked) {
+        await pluginModule.updatePluginState({
+          name: manifest.name,
+          health: "invalid",
+          lastLoadErrorsJson: JSON.stringify(policyGate.errors),
+        });
+      }
     } catch (e: unknown) {
       rollbackInstall(installPath);
       return {
@@ -844,7 +928,12 @@ export class PluginImportService {
         const entity = new MCPToolEntity();
         entity.serverName = server.serverName;
         entity.transport = server.transport;
-        entity.enabled = true;
+        // HOST-04: a blocked activation persists the server rows DISABLED
+        // (kept for diagnostics and future update/re-gate), so effective
+        // enablement never offers the plugin's tools. H6: the same applies
+        // while the declared browser dependency is unresolvable — the tool
+        // stays unexposed until the browser resolves.
+        entity.enabled = !policyGateBlocked && !browserMissing;
         entity.authType = server.authType;
         entity.timeout = server.timeout ?? 30000;
         entity.tools = JSON.stringify([]);
@@ -879,15 +968,49 @@ export class PluginImportService {
       };
     }
 
-    // 10b. Auto-trust and discover MCP tools so they're available immediately.
-    for (const { id, isStdio } of mcpServerIds) {
-      try {
-        if (isStdio) {
-          new MCPToolService().setTrust(id, true);
+    // 10b. H6: the discovery smoke test runs ONLY after trust, and a failed
+    // discovery is fatal — the half-installed plugin (rows + files) is rolled
+    // back so the renderer can never see a "trusted but tool-less" state.
+    // HOST-04: skipped entirely when the activation gate blocked the plugin —
+    // discovery must not auto-trust a server whose tool policies failed.
+    // H6: skipped for a missing browser dependency as well — discovery with
+    // a disabled row would still auto-trust a server whose toolset cannot
+    // run; re-discovery happens after the browser dependency resolves.
+    if (!policyGateBlocked && !browserMissing) {
+      for (const { id, isStdio } of mcpServerIds) {
+        try {
+          if (isStdio) {
+            new MCPToolService().setTrust(id, true);
+          }
+          await new MCPToolService().discoverTools(id);
+        } catch (e) {
+          log.warn(`Failed to discover MCP tools for server ${id}:`, e);
+          await rollbackRowsAndFiles(manifest.name, installPath);
+          // H6/update-transaction: best-effort restore of the previous
+          // generation so a failed update leaves the plugin usable.
+          if (deferredOverwriteTeardown && fs.existsSync(backupDir)) {
+            if (fs.existsSync(installPath)) removePath(installPath);
+            try {
+              fs.renameSync(backupDir, installPath);
+            } catch {
+              // best-effort — the user is told the update failed either way
+            }
+          }
+          return {
+            success: false,
+            errors: [
+              {
+                code: "mcp-discovery-failed",
+                componentType: "mcpServer",
+                pluginName: manifest.name,
+                message: `MCP discovery smoke test failed for server ${id}: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+                recoverable: true,
+              },
+            ],
+          };
         }
-        await new MCPToolService().discoverTools(id);
-      } catch (e) {
-        log.warn(`Failed to discover MCP tools for server ${id}:`, e);
       }
     }
 
@@ -930,7 +1053,26 @@ export class PluginImportService {
     }
 
     // 11b. Record needs_configuration notice for Python skills (Design §15.5).
-    if (hasPythonSkill) {
+    // HOST-04: skipped for a blocked activation — the policy-gate errors are
+    // the authoritative diagnostic and must not be overwritten (or demoted
+    // from `invalid` to `partial_load`).
+    if (browserMissing && !policyGateBlocked) {
+      try {
+        await pluginModule.setLoadErrors(manifest.name, [
+          {
+            code: "dependency-unsatisfied",
+            componentType: "skill",
+            pluginName: manifest.name,
+            message:
+              "The plugin requires an approved browser executable. Resolve the browser dependency, then reload or re-run discovery to enable its tools.",
+            recoverable: true,
+          },
+        ]);
+      } catch {
+        // best-effort — health is already set on the row
+      }
+    }
+    if (hasPythonSkill && !policyGateBlocked && !browserMissing) {
       try {
         await pluginModule.setLoadErrors(manifest.name, [
           {
@@ -950,11 +1092,22 @@ export class PluginImportService {
     // 11c. Surface agent parser warnings (forbidden/unknown fields) as
     // non-fatal load errors so they show in diagnostics. Plugin health stays
     // healthy — warnings never block the runtime (design §12.5).
-    if (agentParse.warnings.length > 0) {
+    if (agentParse.warnings.length > 0 && !policyGateBlocked) {
       try {
         await pluginModule.setLoadErrors(manifest.name, agentParse.warnings);
       } catch {
         // best-effort
+      }
+    }
+
+    // 11d. H6/update-transaction: the new generation is fully promoted
+    // (rows, discovery, agents) — the previous-generation backup (if any)
+    // is retired now.
+    if (deferredOverwriteTeardown && fs.existsSync(backupDir)) {
+      try {
+        removePath(backupDir);
+      } catch {
+        // best-effort — the backup ages out with the next update at worst
       }
     }
 
@@ -966,7 +1119,11 @@ export class PluginImportService {
       version: manifest.version,
       source: (manifest.source ?? "local") as PluginSource,
       enabled: true,
-      health: hasPythonSkill ? "needs_configuration" : "healthy",
+      health: policyGateBlocked
+        ? "invalid"
+        : browserMissing || hasPythonSkill
+        ? "needs_configuration"
+        : "healthy",
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
       agentCount: pluginAgents.length,

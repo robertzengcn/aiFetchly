@@ -1,5 +1,31 @@
 import { randomUUID } from "crypto";
 
+/**
+ * H5: how long a RUNNING job's admission lease survives after a cancel
+ * request. The public status flips to `cancelled` immediately, but the
+ * spawn continuation (MCP transport teardown → SIGTERM/SIGKILL of the
+ * plugin process AND its browser group) is still unwinding until the
+ * handle resolves/rejects. The lease is released when the continuation
+ * exits, or at this grace deadline at the latest so a hung tool can never
+ * wedge the concurrency budget.
+ */
+export const TOOL_JOB_SETTLE_GRACE_MS = 15_000;
+
+/**
+ * H5 (lifecycle): thrown by `start()` when admission is sealed for the
+ * tool's plugin prefix (disable/uninstall/update in progress).
+ */
+export class AdmissionSealedError extends Error {
+  readonly sealedBy: string;
+  constructor(toolName: string, sealedBy: string) {
+    super(
+      `${toolName} refused while "${sealedBy}" seals admission (plugin lifecycle operation in progress)`
+    );
+    this.name = "AdmissionSealedError";
+    this.sealedBy = sealedBy;
+  }
+}
+
 export type ToolJobStatus =
   | "queued"
   | "running"
@@ -101,6 +127,8 @@ interface InternalJob {
   lastPolledAt: number;
   queuedSpawn?: () => void;
   abortController: AbortController;
+  /** Timer that force-releases the admission lease after a cancel (H5). */
+  settleTimer?: NodeJS.Timeout;
 }
 
 export class ToolJobRegistry {
@@ -109,6 +137,12 @@ export class ToolJobRegistry {
   private running = 0;
   private closed = false;
   private readonly limits: ToolJobLimits;
+  /**
+   * H5 (lifecycle): sealed tool-name prefixes refuse admission (disable,
+   * uninstall, update). Sealing prevents the next browser start while the
+   * plugin's current jobs are still being torn down and their files staged.
+   */
+  private admissionSeals = new Set<string>();
 
   constructor(limits?: Partial<ToolJobLimits>) {
     this.limits = {
@@ -130,6 +164,10 @@ export class ToolJobRegistry {
       throw new Error(
         "ToolJobRegistry is closed (application shutting down); job refused"
       );
+    }
+    const sealedBy = this.admissionSealedByPrefix(toolName);
+    if (sealedBy !== null) {
+      throw new AdmissionSealedError(toolName, sealedBy);
     }
     const jobId = randomUUID();
     // One AbortController per job. Aborting is the authoritative cancellation
@@ -174,7 +212,13 @@ export class ToolJobRegistry {
       },
       signal: abortController.signal,
       resolve: (result) => {
-        if (job.status === "cancelled") return;
+        if (job.status === "cancelled") {
+          // H5: a cancelled job whose spawn continuation finally exited —
+          // THIS is the moment cleanup has quiesced. Release the admission
+          // lease now (the deferred grace timer becomes unnecessary).
+          this.finishSettling(job);
+          return;
+        }
         job.status = "completed";
         job.result = result;
         job.completedAt = Date.now();
@@ -184,7 +228,11 @@ export class ToolJobRegistry {
         this.drainQueue();
       },
       reject: (err) => {
-        if (job.status === "cancelled") return;
+        if (job.status === "cancelled") {
+          // Same quiesced-cleanup release as the resolve path above.
+          this.finishSettling(job);
+          return;
+        }
         job.status = "failed";
         job.error = err.message;
         job.completedAt = Date.now();
@@ -250,6 +298,21 @@ export class ToolJobRegistry {
     }
   }
 
+  /**
+   * H5: live-or-unwinding probe for a specific job id — used by the
+   * plugin-partial gate to refuse snapshots for terminal jobs without
+   * touching `getStatus` (which affects rate-limit accounting).
+   */
+  isJobActive(jobId: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job) return false;
+    return (
+      job.status === "queued" ||
+      job.status === "running" ||
+      (job.status === "cancelled" && !job.settled)
+    );
+  }
+
   getStatus(jobId: string): ToolJobSnapshot {
     const job = this.jobs.get(jobId);
     if (!job) return this.notFound(jobId);
@@ -293,16 +356,24 @@ export class ToolJobRegistry {
    * fingerprint in this conversation (HOST-10). Returns the jobId so the
    * caller can return a structured JOB_ALREADY_RUNNING outcome bound to the
    * caller's own toolCallId instead of starting a second live job.
+   *
+   * H5: cancelled-but-still-tearing-down jobs also block admission — the
+   * settlement flag is deferred until the spawn continuation exits, so a
+   * second browser cannot start while the first is being reaped.
    */
   findActiveJobByFingerprint(
     conversationId: string,
     fingerprint: string
   ): { jobId: string } | null {
     for (const job of this.jobs.values()) {
+      const stillUnwinding =
+        job.status === "cancelled" && !job.settled;
       if (
         job.conversationId === conversationId &&
         job.fingerprint === fingerprint &&
-        (job.status === "queued" || job.status === "running")
+        (job.status === "queued" ||
+          job.status === "running" ||
+          stillUnwinding)
       ) {
         return { jobId: job.jobId };
       }
@@ -334,9 +405,11 @@ export class ToolJobRegistry {
     job.completedAt = Date.now();
     job.updatedAt = Date.now();
     if (wasRunning) {
-      this.running--;
-      this.markSettled(job);
-      this.drainQueue();
+      // H5 (admission lease): do NOT settle here. The spawn continuation is
+      // still tearing the plugin process and its browser group down; the
+      // lease (this.running slot + duplicate-suppression fingerprint) is
+      // held until the continuation exits or the grace window lapses.
+      this.beginDeferredSettle(job);
     } else if (wasQueued) {
       // Remove from queue if still queued
       const idx = this.queue.indexOf(jobId);
@@ -344,6 +417,38 @@ export class ToolJobRegistry {
       this.markSettled(job);
     }
     return { cancelled: true };
+  }
+
+  /**
+   * H5: schedule the deferred settlement for a cancelled RUNNING job. The
+   * admission lease is released by `finishSettling` either when the spawn
+   * continuation exits (resolve/reject early paths) or when this grace
+   * timer lapses — whichever is first.
+   */
+  private beginDeferredSettle(job: InternalJob): void {
+    if (job.settled || job.settleTimer) return;
+    const timer = setTimeout(() => {
+      job.settleTimer = undefined;
+      this.finishSettling(job);
+    }, TOOL_JOB_SETTLE_GRACE_MS);
+    // Never keep the event loop alive just for lease accounting.
+    timer.unref?.();
+    job.settleTimer = timer;
+  }
+
+  /**
+   * H5: release a cancelled RUNNING job's admission lease exactly once —
+   * clear the pending grace timer, mark settled, free the slot, drain.
+   */
+  private finishSettling(job: InternalJob): void {
+    if (job.settled) return;
+    if (job.settleTimer) {
+      clearTimeout(job.settleTimer);
+      job.settleTimer = undefined;
+    }
+    this.running--;
+    this.markSettled(job);
+    this.drainQueue();
   }
 
   /** Fire settled callbacks exactly once for a terminal job. */
@@ -420,26 +525,136 @@ export class ToolJobRegistry {
     return running;
   }
 
-  shutdown(): void {
-    this.closed = true; // T06/AC-05: no job may be admitted after freeze
-    for (const job of this.jobs.values()) {
-      if (job.status === "running" || job.status === "queued") {
-        job.abortController.abort();
-        for (const h of job.cancelHandlers) {
-          try {
-            h();
-          } catch {
-            // ignore
-          }
-        }
-        job.status = "cancelled";
-        job.completedAt = Date.now();
-        this.markSettled(job);
-      }
+  /**
+   * H5 (lifecycle): refuse admission for tools under the given prefix.
+   * Callers (disable/uninstall/update) seal admission BEFORE aborting the
+   * plugin's active jobs so a new browser can never start behind them.
+   */
+  sealAdmission(prefix: string): void {
+    this.admissionSeals.add(prefix);
+  }
+
+  releaseAdmissionSeal(prefix: string): void {
+    this.admissionSeals.delete(prefix);
+  }
+
+  /** The sealed-by prefix naming `toolName`'s plugin, or null when open. */
+  private admissionSealedByPrefix(toolName: string): string | null {
+    for (const prefix of this.admissionSeals) {
+      if (toolName.startsWith(prefix)) return prefix;
     }
+    return null;
+  }
+
+  /**
+   * H5 (lifecycle): live-or-unwinding job ids whose tool name starts with
+   * the prefix. Used by disable/uninstall flows to enumerate exactly the
+   * jobs they must abort and then await.
+   */
+  listActiveJobIdsByToolPrefix(prefix: string): string[] {
+    const out: string[] = [];
+    for (const [id, job] of this.jobs) {
+      const active =
+        job.status === "queued" ||
+        job.status === "running" ||
+        (job.status === "cancelled" && !job.settled);
+      if (active && job.toolName.startsWith(prefix)) out.push(id);
+    }
+    return out;
+  }
+
+  shutdown(): void {
+    // T06/AC-05: seal the registry — start() refuses new jobs after this.
+    // H5: active jobs are aborted and labelled cancelled now, but their
+    // admission leases ride the deferred settlement path so a caller that
+    // awaits cleanup can observe actual quiescence (see
+    // shutdownAndAwaitCleanup). State is NOT cleared here: cleared only in
+    // shutdownAndAwaitCleanup after the bounded cleanup wait.
+    this.closed = true;
+    this.freezeActiveJobs();
+  }
+
+  /**
+   * H5 (lifecycle): shutdown + bounded cleanup await. Aborts every active
+   * job (signals, cancellation requests), then waits up to `graceMs` total
+   * for the spawn continuations to quiesce before clearing state. Callers
+   * stop paying attention after the grace period regardless (the
+   * continuation timers are unref'd, so a hung tool cannot block exit).
+   */
+  async shutdownAndAwaitCleanup(graceMs: number): Promise<void> {
+    this.closed = true;
+    const touched = this.freezeActiveJobs();
+    await this.waitForAllSettled(graceMs, touched);
     this.jobs.clear();
     this.queue = [];
     this.running = 0;
+  }
+
+  /**
+   * H5 (lifecycle): abort AND bounded-await a specific set of jobs without
+   * sealing the whole registry or clearing state — plugin
+   * disable/uninstall/update flows await their own child teardown before
+   * removing binaries and files.
+   */
+  async abortAndAwaitJobs(
+    jobIds: readonly string[],
+    graceMs: number
+  ): Promise<void> {
+    const touched = this.freezeJobsById(jobIds);
+    await this.waitForAllSettled(graceMs, touched);
+  }
+
+  /** Abort + relabel every active (queued/running) job without clearing. */
+  private freezeActiveJobs(): string[] {
+    const ids: string[] = [];
+    for (const [id, job] of this.jobs) {
+      if (job.status === "running" || job.status === "queued") ids.push(id);
+    }
+    this.queue = [];
+    return this.freezeJobsById(ids);
+  }
+
+  /** Abort + relabel the given active jobs (H5 lifecycle targeting). */
+  private freezeJobsById(ids: readonly string[]): string[] {
+    const touched: string[] = [];
+    for (const id of ids) {
+      const job = this.jobs.get(id);
+      if (!job) continue;
+      if (job.status !== "running" && job.status !== "queued") continue;
+      const wasRunning = job.status === "running";
+      job.abortController.abort();
+      for (const h of job.cancelHandlers) {
+        try {
+          h();
+        } catch {
+          // ignore
+        }
+      }
+      job.status = "cancelled";
+      job.completedAt = Date.now();
+      if (wasRunning) {
+        // H5: keep the admission lease until the spawn continuation exits
+        // (or the grace window lapses) so cleanup is observable by callers.
+        this.beginDeferredSettle(job);
+      } else {
+        // Queued jobs never started work: nothing to unwind.
+        this.markSettled(job);
+      }
+      touched.push(id);
+    }
+    return touched;
+  }
+
+  private async waitForAllSettled(
+    graceMs: number,
+    ids: readonly string[]
+  ): Promise<void> {
+    const deadline = Date.now() + graceMs;
+    for (const id of ids) {
+      const remaining = Math.max(0, deadline - Date.now());
+      if (remaining <= 0) break;
+      await this.waitForSettled(id, remaining);
+    }
   }
 
   /** True once shutdown() sealed the registry — start() refuses new jobs (T06). */

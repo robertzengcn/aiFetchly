@@ -14,9 +14,17 @@ import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallSer
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  getDefaultToolJobRegistry,
+  TOOL_JOB_SETTLE_GRACE_MS,
+} from "@/service/ToolJobRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import {
+  PluginManagementModule,
+} from "@/modules/PluginManagementModule";
+import { MCPToolModule } from "@/modules/MCPToolModule";
 import { buildAgentDefinition } from "@/service/slashCommands/agentFrontmatter";
 import {
   frontmatterRecord,
@@ -73,6 +81,32 @@ export class PluginComponentRegistryService {
           `[PluginComponentRegistryService] tool policy registration failed for "${plugin.name}":`,
           result.errors.map((e) => e.message).join("; ")
         );
+        // HOST-04 activation gate (re-evaluated on every apply): a manifest
+        // whose tool policies / host requirements fail registration must
+        // never leave its MCP servers discoverable. Persist a stable
+        // diagnostic, flip health to `invalid`, and disable the owned
+        // server rows so the model cannot reach them (and therefore cannot
+        // fall through to the 90-second name-inference timeout).
+        try {
+          const pluginModule = new PluginManagementModule();
+          await pluginModule.updatePluginState({
+            name: plugin.name,
+            health: "invalid",
+            lastLoadErrorsJson: JSON.stringify([...result.errors]),
+          });
+          const disabledCount = await new MCPToolModule().setPluginServersEnabled(
+            plugin.name,
+            false
+          );
+          log.warn(
+            `[PluginComponentRegistryService] HOST-04: disabled ${disabledCount} MCP server(s) for "${plugin.name}".`
+          );
+        } catch (gateErr) {
+          log.warn(
+            `[PluginComponentRegistryService] HOST-04: failed to disable "${plugin.name}":`,
+            gateErr
+          );
+        }
       }
     }
     for (const plugin of loaded.disabled) {
@@ -101,6 +135,44 @@ export class PluginComponentRegistryService {
     manager.getAgentRegistry().replaceSource(sourceId, []);
     PluginHookRegistrar.unregisterPlugin(pluginName);
     PluginCommandDiagnosticsStore.clear(pluginName);
+  }
+
+  /**
+   * H5 (lifecycle): quiesce every active MCP tool job owned by a plugin
+   * BEFORE its binaries/files are removed (disable / uninstall / update).
+   *
+   * Order matters: admission is sealed for the plugin's tool namespace
+   * (`mcp__<plugin>__…`) first so no new browser can spawn behind the
+   * teardown, then every active job is aborted (process-group kill) and
+   * awaited, then the seal is released.
+   *
+   * Throws a retryable error when jobs are still unwinding past the grace
+   * window — the caller may surface it and let the user retry; no files
+   * have been removed at that point.
+   */
+  static async stopActiveJobsForPlugin(
+    pluginName: string,
+    graceMs: number = TOOL_JOB_SETTLE_GRACE_MS
+  ): Promise<void> {
+    const registry = getDefaultToolJobRegistry();
+    const prefix = `mcp__${pluginName}__`;
+    registry.sealAdmission(prefix);
+    try {
+      const jobIds = registry.listActiveJobIdsByToolPrefix(prefix);
+      if (jobIds.length === 0) return;
+      log.info(
+        `[PluginComponentRegistryService] aborting ${jobIds.length} active MCP job(s) for "${pluginName}".`
+      );
+      await registry.abortAndAwaitJobs(jobIds, graceMs);
+      const remaining = registry.listActiveJobIdsByToolPrefix(prefix).length;
+      if (remaining > 0) {
+        throw new Error(
+          `AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT: ${remaining} MCP tool job(s) for "${pluginName}" are still unwinding; no files were removed — retry the operation.`
+        );
+      }
+    } finally {
+      registry.releaseAdmissionSeal(prefix);
+    }
   }
 
   /**

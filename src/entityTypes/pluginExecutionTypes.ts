@@ -140,6 +140,13 @@ export interface PluginToolExecutionOptions {
   /** Authoritative wall-clock deadline for the whole call. */
   readonly deadlineEpochMs?: number;
   /**
+   * H5: the same deadline on a monotonic clock (performance.now() anchor).
+   * Preferred over the wall-clock arithmetic when present, so host wall-clock
+   * changes can never extend or truncate the job. Rides the process-local
+   * execution path only — never the plugin-visible context file.
+   */
+  readonly deadlinePerfMs?: number;
+  /**
    * The recovery attempt the ledger authorized for this call, when the call
    * is a retry. The plugin rejects a model-supplied recovery that does not
    * match, and must refuse recovery when this is absent (H1/H3).

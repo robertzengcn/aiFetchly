@@ -30,7 +30,10 @@ const RECORDS = {
 };
 
 beforeAll(() => {
-  root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "yp-artifacts-")), "store");
+  root = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "yp-artifacts-")),
+    "store"
+  );
   fixedNow = Date.parse("2026-10-16T00:00:00Z");
   service = new PluginFileArtifactService({ root }, () => fixedNow);
 });
@@ -41,10 +44,7 @@ afterAll(() => {
 
 function stageExecution(executionId: string): string {
   const staging = service.provisionStaging(executionId);
-  fs.writeFileSync(
-    path.join(staging, "records.json"),
-    JSON.stringify(RECORDS)
-  );
+  fs.writeFileSync(path.join(staging, "records.json"), JSON.stringify(RECORDS));
   return staging;
 }
 
@@ -98,7 +98,13 @@ describe("PluginFileArtifactService", () => {
       conversationId: "conv-1",
       pluginName: "demo-plugin",
       candidates: [
-        { version: 1, relativePath: "records.csv", format: "csv", recordCount: 0, complete: true },
+        {
+          version: 1,
+          relativePath: "records.csv",
+          format: "csv",
+          recordCount: 0,
+          complete: true,
+        },
       ],
     });
     expect(artifacts).toHaveLength(0);
@@ -140,14 +146,23 @@ describe("PluginFileArtifactService", () => {
 
   it("drops a third candidate with an overflow notice (dead slice removed)", () => {
     const staging = stageExecution("exec-cap");
-    fs.writeFileSync(staging + path.sep + "records.csv", "businessName,phone\n");
+    fs.writeFileSync(
+      staging + path.sep + "records.csv",
+      "businessName,phone\n"
+    );
     const { artifacts, errors } = service.promoteCandidates({
       executionId: "exec-cap",
       conversationId: "conv-cap",
       pluginName: "demo-plugin",
       candidates: [
         JSON_CANDIDATE,
-        { version: 1, relativePath: "records.csv", format: "csv", recordCount: 0, complete: true },
+        {
+          version: 1,
+          relativePath: "records.csv",
+          format: "csv",
+          recordCount: 0,
+          complete: true,
+        },
         JSON_CANDIDATE,
       ],
     });
@@ -201,9 +216,7 @@ describe("PluginFileArtifactService", () => {
       executionId: "exec-preview",
       conversationId: "conv-p",
       pluginName: "demo-plugin",
-      candidates: [
-        { ...JSON_CANDIDATE, recordCount: 50 },
-      ],
+      candidates: [{ ...JSON_CANDIDATE, recordCount: 50 }],
     });
     const preview = service.preview("conv-p", artifacts[0].id, 5);
     expect(preview.ok).toBe(true);
@@ -243,5 +256,115 @@ describe("PluginFileArtifactService", () => {
     expect(fs.existsSync(service.stagingDir("exec-clean"))).toBe(true);
     service.releaseStaging("exec-clean");
     expect(fs.existsSync(service.stagingDir("exec-clean"))).toBe(false);
+  });
+});
+
+describe("PluginFileArtifactService.recoverStartupExecutions", () => {
+  it("quarantines orphan (never promoted) staging and journals interrupted", () => {
+    const orphanRoot = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "yp-startup-")),
+      "store"
+    );
+    try {
+      const orphanService = new PluginFileArtifactService(
+        { root: orphanRoot },
+        () => Date.parse("2026-10-16T00:00:00Z")
+      );
+      // Simulate a crashed execution: staging with candidates but no journal.
+      const staging = orphanService.provisionStaging("exec-crashed");
+      fs.writeFileSync(
+        path.join(staging, "records.json"),
+        JSON.stringify(RECORDS)
+      );
+
+      const result = orphanService.recoverStartupExecutions();
+      expect(result.interrupted).toEqual(["exec-crashed"]);
+
+      // Journal says interrupted; a conversation poll re-polls and can find
+      // the honest failure instead of waiting forever.
+      const journal = JSON.parse(
+        fs.readFileSync(path.join(orphanRoot, "journal", "exec-crashed.json"), "utf8")
+      );
+      expect(journal.artifacts).toEqual([]);
+      expect(journal.errors[0]).toMatch(/interrupted: host restart/);
+
+      // Staging moved into quarantine; staging/<id> is gone.
+      expect(
+        fs.existsSync(
+          path.join(
+            orphanRoot,
+            "staging-quarantine",
+            "exec-crashed",
+            "records.json"
+          )
+        )
+      ).toBe(true);
+      expect(fs.existsSync(staging)).toBe(false);
+
+      // Second sweep with the same id already quarantined: no duplicate.
+      const again = orphanService.recoverStartupExecutions();
+      expect(again.interrupted).toEqual([]);
+    } finally {
+      fs.rmSync(orphanRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ages out stale retained staging after promotion but respects fresh ones", () => {
+    const agedRoot = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "yp-startup-")),
+      "store"
+    );
+    try {
+      const agedService = new PluginFileArtifactService(
+        { root: agedRoot },
+        () => Date.parse("2026-01-01T00:00:00Z")
+      );
+      agedService.provisionStaging("exec-old");
+      fs.writeFileSync(
+        path.join(agedService.stagingDir("exec-old"), "records.json"),
+        JSON.stringify(RECORDS)
+      );
+      const promoted = agedService.promoteCandidates({
+        executionId: "exec-old",
+        conversationId: "conv-old",
+        pluginName: "demo-plugin",
+        candidates: [JSON_CANDIDATE],
+      });
+      expect(promoted.errors).toEqual([]);
+
+      // Fresh staging retained after promotion (staging is retained post-
+      // promotion) — promotion journaled it just before the sweep, so it
+      // must NOT be aged out even though the dir still exists. The clock
+      // jumps 30 days between the two promotions.
+      const freshClock = new PluginFileArtifactService(
+        { root: agedRoot },
+        () => Date.parse("2026-01-31T00:00:00Z")
+      );
+      const freshStaging = freshClock.provisionStaging("exec-fresh");
+      fs.writeFileSync(
+        path.join(freshStaging, "records.json"),
+        JSON.stringify(RECORDS)
+      );
+      const freshPromoted = freshClock.promoteCandidates({
+        executionId: "exec-fresh",
+        conversationId: "conv-fresh",
+        pluginName: "demo-plugin",
+        candidates: [JSON_CANDIDATE],
+      });
+      expect(freshPromoted.errors).toEqual([]);
+      expect(fs.existsSync(agedService.stagingDir("exec-fresh"))).toBe(true);
+
+      // A service 31 days later performs the sweep.
+      const later = new PluginFileArtifactService({ root: agedRoot }, () =>
+        Date.parse("2026-02-02T00:00:00Z")
+      );
+      const result = later.recoverStartupExecutions();
+      expect(result.agedPromotedStaging).toContain("exec-old");
+      expect(result.agedPromotedStaging).not.toContain("exec-fresh");
+      expect(fs.existsSync(agedService.stagingDir("exec-old"))).toBe(false);
+      expect(fs.existsSync(agedService.stagingDir("exec-fresh"))).toBe(true);
+    } finally {
+      fs.rmSync(agedRoot, { recursive: true, force: true });
+    }
   });
 });

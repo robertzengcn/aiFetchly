@@ -246,6 +246,26 @@ export function normalizeMcpDeclaration(
     metadata: decl.metadata ?? {},
     componentPath,
   };
+  // H6: the reserved runtime-descriptor key is HOST-owned. A package that
+  // declares it on a (non-runtime) server is rejected outright — keeping it
+  // would let `createServerBase` resolve a host runtime whose entry
+  // confinement was never validated at import.
+  if (
+    (decl.metadata as Record<string, unknown> | undefined)?.[
+      HOST_RUNTIME_METADATA_FIELD
+    ] !== undefined
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "mcp-config-invalid",
+        componentType: "mcpServer",
+        componentName: key,
+        message: `server "${key}" may not declare the reserved "${HOST_RUNTIME_METADATA_FIELD}" metadata key; only the host normalizer writes it.`,
+        recoverable: false,
+      },
+    };
+  }
   return { ok: true, normalized };
 }
 

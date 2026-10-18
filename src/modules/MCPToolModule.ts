@@ -53,6 +53,19 @@ export class MCPToolModule extends BaseModule {
     );
   }
 
+  /**
+   * Enable or disable every MCP server owned by a plugin in one update
+   * (HOST-04 activation gate).
+   */
+  public async setPluginServersEnabled(
+    pluginName: string,
+    enabled: boolean
+  ): Promise<number> {
+    return this.withConnection(() =>
+      this.mcpToolModel.setEnabledByPluginName(pluginName, enabled)
+    );
+  }
+
   /** Find all MCP servers owned by a plugin. (Design §5.3) */
   public async findMcpByPluginName(
     pluginName: string

@@ -283,6 +283,14 @@ export interface SkillExecutionContext {
   readonly deadlineEpochMs?: number;
 
   /**
+   * H5: the same deadline on a MONOTONIC clock (performance.now() anchor).
+   * Present whenever `deadlineEpochMs` is set; the MCP execution path derives
+   * every inner timeout from this anchor so wall-clock changes can never
+   * extend or truncate the job. Absent for foreground callers.
+   */
+  readonly deadlinePerfMs?: number;
+
+  /**
    * Trusted per-job execution id (host registry-generated, never tool args).
    * One id binds the host context file, the artifact staging directory, the
    * journal, and post-exit promotion (TODO 2026-10-17 §2 H1). Omitted by
@@ -404,6 +412,8 @@ export interface ModuleExecutionContext {
    * callers omit it and keep the existing behavior.
    */
   readonly deadlineEpochMs?: number;
+  /** H5: monotonic-clock anchor for the same deadline (performance.now). */
+  readonly deadlinePerfMs?: number;
   /** Trusted per-job execution id shared by context, staging, and promotion (H1). */
   readonly executionId?: string;
   /** Recovery attempt the host ledger authorized for this call (H1/H3). */

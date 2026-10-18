@@ -1846,6 +1846,27 @@ function initialize() {
         );
       }
 
+      // H6: plugin artifact startup sweep — journal executions interrupted by
+      // a crash before promotion, quarantine their orphan staging, and age
+      // out stale retained staging. Runs before any plugin can start, so no
+      // live execution can race the sweep. Fire-and-forget, never fatal.
+      try {
+        const { getPluginFileArtifactService } = await import(
+          "@/service/PluginFileArtifactService"
+        );
+        const sweep = getPluginFileArtifactService().recoverStartupExecutions();
+        if (sweep.interrupted.length > 0 || sweep.agedPromotedStaging.length > 0) {
+          log.info(
+            `[plugin-artifacts] startup sweep: interrupted=${sweep.interrupted.length} aged=${sweep.agedPromotedStaging.length}`
+          );
+        }
+      } catch (err) {
+        log.warn(
+          "[plugin-artifacts] startup sweep failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Preserved tool outputs: install the persistent cursor key and run the
       // reconciliation sweep (technical design §12.2). Without this the cursor
       // key is ephemeral per process, so every cursor a model received before a

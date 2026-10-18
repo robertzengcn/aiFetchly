@@ -78,14 +78,26 @@ export function createShutdownParticipants(
     freeze: () => {
       // T06/AC-05: seal the registry SYNCHRONOUSLY at exit entry — jobs
       // admitted after this tick are refused (start() throws closed).
+      // H5: active jobs are aborted + relabelled cancelled here; their
+      // admission leases ride deferred settlement so stop() below can await
+      // actual cleanup quiescence before other participants tear down.
       void import("@/service/ToolJobRegistry").then(
         ({ getDefaultToolJobRegistry }) => {
           getDefaultToolJobRegistry().shutdown();
         }
       );
     },
-    stop: async () => {
-      // Nothing further at stop time — freeze already cancelled + sealed.
+    stop: async (context) => {
+      // H5 (lifecycle): await bounded cleanup for the jobs frozen above
+      // (plugin process teardown incl. browser group kill) before the rest
+      // of the shutdown proceeds. Bounded by the remaining budget; a hung
+      // tool cannot block exit beyond it.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      await getDefaultToolJobRegistry().shutdownAndAwaitCleanup(
+        Math.max(0, Math.min(5_000, context.remainingMs()))
+      );
     },
     finalize: async () => undefined,
   };

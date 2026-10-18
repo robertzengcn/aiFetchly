@@ -177,6 +177,104 @@ export class PluginFileArtifactService {
     return out;
   }
 
+  // ---------------------------------------------------------------- startup sweep
+
+  /**
+   * H6: startup sweep for executions interrupted by a host crash/restart.
+   *
+   * For every staging directory:
+   *  - No journal (promotion never happened): write an `interrupted` journal
+   *    entry so a conversation re-polling for the artifact gets an honest
+   *    resolution, then move the orphan staging dir into `staging-quarantine`
+   *    (plugin-owned bytes are never deleted directly — a human may inspect
+   *    them; the monitor sweeps quarantine by the same retention window).
+   *  - Journal exists but the staging dir was retained after promotion:
+   *    age out (remove) once the journal is older than the retention
+   *    window (default 30 days).
+   *
+   * Runs BEFORE any plugin can start (background.ts whenReady), so races
+   * with live executions are impossible.
+   */
+  public recoverStartupExecutions(
+    retentionMs: number = PLUGIN_ARTIFACT_LIMITS.defaultRetentionMs
+  ): { interrupted: string[]; agedPromotedStaging: string[] } {
+    const out: { interrupted: string[]; agedPromotedStaging: string[] } = {
+      interrupted: [],
+      agedPromotedStaging: [],
+    };
+    const stagingRoot = path.join(this.root, "staging");
+    const quarantineRoot = path.join(this.root, "staging-quarantine");
+    const journalDir = path.join(this.root, "journal");
+    if (!this.fs.existsSync(stagingRoot)) return out;
+    let ids: string[];
+    try {
+      ids = this.fs.readdirSync(stagingRoot);
+    } catch (e) {
+      log.warn(
+        `[PluginFileArtifactService] startup sweep could not read staging: ${String(e)}`
+      );
+      return out;
+    }
+    for (const id of ids) {
+      let stagingPath: string;
+      try {
+        this.assertSafeComponent(id);
+        stagingPath = path.join(stagingRoot, id);
+        if (!this.fs.existsSync(stagingPath)) continue;
+      } catch {
+        continue; // unsafe component — hygiene sweep, not a job id
+      }
+
+      const journalPath = path.join(journalDir, `${id}.json`);
+      const promoted = this.fs.existsSync(journalPath);
+      if (!promoted) {
+        try {
+          this.writeJournal(id, {
+            artifacts: [],
+            errors: [
+              `interrupted: host restart before promotion (startup sweep at ${new Date(
+                this.now()
+              ).toISOString()})`,
+            ],
+          });
+          this.fs.mkdirSync(quarantineRoot, { recursive: true });
+          try {
+            this.fs.renameSync(stagingPath, path.join(quarantineRoot, id));
+          } catch {
+            // Quarantine target already exists (previous sweep) — drop.
+            this.fs.rmSync(stagingPath, { recursive: true, force: true });
+          }
+          out.interrupted.push(id);
+        } catch (e) {
+          log.warn(
+            `[PluginFileArtifactService] startup sweep failed for ${id}: ${String(e)}`
+          );
+        }
+        continue;
+      }
+
+      // Promoted earlier: stale retained staging older than the journal's
+      // published timestamp ages out with the same retention window.
+      try {
+        const parsed = JSON.parse(
+          this.fs.readFileSync(journalPath)
+        ) as { at?: string };
+        const at = typeof parsed?.at === "string" ? Date.parse(parsed.at) : NaN;
+        if (
+          Number.isFinite(at) &&
+          this.now() - at > retentionMs &&
+          this.fs.existsSync(stagingPath)
+        ) {
+          this.fs.rmSync(stagingPath, { recursive: true, force: true });
+          out.agedPromotedStaging.push(id);
+        }
+      } catch {
+        // Unreadable journal: keep the dir for a later sweep.
+      }
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- promotion
 
   /**

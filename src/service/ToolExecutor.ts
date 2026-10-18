@@ -482,6 +482,7 @@ export class ToolExecutor {
             toolParams,
             {
               deadlineEpochMs: context?.deadlineEpochMs,
+              deadlinePerfMs: context?.deadlinePerfMs,
               // H1: one execution id for context, staging, journal, promotion;
               // ledger-authorized recovery rides the host context file, never
               // model arguments.

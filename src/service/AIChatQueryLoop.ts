@@ -107,6 +107,7 @@ import {
 } from "@/service/AIChatImageHandoff";
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import {
+  AdmissionSealedError,
   getDefaultToolJobRegistry,
   type ToolJobSpawnHandle,
 } from "@/service/ToolJobRegistry";
@@ -4485,7 +4486,7 @@ export class AIChatQueryLoop {
     onProgress?: ToolProgressEmitter,
     deadlineMs?: number
   ): Promise<
-    | { kind: "job"; jobId: string }
+    | { kind: "job"; jobId: string; deadlinePerfMs: number }
     | { kind: "rejected"; result: ToolExecutionResult }
   > {
     // Re-check AI enable gate before starting async work. The IPC layer
@@ -4501,7 +4502,14 @@ export class AIChatQueryLoop {
     // plugin tool policy ceiling (or the host default). Every inner MCP
     // timeout derives from the remaining budget; progress can never extend
     // it, and pollAsyncJobToCompletion enforces the same bound.
-    const deadlineEpochMs = Date.now() + (deadlineMs ?? HOST_MAX_RUN_MS);
+    //
+    // H5: the EPOCH deadline is the observable contract (host context file,
+    // registry snapshots, user-facing copy); the AUTHORITATIVE expiry checks
+    // use a monotonic clock anchored here (`deadlinePerfMs`), so wall-clock
+    // changes can never extend or truncate the job.
+    const deadlineBudgetMs = deadlineMs ?? HOST_MAX_RUN_MS;
+    const deadlineEpochMs = Date.now() + deadlineBudgetMs;
+    const deadlinePerfMs = performance.now() + deadlineBudgetMs;
 
     const registry = getDefaultToolJobRegistry();
 
@@ -4578,16 +4586,19 @@ export class AIChatQueryLoop {
         };
       }
 
-      const { jobId } = registry.start(
-        call.name,
-        args,
-        { conversationId: input.conversationId, toolCallId: call.id },
-        (handle) => this.spawnPluginAsyncTool(input, call, handle, {
-          deadlineEpochMs,
-          outboundAuthorization,
-          onProgress,
-          pluginName,
-          identity,
+      let startOutcome: { jobId: string; queued: boolean };
+      try {
+        startOutcome = registry.start(
+          call.name,
+          args,
+          { conversationId: input.conversationId, toolCallId: call.id },
+          (handle) => this.spawnPluginAsyncTool(input, call, handle, {
+            deadlineEpochMs,
+            deadlinePerfMs,
+            outboundAuthorization,
+            onProgress,
+            pluginName,
+            identity,
           // H1/H3: the reservation (attempt, host strategy, owed delay) is the
           // authority for this call's recovery — the model's arguments are
           // never authoritative. Threading it through the host context file
@@ -4604,8 +4615,30 @@ export class AIChatQueryLoop {
               : undefined,
         }),
         { fingerprint }
-      );
-      return { kind: "job", jobId };
+        );
+      } catch (err) {
+        // H5 (lifecycle): admission seals (disable/uninstall/update) reject
+        // with a stable, retryable structured result — no job is created.
+        const sealedBy =
+          err instanceof AdmissionSealedError ? err.sealedBy : null;
+        if (sealedBy === null) throw err;
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "This plugin is being updated or removed; retries will succeed once the operation completes.",
+              code: "TOOL_ADMISSION_SEALED",
+              sealed_by: sealedBy.slice(0, 96),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+      return { kind: "job", jobId: startOutcome.jobId, deadlinePerfMs };
     }
 
     const { jobId } = registry.start(
@@ -4626,8 +4659,10 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
-              // Authoritative managed-async deadline (HOST-07).
+              // Authoritative managed-async deadline (HOST-07). Epoch rides
+              // the observable contract; the monotonic anchor drives clocks (H5).
               deadlineEpochMs,
+              deadlinePerfMs,
               // Trusted intent context (technical design §9/§14.2): binds the
               // draft to the exact user message + persisted intent decision
               // so authorization is never derived from tool arguments.
@@ -4678,7 +4713,7 @@ export class AIChatQueryLoop {
       }
     );
 
-    return { kind: "job", jobId };
+    return { kind: "job", jobId, deadlinePerfMs };
   }
 
   /**
@@ -4697,6 +4732,8 @@ export class AIChatQueryLoop {
     handle: ToolJobSpawnHandle,
     meta: {
       deadlineEpochMs: number;
+      /** Monotonic anchor for every deadline-aware clock (H5). */
+      deadlinePerfMs: number;
       outboundAuthorization:
         | {
             batchId: number;
@@ -4738,6 +4775,7 @@ export class AIChatQueryLoop {
         model: input.request.model,
         signal: handle.signal,
         deadlineEpochMs: meta.deadlineEpochMs,
+        deadlinePerfMs: meta.deadlinePerfMs,
         executionId,
         authorizedRecovery: meta.authorizedRecovery,
         sourceUserMessageId: input.sourceUserMessageId,
@@ -4976,7 +5014,9 @@ export class AIChatQueryLoop {
     call: { id: string; name: string },
     jobId: string,
     onProgress?: ToolProgressEmitter,
-    deadlineMs?: number
+    deadlineMs?: number,
+    /** H5: monotonic anchor shared with the execution path when provided. */
+    deadlinePerfMs?: number
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
@@ -4984,12 +5024,15 @@ export class AIChatQueryLoop {
     // The poll cap enforces the SAME authoritative deadline the execution
     // path uses (plugin policy maxRunMs, already clamped to the host ceiling
     // and to the ASYNC_POLL_MAX_MS backstop).
-    const deadlineAt =
-      startedAt +
-      Math.min(
-        deadlineMs ?? ASYNC_POLL_MAX_MS,
-        ASYNC_POLL_MAX_MS
-      );
+    //
+    // H5: expiry is decided on the MONOTONIC clock anchored when the job was
+    // admitted (`deadlinePerfMs`); a wall-clock change can never extend or
+    // truncate the job. `deadlineAt` (epoch) survives only for display.
+    const deadlinePerfAt =
+      deadlinePerfMs ??
+      performance.now() +
+        Math.min(deadlineMs ?? ASYNC_POLL_MAX_MS, ASYNC_POLL_MAX_MS);
+    const deadlineAt = startedAt + (deadlineMs ?? ASYNC_POLL_MAX_MS);
 
     const emitProgress = (
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
@@ -5069,11 +5112,14 @@ export class AIChatQueryLoop {
         };
       }
 
-      if (Date.now() >= deadlineAt) {
+      if (performance.now() >= deadlinePerfAt) {
         // PRD §11.8: expiry must CANCEL the job and stop its browser before
         // returning — never tell the model to retry while the original
         // scraper may still be running. Bounded cleanup wait; the supervised
-        // transport escalates to SIGKILL independently of this wait.
+        // transport escalates to SIGKILL independently of this wait, and the
+        // H5 process-group kill covers the plugin's browser descendants (the
+        // spawn continuation that closes the transport is exactly what the
+        // deferred H5 settlement waits for).
         try {
           registry.cancel(jobId);
         } catch {
@@ -5429,8 +5475,9 @@ export class AIChatQueryLoop {
         pluginPolicy?.policy.maxRunMs
       );
       if (admission.kind === "rejected") {
-        // Admission failure (duplicate job / rejected recovery): surface as
-        // the tool result directly — no job was created.
+        // Admission failure (duplicate job / rejected recovery / sealed
+        // plugin admission): surface as the tool result directly — no job
+        // was created.
         toolResult = admission.result;
       } else {
         toolResult = await this.pollAsyncJobToCompletion(
@@ -5438,7 +5485,8 @@ export class AIChatQueryLoop {
           effectiveCall,
           admission.jobId,
           onProgress,
-          pluginPolicy?.policy.maxRunMs
+          pluginPolicy?.policy.maxRunMs,
+          admission.deadlinePerfMs
         );
       }
     } else {
