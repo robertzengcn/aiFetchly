@@ -83,3 +83,50 @@ describe("historySelection store (B14)", () => {
     );
   });
 });
+
+/**
+ * R13 (audit 2026-10-17): background engine acknowledgements reconcile the
+ * ACKING conversation's stored chips whether or not it is selected — only
+ * accepted ids clear, changed flag refreshed, rejected flag rejected, and a
+ * different conversation's chips are untouched.
+ */
+describe("historySelection applyAcknowledgement (R13)", () => {
+  it("reconciles a background conversation's chips without touching others", () => {
+    const store = useHistorySelectionStore();
+    store.setItems("conv-a", [
+      { sourceId: "s1", preview: "p1", estimatedTokens: 10 },
+      { sourceId: "s2", preview: "p2", estimatedTokens: 10 },
+      { sourceId: "s3", preview: "p3", estimatedTokens: 10 },
+    ]);
+    store.setItems("conv-b", [
+      { sourceId: "s1", preview: "p1", estimatedTokens: 10 },
+    ]);
+
+    store.applyAcknowledgement("conv-a", {
+      accepted: new Set(["s1"]),
+      changed: new Set(["s2"]),
+      rejected: new Set(["s3"]),
+    });
+
+    const a = store.getItems("conv-a");
+    expect(a.map((item) => item.sourceId)).toEqual(["s2", "s3"]);
+    expect(a[0]).toMatchObject({ sourceId: "s2", refreshed: true });
+    expect(a[1]).toMatchObject({ sourceId: "s3", rejected: true });
+    // A different conversation's identical id is untouched.
+    expect(store.getItems("conv-b")).toEqual([
+      { sourceId: "s1", preview: "p1", estimatedTokens: 10 },
+    ]);
+  });
+
+  it("no-ops for unknown conversations and empty outcome sets", () => {
+    const store = useHistorySelectionStore();
+    store.setItems("conv-a", [
+      { sourceId: "s1", preview: "p1", estimatedTokens: 10 },
+    ]);
+    store.applyAcknowledgement("conv-missing", {
+      accepted: new Set(["s1"]),
+    });
+    store.applyAcknowledgement("conv-a", {});
+    expect(store.getItems("conv-a")).toHaveLength(1);
+  });
+});

@@ -403,7 +403,7 @@
 
     <!-- Generated-image reference notice (over-limit preflight abort). -->
     <div
-      v-if="generatedImageNotice !== null"
+      v-if="shownImageNotice !== null"
       class="chat-center__genimg-notice"
       role="alert"
       data-testid="workspace-genimg-notice"
@@ -412,7 +412,7 @@
         mdi-image-alert-outline
       </v-icon>
       <span class="chat-center__genimg-notice-text">
-        {{ generatedImageNotice }}
+        {{ shownImageNotice }}
       </span>
       <v-btn
         size="x-small"
@@ -420,7 +420,7 @@
         class="ml-1"
         :aria-label="t('common.close') || 'Close'"
         data-testid="workspace-genimg-notice-dismiss"
-        @click="generatedImageNotice = null"
+        @click="clearImageNotice()"
       >
         {{ t("common.close") || "Close" }}
       </v-btn>
@@ -1224,7 +1224,7 @@ const selectedGeneratedImageViews = computed(() =>
 
 /** "Use as reference" tile action: toggle the image in the tray. */
 function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
-  generatedImageNotice.value = null;
+  clearImageNotice();
   const key = composerDraftKey.value;
   const current = activeGeneratedImageRefs.value;
   if (current.some((r) => sameGeneratedImageRef(r, reference))) {
@@ -1430,7 +1430,7 @@ function declineGeneratedImageBatch(): void {
 
 /** "Edit" tile action: exactly this image becomes the tray selection. */
 function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
-  generatedImageNotice.value = null;
+  clearImageNotice();
   composerDrafts.setGeneratedImageReferences(composerDraftKey.value, [
     reference,
   ]);
@@ -1569,6 +1569,77 @@ function enqueuePendingImageExport(
   );
 }
 
+/**
+ * R08: late export outcomes belong to the CAPTURED conversation, never to
+ * the currently selected chat. After the awaited IPC the surface may show
+ * chat B, so outcome notices queue per conversation id (a plain ref Map,
+ * replaced immutably) and the banner resolves them for the CURRENT
+ * selection — chat B can never display chat A's save result, and returning
+ * to A surfaces the queued outcome exactly where it was earned
+ * (FR-IMG-013/015, FR-SUB-007, FR-LIF-002).
+ */
+const deferredImageNotices = ref<Map<string, string>>(new Map());
+
+function queueDeferredImageNotice(
+  conversation: string,
+  message: string
+): void {
+  deferredImageNotices.value = new Map(deferredImageNotices.value).set(
+    conversation,
+    message
+  );
+}
+
+/**
+ * What the banner shows for the CURRENT selection: this conversation's
+ * deferred export outcome first, else the synchronous session notice
+ * (composer preflight errors unaffected by R08).
+ */
+const shownImageNotice = computed<string | null>(() => {
+  const id = conversationId.value;
+  if (!id) return generatedImageNotice.value;
+  return deferredImageNotices.value.get(id) ?? generatedImageNotice.value;
+});
+
+/** Clear what the current conversation displays (tray action or dismiss). */
+function clearImageNotice(): void {
+  generatedImageNotice.value = null;
+  const id = conversationId.value;
+  if (!id) return;
+  const next = new Map(deferredImageNotices.value);
+  next.delete(id);
+  deferredImageNotices.value = next;
+}
+
+/**
+ * R08: conversations whose queued export returned `workspace_required`
+ * while ANOTHER chat was selected. The setup card opens when the owner is
+ * re-selected (consumed exactly once), never for the chat the response
+ * happened to land in (FR-INT-002).
+ */
+const deferredImageExportSetupIds = ref(new Set<string>());
+
+/**
+ * Finish a deferred setup request for the re-selected owner. R04-style
+ * capture-and-recheck: the decision is made only after a FRESH workspace
+ * read of THAT conversation (the switch watcher may still hold the previous
+ * chat's summary) and is reverified against the selection after the await,
+ * so a second switch can never open the card in a third chat.
+ */
+async function flushDeferredImageExportSetup(
+  conversation: string
+): Promise<void> {
+  if (conversationId.value !== conversation) return;
+  await conversationWorkspace.refresh();
+  if (conversationId.value !== conversation) return;
+  if (conversationWorkspace.workspace.value?.approvalState === "approved") {
+    // Approved since the response landed: the queued export drains through
+    // the approval watcher below — no setup card needed.
+    return;
+  }
+  onRequestWorkspaceSetup();
+}
+
 async function attemptGeneratedImageExport(
   conversation: string,
   reference: ChatV2GeneratedImageReference
@@ -1579,22 +1650,39 @@ async function attemptGeneratedImageExport(
       // Keep the export queued; the SAME request-workspace flow runs and the
       // queued export retries automatically once a workspace is approved.
       enqueuePendingImageExport(conversation, reference);
-      onRequestWorkspaceSetup();
-      generatedImageNotice.value =
+      queueDeferredImageNotice(
+        conversation,
         t("aiChatV2.imageTool.errors.workspaceRequired") ||
-        "An approved workspace is required first.";
+          "An approved workspace is required first."
+      );
+      // R08: the setup card belongs to the export OWNER. Surface it
+      // immediately only when that conversation is selected right now;
+      // otherwise defer it until the owner is re-selected (the switch
+      // watcher consumes the deferred request below).
+      if (conversationId.value === conversation) {
+        onRequestWorkspaceSetup();
+      } else {
+        deferredImageExportSetupIds.value = new Set([
+          ...deferredImageExportSetupIds.value,
+          conversation,
+        ]);
+      }
       return;
     }
-    generatedImageNotice.value =
+    queueDeferredImageNotice(
+      conversation,
       t("aiChatV2.artifactExport.savedToWorkspace", {
         fileName: result.fileName ?? "",
-      }) || `Saved ${result.fileName ?? ""} to your workspace.`;
+      }) || `Saved ${result.fileName ?? ""} to your workspace.`
+    );
   } catch (err) {
-    generatedImageNotice.value =
+    queueDeferredImageNotice(
+      conversation,
       err instanceof Error && err.message
         ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${err.message})`
         : t("aiChatV2.artifactExport.saveFailed") ||
-          "Could not save to workspace.";
+            "Could not save to workspace."
+    );
   }
 }
 
@@ -2556,6 +2644,16 @@ watch(
         }
       }
     }
+    // R08: a late `workspace_required` may have deferred ITS setup request
+    // while this conversation was away. Returning here consumes that request
+    // exactly once — the flush re-reads THIS chat's workspace freshly before
+    // opening the card, so the stale summary read above cannot decide it.
+    if (next && deferredImageExportSetupIds.value.has(next)) {
+      deferredImageExportSetupIds.value = new Set(
+        [...deferredImageExportSetupIds.value].filter((id) => id !== next)
+      );
+      void flushDeferredImageExportSetup(next);
+    }
   },
   { immediate: true }
 );
@@ -2575,18 +2673,12 @@ function onEngineStartAck(chunk: Record<string, unknown>): void {
     Array.isArray(chunk.historySelectionRejectedIds);
   // B14: acceptance resolves the stable submission identity for the ACKED
   // conversation (accepted AND mixed acknowledgements) — never by switching.
-  // Chips mutate only when the ack owns the current selection, so a
-  // background ack for A never clears B's chips.
   if (ackConversationId) {
     historySelStore.resolveSubmission(ackConversationId);
   } else if (conversationId.value) {
     historySelStore.resolveSubmission(conversationId.value);
   }
-  if (
-    !hasSelectionAcks ||
-    selectedContextItems.value.length === 0 ||
-    (ackConversationId !== null && ackConversationId !== conversationId.value)
-  ) {
+  if (!hasSelectionAcks) {
     return;
   }
   const toIdSet = (value: unknown): Set<string> => {
@@ -2600,6 +2692,26 @@ function onEngineStartAck(chunk: Record<string, unknown>): void {
   const accepted = toIdSet(chunk.historySelectionAcceptedIds);
   const changed = toIdSet(chunk.historySelectionChangedIds);
   const rejected = toIdSet(chunk.historySelectionRejectedIds);
+  // R13: reconcile the ACKING conversation's STORED chips at application
+  // lifetime — a background acknowledgement for A updates A's stored draft
+  // even while B is selected, so returning to A restores only the
+  // remaining/flagged chips instead of resurfacing consumed selections.
+  const storeConversationId = ackConversationId ?? conversationId.value;
+  if (storeConversationId) {
+    historySelStore.applyAcknowledgement(storeConversationId, {
+      accepted,
+      changed,
+      rejected,
+    });
+  }
+  // The center's LIVE working copy mutates only when the ack owns the
+  // current selection, so a background ack for A never clears B's chips.
+  if (
+    selectedContextItems.value.length === 0 ||
+    (ackConversationId !== null && ackConversationId !== conversationId.value)
+  ) {
+    return;
+  }
   selectedContextItems.value = selectedContextItems.value
     .filter((item) => !accepted.has(item.sourceId))
     .map((item) =>

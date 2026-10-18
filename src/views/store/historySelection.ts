@@ -118,6 +118,44 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
     });
   }
 
+  /**
+   * R13 (FR-HIS-003, application-lifetime reconciliation): apply an engine
+   * start acknowledgement to the ACKING conversation's stored chips whether
+   * or not that conversation is currently selected — only ACCEPTED ids clear,
+   * changed survivors flag `refreshed`, rejected flag `rejected`. Called for
+   * background acknowledgements so returning to the conversation restores
+   * reconciled chips instead of resurfacing already-consumed selections.
+   */
+  function applyAcknowledgement(
+    conversationId: string,
+    outcome: {
+      readonly accepted?: ReadonlySet<string>;
+      readonly changed?: ReadonlySet<string>;
+      readonly rejected?: ReadonlySet<string>;
+    }
+  ): void {
+    const prev = drafts.value.get(conversationId);
+    if (!prev) return;
+    const accepted = outcome.accepted ?? new Set<string>();
+    const changed = outcome.changed ?? new Set<string>();
+    const rejected = outcome.rejected ?? new Set<string>();
+    const hasAny =
+      accepted.size > 0 || changed.size > 0 || rejected.size > 0;
+    if (!hasAny) return;
+    drafts.value.set(conversationId, {
+      ...prev,
+      items: prev.items
+        .filter((item) => !accepted.has(item.sourceId))
+        .map((item) =>
+          changed.has(item.sourceId)
+            ? { ...item, refreshed: true }
+            : rejected.has(item.sourceId)
+              ? { ...item, rejected: true }
+              : item
+        ),
+    });
+  }
+
   /** Test seam: reset all drafts. */
   function clearAll(): void {
     drafts.value.clear();
@@ -129,6 +167,7 @@ export const useHistorySelectionStore = defineStore("historySelection", () => {
     ensureSubmissionId,
     peekSubmissionId,
     resolveSubmission,
+    applyAcknowledgement,
     clearAll,
   };
 });
