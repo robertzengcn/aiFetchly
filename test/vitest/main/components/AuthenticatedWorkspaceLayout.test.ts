@@ -8,6 +8,7 @@ import { createI18n } from "vue-i18n";
 const bootstrapWorkspaceMock = vi.fn();
 const subscribeSummaryEventsMock = vi.fn();
 const setWorkspaceRedesignEnabledMock = vi.fn();
+const fetchWorkspaceRedesignPreferenceMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const selectConversationMock = vi.fn();
 const subscribeDetailEventsMock = vi.fn();
@@ -20,6 +21,8 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
     subscribeSummaryEventsMock(...args),
   setWorkspaceRedesignEnabled: (...args: unknown[]) =>
     setWorkspaceRedesignEnabledMock(...args),
+  fetchWorkspaceRedesignPreference: (...args: unknown[]) =>
+    fetchWorkspaceRedesignPreferenceMock(...args),
   createWorkspaceConversationId: (...args: unknown[]) =>
     createWorkspaceConversationIdMock(...args),
   renameConversation: vi.fn(),
@@ -110,6 +113,11 @@ beforeEach(() => {
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
   setWorkspaceRedesignEnabledMock.mockResolvedValue(undefined);
+  // A02 default: the preference is UNSET (mount persists the default).
+  fetchWorkspaceRedesignPreferenceMock.mockResolvedValue({
+    enabled: true,
+    explicit: false,
+  });
   createWorkspaceConversationIdMock.mockReturnValue("fresh-1");
   selectConversationMock.mockResolvedValue({
     acceptedGeneration: 1,
@@ -142,12 +150,25 @@ describe("AuthenticatedWorkspaceLayout (chat-first shell design §7.2, TODO gap 
     );
   });
 
-  it("forces the redesign preference and shell flag on at mount (no toggle-off path)", async () => {
+  it("lands the redesign DEFAULT on mount when the preference is unset (no toggle-off path)", async () => {
     useInnerPageShellFlag().setShellEnabled(false);
     await mountLayout();
     await flushPromises();
 
     expect(setWorkspaceRedesignEnabledMock).toHaveBeenCalledWith(true);
+    expect(useInnerPageShellFlag().shellEnabled.value).toBe(true);
+  });
+
+  it("A02: never overwrites an explicit operator rollback on mount", async () => {
+    fetchWorkspaceRedesignPreferenceMock.mockResolvedValue({
+      enabled: false,
+      explicit: true,
+    });
+    await mountLayout();
+    await flushPromises();
+
+    expect(setWorkspaceRedesignEnabledMock).not.toHaveBeenCalled();
+    // The renderer-local shell boundary flag is still enforced.
     expect(useInnerPageShellFlag().shellEnabled.value).toBe(true);
   });
 

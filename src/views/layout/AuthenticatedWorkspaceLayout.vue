@@ -54,6 +54,7 @@ import {
   createAndSelectWorkspaceChat,
 } from "@/views/composables/chatWorkspaceSelection";
 import {
+  fetchWorkspaceRedesignPreference,
   setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
 import {
@@ -185,11 +186,23 @@ onMounted(() => {
   // authenticated application unmounts — never on center-route changes.
   void chatWorkspace.bootstrap();
   // The workspace shell is now the only shell (footer toggle removed):
-  // enforce the durable redesign preference and the boundary flag on every
-  // mount so the app always lands on the converged shell.
-  setWorkspaceRedesignEnabled(true).catch(() => {
-    // Preference write failed — the in-memory shell flag below still applies.
-  });
+  // land the durable redesign DEFAULT and the boundary flag on mount so the
+  // app always lands on the converged shell — but never overwrite an
+  // EXPLICIT operator choice (A02, design §30.2): a flag-only rollback
+  // (enabled=false) must survive mounting the workspace, so the write only
+  // happens while the preference is unset. The in-memory shell boundary
+  // flag is renderer-local and stays enforced on every mount.
+  void fetchWorkspaceRedesignPreference()
+    .then((preference) => {
+      if (preference && preference.explicit) return;
+      return setWorkspaceRedesignEnabled(true).catch(() => {
+        // Preference write failed — the in-memory shell flag below still
+        // applies and the unset default already reads enabled.
+      });
+    })
+    .catch(() => {
+      // Preference read failed — fall through to the shell flag only.
+    });
   innerPageShell.setShellEnabled(true);
 });
 

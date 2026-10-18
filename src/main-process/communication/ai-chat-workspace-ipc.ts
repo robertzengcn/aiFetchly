@@ -740,8 +740,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // Default-on for dev preview: treat missing value (null/undefined) as
       // enabled so the merged redesign is visible without manual setup.
       // Explicit "false" still disables (rollback per design §30.2).
+      // A02: `explicit` distinguishes the unset default from an operator's
+      // recorded choice — mount-time enforcement may only land the DEFAULT,
+      // never overwrite an explicit rollback/disable.
       const enabled = raw === null || raw === undefined ? true : raw === "true";
-      return ok({ enabled });
+      const explicit = raw === "true" || raw === "false";
+      return ok({ enabled, explicit });
     } catch (err) {
       return denied(userSafeError(err));
     }

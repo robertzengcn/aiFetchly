@@ -233,6 +233,26 @@ export async function isWorkspaceRedesignEnabled(): Promise<boolean> {
   return (result as { enabled?: boolean } | null)?.enabled === true;
 }
 
+/**
+ * A02 (design §30.2): the rollout preference with its explicitness. The
+ * authenticated layout's mount-time enforcement may only persist the
+ * DEFAULT when the preference is unset — an operator's explicit rollback
+ * (enabled=false) or pin (enabled=true) must never be overwritten by
+ * mounting the workspace.
+ */
+export async function fetchWorkspaceRedesignPreference(): Promise<{
+  enabled: boolean;
+  explicit: boolean;
+} | null> {
+  const result = await windowInvoke(AI_CHAT_WORKSPACE_GET_FLAG, {});
+  const shaped = result as { enabled?: boolean; explicit?: boolean } | null;
+  if (!shaped) return null;
+  return {
+    enabled: shaped.enabled === true,
+    explicit: shaped.explicit === true,
+  };
+}
+
 export async function setWorkspaceRedesignEnabled(
   enabled: boolean
 ): Promise<boolean> {
