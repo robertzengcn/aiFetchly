@@ -98,6 +98,25 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
     expect(decision.code).toBe("allowed");
   });
 
+  it("treats a stored deterministic-unknown classification as refinement-pending at pre_draft, not a hard block (FR-007 §10.1)", async () => {
+    // Sync persists classifyDeterministic's inconclusive verdict ("unknown",
+    // 0.5) for ordinary human emails. The gate must NOT hard-block it at
+    // pre_draft: the generation service refines it via the constrained model
+    // classifier right after the guard/reuse checks (B01 ordering) and
+    // re-gates on the refined value. Hard-blocking here deadlocked drafting
+    // for every ordinary inbound email.
+    const id = await seedMessage({
+      classification: "unknown",
+      classificationConfidence: 0.5,
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+  });
+
   it("createDraft wires the gate before retrieval/LLM (structural guard)", () => {
     // Ensures the pre_draft evaluate call appears BEFORE retrieveReplyKnowledge
     // in the source, so a blocked message never reaches knowledge/LLM.

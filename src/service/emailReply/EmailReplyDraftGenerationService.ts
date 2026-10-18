@@ -1433,14 +1433,97 @@ export class EmailReplyDraftGenerationService {
         // G01/FR-035: deadline exhaustion is a transport failure, not a soft
         // classification failure — re-throw so the createDraft catch converts
         // it to a deadline_exceeded outcome (no draft persisted). Only genuine
-        // classifier failures fall through to the stored-value continuation.
+        // classifier failures fall through to the decided-classification
+        // enforcement below.
         if (e instanceof LlmTransportError && e.deadlineExceeded) {
           throw e;
         }
         console.error(
-          "Model classification stage failed; continuing with stored value:",
+          "Model classification stage failed; enforcing undecided-classification refusal:",
           e
         );
+      }
+
+      // 2a-bis. Decided-classification enforcement (FR-007 §10.1 + the
+      //     pre-draft unknown exemption in evaluatePreDraft): the gate listed
+      //     a stored deterministic-'unknown' as refinement-pending, so the
+      //     classification verdict MUST be concrete before any prose
+      //     generation. Two outcomes here:
+      //     a) still undecided (the classifier transport/schema failed and
+      //        the stored value stands) → typed classification_unknown
+      //        refusal. Never draft for an undecided sender — that would
+      //        bypass the safety net the old hard block provided.
+      //     b) refined to a concrete classification → re-run the
+      //        authoritative pre-draft gate. A refined hard block
+      //        (bounce / auto_reply / unsubscribe / needs_human_review)
+      //        refuses HERE instead of after paying for the generation call
+      //        (B03's post-generation recheck would otherwise discard it).
+      if (
+        message.classification == null ||
+        message.classification === "unknown"
+      ) {
+        const code = "classification_unknown";
+        const refusalReason =
+          "[classification_unknown] Sender classification could not be determined (classification stage failed); no draft created";
+        await this.recordFailure(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          refusalReason,
+          { stage: "post_classification", code }
+        );
+        incrementReplyMetric("policy_decision", {
+          stage: "post_classification",
+          code,
+          allowed: false,
+        });
+        return {
+          success: false,
+          error: refusalReason,
+          requestCorrelationId,
+          code,
+          next_action: nextActionForCode(code),
+        };
+      }
+      // Refined to a concrete classification — the gate that suppressed the
+      // unknown block must now re-decide with the refined verdict. Bounded
+      // like the original gate (G01/FR-035); deadline expiry propagates as a
+      // transport failure, not a soft continuation.
+      const postRefinementDecision = await this.raceWithDeadline(
+        "policy_evaluation",
+        new EmailReplyPolicyOrchestrator().evaluate({
+          stage: "pre_draft",
+          messageId: message.id,
+        })
+      );
+      incrementReplyMetric("policy_decision", {
+        stage: "post_classification",
+        code: postRefinementDecision.code,
+        allowed: postRefinementDecision.allowed,
+      });
+      if (!postRefinementDecision.allowed) {
+        // FR-034: exactly ONE reply_skipped audit for this refusal (the
+        // original gate allowed the refinement-pending message, so it wrote
+        // nothing). Audit persistence failure STOPS the work.
+        await this.writeRefusalAudit(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          {
+            stage: "post_classification",
+            code: postRefinementDecision.code,
+            reason: postRefinementDecision.reason,
+            policyVersion: postRefinementDecision.policyVersion,
+            ruleId: postRefinementDecision.ruleId,
+          }
+        );
+        return {
+          success: false,
+          error: `[${postRefinementDecision.code}] ${postRefinementDecision.reason}`,
+          requestCorrelationId,
+          code: postRefinementDecision.code,
+          next_action: nextActionForCode(postRefinementDecision.code),
+        };
       }
     }
 
@@ -3272,7 +3355,7 @@ export class EmailReplyDraftGenerationService {
     messageId: number,
     requestCorrelationId: string,
     decision: {
-      readonly stage: "pre_draft";
+      readonly stage: "pre_draft" | "post_classification";
       readonly code: string;
       readonly reason: string;
       readonly policyVersion: string;

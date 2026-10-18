@@ -172,4 +172,35 @@ describe("EmailReplyPolicyCode — FR-028/029/036/027 duplicate/refusal codes", 
       expect(legacyCodes).toContain(mapped.code);
     }
   });
+
+  it("maps classification-flavored blocked reasons to accurate codes (FR-007 §10.1 follow-up)", () => {
+    // The classification hard-block reason carries the classification literal.
+    // 'unknown' must surface as classification_unknown (pre-send / non-tool
+    // producers), NOT the generic blocked_sender the old fallthrough emitted.
+    const unknownBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'unknown' must not be auto-replied",
+      null
+    );
+    expect(unknownBlock.allowed).toBe(false);
+    expect(unknownBlock.code).toBe("classification_unknown");
+
+    // A stored 'auto_reply' classification (e.g. list mail) is an automated
+    // sender block, not blocked_sender.
+    const autoReplyBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'auto_reply' must not be auto-replied",
+      null
+    );
+    expect(autoReplyBlock.code).toBe("automated_sender");
+
+    // A deterministic 'needs_human_review' classification is a sensitive
+    // topic, not blocked_sender.
+    const reviewBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'needs_human_review' must not be auto-replied",
+      null
+    );
+    expect(reviewBlock.code).toBe("sensitive_topic");
+  });
 });

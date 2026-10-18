@@ -288,10 +288,26 @@ export class EmailReplyPolicyOrchestrator {
     const rule = await this.ruleModule
       .getEffectiveRule(message.emailServiceId)
       .catch(() => null);
+    // FR-007 §10.1: a stored deterministic-'unknown' at pre_draft is a stage-2
+    // REFINEMENT TRIGGER, not a final verdict. Sync persists
+    // classifyDeterministic's inconclusive result for ordinary human emails;
+    // the generation service refines it via the constrained model classifier
+    // right after the guard/reuse checks (B01 ordering) and re-runs this gate
+    // on the refined value. Feeding the stage-agnostic evaluator `null`
+    // (pending refinement) here is what makes that refinement reachable — a
+    // hard block would deadlock drafting before the classifier could run.
+    // Pre-send NEVER exempts: an approved draft's classification must be
+    // decided, and `unknown` stays a hard block there (surfaced as
+    // classification_unknown by classifyBlock).
+    const refinementPending = message.classification === "unknown";
     const decision = evaluateAutoReplyPolicy({
       message: message as never,
-      classification: message.classification as never,
-      confidence: message.classificationConfidence,
+      classification: (refinementPending
+        ? null
+        : message.classification) as never,
+      confidence: refinementPending
+        ? null
+        : message.classificationConfidence,
       rule,
       sendCounts: { todayForService: 0, threadCount: 0 },
     });
@@ -519,9 +535,16 @@ function classifyBlock(reason: string): EmailReplyPolicyCode {
   const r = reason.toLowerCase();
   if (r.includes("bounce")) return "bounce";
   if (r.includes("unsubscribe")) return "unsubscribe";
-  if (r.includes("automated") || r.includes("no-reply"))
+  if (r.includes("auto_reply") || r.includes("automated") || r.includes("no-reply"))
     return "automated_sender";
   if (r.includes("domain")) return "blocked_domain";
+  // Classification hard-block reasons carry the classification literal:
+  // 'needs_human_review' is a sensitive topic, 'unknown' is an undecided
+  // classification (pre-send / non-tool producers). Both were previously
+  // falling through to the misleading generic blocked_sender.
+  if (r.includes("needs_human_review") || r.includes("sensitive"))
+    return "sensitive_topic";
+  if (r.includes("unknown")) return "classification_unknown";
   if (r.includes("sender") || r.includes("pattern")) return "blocked_sender";
   return "blocked_sender";
 }

@@ -2113,6 +2113,175 @@ describe("createDraft runs guard + reuse before classification (B01)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// FR-007 §10.1: stored deterministic-'unknown' is refinement-pending, never a
+// deadlock. Sync persists classifyDeterministic's "Deterministic rules
+// inconclusive" verdict (unknown, confidence 0.5) for ordinary human emails;
+// the pre-draft gate exempts it so the constrained model classifier (already
+// wired after the guard/reuse checks per B01) can decide it. Regression for:
+// "[blocked_sender] Classification 'unknown' must not be auto-replied" —
+// the gate used to hard-block the stored-unknown BEFORE refinement could run,
+// so the refinement branch was unreachable for exactly the messages it
+// targets and every ordinary inbound email was refused.
+// ---------------------------------------------------------------------------
+describe("createDraft refines a stored deterministic-unknown classification (FR-007 §10.1)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  /**
+   * Seed a clean message the way the receive-sync pipeline actually does:
+   * classification persisted via updateClassification + deterministic
+   * provenance (EmailReceiveSyncService.normalizeAndAssociate), NOT left
+   * null. The B01 block above seeds null — the only value the pre-B01 gate
+   * tolerated — which is why the unknown deadlock was never caught there.
+   */
+  async function seedSyncedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "david@example.com";
+    msg.fromName = "David";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = over.subject ?? "Question about your product";
+    msg.bodyText = over.bodyText ?? "Hello, I would like to know more.";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? null;
+    msg.classificationConfidence = over.classificationConfidence ?? null;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    if (over.classification !== undefined) {
+      // Mirror the sync path exactly: classification + provenance columns.
+      await messageModule.updateClassification(
+        saved.id,
+        over.classification,
+        over.classificationConfidence ?? 0.5
+      );
+      await messageModule.updateClassificationProvenance(
+        saved.id,
+        "deterministic",
+        "deterministic-v1"
+      );
+    }
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4244;
+    draft.subject = "Re: Question about your product";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("refines the stored unknown via the constrained model and drafts successfully", async () => {
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const classifierJson = JSON.stringify({
+      classification: "interested",
+      confidence: 0.9,
+    });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(classifierJson),
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(false);
+    // Exactly two AI calls: bounded classification + generation.
+    expect(requests).toHaveLength(2);
+    expect(requests[0].max_tokens).toBe(60);
+    // The refined classification is persisted like the sync path would.
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("interested");
+  });
+
+  it("re-gates after refinement: a refined unsubscribe refuses with a typed code and no generation call", async () => {
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({ classification: "unsubscribe", confidence: 0.95 })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("unsubscribe");
+    // The refinement ran (1 call) but prose generation never did — the
+    // post-refinement re-gate refused before the LLM spend.
+    expect(requests).toHaveLength(1);
+  });
+
+  it("routes a failed classifier to human review: persists needs_human_review, refuses sensitive_topic, no generation call", async () => {
+    // classifyMessage's contract (locked in EmailReceiveNormalization.test.ts
+    // "survives a model caller that throws"): a throwing model caller routes
+    // to review → needs_human_review. The refined value is persisted, the
+    // re-gate then refuses with the accurate code (NOT the old fallthrough
+    // blocked_sender), and prose generation never fires.
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    // The factory throws on the FIRST (classification) call — no canned
+    // responses. The classification stage fails through the review fallback.
+    const { factory, requests } = fakeApiFactory([]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("sensitive_topic");
+    // The classification call was attempted; generation never fired.
+    expect(requests).toHaveLength(1);
+    // The review verdict is persisted as the routing record (source review).
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("needs_human_review");
+  });
+
+  it("reuses an eligible draft with zero AI calls even when the stored classification is unknown", async () => {
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    // Reuse (B01 ordering) settles the outcome before classification —
+    // zero AI calls even for a persisted unknown classification.
+    expect(requests).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // One refusal audit per invocation (FR-034, Phase-1 slice)
 // ---------------------------------------------------------------------------
 describe("createDraft refusal audits (FR-034)", () => {
