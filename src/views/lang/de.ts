@@ -3780,6 +3780,8 @@ export default {
       activity: "Aktivität",
       context: "Kontext",
       resize: "Inspektor skalieren",
+      artifactsDisabled:
+        "Artefaktergebnisse sind nicht verfügbar, solange der Adapter für spezialisierte Ergebnisse zurückgesetzt ist.",
     },
     artifacts: {
       selectConversation:

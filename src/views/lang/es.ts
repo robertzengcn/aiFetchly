@@ -3780,6 +3780,8 @@ export default {
       activity: "Actividad",
       context: "Contexto",
       resize: "Cambiar tamaño del inspector",
+      artifactsDisabled:
+        "Los resultados de artefactos no están disponibles mientras el adaptador de resultados especializados está revertido.",
     },
     artifacts: {
       selectConversation:

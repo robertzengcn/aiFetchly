@@ -3751,6 +3751,8 @@ export default {
       activity: "Activity",
       context: "Context",
       resize: "Resize inspector",
+      artifactsDisabled:
+        "Artifact results are unavailable while the specialized-results rollout adapter is rolled back.",
     },
     artifacts: {
       selectConversation: "Select a conversation to see its generated outputs.",

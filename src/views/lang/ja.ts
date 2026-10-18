@@ -3699,6 +3699,8 @@ export default {
       activity: "アクティビティ",
       context: "コンテキスト",
       resize: "インスペクターの幅を変更",
+      artifactsDisabled:
+        "専用結果ロールバックアダプターが適用されている間、アーティファクトの結果は利用できません。",
     },
     artifacts: {
       selectConversation: "会話を選択すると生成物が表示されます。",

@@ -3764,6 +3764,8 @@ export default {
       activity: "Activité",
       context: "Contexte",
       resize: "Redimensionner l'inspecteur",
+      artifactsDisabled:
+        "Les résultats d'artefacts restent indisponibles tant que l'adaptateur de résultats spécialisés est revenu en arrière.",
     },
     artifacts: {
       selectConversation:

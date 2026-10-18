@@ -3564,6 +3564,7 @@ export default {
       activity: "活动",
       context: "上下文",
       resize: "调整检查器宽度",
+      artifactsDisabled: "专用结果回滚适配器启用期间，产物结果暂不可用。",
     },
     artifacts: {
       selectConversation: "选择一个会话以查看其生成的内容。",
