@@ -1011,7 +1011,11 @@ export class AIChatTurnQueueService {
         });
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
           code: "DISPATCH_PROMOTE_FAILED",
-          message: err instanceof Error ? err.message : String(err),
+          // Review fix (information disclosure): static guidance only — the
+          // raw error is logged below and must not cross to the renderer
+          // through userSafeError's verbatim typed-code passthrough.
+          message:
+            "The message could not be promoted for execution. It is paused — retry or remove it.",
         });
         const view = await this.deps.pendingModule.getView(
           row.pendingMessageId

@@ -177,6 +177,7 @@ import type {
   ChatToolApprovalMode,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2GeneratedImageExportResult } from "@/views/api/aiChatV2";
 import { MessageType } from "@/entityTypes/commonType";
 import {
   AI_CHAT_V2_GOAL_CREATE,
@@ -336,7 +337,9 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
             '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
         }),
         WorkspaceRequiredCard: defineComponent({
+          name: "WorkspaceRequiredCard",
           props: ["conversationId"],
+          emits: ["approved", "cancel"],
           template: '<div data-testid="workspace-required-stub" />',
         }),
         WorkspaceTrustCard: true,
@@ -1381,6 +1384,155 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(
         wrapper.find('[data-testid="workspace-required-stub"]').exists()
       ).toBe(true);
+    });
+
+    /**
+     * R08: a late image-export response belongs to the conversation the save
+     * was issued in — never the currently selected chat. Outcomes (notice)
+     * and follow-up UI (workspace setup) queue against that captured owner
+     * and surface only when it is re-selected (FR-IMG-013/015, FR-SUB-007,
+     * FR-LIF-002, FR-INT-002).
+     */
+    describe("late image-export outcomes after a switch (R08)", () => {
+      interface DeferredExport {
+        wrapper: ReturnType<typeof mountSurface>;
+        chatWorkspace: ReturnType<typeof useChatWorkspaceStore>;
+        resolveExport: (result: ChatV2GeneratedImageExportResult) => void;
+        rejectExport: (reason?: unknown) => void;
+      }
+
+      async function mountWithHangingExport(): Promise<DeferredExport> {
+        const pinia = createPinia();
+        setActivePinia(pinia);
+        const wrapper = mountSurface(pinia);
+        const chatWorkspace = useChatWorkspaceStore();
+        chatWorkspace.setSelected("conv-a");
+        await flushPromises();
+
+        let resolveExport!: (result: ChatV2GeneratedImageExportResult) => void;
+        let rejectExport!: (reason?: unknown) => void;
+        exportGeneratedImageMock.mockReturnValue(
+          new Promise<ChatV2GeneratedImageExportResult>((resolve, reject) => {
+            resolveExport = resolve;
+            rejectExport = reject;
+          })
+        );
+        const transcript = wrapper.findComponent({
+          name: "AiChatWorkspaceTranscript",
+        });
+        transcript.vm.$emit("save-generated-image", {
+          messageId: "m1",
+          imageIndex: 0,
+        });
+        await flushPromises();
+        // The export stays addressed to the issuing chat.
+        expect(exportGeneratedImageMock).toHaveBeenCalledTimes(1);
+        expect(exportGeneratedImageMock).toHaveBeenCalledWith("conv-a", {
+          messageId: "m1",
+          imageIndex: 0,
+        });
+
+        // Switch away while the export hangs: chat B owns none of it.
+        chatWorkspace.setSelected("conv-b");
+        await flushPromises();
+        return { wrapper, chatWorkspace, resolveExport, rejectExport };
+      }
+
+      it("surfaces a delayed saved outcome only after re-selecting the exporting chat", async () => {
+        const { wrapper, chatWorkspace, resolveExport } =
+          await mountWithHangingExport();
+
+        resolveExport({ status: "exported", fileName: "late-image.png" });
+        await flushPromises();
+        // While chat B is selected it receives no foreign outcome.
+        expect(
+          wrapper.find('[data-testid="workspace-genimg-notice"]').exists()
+        ).toBe(false);
+        expect(
+          wrapper.find('[data-testid="workspace-required-stub"]').exists()
+        ).toBe(false);
+
+        chatWorkspace.setSelected("conv-a");
+        await flushPromises();
+        const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+        expect(notice.text()).toContain("late-image.png");
+        // Delivered exactly once — a success never retries the export.
+        expect(exportGeneratedImageMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("defers the workspace_required setup into the exporting chat and completes once there", async () => {
+        const { wrapper, chatWorkspace, resolveExport } =
+          await mountWithHangingExport();
+
+        resolveExport({ status: "workspace_required" });
+        await flushPromises();
+        // B opens no setup card for chat A's pending export and shows no
+        // foreign notice.
+        expect(
+          wrapper.find('[data-testid="workspace-required-stub"]').exists()
+        ).toBe(false);
+        expect(
+          wrapper.find('[data-testid="workspace-genimg-notice"]').exists()
+        ).toBe(false);
+
+        // Returning to the exporting chat: its queued outcome surfaces and
+        // the setup card opens for THIS conversation.
+        chatWorkspace.setSelected("conv-a");
+        await flushPromises();
+        expect(
+          wrapper.get('[data-testid="workspace-genimg-notice"]').text()
+        ).toContain("approved workspace");
+        expect(
+          wrapper.find('[data-testid="workspace-required-stub"]').exists()
+        ).toBe(true);
+        // Still queued behind the (missing) workspace — no auto retry yet.
+        expect(exportGeneratedImageMock).toHaveBeenCalledTimes(1);
+
+        // Approving a workspace through the card drains the queued export
+        // exactly once and reports the saved outcome back to this chat.
+        exportGeneratedImageMock.mockResolvedValue({
+          status: "exported",
+          fileName: "late-image.png",
+        });
+        wrapper
+          .findComponent({ name: "WorkspaceRequiredCard" })
+          .vm.$emit("approved", 7, "/tmp/ws");
+        await flushPromises();
+        expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(
+          2,
+          "conv-a",
+          {
+            messageId: "m1",
+            imageIndex: 0,
+          }
+        );
+        expect(
+          wrapper.get('[data-testid="workspace-genimg-notice"]').text()
+        ).toContain("late-image.png");
+      });
+
+      it("shows a late failure notice only inside the exporting chat", async () => {
+        const { wrapper, chatWorkspace, rejectExport } =
+          await mountWithHangingExport();
+
+        rejectExport(new Error("workspace went away"));
+        await flushPromises();
+        // While chat B is selected it receives no foreign failure.
+        expect(
+          wrapper.find('[data-testid="workspace-genimg-notice"]').exists()
+        ).toBe(false);
+        expect(
+          wrapper.find('[data-testid="workspace-required-stub"]').exists()
+        ).toBe(false);
+
+        chatWorkspace.setSelected("conv-a");
+        await flushPromises();
+        const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+        expect(notice.text()).toContain("Could not save to workspace");
+        expect(notice.text()).toContain("workspace went away");
+        // A caught failure does not retry the export.
+        expect(exportGeneratedImageMock).toHaveBeenCalledTimes(1);
+      });
     });
 
     it("stops a running batch through the active-run cancel (FR-IMG-012)", async () => {

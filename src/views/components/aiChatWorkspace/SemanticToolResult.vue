@@ -37,7 +37,7 @@
           class="image-tile"
         >
           <img
-            v-if="image.url"
+            v-if="image.url && isAllowedImageUrl(image.url)"
             :src="image.url"
             :alt="image.file_name || `Generated image ${index + 1}`"
             loading="lazy"
@@ -81,6 +81,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolOutputKind } from "./toolExecutionProjection";
 import type { ChatV2GeneratedImage } from "@/entityTypes/aiChatV2Types";
+import { isAllowedImageUrl } from "@/views/utils/allowedImageUrl";
 
 const props = defineProps<{
   outputKind: ToolOutputKind;

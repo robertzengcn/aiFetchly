@@ -454,7 +454,6 @@ export class AgentRuntime {
           agentToolCatalogContext.toolCatalogModeDecision,
       };
       const result = await loop.run(loopInput);
-      this.liveTaskAborts.delete(agentTaskId);
 
       if (result.type === "completed") {
         finalText = result.fullContent;
@@ -521,6 +520,10 @@ export class AgentRuntime {
     } finally {
       clearTimeout(timer);
       deps?.signal?.removeEventListener("abort", abortFromParent);
+      // Review fix: release the live-controller registration on EVERY exit
+      // path (a thrown loop.run previously leaked the entry, and a later
+      // cancelTask would abort the dead controller and report success).
+      this.liveTaskAborts.delete(agentTaskId);
     }
 
     // 6. Parse output.

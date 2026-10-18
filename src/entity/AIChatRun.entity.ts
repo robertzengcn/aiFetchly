@@ -16,6 +16,10 @@ import { Order } from "./order.decorator";
 @Index("idx_aichatrun_runid", ["runId"], { unique: true })
 @Index("idx_aichatrun_conv_created", ["conversationId", "createdAt"])
 @Index("idx_aichatrun_status_updated", ["status", "updatedAt"])
+// Review fix: the run-dispatch bridge resolves the interactive envelope by
+// (owner, sourceId) on EVERY queue dispatch — without this index that lookup
+// is a full-table sort growing with total run history.
+@Index("idx_aichatrun_owner_source", ["owner", "sourceId"])
 export class AIChatRunEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id!: number;

@@ -201,9 +201,17 @@ export class AIChatPendingMessageModule extends BaseModule {
       });
     } catch (err) {
       if (err instanceof AIChatPendingMessageModuleError) throw err;
+      // Review fix (information disclosure): the typed error's message is
+      // surfaced verbatim by userSafeError ("[CODE] <message>") — raw
+      // preparation errors (filesystem paths, driver text) must stay in
+      // logs, with only static user guidance crossing to the renderer.
+      console.error(
+        "[ai-chat-pending] message preparation failed:",
+        err
+      );
       throw new AIChatPendingMessageModuleError(
         "PREPARATION_FAILED",
-        err instanceof Error ? err.message : "Failed to prepare the message."
+        "The message could not be prepared for sending. Check attachments and try again."
       );
     }
 
