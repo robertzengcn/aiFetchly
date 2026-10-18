@@ -3266,6 +3266,28 @@ export class AIChatQueryEngine {
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(module, baseSink);
 
+    // Parked-question answer publication (R03-family): the answer moved the
+    // plan out of awaiting_question, but the renderer's pinned surface is
+    // derived from persisted plan metadata which still holds the parked
+    // snapshot (status awaiting_question + pending question). Publish the
+    // authoritative post-answer view so the question card releases as soon
+    // as the continuation starts.
+    if (planState) {
+      try {
+        eventSink.emit({
+          type: "plan_state",
+          conversationId,
+          messageId: pending.assistantMessageId,
+          planState,
+        });
+      } catch (err) {
+        log.warn(
+          "[ai-chat-v2] post-answer plan state publication failed:",
+          err
+        );
+      }
+    }
+
     try {
       const result = await this.runLoopSegment(
         this.loop,

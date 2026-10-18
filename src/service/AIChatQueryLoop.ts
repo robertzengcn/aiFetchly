@@ -4329,6 +4329,28 @@ export class AIChatQueryLoop {
       return null;
     }
 
+    // Parked-question publication (R03-family): the parked turn's only
+    // renderer surface for the question is THIS chunk. The in-memory
+    // planContext still holds the pre-question state (draft) — projecting
+    // that would classify the surface `drafting` and HIDE the card while the
+    // turn waits, so re-read the authoritative module state, which carries
+    // status awaiting_question + the pending question.
+    let publishedPlanState = input.planContext.planState;
+    try {
+      const refreshed = await input.planContext.planModule.getPlanStateByPlanId(
+        questionView.planId
+      );
+      if (refreshed) {
+        publishedPlanState = refreshed;
+        input.planContext.planState = refreshed;
+      }
+    } catch (err) {
+      log.warn(
+        "[ai-chat-v2] post-question plan state refresh failed:",
+        err
+      );
+    }
+
     yield {
       type: "ask_user_question",
       conversationId: input.conversationId,
@@ -4336,7 +4358,7 @@ export class AIChatQueryLoop {
       toolCallId: call.id,
       toolName: call.name,
       question: questionView,
-      planState: input.planContext.planState,
+      planState: publishedPlanState,
     };
 
     const ackContent = serializeToolResultContent({
