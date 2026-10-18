@@ -15,13 +15,16 @@
  *      context hash → `not_replied` from cache.
  *   4. POP3 / config-unavailable / missing RFC ID → typed `unknown`. Never
  *      construct an IMAP client from POP3 credentials.
- *   5. Connect via the service's stored receive config; UID-scoped flag refresh
- *      (namespaced rows) — `\Answered` settles `replied` (`mailbox_flag`).
- *      Legacy/expunged rows cannot complete the flag side but may still match
- *      in Sent search.
- *   6. Resolve Sent folders (≤5), search each (≤200 candidate fetches total),
- *      verify exact direct parent + configured sending identity. A verified
- *      match settles `replied` (`sent_search`); ambiguity/incomplete → unknown.
+ *   5. Connect once via the service's stored receive config. On that same
+ *      session, UID-scoped flag refresh (namespaced rows) — `\Answered`
+ *      settles `replied` (`mailbox_flag`). Legacy/expunged rows cannot
+ *      complete the flag side but may still match in Sent search.
+ *   6. On the same connection, resolve Sent folders (≤5), search each
+ *      (≤200 candidate fetches total), verify exact direct parent +
+ *      configured sending identity. A verified match settles `replied`
+ *      (`sent_search`); ambiguity/incomplete → unknown. Separate connections
+ *      per step exhaust the 15s deadline on slow mailboxes (`probe_timeout`)
+ *      and block draft generation.
  *   7. Before persisting a negative, confirm the account context is unchanged
  *      since the probe began; if it changed, return `identity_conflict` and do
  *      not persist. Close the IMAP connection in `finally`.
@@ -80,7 +83,10 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
-import { ImapEmailReceiveClient } from "@/service/emailReceive/ImapEmailReceiveClient";
+import {
+  ImapEmailReceiveClient,
+  type ImapProbeSession,
+} from "@/service/emailReceive/ImapEmailReceiveClient";
 
 // Re-export the result union + guards so callers (Module, tests, future wire-up
 // in generation/delivery services) can import them from a single entry point.
@@ -230,6 +236,16 @@ export interface ReplyDetectionImapPort {
     cap: number;
     signal?: AbortSignal;
   }): Promise<ReplyHeaderSearchResult | false>;
+  /**
+   * Run flag refresh, Sent discovery, and header search on one IMAP
+   * connection. Production supplies this. Ports that omit it fall back to
+   * the three primitives above, which may each open their own connection.
+   */
+  runOnOneConnection?<T>(
+    config: EmailReceiveConnectionConfig,
+    signal: AbortSignal | undefined,
+    work: (session: ImapProbeSession) => Promise<T>
+  ): Promise<T>;
 }
 
 /** What a candidate-matching pass concluded about one candidate. */
@@ -316,7 +332,7 @@ export class EmailReplyDetectionService {
       options?.attemptPort ?? new DefaultAttemptPort();
     this.emailServicePort =
       options?.emailServicePort ?? new DefaultEmailServicePort();
-    this.imapPort = options?.imapPort ?? new DefaultImapPort();
+    this.imapPort = options?.imapPort ?? createReplyDetectionImapPort();
     this.now = options?.now ?? ((): number => Date.now());
   }
 
@@ -881,7 +897,50 @@ export class EmailReplyDetectionService {
   // Steps 5–7 — bounded mailbox probe.
   // -------------------------------------------------------------------------
 
+  /**
+   * Open one IMAP session when the port supports it, then run steps 5–7.
+   * A connect failure is `probe_failed` (or `probe_timeout` if the deadline
+   * already aborted the socket). Ports without `runOnOneConnection` keep the
+   * per-call primitives so existing fakes stay valid.
+   */
   private async probeMailbox(
+    message: EmailReceivedMessageEntity,
+    normalizedConfig: EmailReceiveConnectionConfig,
+    normalizedId: string,
+    configuredSender: string,
+    preProbeContextHash: string,
+    signal?: AbortSignal,
+    deadline?: { expired(): boolean; remainingMs(): number; endsAtMs(): number }
+  ): Promise<ReplyDetectionResult> {
+    const settle = (
+      session: ImapProbeSession
+    ): Promise<ReplyDetectionResult> =>
+      this.probeConnectedMailbox(
+        session,
+        message,
+        normalizedConfig,
+        normalizedId,
+        configuredSender,
+        preProbeContextHash,
+        signal,
+        deadline
+      );
+    const runOne = this.imapPort.runOnOneConnection;
+    if (runOne) {
+      try {
+        return await runOne(normalizedConfig, signal, settle);
+      } catch {
+        if (signal?.aborted || deadline?.expired()) {
+          return this.unknown("probe_timeout");
+        }
+        return this.unknown("probe_failed");
+      }
+    }
+    return settle(new PerCallImapSession(this.imapPort, normalizedConfig));
+  }
+
+  private async probeConnectedMailbox(
+    session: ImapProbeSession,
     message: EmailReceivedMessageEntity,
     normalizedConfig: EmailReceiveConnectionConfig,
     normalizedId: string,
@@ -932,8 +991,7 @@ export class EmailReplyDetectionService {
 
     if (folder && uidValidity && uid) {
       try {
-        const flags = await this.imapPort.refreshMessageFlags({
-          config: normalizedConfig,
+        const flags = await session.refreshMessageFlags({
           folder,
           uidValidity,
           uid,
@@ -976,8 +1034,8 @@ export class EmailReplyDetectionService {
 
     // Step 6 — Sent-folder header search.
     const sentResult = await this.searchSentForReply(
+      session,
       message,
-      normalizedConfig,
       normalizedId,
       configuredSender,
       signal
@@ -1157,8 +1215,8 @@ export class EmailReplyDetectionService {
    * §7.2 matching rules). Bounds: ≤5 folders, ≤200 candidate fetches total.
    */
   private async searchSentForReply(
+    session: ImapProbeSession,
     message: EmailReceivedMessageEntity,
-    config: EmailReceiveConnectionConfig,
     originalMessageId: string,
     configuredSender: string,
     signal?: AbortSignal
@@ -1172,7 +1230,7 @@ export class EmailReplyDetectionService {
   > {
     let folders: SentFolder[];
     try {
-      folders = await this.imapPort.discoverSentFolders(config, signal);
+      folders = await session.discoverSentFolders(signal);
     } catch {
       // Auth/permission/connection failures during LIST must NOT collapse to
       // folder absence (§7.2) — propagate as probe_failed (unknown upstream).
@@ -1207,8 +1265,7 @@ export class EmailReplyDetectionService {
       let folderTruncated = false;
       let failedFetchCount = 0;
       try {
-        const result = await this.imapPort.searchReplyHeaders({
-          config,
+        const result = await session.searchReplyHeaders({
           folder: f.folder,
           originalMessageId,
           cap: fetchesRemaining,
@@ -1877,31 +1934,73 @@ class DefaultEmailServicePort implements ReplyDetectionEmailServicePort {
   }
 }
 
-class DefaultImapPort implements ReplyDetectionImapPort {
-  private readonly client = new ImapEmailReceiveClient();
+/**
+ * Production IMAP port. Mailbox observations for one probe share a single
+ * connection via {@link ImapEmailReceiveClient.withProbeConnection}. The
+ * three primitives remain for callers that invoke them on their own.
+ */
+export function createReplyDetectionImapPort(
+  client: ImapEmailReceiveClient = new ImapEmailReceiveClient()
+): ReplyDetectionImapPort {
+  return {
+    refreshMessageFlags(input) {
+      return client.refreshMessageFlags(input);
+    },
+    discoverSentFolders(config, signal) {
+      return client.discoverSentFolders(config, signal);
+    },
+    searchReplyHeaders(input) {
+      return client.searchReplyHeaders(input);
+    },
+    runOnOneConnection(config, signal, work) {
+      return client.withProbeConnection(config, signal, work);
+    },
+  };
+}
+
+/**
+ * Fallback session for ports that do not implement `runOnOneConnection`.
+ * Each primitive may open its own connection; tests inject those primitives
+ * directly and never hit the network.
+ */
+class PerCallImapSession implements ImapProbeSession {
+  constructor(
+    private readonly port: ReplyDetectionImapPort,
+    private readonly config: EmailReceiveConnectionConfig
+  ) {}
+
   refreshMessageFlags(input: {
-    config: EmailReceiveConnectionConfig;
     folder: string;
     uidValidity: string;
     uid: string;
     signal?: AbortSignal;
   }): Promise<RefreshedFlags | null> {
-    return this.client.refreshMessageFlags(input);
+    return this.port.refreshMessageFlags({
+      config: this.config,
+      folder: input.folder,
+      uidValidity: input.uidValidity,
+      uid: input.uid,
+      signal: input.signal,
+    });
   }
-  discoverSentFolders(
-    config: EmailReceiveConnectionConfig,
-    signal?: AbortSignal
-  ): Promise<SentFolder[]> {
-    return this.client.discoverSentFolders(config, signal);
+
+  discoverSentFolders(signal?: AbortSignal): Promise<SentFolder[]> {
+    return this.port.discoverSentFolders(this.config, signal);
   }
+
   searchReplyHeaders(input: {
-    config: EmailReceiveConnectionConfig;
     folder: string;
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
   }): Promise<ReplyHeaderSearchResult | false> {
-    return this.client.searchReplyHeaders(input);
+    return this.port.searchReplyHeaders({
+      config: this.config,
+      folder: input.folder,
+      originalMessageId: input.originalMessageId,
+      cap: input.cap,
+      signal: input.signal,
+    });
   }
 }
 

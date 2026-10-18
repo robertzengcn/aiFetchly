@@ -84,6 +84,27 @@ export interface ImapFlowConnection {
 export type ImapFlowFactory = (options: ImapFlowOptions) => ImapFlowConnection;
 
 /**
+ * Mailbox observations for one reply-detection probe, already connected.
+ * Flag refresh, Sent-folder discovery, and header search share this session
+ * so a slow server pays for one TLS handshake instead of three.
+ */
+export interface ImapProbeSession {
+  refreshMessageFlags(input: {
+    folder: string;
+    uidValidity: string;
+    uid: string;
+    signal?: AbortSignal;
+  }): Promise<RefreshedFlags | null>;
+  discoverSentFolders(signal?: AbortSignal): Promise<SentFolder[]>;
+  searchReplyHeaders(input: {
+    folder: string;
+    originalMessageId: string;
+    cap: number;
+    signal?: AbortSignal;
+  }): Promise<ReplyHeaderSearchResult | false>;
+}
+
+/**
  * ImapFlow-backed receive client. Connects with TLS based on `ssl`, opens the
  * configured folder, searches a bounded set of messages, parses each via
  * `mailparser`, sanitizes HTML, and returns typed {@link ParsedInboundEmail}.
@@ -163,6 +184,80 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     mode: ImapConnectionMode = "configured"
   ): ImapFlowConnection {
     return this.imapFlowFactory(buildImapFlowOptions(config, mode));
+  }
+
+  /**
+   * One IMAP session for a reply-detection probe. The caller runs flag
+   * refresh, Sent discovery, and header search on the session; this method
+   * owns connect, implicit-TLS retry, abort, and logout.
+   *
+   * A probe that opens a new connection per step spends the 15s deadline on
+   * handshakes and returns `probe_timeout` before it can decide whether a
+   * reply already exists.
+   */
+  async withProbeConnection<T>(
+    config: EmailReceiveConnectionConfig,
+    signal: AbortSignal | undefined,
+    work: (session: ImapProbeSession) => Promise<T>
+  ): Promise<T> {
+    if (signal?.aborted) {
+      throw new Error("IMAP probe aborted before connect");
+    }
+    let client = this.createClient(config);
+    let detachAbort = attachAbortListener(client, signal);
+    try {
+      try {
+        await client.connect();
+      } catch (error) {
+        if (signal?.aborted || !shouldRetryWithImplicitTls(error, config)) {
+          throw error;
+        }
+        await closeClient(client);
+        detachAbort?.();
+        if (signal?.aborted) {
+          throw error;
+        }
+        client = this.createClient(config, "implicitTls");
+        detachAbort = attachAbortListener(client, signal);
+        await client.connect();
+      }
+      if (abortIfSignaled(client, signal)) {
+        throw new Error("IMAP probe aborted during connect");
+      }
+      return await work(this.probeSession(client, signal));
+    } finally {
+      detachAbort?.();
+      await closeClient(client);
+    }
+  }
+
+  private probeSession(
+    client: ImapFlowConnection,
+    signal?: AbortSignal
+  ): ImapProbeSession {
+    return {
+      refreshMessageFlags: (input) =>
+        this.refreshFlagsFromConnectedClient(
+          client,
+          input.folder,
+          input.uid,
+          input.uidValidity,
+          input.signal ?? signal
+        ),
+      discoverSentFolders: (sessionSignal) =>
+        this.discoverSentFoldersFromConnectedClient(
+          client,
+          sessionSignal ?? signal
+        ),
+      searchReplyHeaders: (input) =>
+        this.searchReplyHeadersFromConnectedClient(
+          client,
+          input.folder,
+          input.originalMessageId,
+          input.cap,
+          input.signal ?? signal
+        ),
+    };
   }
 
   /**
