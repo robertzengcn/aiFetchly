@@ -62,9 +62,16 @@
 
     <div class="inspector-body">
       <AiChatArtifactsPanel
-        v-if="activeTab === 'artifacts'"
+        v-if="activeTab === 'artifacts' && specializedResultsEnabled"
         :conversation-id="conversationId"
       />
+      <div
+        v-else-if="activeTab === 'artifacts'"
+        class="inspector-artifacts-fallback"
+        data-testid="workspace-inspector-artifacts-fallback"
+      >
+        {{ t("workspaceChat.inspector.artifactsDisabled") || "Artifact results are unavailable while the specialized-results rollout adapter is rolled back." }}
+      </div>
       <AiChatActivityPanel
         v-if="activeTab === 'activity'"
         :conversation-id="conversationId"
@@ -87,6 +94,9 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatArtifactsPanel from "./AiChatArtifactsPanel.vue";
 import AiChatActivityPanel from "./AiChatActivityPanel.vue";
 import AiChatContextPanel from "./AiChatContextPanel.vue";
+import {
+  useWorkspaceRolloutAdapters,
+} from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
 
 const props = defineProps<{
   activeTab: "artifacts" | "activity" | "context";
@@ -105,6 +115,10 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/** A02 (§23.1): artifacts degrade to a placeholder when the adapter is off. */
+const rolloutAdapters = useWorkspaceRolloutAdapters();
+const specializedResultsEnabled = rolloutAdapters.specializedResults;
 
 /** Resizing applies on wide screens only (design §15.8). */
 const resizable = computed(() => props.overlay !== true);
@@ -234,5 +248,12 @@ function onResizerKeydown(event: KeyboardEvent): void {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.inspector-artifacts-fallback {
+  flex: 1;
+  padding: 16px;
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.64);
 }
 </style>

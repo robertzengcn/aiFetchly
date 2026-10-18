@@ -54,8 +54,10 @@
       {{ busyReasonText }}
     </span>
     <button
+      v-if="showMemory"
       type="button"
       class="workspace-badge__memory"
+      data-testid="workspace-badge-memory"
       :title="memoryLabel"
       @click.stop="requestOpenMemory"
     >
@@ -111,8 +113,10 @@ const props = withDefaults(
     loading?: boolean;
     /** A run is active: workspace changes are unsafe (FR-WS-007). */
     busy?: boolean;
+    /** A02 §23.1 voice/memory adapter off: hide the memory surface entry. */
+    showMemory?: boolean;
   }>(),
-  { memoryCount: 0, loading: false, busy: false }
+  { memoryCount: 0, loading: false, busy: false, showMemory: true }
 );
 
 const emit = defineEmits<{

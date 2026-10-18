@@ -133,6 +133,7 @@
         :memory-count="conversationWorkspace.memoryCount.value"
         :loading="conversationWorkspace.loading.value"
         :busy="workspaceChangesBlocked"
+        :show-memory="voiceMemoryEnabled"
         @request-set-workspace="onRequestWorkspaceSetup"
         @request-open-memory="openWorkspaceMemory"
       />
@@ -325,6 +326,7 @@
       </template>
       <template #toolbar-actions>
         <AiChatVoiceOutputToggle
+          v-if="voiceMemoryEnabled"
           :enabled="voice.spokenResponseEnabled.value"
           :saving="voice.settingsSaving.value"
           :unavailable="voice.runtimeUnavailable.value"
@@ -782,6 +784,9 @@ import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import {
+  useWorkspaceRolloutAdapters,
+} from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
+import {
   createAndSelectWorkspaceChat,
   useChatWorkspaceSelection,
 } from "@/views/composables/chatWorkspaceSelection";
@@ -792,6 +797,13 @@ const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
 const inspector = useAppInspectorStore();
+// A02 (design §23.1): independent rollout adapter controls — each answer
+// toggles one optional surface or dispatch adapter without touching durable
+// rows, run identities, or authorization gates.
+const rolloutAdapters = useWorkspaceRolloutAdapters();
+const sharedOrchestrationEnabled = rolloutAdapters.sharedOrchestration;
+const specializedResultsEnabled = rolloutAdapters.specializedResults;
+const voiceMemoryEnabled = rolloutAdapters.voiceMemory;
 
 /**
  * Center-surface chat route (design §8): conversation presentation only —
@@ -824,6 +836,11 @@ const voiceRuntimeInstallDialog = computed({
 const showWorkspaceMemory = ref(false);
 
 function openWorkspaceMemory(): void {
+  // A02 (§23.1): the voice/memory adapter off removes the memory surface —
+  // workspace mapping itself stays untouched (durable state, no removal).
+  if (!voiceMemoryEnabled.value) {
+    return;
+  }
   const workspace = conversationWorkspace.workspace.value;
   if (!workspace || workspace.approvalState !== "approved") {
     showWorkspaceMemory.value = false;
@@ -1945,11 +1962,22 @@ async function onComposerSend(
   // FR-CMD-001: inputs beginning with '/' pass through the shared command
   // router BEFORE ordinary AI submission — the raw command text never
   // reaches the model.
+  //
+  // A02 (§23.1/§23.2): with the shared-orchestration adapter rolled back,
+  // sends degrade to the plain durable path (no slash/loop/skill commands):
+  // the pending queue, run identities, and permission gates are
+  // main-process owned and stay untouched.
   commandErrorNotice.value = null;
   // T7/D3 + Codex P1: capture the conversation the user pressed Send in
   // BEFORE the first await (command routing / file encoding both suspend).
   // A later selection change can never attach this submission to chat B.
   const commandConversationId = conversationId.value;
+  if (!sharedOrchestrationEnabled.value) {
+    await performOrdinarySend(text, files, options, {
+      targetConversationId: commandConversationId,
+    });
+    return;
+  }
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,

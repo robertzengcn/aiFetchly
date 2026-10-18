@@ -27,6 +27,20 @@ export const AI_CHAT_MESSAGE_QUEUE_ENABLED = "ai_chat_message_queue_enabled";
 export const AI_CHAT_MESSAGE_STEERING_ENABLED =
   "ai_chat_message_steering_enabled";
 /**
+ * Workspace rollout adapter flags (design §23.1/23.2). Each chooses a
+ * presentation or dispatch adapter only — never authorization rules,
+ * database ownership, or persisted identity formats — so an operator can
+ * roll back one adapter independently while pending rows, run identities,
+ * and queue behaviour stay intact. Values "true"/"false"; default-on
+ * (shipped workspace behavior). Missing values fall back to the default.
+ */
+export const AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION =
+  "ai_chat_workspace_shared_orchestration";
+export const AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS =
+  "ai_chat_workspace_specialized_results";
+export const AI_CHAT_WORKSPACE_VOICE_MEMORY =
+  "ai_chat_workspace_voice_memory";
+/**
  * Desktop float notice when the main AI agent finishes a turn or a plan is
  * ready for approval. Stored in system_setting (AI Preferences toggle).
  * Default-on; values "1"/"0" from the settings UI.

@@ -19,6 +19,7 @@ import {
   workspaceBootstrapRequestSchema,
   workspaceFlagGetRequestSchema,
   workspaceFlagSetRequestSchema,
+  type WorkspaceRolloutFeature,
   selectConversationRequestSchema,
   unsubscribeDetailRequestSchema,
   startChatRunRequestSchema,
@@ -54,8 +55,16 @@ import { userSafeError, pendingErrorCode } from "@/service/AIChatErrorMapper";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { Token } from "@/modules/token";
 import {
+  AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION,
+  AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS,
+  AI_CHAT_WORKSPACE_VOICE_MEMORY,
   USER_AI_CHAT_WORKSPACE_REDESIGN,
 } from "@/config/usersetting";
+import {
+  isWorkspaceSharedOrchestrationEnabled,
+  isWorkspaceSpecializedResultsEnabled,
+  isWorkspaceVoiceMemoryEnabled,
+} from "@/service/AIChatWorkspaceRollout";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   ChatHistoryPageResponse,
@@ -757,15 +766,29 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         return denied("Invalid flag request");
       }
       const raw = new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN);
-      // Default-on for dev preview: treat missing value (null/undefined) as
-      // enabled so the merged redesign is visible without manual setup.
-      // Explicit "false" still disables (rollback per design §30.2).
+      // Redesign default is OFF with a validated rollback (PRD §33): an
+      // unset/empty value reports enabled=false so the legacy dock stays
+      // authoritative until the operator (or the A02 mount-time DEFAULT
+      // enforcement) records "true". Explicit "false" still rolls back.
+      // NOTE: Token.getValue returns "" for missing keys — it never yields
+      // null/undefined, so the "" branch is the unset case in practice.
       // A02: `explicit` distinguishes the unset default from an operator's
       // recorded choice — mount-time enforcement may only land the DEFAULT,
       // never overwrite an explicit rollback/disable.
       const enabled = raw === null || raw === undefined ? true : raw === "true";
       const explicit = raw === "true" || raw === "false";
-      return ok({ enabled, explicit });
+      // A02 (design §23.1): independent adapter controls ride the same
+      // channel so the drill toggles each capability through the real shell.
+      // Defaults come from the rollout accessors (default-on adapters).
+      return ok({
+        enabled,
+        explicit,
+        adapters: {
+          sharedOrchestration: isWorkspaceSharedOrchestrationEnabled(),
+          specializedResults: isWorkspaceSpecializedResultsEnabled(),
+          voiceMemory: isWorkspaceVoiceMemoryEnabled(),
+        },
+      });
     } catch (err) {
       return denied(userSafeError(err));
     }
@@ -780,11 +803,24 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         return denied("Invalid flag request");
       }
       const token = new Token();
+      const feature: WorkspaceRolloutFeature = parsed.data.feature ?? "redesign";
+      if (feature !== "redesign") {
+        // Adapter flags: one presentation/dispatch adapter at a time. The
+        // durable queue, run identities and permission gates never change.
+        const key =
+          feature === "shared_orchestration"
+            ? AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION
+            : feature === "specialized_results"
+              ? AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS
+              : AI_CHAT_WORKSPACE_VOICE_MEMORY;
+        token.setValue(key, parsed.data.enabled ? "true" : "false");
+        return ok({ enabled: parsed.data.enabled, feature });
+      }
       token.setValue(
         USER_AI_CHAT_WORKSPACE_REDESIGN,
         parsed.data.enabled ? "true" : "false"
       );
-      return ok({ enabled: parsed.data.enabled });
+      return ok({ enabled: parsed.data.enabled, feature });
     } catch (err) {
       return denied(userSafeError(err));
     }

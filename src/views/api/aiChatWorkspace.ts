@@ -260,6 +260,62 @@ export async function setWorkspaceRedesignEnabled(
   return (result as { enabled?: boolean } | null)?.enabled === enabled;
 }
 
+/**
+ * A02 (design §23.1): independent adapter controls shared with the redesign
+ * preference channel. Adapter toggles change presentation/dispatch wiring
+ * only — never durable rows, run identities or permission gates.
+ */
+export type WorkspaceRolloutFeatureName =
+  | "redesign"
+  | "shared_orchestration"
+  | "specialized_results"
+  | "voice_memory";
+
+export interface WorkspaceRolloutAdapters {
+  readonly sharedOrchestration: boolean;
+  readonly specializedResults: boolean;
+  readonly voiceMemory: boolean;
+}
+
+export async function fetchWorkspaceRolloutFlags(): Promise<{
+  enabled: boolean;
+  explicit: boolean;
+  adapters: WorkspaceRolloutAdapters;
+} | null> {
+  const result = await windowInvoke(AI_CHAT_WORKSPACE_GET_FLAG, {});
+  const shaped = result as
+    | {
+        enabled?: boolean;
+        explicit?: boolean;
+        adapters?: Partial<WorkspaceRolloutAdapters>;
+      }
+    | null;
+  if (!shaped) return null;
+  return {
+    enabled: shaped.enabled === true,
+    explicit: shaped.explicit === true,
+    adapters: {
+      // Unreadable/absent adapter values degrade the shell to its shipped
+      // default state: adapters ON (see AIChatWorkspaceRollout defaults).
+      sharedOrchestration: shaped.adapters?.sharedOrchestration !== false,
+      specializedResults: shaped.adapters?.specializedResults !== false,
+      voiceMemory: shaped.adapters?.voiceMemory !== false,
+    },
+  };
+}
+
+export async function setWorkspaceRolloutAdapter(
+  feature: Exclude<WorkspaceRolloutFeatureName, "redesign">,
+  enabled: boolean
+): Promise<boolean> {
+  const result = await windowInvoke(AI_CHAT_WORKSPACE_SET_FLAG, {
+    feature,
+    enabled,
+  });
+  const shaped = result as { enabled?: boolean; feature?: string } | null;
+  return shaped?.enabled === enabled && shaped?.feature === feature;
+}
+
 export interface ExportedConversationMessage {
   readonly id: string;
   readonly role: string;

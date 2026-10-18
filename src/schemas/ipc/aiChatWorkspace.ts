@@ -233,9 +233,29 @@ export type WorkspaceActivityRequestPayload = z.infer<
 
 export const workspaceFlagGetRequestSchema = z.object({}).strict();
 
+/**
+ * Rollout control names (design §23.1). "redesign" toggles the workspace
+ * shell visibility preference; the adapter names toggle one presentation or
+ * dispatch adapter independently — flags never change authorization rules,
+ * database ownership, or persisted identity formats.
+ */
+export const WORKSPACE_ROLLOUT_FEATURES = [
+  "redesign",
+  "shared_orchestration",
+  "specialized_results",
+  "voice_memory",
+] as const;
+
+export type WorkspaceRolloutFeature = (typeof WORKSPACE_ROLLOUT_FEATURES)[number];
+
+export const workspaceRolloutFeatureSchema = z.enum(
+  WORKSPACE_ROLLOUT_FEATURES
+);
+
 export const workspaceFlagSetRequestSchema = z
   .object({
     enabled: z.boolean(),
+    feature: z.optional(workspaceRolloutFeatureSchema),
   })
   .strict();
 

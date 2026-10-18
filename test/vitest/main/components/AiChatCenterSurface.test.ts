@@ -133,6 +133,10 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   exportConversation: vi.fn(),
   isWorkspaceRedesignEnabled: vi.fn(),
   setWorkspaceRedesignEnabled: vi.fn(),
+  // A02: independent rollout adapter flags (design §23.1) — defaults keep
+  // adapters on; adapter-off toggles live in dedicated adapter tests.
+  fetchWorkspaceRolloutFlags: vi.fn().mockResolvedValue(null),
+  setWorkspaceRolloutAdapter: vi.fn().mockResolvedValue(true),
   // selectedConversation store contract
   selectConversation: vi.fn().mockResolvedValue({
     acceptedGeneration: 1,
