@@ -103,6 +103,24 @@ vi.mock("@/config/skillsRegistry", () => ({
       },
       {
         type: "function",
+        name: "file_write",
+        description: "Write file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "file_edit",
+        description: "Edit file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "shell_execute",
+        description: "Run shell",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
         name: "check_tool_job_status",
         description: "Check job",
         parameters: { type: "object" },
@@ -301,6 +319,44 @@ describe("AgentRuntime", () => {
     expect(result.errorMessage).toContain("exceeded max tool calls");
   });
 
+  it("does not cap tool calls when the agent omits maxToolCalls", async () => {
+    mockDefinition = {
+      ...definition,
+      maxToolCalls: null,
+      maxContinueCalls: null,
+    };
+    mockLoopCallCount = 9;
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest(), {
+      executeTool: vi.fn(async (name, _args, ctx) => ({
+        tool_call_id: ctx.toolCallId,
+        tool_name: name,
+        success: true,
+        result: { summary: "ok" },
+        execution_time_ms: 1,
+      })),
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("uses an Error message from a failed loop instead of Error: prefix", async () => {
+    mockLoopResult = {
+      type: "failed",
+      fullContent: "",
+      error: new Error(
+        "Agent claude-blog:blog-researcher exceeded max tool calls (8)."
+      ),
+    };
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toBe(
+      "Agent claude-blog:blog-researcher exceeded max tool calls (8)."
+    );
+  });
+
   // Regression: subagents run under a tight maxRuntimeMs deadline, so they
   // must retry transient AI-server failures INSTANTLY (baseDelayMs: 0) rather
   // than burning their runtime budget on exponential backoff sleeps. The
@@ -441,10 +497,11 @@ describe("AgentRuntime", () => {
     expect(lastLoopInput?.request.model).toBeUndefined();
     const toolNames =
       lastLoopInput?.openAITools.map((tool) => tool.function.name) ?? [];
-    expect(toolNames).toContain("file_read");
-    expect(toolNames).toContain("grep_files");
-    expect(toolNames).toContain("glob_files");
-    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).toContain("Grep");
+    expect(toolNames).toContain("Glob");
+    expect(toolNames).toContain("Bash");
+    expect(toolNames).not.toContain("file_read");
     expect(toolNames).not.toContain("haiku");
   });
 

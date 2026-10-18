@@ -8,6 +8,11 @@
 
 // French translations
 export default {
+  computerUse: {
+    title: "Contrôle de l'ordinateur",
+    status: { desktop_busy: "Le bureau est contrôlé par une autre session", stop_hotkey_unavailable: "Impossible d'enregistrer le raccourci d'arrêt ; choisissez-en un autre", host_elevated: "AiFetchly s'exécute en administrateur ; redémarrez-le normalement", model_not_ready: "Les composants de vision locale ne sont pas prêts", backend_unavailable: "Le backend du bureau n'est pas installé" },
+    settings: { localVision: "Vision locale", visualPlanner: "Mode planificateur visuel", stopHotkey: "Raccourci d'arrêt", debugCapture: "Capture de débogage", save: "Enregistrer" },
+  },
   common: {
     more: "Plus",
     actions: "Actions",
@@ -3147,6 +3152,7 @@ export default {
     field_max_tool_calls: "Appels d'outils max.",
     field_max_runtime_seconds: "Durée max. (secondes)",
     field_max_continue_calls: "Appels de continuation max.",
+    field_unlimited: "Illimité",
     field_output_schema: "Schéma de sortie (JSON, facultatif)",
     field_warnings: "Avertissements",
     field_no_warnings: "Aucun avertissement",
@@ -3631,7 +3637,6 @@ export default {
     },
     newChat: "Nouvelle discussion",
     automations: "Automatisations",
-    customize: "Personnaliser",
     insights: "Informations",
     knowledgeLibrary: "Bibliothèque de connaissances",
     plugins: "Extensions",
@@ -3754,6 +3759,7 @@ export default {
     inspector: {
       region: "Inspecteur",
       toggle: "Afficher/masquer l'inspecteur",
+      close: "Fermer l'inspecteur",
       artifacts: "Artefacts",
       activity: "Activité",
       context: "Contexte",
@@ -3814,6 +3820,11 @@ export default {
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
       structuredResult: "Résultat structuré — détails dans Activité",
+      failureReason: "Erreur",
+      toolPersistFailure: {
+        toolCallNotSaved: "Outil non exécuté : échec de l'enregistrement.",
+        toolResultNotSaved: "L'outil s'est exécuté, mais son résultat n'a pas pu être enregistré.",
+      },
     },
     plan: {
       continuationAborted: "La sélection a changé — la décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Rouvrez la conversation pour continuer.",

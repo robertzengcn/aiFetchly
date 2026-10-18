@@ -929,32 +929,27 @@ export class PluginImportService {
       // PluginRuntimeCache not yet registered; safe to ignore.
     }
 
-    // 11b. Record needs_configuration notice for Python skills (Design §15.5).
+    // 11b/11c. Persist load diagnostics together. Python skills need
+    // configuration; agent-field warnings stay visible and do not by
+    // themselves mark the plugin partial_load. Writing them in one call
+    // keeps the dependency notice when both are present.
+    const loadErrors: PluginError[] = [];
     if (hasPythonSkill) {
+      loadErrors.push({
+        code: "dependency-unsatisfied",
+        componentType: "skill",
+        pluginName: manifest.name,
+        message:
+          "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
+        recoverable: true,
+      });
+    }
+    loadErrors.push(...agentParse.warnings);
+    if (loadErrors.length > 0) {
       try {
-        await pluginModule.setLoadErrors(manifest.name, [
-          {
-            code: "dependency-unsatisfied",
-            componentType: "skill",
-            pluginName: manifest.name,
-            message:
-              "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
-            recoverable: true,
-          },
-        ]);
+        await pluginModule.setLoadErrors(manifest.name, loadErrors);
       } catch {
         // best-effort — health is already set on the row
-      }
-    }
-
-    // 11c. Surface agent parser warnings (forbidden/unknown fields) as
-    // non-fatal load errors so they show in diagnostics. Plugin health stays
-    // healthy — warnings never block the runtime (design §12.5).
-    if (agentParse.warnings.length > 0) {
-      try {
-        await pluginModule.setLoadErrors(manifest.name, agentParse.warnings);
-      } catch {
-        // best-effort
       }
     }
 

@@ -8,6 +8,11 @@
 
 // Japanese translations
 export default {
+  computerUse: {
+    title: "コンピューター操作",
+    status: { desktop_busy: "デスクトップは別のセッションに制御されています", stop_hotkey_unavailable: "停止ホットキーを登録できませんでした。別の組み合わせを選択してください", host_elevated: "AiFetchly が管理者として実行中です。通常モードで再起動してください", model_not_ready: "ローカルビジョンコンポーネントの準備ができていません", backend_unavailable: "デスクトップバックエンドが未インストールです" },
+    settings: { localVision: "ローカルビジョン", visualPlanner: "ビジュアルプランナーモード", stopHotkey: "停止ホットキー", debugCapture: "デバッグキャプチャ", save: "保存" },
+  },
   common: {
     more: "もっと",
     actions: "操作",
@@ -3092,6 +3097,7 @@ export default {
     field_max_tool_calls: "最大ツール呼び出し数",
     field_max_runtime_seconds: "最大実行時間（秒）",
     field_max_continue_calls: "最大継続呼び出し数",
+    field_unlimited: "無制限",
     field_output_schema: "出力スキーマ（JSON、任意）",
     field_warnings: "警告",
     field_no_warnings: "警告なし",
@@ -3570,7 +3576,6 @@ export default {
     },
     newChat: "新しいチャット",
     automations: "オートメーション",
-    customize: "カスタマイズ",
     insights: "インサイト",
     knowledgeLibrary: "ナレッジライブラリ",
     plugins: "プラグイン",
@@ -3689,6 +3694,7 @@ export default {
     inspector: {
       region: "インスペクター",
       toggle: "インスペクターの切り替え",
+      close: "インスペクターを閉じる",
       artifacts: "アーティファクト",
       activity: "アクティビティ",
       context: "コンテキスト",
@@ -3745,6 +3751,11 @@ export default {
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
+      failureReason: "エラー",
+      toolPersistFailure: {
+        toolCallNotSaved: "ツールは実行されませんでした：保存に失敗しました。",
+        toolResultNotSaved: "ツールは実行されましたが、結果を保存できませんでした。",
+      },
     },
     plan: {
       continuationAborted: "選択が変更されたため、プランの決定は保存されましたが、後続メッセージは送信されませんでした。会話を開き直して続行してください。",

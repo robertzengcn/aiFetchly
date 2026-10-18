@@ -57,6 +57,11 @@ const REQUIRED_EXPORTS_BY_RUNTIME: Record<LocalAiRuntimeId, readonly string[]> =
   {
     "voice-sherpa": ["OfflineRecognizer", "OfflineTts", "GenerationConfig"],
     "embedding-xenova": [],
+    // Model packages load no native module in this probe (§7.7: the model
+    // probe grounds a fixture through the grounding worker instead).
+    "grounding-onnxruntime": ["InferenceSession"],
+    "grounding-model-gui-actor-2b-int4": [],
+    "grounding-model-gui-actor-2b-fp16": [],
   };
 
 /** Resolve the built probe worker file across dev / packaged layouts. */

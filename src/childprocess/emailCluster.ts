@@ -23,6 +23,7 @@ import times from "lodash/times";
 import { crawlSite } from "@/childprocess/emailScraper";
 import { getDomain } from "@/modules/lib/function";
 import { CustomConcurrency } from "@/modules/concurrency-implementation";
+import { withLinuxChromiumStabilityFlags } from "@/modules/lib/chromiumLaunchFlags";
 import { ProxyServer } from "@/entityTypes/proxyType";
 
 export class EmailCluster {
@@ -251,9 +252,10 @@ export class EmailCluster {
         } else {
           userAgents = this.config.user_agent;
         }
-        const args = this.config.chrome_flags.concat([
-          `--user-agent=${userAgents}`,
-        ]);
+        const args = withLinuxChromiumStabilityFlags(
+          this.config.chrome_flags.concat([`--user-agent=${userAgents}`]),
+          process.platform
+        );
         return {
           headless: this.config.headless,
           ignoreHTTPSErrors: true,

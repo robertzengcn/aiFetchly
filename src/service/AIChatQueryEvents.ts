@@ -209,6 +209,10 @@ export interface AIChatQueryErrorEvent {
   /** Renderer-safe machine code (e.g. GeneratedImageReferenceErrorCode) for
    * localized handling; omitted for unclassified errors. */
   errorCode?: string;
+  /** Stage A §3.3 (FR-006): the affected tool call when the failure is a
+   * required-persistence failure, so the tool card can show "not run /
+   * result not saved" precisely. */
+  toolCallId?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {
@@ -402,12 +406,22 @@ export interface PendingPermissionTurn {
    */
   outboundSendPreAuthorized?: boolean;
   planContext?: AIChatPlanLoopContext;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user grants permission (AC-8). Present only when deferred mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -422,7 +436,11 @@ export interface PendingPlanQuestionTurn {
   toolCallId: string;
   questionId: string;
   planId: string;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Turn association (technical-design §4.3) carried from the originating
    * active turn so resumed-flow tool/assistant saves stay grouped by turn.
@@ -434,6 +452,12 @@ export interface PendingPlanQuestionTurn {
    * mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
 }
 
 /** Plan context carried through the loop. */
@@ -604,6 +628,15 @@ export interface AIChatQueryLoopInput {
    */
   intentDecisionId?: number | null;
   /**
+   * Stage A §3.2 (FR-021): owner-supplied lifecycle listener. The engine (not
+   * the loop) calls onAwaiting when it parks a turn; the loop copies this
+   * reference into the pending structures so the resume path can call
+   * onResumed. Synchronous, non-throwing.
+   */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): see PendingPermissionTurn.ownerNotifiesTerminal. */
+  ownerNotifiesTerminal?: boolean;
+  /**
    * Turn association (technical-design §4.3). The engine stamps this when it
    * accepts a user request; the loop threads it into paused-for-permission /
    * paused-for-plan-question pending state so resumed-flow saves stay
@@ -652,6 +685,77 @@ export type AIChatTurnTerminalEvent =
       readonly type: "conversation_busy";
       readonly conversationId: string;
     };
+
+/**
+ * Stage A §3.1 (generator-streaming PRD FR-022): the explicit outcome of one
+ * execution segment, consumed by its owner. This names the existing terminal
+ * classification rather than adding a second union — completion is never
+ * inferred from the absence of a terminal event.
+ */
+export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
+/**
+ * Stage B §5.2 (generator-streaming PRD FR-001): the loop's incremental event
+ * stream. The loop already publishes no terminal events (the engine's
+ * finalize path owns them), so this narrowing matches current behavior.
+ */
+export type AIChatLoopEvent = Exclude<
+  AIChatQueryEvent,
+  { type: "complete" | "cancelled" | "error" }
+>;
+
+/** The loop as a single generator implementation (Stage B §5.2). */
+export type AIChatQueryGenerator = AsyncGenerator<
+  AIChatLoopEvent,
+  AIChatQueryLoopResult,
+  void
+>;
+
+/** Loop input without the sink — the generator contract (Stage B §5.2). */
+export type AIChatQueryGeneratorInput = Omit<AIChatQueryLoopInput, "eventSink">;
+
+/**
+ * Stage A §3.2 (generator-streaming PRD FR-021): explicit internal
+ * waiting/resume notifications. The engine calls `onAwaiting` exactly once
+ * when it parks a turn and `onResumed` exactly once when a claimed resume
+ * starts executing — replacing sampled engine status. Listener methods are
+ * synchronous and non-throwing; the owner serializes its own async work
+ * (persist the run transition first, then broadcast the summary).
+ */
+export interface AIChatTurnLifecycleListener {
+  onAwaiting(event: {
+    readonly kind: "permission" | "user_input";
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+    readonly toolCallId?: string;
+    readonly questionId?: string;
+  }): void;
+  onResumed(event: {
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+  }): void;
+}
+
+/**
+ * Stage A §3.3 (generator-streaming PRD FR-006/007): a REQUIRED tool
+ * persistence write failed. Thrown by the persisting sink's flush barrier so
+ * the loop stops before executing dependent work; excluded from transient
+ * provider retry and never reduced to an ordinary provider error.
+ */
+export class AIChatRequiredPersistenceError extends Error {
+  constructor(
+    readonly persistenceCode:
+      | "tool_call_persist_failed"
+      | "tool_result_persist_failed",
+    readonly toolCallId: string,
+    readonly cause?: unknown
+  ) {
+    super(
+      `Required persistence failed (${persistenceCode}) for tool call ${toolCallId}`
+    );
+    this.name = "AIChatRequiredPersistenceError";
+  }
+}
 
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {

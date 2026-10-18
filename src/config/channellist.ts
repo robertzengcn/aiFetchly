@@ -461,8 +461,6 @@ export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
 /** Renderer->Main: read whether the recoverable-history UI stage is enabled (design §18, stage 3). */
 export const AI_CHAT_V2_HISTORY_UI_ENABLED = "ai-chat-v2:history-ui-enabled";
 /** Renderer->Main: read the active compaction run status (§13.1). */
-export const AI_CHAT_V2_COMPACT_CONVERSATION =
-  "ai-chat-v2:compact-conversation";
 export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
 /** Renderer->Main: cancel the active compaction run (§13.1). */
 export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
@@ -896,6 +894,18 @@ export const LOCAL_AI_RUNTIME_CHECK_UPDATE = "local-ai-runtime:check-update";
 export const LOCAL_AI_RUNTIME_REPAIR = "local-ai-runtime:repair";
 export const LOCAL_AI_RUNTIME_REMOVE = "local-ai-runtime:remove";
 export const LOCAL_AI_RUNTIME_PROGRESS = "local-ai-runtime:progress";
+
+/* Computer Use (computer-use design §7.9, §10) */
+export const COMPUTER_USE_STATUS = "computer-use:status";
+export const COMPUTER_USE_LIST_WINDOWS = "computer-use:list-windows";
+export const COMPUTER_USE_SESSION_START = "computer-use:session-start";
+export const COMPUTER_USE_SESSION_STOP = "computer-use:session-stop";
+export const COMPUTER_USE_SESSION_PAUSE = "computer-use:session-pause";
+export const COMPUTER_USE_SESSION_RESUME = "computer-use:session-resume";
+export const COMPUTER_USE_SETTINGS_GET = "computer-use:settings-get";
+export const COMPUTER_USE_SETTINGS_SET = "computer-use:settings-set";
+export const COMPUTER_USE_VALIDATE_HOTKEY = "computer-use:validate-hotkey";
+export const COMPUTER_USE_GROUNDING_READINESS = "computer-use:grounding-readiness";
 
 // Hooks system — Phase 4 management UI channels.
 export const HOOKS_LIST = "hooks:list";

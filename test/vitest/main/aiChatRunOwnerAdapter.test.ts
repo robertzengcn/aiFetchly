@@ -205,3 +205,55 @@ describe("AIChatRunOwnerAdapter (design §8.3 owner adapters)", () => {
     ).toBe("user_input");
   });
 });
+
+describe("R07: plan submission does not pause the scheduled run", () => {
+  it("plan_submitted keeps the run running; ask_user_question still parks", async () => {
+    await SqliteDb.ensureInitialized();
+    const runModule = new AIChatRunModule();
+    const inner = captureSink();
+    const sink = await createOwnerAdapterSink(inner.sink, {
+      conversationId: "v2-owner-r07",
+      owner: "scheduled",
+      sourceId: "77",
+      runModule,
+      broadcaster: { broadcastSummary: () => undefined },
+    });
+    sink.emit({ type: "start", conversationId: "v2-owner-r07", messageId: "a" } as never);
+    // Transitions are chained async — await the durable "running" before
+    // asserting plan_submitted does not change it.
+    const listRows = () =>
+      new AIChatRunModel(tmpDir).listByConversation("v2-owner-r07", 5);
+    for (let i = 0; i < 50 && (await listRows())[0]?.status !== "running"; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    sink.emit({
+      type: "plan_submitted",
+      conversationId: "v2-owner-r07",
+      messageId: "a",
+      toolCallId: "t",
+      toolName: "SubmitPlanForApproval",
+      planState: { planId: "p1", status: "awaiting_approval" } as never,
+    } as never);
+    const rowsAfterPlan = await new AIChatRunModel(tmpDir).listByConversation(
+      "v2-owner-r07",
+      5
+    );
+    expect(rowsAfterPlan[0]?.status).toBe("running"); // NOT awaiting_user
+
+    sink.emit({
+      type: "ask_user_question",
+      conversationId: "v2-owner-r07",
+      messageId: "a",
+      toolCallId: "t2",
+      toolName: "AskUserQuestion",
+      question: { questionId: "q" } as never,
+      planState: { planId: "p1", status: "drafting" } as never,
+    } as never);
+    for (let i = 0; i < 50 && (await listRows())[0]?.status !== "awaiting_user"; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const rowsAfterQuestion = await listRows();
+    expect(rowsAfterQuestion[0]?.status).toBe("awaiting_user");
+  });
+});
+

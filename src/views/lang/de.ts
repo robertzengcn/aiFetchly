@@ -8,6 +8,11 @@
 
 // German translations
 export default {
+  computerUse: {
+    title: "Computersteuerung",
+    status: { desktop_busy: "Der Desktop wird von einer anderen Sitzung gesteuert", stop_hotkey_unavailable: "Stopptastenkombination konnte nicht registriert werden; wähle eine andere", host_elevated: "AiFetchly läuft als Administrator; starte es normal neu", model_not_ready: "Lokale Vision-Komponenten sind nicht bereit", backend_unavailable: "Desktop-Backend ist nicht installiert" },
+    settings: { localVision: "Lokale Bildverarbeitung", visualPlanner: "Visueller Planermodus", stopHotkey: "Stopptastenkombination", debugCapture: "Debug-Aufzeichnung", save: "Speichern" },
+  },
   common: {
     more: "Mehr",
     actions: "Aktionen",
@@ -3160,6 +3165,7 @@ export default {
     field_max_tool_calls: "Max. Werkzeugaufrufe",
     field_max_runtime_seconds: "Max. Laufzeit (Sekunden)",
     field_max_continue_calls: "Max. Fortsetzungsaufrufe",
+    field_unlimited: "Unbegrenzt",
     field_output_schema: "Ausgabe-Schema (JSON, optional)",
     field_warnings: "Warnungen",
     field_no_warnings: "Keine Warnungen",
@@ -3645,7 +3651,6 @@ export default {
     },
     newChat: "Neuer Chat",
     automations: "Automatisierungen",
-    customize: "Anpassen",
     insights: "Einblicke",
     knowledgeLibrary: "Wissensbibliothek",
     plugins: "Plugins",
@@ -3770,6 +3775,7 @@ export default {
     inspector: {
       region: "Inspektor",
       toggle: "Inspektor ein-/ausblenden",
+      close: "Inspektor schließen",
       artifacts: "Artefakte",
       activity: "Aktivität",
       context: "Kontext",
@@ -3829,6 +3835,11 @@ export default {
       filesChanged: "Dateien geändert — siehe Aktivität",
       permissionNeeded: "Berechtigungsentscheidung erforderlich",
       structuredResult: "Strukturiertes Ergebnis — Details in Aktivität",
+      failureReason: "Fehler",
+      toolPersistFailure: {
+        toolCallNotSaved: "Tool nicht ausgeführt: Speichern fehlgeschlagen.",
+        toolResultNotSaved: "Tool wurde ausgeführt, aber das Ergebnis konnte nicht gespeichert werden.",
+      },
     },
     plan: {
       continuationAborted: "Auswahl geändert — die Planentscheidung wurde gespeichert, die Folgenachricht wurde aber nicht gesendet. Öffne die Unterhaltung erneut, um fortzufahren.",

@@ -369,7 +369,14 @@ describe("AIChatQueryLoop async poll", () => {
     const result = await promise;
 
     expect(result.type).toBe("cancelled");
-    expect(fake.cancelSpied).toHaveBeenCalledWith(lastStartedJobId());
+    // R05 (lazy admission): an abort that wins before the tool starts
+    // leaves no job to cancel. When a job DID start, it must be cancelled
+    // with its own id — never an undefined one.
+    if (capturedJobIds.length > 0) {
+      expect(fake.cancelSpied).toHaveBeenCalledWith(lastStartedJobId());
+    } else {
+      expect(fake.cancelSpied).not.toHaveBeenCalled();
+    }
     // Regression: the abort must NOT emit a tool_result event, otherwise the
     // renderer inserts an orphan "Turn cancelled" card on the cancel path.
     const resultEvents = events.filter((e) => e.type === "tool_result");

@@ -59,7 +59,7 @@ describe("AgentToolPolicyService", () => {
     expect(decision.allowed).toBe(false);
   });
 
-  it("blocks shell/email/social categories for every v1 agent", () => {
+  it("blocks shell/email/social categories for every built-in v1 agent", () => {
     const svc = new AgentToolPolicyService();
     for (const name of ["run_shell", "send_email", "post_social_message"]) {
       const decision = svc.checkToolCall({
@@ -70,6 +70,48 @@ describe("AgentToolPolicyService", () => {
       });
       expect(decision.allowed).toBe(false);
     }
+  });
+
+  it("allows Claude Bash and Write for a plugin agent that declares them", () => {
+    const svc = new AgentToolPolicyService();
+    const pluginAgent = {
+      ...researcher,
+      source: "plugin" as const,
+      allowedTools: ["Bash", "Write", "Read"],
+    };
+    for (const name of ["Bash", "Write", "Read"]) {
+      const decision = svc.checkToolCall({
+        definition: pluginAgent,
+        toolName: name,
+        executionMode: "foreground",
+        allowInteractivePermissionPrompts: true,
+      });
+      expect(decision.allowed).toBe(true);
+    }
+    const email = svc.checkToolCall({
+      definition: { ...pluginAgent, allowedTools: ["send_email"] },
+      toolName: "send_email",
+      executionMode: "foreground",
+      allowInteractivePermissionPrompts: true,
+    });
+    expect(email.allowed).toBe(false);
+  });
+
+  it("exposes Claude tool names when the underlying AiFetchly tool exists", () => {
+    const svc = new AgentToolPolicyService();
+    const exposed = svc.filterExposedToolNames({
+      allowedTools: ["Read", "Write", "Bash", "NotebookEdit"],
+      availableToolNames: ["file_read", "file_write", "shell_execute"],
+      source: "plugin",
+    });
+    expect(exposed).toEqual(["Bash", "Read", "Write"]);
+    expect(
+      svc.filterExposedToolNames({
+        allowedTools: ["Bash"],
+        availableToolNames: ["shell_execute"],
+        source: "built-in",
+      })
+    ).toEqual([]);
   });
 
   it("filterExposedToolNames intersects allowlist with available tool names", () => {

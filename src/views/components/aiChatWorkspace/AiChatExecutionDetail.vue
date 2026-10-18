@@ -11,7 +11,7 @@
       class="details-toggle"
       :aria-expanded="expanded"
       data-testid="workspace-execution-details-toggle"
-      @click="expanded = !expanded"
+      @click="toggleDetails"
     >
       <v-icon
         :icon="expanded ? 'mdi-chevron-down' : 'mdi-chevron-right'"
@@ -30,8 +30,14 @@
         <dd class="mono pre-wrap">{{ execution.argumentsPreview }}</dd>
       </div>
       <div v-if="execution.summary" class="details-entry">
-        <dt>{{ t('workspaceChat.execution.resultSummary') || 'Result' }}</dt>
-        <dd class="pre-wrap">{{ execution.summary }}</dd>
+        <dt>
+          {{
+            execution.isError
+              ? (t('workspaceChat.execution.failureReason') || 'Error')
+              : (t('workspaceChat.execution.resultSummary') || 'Result')
+          }}
+        </dt>
+        <dd class="pre-wrap" data-testid="workspace-execution-detail-summary">{{ execution.summary }}</dd>
       </div>
       <div v-if="execution.durationMs !== undefined" class="details-entry">
         <dt>{{ t('workspaceChat.execution.duration') || 'Duration' }}</dt>
@@ -46,17 +52,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolExecutionView } from "./toolExecutionProjection";
 
-defineProps<{
+const props = defineProps<{
   execution: ToolExecutionView;
 }>();
 
 const { t } = useI18n();
-// Session-only expansion: collapsed by default (FR-046).
+// Session-only expansion: collapsed by default (FR-046). A failure opens
+// once so the reason is visible without an extra click; a later manual
+// toggle is kept.
+const userToggled = ref(false);
 const expanded = ref(false);
+
+watch(
+  () => props.execution.isError && Boolean(props.execution.summary),
+  (showReason) => {
+    if (showReason && !userToggled.value) {
+      expanded.value = true;
+    }
+  },
+  { immediate: true }
+);
+
+function toggleDetails(): void {
+  userToggled.value = true;
+  expanded.value = !expanded.value;
+}
 
 function formatTime(iso: string): string {
   const parsed = Date.parse(iso);

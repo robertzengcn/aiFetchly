@@ -997,6 +997,9 @@ describe("AIChatQueryEngine", () => {
         conversationId: "v2-test",
       });
       expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its transcript.
+      await new Promise((r) => setTimeout(r, 20));
 
       const serialized = JSON.stringify(capturedMessages ?? []);
       // The model-only handoff carrying the prepared image reaches the loop.
@@ -1064,6 +1067,9 @@ describe("AIChatQueryEngine", () => {
         conversationId: "v2-test",
       });
       expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its transcript.
+      await new Promise((r) => setTimeout(r, 20));
 
       // Without seeding, images produced by the directly-executed approved
       // tool would never reach the resumed turn's result.images (and so never
@@ -1125,6 +1131,9 @@ describe("AIChatQueryEngine", () => {
       });
 
       expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its input.
+      await new Promise((r) => setTimeout(r, 20));
       expect(resumedInput?.sourceUserMessageId).toBe(
         "user-confirmation-message"
       );

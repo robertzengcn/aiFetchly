@@ -6,6 +6,7 @@ import type {
   ChatRunDetailEvent,
   ConversationRuntimeStatus,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import { toolFailureReason } from "@/views/components/aiChatWorkspace/toolExecutionProjection";
 
 /**
  * Pure renderer-side presenter that reduces workspace detail events into the
@@ -403,6 +404,8 @@ export function createWorkspaceStreamPresenter(
         const toolResult =
           (chunk.toolResult as Record<string, unknown> | undefined) ??
           undefined;
+        const failed = toolResult?.success === false;
+        const failureReason = failed ? toolFailureReason(toolResult) : undefined;
         const metadata: ChatV2MessageMetadata = {
           ...m0Metadata(),
           toolCallId,
@@ -410,7 +413,7 @@ export function createWorkspaceStreamPresenter(
           toolResult,
           // Mirror the legacy dock's derivation so the transcript
           // projection can classify rows without re-reading toolResult.
-          toolResultStatus: toolResult?.success === false ? "error" : "success",
+          toolResultStatus: failed ? "error" : "success",
           toolResultSummary:
             typeof toolResult?.summary === "string"
               ? toolResult.summary
@@ -418,8 +421,12 @@ export function createWorkspaceStreamPresenter(
               // of a summary — surface it so the receipt explains the skip.
               typeof toolResult?.reason === "string"
               ? toolResult.reason
-              : undefined,
-          success: toolResult?.success !== false,
+              : failureReason,
+          success: !failed,
+          ...(failureReason ? { error: failureReason } : {}),
+          ...(typeof toolResult?.executionTimeMs === "number"
+            ? { executionTimeMs: toolResult.executionTimeMs }
+            : {}),
           ...(artifact ? { artifact } : {}),
         };
         // Permission-grant resume: the engine re-emits the tool result that
@@ -643,6 +650,25 @@ export function createWorkspaceStreamPresenter(
         streamStatus = "error";
         runtimeStatus = "idle";
         errorMessage = str(chunk.errorMessage) ?? "Unknown error";
+        // Stage A §3.3 (FR-006): a required-persistence failure names the
+        // affected tool call — mark its card failed ("not run" / "result
+        // not saved") instead of leaving it running or completed.
+        const persistCode = str(chunk.errorCode);
+        const persistToolCallId = str(chunk.toolCallId);
+        if (
+          (persistCode === "tool_call_persist_failed" ||
+            persistCode === "tool_result_persist_failed") &&
+          persistToolCallId
+        ) {
+          updateMessage(`tool-call-${persistToolCallId}`, (m) => ({
+            ...m,
+            metadata: {
+              ...(m.metadata ?? { source: "chat-v2" as const }),
+              toolPersistFailure: persistCode,
+              toolResultStatus: "error",
+            },
+          }));
+        }
         retry = null;
         break;
       }

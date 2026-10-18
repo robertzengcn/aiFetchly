@@ -40,17 +40,6 @@
       <button
         type="button"
         class="global-nav-button"
-        :class="{ active: isRouteActive('/systemsetting/mcp') }"
-        data-testid="workspace-customize"
-        :aria-current="isRouteActive('/systemsetting/mcp') ? 'page' : undefined"
-        @click="goTo('/systemsetting/mcp')"
-      >
-        <v-icon icon="mdi-tune-variant" size="18" aria-hidden="true" />
-        <span>{{ t('workspaceChat.customize') || 'Customize' }}</span>
-      </button>
-      <button
-        type="button"
-        class="global-nav-button"
         :class="{ active: isRouteActive('/insights') }"
         data-testid="workspace-insights"
         :aria-current="isRouteActive('/insights') ? 'page' : undefined"

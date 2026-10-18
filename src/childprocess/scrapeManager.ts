@@ -33,6 +33,7 @@ import { pluggableType } from "@/entityTypes/scrapeType";
 import { ProxyServer } from "@/entityTypes/proxyType";
 import { CookiesType } from "@/entityTypes/cookiesType";
 import { pickRandomIndex } from "@/modules/lib/randomIndex";
+import { withLinuxChromiumStabilityFlags } from "@/modules/lib/chromiumLaunchFlags";
 // import vanillaPuppeteer from 'puppeteer';
 // import {addExtra} from 'puppeteer-extra';
 // import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -310,10 +311,10 @@ export class ScrapeManager {
     const perBrowserOptions = map(
       this.proxiesArr.slice(0, this.numClusters),
       (proxy) => {
-        const args = [
-          ...this.config.chrome_flags,
-          "--disable-blink-features=AutomationControlled",
-        ];
+        const args = withLinuxChromiumStabilityFlags(
+          [...this.config.chrome_flags, "--disable-blink-features=AutomationControlled"],
+          process.platform
+        );
 
         // Chromium's native UA always matches the executable version. Only
         // apply an explicit override when the caller deliberately configured one.

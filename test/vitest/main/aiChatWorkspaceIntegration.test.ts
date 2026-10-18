@@ -13,6 +13,7 @@ import { AIChatRunModel } from "@/model/AIChatRun.model";
 import type { CoordinatorEngine } from "@/service/AIChatCoordinator";
 import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
+import type { AIChatSegmentOutcome } from "@/service/AIChatQueryEvents";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-ws-integration");
 
@@ -41,7 +42,7 @@ beforeEach(() => {
 
 interface TurnHandle {
   input: AIChatQuerySubmitInput;
-  resolve(): void;
+  resolve(outcome?: AIChatSegmentOutcome): void;
 }
 
 function makeFakeEngine(): {
@@ -57,9 +58,49 @@ function makeFakeEngine(): {
       engineStatus.set(conversationId, status);
     },
     engine: {
-      submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-        return new Promise<void>((resolve) => {
-          turns.push({ input, resolve });
+      runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
+        return new Promise<AIChatSegmentOutcome>((resolve) => {
+          turns.push({
+            input,
+            resolve: (outcome) =>
+              resolve(
+                outcome ?? {
+                  type: "completed",
+                  conversationId: input.request.conversationId ?? "",
+                  assistantMessageId: "",
+                }
+              ),
+          });
+        });
+      },
+      submitPersistedUserMessage(input: {
+        readonly eventSink: unknown;
+        readonly request: unknown;
+        readonly savedUser: { readonly messageId: string; readonly conversationId: string };
+        readonly modelContent: string;
+        readonly contentParts?: unknown;
+        readonly assistantMessageId?: string;
+      }): Promise<AIChatSegmentOutcome> {
+        return Promise.resolve({
+          type: "failed",
+          conversationId: input.savedUser.conversationId,
+          assistantMessageId: input.assistantMessageId ?? "",
+        });
+      },
+      claimPendingPermission(): never {
+        throw new Error("not used in this test");
+      },
+      claimPendingQuestion(): never {
+        throw new Error("not used in this test");
+      },
+      cancelClaimed(): boolean {
+        return false;
+      },
+      resumeClaimed(): Promise<AIChatSegmentOutcome> {
+        return Promise.resolve({
+          type: "failed",
+          conversationId: "",
+          assistantMessageId: "",
         });
       },
       stopActiveTurn(conversationId?: string): void {

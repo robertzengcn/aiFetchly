@@ -1,17 +1,41 @@
 # Yellow Pages Scraper Plugin for AI Chat
 
-**Document type:** Product Requirements Document  
-**Status:** Proposed  
-**Date:** 2026-07-28  
-**Primary surface:** AiChatV2  
-**Execution model:** Installed plugin with skill, command, hooks, and an MCP stdio server  
-**Persistence model:** No Yellow Pages TypeORM entities
+**Document type:** Product Requirements Document\
+**Status:** Revised proposal; implementation and release gates remain open\
+**Created:** 2026-07-28\
+**Reviewed:** 2026-10-14\
+**Technical design:** [Detailed implementation design](yellow-pages-scraper-plugin-technical-design.md)\
+**Primary surface:** AiChatV2\
+**Execution model:** Installed plugin with skill, command, optional hooks, and an MCP stdio server\
+**Persistence model:** Plugin result artifacts; no new Yellow Pages TypeORM entities\
+**Repositories:** AiFetchly desktop, independent `yellow-pages-scraper-plugin` repository (location TBD), and `aifetchly-hub-go`\
+
+## 0. Review Baseline and Corrections
+
+This revision was checked against desktop `70037427` and the Hub working tree based on `71b8c84`. The Hub has pre-existing uncommitted publishing/source changes; this review includes the visible implementation but does not establish what is deployed. No Hub files were changed. All requirements below describe the target unless explicitly identified as existing behavior.
+
+| Previous error or omission | Verified correction / required action | Evidence |
+| --- | --- | --- |
+| Installation was described without a separate repository or Hub release workflow. | Build releases in the plugin repository; publish through the Hub; install through the existing Plugin Manager. Hub managed APIs exist, but desktop currently rejects non-direct Hub installs. | Desktop `PluginMarketplaceService.installCommunityPlugin`; Hub `internal/httpapi/routes/install_plan.go`, `prepare_install.go` |
+| Shipping production `node_modules` was presented as Hub-compatible. | Hub canonical packaging removes every `node_modules` directory and runs no build scripts. Publish a prebuilt bundle with required assets outside excluded directories. | Hub `internal/artifacts/plugin_package.go` |
+| Hub ZIP publication could be mistaken for usable desktop delivery. | Catalog `zip` sources are not installable today; URL downloads lack expected-checksum plumbing. Prefer a prebuilt GitHub commit or implement the missing ZIP mapping/integrity checks. | `AiFetchHubMarketplaceFetcher`, `pluginSourceTypes.ts`, `UrlPluginFetcher` |
+| Stdio MCP was described as a custom response-only client. | Stdio now uses the MCP SDK and `SupervisedStdioTransport`; the legacy response handler is not the stdio implementation. | `src/modules/MCPClient.ts`, `src/modules/mcp/SupervisedStdioTransport.ts` |
+| Async jobs were said to lack an abort signal. | Registry jobs own an abort signal and the query loop already passes `handle.signal`; the MCP executor/service still drop execution context. | `ToolJobRegistry`, `AIChatQueryLoop.executeAsyncTool`, `ToolExecutor.executeMCPTool` |
+| All MCP `isError` results were called protocol failures. | Tool-level errors and JSON-RPC/transport failures are distinct. Preserve structured diagnostics and classify recoverability from validated data. | `MCPClient.callToolContent` versus `callTool` |
+| Thirty-minute polling was treated as a cancellation deadline. | Current polling returns a failure while allowing work to continue. Add cancellation and cleanup at deadline expiry. | `AIChatQueryLoop.pollAsyncJobToCompletion` |
+| Retry enforcement depended on a process that exits after each call. | Host owns a conversation-scoped recovery ledger across process lifetimes. Hooks and model instructions cannot enforce this alone. | `MCPToolService.executeMCPTool` disconnects in `finally` |
+| Removal covered only one worker and the dedicated UI. | Remove both worker targets, built-in tools, startup hooks, IPC/preload, routes, and persistence registrations after release validation. | `forge.config.js`, `skillsRegistry.ts`, `ToolExecutor.ts`, `background.ts`, `bootuprun.ts` |
+| A browser dependency service was assumed to be entirely new. | Reuse existing managed-browser resolution and dependency infrastructure through a generic plugin boundary; no plugin imports from host worker internals. | `src/childprocess/managed-browser/BrowserExecutableResolver.ts` |
+
+The prior AI-chat-only surface and artifact-based result design are retained. This revision specifies extraction and distribution; it does not create the new repository, implement the plugin, publish a Hub version, or delete existing user data.
 
 ## 1. Executive Summary
 
 AiFetchly currently ships Yellow Pages scraping as an application feature with a dedicated UI, application-owned entities, a main-process manager, and a child-process Puppeteer worker. Not every customer needs this capability. The product should move the capability into an independently installable plugin.
 
-After this change, installing and enabling the plugin gives AiChatV2 the ability to call a Yellow Pages scraping tool. Without the plugin, the tool, skill instructions, slash command, hooks, Puppeteer runtime, platform adapters, and related dependencies are absent from the application tool catalog.
+After this change, installing and enabling the plugin gives AiChatV2 the ability to call a Yellow Pages scraping tool. Without the plugin, no Yellow Pages tools, instructions, commands, hooks, or adapters are registered or bundled. Shared Puppeteer/browser infrastructure required by other application features may remain; extraction does not imply removing every browser dependency from core.
+
+The independent plugin repository owns source, tests, build output, adapter versions, and releases. The Hub owns catalog publication and approved package distribution; it does not execute scrapes. Users discover and install the released plugin through AiFetchly’s Plugin Manager.
 
 The plugin owns the actual scrape. Its MCP process launches Puppeteer and contains the platform adapters, selectors, deterministic fallback behavior, extraction logic, error classification, and artifact generation. The AiFetchly host owns plugin installation, permissions, the AI conversation loop, long-running job management, cancellation, progress delivery, AI-provider access, and tool-result serialization.
 
@@ -75,7 +99,7 @@ The legacy scraper already demonstrates a useful pattern: the child process capt
 ## 4. Non-Goals
 
 1. Preserve compatibility with the existing Yellow Pages create, edit, list, or task-management UI.
-2. Preserve or migrate existing Yellow Pages TypeORM entities.
+2. Import legacy Yellow Pages records into the plugin. Legacy data retention/export is a cutover prerequisite, not permission to drop tables.
 3. Add new Yellow Pages database entities to the host application.
 4. Let the plugin access the application database directly.
 5. Keep the old `src/childprocess/YellowPagesScraper.ts` as the production scraper after migration.
@@ -206,14 +230,14 @@ yellow-pages-scraper-plugin/
 | ----------------------- | ------------------------------------------------------------------------------------------------------- |
 | Skill                   | Teaches the chat model when to use the scraper, how to interpret errors, and which retries are allowed. |
 | Slash command           | Expands a user command such as `/yellow-pages dentists in Chicago` into a clear chat request.           |
-| PreToolUse hook         | Enforces retry budgets, input limits, platform restrictions, and required permissions before execution. |
+| PreToolUse hook         | Optional model guidance and early validation; authoritative checks belong in the host and plugin runtime. |
 | PostToolUseFailure hook | Adds model-facing recovery guidance without changing the underlying error facts.                        |
 | MCP server              | Implements the actual tools and owns the Puppeteer process.                                             |
 | Platform adapters       | Contain site-specific navigation and extraction behavior.                                               |
 | Recovery coordinator    | Runs deterministic fallbacks and classifies failures.                                                   |
 | Artifact writer         | Writes complete results to approved plugin-scoped storage.                                              |
 
-The skill, command, and hooks do not scrape pages. The MCP server and its imported scraper modules do the work.
+Hooks are optional for the first release and are not the enforcement boundary. The skill, command, and hooks do not scrape pages. The MCP server and its imported scraper modules do the work.
 
 ## 9. Plugin Manifest and Tool Policy
 
@@ -231,7 +255,7 @@ The current `PluginManifest` accepts unknown top-level fields for diagnostics, b
   "description": "Find and export business listings from supported Yellow Pages platforms.",
   "skills": ["skills/yellow-pages-scraper"],
   "mcpServers": [".mcp.json"],
-  "permissions": ["network", "automation", "plugin-storage", "ai-recovery"],
+  "permissions": ["network", "automation", "plugin-storage"],
   "toolPolicies": {
     "scraper/scrape_yellow_pages": {
       "timeoutClass": "async",
@@ -245,7 +269,7 @@ The current `PluginManifest` accepts unknown top-level fields for diagnostics, b
 }
 ```
 
-The exact manifest field name may change during technical design, but the behavior is required.
+This is a proposed extension, not a manifest that the current host can execute as specified. Permission strings are illustrative until mapped to validated host capabilities; declaring a string does not grant access. `ai-recovery` is deferred to the optional broker phase. Validate these fields in both desktop and Hub, and gate installation/activation by a compatible desktop version. The exact field names may change during technical design, but the behavior is required.
 
 ### 9.3 Policy identity
 
@@ -410,7 +434,7 @@ The registry starts the MCP execution subject to its concurrency limits.
 
 ### 11.3 Progress propagation
 
-The plugin emits progress through MCP notifications. The host maps one notification to both destinations:
+Use MCP progress notifications correlated by a host-issued progress token on the tool call. The JSON below is the normalized host progress shape, not an assertion that MCP standardizes `phase` or `partialCount`. Define and validate any extra metadata. Partial snapshots require a documented, versioned extension with the same correlation and payload limits. The host maps each validated update to both destinations:
 
 1. `ToolJobRegistry.updateProgress(jobId, progress)` for job status.
 2. `context.emitProgress(progress)` for the existing AiChatV2 `tool_progress` stream.
@@ -462,8 +486,8 @@ Cancellation must propagate end to end:
 User presses Stop
   -> AI turn AbortController aborts
   -> ToolJobRegistry.cancel(jobId)
-  -> registered job cancel handler runs
-  -> per-job AbortController aborts
+  -> registry-owned AbortController aborts handle.signal
+  -> registered cleanup handlers run
   -> MCP cancellation reaches plugin
   -> scraper stops page loops
   -> Puppeteer page and browser close
@@ -471,7 +495,7 @@ User presses Stop
   -> host sends SIGTERM, then SIGKILL after a grace period if needed
 ```
 
-The current async path must register `handle.onCancel` and pass the resulting signal into MCP execution. Cancelling only the in-memory registry record is insufficient.
+Forward the existing registry-owned `handle.signal` into MCP execution; use `handle.onCancel` for additional cleanup where needed. Cancelling only the in-memory registry record is insufficient.
 
 ### 11.8 Deadline behavior
 
@@ -564,7 +588,9 @@ Depending on the error, the model may:
 - A rate-limit failure cannot retry before `retryAfterMs`.
 - Recovery calls count toward the existing maximum model-tool round budget.
 
-The skill and failure hook instruct the model about these limits. The MCP server also enforces them because instructions and hooks are not security boundaries.
+The host must maintain a conversation- and plugin-scoped recovery ledger across MCP process exits: prior error IDs, canonical search identity, attempt counts, allowed strategies, earliest retry time, and consumed retries. It validates and atomically reserves each retry before spawning work, and passes trusted recovery context to the plugin. Model-supplied counters or `previousErrorId` alone are not authority. The plugin validates local deterministic budgets and strategy inputs. After host restart, reject unrecognized recovery IDs; the user may explicitly start a new search. Hooks only explain this policy.
+
+Partial-result follow-ups start a new scrape unless a separately specified checkpoint contract exists. `resumeStrategy` is guidance, not a promise to resume a closed browser; deduplicate records when combining artifacts.
 
 ## 13. Structured Failure Contract
 
@@ -674,9 +700,11 @@ The plugin must not include:
 
 ## 14. MCP Result Normalization Requirements
 
-### 14.1 Recoverable failures must not use MCP `isError`
+### 14.1 Tool failures versus protocol failures
 
-The current `MCPClient.callTool` throws when an MCP result has `isError: true`. Throwing converts useful structured diagnostics into a generic error string. The plugin must return recoverable failures as ordinary text or structured content containing `success: false`.
+MCP `isError: true` indicates a tool-level failure, not a JSON-RPC protocol error. The current convenience method `MCPClient.callTool` throws for it, while `callToolContent` preserves it along with structured content and all content blocks.
+
+The initial plugin contract returns its validated domain envelope (`success`, `status`, structured error) in `structuredContent` with a matching bounded JSON text representation for compatibility. Recoverable domain outcomes may use this ordinary result envelope. The generic host normalization must also preserve useful diagnostics from `isError: true` tools; it must not classify all such outcomes as transport failures or stringify unbounded content. Declare one precedence rule: `isError: true` cannot become success even if a contradictory nested payload claims success. Recoverability comes from validated error policy, not the flag alone.
 
 ### 14.2 Host must preserve nested failure state
 
@@ -694,7 +722,7 @@ plugin result success:false
 
 ### 14.3 Fatal failures
 
-Protocol-level `isError`, process exits, malformed JSON-RPC, connection failures, and trust failures become fatal `ToolExecutionResult` values with sanitized messages. They do not expose command-line arguments, environment variables, or local secrets.
+Process exits, malformed JSON-RPC, connection failures, and trust failures become fatal `ToolExecutionResult` values with sanitized messages. Tool-level `isError` is normalized separately as described above. They do not expose command-line arguments, environment variables, or local secrets.
 
 ## 15. In-Session AI Recovery
 
@@ -717,7 +745,7 @@ Use a generic host AI broker through one of these mechanisms:
 
 The MCP option is preferred because it avoids creating a Yellow Pages-only reverse protocol.
 
-The current client advertises no capabilities and only handles response messages. It must be extended before this phase can work.
+The current stdio SDK client advertises an empty capability set and has no application sampling broker. Add capability negotiation and request handlers in that SDK path before this phase; do not build sampling around the legacy `handleMessage` implementation.
 
 ### 15.4 Broker flow
 
@@ -821,13 +849,15 @@ These values preserve the useful safeguards already present in `YellowPagesAiSup
 
 An MCP stdio plugin executes local code. Installation and enablement must make the requested permissions visible. The host must continue to apply plugin trust checks, executable path validation, environment allowlisting, and command restrictions before process spawn.
 
+These checks are not an OS sandbox: installed local plugin code has the process user’s access unless separately isolated. Permission declarations and path checks must not be described as sandbox guarantees.
+
 ### 17.2 Environment isolation
 
 The plugin process receives only allowlisted environment values and explicitly configured plugin options. It must not inherit the full Electron main-process environment.
 
 ### 17.3 Network scope
 
-The plugin declares the supported platform origins. Runtime navigation should remain on those origins and required first-party asset origins unless the user grants broader access.
+The plugin declares the supported platform origins. Directory navigation should remain on those origins and approved supporting origins. Following business website links for email/contact extraction needs a separately declared, bounded capability; otherwise omit those fields or report them unavailable. Validate redirects and reject local/private network destinations under the host network policy. Do not imply that directory-only origins permit arbitrary linked-site crawling.
 
 ### 17.4 Browser data
 
@@ -868,11 +898,11 @@ The model should use the preview and summary. A separate approved file/artifact 
 
 ### 18.3 Storage boundary
 
-The plugin writes only to plugin-scoped storage or through a host artifact service. It does not write to the application database. Artifact paths must not escape the approved root.
+The plugin writes only to a host-provisioned per-plugin, per-job output directory outside the installed package, or through a host artifact service. A generic host adapter must validate/register completed files and resolve artifact IDs for chat download/export with conversation ownership checks. Merely returning an ID does not make a file downloadable. This bridge is required work; no existing generic plugin artifact API is assumed. The plugin does not write to the application database. Artifact paths must not escape the approved root.
 
 ### 18.4 Retention
 
-Retention is controlled by a generic artifact policy. Plugin uninstall may offer removal of plugin artifacts, but it must not silently delete user-exported files.
+Retention must be implemented through a generic artifact policy. Updates and repair must preserve completed outputs outside the install directory; pending output must be finalized or clearly marked incomplete. Plugin uninstall may offer removal of plugin artifacts, but it must not silently delete user-exported files.
 
 ## 19. Plugin Installation and Availability
 
@@ -914,25 +944,9 @@ Production packaging must not assume a globally installed `node` command. The ho
 
 ### 19.4 Current runtime gap
 
-MCP is a protocol, not a JavaScript runtime. An MCP request cannot execute the plugin until the host has started an MCP server process capable of reading and writing JSON-RPC over stdin and stdout.
+The current plugin stdio declaration requires a non-empty `command`; typed `runtime` and `entry` fields are not supported yet. `MCPClient.connectStdio` now uses the MCP SDK with `SupervisedStdioTransport`, which validates commands, sanitizes environment, spawns an owned child, and supervises shutdown. Extend that path rather than introducing an unsupervised parallel launcher.
 
-The current MCP implementation requires every stdio server declaration to contain a non-empty `command`. `MCPClient.connectStdio` passes that command and its arguments directly to `child_process.spawn`. A declaration such as the following therefore depends on a system-installed Node executable:
-
-```json
-{
-  "mcpServers": {
-    "scraper": {
-      "transport": "stdio",
-      "command": "node",
-      "args": ["dist/yellow-pages-mcp.cjs"]
-    }
-  }
-}
-```
-
-This may work in development but is not an acceptable packaged-application design. A user may not have Node installed, the executable may not be on `PATH`, and the available Node version may not match the plugin build.
-
-Until the host-managed runtime described below is implemented, a JavaScript MCP plugin has only two production choices: require an external Node installation or ship a platform-specific standalone executable. Neither is the preferred Yellow Pages plugin architecture.
+A declaration using `command: "node"` still relies on an external executable and is not an acceptable default for customer machines. A successful local developer install does not prove packaged-app compatibility. The proposed runtime contract below is a release blocker until validated end to end.
 
 ### 19.5 Proposed host-managed runtime declaration
 
@@ -964,7 +978,7 @@ The exact persisted representation may use typed runtime fields or an internal c
 
 ### 19.6 Electron provides the Node runtime
 
-Electron includes a Node runtime. In both development and a packaged application, the main process can launch the executable represented by `process.execPath` in Node mode:
+Electron includes a Node runtime. The proposed launcher uses `process.execPath` in Node mode, subject to validation of the shipped Electron configuration and run-as-node fuse on every supported target:
 
 ```typescript
 const child = spawn(process.execPath, [resolvedPluginEntry], {
@@ -981,7 +995,7 @@ const child = spawn(process.execPath, [resolvedPluginEntry], {
 
 AiFetchly already uses this mechanism for the application-owned Google Maps and Yandex Maps workers. The plugin runtime should extract this behavior into a generic, policy-checked MCP process launcher rather than duplicating it in Yellow Pages code.
 
-The existing MCP environment filter correctly rejects plugin-supplied `ELECTRON_*` variables, including `ELECTRON_RUN_AS_NODE`, because allowing an untrusted declaration to control Electron startup can enable process hijacking. The generic launcher must:
+The existing MCP environment filter correctly rejects plugin-supplied `ELECTRON_*` variables, including `ELECTRON_RUN_AS_NODE`, because allowing an untrusted declaration to control Electron startup can enable process hijacking. The existing supervised transport must gain a trusted runtime launch path without weakening declaration-side restrictions. The launcher must:
 
 1. Build the normal allowlisted child environment.
 2. Reject prohibited plugin-supplied variables.
@@ -1046,32 +1060,25 @@ The plugin does not need to bundle Node. It still needs access to a compatible C
 
 The recommended browser design is:
 
-1. The plugin bundles or ships `puppeteer-core` and its JavaScript scraper dependencies.
+1. The plugin bundles `puppeteer-core` and its JavaScript scraper dependencies into the release artifact.
 2. A generic host browser dependency service locates or installs a supported browser.
 3. The host passes an approved browser executable path through trusted startup configuration or MCP initialization data.
 4. The plugin verifies the supplied file and launches it with `puppeteer.launch({ executablePath })`.
 5. The plugin does not import AiFetchly's internal `BrowserManager`, query application settings directly, or read a browser path from the application database.
 
+Existing managed-browser code already resolves configured, managed-cache, and system browser candidates with a typed missing-dependency result. Reuse that behavior through a main-process capability; do not import worker-only code into the plugin or add a second Yellow Pages browser downloader. The capability contract and compatibility check are still required work.
+
 Passing the browser path through a trusted host capability keeps browser installation reusable across plugins without coupling the plugin to AiFetchly source modules.
 
 ### 19.9 Plugin JavaScript dependency packaging
 
-The plugin has two supported packaging strategies:
+The independent repository builds the MCP SDK, scraper, adapters, and `puppeteer-core` into `dist/yellow-pages-mcp.cjs`. Copy required non-code assets into an explicit package assets directory and test the exact archive after Hub repackaging. Hub validation/packaging never runs `npm install` or the plugin build.
 
-1. Bundle the MCP SDK, scraper, adapters, `puppeteer-core`, and compatible pure-JavaScript dependencies into `dist/yellow-pages-mcp.cjs`.
-2. Ship the compiled `dist` files with production-only plugin-local `node_modules` for packages that cannot be bundled reliably.
+The Hub canonical packager excludes **all `node_modules` directories**, so the previous option to ship plugin-local production `node_modules` is invalid for that route. A dependency that cannot be bundled or packaged as explicit assets blocks release until a supported packaging contract is implemented. Do not silently depend on install scripts or private host dependencies.
 
-A mostly bundled CommonJS entrypoint is preferred because it limits module-resolution differences between development and packaged builds. Puppeteer-related packages that depend on dynamic files may remain plugin-local dependencies when required.
+Desktop archive limits are currently 50 MiB compressed, 250 MiB extracted, and 5,000 files (`PLUGIN_PACKAGE_LIMITS`); Hub canonical defaults allow 512 MiB uncompressed and 20,000 files. The release must satisfy the stricter desktop limits. Keep the browser binary separate. Hub archive entries use mode 0644, so do not rely on executable bits for bundled scripts/binaries.
 
-The plugin must not:
-
-- Resolve modules through AiFetchly's private application `node_modules`.
-- Depend on `NODE_PATH`.
-- Assume paths inside `app.asar` are writable or executable.
-- Include native modules unless they have a declared, verified Electron/Node ABI compatibility strategy.
-- Download or execute unverified JavaScript during MCP startup.
-
-Using `puppeteer-core` keeps the plugin code independent from the browser binary. Shipping full `puppeteer` with its own Chromium download is allowed only if package-size, signature, update, and cleanup policies explicitly support it.
+The plugin must not resolve through AiFetchly’s `node_modules`, depend on `NODE_PATH`, write inside `app.asar`, download JavaScript on startup, or ship native modules without a verified ABI/target strategy. Builds must include dependency licenses, a lockfile, and reproducible artifact identity.
 
 ### 19.10 Alternatives considered
 
@@ -1082,6 +1089,42 @@ Using `puppeteer-core` keeps the plugin code independent from the browser binary
 **Use `utilityProcess.fork`:** Electron can execute JavaScript in a utility process, but the current MCP client expects stdin/stdout JSON-RPC. Adopting `utilityProcess` would require a new MCP transport adapter. It is not the smallest first implementation.
 
 **Import Puppeteer from AiFetchly's application bundle:** Rejected. It couples plugin behavior to private package layout and application releases. The host may manage the browser executable, but the plugin owns its JavaScript client dependency.
+
+### 19.11 Repository ownership and release artifact
+
+| Repository | Owns | Must not own |
+| --- | --- | --- |
+| Independent `yellow-pages-scraper-plugin` (proposed name; URL TBD) | Scraper, adapters/selectors, MCP server, skill/command, optional hooks, result schema, fixtures, release build and CI | Imports from desktop `@/`, Electron settings/Token, application database, main-process task manager |
+| `aiFetchly` | Plugin Manager, host runtime/browser capabilities, generic jobs, MCP policy, AI gating, artifact access, legacy removal | Production Yellow Pages scraping engine or bundled fallback adapters after cutover |
+| `aifetchly-hub-go` | Catalog identity, version/source attachment, review/validation, compatible target/resource metadata, publication, access decisions, supported artifact/download flows | Scrape execution, business results, browser sessions, desktop AI credentials |
+
+Keep the plugin outside the desktop source/build tree. Its CI must build and test without the desktop checkout or desktop `node_modules`. Ship the prebuilt entry, manifest, skill, command, optional hooks, assets, and licenses in the release package; keep fixtures/build tools in the repository as appropriate. The Hub must receive built output, not a source-only tree that expects customer-side compilation.
+
+Use the same manifest name (`yellow-pages-scraper`) and version throughout the package, Hub version, and desktop provenance. Record the source revision, checksum, build inputs, and supported host/browser versions. Source references must identify reproducible release content. The visible Hub working tree currently allows GitHub/git metadata without a SHA if a ref is present; that is not sufficient reproducibility for this plugin’s release policy. Prefer a commit SHA or an immutable release ZIP with checksum and verify what the deployed Hub accepts.
+
+### 19.12 Hub installation modes and release decision
+
+The existing Community catalog in Plugin Manager is the discovery surface; do not introduce a separate Yellow Pages installer or a second Hub page. `AiFetchHubMarketplaceFetcher` accepts `direct`, `ticket`, and `managed`, but `PluginMarketplaceService.installCommunityPlugin` only installs `allowed` + `direct` entries with an installable object source. Recognizing catalog metadata is not managed installation support.
+
+The recommended first release is a direct Hub catalog entry pointing to a prebuilt GitHub tree pinned by commit SHA, **if the product chooses public/direct distribution**. The selected commit must include its built `dist` output; a tag containing only TypeScript source is insufficient. It still requires the host runtime, browser capability, and async work in this PRD. Do not require native git, npm, or Node on the customer machine; verify the chosen archive acquisition path in packaged builds. Local-folder/ZIP installation is for development and diagnostics, not the release acceptance path.
+
+Hub `source: "zip"` entries are currently accepted for catalog display but dropped from the installable source by `normalizeEntrySource`. Generic `source: "url"` ZIP downloads exist, but `PluginSourceRequest` has no expected-checksum field and `UrlPluginFetcher` does not compare downloaded bytes with a Hub checksum. A checksummed ZIP/release-asset route therefore requires explicit source mapping and integrity verification work; do not assume the Hub SHA256 automatically reaches desktop enforcement. Test the exact acquisition route and redirect policy before selecting it.
+
+If the release needs subscription-protected delivery, ticketed downloads, or Hub-managed resources, completing desktop managed installation is a prerequisite. Do not relabel a protected package as public/direct or bypass access decisions to make installation work. Follow the generic managed-installation PRD, reconciled with current source and the unified Plugin Manager UI. Show unsupported installation modes accurately instead of reporting every non-direct mode as “subscription required.”
+
+The Hub already implements version-ID install plans, prepare-install, resource download tickets, and managed publication gates. Its runtime declaration validator currently recognizes `managed-python` and `uv-python`; it does **not** implement the proposed `aifetchly-node`/browser contract. Do not encode a JavaScript scraper as a Python runtime or assume uv provisions Node/Chrome. For the initial direct route, Node and browser capability are supplied by the desktop. Any Hub-managed Node/browser resources need their own generic schema, validation, target selection, and installer support before use.
+
+### 19.13 Publication, installation, and update requirements
+
+1. Build and test the independent plugin release, including canonical-packager survival, desktop archive limits, runtime launch, and adapter fixtures.
+2. Create/update the Hub plugin and draft version, register a source, and attach that source to the version. Use existing validation/review and admin publication workflows; retain evidence for the exact built artifact. Publishing regenerates the catalog. No new Yellow Pages-specific Hub endpoint is required.
+3. Publish only tested OS/architecture and host-version combinations. Managed versions additionally require the Hub rollout flag, ready resources, and supported targets. Verify deployment configuration; code presence alone is not operational readiness.
+4. Refresh the existing Hub catalog, open details, and show permissions, support requirements, installation size where known, access state, and missing dependencies. Resolve fresh access before acquisition. An unsupported host/runtime must produce an actionable upgrade/repair state rather than a healthy-looking unusable plugin.
+5. For direct distribution, use the existing source acquisition/import pipeline with pinned identity and checksum verification for the selected source type. For managed distribution, implement `GET /api/v1/plugins/by-id/:pluginId/versions/:versionId/install-plan`, honor `compatible`, and use `POST .../prepare-install` with its opaque `planDigest` where required. Keep tickets, credentials, and signed URLs in the main process; never forward them to the MCP server or AI. Handle stale plans, expiry, revoked artifacts, and unavailable access checks without silent fallback to another source.
+6. Stage, validate, register components, and smoke-test runtime/tool discovery before making a version available to AI. A failed install/update must leave the previous working version intact. Update must stop new jobs and drain or cancel active jobs before replacing files; never mix running old code with replaced assets.
+7. Preserve plugin-scoped result storage during update/repair. Uninstall cancels owned work and removes components; shared browser resources still used by other features remain installed. Exported user files are never silently deleted.
+
+Version 1 must pass a Hub-to-packaged-desktop installation test on each advertised target. If managed installation is selected, its desktop implementation and Hub deployment readiness are explicit release gates, not assumed completed foundations.
 
 ## 20. AiChatV2 Experience
 
@@ -1154,13 +1197,13 @@ Some comments and skill descriptions still state that the loop immediately retur
 
 ### 21.5 Current timeout conflict
 
-`MCPToolService.executeMCPTool` races every call against `MCP_CALL_TIMEOUT_MS`, currently 240 seconds, and always disconnects the MCP client in `finally`. A managed async scrape would still fail after four minutes unless the call timeout becomes policy-aware.
+`MCPToolService.executeMCPTool` still races calls against 240 seconds and disconnects in `finally`. The stdio SDK call uses `options.timeoutMs` or server timeout; although supported at client level, the service does not supply a job deadline. `sendRequest` is the legacy non-SDK path, not the stdio timer.
 
-`MCPClient.sendRequest` also has a request timeout. All nested limits must respect the job deadline.
+SDK calls currently set `resetTimeoutOnProgress: true`. Progress must never extend the authoritative job deadline. Connection startup, queue wait, retries, browser work, and cleanup need a bounded budget. The current query-loop 30-minute polling cap returns without cancelling the job; explicitly cancel and await bounded cleanup when it expires.
 
 ### 21.6 Current notification gap
 
-`MCPClient.handleMessage` resolves JSON-RPC responses by numeric ID but ignores notifications and server-to-client requests. Progress, partial snapshots, cancellation acknowledgement, and future sampling need explicit protocol handling.
+Stdio uses the SDK, and `callToolContent` already supports a timeout override, abort signal, structured content, and full content blocks. There is no generic plugin progress-token/on-progress bridge to job state or validated partial-snapshot extension. Add those to the SDK path. Sampling remains deferred; legacy SSE/WebSocket behavior must not regress.
 
 ### 21.7 Current failure normalization gap
 
@@ -1170,7 +1213,7 @@ Without normalization, `{ success: false }` from the plugin is nested inside an 
 
 ### 21.8 Current cancellation gap
 
-The async query loop cancels the registry job when the chat is stopped, but its async spawn path does not currently register a job cancellation handler or pass a per-job abort signal to the tool execution context.
+`ToolJobRegistry` already owns an `AbortController` per job; cancellation/shutdown aborts `handle.signal`, and the async query loop passes it to execution context. Preserve this existing mechanism. `ToolExecutor` and `MCPToolService` must forward that signal to the SDK call. Reuse supervised process ownership for cleanup, and verify browser descendants, disable/uninstall, and deadline termination rather than assuming the UI cancellation state proves cleanup.
 
 ### 21.9 Legacy AI support worth preserving
 
@@ -1214,7 +1257,7 @@ Map bounded MCP partial notifications to `ToolJobRegistry.updatePartial`.
 
 ### HOST-06: Cancellation bridge
 
-Create a per-job `AbortController`, register it with `ToolJobSpawnHandle.onCancel`, propagate cancellation to MCP, and kill an unresponsive process after a grace period.
+Reuse the registry-owned `handle.signal`, propagate it through MCP execution, attach cleanup with `onCancel` where needed, and await bounded supervised process/browser-tree termination. Do not introduce a second competing job cancellation authority.
 
 ### HOST-07: Deadline-aware MCP calls
 
@@ -1246,11 +1289,31 @@ Align `SkillDefinition` comments, built-in skill descriptions, async-job documen
 
 ### HOST-14: Host-managed JavaScript MCP runtime
 
-Extend plugin MCP declarations with a validated `aifetchly-node` runtime and plugin-relative entrypoint. Add a trusted launcher that runs `process.execPath` with an internally injected `ELECTRON_RUN_AS_NODE=1`, piped stdio, a confined working directory, and the existing sanitized environment. Do not require a system `node` executable.
+Extend plugin MCP declarations with a validated `aifetchly-node` runtime and plugin-relative entrypoint. Extend the supervised stdio launcher to run `process.execPath` with an internally injected `ELECTRON_RUN_AS_NODE=1`, piped stdio, a confined working directory, and the existing sanitized environment. Do not require a system `node` executable.
 
 ### HOST-15: Generic browser runtime capability
 
-Expose an approved Chrome or Chromium executable path to browser plugins without allowing them to read application settings or import application browser modules. Browser discovery, installation, version diagnostics, and path approval remain host-owned.
+Reuse existing managed-browser resolution behind a generic plugin capability. Expose an approved Chrome or Chromium executable path to browser plugins without allowing them to read application settings or import application browser modules. Browser discovery, installation, version diagnostics, and path approval remain host-owned.
+
+### HOST-16: Cross-call recovery ledger
+
+Track trusted recovery state across MCP processes and enforce attempts, delay, and search identity before spawning. Test concurrent retry requests and forged/expired prior-error IDs.
+
+### HOST-17: Plugin result artifact bridge
+
+Provision output directories outside installed code, validate finalized artifacts, and expose authorized download/export by opaque ID in chat. Implement retention and update/uninstall behavior without Yellow Pages database entities. Reuse applicable generic storage services after checking their ownership and lifetime contracts.
+
+### HOST-18: Hub installation compatibility
+
+Complete the selected distribution path in §19.12. Reuse existing catalog/import infrastructure. If managed distribution is selected, implement the missing desktop plan/ticket/resource pipeline; do not duplicate Hub discovery. Add host-version/runtime capability gating for the new declaration and usable diagnostics when a dependency is absent.
+
+### HUB-01: Publish the independent plugin
+
+Create the catalog/version/source records and publish the tested prebuilt package using existing Hub workflows. Verify manifest, capabilities, target support, release identity, and archive size compatibility. Static validation must not execute scraper or package scripts.
+
+### HUB-02: Validate new generic contracts where used
+
+Add validation/metadata support for runtime/policy/minimum-host capability declarations required by the chosen release route. Unknown manifest fields being preserved does not establish support. Managed Node/browser resources are a separate extension, required only if that distribution route is chosen.
 
 ## 23. Required Plugin Behavior
 
@@ -1296,7 +1359,7 @@ Missing browser or runtime components produce a stable dependency failure instea
 
 ### PLUGIN-11: Host-runtime-compatible entrypoint
 
-The plugin ships a CommonJS MCP entrypoint that runs under AiFetchly's embedded Node version and resolves all JavaScript dependencies from its bundle or plugin-local production dependencies.
+The plugin ships a CommonJS MCP entrypoint that runs under AiFetchly's embedded Node version and resolves all JavaScript dependencies from its prebuilt bundle and explicitly packaged assets that survive Hub canonicalization.
 
 ### PLUGIN-12: Browser runtime separation
 
@@ -1383,7 +1446,7 @@ Record these metadata fields without page content or business records:
 ### 25.3 Plugin unit tests
 
 - The compiled CommonJS MCP entrypoint starts with AiFetchly's embedded Node version.
-- JavaScript dependencies resolve from the bundle or plugin-local production dependencies without `NODE_PATH`.
+- JavaScript dependencies resolve from the canonicalized release bundle and assets without `node_modules` or `NODE_PATH`.
 - The scraper launches the supplied approved browser executable.
 - A missing or incompatible browser produces `BROWSER_EXECUTABLE_MISSING` or another stable dependency error.
 - Input validation and bounds.
@@ -1429,6 +1492,18 @@ Record these metadata fields without page content or business records:
 4. Simulate CAPTCHA and verify the AI asks for intervention rather than attempting bypass behavior.
 5. Disable the plugin and verify the command and tool disappear.
 6. Restart the app during a job and verify the process is gone and the job is reported as interrupted rather than running forever.
+
+### 25.7 Distribution and migration tests
+
+- Build the plugin in an isolated checkout with no desktop source dependencies; test the exact released ZIP and Hub-canonicalized bytes. Verify all runtime assets survive exclusion and satisfy desktop limits.
+- Install from the actual staging Hub catalog on a clean packaged-app target without system Node, git, or npm. Local-folder success does not satisfy this case.
+- Test direct source identity/checksum mismatch and inaccessible release; for managed mode also test denied access, stale plan, expired ticket, revoked artifact, and target mismatch.
+- Update while a job is running; failed update preserves the previous version and artifacts. Disable/uninstall terminates browser descendants and removes all catalog exposure.
+- Assert host-owned retry limits survive process restart between calls and reject forged IDs/concurrent duplicate retries. Assert progress cannot extend the hard deadline.
+- Test artifact ID ownership, traversal rejection, export after plugin update, and handling of interrupted partial outputs.
+- Upgrade a legacy database with existing results; preserve data and prevent legacy tasks from restarting after cutover.
+- Verify no Yellow Pages built-in tool, route, startup handler, IPC channel, worker bundle, or adapter remains active after extraction. Regression-test unrelated scrapers and shared browser infrastructure.
+- For implementation UI changes, add/update `test/vitest/main/components/` tests and pass `yarn test:components`; extend `test/e2e/specs/` for Hub install → AI scrape → export/cancel. Update all six supported translations. These are implementation requirements; this PRD-only revision changes no UI.
 
 ## 26. Acceptance Criteria
 
@@ -1492,6 +1567,22 @@ The installed plugin MCP server starts and executes Puppeteer JavaScript on a ma
 
 The host supplies a verified Chrome or Chromium executable independently from the Node runtime, and the plugin launches it without importing AiFetchly's private browser modules or application dependencies.
 
+### AC-16: Independent repository and Hub delivery
+
+The plugin builds without the desktop repository, and a user discovers and installs its tested version from the Hub through the existing Plugin Manager on a clean supported machine. Package, source revision/checksum, Hub version, and installed provenance agree. No local development path or built-in fallback is required.
+
+### AC-17: Distribution compatibility and update safety
+
+The release satisfies Hub canonicalization and desktop archive limits. Unsupported host/target or denied access cannot produce an enabled unusable plugin. A failed update preserves the previous working version; completed artifacts survive update and repair. A managed/ticket release is blocked until desktop and deployed Hub support its complete installation flow.
+
+### AC-18: Complete extraction with legacy data retained
+
+Both worker build targets and all production Yellow Pages routes, tools, IPC, startup tasks, adapters, and persistence registrations are removed after the Hub delivery gate. Existing user records are preserved under the documented cutover/export policy. Other browser features still pass regression tests.
+
+### AC-19: Recovery state and usable artifacts
+
+Retry budgets remain authoritative across distinct MCP process lifetimes. Completed/partial artifacts can actually be exported through authorized chat controls, not merely mentioned by ID. Deadline expiry cancels underlying work before any automatic retry.
+
 ## 27. Rollout Plan
 
 ### Phase 1: Generic async MCP foundation
@@ -1512,7 +1603,7 @@ Exit condition: a synthetic MCP tool can run longer than four minutes, report pr
 - Create the independent plugin repository/package.
 - Move scraper engine, adapters, and browser logic from the application into the plugin.
 - Implement the MCP server and primary tool.
-- Add the skill, command, hooks, permissions, and dependencies.
+- Add the skill, command, optional hooks, validated permissions, and dependencies.
 - Add artifact output.
 
 Exit condition: an installed plugin completes a real scrape from AiChatV2 without the legacy UI or entities.
@@ -1527,12 +1618,22 @@ Exit condition: an installed plugin completes a real scrape from AiChatV2 withou
 
 Exit condition: a simulated selector change causes one bounded AI-selected recovery attempt and either succeeds or ends with an actionable explanation.
 
+### Phase 3b: Hub publication and packaged-app acceptance
+
+- Produce the independent repository’s versioned prebuilt release and immutable source/artifact identity.
+- Publish a staging Hub entry through the supported source/version workflow.
+- Validate the selected direct or managed route under §19.11–19.13.
+- Install, update, repair, disable, and uninstall through Plugin Manager on the supported packaged-app target matrix.
+- Confirm browser acquisition, artifact export, entitlement behavior, and no developer-tool prerequisite.
+
+Exit condition: a user can discover and install the released plugin from the Hub and complete a scrape on a clean supported machine. Local-folder installation alone is insufficient.
+
 ### Phase 4: Remove legacy application capability
 
 - Remove Yellow Pages routes and management UI.
 - Remove Yellow Pages TypeORM entities, models, and modules according to the database migration policy.
-- Remove `YellowPagesProcessManager` and the application-owned child-process entry.
-- Remove the worker build entry only after plugin parity is verified.
+- Remove `YellowPagesProcessManager` and both application-owned child-process entries.
+- Remove both worker build entries only after the Hub-distributed plugin passes the agreed parity matrix.
 - Keep generic AI recovery and browser capabilities that other features use.
 
 Exit condition: the core application builds and runs without Yellow Pages feature code; installing the plugin restores the AI capability.
@@ -1566,6 +1667,23 @@ Do not copy these application couplings into the plugin:
 - Direct references to `YellowPagesProcessManager`.
 - Renderer IPC and Yellow Pages UI state.
 
+### 28.1.1 Extraction and removal inventory
+
+This inventory is the minimum cutover checklist, not permission to delete shared code by directory name. Trace consumers before moving/removing each item.
+
+| Area | Current desktop surfaces | Target action |
+| --- | --- | --- |
+| Worker/build | `src/childprocess/YellowPagesScraper.ts`, `YellowPagesScraperProcess.ts`; both entries in `forge.config.js`; `vite.yellowPages.config.mjs`, `vite.yellowPagesScraperProcess.config.mjs`; worker schemas | Adapt scraper into plugin-owned MCP implementation; remove both core build targets and obsolete protocols. Do not copy Electron worker bootstrapping. |
+| Domain logic | `YellowPagesController`, `YellowPagesProcessManager`, `YellowPagesOrchestrator`, `YellowPages*Module`, `YellowPagesAiSupportHandler`, `YellowPagesHealthCheck` | Move domain behavior, replace orchestration with generic host jobs, remove obsolete core code. |
+| Adapters/config | `src/modules/platforms/`, `src/config/platforms/`, `ChildProcessAdapterFactory`, `BasePlatformAdapter`, Yellow Pages interfaces, `yellowPagesProxyLaunch` | Move Yellow Pages-only code/config; identify and retain shared consumers or extract a clean shared contract. |
+| Built-in AI | `src/config/skillsRegistry.ts`, `src/config/aiTools.config.ts`, `ToolExecutor`, `ToolExecutionService`, `ToolTimeoutPolicy`, `yellowPagesResultFormatter` | Remove `search_yellow_pages` and `get_available_yellow_pages_platforms` registrations and domain branches. Installed plugin uses canonical MCP names. |
+| Startup | `src/background.ts`, `src/modules/bootuprun.ts` | Remove Yellow Pages initialization, recovery, and orphan-task checks; keep generic process cleanup. |
+| IPC/renderer | `yellowPagesIpc.ts`, communication registration, preload allowlists, IPC schemas/channels, `src/views/api/yellowpages.ts`, pages/components, menus, router files including migration registry | Remove legacy routes/actions and exposure; retain generic plugin/chat controls. Update corresponding UI tests and translations. |
+| Persistence | Three `YellowPages*.entity.ts` files, task/result models, `src/config/SqliteDb.ts`, legacy SQL definitions | Remove feature registrations and data-access paths under the non-destructive upgrade policy in §28.3. |
+| Tests/docs/dependencies | Existing Yellow Pages tests, fixtures, scripts, docs, package dependencies | Move adapter fixtures/tests to plugin; replace core tests with absence/host-integration coverage; remove only dependencies proven exclusive to Yellow Pages. |
+
+Before extraction, record a parity matrix per currently configured adapter: category/location search, pagination, detail fields, export, proxy/session behavior, supported regions, and recovery. Mark each behavior as retained, explicitly deferred, or removed, with fixture coverage. The recommended v1 scope defers authenticated sessions (subject to §31) and excludes live-page AI recovery; do not claim full legacy parity without documenting those exclusions. Final platform and field coverage must be decided before publishing.
+
 ### 28.2 AI support migration
 
 For the first plugin release, convert unrecovered failures into the structured outer-chat contract. Do not block plugin extraction on an in-session broker.
@@ -1583,7 +1701,7 @@ When the broker phase begins, preserve the behavior of the existing handler thro
 
 ### 28.3 Data migration
 
-No Yellow Pages entity migration is required for the new AI workflow. Existing records and removal timing are a separate product decision. The plugin does not read them.
+The plugin does not read or migrate legacy tables. Before removing the old UI, choose and document a user-visible export/backup path for existing tasks/results. Default cutover preserves existing database files/tables and disables legacy startup/task scheduling; no silent table drop or automatic legacy-job resume. Review TypeORM synchronization/migrations when removing entity registrations, and test upgrades from a database containing Yellow Pages records. Destructive cleanup, if ever offered, is a separate explicit operation. Generic plugin installation and chat persistence remain host-owned Models/Modules.
 
 ## 29. Risks and Mitigations
 
@@ -1639,6 +1757,17 @@ These decisions do not block the first host-foundation phase but must be resolve
 9. Whether application shutdown records an interrupted tool message immediately or repairs it on next conversation load.
 10. Whether generic job persistence is valuable enough for a later detached-job mode.
 
+Release-blocking decisions added by this review:
+
+11. Independent repository owner/URL, release CI, license, and immutable artifact policy.
+12. Public/direct versus protected/managed distribution. Direct is the recommended first path if access policy permits; paid/managed delivery requires the desktop installer work above.
+13. Minimum compatible desktop version and tested OS/architecture/browser matrix for the new runtime contract.
+14. Legacy export/backup and cutover communication before removing the existing UI; no silent deletion by default.
+15. Exact result-artifact API, retention default, ownership, and download/export UI integration.
+16. Per-adapter parity matrix, including proxy support, external business-site crawling, and deferred authentication.
+
+The proposed AI-chat-only replacement remains the product scope; a new plugin-rendered Yellow Pages management UI would be a separate requirement.
+
 ## 32. Success Metrics
 
 ### 32.1 Product metrics
@@ -1692,6 +1821,22 @@ Current implementation surfaces used to derive this PRD:
 - `docs/test-manual/aiChatV2-async-jobs.md`
 - `docs/AI_PUPPETEER_RECOVERY_ARCHITECTURE.md`
 - `docs/yellow-pages-scraper-prd.md`
+
+Additional evidence for the 2026-10-14 review (desktop-relative unless noted):
+
+- `src/service/PluginMarketplaceService.ts` — current direct-only Hub installation guard.
+- `src/service/pluginMarketplaces/AiFetchHubMarketplaceFetcher.ts` — catalog mode/schema normalization and catalog-only ZIP sources.
+- `src/service/pluginSources/pluginSourceTypes.ts`, `src/service/pluginSources/UrlPluginFetcher.ts` — acquisition contract and missing expected-checksum verification.
+- `src/modules/mcp/SupervisedStdioTransport.ts` — existing stdio supervision and environment filtering.
+- `src/childprocess/managed-browser/BrowserExecutableResolver.ts` — existing browser resolution.
+- `src/childprocess/YellowPagesScraperProcess.ts`, `forge.config.js` — second worker target.
+- `src/config/skillsRegistry.ts`, `src/config/aiTools.config.ts`, `src/service/ToolExecutionService.ts` — built-in Yellow Pages tools and coupling.
+- `src/background.ts`, `src/modules/bootuprun.ts`, `src/config/SqliteDb.ts`, `src/preload.ts` — cutover registrations.
+- `docs/prd/plugin-hub-managed-installation-prd.md` — related proposal; not proof of implementation.
+- `docs/prd/unified-plugin-page-discovery-prd.md` — related unified Plugin Manager requirements.
+- Hub (`/home/robertzeng/project/aifetchly-hub-go`): `internal/artifacts/plugin_package.go`, `internal/validation/manifest.go`, `internal/resources/declaration.go`, `internal/resources/plan.go`, `internal/httpapi/routes/install_plan.go`, `internal/httpapi/routes/prepare_install.go`, `internal/publish/publish.go`.
+
+Hub working-tree source takes precedence over stale comments or older PRDs when describing current behavior. Deployed behavior must be verified during staging acceptance.
 
 ## 34. Terminology
 

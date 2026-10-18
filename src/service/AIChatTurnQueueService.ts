@@ -8,6 +8,7 @@ import type {
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
+  AIChatSegmentOutcome,
   AIChatTurnTerminalEvent,
 } from "@/service/AIChatQueryEvents";
 import type {
@@ -29,6 +30,32 @@ import type { AIChatExecutionScheduler } from "@/service/AIChatExecutionSchedule
  * acceptance, and restart recovery. All durable state lives in the pending
  * Module; this service owns in-memory serialization only.
  */
+
+/**
+ * Stage A §3.4 (generator-streaming PRD FR-004/005): one drained row's turn,
+ * handed to the execution owner. The queue keeps FIFO/steering/hold policy;
+ * the owner creates the durable run, holds the lease + scheduler capacity,
+ * and returns the segment outcome.
+ */
+export interface AIChatQueueTurnDispatch {
+  readonly conversationId: string;
+  readonly pendingMessageId: string;
+  readonly request: ChatV2StreamRequest;
+  readonly savedUser: {
+    readonly messageId: string;
+    readonly conversationId: string;
+  };
+  readonly modelContent: string;
+  readonly contentParts?: unknown;
+  readonly assistantMessageId: string;
+}
+
+/** Execution-owner seam for drained rows (the workspace coordinator). */
+export interface AIChatQueueTurnDispatcher {
+  dispatchQueuedTurn(
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatSegmentOutcome>;
+}
 
 /** Structural slice of AIChatQueryEngine the queue service needs. */
 export interface AIChatTurnQueueEngine {
@@ -107,6 +134,16 @@ export interface AIChatTurnQueueServiceDeps {
   readonly tryAcquireLease: (input: {
     readonly conversationId: string;
   }) => AIChatQueueLease | null;
+  /**
+   * Stage A §3.4 (FR-004/005): drained rows execute through the run owner,
+   * which gives the turn a durable run identity, one scheduler, and the
+   * conversation lease — replacing the broadcast sink + queue-owned lease.
+   * Optional seam kept for the shared-orchestration unification follow-up
+   * (A01); the parity branch keeps the audited bridge-execution path below.
+   */
+  readonly dispatchQueuedTurn?: (
+    input: AIChatQueueTurnDispatch
+  ) => Promise<AIChatSegmentOutcome>;
   readonly isAiEnabled: () => boolean;
   readonly isQueueEnabled: () => boolean;
   readonly isSteeringEnabled: () => boolean;

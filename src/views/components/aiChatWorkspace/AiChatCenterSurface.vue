@@ -2860,7 +2860,8 @@ async function onCompact(): Promise<void> {
     // its progress events.
     await startCompaction(conversationId.value);
   } catch {
-    // Non-fatal — the run strip still shows progress.
+    // Non-fatal — compaction runs in the main process; progress events
+    // broadcast on ai-chat-v2:compaction-progress.
   }
 }
 

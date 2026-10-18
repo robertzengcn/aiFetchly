@@ -41,8 +41,10 @@ const conversationId = computed<string | null>(() => {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    // B05/G02 repair: legacy channel had no handler/allowlist — use the
-    // bounded coordinator path (§13.1).
+    // B05/G02 repair: the legacy ai-chat-v2:compact-conversation channel has
+    // NO main-process handler/allowlist (removed by the §13.1 "START-only"
+    // contract) — route the action through the bounded incremental
+    // coordinator (compaction-start, §13.1).
     await startCompaction(conversationId.value);
   } catch {
     // Non-fatal — the activity tab still shows run progress.

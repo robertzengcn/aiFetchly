@@ -57,7 +57,9 @@ export class AIChatRunModule extends BaseModule {
   ): Promise<AIChatRunEntity> {
     await this.ensureConnection();
     const EXPECTED: Record<ChatRunStatus, readonly ChatRunStatus[]> = {
-      queued: ["queued"],
+      // Stage A §3.5 (generator-streaming PRD design §9): a claimed resume
+      // re-enters through queued before its new running segment.
+      queued: ["queued", "awaiting_permission", "awaiting_user"],
       running: ["queued", "awaiting_permission", "awaiting_user"],
       awaiting_permission: ["queued", "running"],
       awaiting_user: ["queued", "running"],

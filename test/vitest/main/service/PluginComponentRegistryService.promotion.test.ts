@@ -428,11 +428,7 @@ Analyze the codebase and return concise architecture recommendations.
       pluginName: "ecc",
       pluginComponentPath: "agents/code-explorer.md",
     });
-    expect(agent?.allowedTools).toEqual([
-      "file_read",
-      "grep_files",
-      "glob_files",
-    ]);
+    expect(agent?.allowedTools).toEqual(["Read", "Grep", "Glob"]);
     expect(
       diagnostics.some((d) =>
         d.message.includes("tools must be a YAML string array")

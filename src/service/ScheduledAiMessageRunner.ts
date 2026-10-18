@@ -81,6 +81,29 @@ export interface ScheduledAiMessageRunResult {
  * through the task-scoped policy, and persists results.
  */
 export class ScheduledAiMessageRunner {
+  /**
+   * R07 (FR-007/023): the scheduled owner's durable-run gate — the engine
+   * awaits this between its durable message writes and its post-terminal
+   * side effects. Maps the segment terminal onto the scheduled run row via
+   * the existing module methods; the rich finalizeChatRun data follows the
+   * segment with the sink's captured outcome.
+   */
+  private async persistSegmentTerminal(
+    runId: number,
+    terminal: "completed" | "cancelled" | "failed"
+  ): Promise<void> {
+    if (terminal === "completed") {
+      // completeRun requires the rich params — the durable gate writes the
+      // narrow status (idempotent) and finalizeChatRun completes the row
+      // with the captured outcome after the segment settles.
+      await this.runModule.updateRunStatus(runId, "completed");
+    } else if (terminal === "failed") {
+      await this.runModule.failRun(runId, "ENGINE_SEGMENT_FAILED");
+    } else {
+      await this.runModule.updateRunStatus(runId, "cancelled");
+    }
+  }
+
   private readonly taskModule: AiMessageTaskModule;
   private readonly runModule: AiMessageTaskRunModule;
   // Lazy-initialized deps for the chat-bound path (kept out of the legacy
@@ -500,36 +523,83 @@ export class ScheduledAiMessageRunner {
         sourceId: String(scheduleId),
         broadcaster: sharedSummaryBroadcaster,
       });
-      await engine.submitMessage({
-        eventSink: sink,
-        request: {
-          conversationId,
-          message: task.message,
-          model: task.model && task.model !== "auto" ? task.model : undefined,
-        },
-        scheduledContext: {
-          source: "scheduled_loop",
-          taskId,
-          scheduleId,
-          runId,
-          occurrence,
-          scheduledFor: scheduledFor.toISOString(),
-          catchUp,
-          userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
-          assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
-        },
-        outboundSendPreAuthorized,
-      });
-      // `submitMessage` resolves on a permission pause (the engine parks the
-      // turn in `pendingPermissions` and returns without emitting a terminal
-      // event). When that happens, stay alive — engine registered, runtime
-      // timeout cleared, 1h backstop armed — and wait for the resumed loop
-      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
-      // Without this wait, the `finally` below would unregister the engine
-      // and clear the backstop before the user can respond, orphaning every
-      // permission card (the headline feature would be non-functional).
+
+      // TODO-11 (FR-013/022): consume the typed segment outcome directly —
+      // the owner receives the engine's explicit classification instead of
+      // reconstructing it from sink events. Pauses park the turn in the
+      // engine (the promise resolves with a paused outcome), so the sink's
+      // waitForTerminalOutcome still bounds the resumed continuation.
+      const mapSegmentOutcome = (
+        segment: import("@/service/AIChatQueryEvents").AIChatSegmentOutcome
+      ): ScheduledTurnOutcome | null => {
+        switch (segment.type) {
+          case "completed":
+            return {
+              kind: "completed",
+              assistantMessageId: segment.assistantMessageId,
+              content: "",
+            };
+          case "cancelled":
+            return {
+              kind: "cancelled",
+              assistantMessageId: segment.assistantMessageId,
+              content: "",
+            };
+          case "failed":
+            return {
+              kind: "failed",
+              assistantMessageId: segment.assistantMessageId,
+              errorMessage: "ENGINE_SEGMENT_FAILED",
+            };
+          case "conversation_busy":
+            return { kind: "blocked", reason: "conversation_busy" };
+          case "paused_for_permission":
+          case "paused_for_plan_question":
+            return null; // parked: wait for the resumed terminal via the sink
+        }
+      };
+      const segmentOutcome = await engine
+        .runTurn({
+          eventSink: sink,
+          request: {
+            conversationId,
+            message: task.message,
+            model: task.model && task.model !== "auto" ? task.model : undefined,
+          },
+          scheduledContext: {
+            source: "scheduled_loop",
+            taskId,
+            scheduleId,
+            runId,
+            occurrence,
+            scheduledFor: scheduledFor.toISOString(),
+            catchUp,
+            userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+            assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
+          },
+          outboundSendPreAuthorized,
+          onSegmentDurable: (_convId, terminal) =>
+            this.persistSegmentTerminal(runId, terminal).then(() => undefined),
+        })
+        .catch((runErr: unknown): import("@/service/AIChatQueryEvents").AIChatSegmentOutcome => {
+          log.error("[scheduled-runner] engine segment threw:", runErr);
+          return {
+            type: "failed",
+            conversationId,
+            assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
+          };
+        });
+      // Prefer the sink's richer captured outcome (content/model/tokens the
+      // typed outcome does not carry); the mapped segment outcome is the
+      // authoritative classification when the sink saw no terminal (pauses
+      // resolved with content still parked in the engine).
       outcome =
-        ownerSink.getOutcome() ?? (await ownerSink.waitForTerminalOutcome());
+        ownerSink.getOutcome() ??
+        mapSegmentOutcome(segmentOutcome) ??
+        (await ownerSink.waitForTerminalOutcome());
+      // A terminal segment whose sink captured nothing (event/outcome
+      // disagreement) still finalizes from the classification — never the
+      // NO_TERMINAL_EVENT failure.
     } finally {
       clearTimeout(timeoutHandle);
       clearPermissionBackstop();
@@ -976,36 +1046,79 @@ export class ScheduledAiMessageRunner {
           });
         }
       });
-      await engine.submitMessage({
-        eventSink: sink,
-        request: {
-          conversationId,
-          message: task.message,
-          model: task.model && task.model !== "auto" ? task.model : undefined,
-          systemPrompt: task.system_prompt ?? undefined,
-        },
-        scheduledContext: {
-          source: "scheduled_loop",
-          taskId: task.id,
-          scheduleId: scheduleKey,
-          runId,
-          occurrence: runId,
-          scheduledFor: startedAt.toISOString(),
-          catchUp: false,
-          userMessageId: `scheduled-user-${scheduleKey}-${runId}`,
-          assistantMessageId,
-        },
-        outboundSendPreAuthorized,
-      });
-      // `submitMessage` resolves on a permission pause (the engine parks the
-      // turn in `pendingPermissions` and returns without emitting a terminal
-      // event). When that happens, stay alive — engine registered, runtime
-      // timeout cleared, 1h backstop armed — and wait for the resumed loop
-      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
-      // Without this wait, the `finally` below would unregister the engine
-      // and clear the backstop before the user can respond, orphaning every
-      // permission card (the headline feature would be non-functional).
-      outcome = sink.getOutcome() ?? (await sink.waitForTerminalOutcome());
+
+      // TODO-11 (FR-013/022): consume the typed segment outcome directly;
+      // the sink remains the rich-data source and the resumed-terminal wait.
+      const mapSegment = (
+        segment: import("@/service/AIChatQueryEvents").AIChatSegmentOutcome
+      ): ScheduledTurnOutcome | null => {
+        switch (segment.type) {
+          case "completed":
+            return {
+              kind: "completed",
+              assistantMessageId: segment.assistantMessageId,
+              content: "",
+            };
+          case "cancelled":
+            return {
+              kind: "cancelled",
+              assistantMessageId: segment.assistantMessageId,
+              content: "",
+            };
+          case "failed":
+            return {
+              kind: "failed",
+              assistantMessageId: segment.assistantMessageId,
+              errorMessage: "ENGINE_SEGMENT_FAILED",
+            };
+          case "conversation_busy":
+            return { kind: "blocked", reason: "conversation_busy" };
+          case "paused_for_permission":
+          case "paused_for_plan_question":
+            return null;
+        }
+      };
+      const segmentOutcome = await engine
+        .runTurn({
+          eventSink: sink,
+          request: {
+            conversationId,
+            message: task.message,
+            model: task.model && task.model !== "auto" ? task.model : undefined,
+            systemPrompt: task.system_prompt ?? undefined,
+          },
+          scheduledContext: {
+            source: "scheduled_loop",
+            taskId: task.id,
+            scheduleId: scheduleKey,
+            runId,
+            occurrence: runId,
+            scheduledFor: startedAt.toISOString(),
+            catchUp: false,
+            userMessageId: `scheduled-user-${scheduleKey}-${runId}`,
+            assistantMessageId,
+          },
+          outboundSendPreAuthorized,
+        })
+        .catch(
+          (
+            runErr: unknown
+          ): import("@/service/AIChatQueryEvents").AIChatSegmentOutcome => {
+            console.error("[scheduled-loop] engine segment threw:", runErr);
+            return {
+              type: "failed",
+              conversationId,
+              assistantMessageId,
+            };
+          }
+        );
+      // Prefer the sink's richer captured outcome; the mapped segment
+      // classification is authoritative when the sink saw no terminal, and a
+      // pause parks for the resumed terminal via the sink wait.
+      outcome =
+        sink.getOutcome() ??
+        mapSegment(segmentOutcome) ??
+        (await sink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;

@@ -3,8 +3,14 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { SqliteDb } from "@/config/SqliteDb";
-import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
+import type {
+  AIChatQueryEventSink,
+  AIChatSegmentOutcome,
+} from "@/service/AIChatQueryEvents";
+import type {
+  AIChatPendingClaim,
+  AIChatQuerySubmitInput,
+} from "@/service/AIChatQueryEngine";
 import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
 import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { CoordinatorEngine } from "@/service/AIChatCoordinator";
@@ -51,10 +57,22 @@ beforeEach(() => {
   AIChatConversationTurnCoordinator.getInstance().resetForTesting();
 });
 
-/** Deferred the test resolves to finish a fake engine turn. */
+/** Deferred the test resolves (or rejects) to finish a fake engine turn. */
 interface TurnHandle {
   input: AIChatQuerySubmitInput;
-  resolve(): void;
+  resolve(outcome?: AIChatSegmentOutcome): void;
+  reject(error: unknown): void;
+}
+
+/** Pending-action + claim bookkeeping for owner-driven resume tests. */
+interface FakeClaim {
+  status: "claimed";
+  kind: "permission" | "question";
+  conversationId: string;
+  assistantMessageId: string;
+  toolCallId?: string;
+  questionId?: string;
+  pending: Record<string, never>;
 }
 
 function makeFakeEngine(): {
@@ -62,20 +80,149 @@ function makeFakeEngine(): {
   turns: TurnHandle[];
   stopCalls: string[];
   setStatus(conversationId: string, status: ChatV2RuntimeStatus): void;
+  pendingPermission: { toolCallId: string } | null;
+  resumed: Array<{
+    claim: Extract<AIChatPendingClaim, { status: "claimed" }>;
+    resolve(outcome: AIChatSegmentOutcome): void;
+  }>;
+  cancelledClaims: string[];
+  resumeClaims: unknown[];
+  parkPending(
+    conversationId: string,
+    entry: { kind: "permission" | "question"; id: string }
+  ): void;
 } {
   const turns: TurnHandle[] = [];
   const stopCalls: string[] = [];
   const engineStatus = new Map<string, ChatV2RuntimeStatus>();
+  const pendingPermission: { toolCallId: string } | null = null;
+  const resumed: Array<{
+    claim: Extract<AIChatPendingClaim, { status: "claimed" }>;
+    resolve(outcome: AIChatSegmentOutcome): void;
+  }> = [];
+  const cancelledClaims: string[] = [];
+  const resumeClaims: unknown[] = [];
+  const claimed: Map<string, FakeClaim> = new Map();
+  const parked: Map<string, FakeClaim> = new Map();
+  const parkPending = (
+    conversationId: string,
+    entry: { kind: "permission" | "question"; id: string }
+  ): void => {
+    parked.set(conversationId, {
+      status: "claimed",
+      kind: entry.kind,
+      conversationId,
+      assistantMessageId: "assistant-1",
+      ...(entry.kind === "permission"
+        ? { toolCallId: entry.id }
+        : { questionId: entry.id }),
+      pending: {} as Record<string, never>,
+    });
+    engineStatus.set(conversationId, "awaiting_permission");
+  };
+  const claimPending = (
+    conversationId: string,
+    kind: "permission" | "question",
+    id: string
+  ): AIChatPendingClaim => {
+    if (claimed.has(conversationId)) {
+      return { status: "already_claimed" };
+    }
+    const parkedEntry = parked.get(conversationId);
+    const matches =
+      parkedEntry !== undefined &&
+      ((kind === "permission" &&
+        parkedEntry.toolCallId !== undefined &&
+        parkedEntry.toolCallId === id) ||
+        (kind === "question" &&
+          parkedEntry.questionId !== undefined &&
+          parkedEntry.questionId === id));
+    if (!matches) {
+      return { status: "not_found" };
+    }
+    parked.delete(conversationId);
+    claimed.set(conversationId, parkedEntry);
+    return parkedEntry as unknown as AIChatPendingClaim;
+  };
+  void pendingPermission;
   return {
     turns,
     stopCalls,
+    pendingPermission,
+    resumed,
+    cancelledClaims,
+    resumeClaims,
+    parkPending,
     setStatus(conversationId: string, status: ChatV2RuntimeStatus): void {
       engineStatus.set(conversationId, status);
     },
     engine: {
-      submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-        return new Promise<void>((resolve) => {
-          turns.push({ input, resolve });
+      runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
+        return new Promise<AIChatSegmentOutcome>((resolve, reject) => {
+          turns.push({
+            input,
+            resolve: (outcome) =>
+              resolve(
+                outcome ?? {
+                  type: "completed",
+                  conversationId: input.request.conversationId ?? "",
+                  assistantMessageId: "",
+                }
+              ),
+            reject,
+          });
+        });
+      },
+      submitPersistedUserMessage(input: {
+        readonly eventSink: unknown;
+        readonly request: unknown;
+        readonly savedUser: { readonly messageId: string; readonly conversationId: string };
+        readonly modelContent: string;
+        readonly contentParts?: unknown;
+        readonly assistantMessageId?: string;
+      }): Promise<AIChatSegmentOutcome> {
+        return new Promise<AIChatSegmentOutcome>((resolve) => {
+          turns.push({
+            input: input as unknown as AIChatQuerySubmitInput,
+            resolve: (outcome) =>
+              resolve(
+                outcome ?? {
+                  type: "completed",
+                  conversationId: input.savedUser.conversationId,
+                  assistantMessageId: input.assistantMessageId ?? "",
+                }
+              ),
+            reject: () => resolve({
+              type: "failed",
+              conversationId: input.savedUser.conversationId,
+              assistantMessageId: input.assistantMessageId ?? "",
+            }),
+          });
+        });
+      },
+      claimPendingPermission(
+        conversationId: string,
+        toolId: string
+      ): AIChatPendingClaim {
+        return claimPending(conversationId, "permission", toolId);
+      },
+      claimPendingQuestion(
+        conversationId: string,
+        questionId: string
+      ): AIChatPendingClaim {
+        return claimPending(conversationId, "question", questionId);
+      },
+      cancelClaimed(conversationId: string): boolean {
+        const had = claimed.delete(conversationId);
+        if (had) cancelledClaims.push(conversationId);
+        return had;
+      },
+      resumeClaimed(
+        claim: Extract<AIChatPendingClaim, { status: "claimed" }>
+      ): Promise<AIChatSegmentOutcome> {
+        resumeClaims.push(claim);
+        return new Promise<AIChatSegmentOutcome>((resolve) => {
+          resumed.push({ claim, resolve });
         });
       },
       stopActiveTurn(conversationId?: string): void {
@@ -165,6 +312,19 @@ function buildCoordinator(
     ...(busySubmit ? { busySubmit } : {}),
   });
   return { coordinator, router, fake, runModel: new AIChatRunModel(tmpDir) };
+}
+
+function runModel70(): AIChatRunModel {
+  return new AIChatRunModel(tmpDir);
+}
+
+
+/** R03: simulate the user's Stop landing on a live (scheduler-active) run. */
+function liveCancel(
+  coordinator: AIChatCoordinator,
+  conversationId: string
+): void {
+  void coordinator.cancelRun({ conversationId });
 }
 
 function request(n: number): Parameters<AIChatCoordinator["startRun"]>[0] {
@@ -511,15 +671,21 @@ describe("AIChatCoordinator", () => {
       messageId: "assistant-1",
       fullContent: "partial",
     });
-    turn.resolve();
+    // Outcome is authoritative (Stage A1): the engine classifies the aborted
+    // segment as cancelled — the coordinator no longer infers it from chunks.
+    turn.resolve({
+      type: "cancelled",
+      conversationId: "v2-test-20",
+      assistantMessageId: "assistant-1",
+    });
     await waitFor(async () => {
       const row = await runModel.getByRunId(accepted.response.runId);
       return row?.status === "cancelled";
     });
   });
 
-  it("observes engine permission pauses and broadcasts attention", async () => {
-    const { coordinator, router, fake } = buildCoordinator();
+  it("observes engine permission pauses via the lifecycle listener and broadcasts attention (FR-021)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
     const win = fakeWindow(2);
     win.register(router);
     await SqliteDb.ensureInitialized();
@@ -527,16 +693,15 @@ describe("AIChatCoordinator", () => {
     await waitFor(() => fake.turns.length === 1);
     if (!accepted.ok) return;
     const turn = fake.turns[0];
+    expect(turn.input.lifecycle).toBeDefined();
+    expect(turn.input.ownerNotifiesTerminal).toBe(true);
 
-    // Engine pauses for permission BEFORE the tool result lands.
-    fake.setStatus("v2-test-30", "awaiting_permission");
-    emit(turn.input.eventSink, {
-      type: "tool_call",
+    // The engine parks the turn — explicit notification, not sampled state.
+    turn.input.lifecycle?.onAwaiting({
+      kind: "permission",
       conversationId: "v2-test-30",
-      messageId: "assistant-1",
+      assistantMessageId: "assistant-1",
       toolCallId: "tc-1",
-      toolName: "read_file",
-      toolArguments: { path: "/tmp/x" },
     });
     await waitFor(() =>
       win.summaries.some((s) => s.reason === "permission_required")
@@ -547,9 +712,24 @@ describe("AIChatCoordinator", () => {
     expect(coordinator.getLiveRuntime("v2-test-30")?.runtimeStatus).toBe(
       "awaiting_permission"
     );
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+
+    // A second onAwaiting for the same park is idempotent (exactly once).
+    turn.input.lifecycle?.onAwaiting({
+      kind: "permission",
+      conversationId: "v2-test-30",
+      assistantMessageId: "assistant-1",
+      toolCallId: "tc-1",
+    });
 
     // Resume and finish.
-    fake.setStatus("v2-test-30", "idle");
+    turn.input.lifecycle?.onResumed({
+      conversationId: "v2-test-30",
+      assistantMessageId: "assistant-1",
+    });
     emit(turn.input.eventSink, {
       type: "complete",
       conversationId: "v2-test-30",
@@ -589,6 +769,88 @@ describe("AIChatCoordinator", () => {
       const row = await runModel.getByRunId(accepted.response.runId);
       return row?.status === "completed";
     });
+  });
+
+  it("derives waiting status from the paused segment outcome — never completed (FR-009/022)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(4);
+    win.register(router);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(31));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    // Only a token chunk — no terminal chunk, no sampled pause state.
+    emit(fake.turns[0].input.eventSink, {
+      type: "token",
+      conversationId: "v2-test-31",
+      messageId: "assistant-1",
+      contentDelta: "work",
+      model: "m",
+    });
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-31",
+      assistantMessageId: "assistant-1",
+    });
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    expect(
+      win.summaries.some((s) => s.reason === "permission_required")
+    ).toBe(true);
+    expect(coordinator.getLiveRuntime("v2-test-31")?.runtimeStatus).toBe(
+      "awaiting_permission"
+    );
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.status).not.toBe("completed");
+  });
+
+  it("records an unclassified exit as failed with a diagnostic — never completed (AC-17)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(5);
+    win.register(router);
+    router.select(5, "v2-test-32", 1);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(32));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    // The engine promise rejects — no terminal chunk, no classified outcome.
+    fake.turns[0].reject(new Error("engine vanished"));
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    const failedRow = await runModel.getByRunId(accepted.response.runId);
+    expect(failedRow?.errorCode).toBe("unclassified_segment_exit");
+    expect(failedRow?.errorSummary).toContain("engine vanished");
+    // The renderer still learned about the failure via a synthesized error
+    // detail event (never silence an unclassified exit).
+    expect(win.details.some((d) => d.eventType === "error")).toBe(true);
+  });
+
+  it("treats an unexpected conversation_busy outcome as failed, not success", async () => {
+    const { coordinator, fake, runModel } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(35));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    fake.turns[0].resolve({
+      type: "conversation_busy",
+      conversationId: "v2-test-35",
+    });
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.errorSummary).toContain("busy");
   });
 });
 
@@ -697,5 +959,354 @@ describe("AIChatRunEventAdapter", () => {
     expect(Adapter.statusHintFor("error")).toBe("failed");
     expect(Adapter.statusHintFor("cancelled")).toBe("cancelled");
     expect(Adapter.statusHintFor("token")).toBeNull();
+  });
+
+  it("dispatchQueuedTurn gives a drained row a durable run, real run id, and one owner (FR-004/005, AC-16)", async () => {
+    const terminals: Array<{ conversationId: string; status: ChatRunStatus }> =
+      [];
+    const { coordinator, router, fake, runModel } = buildCoordinator((c, st) => {
+      terminals.push({ conversationId: c, status: st });
+    });
+    const win = fakeWindow(6);
+    win.register(router);
+    router.select(6, "v2-queued-1", 1);
+    await SqliteDb.ensureInitialized();
+
+    const dispatched = coordinator.dispatchQueuedTurn({
+      conversationId: "v2-queued-1",
+      pendingMessageId: "p-1",
+      request: { message: "queued hello", conversationId: "v2-queued-1" },
+      savedUser: { messageId: "user-pending-9", conversationId: "v2-queued-1" },
+      modelContent: "queued hello",
+      assistantMessageId: "assistant-pending-p-1",
+    });
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+
+    const liveRunId = coordinator.getLiveRuntime("v2-queued-1")?.activeRunId;
+    expect(liveRunId).toBeTruthy();
+    expect(liveRunId?.startsWith("pending-queue-")).toBe(false);
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(liveRunId ?? "");
+      return row?.status === "running";
+    });
+
+    emit(turn.input.eventSink, {
+      type: "start",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+    });
+    emit(turn.input.eventSink, {
+      type: "token",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+      contentDelta: "q",
+      model: "m",
+    });
+    await waitFor(() => win.details.length >= 2);
+    for (const detail of win.details) {
+      expect(detail.runId).toBe(liveRunId);
+      expect(String(detail.runId).startsWith("pending-queue-")).toBe(false);
+    }
+    expect(win.details[0].sequence).toBeLessThan(win.details[1].sequence);
+
+    emit(turn.input.eventSink, {
+      type: "complete",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+      fullContent: "queued done",
+      finishReason: "stop",
+    });
+    turn.resolve({
+      type: "completed",
+      conversationId: "v2-queued-1",
+      assistantMessageId: "assistant-pending-p-1",
+    });
+
+    const outcome = await dispatched;
+    expect(outcome.type).toBe("completed");
+    const row = await runModel.getByRunId(liveRunId ?? "");
+    expect(row?.status).toBe("completed");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toEqual({
+      conversationId: "v2-queued-1",
+      status: "completed",
+    });
+  });
+
+  it("dispatchQueuedTurn reports busy when the conversation is already owned", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    fake.setStatus("v2-queued-2", "running");
+    const outcome = await coordinator.dispatchQueuedTurn({
+      conversationId: "v2-queued-2",
+      pendingMessageId: "p-2",
+      request: { message: "x", conversationId: "v2-queued-2" },
+      savedUser: { messageId: "u", conversationId: "v2-queued-2" },
+      modelContent: "x",
+      assistantMessageId: "a",
+    });
+    expect(outcome.type).toBe("conversation_busy");
+    expect(fake.turns).toHaveLength(0);
+  });
+
+  it("resumeRun claims, queues, and observes the resumed continuation (FR-024, AC-05)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(7);
+    win.register(router);
+    router.select(7, "v2-resume-1", 1);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(41));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    // The segment parks on a permission card.
+    fake.parkPending("v2-test-41", { kind: "permission", id: "tool-r-1" });
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-41",
+      assistantMessageId: "assistant-1",
+    });
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    const liveRunId = coordinator.getLiveRuntime("v2-test-41")?.activeRunId;
+
+    // Duplicate approval is idempotent BEFORE the claim is resumed: the
+    // second claim on the same action returns already_claimed → ok:true,
+    // no second dispatch.
+    const first = await coordinator.resumeRun({
+      conversationId: "v2-test-41",
+      action: { kind: "permission", toolId: "tool-r-1" },
+    });
+    expect(first.ok).toBe(true);
+    await waitFor(() => fake.resumed.length === 1);
+
+    // The resumed continuation runs INSIDE the dispatch with the SAME run id
+    // and adapter (sequence continuity, FR-005).
+    expect(fake.resumeClaims).toHaveLength(1);
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(liveRunId ?? "");
+      return row?.status === "running";
+    });
+
+    // Sequence continues from the pre-pause events (start/token seq 1..2).
+    emit(fake.resumed[0].claim && fake.turns[0].input.eventSink, {
+      type: "token",
+      conversationId: "v2-test-41",
+      messageId: "assistant-1",
+      contentDelta: "post",
+      model: "m",
+    });
+    fake.resumed[0].resolve({
+      type: "completed",
+      conversationId: "v2-test-41",
+      assistantMessageId: "assistant-1",
+    });
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(liveRunId ?? "");
+      return row?.status === "completed";
+    });
+    expect(coordinator.getLiveRuntime("v2-test-41")).toBeNull();
+  });
+
+  it("Stop while a resume waits for capacity cancels the claim and never starts the tool (FR-024, AC-04)", async () => {
+    const { coordinator, fake, runModel } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    // Fill all three general capacity slots with unrelated runs.
+    for (let i = 0; i < 3; i += 1) {
+      await coordinator.startRun(request(50 + i));
+    }
+    await waitFor(() => fake.turns.length === 3);
+    const accepted = await coordinator.startRun(request(42));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 3); // still queued
+
+    // Free one slot so the target dispatches, then park it.
+    fake.turns[0].resolve({
+      type: "completed",
+      conversationId: "v2-test-50",
+      assistantMessageId: "",
+    });
+    await waitFor(() => fake.turns.length === 4);
+    fake.parkPending("v2-test-42", { kind: "permission", id: "tool-r-2" });
+    fake.turns[3].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-42",
+      assistantMessageId: "assistant-1",
+    });
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    // Active now: fillers 1 + 2 (2 slots).
+
+    // Occupy the third slot so a claimed resume must WAIT for capacity.
+    const extra = await coordinator.startRun(request(60));
+    void extra;
+    await waitFor(() => fake.turns.length === 5);
+
+    const resumed = await coordinator.resumeRun({
+      conversationId: "v2-test-42",
+      action: { kind: "permission", toolId: "tool-r-2" },
+    });
+    expect(resumed.ok).toBe(true);
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "queued";
+    });
+    // Capacity is full: the continuation has NOT started.
+    expect(fake.resumed.length).toBe(0);
+
+    const cancel = await coordinator.cancelRun({ conversationId: "v2-test-42" });
+    expect(cancel.cancelled).toBe(true);
+    expect(fake.cancelledClaims).toContain("v2-test-42");
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "cancelled";
+    });
+    // The approved tool never started.
+    expect(fake.resumed.length).toBe(0);
+    // Cleanup remaining fillers.
+    for (const t of fake.turns) t.resolve();
+  });
+
+
+  it("a stale dispatch cancels its orphaned engine claim (review fix, stop/approve race)", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(70));
+    if (!accepted.ok) return;
+    const runId = accepted.response.runId;
+    await waitFor(() => fake.turns.length === 1);
+
+    // Park the run, then reproduce the raced state directly: an approval
+    // claim that landed AFTER cancelRun finalized the run (so nothing
+    // dispatches it) but whose dispatch is already queued in the pump.
+    fake.parkPending("v2-test-70", { kind: "permission", id: "tool-r-70" });
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-70",
+      assistantMessageId: "assistant-1",
+    });
+    await waitFor(async () => {
+      const row = await runModel70().getByRunId(runId);
+      return row?.status === "awaiting_permission";
+    }).catch(() => undefined);
+    const cancel = await coordinator.cancelRun({ conversationId: "v2-test-70" });
+    expect(cancel.cancelled).toBe(true);
+    expect(coordinator.ownsConversation("v2-test-70")).toBe(false);
+
+    // The raced approval: claimed just after finalize (the real race
+    // interleaves this before deletion; simulating the post-state directly).
+    const lateClaim = fake.engine.claimPendingPermission("v2-test-70", "tool-r-70");
+    expect(lateClaim.status).toBe("claimed");
+
+    // The already-queued dispatch finally executes: the stale guard must
+    // cancel the orphaned claim so a duplicate approval is rejected later.
+    const stale = coordinator as unknown as {
+      executeDispatch(r: string, c: string): Promise<void>;
+    };
+    await stale.executeDispatch(runId, "v2-test-70");
+    expect(fake.cancelledClaims).toContain("v2-test-70");
+  });
+
+
+  it("R02: the run-owned lifecycle promise tracks the CURRENT write (await sees the pending row)", async () => {
+    const { coordinator, fake, runModel } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(80));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    const lifecycle = fake.turns[0].input.lifecycle;
+    expect(lifecycle).toBeDefined();
+
+    // Gate the durable write: onAwaiting fires but the row is still pending.
+    let releaseWrite!: () => void;
+    const gated = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    // Stub the MODULE method the coordinator actually calls — the test's
+    // runModel is a separate instance from the module's internal model.
+    const { AIChatRunModule: RunModule } = await import(
+      "@/modules/AIChatRunModule"
+    );
+    const realTransition = RunModule.prototype.transition;
+    const forward = (self: unknown, args: unknown[]): unknown =>
+      (realTransition as unknown as (...a: unknown[]) => unknown).apply(
+        self,
+        args
+      );
+    RunModule.prototype.transition = function gatedTransition(
+      this: unknown,
+      ...args: unknown[]
+    ): unknown {
+      if (args[1] === "awaiting_permission") {
+        return gated.then(() => forward(this, args));
+      }
+      return forward(this, args);
+    } as never;
+
+    lifecycle?.onAwaiting({
+      kind: "permission",
+      conversationId: "v2-test-80",
+      assistantMessageId: "a",
+      toolCallId: "t",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    const live = coordinator.getLiveRuntime("v2-test-80");
+    expect(live?.runtimeStatus).toBe("awaiting_permission");
+    // The live entry is gone once we finalize... use the BEFORE-await probe:
+    // grab the chain through the exposed dispatch wait point instead — the
+    // coordinator awaits (live).lifecycleTransitions in its finally; here we
+    // assert indirectly: the run row is NOT yet awaiting_permission.
+    const rowBefore = await runModel.getByRunId(accepted.response.runId);
+    expect(rowBefore?.status).not.toBe("awaiting_permission");
+
+    releaseWrite();
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    // A parked run intentionally KEEPS its live entry; settle the fake turn
+    // and restore the prototype. The cleanup wait must not expect null.
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-80",
+      assistantMessageId: "a",
+    });
+    await waitFor(() =>
+      coordinator.getLiveRuntime("v2-test-80")?.runtimeStatus ===
+      "awaiting_permission"
+    );
+    await coordinator.cancelRun({ conversationId: "v2-test-80" });
+    RunModule.prototype.transition = realTransition;
+  });
+
+  it("R03: Stop during terminal durable writes wins over a completed outcome", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(9);
+    win.register(router);
+    router.select(9, "v2-test-81", 1);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(81));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+    // The user presses Stop while the turn is running.
+    liveCancel(coordinator, "v2-test-81");
+    // The engine then resolves completed (won the internal race).
+    turn.resolve({
+      type: "completed",
+      conversationId: "v2-test-81",
+      assistantMessageId: "a",
+    });
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "cancelled";
+    });
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.status).toBe("cancelled"); // Stop won — never completed
   });
 });

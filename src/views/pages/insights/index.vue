@@ -5,11 +5,12 @@
     description-key="insights.subtitle"
     content-width="full"
   >
-    <div class="landing-section">
-      <div
+    <div class="insights-grid">
+      <v-card
         v-for="item in insightItems"
         :key="item.path"
-        class="landing-row"
+        class="insight-card"
+        elevation="0"
         tabindex="0"
         role="button"
         :aria-label="item.title"
@@ -17,13 +18,15 @@
         @keydown.enter.prevent="goTo(item.path)"
         @keydown.space.prevent="goTo(item.path)"
       >
-        <span class="row-icon" aria-hidden="true">
-          <v-icon :icon="item.icon" size="22" />
-        </span>
-        <span class="row-title">{{ item.title }}</span>
-        <span class="row-value">{{ item.description }}</span>
-        <v-icon class="row-arrow" icon="mdi-arrow-right" size="20" aria-hidden="true" />
-      </div>
+        <div class="insight-card__icon" aria-hidden="true">
+          <v-icon :icon="item.icon" size="28" />
+        </div>
+        <div class="insight-card__content">
+          <h2 class="insight-card__title">{{ item.title }}</h2>
+          <p class="insight-card__description">{{ item.description }}</p>
+        </div>
+        <v-icon class="insight-card__arrow" icon="mdi-arrow-right" size="22" aria-hidden="true" />
+      </v-card>
     </div>
   </AppPageShell>
 </template>
@@ -93,46 +96,47 @@ function goTo(path: string): void {
 </script>
 
 <style scoped>
-.landing-section {
+.insights-grid {
   max-width: var(--app-width-wide);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.insight-card {
+  min-height: 156px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 24px;
+  gap: 14px;
+  align-items: start;
+  padding: 20px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-panel);
   background: var(--app-surface);
-  overflow: hidden;
-}
-
-.landing-row {
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-4);
-  padding: var(--app-space-4) var(--app-space-5);
-  border-bottom: 1px solid var(--app-border);
   cursor: pointer;
-  transition: background-color var(--app-duration-short) ease;
+  transition:
+    border-color var(--app-duration-short) ease,
+    box-shadow var(--app-duration-short) ease,
+    transform var(--app-duration-short) ease;
 }
 
-.landing-row:last-child {
-  border-bottom: none;
-}
-
-.landing-row:hover,
-.landing-row:focus-visible {
-  background: var(--app-surface-variant);
-}
-
-.landing-row:focus {
+.insight-card:hover,
+.insight-card:focus-visible {
+  border-color: var(--app-accent);
+  box-shadow: 0 10px 28px rgba(23, 32, 51, 0.1);
+  transform: translateY(-1px);
   outline: none;
 }
 
-.landing-row:focus-visible {
+.insight-card:focus-visible {
   outline: 2px solid var(--app-focus);
   outline-offset: -2px;
 }
 
-.row-icon {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+.insight-card__icon {
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -141,49 +145,52 @@ function goTo(path: string): void {
   background: var(--app-accent-soft);
 }
 
-.row-title {
-  flex-shrink: 0;
-  min-width: 220px;
+.insight-card__content {
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.insight-card__title {
+  margin: 0;
   color: var(--app-text);
-  font-size: 14px;
+  font-size: 17px;
+  line-height: 1.35;
   font-weight: 650;
-  line-height: 1.4;
+  letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 
-.row-value {
-  flex: 1;
-  min-width: 0;
+.insight-card__description {
+  margin: 8px 0 0;
   color: var(--app-text-soft);
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
-.row-arrow {
-  flex-shrink: 0;
+.insight-card__arrow {
   color: var(--app-text-muted);
-  transition: color var(--app-duration-short) ease;
+  margin-top: 2px;
 }
 
-.landing-row:hover .row-arrow,
-.landing-row:focus-visible .row-arrow {
+.insight-card:hover .insight-card__arrow,
+.insight-card:focus-visible .insight-card__arrow {
   color: var(--app-accent);
 }
 
+@media (max-width: 1100px) {
+  .insights-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 700px) {
-  .landing-row {
-    flex-wrap: wrap;
-    gap: var(--app-space-2);
-    padding: var(--app-space-3) var(--app-space-4);
+  .insights-grid {
+    grid-template-columns: 1fr;
   }
 
-  .row-title {
-    min-width: 0;
-  }
-
-  .row-value {
-    flex-basis: 100%;
-    padding-left: calc(36px + var(--app-space-2));
+  .insight-card {
+    min-height: 132px;
+    padding: 16px;
   }
 }
 </style>

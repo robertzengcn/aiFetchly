@@ -24,7 +24,6 @@ const i18n = createI18n({
       workspaceChat: {
         newChat: "New chat",
         automations: "Automations",
-        customize: "Customize",
         insights: "Insights",
         knowledgeLibrary: "Knowledge Library",
         plugins: "Plugins",
@@ -90,6 +89,14 @@ describe("AiChatWorkspaceSidebar global nav", () => {
     expect(wrapper.get('[data-testid="workspace-plugins"]').text()).toContain(
       "Plugins"
     );
+  });
+
+  it("does not render a Customize nav link", () => {
+    const wrapper = mountSidebar();
+    expect(wrapper.find('[data-testid="workspace-customize"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).not.toContain("Customize");
   });
 
   it("navigates to /insights when Insights is clicked", async () => {

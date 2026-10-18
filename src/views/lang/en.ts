@@ -7,6 +7,11 @@
 // import { upgrade } from "undici";
 
 export default {
+  computerUse: {
+    title: "Computer Use",
+    status: { desktop_busy: "Desktop is controlled by another session", stop_hotkey_unavailable: "Stop hotkey could not be registered; choose another combination", host_elevated: "AiFetchly is running as administrator; restart it normally", model_not_ready: "Local vision components are not ready", backend_unavailable: "Desktop backend is not installed" },
+    settings: { localVision: "Local vision", visualPlanner: "Visual planner mode", stopHotkey: "Stop hotkey", debugCapture: "Debug capture", save: "Save" },
+  },
   common: {
     more: "More",
     actions: "Actions",
@@ -3142,6 +3147,7 @@ export default {
     field_max_tool_calls: "Max tool calls",
     field_max_runtime_seconds: "Max runtime (seconds)",
     field_max_continue_calls: "Max continue calls",
+    field_unlimited: "Unlimited",
     field_output_schema: "Output schema (JSON, optional)",
     field_warnings: "Warnings",
     field_no_warnings: "No warnings",
@@ -3613,7 +3619,6 @@ export default {
     },
     newChat: "New chat",
     automations: "Automations",
-    customize: "Customize",
     insights: "Insights",
     knowledgeLibrary: "Knowledge Library",
     plugins: "Plugins",
@@ -3741,6 +3746,7 @@ export default {
     inspector: {
       region: "Inspector",
       toggle: "Toggle inspector",
+      close: "Close inspector",
       artifacts: "Artifacts",
       activity: "Activity",
       context: "Context",
@@ -3797,6 +3803,11 @@ export default {
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
       structuredResult: "Structured result — see details in Activity",
+      failureReason: "Error",
+      toolPersistFailure: {
+        toolCallNotSaved: "Tool not run: it could not be saved.",
+        toolResultNotSaved: "Tool ran but its result could not be saved.",
+      },
     },
     plan: {
       continuationAborted: "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.",

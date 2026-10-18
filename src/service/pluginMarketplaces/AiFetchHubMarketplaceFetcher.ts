@@ -22,6 +22,13 @@ const MAX_PLUGINS = 5000;
 export type HubCatalogClient = Pick<HttpClient, "getFirstParty">;
 
 // --- Hub catalog contract (first-party; PRD §7.4 / hub tech design §9.3) ----
+// Live hub shape (aifetchly-hub-go docs/plugin-hub-api-catalog.md §2):
+//   entry.name is the slug (no `slug` key), `access:{status}` only with
+//   sibling top-level `installMode`, viewer at `user:{segment}`.
+// Legacy desktop shape: `slug` + nested `access:{status,installMode}`.
+// Both are accepted; explicit `slug` / nested `installMode` win.
+
+const hubInstallModeSchema = z.enum(["direct", "ticket", "managed"]);
 
 const accessSchema = z
   .object({
@@ -32,7 +39,7 @@ const accessSchema = z
       "forbidden",
       "unavailable",
     ]),
-    installMode: z.enum(["direct", "ticket"]),
+    installMode: hubInstallModeSchema.optional(),
   })
   .passthrough();
 
@@ -63,6 +70,22 @@ const entrySourceSchema = z.union([
       version: z.string().max(256).optional(),
     })
     .passthrough(),
+  // Hub zip entries (hub catalog §2, e.g. GitHub release-asset URLs with a
+  // sha256) are installable through the existing `url` pipeline:
+  // UrlPluginFetcher downloads `.zip` URLs and GitHubPluginFetcher handles
+  // `github.com/.../releases/download/...` asset URLs. Accepted here and
+  // normalized to `{source:"url", url}` below so one zip row neither
+  // invalidates the whole catalog nor becomes uninstallable.
+  z
+    .object({
+      source: z.literal("zip"),
+      url: z.string().min(1).max(4096),
+      sha256: z
+        .string()
+        .regex(/^[a-fA-F0-9]{64}$/)
+        .optional(),
+    })
+    .passthrough(),
   z
     .object({
       kind: z.enum(["github", "git", "url", "npm"]),
@@ -74,26 +97,48 @@ const entrySourceSchema = z.union([
 
 const hubEntrySchema = z
   .object({
-    slug: z.string().min(1).max(256),
+    slug: z.string().min(1).max(256).optional(),
     displayName: z.string().max(256).optional(),
     name: z.string().max(256).optional(),
     description: z.string().max(2048).optional(),
     version: z.string().max(128).optional(),
     owner: z.string().max(256).optional(),
+    author: z.string().max(256).optional(),
     category: z.string().max(128).optional(),
     tags: z.array(z.string().max(64)).max(64).optional(),
     homepage: z.string().max(2048).optional(),
     repository: z.string().max(2048).optional(),
     license: z.string().max(128).optional(),
     access: accessSchema,
+    installMode: hubInstallModeSchema.optional(),
     source: entrySourceSchema.optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((val, ctx) => {
+    if (!val.slug && !val.name) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Either slug or name is required",
+        path: ["slug"],
+      });
+    }
+    if (!val.access.installMode && !val.installMode) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Either access.installMode or top-level installMode is required",
+        path: ["access", "installMode"],
+      });
+    }
+  });
 
 const hubCatalogSchema = z
   .object({
     plugins: z.array(hubEntrySchema).max(MAX_PLUGINS),
     segment: z.string().max(64).optional(),
+    user: z
+      .object({ segment: z.string().max(64) })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -106,6 +151,19 @@ type HubEntrySource = z.infer<typeof entrySourceSchema>;
  * this schema on read so a corrupted row or a schema drift between app
  * versions fails loudly instead of flowing unvalidated into install.
  */
+const persistedAccessSchema = z
+  .object({
+    status: z.enum([
+      "allowed",
+      "login_required",
+      "subscription_required",
+      "forbidden",
+      "unavailable",
+    ]),
+    installMode: hubInstallModeSchema,
+  })
+  .passthrough();
+
 export const persistedHubManifestSchema = z
   .object({
     name: z.string().min(1).max(256),
@@ -126,7 +184,7 @@ export const persistedHubManifestSchema = z
             repository: z.string().max(2048).optional(),
             license: z.string().max(128).optional(),
             owner: z.string().max(256).optional(),
-            access: accessSchema,
+            access: persistedAccessSchema,
             source: entrySourceSchema.optional(),
           })
           .passthrough()
@@ -167,6 +225,14 @@ function normalizeEntrySource(
     }
     if (r.source === "url" && typeof r.url === "string" && r.url.length > 0) {
       return { source: "url", url: r.url, ...(pinned ? { ref: pinned } : {}) };
+    }
+    if (r.source === "zip" && typeof r.url === "string" && r.url.length > 0) {
+      // Hub zip descriptor → marketplace url source. The hub's `sha256` is a
+      // checksum, not a git ref — deliberately dropped here (never smuggled
+      // into install-pipeline CLI args); the bounded download pipeline
+      // (UrlPluginFetcher / GitHub release-asset path) enforces size,
+      // https-only, and redirect-allowlist guarantees.
+      return { source: "url", url: r.url };
     }
     if (
       r.source === "npm" &&
@@ -293,8 +359,18 @@ export class AiFetchHubMarketplaceFetcher implements PluginMarketplaceFetcher {
 
 function toManifestEntry(entry: HubEntry): Record<string, unknown> {
   const source = entry.source ? normalizeEntrySource(entry.source) : undefined;
+  // Live hub uses `name` as the slug; legacy shape uses explicit `slug`.
+  const slug = entry.slug ?? entry.name;
+  // Live hub puts installMode top-level; legacy shape nests it in access.
+  // superRefine guarantees at least one is present.
+  const installMode = entry.access.installMode ?? entry.installMode;
+  // Live hub uses `author`; legacy shape uses `owner`.
+  const owner = entry.owner ?? entry.author;
+  if (!slug || !installMode) {
+    throw new Error("Plugin Hub entry is missing slug/name or installMode.");
+  }
   return {
-    name: entry.slug, // marketplace canonical name = hub slug
+    name: slug, // marketplace canonical name = hub slug
     ...(entry.displayName ? { displayName: entry.displayName } : {}),
     ...(entry.description ? { description: entry.description } : {}),
     ...(entry.version ? { version: entry.version } : {}),
@@ -305,12 +381,12 @@ function toManifestEntry(entry: HubEntry): Record<string, unknown> {
     ...(entry.license ? { license: entry.license } : {}),
     ...(source ? { source } : {}),
     // Hub passthrough extras consumed by the community page/service.
-    slug: entry.slug,
+    slug,
     access: {
       status: entry.access.status,
-      installMode: entry.access.installMode,
+      installMode,
     } satisfies PluginCommunityAccess,
-    ...(entry.owner ? { owner: entry.owner } : {}),
+    ...(owner ? { owner } : {}),
   };
 }
 

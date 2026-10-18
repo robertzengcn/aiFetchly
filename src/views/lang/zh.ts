@@ -1,4 +1,9 @@
 export default {
+  computerUse: {
+    title: "电脑操控",
+    status: { desktop_busy: "桌面正被另一个会话控制", stop_hotkey_unavailable: "停止热键注册失败，请选择其他组合键", host_elevated: "AiFetchly 正以管理员身份运行，请以普通方式重启", model_not_ready: "本地视觉组件未就绪", backend_unavailable: "桌面后端未安装" },
+    settings: { localVision: "本地视觉", visualPlanner: "视觉规划模式", stopHotkey: "停止热键", debugCapture: "调试采集", save: "保存" },
+  },
   common: {
     more: "更多",
     actions: "操作",
@@ -2982,6 +2987,7 @@ export default {
     field_max_tool_calls: "最大工具调用数",
     field_max_runtime_seconds: "最大运行时间（秒）",
     field_max_continue_calls: "最大继续调用数",
+    field_unlimited: "无限制",
     field_output_schema: "输出模式（JSON，可选）",
     field_warnings: "警告",
     field_no_warnings: "无警告",
@@ -3441,7 +3447,6 @@ export default {
     },
     newChat: "新聊天",
     automations: "自动化任务",
-    customize: "自定义",
     insights: "洞察",
     knowledgeLibrary: "知识库",
     plugins: "插件",
@@ -3554,6 +3559,7 @@ export default {
     inspector: {
       region: "检查器",
       toggle: "切换检查器",
+      close: "关闭检查器",
       artifacts: "产物",
       activity: "活动",
       context: "上下文",
@@ -3609,6 +3615,11 @@ export default {
       filesChanged: "文件已更改 — 见“活动”",
       permissionNeeded: "需要权限决定",
       structuredResult: "结构化结果 — 详情见“活动”",
+      failureReason: "错误",
+      toolPersistFailure: {
+        toolCallNotSaved: "工具未运行：保存失败。",
+        toolResultNotSaved: "工具已运行，但结果保存失败。",
+      },
     },
     plan: {
       continuationAborted: "所选对话已切换——计划决策已保存，但后续消息未发送。请重新打开该对话继续。",

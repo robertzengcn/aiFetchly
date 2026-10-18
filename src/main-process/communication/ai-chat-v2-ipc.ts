@@ -6,7 +6,6 @@ import {
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
-import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import {
   AI_CHAT_MESSAGE_QUEUE_ENABLED,
   AI_CHAT_MESSAGE_STEERING_ENABLED,
@@ -77,8 +76,9 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
-import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import {
+  getRunOwnerResumeRouter,
+} from "@/service/aiChatWorkspaceRuntime";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -201,6 +201,15 @@ export function createQueryLoop(): AIChatQueryLoop {
     // budget-checked immediately before streamChatCompletion (FR-04/FR-08,
     // AC-11/AC-16). Never omit this service on a production path.
     requestBudgetService: new AIChatRequestBudgetService(),
+    // Stage B §5.1: native provider iteration is the loop's preferred seam;
+    // the callback form remains as the compatibility facade.
+    streamEvents: (request, options) => {
+      const api = new AiChatApi();
+      return api.openAIChatCompletionStreamEvents(
+        applyLocalToolPolicy(request),
+        options
+      );
+    },
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
       return api.openAIChatCompletionStream(
@@ -644,6 +653,7 @@ function broadcastQueueSummary(input: {
   });
 }
 
+/**
 export function getQueueService(): AIChatTurnQueueService {
   if (!queueService) {
     const pendingModule = new AIChatPendingMessageModule();
@@ -1336,6 +1346,18 @@ function handleStop(data?: unknown): void {
   } else {
     registry.clearAll();
   }
+  // Review F1 (FR-008/024): route Stop through the run's owner when the
+  // coordinator owns the conversation — a raw engine stop leaves the parked
+  // run's terminal dropped outside any live dispatch (the run row wedges in
+  // awaiting_* and the busy queue never drains). Non-coordinator turns keep
+  // the engine-internal path.
+  if (
+    conversationId !== undefined &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    void getRunOwnerResumeRouter()!.cancelOwnedRun(conversationId);
+    return;
+  }
   getQueryEngine().stopActiveTurn(conversationId);
 }
 
@@ -1378,6 +1400,9 @@ export async function handleResumeToolAfterPermission(
   // the paused turn for this conversation + toolId, route the grant directly
   // to it instead of the interactive singleton engine. The scheduled engine
   // parked the turn and is the only one that can resume it.
+  // Review F1 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's cancel — the engine's deny wrapper re-executes outside the
+  // owner's lease/capacity and its continuation is unobserved.
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1392,6 +1417,20 @@ export async function handleResumeToolAfterPermission(
     }
   }
 
+  // Stage A §3.5 (FR-024): permission resume re-enters through the run's
+  // owner (claim → queued → scheduler capacity → lease → observed outcome)
+  // when the workspace coordinator owns the conversation. Non-coordinator
+  // turns (legacy V2 send, scheduled) keep the engine-internal path.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
@@ -1438,6 +1477,33 @@ export async function handleDenyToolPermission(
       ? parsed.conversationId
       : undefined;
 
+  // R01 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's validated cancel — resumeRun's claim validation rejects a stale
+  // tool id, so deny first tries a matching pending action and falls back to
+  // cancellation (the documented deny policy) only when the run is owned.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const validated = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    if (validated.ok) {
+      // The action existed and a resume was queued — convert it to a deny:
+      // cancel the now-queued resume before the tool starts.
+      const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+        conversationId
+      );
+      return ok({ ok: cancelled, handled: true });
+    }
+    // Stale/duplicate deny on an owned run: cancel under the documented
+    // deny-equals-stop policy (idempotent when already terminal).
+    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+      conversationId
+    );
+    return ok({ ok: cancelled, handled: true });
+  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1798,6 +1864,18 @@ async function handleAnswerQuestion(
     return denied("answers payload is invalid");
   }
 
+  // Stage A §3.5 (FR-024): plan answers re-enter through the run's owner.
+  if (getRunOwnerResumeRouter()?.ownsConversation(parsed.conversationId) === true) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId: parsed.conversationId,
+      action: {
+        kind: "answer",
+        questionId: parsed.questionId,
+        answers: parsed.answers,
+      },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,

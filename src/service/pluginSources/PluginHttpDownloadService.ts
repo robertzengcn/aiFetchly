@@ -425,7 +425,10 @@ function defaultRequest(
   headers: PluginHttpHeaders,
   callback: Parameters<PluginHttpRequestFunction>[2]
 ): ReturnType<PluginHttpRequestFunction> {
-  return https.get(
+  // Node's ClientRequest exposes `.on('error', …)` / `.destroy()` — adapt it
+  // to the `{ destroy, onError }` seam `run()` consumes. Never return the raw
+  // request: it has no `.onError` method and `hop()` throws TypeError.
+  const req = https.get(
     url,
     {
       headers: { ...headers, "accept-encoding": "identity" },
@@ -446,7 +449,13 @@ function defaultRequest(
         destroy: () => res.destroy(),
       });
     }
-  ) as unknown as ReturnType<PluginHttpRequestFunction>;
+  );
+  return {
+    destroy: () => req.destroy(),
+    onError: (listener) => {
+      req.on("error", listener);
+    },
+  };
 }
 
 /** Convenience: unique temp file path next to a prefix dir (design §10.4). */

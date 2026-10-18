@@ -63,9 +63,17 @@ export interface AgentDefinitionView {
   allowedTools: string[];
   defaultModel?: string;
   mode: AgentMode;
-  maxToolCalls: number;
+  /**
+   * Positive tool-call cap. `null` means the agent file did not set one
+   * (Claude Code leaves that subagent uncapped).
+   */
+  maxToolCalls: number | null;
   maxRuntimeMs: number;
-  maxContinueCalls: number;
+  /**
+   * Positive turn cap, mapped from Claude `maxTurns`. `null` means the
+   * file omitted `maxTurns`, so no turn limit is applied.
+   */
+  maxContinueCalls: number | null;
   outputSchema: Record<string, unknown>;
   status: "active" | "disabled";
   source: AgentDefinitionSource;

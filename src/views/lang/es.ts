@@ -8,6 +8,11 @@
 
 // Spanish translations
 export default {
+  computerUse: {
+    title: "Uso del equipo",
+    status: { desktop_busy: "El escritorio está controlado por otra sesión", stop_hotkey_unavailable: "No se pudo registrar el atajo de parada; elige otra combinación", host_elevated: "AiFetchly se ejecuta como administrador; reinícialo normalmente", model_not_ready: "Los componentes de visión local no están listos", backend_unavailable: "El backend de escritorio no está instalado" },
+    settings: { localVision: "Visión local", visualPlanner: "Modo planificador visual", stopHotkey: "Atajo de parada", debugCapture: "Captura de depuración", save: "Guardar" },
+  },
   common: {
     more: "Más",
     actions: "Acciones",
@@ -3166,6 +3171,7 @@ export default {
     field_max_tool_calls: "Máx. llamadas a herramientas",
     field_max_runtime_seconds: "Tiempo máx. (segundos)",
     field_max_continue_calls: "Máx. llamadas de continuación",
+    field_unlimited: "Sin límite",
     field_output_schema: "Esquema de salida (JSON, opcional)",
     field_warnings: "Advertencias",
     field_no_warnings: "Sin advertencias",
@@ -3646,7 +3652,6 @@ export default {
     },
     newChat: "Nuevo chat",
     automations: "Automatizaciones",
-    customize: "Personalizar",
     insights: "Información",
     knowledgeLibrary: "Biblioteca de conocimientos",
     plugins: "Complementos",
@@ -3770,6 +3775,7 @@ export default {
     inspector: {
       region: "Inspector",
       toggle: "Alternar inspector",
+      close: "Cerrar inspector",
       artifacts: "Artefactos",
       activity: "Actividad",
       context: "Contexto",
@@ -3828,6 +3834,11 @@ export default {
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
       structuredResult: "Resultado estructurado — detalles en Actividad",
+      failureReason: "Error",
+      toolPersistFailure: {
+        toolCallNotSaved: "Herramienta no ejecutada: no se pudo guardar.",
+        toolResultNotSaved: "La herramienta se ejecutó, pero no se pudo guardar su resultado.",
+      },
     },
     plan: {
       continuationAborted: "La selección cambió: la decisión del plan se guardó, pero su mensaje de seguimiento no se envió. Reabre la conversación para continuar.",
