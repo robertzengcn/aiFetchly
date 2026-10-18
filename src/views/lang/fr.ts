@@ -2501,6 +2501,10 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
+    },
     cancel: "Annuler",
     queue: {
       queued: "En file d'attente",
@@ -4354,9 +4358,4 @@ export default {
       superseded: "Remplacée",
       awaiting_commands: "Commandes d’installation en attente",
     },
-  },
-  skillSlash: {
-    notFound:
-      "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
-  },
-};
+  },};

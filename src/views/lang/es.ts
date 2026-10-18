@@ -2516,6 +2516,10 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "Ninguna habilidad de prompt instalada coincide con '{name}'. Usa /skills para listarlas.",
+    },
     cancel: "Cancelar",
     queue: {
       queued: "En cola",
@@ -4365,9 +4369,4 @@ export default {
       superseded: "Reemplazada",
       awaiting_commands: "Comandos de instalación pendientes",
     },
-  },
-  skillSlash: {
-    notFound:
-      "Ninguna habilidad de prompt instalada coincide con '{name}'. Usa /skills para listarlas.",
-  },
-};
+  },};

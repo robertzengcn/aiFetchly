@@ -2515,6 +2515,10 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
+    },
     cancel: "Cancel",
     queue: {
       queued: "Queued",
@@ -4327,9 +4331,4 @@ export default {
       superseded: "Superseded",
       awaiting_commands: "Setup commands pending",
     },
-  },
-  skillSlash: {
-    notFound:
-      "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
-  },
-};
+  },};

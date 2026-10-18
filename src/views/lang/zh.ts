@@ -2384,6 +2384,10 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "没有匹配 '{name}' 的已安装提示技能。使用 /skills 查看已安装技能。",
+    },
     cancel: "取消",
     queue: {
       queued: "已排队",
@@ -4103,9 +4107,4 @@ export default {
       superseded: "已被取代",
       awaiting_commands: "等待执行安装命令",
     },
-  },
-  skillSlash: {
-    notFound:
-      "没有匹配 '{name}' 的已安装提示技能。使用 /skills 查看已安装技能。",
-  },
-};
+  },};

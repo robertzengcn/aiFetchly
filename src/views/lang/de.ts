@@ -2508,6 +2508,10 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",
+    },
     cancel: "Abbrechen",
     queue: {
       queued: "In Warteschlange",
@@ -4376,9 +4380,4 @@ export default {
       superseded: "Ersetzt",
       awaiting_commands: "Setup-Befehle ausstehend",
     },
-  },
-  skillSlash: {
-    notFound:
-      "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",
-  },
-};
+  },};

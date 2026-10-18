@@ -2466,6 +2466,10 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+  skillSlash: {
+      notFound:
+        "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
+    },
     cancel: "キャンセル",
     queue: {
       queued: "待機中",
@@ -4269,9 +4273,4 @@ export default {
       superseded: "置き換え済み",
       awaiting_commands: "セットアップコマンド待ち",
     },
-  },
-  skillSlash: {
-    notFound:
-      "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
-  },
-};
+  },};
