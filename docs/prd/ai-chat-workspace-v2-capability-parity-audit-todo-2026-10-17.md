@@ -169,10 +169,10 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### A02 — P2: Required independent rollout controls are coupled
 
-- [ ] Implement independently controllable shared-orchestration, specialized-result, voice/memory and V2 visibility adapters, or explicitly revise design §23.1.
+- [x] Implement independently controllable shared-orchestration, specialized-result, voice/memory and V2 visibility adapters, or explicitly revise design §23.1. **DONE (2026-10-18):** commit 24386459 implements three presentation/dispatch adapters (`shared_orchestration`, `specialized_results`, `voice_memory`) as one independently togglable flag each, default ON, riding the existing workspace flag IPC channel (`GET_FLAG` returns `{enabled, explicit, adapters}`; `SET_FLAG` routes a `feature` name to its own Token key). V2 visibility stays the documented inverse-of-redesign control (`isChatV2DockVisible()`), revised explicitly per the audit's second option. Renderer rollback drill: commit a546beaa (six Electron E2E scenarios through the real renderer→preload→ipcMain channel, `test/e2e/specs/workspaceRolloutDrill.test.ts`); adapter gating in `useWorkspaceRolloutAdapters` (AiChatCenterSurface send path skips command routing when shared orchestration is off; profiled plan decision/approval cards remain deliberately ungated; artifacts panel falls back to a localized notice — caught a raw-key i18n leak, fixed in six languages).
 - **Evidence:** `src/service/AIChatWorkspaceRollout.ts:26–32` explicitly says these surfaces share the workspace-visibility flag and separately flaggable adapters are follow-up. Its enum only defines Queue, Steering and WorkspaceRedesign. `isChatV2DockVisible()` is the inverse of redesign rather than an independent control.
-- **Additional integration risk:** `AuthenticatedWorkspaceLayout.vue:187–194` writes redesign=true on mount, whereas the shell boundary is controlled by the separate localStorage `innerPageShellV3` flag. A main-process flag-only rollback drill does not verify the actual renderer rollback sequence. Test both settings and ensure an operator's rollback choice is not overwritten by mounting the workspace.
-- **Acceptance:** Toggle each specified capability independently through the actual renderer; preserve pending/run identities, tokens and queue cancellation; restore workspace without duplicate work. Verify the real V2 entry remains reachable.
+- **Additional integration risk:** `AuthenticatedWorkspaceLayout.vue:187–194` writes redesign=true on mount, whereas the shell boundary is controlled by the separate localStorage `innerPageShellV3` flag. A main-process flag-only rollback drill does not verify the actual renderer rollback sequence. Test both settings and ensure an operator's rollback choice is not overwritten by mounting the workspace. **RESOLVED:** 5607302e (mount never overwrites explicit) + a546beaa E2E proves reload/remount preserves an explicit rollback and the legacy dock stays reachable via the shell-boundary toggle.
+- **Acceptance:** Toggle each specified capability independently through the actual renderer; preserve pending/run identities, tokens and queue cancellation; restore workspace without duplicate work. Verify the real V2 entry remains reachable. **MET:** drill scenario 4 rolls back shared orchestration while a pending queue carries work — pending identity, stop, single clean resume and no duplicate dispatch after re-assert; scenario 3 restores the workspace without duplicate DEFAULT writes; scenario 2 opens `ai-chat-root` after the rollback.
 - **Requirements:** Technical design §23.1–23.3; PRD §21; AD-009.
 
 ### A03 — P2: Reconcile stale audit completion claims
@@ -255,15 +255,19 @@ Every functional requirement range in the PRD is represented below. **Present** 
 - R13 (background acknowledgement reconciliation): 46e613d3.
 - A02 partial: mount-time shell enforcement never overwrites an explicit
   rollback (5607302e). The remaining §23.1 independent adapters stay open.
+  **DONE (2026-10-18):** independent adapters + renderer drill shipped in
+  24386459 (adapters, Token keys, flag IPC `{enabled, explicit, adapters}`,
+  composable + gating) and a546beaa (six-scenario renderer rollout drill
+  E2E + six-language artifacts fallback notice). A02 P2 is closed.
 - Verified review fixes landed alongside: preload invoke-allowlist gaps
   (AGENT_TASK_CANCEL + platform/social/login/paste channels) with a
   source-scan parity guard, the (owner, sourceId) run index, the
-  AgentRuntime abort-map leak, static guidance for PREPARATION_FAILED/
+  AgentRuntime abort-map leak,   static guidance for PREPARATION_FAILED/
   DISPATCH_PROMOTE_FAILED, and the shared image-URL allowlist.
 - Still open: A01 (full shared orchestration / V2 extraction — owner
-  decision), A02 remainder (independent rollout adapters + renderer
-  rollback drill through the real V2 entry), A03 doc reconciliation
-  (done in this session), V01/V02/V03 release gates.
+  decision, dev's generator-streaming `dispatchQueuedTurn` seam stays
+  dormant in the queue service pending the choice), V01/V02/V03
+  release gates.
 
 ## Suggested execution order
 
