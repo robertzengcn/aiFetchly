@@ -1324,6 +1324,161 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
   });
 
   /**
+   * Approval-policy selection scoping (audit R04, FR-SUB-007/FR-PER-004):
+   * `getChatV2ToolApprovalMode` replies are selection-generation scoped. A
+   * late reply for a PREVIOUS selection — including the A→B→A revisit —
+   * must never become the active policy, a pending load must never let the
+   * previous policy linger (a send reads the conservative default), and a
+   * failed read keeps the default instead of erroring the surface.
+   */
+  describe("approval-mode loads are selection scoped (audit R04)", () => {
+    type ModeAccessory =
+      | { reject(reason: unknown): void; resolve(value: string): void }
+      | undefined;
+
+    function deferredFor(
+      id: string,
+      store: Map<string, ModeAccessory>
+    ): Promise<string> {
+      return new Promise<string>((resolve, reject) => {
+        store.set(id, { reject, resolve });
+      });
+    }
+
+    function shownMode(
+      mounted: ReturnType<typeof mountSurface>
+    ): string {
+      return mounted
+        .get('[data-testid="approval-mode-selector-stub"]')
+        .text()
+        .trim();
+    }
+
+    function switchConversation(conversationId: string): void {
+      useChatWorkspaceStore().setSelected(conversationId);
+    }
+
+    afterEach(() => {
+      // Restore the api-stub default so later suites are unaffected.
+      (window.api.invoke as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        Promise.resolve(undefined)
+      );
+    });
+
+    it("ignores a late reply of a superseded load (A→B, late A reply)", async () => {
+      const pending = new Map<string, ModeAccessory>();
+      const calls: string[] = [];
+      getToolApprovalMock.mockImplementation((id: string) => {
+        calls.push(id);
+        // The FIRST conversation's read hangs until the test lets it settle.
+        return calls.length === 1
+          ? deferredFor(calls[0], pending)
+          : Promise.resolve("ask_for_approval");
+      });
+
+      const mounted = mountSurface();
+      await flushPromises();
+
+      switchConversation("conv-1");
+      await flushPromises();
+
+      switchConversation("conv-2");
+      await flushPromises();
+      expect(calls).toEqual(["conv-1", "conv-2"]);
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+
+      // conv-1's LATE reply races in after conv-2's read settled.
+      pending.get("conv-1")?.resolve("auto_approve");
+      await flushPromises();
+
+      // The stale conv-1 reply must not flip conv-2's policy.
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+    });
+
+    it("stale replies never win even when the conversation id matches again (A→B→A)", async () => {
+      const pending = new Map<string, ModeAccessory>();
+      let counter = 0;
+      getToolApprovalMock.mockImplementation((_id: string) => {
+        counter += 1;
+        const generation = counter;
+        // Every read hangs until its explicit release; releases happen in a
+        // different order than the reads (the R04 trigger).
+        return deferredFor(`gen-${generation}`, pending);
+      });
+
+      const mounted = mountSurface();
+      await flushPromises();
+
+      switchConversation("conv-1"); // gen-1
+      await flushPromises();
+      switchConversation("conv-2"); // gen-2
+      await flushPromises();
+      switchConversation("conv-1"); // gen-3 — same id as gen-1
+
+      // Releasing gen-2 then gen-1 (both staged while gen-3's read is
+      // pending) must not override: the later reply belongs to the CURRENT
+      // generation only.
+      pending.get("gen-2")?.resolve("auto_approve");
+      await flushPromises();
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+      pending.get("gen-1")?.resolve("auto_approve");
+      await flushPromises();
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+
+      pending.get("gen-3")?.resolve("auto_approve");
+      await flushPromises();
+      expect(shownMode(mounted)).toBe("auto_approve");
+    });
+
+    it("a send while a load is pending submits the conservative policy, never the previous one", async () => {
+      const pending = new Map<string, ModeAccessory>();
+      let counter = 0;
+      getToolApprovalMock.mockImplementation((_id: string) => {
+        counter += 1;
+        if (counter === 1) return Promise.resolve("auto_approve");
+        // conv-2's read never settles — R04's "send-before-load" case.
+        return deferredFor("stuck", pending);
+      });
+
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-2",
+        runId: "run-1",
+        status: "running",
+        acceptedAt: "",
+      });
+      const mounted = mountSurface();
+      await flushPromises();
+
+      switchConversation("conv-1");
+      await flushPromises();
+      expect(shownMode(mounted)).toBe("auto_approve");
+
+      switchConversation("conv-2");
+      await flushPromises();
+      // The previous conversation's policy does not linger.
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+      const composer = mounted.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "hello", []);
+      await flushPromises();
+
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      const payload = startChatRunMock.mock.calls[0]?.[0] as {
+        toolApprovalMode?: string;
+      };
+      expect(payload.toolApprovalMode).toBe("ask_for_approval");
+    });
+
+    it("a failed policy read keeps the conservative default", async () => {
+      getToolApprovalMock.mockRejectedValue(new Error("policy read failed"));
+      const mounted = mountSurface();
+      await flushPromises();
+
+      await switchConversation("conv-1");
+      expect(shownMode(mounted)).toBe("ask_for_approval");
+    });
+  });
+
+  /**
    * Per-output reporting + generated-image batch actions (FR-RPT-001/002/009,
    * FR-IMG-011/012/013): the transcript forwards report, save, stop-batch,
    * and retry-batch tile events; the center owns the dialogs and flows.
