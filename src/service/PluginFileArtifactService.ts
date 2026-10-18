@@ -111,6 +111,72 @@ export class PluginFileArtifactService {
     return path.join(this.root, "staging", executionId);
   }
 
+  /** True when the staging directory exists (crash-safe execution reads). */
+  public stagingExists(executionId: string): boolean {
+    try {
+      this.assertSafeComponent(executionId);
+    } catch {
+      return false;
+    }
+    return this.fs.existsSync(this.stagingDir(executionId));
+  }
+
+  /**
+   * Crash-safe read of the plugin's candidate manifest (H2). Only candidates
+   * with a shape the host recognizes AND that claim `complete` finalization
+   * are returned — promotion therefore registers listed, finalized files
+   * only, and never a half-written data file (design §13.2).
+   */
+  public readCandidates(executionId: string): PluginArtifactCandidate[] {
+    try {
+      this.assertSafeComponent(executionId);
+    } catch {
+      return [];
+    }
+    const manifest = path.join(
+      this.stagingDir(executionId),
+      "candidates.json"
+    );
+    if (!this.fs.existsSync(manifest)) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(this.fs.readFileSync(manifest));
+    } catch {
+      return [];
+    }
+    if (!parsed || typeof parsed !== "object") return [];
+    const list = (parsed as { candidates?: unknown }).candidates;
+    if (!Array.isArray(list)) return [];
+    const out: PluginArtifactCandidate[] = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      const c = raw as Record<string, unknown>;
+      if (c.version !== 1) continue;
+      const isJsonPath = c.relativePath === "records.json";
+      const isCsvPath = c.relativePath === "records.csv";
+      if (!isJsonPath && !isCsvPath) continue;
+      if (c.format !== "json" && c.format !== "csv") continue;
+      if (
+        typeof c.recordCount !== "number" ||
+        !Number.isInteger(c.recordCount) ||
+        c.recordCount < 0
+      ) {
+        continue;
+      }
+      // Register only FINALIZED files; an in-flight candidate is a
+      // half-written file the host must never expose (design §13.2).
+      if (c.complete !== true) continue;
+      out.push({
+        version: 1,
+        relativePath: isJsonPath ? "records.json" : "records.csv",
+        format: c.format,
+        recordCount: c.recordCount,
+        complete: true,
+      });
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- promotion
 
   /**
@@ -135,7 +201,9 @@ export class PluginFileArtifactService {
     if (
       input.candidates.length > PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution
     ) {
-      input.candidates.slice(PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution);
+      // The promote loop below slices to the cap; a candidate beyond it is
+      // only reported as dropped (the previous dead `slice(...)` call was
+      // discarded by callers AND by the loop).
       errors.push(
         `too many candidates; only the first ${PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution} are considered`
       );

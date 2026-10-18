@@ -116,6 +116,10 @@ import {
   jobFingerprintFromArgs,
   searchIdentityFromArgs,
 } from "@/service/PluginRecoveryLedger";
+import {
+  getPluginFileArtifactService,
+  type RegisteredPluginArtifact,
+} from "@/service/PluginFileArtifactService";
 import { HOST_MAX_RUN_MS } from "@/entityTypes/pluginExecutionTypes";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
@@ -1096,6 +1100,80 @@ function isToolExecutionResultLike(
     record.result !== null &&
     typeof record.execution_time_ms === "number"
   );
+}
+
+/** Narrow object guard for plugin payloads living in `result.result`. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Bounded in-message preview row cap for plugin tool results. */
+const PLUGIN_PREVIEW_ROW_LIMIT = 5;
+
+/** Bounded warning merge: keeps at most `max` string warnings. */
+function toReadonlyStringArray(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((w): w is string => typeof w === "string")
+    .slice(0, 8);
+}
+
+/** Preview passthrough: keep the plugin's bounded preview rows verbatim. */
+function toReadonlyStringArraySafeRecords(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, PLUGIN_PREVIEW_ROW_LIMIT);
+}
+
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+function toArtifactRef(
+  artifact: RegisteredPluginArtifact
+): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    format: artifact.format,
+    recordCount: artifact.recordCount,
+    sizeBytes: artifact.sizeBytes,
+    createdAt: artifact.createdAt,
+    expiresAt: artifact.expiresAt,
+  };
+}
+
+/**
+ * Remove every staging/candidate reference from a plugin payload (H2): the
+ * model payload and the persisted message must expose host-registered ids
+ * only — never host filesystem paths.
+ */
+function stripPluginPayloadStagingRefs(
+  payload: Record<string, unknown>
+): void {
+  for (const key of [
+    "candidates",
+    "candidatePath",
+    "candidatesPath",
+    "stagingDir",
+    "stagingDirectory",
+    "outputDirectory",
+  ]) {
+    if (key in payload) delete payload[key];
+  }
+  const partial = payload.partial;
+  if (isRecordLike(partial)) {
+    for (const key of [
+      "candidates",
+      "candidatePath",
+      "candidatesPath",
+      "stagingDir",
+      "stagingDirectory",
+      "outputDirectory",
+    ]) {
+      if (key in partial) delete partial[key];
+    }
+  }
 }
 
 /**
@@ -4510,6 +4588,20 @@ export class AIChatQueryLoop {
           onProgress,
           pluginName,
           identity,
+          // H1/H3: the reservation (attempt, host strategy, owed delay) is the
+          // authority for this call's recovery — the model's arguments are
+          // never authoritative. Threading it through the host context file
+          // lets the plugin verify {errorId, strategy} and the owed delay.
+          authorizedRecovery:
+            validation.context.strategy && validation.context.errorRef
+              ? {
+                  errorId: validation.context.errorRef,
+                  strategy: validation.context.strategy,
+                  ...(validation.context.retryAfterMs !== null
+                    ? { retryAfterMs: validation.context.retryAfterMs }
+                    : {}),
+                }
+              : undefined,
         }),
         { fingerprint }
       );
@@ -4615,6 +4707,12 @@ export class AIChatQueryLoop {
       onProgress?: ToolProgressEmitter;
       pluginName: string;
       identity: string;
+      /** Ledger-authorized recovery for this call (H1/H3); undefined when this is attempt 1. */
+      authorizedRecovery?: {
+        errorId: string;
+        strategy: "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay";
+        retryAfterMs?: number;
+      };
     }
   ): Promise<void> {
     const ledger = getPluginRecoveryLedger();
@@ -4629,6 +4727,9 @@ export class AIChatQueryLoop {
         "failed"
       );
     });
+    // H1: the registry job id IS the execution id — one id binds the host
+    // context file, the staging directory, the journal, and promotion.
+    const executionId = handle.jobId;
     try {
       const result = await this.deps.executeTool(call.name, call.arguments ?? {}, {
         conversationId: input.conversationId,
@@ -4637,6 +4738,8 @@ export class AIChatQueryLoop {
         model: input.request.model,
         signal: handle.signal,
         deadlineEpochMs: meta.deadlineEpochMs,
+        executionId,
+        authorizedRecovery: meta.authorizedRecovery,
         sourceUserMessageId: input.sourceUserMessageId,
         intentDecisionId: input.intentDecisionId,
         ownerAgentId: input.ownerAgentId,
@@ -4710,6 +4813,16 @@ export class AIChatQueryLoop {
             ...err,
             ...bound,
           };
+        } else {
+          // H3: a failure WITHOUT a structured error envelope is an invalid
+          // result — it cannot carry a recovery contract into the ledger.
+          // Charge the attempt (transport failure) so it cannot repeat for
+          // free; no automated retry may follow.
+          ledger.recordTransportFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+          });
         }
       } else {
         ledger.completeAttempt(
@@ -4719,9 +4832,129 @@ export class AIChatQueryLoop {
           "succeeded"
         );
       }
+
+      // H2: the plugin process and its browser are already gone (the MCP
+      // client disconnects before this point), so staging files are final.
+      // Register/promote candidates BEFORE the result reaches the model, then
+      // attach opaque host ids and strip every staging path from the payload.
+      if (isRecordLike(result.result)) {
+        this.promotePluginArtifactsToPayload({
+          conversationId: input.conversationId,
+          executionId,
+          pluginName: meta.pluginName,
+          payload: result.result,
+        });
+      }
       handle.resolve(result);
     } catch (err) {
+      // H3: crash/exit rejected the call — the FIRST arrival of this path
+      // cannot skip the budget either. The reservation created the entry, so
+      // this records a real transport failure against it; the model must
+      // report the problem to the user instead of silently re-rolling.
+      ledger.recordTransportFailure({
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        searchIdentity: meta.identity,
+      });
+      // Crash salvage: register whatever candidates were already finalized.
+      try {
+        this.promotePluginArtifactsToPayload({
+          conversationId: input.conversationId,
+          executionId,
+          pluginName: meta.pluginName,
+          payload: undefined,
+        });
+      } catch {
+        // Best-effort salvage on the crash path.
+      }
       handle.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  /**
+   * H2: production caller for `PluginFileArtifactService.promoteCandidates`.
+   *
+   * Read `candidates.json` from the execution's staging directory, promote
+   * only listed + finalized files into the host-owned artifact store, and
+   * rewrite the model payload: staging paths are stripped, `artifact` /
+   * `artifacts` carry id, format, record count, size, and timestamps.
+   * Idempotent per (executionId, candidate path) — retries never duplicate.
+   * On a failed promotion the caller must NOT return success:true.
+   */
+  private promotePluginArtifactsToPayload(input: {
+    conversationId: string;
+    executionId: string;
+    pluginName: string;
+    /** Model-facing payload when the tool produced one (undefined on crash). */
+    payload?: Record<string, unknown>;
+  }): void {
+    if (!input.executionId) return;
+    const artifactsService = getPluginFileArtifactService();
+    const stagingOk = artifactsService.stagingExists(input.executionId);
+    const candidates = artifactsService.readCandidates(input.executionId);
+
+    let artifacts: RegisteredPluginArtifact[] = [];
+    let errors: string[] = [];
+    if (stagingOk && candidates.length > 0) {
+      const promotion = artifactsService.promoteCandidates({
+        executionId: input.executionId,
+        conversationId: input.conversationId,
+        pluginName: input.pluginName,
+        candidates,
+      });
+      artifacts = promotion.artifacts;
+      errors = promotion.errors;
+    }
+
+    const declined =
+      !stagingOk || candidates.length === 0 || errors.length > 0;
+    if (input.payload) {
+      // Strip candidate/staging references — the renderer and the model see
+      // opaque artifact ids only (design §13: paths never leave the host).
+      stripPluginPayloadStagingRefs(input.payload);
+
+      if (artifacts.length > 0) {
+        input.payload.artifact = toArtifactRef(artifacts[0]);
+        input.payload.artifacts = artifacts.map(toArtifactRef);
+        if (errors.length > 0 && input.payload.success === true) {
+          // Partial promotion still yields durable artifacts for SOME files,
+          // but the user must see that not everything was promised.
+          input.payload.warnings = [
+            ...toReadonlyStringArray(input.payload.warnings),
+            `Artifact registration partially failed: ${errors.join("; ")}`,
+          ].slice(0, 8);
+        }
+      } else if (declined && input.payload.success === true) {
+        // H2: a scrape that reported success but produced NO durable,
+        // registered artifacts is NOT a success from the user's point of
+        // view (nothing is previewable or exportable). Degrade to a truthful
+        // structured failure instead of advertising exportable files that
+        // do not exist.
+        const previewKey = "preview" in input.payload ? input.payload.preview : [];
+        input.payload = Object.assign(input.payload, {
+          status: "failed",
+          success: false,
+          summary: input.payload.summary,
+          error: {
+            id: `art_${input.executionId.slice(0, 12)}`,
+            code: "ARTIFACT_REGISTRATION_FAILED",
+            category: "host_bug",
+            stage: "artifacts",
+            message: !stagingOk
+              ? "The scrape reported success but its staging directory was not finalized."
+              : candidates.length === 0
+                ? "The scrape reported success but registered no finalized result files."
+                : "Result files could not be registered by the host.",
+            recoverable: false,
+            allowedStrategies: [],
+          },
+          // Preserve the in-message preview only; records stay host-side.
+          preview: toReadonlyStringArraySafeRecords(previewKey),
+        });
+        if (isRecordLike(input.payload.error)) {
+          input.payload.error.id = `art_${input.executionId.slice(0, 12)}`;
+        }
+      }
     }
   }
 

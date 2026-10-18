@@ -10,6 +10,7 @@ import {
   getPluginMcpRuntimeResolver,
   type ResolvedPluginLaunch,
 } from "@/service/PluginMcpRuntimeResolver";
+import type { HostAuthorizedRecoveryV1 } from "@/entityTypes/pluginExecutionTypes";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import type { WebSocket as WSWebSocket } from "ws";
 
@@ -64,6 +65,8 @@ export interface MCPClientConfig {
         readonly version: string;
       };
       readonly deadlineEpochMs?: number;
+      /** Recovery attempt the host ledger authorized for this call (H1). */
+      readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
     };
   };
 }
@@ -293,6 +296,7 @@ export class MCPClient {
           outputDirectory: context.outputDirectory,
           browser: context.browser,
           deadlineEpochMs: context.deadlineEpochMs,
+          authorizedRecovery: context.authorizedRecovery,
         })
       : resolver.resolveForDiscovery(
           pluginName,

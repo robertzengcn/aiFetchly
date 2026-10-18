@@ -482,6 +482,11 @@ export class ToolExecutor {
             toolParams,
             {
               deadlineEpochMs: context?.deadlineEpochMs,
+              // H1: one execution id for context, staging, journal, promotion;
+              // ledger-authorized recovery rides the host context file, never
+              // model arguments.
+              executionId: context?.executionId,
+              authorizedRecovery: context?.authorizedRecovery,
               signal: context?.signal,
               onProgress: context?.emitProgress
                 ? (progress) => {

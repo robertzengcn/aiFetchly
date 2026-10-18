@@ -954,8 +954,10 @@ import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   extractArtifactMetadata,
   extractToolOutputDescriptors,
+  extractPluginArtifacts,
   ensureArtifactMetadata,
   ensureToolOutputMetadata,
+  ensurePluginArtifactMetadata,
 } from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
@@ -3493,8 +3495,13 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // live under `metadata.toolResult` in persisted rows but are read at the
     // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
     // receipt card visible after a restart (PRD §11 cross-restart durability).
+    // Host-registered plugin result artifacts (design §13.4) nest under
+    // `metadata.toolResult` the same way; without the lift the result-file
+    // card disappears on conversation reopen.
     const persistedMessages = (resp?.messages ?? []).map((m) =>
-      ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      ensurePluginArtifactMetadata(
+        ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      )
     );
     // Seed pending bubbles from the durable queue (FR-43).
     patchConversationRuntimeState(conversationId, {
@@ -3794,6 +3801,7 @@ const upsertToolResultMessage = (
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
       : JSON.stringify(toolResult, null, 2);
+  const pluginArtifactsMetadata = extractPluginArtifacts(toolResult);
   const existingIdx = chunk.replacesPermissionPromptForToolId
     ? currentMessages.findIndex(
         (message) =>
@@ -3828,6 +3836,10 @@ const upsertToolResultMessage = (
     // renders during a live stream — the descriptors are present but nested
     // under `metadata.toolResult`, where `preservedOutput` does not read.
     ...(extractToolOutputDescriptors(toolResult) ?? {}),
+    // Host-registered plugin result artifacts (design §13.4): same live
+    // boundary — the host attaches validated `pa_…` descriptors to the tool
+    // payload, so lift them to the top-level slot the result-file card reads.
+    ...(pluginArtifactsMetadata ? { pluginArtifacts: pluginArtifactsMetadata } : {}),
   };
 
   if (existingIdx !== -1) {

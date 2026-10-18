@@ -26,7 +26,9 @@ import {
   readRuntimeDescriptorFromMetadata,
   HOST_CLEANUP_RESERVE_MS,
   type PluginToolExecutionOptions,
+  type HostAuthorizedRecoveryV1,
 } from "@/entityTypes/pluginExecutionTypes";
+import { getPluginFileArtifactService } from "@/service/PluginFileArtifactService";
 
 /**
  * Build a sanitized `toolSchemas` map (toolName -> { description, inputSchema })
@@ -138,6 +140,7 @@ function buildClientConfig(server: MCPToolEntity): {
         version: string;
       };
       deadlineEpochMs?: number;
+      authorizedRecovery?: HostAuthorizedRecoveryV1;
     };
   };
 } {
@@ -165,6 +168,7 @@ function buildClientConfig(server: MCPToolEntity): {
           version: string;
         };
         deadlineEpochMs?: number;
+        authorizedRecovery?: HostAuthorizedRecoveryV1;
       };
     };
   } = {
@@ -293,14 +297,24 @@ export class MCPToolService {
     executeContext?: {
       readonly executionId: string;
       readonly deadlineEpochMs?: number;
+      /** Recovery attempt the ledger authorized for this call (H1/H3). */
+      readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
     }
   ): MCPClient {
     const config = buildClientConfig(server);
     // Execute-mode host context (design §6.2/§6.3): plugin runtime servers
     // receive the host-approved browser descriptor (capability-gated, no
-    // application settings exposure) and the authoritative deadline through
-    // the trusted context file — never through model-visible arguments.
+    // application settings exposure), the authoritative deadline, the
+    // host-provisioned staging directory, and the ledger-authorized recovery
+    // through the trusted context file — never through model-visible
+    // arguments.
     if (config.hostRuntime && executeContext) {
+      // H1 (§2): provision the per-job staging directory under the SAME
+      // execution id BEFORE tools/call, so the plugin can finalize
+      // candidates into it and the host can promote them after exit.
+      const outputDirectory = getPluginFileArtifactService().provisionStaging(
+        executeContext.executionId
+      );
       const browser = getPluginBrowserCapabilityService().describe();
       config.hostRuntime = {
         ...config.hostRuntime,
@@ -308,12 +322,18 @@ export class MCPToolService {
           mode: "execute" as const,
           executionId: executeContext.executionId,
           deadlineEpochMs: executeContext.deadlineEpochMs,
+          outputDirectory,
           ...(browser
             ? {
                 browser: {
                   executablePath: browser.path,
                   version: browser.version,
                 },
+              }
+            : {}),
+          ...(executeContext.authorizedRecovery
+            ? {
+                authorizedRecovery: executeContext.authorizedRecovery,
               }
             : {}),
         },
@@ -845,9 +865,14 @@ export class MCPToolService {
       );
     }
 
+    // H1: the caller (job registry) owns the execution id so the context
+    // file, staging directory, journal, and promotion share ONE id. Only a
+    // caller with no id at all falls back to an untracked one.
+    const executionId = options.executionId ?? randomUUID();
     const client = this.createClientForServer(server, {
-      executionId: randomUUID(),
+      executionId,
       deadlineEpochMs: options.deadlineEpochMs,
+      authorizedRecovery: options.authorizedRecovery,
     });
     try {
       await client.connect();

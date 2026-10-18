@@ -1,4 +1,5 @@
 import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
+import type { ChatV2PluginArtifactMetadata } from "@/entityTypes/aiChatV2Types";
 
 /**
  * Extract a typed artifact pointer from a raw Chat V2 tool result.
@@ -144,8 +145,7 @@ export function extractToolOutputDescriptors(
  * the artifact card disappears after closing and reopening a conversation
  * (PRD ART-009, acceptance criterion #5). Returns the message unchanged when
  * no artifact is present or the shortcut already exists.
- */
-export function ensureArtifactMetadata<
+ */export function ensureArtifactMetadata<
   T extends MessageWithMaybeArtifactMetadata
 >(message: T): T {
   const meta = message.metadata;
@@ -214,4 +214,110 @@ export function ensureToolOutputMetadata<
   }
   if (lifted === null) return message;
   return { ...message, metadata: { ...meta, ...lifted } };
+}
+
+/**
+ * Message shape accepted by ensurePluginArtifactMetadata: the plugin path
+ * reads/writes the extra `pluginArtifacts` shortcut slot on metadata.
+ */
+interface PluginArtifactSlotsMetadata {
+  pluginArtifacts?: ChatV2PluginArtifactMetadata[];
+}
+
+/**
+ * Validate one raw host-registered plugin artifact descriptor (design §13.4).
+ * Accepts only the shape the host attaches to the tool payload: opaque
+ * `pa_…` id, json/csv format, numeric recordCount. Never filesystem paths.
+ */
+function validatePluginArtifact(raw: unknown): ChatV2PluginArtifactMetadata | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (typeof rec.id !== "string" || !rec.id.startsWith("pa_")) return null;
+  if (rec.format !== "json" && rec.format !== "csv") return null;
+  if (
+    typeof rec.recordCount !== "number" ||
+    !Number.isFinite(rec.recordCount) ||
+    rec.recordCount < 0
+  ) {
+    return null;
+  }
+  return {
+    id: rec.id,
+    format: rec.format,
+    recordCount: rec.recordCount,
+    ...(typeof rec.sizeBytes === "number" && rec.sizeBytes >= 0
+      ? { sizeBytes: rec.sizeBytes }
+      : {}),
+    ...(typeof rec.createdAt === "string" ? { createdAt: rec.createdAt } : {}),
+    ...(typeof rec.expiresAt === "string" ? { expiresAt: rec.expiresAt } : {}),
+  };
+}
+
+/**
+ * Extract host-registered plugin result artifacts from a raw Chat V2 tool
+ * result. The host attaches them as `artifacts` (or `pluginArtifact` as a
+ * single-descriptor legacy shape) on the result body — never under the
+ * AI-artifact `artifact` slot this file's HTML extractor reads, because the
+ * plugin path only ever yields json/csv descriptors. Returns `undefined`
+ * when nothing valid is present so the card never renders from malformed
+ * data.
+ */
+export function extractPluginArtifacts(
+  toolResult: Record<string, unknown> | undefined | null
+): ChatV2PluginArtifactMetadata[] | undefined {
+  if (!toolResult || typeof toolResult !== "object") return undefined;
+  const source = toolResult as Record<string, unknown>;
+  const rawList: unknown[] = Array.isArray(source.artifacts)
+    ? (source.artifacts as unknown[])
+    : source.pluginArtifact
+      ? [source.pluginArtifact]
+      : [];
+  if (rawList.length === 0) return undefined;
+  const validated: ChatV2PluginArtifactMetadata[] = [];
+  for (const raw of rawList) {
+    const artifact = validatePluginArtifact(raw);
+    if (artifact) validated.push(artifact);
+  }
+  return validated.length > 0 ? validated : undefined;
+}
+
+/**
+ * Lift a top-level `metadata.pluginArtifacts` shortcut for a tool-result
+ * message that lacks one, reading from `metadata.toolResult` exactly like
+ * {@link ensureArtifactMetadata}. Persisted plugin tool-result rows keep the
+ * descriptors nested under `toolResult` (see `saveToolResultMessage`: inline
+ * results persist the whole bounded envelope); the live in-memory
+ * `tool_result` chunk path sets the shortcut directly. Without this lift the
+ * plugin result-file card disappears after closing and reopening a
+ * conversation. Idempotent and defensive; unchanged when nothing to lift.
+ */
+export function ensurePluginArtifactMetadata<
+  T extends {
+    metadata?:
+      | (MessageWithMaybeArtifactMetadata["metadata"] &
+          PluginArtifactSlotsMetadata)
+      | undefined;
+  }
+>(message: T): T {
+  const meta = message.metadata;
+  if (
+    meta &&
+    !meta.pluginArtifacts &&
+    meta.toolResult &&
+    typeof meta.toolResult === "object"
+  ) {
+    const lifted = extractPluginArtifacts(
+      meta.toolResult as Record<string, unknown>
+    );
+    if (lifted) {
+      return {
+        ...message,
+        metadata: {
+          ...meta,
+          ...(lifted ? { pluginArtifacts: lifted } : {}),
+        },
+      };
+    }
+  }
+  return message;
 }

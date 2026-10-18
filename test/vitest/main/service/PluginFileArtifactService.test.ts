@@ -138,6 +138,25 @@ describe("PluginFileArtifactService", () => {
     expect(errors[0]).toMatch(/not allowed/);
   });
 
+  it("drops a third candidate with an overflow notice (dead slice removed)", () => {
+    const staging = stageExecution("exec-cap");
+    fs.writeFileSync(staging + path.sep + "records.csv", "businessName,phone\n");
+    const { artifacts, errors } = service.promoteCandidates({
+      executionId: "exec-cap",
+      conversationId: "conv-cap",
+      pluginName: "demo-plugin",
+      candidates: [
+        JSON_CANDIDATE,
+        { version: 1, relativePath: "records.csv", format: "csv", recordCount: 0, complete: true },
+        JSON_CANDIDATE,
+      ],
+    });
+    // Exactly the cap is promoted; the overflow candidate is never honored.
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts[0].id).not.toBe(artifacts[1].id);
+    expect(errors.some((e) => e.includes("too many candidates"))).toBe(true);
+  });
+
   it("scopes list/preview/export/delete by conversation ownership", () => {
     stageExecution("exec-own");
     const { artifacts } = service.promoteCandidates({

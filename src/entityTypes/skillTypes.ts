@@ -12,6 +12,7 @@ import type {
   ModelArtifact,
   PermissionPreview,
 } from "@/entityTypes/aiImageAttachmentToolTypes";
+import type { HostAuthorizedRecoveryV1 } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Result returned by a skill's execute function.
@@ -282,6 +283,22 @@ export interface SkillExecutionContext {
   readonly deadlineEpochMs?: number;
 
   /**
+   * Trusted per-job execution id (host registry-generated, never tool args).
+   * One id binds the host context file, the artifact staging directory, the
+   * journal, and post-exit promotion (TODO 2026-10-17 §2 H1). Omitted by
+   * callers with no artifact promotion path.
+   */
+  readonly executionId?: string;
+
+  /**
+   * The recovery attempt the host recovery ledger authorized for this call
+   * (H1/H3). Supplied by the main process from the ledger reservation, never
+   * from model tool arguments; the plugin validates it against its own
+   * bookkeeping and refuses recovery when it is absent.
+   */
+  readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
+
+  /**
    * Number of `image_url` content parts already present in the outgoing
    * request transcript, computed by AIChatQueryLoop immediately before tool
    * execution. Image-attaching tools use this to enforce the combined
@@ -387,6 +404,10 @@ export interface ModuleExecutionContext {
    * callers omit it and keep the existing behavior.
    */
   readonly deadlineEpochMs?: number;
+  /** Trusted per-job execution id shared by context, staging, and promotion (H1). */
+  readonly executionId?: string;
+  /** Recovery attempt the host ledger authorized for this call (H1/H3). */
+  readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
 }
 
 // ---------------------------------------------------------------------------

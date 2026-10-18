@@ -15,11 +15,17 @@ describe("canonicalization helpers", () => {
     expect(canonicalJson({ a: 1, b: 2 })).toBe(canonicalJson({ b: 2, a: 1 }));
   });
 
-  it("search identity ignores maxResults and recovery but keeps platform", () => {
+  it("search identity ignores maxResults, recovery, platform, and includeDetailPages", () => {
+    // Kernel knobs (platform / detail pages) adjust the SAME logical search —
+    // a switch_platform retry or a scope toggle must never mint a fresh
+    // budget (design §12.2), so they stay out of the ledger identity.
     expect(searchIdentityFromArgs({ ...ARGS, maxResults: 10, recovery: { previousErrorId: "e", strategy: "reduced_scope" } })).toBe(
       searchIdentityFromArgs(ARGS)
     );
-    expect(searchIdentityFromArgs({ ...ARGS, platform: "yell" })).not.toBe(
+    expect(searchIdentityFromArgs({ ...ARGS, platform: "yellowpages-com" })).toBe(
+      searchIdentityFromArgs(ARGS)
+    );
+    expect(searchIdentityFromArgs({ ...ARGS, includeDetailPages: false })).toBe(
       searchIdentityFromArgs(ARGS)
     );
   });
@@ -28,6 +34,10 @@ describe("canonicalization helpers", () => {
     const base = jobFingerprintFromArgs("c1", "tool", ARGS);
     expect(jobFingerprintFromArgs("c1", "tool", { ...ARGS, recovery: { previousErrorId: "x" } })).toBe(base);
     expect(jobFingerprintFromArgs("c1", "tool", { ...ARGS, maxResults: 5 })).not.toBe(base);
+    // platform stays in the duplicate-job fingerprint: two different live
+    // requests must not be collapsed even when their ledger identity matches.
+    expect(jobFingerprintFromArgs("c1", "tool", { ...ARGS, platform: "yell" })).not.toBe(base);
+    expect(jobFingerprintFromArgs("c1", "tool", { ...ARGS, includeDetailPages: false })).not.toBe(base);
     expect(jobFingerprintFromArgs("c2", "tool", ARGS)).not.toBe(base);
   });
 });
@@ -238,7 +248,34 @@ describe("PluginRecoveryLedger", () => {
     expect(bound.pluginErrorId).toBe("err_plugin456");
   });
 
-  it("success terminalizes the identity against further retries", () => {
+  it("surfaces the host-owed retryAfterMs in the reservation context", () => {
+    const errorRef = record({ category: "rate_limited", retryAfterMs: 480_000 });
+    now += 480_001; // pass the cooldown
+    const v = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: searchIdentityFromArgs(ARGS),
+      previousErrorId: errorRef,
+      strategy: "fallback_adapter",
+    });
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.context.retryAfterMs).toBe(480_000);
+  });
+
+  it("surfaces null retryAfterMs when the failure owes no delay", () => {
+    const errorRef = record(); // site_changed, no retryAfterMs
+    const v = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: searchIdentityFromArgs(ARGS),
+      previousErrorId: errorRef,
+      strategy: "switch_platform",
+    });
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.context.retryAfterMs).toBeNull();
+  });
+
+  it("success deletes the identity so the next search starts clean", () => {
     const identity = searchIdentityFromArgs(ARGS);
     const errorRef = record();
     expect(
@@ -251,12 +288,186 @@ describe("PluginRecoveryLedger", () => {
       }).ok
     ).toBe(true);
     ledger.completeAttempt("c1", "p1", identity, "succeeded");
-    const after = ledger.validateAndReserve({
+
+    // A later failure of the same logical search is a NEW search: attempts
+    // restart at 1 instead of inheriting the old budget/state.
+    record();
+    const fresh = ledger.recordFailure({
       conversationId: "c1",
       pluginName: "p1",
       searchIdentity: identity,
+      code: "RESULT_SELECTOR_NOT_FOUND",
+      category: "site_changed",
+      allowedStrategies: ["fallback_adapter"],
     });
-    expect(after.ok).toBe(true); // terminal → treated as a fresh search
+    const retry = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity,
+      previousErrorId: fresh,
+      strategy: "fallback_adapter",
+    });
+    expect(retry.ok).toBe(true);
+    if (retry.ok) expect(retry.context.attempt).toBe(2);
+  });
+
+  describe("first-attempt reservation (H3)", () => {
+    const identity = () => searchIdentityFromArgs(ARGS);
+
+    it("reserves the first attempt before spawn", () => {
+      const v = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+      expect(v.ok).toBe(true);
+      if (v.ok) {
+        expect(v.context.attempt).toBe(1);
+        expect(v.context.strategy).toBeNull();
+        expect(v.context.errorRef).toBeNull();
+        expect(v.context.retryAfterMs).toBeNull();
+      }
+      // A second same-scope first-call while the reservation is in flight is
+      // no longer a free attempt: the reservation exists.
+      const second = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+      expect(second.ok).toBe(false);
+      if (!second.ok) expect(second.reason).toBe("missing_recovery_field");
+    });
+
+    it("charges the budget on transport failure (crash/exit/invalid result)", () => {
+      ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+      ledger.recordTransportFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+
+      // Same failed scope WITHOUT recovery stays missing_recovery_field.
+      const plain = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+      expect(plain.ok).toBe(false);
+      if (!plain.ok) expect(plain.reason).toBe("missing_recovery_field");
+
+      // WITH recovery: no plugin contract exists after a crash → forged or
+      // impossible retry is a dead end (the user starts a new search).
+      const forged = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+        previousErrorId: "err_forged",
+        strategy: "reduced_scope",
+      });
+      expect(forged.ok).toBe(false);
+      if (!forged.ok) expect(forged.reason).toBe("unknown_error_ref");
+    });
+
+    it("a new user message with a changed search gets a fresh identity", () => {
+      ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+      ledger.recordTransportFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity(),
+      });
+
+      const otherIdentity = searchIdentityFromArgs({
+        ...ARGS,
+        location: "Denver, CO",
+      });
+      const other = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: otherIdentity,
+      });
+      expect(other.ok).toBe(true);
+      if (other.ok) expect(other.context.attempt).toBe(1);
+    });
+
+    it("transport failure preserves the attempt count for hard-max accounting", () => {
+      const identity = searchIdentityFromArgs(ARGS);
+      // Attempt 1 crashes.
+      ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+      });
+      ledger.recordTransportFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+      });
+      // A subsequent domain failure inherits the SAME attempt count.
+      record();
+      // Attempt 2 via a different strategy consumes the retry budget.
+      const errorRef = ledger.recordFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+        code: "OTHER",
+        category: "plugin_bug",
+        allowedStrategies: ["reduced_scope"],
+      });
+      expect(
+        ledger.validateAndReserve({
+          conversationId: "c1",
+          pluginName: "p1",
+          searchIdentity: identity,
+          previousErrorId: errorRef,
+          strategy: "reduced_scope",
+        }).ok
+      ).toBe(true);
+      ledger.completeAttempt("c1", "p1", identity, "failed");
+      // Attempt 3 = hard max; attempt 4 is exhausted.
+      const errorRef2 = ledger.recordFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+        code: "OTHER2",
+        category: "plugin_bug",
+        allowedStrategies: ["reduced_scope"],
+      });
+      expect(
+        ledger.validateAndReserve({
+          conversationId: "c1",
+          pluginName: "p1",
+          searchIdentity: identity,
+          previousErrorId: errorRef2,
+          strategy: "reduced_scope",
+        }).ok
+      ).toBe(true);
+      ledger.completeAttempt("c1", "p1", identity, "failed");
+      const errorRef3 = ledger.recordFailure({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+        code: "OTHER3",
+        category: "plugin_bug",
+        allowedStrategies: ["reduced_scope"],
+      });
+      const exhausted = ledger.validateAndReserve({
+        conversationId: "c1",
+        pluginName: "p1",
+        searchIdentity: identity,
+        previousErrorId: errorRef3,
+        strategy: "reduced_scope",
+      });
+      expect(exhausted.ok).toBe(false);
+      if (!exhausted.ok) expect(exhausted.reason).toBe("budget_exhausted");
+    });
   });
 });
 
