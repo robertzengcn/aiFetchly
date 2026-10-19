@@ -26,6 +26,26 @@ export class AdmissionSealedError extends Error {
   }
 }
 
+/**
+ * G01 (HOST-10): a plugin's declared `maxConcurrentPerConversation` was
+ * exceeded for a (conversation, tool) pair at admission. Thrown BEFORE a
+ * job is created, so no capacity slot or ledger reservation is committed.
+ */
+export class ToolConversationConcurrencyError extends Error {
+  readonly toolName: string;
+  readonly conversationId: string;
+  readonly limit: number;
+  constructor(toolName: string, conversationId: string, limit: number) {
+    super(
+      `Tool "${toolName}" already has ${limit} active job(s) in this conversation (declared maxConcurrentPerConversation).`
+    );
+    this.name = "ToolConversationConcurrencyError";
+    this.toolName = toolName;
+    this.conversationId = conversationId;
+    this.limit = limit;
+  }
+}
+
 export type ToolJobStatus =
   | "queued"
   | "running"
@@ -171,7 +191,11 @@ export class ToolJobRegistry {
     _args: Record<string, unknown>,
     ctx: { conversationId: string; toolCallId: string },
     spawn: (handle: ToolJobSpawnHandle) => Promise<unknown>,
-    options?: { readonly fingerprint?: string }
+    options?: {
+      readonly fingerprint?: string;
+      /** G01: plugin-declared maxConcurrentPerConversation for this tool. */
+      readonly conversationConcurrencyLimit?: number;
+    }
   ): { jobId: string; queued: boolean } {
     if (this.closed) {
       // T06/AC-05: no job may be admitted after shutdown seals the registry.
@@ -183,6 +207,25 @@ export class ToolJobRegistry {
     if (sealedBy !== null) {
       throw new AdmissionSealedError(toolName, sealedBy);
     }
+    // G01: enforce the plugin's per-conversation concurrency ceiling for
+    // THIS tool. Synchronous and single-threaded, so the check is race-free
+    // against other admissions. Quarantined jobs keep ownership (B04) and
+    // count as active; settled jobs do not.
+    const concurrencyLimit = options?.conversationConcurrencyLimit;
+    if (typeof concurrencyLimit === "number" && concurrencyLimit >= 1) {
+      const active = this.countActiveForConversationTool(
+        ctx.conversationId,
+        toolName
+      );
+      if (active >= concurrencyLimit) {
+        throw new ToolConversationConcurrencyError(
+          toolName,
+          ctx.conversationId,
+          concurrencyLimit
+        );
+      }
+    }
+
     const jobId = randomUUID();
     // One AbortController per job. Aborting is the authoritative cancellation
     // request for the underlying tool work; the handlers below only relabel
@@ -286,6 +329,29 @@ export class ToolJobRegistry {
     spawn(handle).catch((err) =>
       handle.reject(err instanceof Error ? err : new Error(String(err)))
     );
+  }
+
+  /**
+   * G01: number of NOT-yet-settled jobs for one (conversation, tool) pair.
+   * Queued and running jobs both count (they both grow into running work);
+   * quarantined jobs keep ownership and count too (B04).
+   */
+  private countActiveForConversationTool(
+    conversationId: string,
+    toolName: string
+  ): number {
+    let count = 0;
+    for (const job of this.jobs.values()) {
+      if (job.settled) continue;
+      if (
+        job.conversationId !== conversationId ||
+        job.toolName !== toolName
+      ) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
   }
 
   private drainQueue(): void {

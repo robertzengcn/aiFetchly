@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ToolJobRegistry,
+  ToolConversationConcurrencyError,
   AdmissionSealedError,
   TOOL_JOB_SETTLE_GRACE_MS,
   type ToolJobSpawnHandle,
@@ -435,5 +436,124 @@ describe("ToolJobRegistry B04 idempotent settlement + cleanup quarantine", () =>
     const freed = eventuallyRun(registry, { called: false });
     expect(registry.getStatus(freed.jobId).status).toBe("running");
     void hung;
+  });
+});
+
+describe("G01 per-conversation tool concurrency admission", () => {
+  it("refuses a second different-args job for the same conversation+tool when limit=1", () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 4 });
+    registry.start(
+      "mcp__scrapy__scraper__scrape",
+      { query: "a" },
+      { conversationId: "c1", toolCallId: "t1" },
+      () => new Promise(() => undefined),
+      { conversationConcurrencyLimit: 1 }
+    );
+    expect(() =>
+      registry.start(
+        "mcp__scrapy__scraper__scrape",
+        { query: "DIFFERENT" },
+        { conversationId: "c1", toolCallId: "t2" },
+        async () => 1,
+        { conversationConcurrencyLimit: 1 }
+      )
+    ).toThrow(ToolConversationConcurrencyError);
+  });
+
+  it("other tools and other conversations keep their own admission budget", () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 4 });
+    registry.start(
+      "mcp__scrapy__scraper__scrape",
+      {},
+      { conversationId: "c1", toolCallId: "t1" },
+      () => new Promise(() => undefined),
+      { conversationConcurrencyLimit: 1 }
+    );
+    // Different tool, same conversation → allowed.
+    const otherTool = registry.start(
+      "mcp__scrapy__scraper__list",
+      {},
+      { conversationId: "c1", toolCallId: "t2" },
+      async () => 1,
+      { conversationConcurrencyLimit: 1 }
+    );
+    expect(otherTool.queued).toBe(false);
+    // Same tool, different conversation → allowed.
+    const otherConv = registry.start(
+      "mcp__scrapy__scraper__scrape",
+      {},
+      { conversationId: "c2", toolCallId: "t3" },
+      async () => 1,
+      { conversationConcurrencyLimit: 1 }
+    );
+    expect(otherConv.queued).toBe(false);
+  });
+
+  it("admission re-opens once the conflicting job settles", async () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 4 });
+    const first = registry.start(
+      "toolX",
+      {},
+      { conversationId: "c1", toolCallId: "t1" },
+      (handle) =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => handle.resolve("done"), 25);
+        }),
+      { conversationConcurrencyLimit: 1 }
+    );
+    expect(() =>
+      registry.start(
+        "toolX",
+        { different: true },
+        { conversationId: "c1", toolCallId: "t2" },
+        async () => 1,
+        { conversationConcurrencyLimit: 1 }
+      )
+    ).toThrow(ToolConversationConcurrencyError);
+    await registry.waitForSettled(first.jobId, 5_000);
+    const reopened = registry.start(
+      "toolX",
+      { different: true },
+      { conversationId: "c1", toolCallId: "t2" },
+      async (handle) => {
+        handle.resolve("done");
+        return 1;
+      },
+      { conversationConcurrencyLimit: 1 }
+    );
+    expect(reopened.queued).toBe(false);
+    await registry.waitForSettled(reopened.jobId, 5_000);
+  });
+
+  it("counts queued jobs as active (global slots do not bypass the tool limit)", () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 1 });
+    const first = registry.start(
+      "toolY",
+      {},
+      { conversationId: "c1", toolCallId: "t1" },
+      () => new Promise(() => undefined),
+      { conversationConcurrencyLimit: 2 }
+    );
+    expect(first.queued).toBe(false);
+    // Fills the single global slot; second job is QUEUED but counts as active.
+    const second = registry.start(
+      "toolY",
+      {},
+      { conversationId: "c1", toolCallId: "t2" },
+      async () => 1,
+      { conversationConcurrencyLimit: 2 }
+    );
+    expect(second.queued).toBe(true);
+    expect(() =>
+      registry.start(
+        "toolY",
+        {},
+        { conversationId: "c1", toolCallId: "t3" },
+        async () => 1,
+        { conversationConcurrencyLimit: 2 }
+      )
+    ).toThrow(ToolConversationConcurrencyError);
+    registry.cancel(first.jobId);
+    registry.cancel(second.jobId);
   });
 });

@@ -112,6 +112,7 @@ import {
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import {
   AdmissionSealedError,
+  ToolConversationConcurrencyError,
   getDefaultToolJobRegistry,
   type ToolJobSpawnHandle,
 } from "@/service/ToolJobRegistry";
@@ -4623,7 +4624,15 @@ export class AIChatQueryLoop {
                 }
               : undefined,
         }),
-        { fingerprint }
+        {
+          // G01: enforce the plugin's declared maxConcurrentPerConversation
+          // for this tool. Admission happens BEFORE a job exists — no slot
+          // and no ledger lock are committed when the limit is reached.
+          fingerprint,
+          conversationConcurrencyLimit:
+            getPluginToolPolicyRegistry().resolveByToolName(call.name)?.policy
+              .maxConcurrentPerConversation,
+        }
         );
       if (startOutcome.queued) {
         // B08: a QUEUED job's spawn callback has not run, so the settle hook
@@ -4653,6 +4662,23 @@ export class AIChatQueryLoop {
           identity,
           "failed"
         );
+        if (err instanceof ToolConversationConcurrencyError) {
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "This tool is already running the maximum number of searches allowed for this conversation. Retry after the current search finishes.",
+                code: "TOOL_CONCURRENCY_LIMIT",
+                limit: err.limit,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
         if (sealedBy === null) throw err;
         return {
           kind: "rejected",
