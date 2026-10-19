@@ -29,7 +29,19 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R01 — P1: Global scheduler can admit a run that nobody dispatches
 
-- [ ] Route every scheduler admission to its actual pending owner; preserve deferred admissions until consumed.
+- [x] Route every scheduler admission to its actual pending owner; preserve deferred admissions until consumed. DONE 2026-10-19 (verified in-tree; fix landed since this audit): `AIChatWorkspaceRunDispatchBridge.pumpAdmissionsFor()` (:408–426) is the one admission dispatcher — the requested runId resolves its claim and every CROSS-CANDIDATE admission is recorded (`recordedAdmissions`, :423) for later consumption by `admitDeferred` (:305–313) / `admitEnvelope` (:389–404); drops are identity-driven at finish/requeue/park/cancel. Pinned by `aiChatWorkspaceRunDispatchBridge.test.ts:129` ("records cross-candidate pump admissions and hands them to their claim") and the real-scheduler reproduction journey in `aiChatWorkspaceGlobalScheduler.test.ts:202` ("deferred cross-candidate admission (R01)") — exactly the audit's capacity-1/selected-priority scenario.
+- [x] Cancel and reconcile deferred envelopes when their pending message is cancelled or conversation queue is cleared. DONE 2026-10-19 (verified in-tree): `AIChatTurnQueueService.cancelRunEnvelopesForPending()` (:401–437) is wired into `cancelPendingMessage` (:701–711) and `clearConversation` (:843–848), calls the bridge's `cancelForPendingMessage` → `cancelDeferred` (scheduler entry removed BEFORE settle) → `finishRunStrict` CAS-idempotent settle (races with admission are idempotent). Pinned by `aiChatWorkspaceRunDispatchBridge.test.ts:192` (R02) + :249 (cancel race against a cross-candidate pump) and `aiChatWorkspaceGlobalScheduler.test.ts:338` ("deferred cancellation reconcile (R02)").
+- [x] Retain and flush the terminal gate for permission/question continuations after durable settlement. DONE 2026-10-19 (verified in-tree): the parked branch retains the gate with parked identity (`parkedRuns` map storing runId/pendingMessageId/gate, `AIChatTurnQueueService.ts:1244–1248`); `settleParkedRunContinuation` (:453–479) first settles via strict `finishRunStrict` (a storage failure keeps the buffered terminal + identity and returns false), then flushes the gate exactly once (`:477`); `notifyExternalTurnTerminal` (:747–785) and clear settle parked rows without a best-effort finishRun. Pinned by `aiChatWorkspaceParkedLifecycle.test.ts:244` ("resumed parked turns keep terminal stream publication (R03)", `aiChatWorkspaceCoordinator.test.ts:1287`) and the live P-4 journey in `aiChatPlanPermissionReload.test.ts`.
+- [x] Scope approval-mode loading to selection generation and reset/block policy selection while the current conversation loads. DONE 2026-10-19 (verified in-tree): `AiChatCenterSurface.loadApprovalMode()` bumps `toolApprovalModeGeneration` and the post-await result is dropped on generation mismatch with a conservative `ask_for_approval` reset while pending (:1779–1793); manual switch/deselect bump the generation (:1799, :1884–1895). Pinned by `AiChatCenterSurface.test.ts:1334` "approval-mode loads are selection scoped (audit R04)" (late A→B, A→B→A, send-while-pending, failed load).
+- [x] Clear only the accepted submission's reference snapshot, with matching conversation/request identity. DONE 2026-10-19 (verified in-tree): the string `pendingDraftClearKey` is replaced by `pendingDraftClears` (per-run-ordinal snapshots armed ONLY on `accepted`, carrying `acceptedRunOrdinalFor`); the consumer completes exactly-once on `selectedStore.lastTerminalRun` matching conversationId+ordinal and `error`/`cancelled` dequeue while preserving the reference tray (:1513–1518, :2228–2252, :1533–1559). Pinned by `AiChatCenterSurface.test.ts:4159` "image-reference draft clears (audit R05)" over the REAL store handshake.
+- [x] Initialize the center's history working copy from the store on mount as well as selection changes. DONE 2026-10-19 (verified in-tree): `restoreActiveHistoryDraft()` reads the conversation-keyed Pinia draft and the `conversationId` watcher runs with `{ immediate: true }` (:2559–2562, :2666, :2694). Pinned by `AiChatCenterSurface.test.ts:1978` "route remount restoration (R06)".
+- [x] Explicitly cancel selected-conversation speech on selection changes and Stop. DONE (fix landed with the R07 voice certification, commit `c10e44cd`; verified in-tree): Strip-Stop (`:988–1012`) and the selection watcher (:1876–1883) both call `resetSpeechFeed()` + `voice.stopSpeaking()`; feed identity resets (:1910–1913) and `useAiChatVoice.stopSpeaking()` (:474–487) also cancels the lost-harness cancel channel. Pinned by `AiChatCenterSurface.test.ts:4608` "speech cancellation (R07)" with real `cancelVoiceJob` assertions and the live `aiChatVoiceParity.test.ts` channel round-trip.
+- [x] Scope export notices and setup actions to the captured export owner. DONE 2026-10-19 (verified in-tree): `attemptGeneratedImageExport` opens setup only when the owner is still selected and otherwise DEFERS into `deferredImageExportSetupIds` consumed on re-selection with a post-await owner recheck (:1668–1712, :1654–1666, :2683–2692); outcome notices are per-conversation (`deferredImageNotices` map, banner resolved only for the CURRENT selection :1606–1637) and queued exports re-drain per owner (:1714–1731). Pinned by `AiChatCenterSurface.test.ts:1577` "late image-export outcomes after a switch (R08)".
+- [x] Reject unsupported loop payloads before staging/execution, and return failed command disposition for failed controls. DONE 2026-10-19 (verified in-tree): loop-family attachment/pasted rejection (`loop_attachments_not_supported`, draft retained) at `useChatCommandRouting.ts:452–471`; `runScheduledLoopControl` returns `{kind:"rejected", code:"loop_control_failed"}` on null AND throw with origin-scoped localized error (:292–327); `confirmScheduledLoop` reports durable truth only (:630–678) and the surface retains the draft for rejected/failed confirm plus exactly-once acceptance on durable create. Pinned by `useChatCommandRouting.test.ts:564` (R09 incl. origin scoping), the component R09-1 block (`AiChatCenterSurface.test.ts:805/836/863/901`) and E2E C-4/C-5 in `aiChatCommandMatrix.test.ts:250/:286`.
+- [x] Finish owner/generation checks after asynchronous command operations. DONE 2026-10-19 (verified in-tree): every async failure path passes the commanding conversationId into `ports.setError` (goal-loop start :269–280, loop control :306–324, skill ack :576–587, goal create :533–553); the surface port filters stale origins (:2304–2313); `/clear` behaves guarded end-to-end (pre-await ownership, null → retryable failure, post-await reload ownership, catch → false; `:2382–2418`) and the router propagates `acceptedSend: cleared` (:416–420). Pinned by `useChatCommandRouting.test.ts:643/:754` (R10 origin/ownership after awaits) and `AiChatCenterSurface.test.ts:4654` ("/clear ownership after awaits (R10)").
+- [x] Move Chat V2 onto the same accepted-send contract and retain failed drafts. DONE 2026-10-19 (verified in-tree): the A01 revision sanctioned the durable-queue contract — AiChatV2 `onAccepted` fires only on durable loop/goal/skill/control outcomes (skill-ack failure retains :4494–4499; scheduled-loop staging ≠ acceptance :4450–4457; ordinary send acceptance at the durable enqueue :5392–5395). Pinned by `AiChatV2.acceptedSendContract.test.ts:273` "AiChatV2 accepted-send contract (R11)" (13 characterization tests) + R11-1 (:349–414).
+- [x] Persist or reconstruct continuation intent authoritatively with the plan decision. DONE 2026-10-19 (verified in-tree, main-reconcile variant — the audit's sanctioned option B): the renderer saves the intent before any further await (:3146–3158) and, if no renderer-saved intent exists, `adoptRecoveredPlanContinuation` calls main `recoverChatV2PlanContinuationIntent` → `AIChatPlanModule.getRecoverablePlanContinuation`, reconciling persisted decision transitions against deterministic pending ids; adoption is capture-recheck owner-safe, the deterministic `planContinuationRequestId` gives exactly-once, acceptance clears intent+tombstone and dismissal tombstones are respected. Pinned by `planContinuationRecovery.test.ts:104`, `planContinuationStore.test.ts:65/69`, and `AiChatCenterSurface.test.ts:2686` "(R12) plan continuation recovery".
+- [x] Reconcile history acknowledgements against conversation-keyed state outside the selected center's lifetime. DONE 2026-10-19 (verified in-tree): `onEngineStartAck` reconciles the ACKING conversation's STORED draft at application lifetime via `historySelStore.applyAcknowledgement(storeConversationId, …)` and `resolveSubmission` per conversation; the live working copy mutates only when the ack owns the current selection (:2703–2761). Pinned by `components/store/historySelection.test.ts:93` "applyAcknowledgement (R13)" and the AC-19/AC-19b journeys in `ai-chat-recoverable-history.test.ts`.
 - **Evidence:** `src/service/AIChatWorkspaceRunDispatchBridge.ts:317–331` calls the global `scheduler.pump`, but its callback only recognizes the requested `runId`. `AIChatTurnQueueService` does not invoke the bridge's `admitDeferred` path.
 - **Reproduction:** Capacity 1. Run A occupies capacity; B and C defer. Make C the selected/high-priority conversation. Complete A, then retry B. Pump admits C, but B's callback ignores it. Retry C: submission sees it already active and pump emits no new admission. C remains durably `queued` while occupying scheduler capacity. Reproducer output: B admitted=false; C admitted=false; C durable status=queued; C scheduler active=true.
 - **Impact:** Accepted work stalls indefinitely and can block other conversations. Existing global-scheduler tests do not cover this deferred cross-candidate admission sequence.
@@ -39,7 +51,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R02 — P1: Cancelling deferred work leaves its scheduler/run envelope alive
 
-- [ ] Cancel and reconcile deferred envelopes when their pending message is cancelled or conversation queue is cleared.
 - **Evidence:** `src/service/AIChatTurnQueueService.ts:563–569` cancels the pending row and emits its view without cancelling the deferred scheduler entry. `clearConversation` at `667–683` removes pending state without settling that envelope. The bridge exposes deferred-cancellation functionality, but these paths do not call it.
 - **Trigger:** Fill capacity, enqueue a message in another conversation so it acquires a deferred envelope, then cancel it before admission. Release capacity and pump another candidate.
 - **Impact:** A cancelled intent can leave a nonterminal run and orphaned capacity. Combined with R01, the scheduler can admit an entry whose pending owner no longer exists; Activity/deletion checks can also retain stale queued execution.
@@ -49,7 +60,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R03 — P1: Resumed parked turns lose terminal stream publication
 
-- [ ] Retain and flush the terminal gate for permission/question continuations after durable settlement.
 - **Evidence:** `src/service/AIChatTurnQueueService.ts:918` constructs `AIChatTerminalGate` as the engine sink. The parked branch at `1045–1083` retains only run/pending IDs, holds the queue and returns. `notifyExternalTurnTerminal` at `600–625` settles the parked run but has no gate reference to flush. The resumed engine continuation retains the original sink.
 - **Trigger:** Queue-backed tool turn pauses for permission or a plan question; grant/answer and allow its continuation to complete, fail or cancel.
 - **Impact:** Terminal chunks remain buffered, so renderer completion/error/cancellation can fail to settle even though the resumed work has ended. The external-terminal path also uses best-effort `finishRun`, unlike the strict persistence-before-publication path.
@@ -59,7 +69,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R04 — P1: A late approval-mode response can change another chat's policy
 
-- [ ] Scope approval-mode loading to selection generation and reset/block policy selection while the current conversation loads.
 - **Evidence:** `src/views/components/aiChatWorkspace/AiChatCenterSurface.vue:1646–1649` awaits `getChatV2ToolApprovalMode(id)` and assigns the result without checking the current conversation or generation. The watcher at `1690–1694` starts overlapping loads; ordinary send passes `toolApprovalMode.value` into its request at `1990`.
 - **Trigger:** A uses auto-approve, B uses ask-for-approval. Delay A's response, switch to B, resolve B then A, and send in B.
 - **Impact:** B's next request carries A's approval preference. This is a policy-selection defect; it does not establish that all backend permission checks can be bypassed.
@@ -69,7 +78,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R05 — P1: Image completion clears references from a newer or rejected draft
 
-- [ ] Clear only the accepted submission's reference snapshot, with matching conversation/request identity.
 - **Evidence:** `AiChatCenterSurface.vue:1966–1967` sets `pendingDraftClearKey` before acceptance. The stream-status watcher at `1471–1479` clears every reference under that key on any selected-store `streaming`→`idle` transition; it does not match a run or reference snapshot.
 - **Trigger:** Send image references, select a different image for the next draft while the run continues, then let the first run finish. Also exercise a rejected image follow-up while another turn is streaming, followed by a switch to an idle conversation.
 - **Impact:** Unsent/new references can disappear. A selection transition can be mistaken for the submitted turn's completion.
@@ -79,7 +87,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R06 — P2: History chips do not restore on a route remount
 
-- [ ] Initialize the center's history working copy from the store on mount as well as selection changes.
 - **Evidence:** `AiChatCenterSurface.vue:2243` initializes `selectedContextItems` to `[]`; its restoration watcher at `2357–2377` is not immediate. `performOrdinarySend` reads this local array when building `historySelectionIds`.
 - **Trigger:** Select archive passages in A, navigate to another center page, then return without changing the selected conversation.
 - **Impact:** The Pinia draft still exists, but chips are invisible and the next send omits them. Store persistence alone does not satisfy route restoration.
@@ -89,7 +96,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R07 — P2: Changing conversation or stopping text generation does not cancel speech
 
-- [ ] Explicitly cancel selected-conversation speech on selection changes and Stop.
 - **Evidence:** `AiChatCenterSurface.vue:957` handles Stop without `voice.stopSpeaking`; the voice watchers at `1704–1745` feed or complete speech, and non-streaming state calls `completeAssistantResponse`. The only direct stop-speaking binding is the explicit speech control at `294`; unmount disposal is separate. `useAiChatVoice.ts` has no conversation-selection subscription.
 - **Trigger:** While A has playing/queued spoken output, switch to B without unmounting the center, or Stop A's text run.
 - **Impact:** A's speech can continue in B; completing the response flushes text rather than cancelling it.
@@ -99,7 +105,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R08 — P2: A late image-export response opens workspace setup in the wrong chat
 
-- [ ] Scope export notices and setup actions to the captured export owner.
 - **Evidence:** `AiChatCenterSurface.vue:1525–1544` awaits export for `conversation`, then calls `onRequestWorkspaceSetup()` and writes global notices. That setup method at `837–843` reads the currently selected conversation.
 - **Trigger:** Save an image in A, switch to B before A returns `workspace_required`.
 - **Impact:** B's setup dialog opens for A's pending export, and B can receive A's export outcome/filename notice. The export request itself remains addressed to A; this is incorrect follow-up UI ownership.
@@ -109,7 +114,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R09 — P2: Loop commands silently discard attachments and hide control failures
 
-- [ ] Reject unsupported loop payloads before staging/execution, and return failed command disposition for failed controls.
 - **Evidence:** `src/views/composables/aiChatWorkspace/useChatCommandRouting.ts:407–439` handles loop commands without checking `options.files` or preserving pasted bodies in staged work. `runScheduledLoopControl` at `273–283` ignores null responses and catches exceptions, then returns `completed`. The center at `1835–1865` accepts staged/completed dispositions, clearing the full composer draft.
 - **Trigger:** Attach a file to `/loop 2` or a valid scheduled `/loop` command. Separately, return null/throw for `/loop pause`, `/loop resume` or `/loop stop`.
 - **Impact:** Attachments can disappear without entering any request; failed controls appear accepted and erase retryable input. In particular, a failed stop may leave the schedule running without an actionable error.
@@ -119,7 +123,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R10 — P2: Some command error and reload paths still target the current selection
 
-- [ ] Finish owner/generation checks after asynchronous command operations.
 - **Evidence:** Prompt-skill failure calls `ports.setError(message)` without origin at `useChatCommandRouting.ts:510–517`; goal-loop start failure does likewise around `258–266`. The center's port only filters when an origin is supplied. `/clear` checks selection before awaiting, then unconditionally reloads `targetConversationId` after clear/bootstrap (`AiChatCenterSurface.vue:2130–2145`). It also ignores a null clear response and swallows exceptions; the router reports it accepted.
 - **Trigger:** In A, start a delayed failed `/skill` invocation or goal-loop start; switch to B before resolution. For `/clear`, switch while the clear IPC is pending.
 - **Impact:** B can show A's command error. A late clear refresh can load A into the selected store after B was selected. Failed clear can consume the command without useful retry feedback.
@@ -129,7 +132,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R11 — P2: Rollback Chat V2 still clears drafts before validation/acceptance
 
-- [ ] Move Chat V2 onto the same accepted-send contract and retain failed drafts.
 - **Evidence:** `src/views/components/aiChatV2/AiChatV2.vue:4375` calls `options?.onAccepted?.()` before `/goal` validation, skill acknowledgement, attachment preparation or durable send. Later failure returns do not restore the composer draft. The shared composer actually clears text/files/paste in that callback (`AiChatV2Composer.vue:1396–1407`).
 - **Trigger:** On rollback surface send `/goal` without an objective, a missing `/skill`, an invalid attachment or a request rejected by IPC.
 - **Impact:** Retryable user input is lost. This was identified as an unacceptable reference behavior in the PRD baseline and remains present.
@@ -139,7 +141,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R12 — P1: Plan continuation recovery still has a commit-to-response crash gap
 
-- [ ] Persist or reconstruct continuation intent authoritatively with the plan decision.
 - **Evidence:** `AiChatCenterSurface.vue:2707–2749` awaits the decision response before saving the continuation intent in localStorage. Recovery at `2668–2683` reads that saved intent. `src/main-process/communication/ai-chat-v2-ipc.ts:1806–1812` persists and returns the approved plan without creating the continuation intent in the same durable operation.
 - **Trigger:** Main commits approval, but its reply is lost or the renderer crashes before `savePlanContinuationIntent`. Reopen the conversation.
 - **Impact:** The plan is approved, but no queued continuation and no renderer retry intent exist. Deterministic continuation IDs prevent duplicate accepted intents; they do not recover an intent that was never recorded.
@@ -149,7 +150,6 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### R13 — P2: Background history acknowledgements do not reconcile stored chips
 
-- [ ] Reconcile history acknowledgements against conversation-keyed state outside the selected center's lifetime.
 - **Evidence:** `AiChatCenterSurface.vue:2385–2430` resolves submission identity but skips chip changes when the acknowledged conversation is not selected; its acknowledgement listener is center-mounted near `2975`. The selected store drops foreign detail events at `selectedConversation.ts:263–266`. No corresponding background chip update is performed by this path.
 - **Trigger:** Queue a history-context message in A, switch to B or leave the center before A dispatches and acknowledges accepted/changed/rejected IDs, then return to A.
 - **Impact:** Already-consumed chips can reappear, changed/rejected flags are missed, and a later message can resend stale context. Fixing R06 alone makes restoration visible but does not resolve the missed acknowledgement.
