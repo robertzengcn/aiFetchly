@@ -52,6 +52,10 @@ const shutdownResponder = installWorkerShutdownResponder({
 });
 
 let sequence = 0;
+const nextSequence = (): number => {
+  sequence += 1;
+  return sequence;
+};
 let malformedCount = 0;
 let stopped = false;
 
@@ -61,6 +65,7 @@ const session = new WorkerSession({
   send: (message) => {
     parentPort.postMessage(JSON.stringify(message));
   },
+  nextSequence,
 });
 
 function baseMessage(requestId: string): {
@@ -69,12 +74,11 @@ function baseMessage(requestId: string): {
   requestId: string;
   sequence: number;
 } {
-  sequence += 1;
   return {
     protocolVersion: 1,
     sessionId,
     requestId,
-    sequence,
+    sequence: nextSequence(),
   };
 }
 

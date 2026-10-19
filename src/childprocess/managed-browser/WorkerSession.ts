@@ -4,6 +4,7 @@ import type { z } from "zod";
 import {
   MANAGED_BROWSER_PROTOCOL_VERSION,
   MANAGED_BROWSER_SCREENSHOT_POLICY,
+  MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import type {
   AuthenticationAssessment,
@@ -143,6 +144,13 @@ export interface WorkerSessionDeps {
   readonly send: (message: ManagedBrowserOutboundMessage) => void;
   readonly launchBrowser?: LaunchBrowserFn;
   readonly now?: () => number;
+  /**
+   * Shared monotonic sequence allocator (§8.4). Heartbeats and session
+   * replies MUST draw from ONE counter: the client drops any message whose
+   * sequence is ≤ the last observed value, so split counters race with the
+   * heartbeat timer and genuine replies get discarded as stale.
+   */
+  readonly nextSequence?: () => number;
 }
 
 type StartSessionPayload = Extract<
@@ -156,6 +164,7 @@ export class WorkerSession {
   private readonly send: (message: ManagedBrowserOutboundMessage) => void;
   private readonly launch: LaunchBrowserFn | undefined;
   private readonly now: () => number;
+  private readonly nextSequence: (() => number) | undefined;
   private readonly runtime: ManagedBrowserRuntime;
   private readonly registry =
     new PageReferenceRegistry<ExecutorElementHandle>();
@@ -181,6 +190,7 @@ export class WorkerSession {
     this.sessionId = deps.sessionId;
     this.sessionNonce = deps.sessionNonce;
     this.send = deps.send;
+    this.nextSequence = deps.nextSequence;
     this.launch = deps.launchBrowser;
     this.now = deps.now ?? Date.now;
     this.runtime = new ManagedBrowserRuntime("starting");
@@ -303,7 +313,15 @@ export class WorkerSession {
       // --- Navigate to the platform verification URL ---
       this.runtime.transition("verifying_login");
       await this.page.goto(this.adapter.verificationUrl, {
-        timeoutMs: 45_000,
+        /**
+         * Puppeteer's option key is `timeout` — `timeoutMs` is ignored and
+         * the (smaller) page default would win. A no-cookie fresh Chrome
+         * profile against the real platform can take longer than 30s, and
+         * the rejected navigation used to be misclassified (see catch) as
+         * browser_dependency_missing, failing the whole start (R09-family
+         * parity gap caught by the AIFETCHLY_MB_E2E journey).
+         */
+        timeout: MANAGED_BROWSER_TIMEOUTS.initialVerificationMs,
         waitUntil: "domcontentloaded",
       });
       const assessment = await this.adapter.assessAuthentication(this.page);
@@ -465,7 +483,8 @@ export class WorkerSession {
           type: "HANDOFF_REQUIRED",
           // Structured reason from the triggering action (review fix: was
           // hardcoded to password_field for every handoff path).
-          reason: (outcome.handoffReason as "password_field") ?? "password_field",
+          reason:
+            (outcome.handoffReason as "password_field") ?? "password_field",
           challenge: null,
         });
       } else if (this.runtime.getState() === "running") {
@@ -958,7 +977,7 @@ export class WorkerSession {
       throw new Error("no page for self-test");
     }
     await page
-      .goto("about:blank", { timeoutMs: 5_000, waitUntil: "load" })
+      .goto("about:blank", { timeout: 5_000, waitUntil: "load" })
       .catch(() => undefined);
     return page.evaluate<FingerprintSelfTestEvidence>(
       `(() => {
@@ -1044,7 +1063,7 @@ export class WorkerSession {
     requestId: string;
     sequence: number;
   } {
-    this.sequence += 1;
+    this.sequence = this.nextSequence ? this.nextSequence() : this.sequence + 1;
     return {
       protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       sessionId: this.sessionId,
