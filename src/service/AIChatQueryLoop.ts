@@ -121,6 +121,7 @@ import {
   getPluginRecoveryLedger,
   jobFingerprintFromArgs,
   searchIdentityFromArgs,
+  validatePublicSearchInput,
 } from "@/service/PluginRecoveryLedger";
 import {
   getPluginFileArtifactService,
@@ -4523,6 +4524,31 @@ export class AIChatQueryLoop {
     const args = call.arguments ?? {};
     const pluginName = parsePluginNameFromCanonicalTool(call.name);
     if (pluginName) {
+      // G01 (design §10.1, HOST-10): the host validates the public input
+      // contract BEFORE admission — bad shapes never reach the ledger,
+      // the registry or the plugin process.
+      const inputIssues = validatePublicSearchInput(args);
+      if (inputIssues.length > 0) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: "The search input was rejected by the host schema check.",
+              code: "TOOL_INPUT_INVALID",
+              issues: inputIssues.map((issue) => ({
+                code: issue.code,
+                field: issue.field,
+                message: issue.message,
+              })),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
       const ledger = getPluginRecoveryLedger();
       const identity = searchIdentityFromArgs(args);
       const fingerprint = jobFingerprintFromArgs(

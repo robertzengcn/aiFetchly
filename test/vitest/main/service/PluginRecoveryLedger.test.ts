@@ -5,6 +5,12 @@ import {
   canonicalJson,
   searchIdentityFromArgs,
   jobFingerprintFromArgs,
+  normalizeSearchText,
+  normalizeArgsForSearchIdentity,
+  validatePublicSearchInput,
+  LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS,
+  PUBLIC_SEARCH_TEXT_FIELDS,
+  PUBLIC_SEARCH_LIST_FIELDS,
   type RecoveryStrategy,
 } from "@/service/PluginRecoveryLedger";
 import { ToolJobRegistry } from "@/service/ToolJobRegistry";
@@ -750,4 +756,128 @@ describe("B08: reservation lifecycle", () => {
       expect(after.reason).not.toBe("reservation_in_flight");
     }
   }
+});
+
+describe("G01 public input canonicalization", () => {
+  it("normalizes query/location spellings so equivalent searches share identity", () => {
+    const identity = searchIdentityFromArgs(ARGS);
+    expect(
+      searchIdentityFromArgs({
+        ...ARGS,
+        query: "  dentists\t ",
+        location: "CHICAGO,   Il  ",
+      })
+    ).toBe(identity);
+    expect(normalizeSearchText("  C\uFF28icago ")).toBe("chicago");
+  });
+
+  it("does not let different searches collapse into one identity", () => {
+    expect(searchIdentityFromArgs({ query: "dentists", location: "Chicago, IL" })).not.toBe(
+      searchIdentityFromArgs({ query: "plumbers", location: "Chicago, IL" })
+    );
+  });
+
+  it("treats the fields list as an order-insensitive set", () => {
+    const base = searchIdentityFromArgs({
+      ...ARGS,
+      fields: ["phone", "email", "businessName"],
+    });
+    expect(
+      searchIdentityFromArgs({
+        ...ARGS,
+        fields: ["EMAIL", "  phone ", "phone", "businessName"],
+      })
+    ).toBe(base);
+  });
+
+  it("keeps kernel knobs out of the normalized identity but inside the job fingerprint", () => {
+    const identity = searchIdentityFromArgs(ARGS);
+    expect(searchIdentityFromArgs({ ...ARGS, platform: "yellowpages-com" })).toBe(identity);
+    expect(
+      jobFingerprintFromArgs("c1", "t", { ...ARGS, platform: "yellowpages-com" })
+    ).not.toBe(jobFingerprintFromArgs("c1", "t", ARGS));
+    // Normalization applies to fingerprints too: whitespace-only differences
+    // never mint a second live job.
+    expect(
+      jobFingerprintFromArgs("c1", "t", { ...ARGS, query: "  dentists\n" })
+    ).toBe(jobFingerprintFromArgs("c1", "t", ARGS));
+  });
+
+  it("validatePublicSearchInput polices shapes without rejecting unknown fields", () => {
+    expect(validatePublicSearchInput(ARGS)).toEqual([]);
+    expect(
+      validatePublicSearchInput({ query: 5, location: null, fields: "phone" })
+        .map((i) => i.field)
+        .sort()
+    ).toEqual(["fields", "location", "query"]);
+    expect(
+      validatePublicSearchInput({
+        query: "  ",
+        location: "x".repeat(257),
+        fields: ["phone", 5],
+      })
+        .map((i) => i.field)
+        .sort()
+    ).toEqual(["fields", "location", "query"]);
+    // Unknown plugin-domain fields pass through untouched.
+    expect(validatePublicSearchInput({ ...ARGS, custom: { nested: 1 } })).toEqual(
+      []
+    );
+  });
+
+  it("normalizeArgsForSearchIdentity leaves unrelated args untouched", () => {
+    expect(normalizeArgsForSearchIdentity(ARGS)).toEqual({
+      ...ARGS,
+      location: "chicago, il",
+    });
+    const weird = { ...ARGS, location: " Chicago\tIL ", fields: ["b", "a", "b"] };
+    expect(normalizeArgsForSearchIdentity(weird)).toEqual({
+      ...ARGS,
+      location: "chicago il",
+      fields: ["a", "b"],
+    });
+  });
+});
+
+describe("G01 generic logical-search identity contract", () => {
+  it("declares the strategy-adjustable fields the design fixes", () => {
+    expect([...LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS].sort()).toEqual([
+      "includeDetailPages",
+      "maxResults",
+      "platform",
+      "recovery",
+    ]);
+  });
+
+  it("excludes exactly the contract fields from the logical identity", () => {
+    const identity = searchIdentityFromArgs(ARGS);
+    for (const field of LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS) {
+      if (field === "recovery") {
+        expect(
+          searchIdentityFromArgs({
+            ...ARGS,
+            recovery: { previousErrorId: "x", strategy: "reduced_scope" },
+          })
+        ).toBe(identity);
+      } else {
+        const probe: Record<string, unknown> = { ...ARGS };
+        probe[field] = field === "maxResults" ? 5 : field === "platform" ? "yellowpages-com" : field === "includeDetailPages" ? false : "x";
+        expect(searchIdentityFromArgs(probe)).toBe(identity);
+      }
+    }
+    // Non-contract fields DO change the identity.
+    expect(
+      searchIdentityFromArgs({ ...ARGS, cityLabel: "downtown" })
+    ).not.toBe(identity);
+  });
+
+  it("the identity contract is generic vocabulary (no plugin-specific names)", () => {
+    for (const field of LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS) {
+      expect(field).not.toContain("yellow");
+      expect(field).not.toContain("listing");
+    }
+    for (const field of [...PUBLIC_SEARCH_TEXT_FIELDS, ...PUBLIC_SEARCH_LIST_FIELDS]) {
+      expect(field).not.toContain("yellow");
+    }
+  });
 });
