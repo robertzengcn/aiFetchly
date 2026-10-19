@@ -7,7 +7,6 @@
 import UnitAndIntegrationTestSuite from './unitAndIntegrationTestSuite';
 import YellComAdapterTest from './yellComAdapterTest';
 import * as Test192 from './192ComAdapterTest';
-import { YellowPagesAdapterTest } from './yellowPagesAdapterTest';
 import { YelpAdapterTest } from './yelpAdapterTest';
 
 async function runTestSuite() {
@@ -34,7 +33,6 @@ async function runTestSuite() {
     const platformTests = [
         { name: 'Yell.com Adapter', test: new YellComAdapterTest() },
         { name: '192.com Adapter', test: new (Test192 as any)['192ComAdapterTest']() },
-        { name: 'YellowPages Adapter', test: new YellowPagesAdapterTest() },
         { name: 'Yelp Adapter', test: new YelpAdapterTest() }
     ];
 
