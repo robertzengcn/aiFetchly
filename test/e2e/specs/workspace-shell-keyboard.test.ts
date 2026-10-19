@@ -68,12 +68,17 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     await textarea.focus();
     await page.keyboard.type("Keyboard-only message");
     await page.keyboard.press("Enter");
-    // The optimistic user turn renders in the transcript (AI is disabled in
-    // this fixture; the run itself rejects, which does not undo the turn).
-    await expect(page.getByTestId("workspace-transcript")).toContainText(
-      "Keyboard-only message",
-      { timeout: 10_000 }
-    );
+    // AI is disabled in this fixture, so the run rejects at the gate
+    // (audit T8/D5, c954e42e1): the optimistic user row is dropped and the
+    // durable denial surfaces as a visible assistant bubble, while the
+    // composer keeps the draft for a retry.
+    await expect(
+      page
+        .getByTestId("workspace-transcript")
+        .getByText(/Hosted aiFetchly AI requires a subscription/)
+        .first()
+    ).toBeVisible({ timeout: 10_000 });
+    expect(await textarea.inputValue()).toContain("Keyboard-only message");
 
     // --- Tab order: textarea -> selectors -> spoken toggle -> send -------
     await textarea.focus();

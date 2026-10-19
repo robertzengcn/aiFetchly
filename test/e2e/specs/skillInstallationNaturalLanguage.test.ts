@@ -23,6 +23,7 @@ import {
 } from "../fixtures/temporaryState";
 import { closeApp } from "../support/processCleanup";
 import type { LaunchedApp } from "../fixtures/electronApp";
+import type { E2ETestRoot } from "../fixtures/types";
 
 interface InstallSnapshot {
   sessionId: string;
@@ -101,17 +102,18 @@ async function sendMessage(app: LaunchedApp, text: string): Promise<void> {
  * rows via the chat log's tool markers (role=tool messages carry the name).
  */
 async function renderedToolNames(app: LaunchedApp): Promise<string[]> {
-  return app.mainWindow.evaluate(() => {
-    const root = document.querySelector('[data-testid="ai-chat-root"]');
-    if (!root) return [] as string[];
-    // Tool-call blocks render the tool name in a header field. The V2
-    // message list marks them with the toolbox header + tool name row.
-    const texts: string[] = [];
-    root
-      .querySelectorAll(".v2-message__tool-field")
-      .forEach((el) => texts.push(el.textContent ?? ""));
-    return texts.map((t) => t.replace(/^Tool:\s*/, "").trim());
-  });
+  // Retargeted: the workspace transcript renders executions as activity
+  // rows (`.row-tool-name` carries the raw tool name for unknown-tool
+  // actions like the installer) instead of legacy `.v2-message__tool-field`.
+  const root = app.mainWindow.getByTestId("workspace-transcript");
+  const names = root.locator(".row-tool-name");
+  await expect(names.first()).toBeVisible({ timeout: 30_000 });
+  const count = await names.count();
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push((await names.nth(i).innerText()).trim());
+  }
+  return out;
 }
 
 async function approveInstall(
@@ -215,7 +217,7 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
       .click();
 
     // The assistant's readiness report renders (the continuation round).
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "installed and ready",
       { timeout: 60_000 }
     );
@@ -254,7 +256,7 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
     // Session correlation: the session the card/UI knows about is the one
     // the tool created — poll the persisted session list to ready.
     // (The approve is the USER action on the review card.)
-    const status0 = await pollForSession(app);
+    const status0 = await pollForSession(app, root);
     expect(status0).not.toBeNull();
     if (!status0) return;
     expect(status0.state).toBe("awaiting_approval");
@@ -279,7 +281,7 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
       "Still ready and waiting for your footage. Nothing has run."
     );
     await sendMessage(app, "is the skill ready yet?");
-    await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Still ready and waiting",
       { timeout: 60_000 }
     );
@@ -305,17 +307,29 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
  */
 async function pollForSession(
   app: LaunchedApp,
-  attempts = 20,
+  root: E2ETestRoot,
+  attempts = 24,
   intervalMs = 500
 ): Promise<InstallSnapshot | null> {
   for (let i = 0; i < attempts; i++) {
-    // NOTE: innerText EXCLUDES collapsed <details> content — the tool-result
-    // JSON lives there, so use textContent which includes hidden text.
-    const sessionId = await app.mainWindow.evaluate(() => {
-      const text = document.body.textContent ?? "";
-      const match = text.match(/"sessionId"\s*:\s*"([0-9a-f-]{20,40})"/);
-      return match ? match[1] : null;
-    });
+    // The session id is not rendered in the bounded execution receipt; read
+    // it from the persisted install session row (node:sqlite readonly peek
+    // against the runner-managed database).
+    const { DatabaseSync } = await import("node:sqlite");
+    const dbPath = path.join(root.databasePath, "scraper.db");
+    let sessionId: string | null = null;
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      const rows = db
+        .prepare(
+          "SELECT sessionId FROM skill_installation_sessions ORDER BY createdAt DESC LIMIT 1"
+        )
+        .all() as { sessionId: string }[];
+      db.close();
+      sessionId = rows[0]?.sessionId ?? null;
+    } catch {
+      sessionId = null;
+    }
     if (sessionId) {
       const status = await invoke<InstallSnapshot>(
         app,
@@ -385,21 +399,26 @@ test("under the deferred catalog the installer flow stays always-loaded and race
         await fakeAi.setFollowupText("Prepared the fixture.");
         await sendMessage(app, `set up ${fixture} for me`);
         // The chat-first workspace conversation may default to auto-approve;
-        // click the card only when the ask-policy gates this call.
-        const installCard = app.mainWindow.getByTestId(
-          "ai-chat-permission-card"
-        );
-        if (await installCard.isVisible().catch(() => false)) {
-          await app.mainWindow
-            .getByTestId("ai-chat-permission-allow-once")
-            .click();
-        }
-        await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-          "Prepared the fixture.",
-          { timeout: 60_000 }
-        );
+        // click the card only when the ask-policy gates this call. Retry the
+        // approval-vs-remount race: if the click lands while the card is
+        // still remounting (case 14 defers the catalog) it can be dropped —
+        // keep clicking until the follow-up text renders or the card itself
+        // unmounts (already auto-approved).
+        await expect(async () => {
+          const installCard = app.mainWindow.getByTestId(
+            "ai-chat-permission-card"
+          );
+          if (await installCard.isVisible().catch(() => false)) {
+            await app.mainWindow
+              .getByTestId("ai-chat-permission-allow-once")
+              .click();
+          }
+          await expect(
+            app.mainWindow.getByTestId("workspace-transcript")
+          ).toContainText("Prepared the fixture.", { timeout: 5_000 });
+        }).toPass({ timeout: 60_000 });
         // USER gesture: approve the plan on the review card (renderer token).
-        const preparedStatus = await pollForSession(app);
+        const preparedStatus = await pollForSession(app, root);
         expect(preparedStatus).not.toBeNull();
         if (!preparedStatus) return;
         expect(preparedStatus.state).toBe("awaiting_approval");

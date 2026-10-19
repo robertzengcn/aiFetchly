@@ -23,6 +23,7 @@
  */
 
 import * as fs from "fs";
+import * as http from "http";
 import * as https from "https";
 import * as path from "path";
 
@@ -428,7 +429,21 @@ function defaultRequest(
   // Node's ClientRequest exposes `.on('error', …)` / `.destroy()` — adapt it
   // to the `{ destroy, onError }` seam `run()` consumes. Never return the raw
   // request: it has no `.onError` method and `hop()` throws TypeError.
-  const req = https.get(
+  // The E2E FakePluginHub loopback .zip exception rides the same launcher-only
+  // sentinel gate as UrlPluginFetcher (see isE2ELoopbackHttpZipUrl): both
+  // AIFETCHLY_E2E=1 and the sanitized-launcher root must be present, so a
+  // packaged or developer launch can never activate plain http.
+  const lowered = url.toString().toLowerCase();
+  const e2eLoopbackZip =
+    process.env.AIFETCHLY_E2E === "1" &&
+    Boolean(process.env.AIFETCHLY_E2E_ROOT) &&
+    lowered.startsWith("http://") &&
+    (lowered.startsWith("http://127.0.0.1/") ||
+      lowered.startsWith("http://localhost/") ||
+      /^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(lowered)) &&
+    /\.zip(\?.*)?$/.test(lowered);
+  const transport = e2eLoopbackZip ? http : https;
+  const req = transport.get(
     url,
     {
       headers: { ...headers, "accept-encoding": "identity" },
