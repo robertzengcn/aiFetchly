@@ -147,6 +147,37 @@ describe("PluginPartialGate", () => {
     expect(unbounded.mapping?.progress).toBeNull();
   });
 
+  it("G02: collected > expected is normalized for display, unknown totals stay null", () => {
+    const gate = liveGate();
+    const outcome = gate.observe(
+      snapshot({ sequence: 2, collectedCount: 40, expectedCount: 10 })
+    );
+    expect(outcome.mapping?.partialCount).toBe(10);
+    expect(outcome.mapping?.progress).toBe(1);
+    // The INTERNAL partial keeps the honest count for the result metadata.
+    expect(outcome.partial?.collectedCount).toBe(40);
+    // Unmatched/unknown estimates are null, never coerced to zero.
+    const unknown = gate.observe(
+      snapshot({ sequence: 3, collectedCount: 3, expectedCount: null })
+    );
+    expect(unknown.mapping?.expectedCount).toBeNull();
+    expect(unknown.mapping?.partialCount).toBe(3);
+  });
+
+  it("G02: server-supplied messages are redacted in the mapping", () => {
+    const gate = liveGate();
+    const outcome = gate.observe(
+      snapshot({
+        sequence: 2,
+        message: "scraping https://user:hunter2@example.com/api",
+      })
+    );
+    expect(outcome.mapping?.message).toBe(
+      "scraping https://[redacted]@example.com/api"
+    );
+    expect(outcome.mapping?.message).not.toContain("hunter2");
+  });
+
   it("terminates the call once repeated abuse reaches the threshold", () => {
     const gate = liveGate();
     let terminated = false;

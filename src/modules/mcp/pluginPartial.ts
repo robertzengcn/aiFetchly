@@ -17,6 +17,7 @@
  * `tool_progress`, including the phase.
  */
 import { z } from "zod";
+import { redactProgressText } from "@/modules/mcp/progressCoalescing";
 
 export const MCP_PLUGIN_PARTIAL_METHOD =
   "notifications/aifetchly/plugin-partial";
@@ -159,6 +160,12 @@ export class PluginPartialGate {
     }
 
     this.lastSequence = params.sequence;
+    // G02: a server-supplied message is displayed data, never an
+    // instruction — secrets redacted, control chars dropped, bounded.
+    const displayedMessage = redactProgressText(
+      params.message ?? "",
+      200
+    );
     const progress =
       params.expectedCount !== null && params.expectedCount > 0
         ? Math.min(
@@ -166,13 +173,19 @@ export class PluginPartialGate {
             params.collectedCount / Math.max(1, params.expectedCount)
           )
         : null;
+    // G02: `collected > expected` is normalized for display — the renderer
+    // never shows more-than-total progress.
+    const displayedCollected =
+      params.expectedCount !== null
+        ? Math.min(params.collectedCount, params.expectedCount)
+        : params.collectedCount;
     return {
       accept: true,
       terminateCall: false,
       partial: {
         data: {
           phase: params.phase,
-          message: params.message ?? "",
+          message: displayedMessage,
         },
         collectedCount: params.collectedCount,
         expectedCount: params.expectedCount,
@@ -180,9 +193,11 @@ export class PluginPartialGate {
       mapping: {
         phase: params.phase,
         message:
-          params.message ?? `Collected ${params.collectedCount} records`,
+          displayedMessage.length > 0
+            ? displayedMessage
+            : `Collected ${displayedCollected} records`,
         progress,
-        partialCount: params.collectedCount,
+        partialCount: displayedCollected,
         expectedCount: params.expectedCount,
       },
     };

@@ -118,6 +118,10 @@ import {
 } from "@/service/ToolJobRegistry";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import {
+  envelopeErrorIdentity,
+  logToolExecutionDiagnostics,
+} from "@/service/ToolExecutionDiagnostics";
+import {
   getPluginRecoveryLedger,
   jobFingerprintFromArgs,
   searchIdentityFromArgs,
@@ -4857,6 +4861,8 @@ export class AIChatQueryLoop {
     }
   ): Promise<void> {
     const ledger = getPluginRecoveryLedger();
+    // G02: host-measured duration for the execution diagnostic record.
+    const spawnStartedPerf = performance.now();
     handle.onSettled(() => {
       // Outcome is derived from the settled result below; cancellation and
       // transport failures settle as "failed" (attempt consumed, in-flight
@@ -4990,6 +4996,22 @@ export class AIChatQueryLoop {
       }
       if (!result.success) {
         // Ledger already settled as "failed" through its onSettled hook.
+        const errorIdentity = envelopeErrorIdentity(result.result);
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "failed",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: errorIdentity.code,
+          errorMessage: errorIdentity.message,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: errorIdentity.recordCount,
+          cleanupPending: null,
+        });
       } else if (promotion?.degradedToFailure) {
         // B03: success-with-no-usable-artifacts is a truthful failure for
         // the ledger too — a repeat of the same run must consume budget
@@ -5001,6 +5023,21 @@ export class AIChatQueryLoop {
           meta.identity,
           "failed"
         );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "degraded-promotion",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion.registeredCount,
+          artifactErrors: promotion.errors.length,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
       } else {
         ledger.completeAttempt(
           input.conversationId,
@@ -5008,6 +5045,21 @@ export class AIChatQueryLoop {
           meta.identity,
           "succeeded"
         );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "succeeded",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
       }
 
       handle.resolve(result);
@@ -5023,16 +5075,35 @@ export class AIChatQueryLoop {
         userTurnId: input.sourceUserMessageId,
       });
       // Crash salvage: register whatever candidates were already finalized.
+      let crashArtifactsRegistered = 0;
+      let crashArtifactErrors = 0;
       try {
-        this.promotePluginArtifactsToPayload({
+        const crashedPromotion = this.promotePluginArtifactsToPayload({
           conversationId: input.conversationId,
           executionId,
           pluginName: meta.pluginName,
           payload: undefined,
         });
+        crashArtifactsRegistered = crashedPromotion.registeredCount;
+        crashArtifactErrors = crashedPromotion.errors.length;
       } catch {
         // Best-effort salvage on the crash path.
       }
+      logToolExecutionDiagnostics({
+        toolName: call.name,
+        toolCallId: executionId,
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        outcome: "crashed",
+        attempt: meta.authorizedRecovery?.strategy ?? "initial",
+        durationMs: performance.now() - spawnStartedPerf,
+        errorCode: err instanceof Error ? err.name : "UNKNOWN",
+        errorMessage: err instanceof Error ? err.message : String(err),
+        artifactsRegistered: crashArtifactsRegistered,
+        artifactErrors: crashArtifactErrors,
+        resultRecordCount: null,
+        cleanupPending: null,
+      });
       handle.reject(err instanceof Error ? err : new Error(String(err)));
     }
   }

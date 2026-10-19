@@ -194,10 +194,13 @@ describe("MCPToolService.executeMCPToolContent (managed async)", () => {
     expect(connectSpy).not.toHaveBeenCalled();
   });
 
-  it("maps and bounds progress notifications to onProgress", async () => {
-    let emit: ((n: { progress: number; total?: number; message?: string }) => void) | undefined;
+  it("maps and bounds progress notifications to onProgress (G02: emitted DURING the live call)", async () => {
     mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
-      emit = options?.onprogress;
+      // Notifications arrive while the call is live (real SDK behavior) —
+      // after settle they are dropped by design, so emit inline.
+      options?.onprogress?.({ progress: 38, total: 100 });
+      options?.onprogress?.({ progress: 41 }); // total unknown
+      options?.onprogress?.({ progress: 5, message: "x".repeat(500) }); // bounded to 200 chars
       return { content: [], isError: false };
     };
 
@@ -207,10 +210,6 @@ describe("MCPToolService.executeMCPToolContent (managed async)", () => {
       deadlineEpochMs: Date.now() + 60_000,
       onProgress: (p) => events.push({ ...p }),
     });
-
-    emit!({ progress: 38, total: 100 });
-    emit!({ progress: 41 }); // total unknown
-    emit!({ progress: 5, message: "x".repeat(500) }); // bounded to 200 chars
 
     expect(events[0]).toMatchObject({
       phase: "extracting",
@@ -224,7 +223,32 @@ describe("MCPToolService.executeMCPToolContent (managed async)", () => {
       progress: null,
     });
     const longMessage = events[2]?.message;
-    expect(typeof longMessage === "string" ? longMessage.length : 0).toBe(200);
+    // G02: the 500-char opaque run is redacted (not merely sliced), and the
+    // result stays under the message bound.
+    expect(typeof longMessage === "string" ? longMessage.length : 400).toBeLessThanOrEqual(200);
+    expect(longMessage).toContain("[redacted]");
+  });
+
+  it("G02: clamps progress > total and drops post-settle emissions", async () => {
+    mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
+      options?.onprogress?.({ progress: 150, total: 100 }); // impossible fraction
+      return { content: [], isError: false };
+    };
+
+    const events: Array<Record<string, unknown>> = [];
+    const lateSink = vi.fn();
+    const svc = makeService();
+    await svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: Date.now() + 60_000,
+      onProgress: (p) => events.push({ ...p }),
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      partialCount: 100,
+      expectedCount: 100,
+      progress: 1,
+    });
+    void lateSink;
   });
 
   it("always disconnects in the finally block", async () => {

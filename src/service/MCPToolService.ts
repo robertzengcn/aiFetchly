@@ -10,12 +10,16 @@ import {
   unscopeServerName,
 } from "@/service/pluginCompat/McpToolNaming";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
-import { MCPTimeoutError } from "@/service/MCPTimeoutError";
+import { MCPTimeoutError, MCPPartialAbuseError } from "@/service/MCPTimeoutError";
 import { sanitizeMcpToolMetadata } from "@/service/ToolSchemaSanitizer";
 import { TOOL_CATALOG_DEFAULTS } from "@/config/toolCatalogConfig";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { PluginPartialGate } from "@/modules/mcp/pluginPartial";
+import {
+  ProgressRateLimiter,
+  redactProgressText,
+} from "@/modules/mcp/progressCoalescing";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
@@ -964,16 +968,26 @@ export class MCPToolService {
     const gate = new PluginPartialGate(executionId, () =>
       jobRegistry.isJobActive(executionId)
     );
+    // G02: partial updates are coalesced to one per second and abuse is
+    // remembered so the transport-failure path reports the SAFE error.
+    const partialLimiter = new ProgressRateLimiter();
+    let partialAbuseSeen = false;
     client.setPluginPartialSink?.((raw) => {
       const outcome = gate.observe(raw);
-      if (outcome.accept && outcome.partial && outcome.mapping) {
+      const mapping = outcome.mapping;
+      if (outcome.accept && mapping !== undefined) {
         // Bounded counts only — full records never enter the registry.
         jobRegistry.updatePartial(executionId, {
-          data: outcome.partial.data,
-          collectedCount: outcome.partial.collectedCount,
-          expectedCount: outcome.partial.expectedCount ?? 0,
+          data: mapping,
+          collectedCount: mapping.partialCount,
+          expectedCount: mapping.expectedCount,
         });
-        options.onProgress?.(outcome.mapping);
+        partialLimiter.schedule(() => {
+          options.onProgress?.(mapping);
+        });
+      }
+      if (outcome.terminateCall) {
+        partialAbuseSeen = true;
       }
       return outcome;
     });
@@ -1008,6 +1022,9 @@ export class MCPToolService {
 
       let result: MCPToolCallContent | undefined;
       let callError: unknown = undefined;
+      // G02: standard-MCP progress coalescing — at most 4 events/second,
+      // trailing-latest preserved; redaction + clamping below.
+      const progressLimiter = new ProgressRateLimiter();
       try {
         result = await this.raceDeadlineStep(
           () =>
@@ -1019,31 +1036,43 @@ export class MCPToolService {
               onprogress: options.onProgress
                 ? (notification) => {
                     // Design §9.2: units are collected records, not
-                    // elapsed-time percentage; `total` is omitted by servers
-                    // that cannot know it.
-                    const bounded = Number.isFinite(notification.progress)
-                      ? Math.max(0, notification.progress)
-                      : 0;
+                    // elapsed-time percentage. `total` is omitted by
+                    // servers that cannot know it (unknown stays null — a
+                    // missing estimate is never zero).
                     const total =
                       notification.total !== undefined &&
                       Number.isFinite(notification.total) &&
                       notification.total > 0
                         ? notification.total
                         : null;
+                    // G02: `progress > total` is normalized, not forwarded
+                    // — the renderer never sees an impossible fraction.
+                    const bounded = Math.max(
+                      0,
+                      Number.isFinite(notification.progress)
+                        ? notification.progress
+                        : 0
+                    );
+                    const clamped =
+                      total !== null ? Math.min(bounded, total) : bounded;
                     const message =
                       typeof notification.message === "string" &&
                       notification.message.length > 0
-                        ? notification.message.slice(0, 200)
+                        ? redactProgressText(notification.message)
                         : total !== null
-                          ? `Collected ${bounded} of ${total} records`
-                          : `Collected ${bounded} records`;
-                    options.onProgress?.({
-                      phase: "extracting",
-                      message,
-                      progress:
-                        total !== null && total > 0 ? bounded / total : null,
-                      partialCount: bounded,
-                      expectedCount: total,
+                          ? `Collected ${clamped} of ${total} records`
+                          : `Collected ${clamped} records`;
+                    progressLimiter.schedule(() => {
+                      options.onProgress?.({
+                        phase: "extracting",
+                        message,
+                        progress:
+                          total !== null && total > 0
+                            ? clamped / total
+                            : null,
+                        partialCount: clamped,
+                        expectedCount: total,
+                      });
                     });
                   }
                 : undefined,
@@ -1054,7 +1083,16 @@ export class MCPToolService {
         );
       } catch (e) {
         callError = e;
+      } finally {
+        // The call is over (or raced away): a pending trailing progress
+        // update must not fire after settlement.
+        progressLimiter.dispose();
+        partialLimiter.dispose();
       }
+
+      // G02 (abuse): when partial-abuse terminated the transport, the
+      // surfaced error must be the SAFE classification, not the raw
+      // transport failure.
 
       // B07: cleanup is awaited (bounded by the reserve) BEFORE classifying
       // the outcome. An unconfirmed shutdown is never reported as a definite
@@ -1075,6 +1113,12 @@ export class MCPToolService {
           callError !== undefined
             ? callError
             : new Error(`MCP tool ${toolName} produced no result`);
+        // G02 (abuse): the transport died because the plugin exceeded the
+        // partial-snapshot abuse threshold — surface the telemetry-safe
+        // abuse error instead of the raw transport failure.
+        if (partialAbuseSeen && !(failure instanceof MCPTimeoutError)) {
+          throw new MCPPartialAbuseError(toolName, server.serverName);
+        }
         if (
           failure instanceof MCPTimeoutError &&
           !cleanupConfirmed

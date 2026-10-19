@@ -1,4 +1,5 @@
 import { log } from "@/modules/Logger";
+import { createHash } from "crypto";
 import type { PluginError } from "@/entityTypes/pluginTypes";
 import {
   clampPluginToolPolicy,
@@ -78,6 +79,22 @@ export class PluginToolPolicyRegistry {
   >();
 
   /**
+   * G02: diagnostics identity — plugin name → declared manifest version.
+   * The execution diagnostic record reports the version the plugin
+   * ACTUALLY registered with, never a caller-supplied guess.
+   */
+  private pluginVersions = new Map<string, string>();
+
+  /**
+   * G02: diagnostics identity — plugin name → stable manifest generation
+   * (first 12 hex of the sha256 over the serialized manifest exactly as it
+   * was registered). An update re-registration changes the value, so a
+   * diagnostic can be attributed to the manifest generation that produced
+   * the run.
+   */
+  private pluginGenerations = new Map<string, string>();
+
+  /**
    * Register every valid policy declared in a plugin manifest.
    * Policy map keys use `<unscoped server name>/<tool name>`.
    *
@@ -115,6 +132,27 @@ export class PluginToolPolicyRegistry {
       return { errors };
     }
     const record = manifest as Record<string, unknown>;
+
+    // G02: record the registering generation + declared version for the
+    // execution diagnostics before any validation outcome, so a failed
+    // activation is also attributable.
+    this.pluginVersions.set(
+      pluginName,
+      typeof record.version === "string" && record.version.length > 0
+        ? record.version.slice(0, 64)
+        : "unknown"
+    );
+    try {
+      this.pluginGenerations.set(
+        pluginName,
+        createHash("sha256")
+          .update(JSON.stringify(record))
+          .digest("hex")
+          .slice(0, 12)
+      );
+    } catch {
+      this.pluginGenerations.set(pluginName, "unknown");
+    }
 
     // B03: record the plugin's declared file-artifact formats. Promotion
     // require-artifacts semantics use this, never the presence of a
@@ -288,6 +326,9 @@ export class PluginToolPolicyRegistry {
     // B03: capability records follow the plugin's lifecycle even when the
     // manifest registered zero tool policies.
     this.artifactFormats.delete(pluginName);
+    // G02: diagnostics identity follows the same lifecycle.
+    this.pluginVersions.delete(pluginName);
+    this.pluginGenerations.delete(pluginName);
     const names = this.byPlugin.get(pluginName);
     if (!names) return;
     for (const canonical of names) {
@@ -316,6 +357,23 @@ export class PluginToolPolicyRegistry {
     return this.browserGranted.get(pluginName)?.browserExecutable === true;
   }
 
+  /**
+   * G02: the declared manifest version of the last registration for the
+   * plugin (never a caller-supplied value); null when the plugin never
+   * registered.
+   */
+  public getPluginVersion(pluginName: string): string | null {
+    return this.pluginVersions.get(pluginName) ?? null;
+  }
+
+  /**
+   * G02: the stable manifest generation (sha256 prefix over the serialized
+   * manifest) of the last registration; null when never registered.
+   */
+  public getPluginGeneration(pluginName: string): string | null {
+    return this.pluginGenerations.get(pluginName) ?? null;
+  }
+
   /** Resolve a policy by canonical AI tool name (`mcp__plugin__server__tool`). */
   public resolveByToolName(aiToolName: string): PluginToolPolicyEntry | null {
     return this.entries.get(aiToolName) ?? null;
@@ -338,6 +396,8 @@ export class PluginToolPolicyRegistry {
     this.byPlugin.clear();
     this.artifactFormats.clear();
     this.browserGranted.clear();
+    this.pluginVersions.clear();
+    this.pluginGenerations.clear();
   }
 }
 

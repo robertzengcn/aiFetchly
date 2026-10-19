@@ -24,3 +24,23 @@ export class MCPTimeoutError extends Error {
     this.telemetryMessage = `MCP tool timed out after ${timeoutMs}ms`;
   }
 }
+
+/**
+ * G02 (abuse): the managed-async call was terminated because the plugin
+ * repeatedly sent invalid plugin-partial snapshots. The message is
+ * telemetry-safe — no plugin-supplied string is echoed into results.
+ */
+export class MCPPartialAbuseError extends Error {
+  readonly telemetryMessage: string;
+  readonly isTelemetrySafe = true;
+
+  constructor(toolName: string, serverName: string) {
+    super(
+      `MCP server '${serverName}' tool '${toolName}' was terminated after repeatedly invalid progress snapshots`
+    );
+    Object.setPrototypeOf(this, MCPPartialAbuseError.prototype);
+    this.name = "MCPPartialAbuseError";
+    this.telemetryMessage =
+      "MCP tool was terminated after repeatedly invalid progress snapshots";
+  }
+}

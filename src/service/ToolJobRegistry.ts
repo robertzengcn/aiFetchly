@@ -79,7 +79,11 @@ export interface ToolJobSnapshot {
   readonly partial: {
     data: unknown;
     collectedCount: number;
-    expectedCount: number;
+    /**
+     * G02: null when the server gave no estimate — a missing total is NOT
+     * zero expected records.
+     */
+    expectedCount: number | null;
   } | null;
   readonly result: unknown;
   readonly error: string | null;
@@ -131,10 +135,15 @@ interface InternalJob {
   fingerprint?: string;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: ToolJobProgress | null;
+  /** True when the underlying work survived to a durable snapshot. */
   partial: {
     data: unknown;
     collectedCount: number;
-    expectedCount: number;
+    /**
+     * G02: null when the server gave no estimate — a missing total is NOT
+     * zero expected records.
+     */
+    expectedCount: number | null;
   } | null;
   result: unknown;
   error: string | null;
@@ -384,7 +393,11 @@ export class ToolJobRegistry {
 
   updatePartial(
     jobId: string,
-    partial: { data: unknown; collectedCount: number; expectedCount: number }
+    partial: {
+      data: unknown;
+      collectedCount: number;
+      expectedCount: number | null;
+    }
   ): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
