@@ -64,6 +64,18 @@ export class PluginToolPolicyRegistry {
    * produces files.
    */
   private artifactFormats = new Map<string, readonly string[]>();
+  /**
+   * B11/HOST-15: plugin name → declared browser-execution grant (manifest
+   * `capabilities.browserExecutable`) and, when present, the tested browser
+   * compatibility floor (minimum major Chrome version). Execution
+   * provisioning consults this instead of granting every plugin the browser
+   * context, and health checks compare the resolved descriptor against the
+   * declared floor.
+   */
+  private browserGranted = new Map<
+    string,
+    { browserExecutable: boolean; minMajorVersion: number | null }
+  >();
 
   /**
    * Register every valid policy declared in a plugin manifest.
@@ -115,6 +127,17 @@ export class PluginToolPolicyRegistry {
       this.artifactFormats.set(pluginName, declaredCaps.data.fileArtifacts.slice());
     } else {
       this.artifactFormats.set(pluginName, []);
+    }
+    if (declaredCaps.success) {
+      this.browserGranted.set(pluginName, {
+        browserExecutable: declaredCaps.data.browserExecutable === true,
+        minMajorVersion: declaredCaps.data.minBrowserMajorVersion ?? null,
+      });
+    } else {
+      this.browserGranted.set(pluginName, {
+        browserExecutable: false,
+        minMajorVersion: null,
+      });
     }
 
     // Host requirements gate activation (design §5.4): an unsupported
@@ -271,6 +294,7 @@ export class PluginToolPolicyRegistry {
       this.entries.delete(canonical);
     }
     this.byPlugin.delete(pluginName);
+    this.browserGranted.delete(pluginName);
   }
 
   /**
@@ -280,6 +304,16 @@ export class PluginToolPolicyRegistry {
    */
   public getPluginArtifactFormats(pluginName: string): readonly string[] {
     return this.artifactFormats.get(pluginName) ?? [];
+  }
+
+  /**
+   * B11/HOST-15: the plugin's declared browser capability. When granted,
+   * `resolvedBrowserSatisfies` compares a resolved descriptor against the
+   * plugin's declared minimum major version (a manifest without an
+   * explicit floor accepts any host-resolved Chrome).
+   */
+  public pluginDeclaresBrowserExecution(pluginName: string): boolean {
+    return this.browserGranted.get(pluginName)?.browserExecutable === true;
   }
 
   /** Resolve a policy by canonical AI tool name (`mcp__plugin__server__tool`). */
@@ -303,6 +337,7 @@ export class PluginToolPolicyRegistry {
     this.entries.clear();
     this.byPlugin.clear();
     this.artifactFormats.clear();
+    this.browserGranted.clear();
   }
 }
 

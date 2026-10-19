@@ -76,6 +76,29 @@ export class MCPToolModule extends BaseModule {
   }
 
   /**
+   * Find a plugin's HOST-disabled rows (B11/HOST-15): rows disabled by the
+   * import flow while the declared browser dependency was unresolved —
+   * NOT rows a user disabled manually.
+   */
+  public async findBrowserDisabledByPluginName(
+    pluginName: string
+  ): Promise<MCPToolEntity[]> {
+    return this.withConnection(() =>
+      this.mcpToolModel.findBrowserDisabledByPluginName(pluginName)
+    );
+  }
+
+  /**
+   * Re-enable a HOST-disabled server row and clear its
+   * `hostDisabledReason` marker (B11 browser repair).
+   */
+  public async clearBrowserDisabledMarker(id: number): Promise<void> {
+    return this.withConnection(() =>
+      this.mcpToolModel.clearBrowserDisabledMarker(id)
+    ).then(() => undefined);
+  }
+
+  /**
    * Find a plugin-owned MCP server by plugin name and scoped server name.
    * Used by the dual-format MCP tool name parser to resolve
    * `mcp__<plugin>__<server>__<tool>` calls. Returns null when no row

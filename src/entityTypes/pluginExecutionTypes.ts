@@ -55,6 +55,12 @@ export const pluginHostRequirementsSchema = z.object({
 export const pluginCapabilitiesSchema = z.object({
   browserExecutable: z.boolean().optional(),
   fileArtifacts: z.array(z.enum(["json", "csv"])).optional(),
+  /**
+   * B11: minimum tested major Chrome version for browser plugins. Null/absent
+   * accepts any host-resolved Chrome; a declared floor renders an older host
+   * browser as an actionable `browser_dependency_missing` diagnostic.
+   */
+  minBrowserMajorVersion: z.number().int().min(1).optional(),
 });
 
 /** Persisted runtime descriptor (host-owned; rides in MCP metadata). */

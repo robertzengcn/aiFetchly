@@ -25,6 +25,7 @@ import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import { PluginMcpOwnershipChecker } from "@/service/PluginMcpOwnershipChecker";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import {
   readRuntimeDescriptorFromMetadata,
   HOST_CLEANUP_RESERVE_MS,
@@ -121,9 +122,9 @@ export interface MCPToolWithServer {
  *
  * The validated host-runtime descriptor is injected by the caller after the
  * launch-time ownership contract (B13) has passed: buildClientConfig itself
- * never authorizes a launch.
+ * never authorizes a launch. Exported for B11 capability-gating tests.
  */
-function buildClientConfig(
+export function buildClientConfig(
   server: MCPToolEntity,
   hostRuntime?: { entry: string; pluginVersion: string }
 ): {
@@ -365,18 +366,37 @@ export class MCPToolService {
       // H1 (§2): provision the per-job staging directory under the SAME
       // execution id BEFORE tools/call, so the plugin can finalize
       // candidates into it and the host can promote them after exit.
-      const outputDirectory = getPluginFileArtifactService().provisionStaging(
-        executeContext.executionId
-      );
+      // B11/HOST-15: grants are checked against the plugin's DECLARED
+      // capabilities — a tool without the fileArtifacts grant gets no
+      // staging directory and never triggers require-artifacts semantics
+      // (its promotion is generic, not artifact-graded).
+      const declaresArtifacts =
+        getPluginToolPolicyRegistry()
+          .getPluginArtifactFormats(config.hostRuntime.pluginName)
+          .length > 0;
+      const outputDirectory = declaresArtifacts
+        ? getPluginFileArtifactService().provisionStaging(
+            executeContext.executionId
+          )
+        : null;
+      // B11: the browser descriptor leaks no filesystem state into the
+      // context and is granted ONLY to plugins whose manifest declares
+      // browser execution; a missing/older browser resolves to no context
+      // browser entry plus a typed dependency diagnostic at scrape time.
       const browser = getPluginBrowserCapabilityService().describe();
+      const browserGranted =
+        browser !== null &&
+        getPluginToolPolicyRegistry().pluginDeclaresBrowserExecution(
+          config.hostRuntime.pluginName
+        );
       config.hostRuntime = {
         ...config.hostRuntime,
         context: {
           mode: "execute" as const,
           executionId: executeContext.executionId,
           deadlineEpochMs: executeContext.deadlineEpochMs,
-          outputDirectory,
-          ...(browser
+          ...(outputDirectory ? { outputDirectory } : {}),
+          ...(browserGranted
             ? {
                 browser: {
                   executablePath: browser.path,

@@ -1090,12 +1090,20 @@ export class PluginImportService {
     // browser as `needs_configuration` — a user-resolvable dependency, not
     // an activation failure. Its MCP rows persist DISABLED so the scrape
     // tool is never exposed until the browser resolves; re-enabling happens
-    // on the next apply/discovery after the browser dependency flow
-    // completes (PluginBrowserCapabilityService).
+    // on the next apply after the browser dependency flow completes
+    // (PluginComponentRegistryService.repairBrowserBlockedServers).
+    // B11: the capability service now receives the REAL candidates
+    // (env-configured path + managed Chrome-for-Testing cache) instead of
+    // null/empty defaults that reported configured/managed-only
+    // installations as missing. A declared compatibility floor
+    // (`capabilities.minBrowserMajorVersion`) also renders an older host
+    // browser as the same actionable diagnostic.
     const browserMissing =
       !policyGateBlocked &&
       p.manifest.capabilities?.browserExecutable === true &&
-      getPluginBrowserCapabilityService().describe() === null;
+      !getPluginBrowserCapabilityService().testBrowserUsable(
+        p.manifest.capabilities
+      ).compatible;
 
     // 8. Persist InstalledPlugin row.
     // Per Design §15.5, plugin import never prepares Python environments.
@@ -1218,12 +1226,23 @@ export class PluginImportService {
         // enablement never offers the plugin's tools. H6: the same applies
         // while the declared browser dependency is unresolvable — the tool
         // stays unexposed until the browser resolves.
+        // B11: HOST-disability is MARKED in the host-owned metadata so the
+        // apply-time repair flow (repairBrowserBlockedServers) can re-enable
+        // exactly these rows without resurrecting explicit user disables.
+        // Mark ONLY rows disabled by the missing browser dependency:
+        // policy-gate-blocked rows stay silent here (their gating belongs to
+        // the policy layer and is re-evaluated on every apply), so
+        // repairBrowserBlockedServers re-enables exactly these rows without
+        // resurrecting policy blocks or explicit user disables.
         entity.enabled = !policyGateBlocked && !browserMissing;
         entity.authType = server.authType;
         entity.timeout = server.timeout ?? 30000;
         entity.tools = JSON.stringify([]);
         entity.toolConfig = JSON.stringify({});
-        entity.metadata = JSON.stringify(server.metadata ?? {});
+        entity.metadata = JSON.stringify({
+          ...(server.metadata ?? {}),
+          ...(browserMissing ? { hostDisabledReason: "browser-missing" } : {}),
+        });
         entity.pluginName = p.manifest.name;
         entity.pluginComponentPath = server.componentPath;
         entity.origin = "plugin";

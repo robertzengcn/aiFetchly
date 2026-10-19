@@ -29,6 +29,8 @@ import {
   PluginManagementModule,
 } from "@/modules/PluginManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
+import { MCPToolService } from "@/service/MCPToolService";
+import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import { buildAgentDefinition } from "@/service/slashCommands/agentFrontmatter";
 import {
   frontmatterRecord,
@@ -148,6 +150,42 @@ export class PluginComponentRegistryService {
     // gate-failed plugin loses its skills, commands, agents, hooks and
     // policy leases until its manifest passes again (the DB rows stay; the
     // next successful apply re-registers everything).
+    // B11/HOST-15: BEFORE hooks, re-evaluate browser-blocked server rows.
+    // Import disabled them (metadata `hostDisabledReason: browser-missing`)
+    // while the browser dependency was unresolved and promised that a
+    // reload/apply would repair them once it resolved — without this hook
+    // that promise was never kept. Only HOST-disabled rows are repaired;
+    // explicit user disables have no marker and stay untouched, and a
+    // failing discovery keeps the row disabled with a fresh diagnostic.
+    for (const plugin of loaded.enabled.filter(
+      (p) => !gateFailedPlugins.includes(p.name)
+    )) {
+      try {
+        const usable = getPluginBrowserCapabilityService().testBrowserUsable(
+          plugin.manifest.capabilities
+        );
+        if (!usable.compatible) continue;
+        const repaired =
+          await PluginComponentRegistryService.repairBrowserBlockedServers(
+            plugin.name
+          );
+        if (repaired.disabledCount > 0) {
+          log.info(
+            `[PluginComponentRegistryService] B11: re-enabled ${repaired.enabledCount}/${repaired.disabledCount} browser-blocked MCP server(s) for "${plugin.name}".`
+          );
+        }
+        if (repaired.failureCount > 0) {
+          log.warn(
+            `[PluginComponentRegistryService] B11: discovery failed for ${repaired.failureCount} repaired server(s) "${plugin.name}" — those rows stay disabled.`
+          );
+        }
+      } catch (repairErr) {
+        log.warn(
+          `[PluginComponentRegistryService] B11: browser repair for "${plugin.name}" failed:`,
+          repairErr
+        );
+      }
+    }
     PluginHookRegistrar.registerFromLoadedPlugins(
       loaded.enabled.filter(
         (plugin) => !gateFailedPlugins.includes(plugin.name)
@@ -177,6 +215,54 @@ export class PluginComponentRegistryService {
    * Remove a plugin's capabilities from the runtime. Used by the IPC
    * uninstall/disable flow.
    */
+  /**
+   * B11/HOST-15: re-enable a plugin's HOST-disabled MCP rows (import
+   * persisted them disabled while the declared browser dependency was
+   * unresolved, marker `hostDisabledReason: "browser-missing"` in the
+   * host-owned metadata) once the browser dependency resolves. Each
+   * repaired row re-runs the trust+discovery smoke test; rows whose
+   * discovery fails stay disabled with their marker so a later apply
+   * retries. Explicit user disables (no marker) are never touched.
+   */
+  static async repairBrowserBlockedServers(
+    pluginName: string
+  ): Promise<{
+    disabledCount: number;
+    enabledCount: number;
+    failureCount: number;
+  }> {
+    const mcpModule = new MCPToolModule();
+    const candidates = await mcpModule.findBrowserDisabledByPluginName(
+      pluginName
+    );
+    if (candidates.length === 0) {
+      return { disabledCount: 0, enabledCount: 0, failureCount: 0 };
+    }
+    let enabledCount = 0;
+    let failureCount = 0;
+    for (const row of candidates) {
+      try {
+        if (row.transport === "stdio") {
+          new MCPToolService().setTrust(row.id, true);
+        }
+        await new MCPToolService().discoverTools(row.id);
+        await mcpModule.clearBrowserDisabledMarker(row.id);
+        enabledCount += 1;
+      } catch (e) {
+        failureCount += 1;
+        log.warn(
+          `[PluginComponentRegistryService] B11: repair discovery failed for server ${row.id} ("${pluginName}"):`,
+          e
+        );
+      }
+    }
+    return {
+      disabledCount: candidates.length,
+      enabledCount,
+      failureCount,
+    };
+  }
+
   static async unregisterPluginCapabilities(pluginName: string): Promise<void> {
     PluginRuntimeCache.clear(`unregister-${pluginName}`);
     SkillRegistry.unregisterSkillsByPlugin(pluginName);
