@@ -88,7 +88,10 @@ export class PluginFileArtifactModule {
     conversationId: string,
     artifactId: string,
     maxRows?: number
-  ): Promise<{ ok: true; format: "json" | "csv"; rows: string } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; format: "json" | "csv"; rows: string; truncated: boolean }
+    | { ok: false; error: string }
+  > {
     await this.assertConversationOwned(conversationId);
     return this.service.preview(conversationId, artifactId, maxRows);
   }

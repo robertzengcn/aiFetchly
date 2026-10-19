@@ -48,6 +48,13 @@
           class="plugin-artifact-card__preview"
           data-testid="plugin-artifact-preview"
         >{{ row(artifact.id)?.preview }}</pre>
+        <div
+          v-if="row(artifact.id)?.previewTruncated"
+          class="plugin-artifact-card__preview-note"
+          data-testid="plugin-artifact-preview-truncated"
+        >
+          {{ truncatedPreviewLabel() }}
+        </div>
       </div>
       <div class="plugin-artifact-card__actions">
         <v-btn
@@ -96,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   deletePluginArtifact,
@@ -134,6 +141,8 @@ const PREVIEW_MAX_ROWS = 5;
 
 interface RowState {
   preview: string | null;
+  /** Host-side truncation signal (B01): rows/bytes were capped. */
+  previewTruncated: boolean;
   toggled: boolean;
   error: string | null;
   busy: boolean;
@@ -147,17 +156,19 @@ function row(id: string): RowState | undefined {
 }
 
 function ensureRow(id: string): RowState {
-  let state = rows.value.get(id);
-  if (!state) {
-    state = {
-      preview: null,
-      toggled: false,
-      error: null,
-      busy: false,
-      confirmingDelete: false,
-    };
-    rows.value.set(id, state);
-  }
+  const existing = rows.value.get(id);
+  if (existing) return existing;
+  // reactive() so per-row writes (preview/busy/toggle) take effect even
+  // though the value only entered the map as a plain object.
+  const state = reactive<RowState>({
+    preview: null,
+    previewTruncated: false,
+    toggled: false,
+    error: null,
+    busy: false,
+    confirmingDelete: false,
+  });
+  rows.value.set(id, state);
   return state;
 }
 
@@ -210,12 +221,13 @@ function truncatedPreviewLabel(): string {
   );
 }
 
-function boundPreview(raw: unknown): string {
+function boundPreview(raw: unknown, hostTruncated: boolean): string {
   if (typeof raw !== "string") return "";
   const rowsText = raw.split(/\r?\n/);
+  const capped = rowsText.length > PREVIEW_MAX_ROWS;
   return (
     rowsText.slice(0, PREVIEW_MAX_ROWS).join("\n") +
-    (rowsText.length > PREVIEW_MAX_ROWS ? `\n${truncatedPreviewLabel()}` : "")
+    (capped || hostTruncated ? `\n${truncatedPreviewLabel()}` : "")
   );
 }
 
@@ -234,8 +246,11 @@ async function togglePreview(artifact: PluginArtifactView): Promise<void> {
       props.conversationId,
       artifact.id
     );
+    console.log("[CARD-SRC]", result && result.ok ? "ok" : "not-ok", (result as { rows?: string } | null | undefined)?.rows?.slice(0, 40));
     if (result && result.ok) {
-      state.preview = boundPreview(result.rows) || null;
+      state.previewTruncated = result.truncated === true;
+      state.preview = boundPreview(result.rows, state.previewTruncated) || null;
+      console.log("[CARD-SRC]", "preview set:", state.preview?.slice(0, 40));
     } else {
       state.preview = null;
       state.error =

@@ -42,6 +42,8 @@ export interface PluginArtifactPreview {
   error?: string;
   format?: "json" | "csv";
   rows?: string;
+  /** True when the host capped rows/bytes for this preview (B01). */
+  truncated?: boolean;
 }
 
 /** Bounded preview (first rows only; never the whole artifact). */

@@ -60,6 +60,10 @@ export const PLUGIN_ARTIFACT_LIMITS = {
   defaultRetentionMs: 30 * 24 * 60 * 60_000,
   /** Max bytes of a candidates.json manifest read by the host (B10). */
   maxCandidatesManifestBytes: 1024 * 1024,
+  /** Hard byte cap for a rendered preview envelope (B01). */
+  maxPreviewBytes: 16 * 1024,
+  /** Bounded input slice a preview may read/parse (B01). */
+  maxPreviewReadBytes: 1024 * 1024,
 } as const;
 
 /** Structural fs seam for tests. */
@@ -81,16 +85,45 @@ export interface ArtifactFs {
   readFileSync(p: string): string;
   /** Byte read used for digest computation and bounded parses. */
   readBufferSync(p: string): Buffer;
+  /** Bounded positional read: at most `end` bytes of `p` (B01 previews). */
+  readBufferSliceSync(p: string, end: number): Buffer;
   unlinkSync(p: string): void;
   rmSync(p: string, options?: { recursive: boolean; force: boolean }): void;
   renameSync(from: string, to: string): void;
 }
 
 function defaultFs(): ArtifactFs {
+  // B01: an EXPLICIT adapter — the previous `{...fs} as ArtifactFs` cast
+  // promised `readFileSync(): string` while Node (without encoding) returns
+  // a Buffer, which broke real CSV previews (`text.split is not a function`).
+  // The strings read here are always decoded as UTF-8.
   return {
-    ...fs,
-    readBufferSync: (p: string) => fs.readFileSync(p) as Buffer,
-  } as unknown as ArtifactFs;
+    existsSync: (p) => fs.existsSync(p),
+    statSync: (p) => fs.statSync(p),
+    lstatSync: (p) => fs.lstatSync(p),
+    realpathSync: (p) => fs.realpathSync(p),
+    mkdirSync: (p, options) => fs.mkdirSync(p, options),
+    readdirSync: (p) => fs.readdirSync(p),
+    copyFileSync: (from, to) => fs.copyFileSync(from, to),
+    writeFileSync: (p, data, options) => fs.writeFileSync(p, data, options),
+    readFileSync: (p) => fs.readFileSync(p, "utf8"),
+    readBufferSync: (p) => fs.readFileSync(p),
+    readBufferSliceSync: (p, end) => {
+      // Positional bounded read: never loads a whole 100 MiB artifact into
+      // memory just to preview its first rows.
+      const fd = fs.openSync(p, "r");
+      try {
+        const buffer = Buffer.alloc(Math.max(0, end));
+        const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+        return buffer.subarray(0, bytes);
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+    unlinkSync: (p) => fs.unlinkSync(p),
+    rmSync: (p, options) => fs.rmSync(p, options),
+    renameSync: (from, to) => fs.renameSync(from, to),
+  };
 }
 
 /** Leading characters Excel/Sheets treat as formula-like (design §13.3). */
@@ -239,6 +272,256 @@ export function validatePluginArtifactJsonDoc(
     }
   }
   return { ok: true, recordCount: doc.records.length };
+}
+
+/**
+ * Bounded RFC-4180 record extraction for previews (B01): quoted commas and
+ * quoted newlines are NOT record boundaries, \r\n / \r / \n each terminate a
+ * record, and a final unterminated record with content is included. Only
+ * `maxRecords` records are returned even if the text holds more.
+ */
+export function extractCsvPreviewRecords(
+  text: string,
+  maxRecords: number
+): {
+  records: string[];
+  /** True when records exist beyond `maxRecords` (or text was cut). */
+  hasMore: boolean;
+  /** True when the text ends inside an open quoted field. */
+  cutInsideQuotes: boolean;
+} {
+  const records: string[] = [];
+  let recordStart = 0;
+  let i = 0;
+  let inQuotes = false;
+  while (i < text.length && records.length < maxRecords) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      i += 1;
+      continue;
+    }
+    let terminatorLength = 0;
+    if (ch === "\r") terminatorLength = text[i + 1] === "\n" ? 2 : 1;
+    else if (ch === "\n") terminatorLength = 1;
+    if (terminatorLength > 0) {
+      records.push(text.slice(recordStart, i));
+      i += terminatorLength;
+      recordStart = i;
+      continue;
+    }
+    i += 1;
+  }
+  if (records.length < maxRecords && recordStart < text.length) {
+    records.push(text.slice(recordStart));
+  }
+  const exhausted = records.length < maxRecords;
+  const hasMore =
+    !exhausted && (i < text.length || recordStart < text.length);
+  return { records, hasMore, cutInsideQuotes: inQuotes };
+}
+
+/** Per-field cap for a JSON preview record (B01, "individual fields"). */
+const PREVIEW_FIELD_CHARS = 512;
+
+/** Maximum nested keys/values retained from one record's sub-structures. */
+const PREVIEW_MAX_ENTRIES = 32;
+
+function boundPreviewValue(value: unknown, maxFieldChars: number): unknown {
+  if (typeof value === "string") {
+    return value.length > maxFieldChars
+      ? `${value.slice(0, maxFieldChars)}…`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, PREVIEW_MAX_ENTRIES)
+      .map((v) => boundPreviewValue(v, maxFieldChars));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    let kept = 0;
+    for (const [key, entry] of Object.entries(
+      value as Record<string, unknown>
+    )) {
+      if (kept >= PREVIEW_MAX_ENTRIES) break;
+      out[key] = boundPreviewValue(entry, maxFieldChars);
+      kept += 1;
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Bound+cap a list of JSON record items into the allowlisted preview
+ * envelope (B01): per-field caps, per-record keep loop, hard envelope byte
+ * cap, and a `truncated` flag whenever anything was dropped or cut.
+ */
+function buildJsonPreviewEnvelope(
+  schemaVersion: number | undefined,
+  items: unknown[],
+  moreAvailable: boolean,
+  maxRecords: number,
+  maxEnvelopeBytes: number,
+  inputWasCut: boolean
+): { envelope: PluginArtifactJsonPreview; truncated: boolean } {
+  const kept: unknown[] = [];
+  let truncated = inputWasCut || moreAvailable || items.length > maxRecords;
+  let bytes = 0;
+  for (const item of items) {
+    if (kept.length >= maxRecords) {
+      truncated = true;
+      break;
+    }
+    const rendered = boundPreviewValue(item, PREVIEW_FIELD_CHARS);
+    const encoded = JSON.stringify(rendered);
+    // Per-field/per-entry clipping shrank the record (B01 reports it).
+    if (
+      Buffer.byteLength(JSON.stringify(item), "utf8") >
+      Buffer.byteLength(encoded, "utf8")
+    ) {
+      truncated = true;
+    }
+    const nextBytes =
+      bytes + (bytes > 0 ? 1 : 0) + Buffer.byteLength(encoded, "utf8");
+    if (nextBytes > maxEnvelopeBytes && kept.length > 0) {
+      truncated = true;
+      break;
+    }
+    kept.push(rendered);
+    bytes = nextBytes;
+  }
+  return {
+    envelope: { schemaVersion, records: kept, truncated },
+    truncated,
+  };
+}
+
+/** Allowlisted JSON preview envelope (B01): no arbitrary top-level fields. */
+export interface PluginArtifactJsonPreview {
+  schemaVersion?: number;
+  records: unknown[];
+  truncated: boolean;
+}
+
+/**
+ * Extract a bounded JSON preview envelope from a (possibly input-cut) text
+ * slice (B01). Full parse first; when the slice ends mid-document, complete
+ * top-level `records` items are extracted scanner-style and re-parsed.
+ */
+export function extractJsonPreviewRecords(
+  text: string,
+  inputWasCut: boolean,
+  maxRecords: number,
+  maxEnvelopeBytes: number
+): { envelope: PluginArtifactJsonPreview; truncated: boolean } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const doc = parsed as Record<string, unknown>;
+    if (Array.isArray(doc.records)) {
+      const items = doc.records as unknown[];
+      const schemaVersion =
+        typeof doc.schemaVersion === "number" ? doc.schemaVersion : undefined;
+      return buildJsonPreviewEnvelope(
+        schemaVersion,
+        items,
+        false,
+        maxRecords,
+        maxEnvelopeBytes,
+        inputWasCut
+      );
+    }
+  }
+
+  // Input-cut recovery: locate the records array and pull complete items.
+  const keyIndex = text.indexOf('"records"');
+  if (keyIndex < 0) return null;
+  const colonIndex = text.indexOf(":", keyIndex);
+  const scanFrom = text.indexOf("[", colonIndex);
+  if (colonIndex < 0 || scanFrom < 0) return null;
+  let scan = scanFrom + 1;
+  const itemsText: string[] = [];
+  let itemStart = scan;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  while (scan < text.length) {
+    const ch = text[scan];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      scan += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      scan += 1;
+      continue;
+    }
+    if (ch === "{" || ch === "[") depth += 1;
+    else if (ch === "}" || ch === "]") {
+      if (depth === 0) {
+        if (itemStart < scan) itemsText.push(text.slice(itemStart, scan));
+        return finalizeExtractedItems(itemsText, false, maxRecords, maxEnvelopeBytes, inputWasCut);
+      }
+      depth -= 1;
+    } else if (ch === "," && depth === 0) {
+      if (itemStart < scan) itemsText.push(text.slice(itemStart, scan));
+      itemStart = scan + 1;
+      if (itemsText.length >= maxRecords + 1) {
+        return finalizeExtractedItems(itemsText, true, maxRecords, maxEnvelopeBytes, inputWasCut);
+      }
+    }
+    scan += 1;
+  }
+  // Slice ended before the array closed: salvage complete items only.
+  if (itemStart < scan && depth === 0 && !inString) {
+    itemsText.push(text.slice(itemStart, scan));
+  }
+  return finalizeExtractedItems(itemsText, true, maxRecords, maxEnvelopeBytes, inputWasCut);
+}
+
+function finalizeExtractedItems(
+  itemsText: string[],
+  moreAvailable: boolean,
+  maxRecords: number,
+  maxEnvelopeBytes: number,
+  inputWasCut: boolean
+): { envelope: PluginArtifactJsonPreview; truncated: boolean } | null {
+  if (itemsText.length === 0) return null;
+  let items: unknown[];
+  try {
+    items = JSON.parse(`[${itemsText.join(",")}]`) as unknown[];
+  } catch {
+    return null;
+  }
+  if (items.length === 0) return null;
+  return buildJsonPreviewEnvelope(
+    undefined,
+    items,
+    moreAvailable,
+    maxRecords,
+    maxEnvelopeBytes,
+    inputWasCut
+  );
 }
 
 export class PluginFileArtifactService {
@@ -596,14 +879,22 @@ export class PluginFileArtifactService {
   }
 
   /**
-   * Bounded preview: JSON → first `maxRows` records; CSV → first `maxRows`
-   * lines. Never returns unbounded content to the model/renderer.
+   * Bounded preview (B01): a positional byte slice of the artifact — never
+   * the whole file — feeds RFC-4180-aware CSV record extraction or a
+   * validated JSON envelope built from the allowlisted keys
+   * (schemaVersion/records/truncated) with per-field byte caps. Rows AND
+   * bytes are capped; `truncated` reports anything dropped or cut.
    */
   public preview(
     conversationId: string,
     artifactId: string,
     maxRows = 5
-  ): { ok: true; format: PluginArtifactFormat; rows: string } | { ok: false; error: string } {
+  ): {
+    ok: true;
+    format: PluginArtifactFormat;
+    rows: string;
+    truncated: boolean;
+  } | { ok: false; error: string } {
     const artifact = this.requireOwned(artifactId, conversationId);
     if (!artifact) return { ok: false, error: "artifact not found" };
     const contentPath = path.join(
@@ -615,25 +906,52 @@ export class PluginFileArtifactService {
     if (!this.fs.existsSync(contentPath)) {
       return { ok: false, error: "artifact content missing" };
     }
-    const text = this.fs.readBufferSync(contentPath).toString("utf8");
+    const readBytes = PLUGIN_ARTIFACT_LIMITS.maxPreviewReadBytes;
+    const slice = this.fs.readBufferSliceSync(contentPath, readBytes);
+    const size = this.fs.statSync(contentPath).size;
+    const inputWasCut = slice.length < size;
+    const text = slice.toString("utf8");
+    const maxEnvelopeBytes = PLUGIN_ARTIFACT_LIMITS.maxPreviewBytes;
+
     if (artifact.format === "csv") {
-      const lines = text.split("\n").slice(0, maxRows + 1); // header + rows
-      return { ok: true, format: "csv", rows: lines.join("\n") };
-    }
-    try {
-      const parsed: unknown = JSON.parse(text);
-      if (parsed && typeof parsed === "object" && Array.isArray((parsed as { records?: unknown }).records)) {
-        const records = (parsed as { records: unknown[] }).records.slice(0, maxRows);
-        return {
-          ok: true,
-          format: "json",
-          rows: JSON.stringify({ ...parsed, records } as Record<string, unknown>),
-        };
+      // header row + maxRows data records
+      const extraction = extractCsvPreviewRecords(text, maxRows + 1);
+      let truncated =
+        inputWasCut || extraction.hasMore || extraction.cutInsideQuotes;
+      let joined = "";
+      for (const record of extraction.records) {
+        const candidate = joined.length === 0 ? record : `${joined}\n${record}`;
+        if (Buffer.byteLength(candidate, "utf8") > maxEnvelopeBytes) {
+          truncated = true;
+          break;
+        }
+        joined = candidate;
       }
-      return { ok: true, format: "json", rows: text.slice(0, 16 * 1024) };
-    } catch {
-      return { ok: false, error: "artifact content is not valid JSON" };
+      return { ok: true, format: "csv", rows: joined, truncated };
     }
+
+    const json = extractJsonPreviewRecords(
+      text,
+      inputWasCut,
+      maxRows,
+      maxEnvelopeBytes
+    );
+    if (json) {
+      return {
+        ok: true,
+        format: "json",
+        rows: JSON.stringify(json.envelope),
+        truncated: json.truncated,
+      };
+    }
+    // Legacy/unparseable content: bounded text fallback, still byte-capped.
+    const fallbackRows = text.slice(0, maxEnvelopeBytes);
+    return {
+      ok: true,
+      format: "json",
+      rows: fallbackRows,
+      truncated: inputWasCut || text.length > fallbackRows.length,
+    };
   }
 
   /** Copy validated artifact bytes to a user-chosen destination (export). */

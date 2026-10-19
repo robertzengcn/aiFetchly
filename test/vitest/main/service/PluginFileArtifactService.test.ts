@@ -8,6 +8,8 @@ import {
   PluginFileArtifactService,
   PLUGIN_ARTIFACT_LIMITS,
   validatePluginArtifactCsvText,
+  extractCsvPreviewRecords,
+  extractJsonPreviewRecords,
   type PluginArtifactCandidate,
 } from "@/service/PluginFileArtifactService";
 
@@ -648,5 +650,164 @@ describe("PluginFileArtifactService.recoverStartupExecutions", () => {
     } finally {
       fs.rmSync(agedRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("PluginFileArtifactService bounded previews (B01)", () => {
+  function promoteContent(
+    executionId: string,
+    content: string,
+    format: "json" | "csv",
+    recordCount: number
+  ): string {
+    const staging = service.provisionStaging(executionId);
+    const name = format === "json" ? "records.json" : "records.csv";
+    fs.writeFileSync(path.join(staging, name), content);
+    const { artifacts, errors } = service.promoteCandidates({
+      executionId,
+      conversationId: "conv-b01",
+      pluginName: "demo-plugin",
+      candidates: [
+        { version: 1, relativePath: name, format, recordCount, complete: true },
+      ],
+    });
+    expect(errors).toEqual([]);
+    expect(artifacts).toHaveLength(1);
+    return artifacts[0].id;
+  }
+
+  it("keeps quoted newlines inside ONE CSV record (B01)", () => {
+    const csv =
+      "name,notes\n" +
+      'Acme Caf\u00e9,"line one\nline two"\n' +
+      'Beta Biz,"two,""cozy"" rooms"';
+    const id = promoteContent("exec-b01-csv", csv, "csv", 2);
+    const preview = service.preview("conv-b01", id);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.format).toBe("csv");
+    expect(preview.truncated).toBe(false);
+    expect(JSON.parse(JSON.stringify(preview))).toHaveProperty("rows");
+    // three logical records (header + 2), NOT five raw \n lines
+    const segments = preview.rows.split("\n");
+    expect(segments).toHaveLength(4); // header, Acme x2 lines, Beta record
+    expect(segments[1]).toBe('Acme Caf\u00e9,"line one');
+    expect(segments[2]).toBe('line two"');
+    expect(segments[3]).toBe('Beta Biz,"two,""cozy"" rooms"');
+  });
+
+  it("bounds CSV preview to header + maxRows data records (B01)", () => {
+    const csv =
+      "name\n" +
+      Array.from({ length: 10 }, (_, i) => `biz${i}`).join("\n");
+    const id = promoteContent("exec-b01-csvrows", csv, "csv", 10);
+    const preview = service.preview("conv-b01", id, 5);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.truncated).toBe(true);
+    expect(preview.rows.split("\n")).toHaveLength(6);
+    expect(preview.rows.startsWith("name\nbiz0\nbiz1")).toBe(true);
+    expect(preview.rows).toContain("biz4");
+    expect(preview.rows).not.toContain("biz5");
+  });
+
+  it("caps long fields and preserves only the allowlisted JSON envelope (B01)", () => {
+    const longValue = "x".repeat(100_000);
+    const doc = {
+      schemaVersion: 1,
+      flavorSummary: "arbitrary top-level field",
+      records: [{ name: "Split Zone", longValue }],
+    };
+    const id = promoteContent(
+      "exec-b01-jsonlong",
+      JSON.stringify(doc),
+      "json",
+      1
+    );
+    const preview = service.preview("conv-b01", id);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.truncated).toBe(true);
+    const envelope = JSON.parse(preview.rows) as Record<string, unknown>;
+    expect(Object.keys(envelope).sort()).toEqual([
+      "records",
+      "schemaVersion",
+      "truncated",
+    ]);
+    const record = (envelope.records as Record<string, unknown>[])[0];
+    expect(record.name).toBe("Split Zone");
+    expect(typeof record.longValue).toBe("string");
+    expect((record.longValue as string).length).toBeLessThanOrEqual(513);
+    expect((record.longValue as string).endsWith("…")).toBe(true);
+  });
+
+  it("marks the preview truncated when the bounded input slice cut the file (B01)", () => {
+    const big = `{"schemaVersion":1,"records":[${Array.from(
+      { length: 5000 },
+      (_, i) => `{"i":${i},"pad":"${"p".repeat(400)}"}`
+    ).join(",")}]}`;
+    expect(big.length).toBeGreaterThan(
+      PLUGIN_ARTIFACT_LIMITS.maxPreviewReadBytes
+    );
+    const id = promoteContent("exec-b01-bigr", big, "json", 5000);
+    const preview = service.preview("conv-b01", id);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.truncated).toBe(true);
+    const envelope = JSON.parse(preview.rows) as {
+      records: unknown[];
+      truncated: boolean;
+    };
+    expect(envelope.records.length).toBeLessThanOrEqual(5);
+    expect(envelope.truncated).toBe(true);
+    expect(Buffer.byteLength(preview.rows, "utf8")).toBeLessThan(
+      PLUGIN_ARTIFACT_LIMITS.maxPreviewBytes
+    );
+  });
+
+  it("falls back to a bounded text preview for legacy unparseable JSON (B01)", () => {
+    const staging = service.provisionStaging("exec-b01-legacy");
+    fs.writeFileSync(
+      path.join(staging, "records.json"),
+      JSON.stringify({ schemaVersion: 1, records: [{ a: 1 }] })
+    );
+    const { artifacts } = service.promoteCandidates({
+      executionId: "exec-b01-legacy",
+      conversationId: "conv-b01",
+      pluginName: "demo-plugin",
+      candidates: [{ ...JSON_CANDIDATE, recordCount: 1 }],
+    });
+    // Simulate a pre-B10 artifact on disk whose content predates validation.
+    fs.writeFileSync(
+      path.join(root, "artifacts", artifacts[0].id, "content.json"),
+      "not json at all"
+    );
+    const preview = service.preview("conv-b01", artifacts[0].id);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.rows).toBe("not json at all");
+    expect(preview.truncated).toBe(false);
+  });
+
+  it("extractCsvPreviewRecords flags quote-cut and overflow (B01)", () => {
+    const ok = extractCsvPreviewRecords('a,"b\nc"', 3);
+    expect(ok.records).toHaveLength(1);
+    expect(ok.hasMore).toBe(false);
+    expect(ok.cutInsideQuotes).toBe(false);
+    const overflow = extractCsvPreviewRecords("a\nb\nc\nd\ne\nf", 3);
+    expect(overflow.records).toHaveLength(3);
+    expect(overflow.hasMore).toBe(true);
+    const quoteCut = extractCsvPreviewRecords('a,"b\nc', 3);
+    expect(quoteCut.cutInsideQuotes).toBe(true);
+  });
+
+  it("extractJsonPreviewRecords salvages complete items from a cut doc (B01)", () => {
+    const cut =
+      '{"schemaVersion":1,"records":[{"a":1},{"a":2},{"broken":' + "true";
+    const out = extractJsonPreviewRecords(cut, true, 5, 16 * 1024);
+    expect(out).not.toBeNull();
+    if (!out) return;
+    expect(out.truncated).toBe(true);
+    expect(out.envelope.records).toEqual([{ a: 1 }, { a: 2 }]);
   });
 });
