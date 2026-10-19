@@ -18,7 +18,7 @@ const COMMAND_LIST = [
   'schedule enable', 'schedule disable', 'schedule execution-history',
   'proxy list', 'proxy add', 'proxy check', 'proxy delete', 'proxy import',
   'social-account list', 'social-account detail', 'social-account delete',
-  'yellow-pages list', 'yellow-pages results', 'yellow-pages platforms', 'yellow-pages statistics',
+
   'maps history', 'maps history-detail',
   'knowledge list-documents', 'knowledge search', 'knowledge stats',
   'dashboard summary', 'dashboard trends',
@@ -181,7 +181,6 @@ export class CliRepl {
       { name: 'schedule', desc: 'Task scheduling' },
       { name: 'proxy', desc: 'Proxy management' },
       { name: 'social-account', desc: 'Social media accounts' },
-      { name: 'yellow-pages', desc: 'Yellow Pages scraping' },
       { name: 'maps', desc: 'Maps search history' },
       { name: 'knowledge', desc: 'Knowledge base (RAG)' },
       { name: 'dashboard', desc: 'Dashboard statistics' },
