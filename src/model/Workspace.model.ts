@@ -12,8 +12,7 @@ export class WorkspaceModel extends BaseDb {
 
   constructor(dbpath: string) {
     super(dbpath);
-    this.repository =
-      this.sqliteDb.connection.getRepository(WorkspaceEntity);
+    this.repository = this.sqliteDb.connection.getRepository(WorkspaceEntity);
   }
 
   /**
@@ -37,12 +36,16 @@ export class WorkspaceModel extends BaseDb {
   }
 
   /**
-   * Find the most recent workspace for a conversation.
+   * Find the most recent workspace for a conversation. createdAt has
+   * second-precision in SQLite, so rows created in the same second may tie —
+   * id DESC is the deterministic secondary key.
    */
-  async findByConversation(conversationId: string): Promise<WorkspaceRecord | null> {
+  async findByConversation(
+    conversationId: string
+  ): Promise<WorkspaceRecord | null> {
     const entity = await this.repository.findOne({
       where: { conversationId },
-      order: { createdAt: "DESC" },
+      order: { createdAt: "DESC", id: "DESC" },
     });
     return entity ? this.toRecord(entity) : null;
   }
@@ -57,7 +60,7 @@ export class WorkspaceModel extends BaseDb {
   ): Promise<string | null> {
     const entity = await this.repository.findOne({
       where: { conversationId },
-      order: { createdAt: "DESC" },
+      order: { createdAt: "DESC", id: "DESC" },
       select: {
         id: true,
         workspaceKey: true,
@@ -93,12 +96,37 @@ export class WorkspaceModel extends BaseDb {
   /**
    * List all workspaces for a conversation, most recent first.
    */
-  async listByConversation(conversationId: string): Promise<WorkspaceSummary[]> {
+  async listByConversation(
+    conversationId: string
+  ): Promise<WorkspaceSummary[]> {
     const entities = await this.repository.find({
       where: { conversationId },
-      order: { createdAt: "DESC" },
+      order: { createdAt: "DESC", id: "DESC" },
     });
     return entities.map((e) => this.toSummary(e));
+  }
+
+  /**
+   * Revoke every non-terminated (pending/approved) binding of the
+   * conversation except `keepId`. FR-WSP-002 supersede semantics: each
+   * conversation holds at most ONE approved binding, so approving the newest
+   * pick retires the previous ones — a later revoke of the active binding
+   * must not silently revive an older binding (and a second-level createdAt
+   * tie could otherwise resurrect a stale row).
+   */
+  async revokeOtherActive(
+    conversationId: string,
+    keepId: number
+  ): Promise<void> {
+    const entities = await this.repository.find({
+      where: { conversationId },
+    });
+    for (const entity of entities) {
+      if (entity.id === keepId || entity.approvalState === "revoked") {
+        continue;
+      }
+      await this.setApprovalState(entity.id, "revoked");
+    }
   }
 
   private toRecord(e: WorkspaceEntity): WorkspaceRecord {
