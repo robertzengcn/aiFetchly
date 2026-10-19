@@ -67,7 +67,7 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
     msg.referencesHeader = null;
     msg.fromAddress = over.fromAddress ?? "person@example.com";
     msg.fromName = "Person";
-    msg.replyToAddress = null;
+    msg.replyToAddress = over.replyToAddress ?? null;
     msg.toAddressesJson = "[]";
     msg.ccAddressesJson = null;
     msg.subject = "Hi";
@@ -119,6 +119,34 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
       messageId: id,
     });
     expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("automated_sender");
+    expect(decision.reason).toContain("no-reply@mailer.example.com");
+    expect(decision.reason).toMatch(/configured send address/i);
+  });
+
+  it("does not block a human mailbox whose domain contains noreply", async () => {
+    const id = await seedMessage({
+      fromAddress: "person@noreply.example.com",
+      classification: "unknown",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("drafts when From is no-reply but Reply-To is a person", async () => {
+    const id = await seedMessage({
+      fromAddress: "no-reply@forms.example.com",
+      replyToAddress: "estewaycom@gmail.com",
+      classification: "unknown",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
   });
 
   it("allows a normal interested message to proceed to drafting", async () => {

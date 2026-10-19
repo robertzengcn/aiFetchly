@@ -217,12 +217,11 @@ export function validateSendBinding(input: SendBindingInput): void {
     );
   }
 
-  // §18.2 / §18.3 — identity binding. Version-2 revisions carry the frozen
-  // service identity (smtpUsername + replyToAddress) and must match the
-  // current effective service identity at send time. Version-1 revisions may
-  // send ONLY when the service still satisfies the legacy compatibility gate
-  // (effective SMTP username == From, configured Reply-To == null); otherwise
-  // the approval is invalidated and review is required.
+  // §18.2 — identity binding for version-2 revisions, which froze
+  // smtpUsername + replyToAddress at approval time and must still match.
+  // Version-1 revisions do not carry those fields. Sender and recipient
+  // checks above are sufficient for them; a later SMTP username or Reply-To
+  // on the mailbox must not block a confirmed send.
   const version = revision.envelopeVersion ?? 1;
   if (version === 2) {
     // §18.2 — v2 identity comparison. Uses the same v2 normalization as the
@@ -269,30 +268,6 @@ export function validateSendBinding(input: SendBindingInput): void {
       fail(
         "reply_to_mismatch",
         "Send rejected: revision Reply-To does not match the current configured Reply-To (null must match null)"
-      );
-    }
-  } else {
-    // §18.3 — legacy v1 gate. A v1 approval may send only when the service's
-    // effective SMTP username equals its From AND configured Reply-To is null.
-    // Otherwise, the identity the v1 hash implicitly assumed no longer holds;
-    // invalidate and require a fresh v2 revision + re-approval.
-    // Effective SMTP username via the shared resolver (AD-003): the legacy
-    // gate treats `smtpUsername == from` (after normalization) as the
-    // pre-identity-split invariant a v1 approval implicitly assumed.
-    const effectiveSmtp = resolveEmailServiceIdentity({
-      smtpUsername: service.smtpUsername,
-      from: service.from,
-      replyTo: service.replyTo,
-    }).smtpUsername;
-    const smtpMatchesLegacy =
-      normalizeSmtpUsernameForHash(effectiveSmtp) ===
-      normalizeSmtpUsernameForHash(service.from);
-    const replyToIsNull =
-      service.replyTo === null || service.replyTo === undefined;
-    if (!smtpMatchesLegacy || !replyToIsNull) {
-      fail(
-        "legacy_reply_identity_requires_review",
-        "Send rejected: legacy v1 approval requires review because the service identity (SMTP username / Reply-To) has changed"
       );
     }
   }

@@ -153,6 +153,39 @@ describe("classifyDeterministic (FR-007)", () => {
     }
   });
 
+  it("classifies automated local-parts and leaves human lookalikes unknown", () => {
+    expect(
+      classifyDeterministic({
+        ...base,
+        fromAddress: "do-not-reply@example.com",
+      }).classification
+    ).toBe("auto_reply");
+    expect(
+      classifyDeterministic({
+        ...base,
+        fromAddress: "forms-receipts-noreply@google.com",
+      }).classification
+    ).toBe("auto_reply");
+    expect(
+      classifyDeterministic({
+        ...base,
+        fromAddress: "person@noreply.example.com",
+      }).classification
+    ).toBe("unknown");
+    expect(
+      classifyDeterministic({
+        ...base,
+        fromAddress: "techno-reply@example.com",
+      }).classification
+    ).toBe("unknown");
+    expect(
+      classifyDeterministic({
+        ...base,
+        fromAddress: "estewaycom@gmail.com",
+      }).classification
+    ).toBe("unknown");
+  });
+
   it("returns unknown (never a guess) when rules are inconclusive", () => {
     const d = classifyDeterministic(base);
     expect(d.classification).toBe("unknown");

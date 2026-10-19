@@ -1,4 +1,5 @@
 import type { EmailMessageClassification } from "@/entityTypes/emailReceiveTypes";
+import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
 import { z } from "zod/v4";
 
 /**
@@ -43,9 +44,6 @@ const BOUNCE_FROM_RE =
 const BOUNCE_SUBJECT_RE =
   /undeliverable|delivery (?:failure|status notification)|returned mail|mail delivery failed|bounce/i;
 
-const AUTOMATED_FROM_RE =
-  /no-?reply@|donotreply@|noreply@|mailer@|notifications?@|auto-?reply@|automated@/i;
-
 const SENSITIVE_RE =
   /\brefund\b|\bchargeback\b|\blawsuit\b|\blegal (?:action|advice|counsel)\b|\battorney\b|\bpassword\b|\bcredentials?\b|\baccount (?:closure|deletion|access)\b|\bdispute\b|\bcharge dispute\b/i;
 
@@ -83,7 +81,7 @@ export function classifyDeterministic(
       "List headers present (List-ID / List-Unsubscribe)"
     );
   }
-  if (AUTOMATED_FROM_RE.test(from)) {
+  if (isAutomatedSender({ fromAddress: from })) {
     return dec("auto_reply", 0.9, "Automated/no-reply sender pattern");
   }
 

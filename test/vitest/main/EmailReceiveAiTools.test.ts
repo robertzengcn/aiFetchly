@@ -849,6 +849,8 @@ function storedRow(
     emailServiceId: number;
     providerUid: string;
     replyStatus: string;
+    fromAddress: string;
+    replyToAddress: string | null;
     replyDetectedAt: Date | null;
     replyDetectionSource: string | null;
     replyNegativeCheckAt: Date | null;
@@ -862,8 +864,9 @@ function storedRow(
     providerUid: "INBOX:42",
     messageId: "<msg-1@x.com>",
     threadKey: "<msg-1@x.com>",
-    fromAddress: "sender@example.com",
+    fromAddress: overrides.fromAddress ?? "sender@example.com",
     fromName: "Sender",
+    replyToAddress: overrides.replyToAddress ?? null,
     subject: "Hello",
     receivedAt: new Date("2026-10-01T00:00:00Z"),
     isUnread: 1,
@@ -942,6 +945,20 @@ describe("getEmailMessage — evidence flows to the detail DTO (G02)", () => {
     expect(result.message.replyEvidence.replyNegativeCheckAt).toBe(
       "2026-10-03T00:00:00.000Z"
     );
+  });
+
+  it("does not mark a human Reply-To as automated when From is no-reply", async () => {
+    messageModuleStub.read.mockResolvedValue(
+      storedRow({
+        id: 105,
+        fromAddress: "no-reply@forms.example.com",
+        replyToAddress: "estewaycom@gmail.com",
+      })
+    );
+    const result = await getEmailMessage({ message_id: 105 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.message.isAutomatedSender).toBe(false);
   });
 
   it("exposes replied:true for an app-sent row with no detector evidence", async () => {

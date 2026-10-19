@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
+import {
+  classificationForConfirmedSend,
+  evaluateAutoReplyPolicy,
+} from "@/service/emailReply/EmailAutoReplyPolicyService";
 import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import type { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 
@@ -79,7 +82,66 @@ describe("evaluateAutoReplyPolicy (Phase 1 — auto-send disabled)", () => {
       sendCounts: emptyCounts,
     });
     expect(d.status).toBe("blocked");
+    expect(d.reason).toContain("no-reply@example.com");
     expect(d.reason).toMatch(/automated/i);
+    expect(d.reason).toMatch(/configured send address/i);
+  });
+
+  it("allows ordinary human From addresses, including domain or local-part lookalikes", () => {
+    for (const fromAddress of [
+      "estewaycom@gmail.com",
+      "david@aiagentlnc.com",
+      "person@noreply.example.com",
+      "techno-reply@example.com",
+    ]) {
+      const d = evaluateAutoReplyPolicy({
+        message: fakeMessage({ fromAddress }),
+        classification: "interested",
+        confidence: 0.9,
+        rule: fakeRule(),
+        sendCounts: emptyCounts,
+      });
+      expect(d.status, fromAddress).toBe("draft_created");
+    }
+  });
+
+  it("replies to a human Reply-To when From is a no-reply mailbox", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage({
+        fromAddress: "no-reply@forms.example.com",
+        replyToAddress: "estewaycom@gmail.com",
+      }),
+      classification: "interested",
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).toBe("draft_created");
+  });
+
+  it("lets a confirmed send proceed when classification is unknown", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("unknown") as never,
+      confidence: null,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).not.toBe("blocked");
+    expect(d.status).not.toBe("skipped");
+    expect(d.reason).not.toMatch(/unknown/);
+  });
+
+  it("still blocks bounce after the confirmed-send classification mapping", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("bounce") as never,
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).toBe("blocked");
+    expect(d.reason).toMatch(/bounce/);
   });
 
   it("blocks bounce / unsubscribe / auto_reply classifications", () => {

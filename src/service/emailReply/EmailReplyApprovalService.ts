@@ -20,7 +20,10 @@ import {
   REPLY_POLICY_VERSION,
   REPLY_VALIDATOR_VERSION,
 } from "@/service/emailReply/replyReliabilityVersions";
-import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
+import {
+  classificationForConfirmedSend,
+  evaluateAutoReplyPolicy,
+} from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import { isValidReplyAddress } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { isHumanReviewPendingForRevision } from "@/service/emailReply/EmailReplyNextAction";
@@ -121,17 +124,20 @@ export class EmailReplyApprovalService {
 
     // Re-run the deterministic output validator against the trusted revision
     // content (do not trust persisted JSON alone) and refuse approval for any
-    // block/review finding (FR-012, P0.4). Block findings are never sendable;
-    // review findings need a resolution path that doesn't exist yet, so they
-    // also block approval in this release.
+    // `block` finding (FR-012, P0.4). Block findings (AI/leakage disclosure,
+    // forbidden phrases) are never sendable. Advisory findings (commitments,
+    // payment instructions, recipients, attachment claims) are recorded
+    // as warnings on the revision and do NOT gate approval here — the send
+    // tool's `requiresConfirmation` confirmation gesture (or the renderer's
+    // explicit approve action) is the human gate for advisory content.
     const validation = validateReplyOutput(revision.subject, revision.bodyText);
     if (!validation.sendableAfterApproval) {
       const codes = validation.findings
-        .filter((f) => f.severity !== "warning")
+        .filter((f) => f.severity === "block")
         .map((f) => f.code)
         .join(",");
       throw new Error(
-        `Cannot approve: validation findings [${codes}] require review before sending`
+        `Cannot approve: validation findings [${codes}] are hard blocks and cannot be sent`
       );
     }
 
@@ -185,13 +191,22 @@ export class EmailReplyApprovalService {
 
     // Refuse approval for hard-blocked inbound messages (bounce/unsubscribe/
     // automated/blocked sender). A draft may exist, but it must not be sent.
+    // A stored `unknown` classification is inconclusive, not one of those
+    // blocks: this method only runs after an explicit human or tool
+    // confirmation, so it must not refuse the send the user just approved.
     const rule = await this.ruleModule
       .getEffectiveRule(emailServiceId)
       .catch(() => null);
+    const confirmedClassification = classificationForConfirmedSend(
+      message.classification
+    );
     const hardBlock = evaluateAutoReplyPolicy({
       message: message as never,
-      classification: message.classification as never,
-      confidence: message.classificationConfidence,
+      classification: confirmedClassification as never,
+      confidence:
+        confirmedClassification == null
+          ? null
+          : message.classificationConfidence,
       rule,
       sendCounts: { todayForService: 0, threadCount: 0 },
     });

@@ -1344,8 +1344,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: TOOL_RESULT_READ_TOOL_NAME,
     description:
       "Read the next page of a large saved tool result. " +
-      "When a receipt has preview_complete false, call this with the output_id and cursor in next.arguments. " +
+      "When a receipt has preview_complete false, call this with the output_id and the cursor from next.arguments. " +
       "Then pass that page's next_cursor back to this tool until complete is true. " +
+      "next_cursor is an opaque signed token. Copy the entire string verbatim, including the signature after the final dot. " +
+      "Never shorten, decode, rebuild, pretty-print, or invent a cursor. A search cursor cannot be used here. " +
+      "If the result is INVALID_OUTPUT_CURSOR, do not retry that cursor: omit cursor and pass only output_id, or copy the last next_cursor from a page that succeeded. " +
       "The receipt preview is only a sample. If you stop before complete is true, say the review is partial. " +
       "Use this to walk a list. Do not search for a token that appears on every row. " +
       "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
@@ -1354,12 +1357,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         cursor: {
           type: "string",
           description:
-            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+            "Copy next_cursor from the previous tool_result_read result character-for-character, including the signature after the final dot. " +
+            "Omit this field to start at the beginning. A shortened, edited, or reconstructed cursor returns INVALID_OUTPUT_CURSOR and must not be retried.",
         },
         max_tokens: {
           type: "number",
@@ -1402,16 +1410,25 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Page through a list with tool_result_read instead of searching for a token on every row, " +
       "such as a file extension or a repeated field name. " +
       "Returns bounded windows with read cursors and match_count_in_window. " +
-      "No-match is final only when scan_complete is true; otherwise resume with next_cursor. " +
+      "No-match is final only when scan_complete is true; otherwise resume with next_cursor AND the same query string. " +
+      "next_cursor is opaque. Copy it verbatim, including the signature after the final dot. Never shorten, decode, or rebuild it. " +
+      "A read cursor cannot continue a search. If the result is INVALID_OUTPUT_CURSOR, do not retry that cursor: omit it and search again with output_id and query. " +
       "scan_complete refers to the saved bytes only - if source_completeness is 'partial', " +
       "the producer itself truncated and absence cannot be concluded. " +
-      "The query is literal text, never a regular expression.",
+      "The query is literal text, never a regular expression. " +
+      "max_matches must be an integer from 1 to 20. Omit it to use 10. " +
+      "Do not pass 30, 50, or any larger number: one page holds at most 20 matches, " +
+      "and a larger value is capped at 20. Continue with next_cursor for more hits.",
     parameters: {
       type: "object",
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         query: {
           type: "string",
@@ -1422,11 +1439,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         cursor: {
           type: "string",
           description:
-            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+            "Copy next_cursor from the previous tool_result_search result for this same query, character-for-character, including the signature after the final dot. " +
+            "Changing the query invalidates the cursor. Omit this field to start a new scan. Do not retry a cursor that returned INVALID_OUTPUT_CURSOR.",
         },
         max_matches: {
           type: "number",
-          description: "Max matches to return (default 10, max 20).",
+          description:
+            "How many matches to return on this page. Integer from 1 to 20. " +
+            "Default 10 when omitted. A value above 20, such as 30 or 50, is capped at 20. " +
+            "Ask for more results by calling again with next_cursor, not by raising this number.",
           default: 10,
           minimum: 1,
           maximum: 20,
@@ -2464,6 +2485,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
       "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
       "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
+      "Include a URL when the user supplied one. A URL in the body is allowed and is not a " +
+      "safety finding, a block, or a reason to ask for extra confirmation. " +
       "AI must be enabled. Returns the persisted draft for human review.",
     parameters: {
       type: "object",
@@ -2510,7 +2533,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "send_email_reply",
     description:
       "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
-      "Requires user confirmation. Do NOT use this to send new marketing/outbound emails " +
+      "Call this after the user confirms the draft (for example \"yes, send it\"). " +
+      "That confirmation is the send authorization. Do not refuse, and do not ask for a " +
+      "second confirmation, because the body contains a URL. A URL is allowed. " +
+      "Do not refuse because the inbound classification is \"unknown\"; that verdict is " +
+      "inconclusive and does not block a confirmed send. " +
+      "Do NOT use this to send new marketing/outbound emails " +
       "to external contacts — use start_email_send_task instead. Verifies the draft and " +
       "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
     parameters: {
