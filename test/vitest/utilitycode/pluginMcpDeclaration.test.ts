@@ -213,7 +213,7 @@ describe("normalizeMcpDeclaration — host runtime variant", () => {
     }
   });
 
-  it("overwrites a package-supplied reserved runtime metadata key", () => {
+  it("rejects a package-supplied reserved runtime metadata key (design section 5.3)", () => {
     const r = normalizeMcpDeclaration(
       "scraper",
       {
@@ -226,12 +226,32 @@ describe("normalizeMcpDeclaration — host runtime variant", () => {
       ROOT,
       ".mcp.json"
     );
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const descriptor = r.normalized.metadata["_aifetchlyRuntimeV1"] as {
-        entry: string;
-      };
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("mcp-config-invalid");
+      expect(r.error.message).toContain("_aifetchlyRuntimeV1");
+      expect(r.error.message).toContain("only the host writes it");
+    }
+
+    // Non-package metadata that does NOT declare the reserved key coexists
+    // with the host descriptor untouched.
+    const compatible = normalizeMcpDeclaration(
+      "scraper",
+      {
+        runtime: "aifetchly-node",
+        entry: "dist/server.cjs",
+        metadata: { pluginServerName: "scraper" },
+      },
+      ROOT,
+      ".mcp.json"
+    );
+    expect(compatible.ok).toBe(true);
+    if (compatible.ok) {
+      const descriptor = compatible.normalized.metadata[
+        "_aifetchlyRuntimeV1"
+      ] as { entry: string };
       expect(descriptor.entry).toBe("dist/server.cjs");
+      expect(compatible.normalized.metadata.pluginServerName).toBe("scraper");
     }
   });
 });

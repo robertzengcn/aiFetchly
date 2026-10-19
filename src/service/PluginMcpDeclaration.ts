@@ -277,8 +277,8 @@ export function normalizeMcpDeclaration(
  *  - entry must be a relative path that cannot lexically escape the plugin
  *    root (launch revalidates against the real filesystem).
  *  - The normalized descriptor is stored under the reserved host-owned
- *    metadata key; package-supplied values for that key are overwritten so
- *    only the validated descriptor survives.
+ *    metadata key; a package that declares that key is rejected (it is
+ *    never adapted from package metadata — only the host writes it).
  */
 function normalizeHostRuntimeDeclaration(
   key: string,
@@ -332,8 +332,19 @@ function normalizeHostRuntimeDeclaration(
     );
   }
 
-  // Plugin-supplied metadata may not smuggle a runtime descriptor; only the
-  // host writes the reserved key (design §5.3).
+  // Section 5.3: the package may not supply the reserved runtime key AT
+  // ALL — the host rejects it instead of silently overwriting it, exactly
+  // like the non-runtime branch, and then writes its own normalized value.
+  if (
+    (decl.metadata as Record<string, unknown> | undefined)?.[
+      HOST_RUNTIME_METADATA_FIELD
+    ] !== undefined
+  ) {
+    return invalid(
+      `server "${key}" may not declare the reserved "${HOST_RUNTIME_METADATA_FIELD}" metadata key; only the host writes it.`
+    );
+  }
+  // Host-owned descriptor: the only place the reserved key is written.
   const metadata: Record<string, unknown> = { ...(decl.metadata ?? {}) };
   metadata[HOST_RUNTIME_METADATA_FIELD] = {
     contractVersion: 1,
