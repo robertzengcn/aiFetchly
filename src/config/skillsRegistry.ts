@@ -445,61 +445,6 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "search_yellow_pages",
-    description:
-      "Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location. Use get_available_yellow_pages_platforms first to see available platforms.",
-    parameters: {
-      type: "object",
-      properties: {
-        platform: {
-          type: "string",
-          description:
-            'Platform name (e.g., "yellowpages.com"). Use get_available_yellow_pages_platforms to see available options.',
-        },
-        search_term: {
-          type: "string",
-          description: "Business name, category, or keyword to search for",
-        },
-        location: {
-          type: "string",
-          description: "City, state, or ZIP code to search in",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of business results to return (default: 20)",
-          default: 20,
-        },
-        include_emails: {
-          type: "boolean",
-          description:
-            "Whether to attempt extracting email addresses from business pages (default: false)",
-          default: false,
-        },
-      },
-      required: ["platform", "search_term", "location"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    timeoutClass: "network",
-    supportsPartialResult: true,
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "search_yellow_pages",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
-  },
-  {
     name: "search_maps_businesses",
     description:
       "Search map platforms (Google Maps or Yandex Maps) for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and map URL. Use 'google' for global search or 'yandex' for Russian and CIS markets.",
@@ -575,39 +520,6 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_maps_businesses",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "get_available_yellow_pages_platforms",
-    description:
-      "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
-    parameters: {
-      type: "object",
-      properties: {
-        country_code: {
-          type: "string",
-          description:
-            'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").',
-        },
-      },
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "get_available_yellow_pages_platforms",
         args,
         context.conversationId,
         {

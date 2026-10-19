@@ -1,11 +1,8 @@
 import { SearchModule } from "@/modules/SearchModule";
 import { log } from "@/modules/Logger";
 import { SearchTaskStatus } from "@/model/SearchTask.model";
-import { YellowPagesController } from "@/controller/YellowPagesController";
-import { TaskStatus as YellowPagesTaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
-import { formatYellowPagesResultsForLLM } from "@/service/yellowPagesResultFormatter";
 import { MCPToolService } from "@/service/MCPToolService";
 import { normalizeMcpToolOutcome } from "@/service/McpResultNormalizer";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
@@ -142,11 +139,6 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 5,
     cooldownMs: 500,
   },
-  yellowPages: {
-    maxPerMinute: 15,
-    maxConcurrent: 3,
-    cooldownMs: 800,
-  },
   fileRead: FILE_TOOL_RATE_LIMITS.fileRead,
   fileSearch: FILE_TOOL_RATE_LIMITS.fileSearch,
   fileWrite: FILE_TOOL_RATE_LIMITS.fileWrite,
@@ -189,11 +181,6 @@ class RateLimiterManager {
       return RATE_LIMIT_CONFIG.contactVerification;
     } else if (toolName.includes("email") || toolName.includes("extract")) {
       return RATE_LIMIT_CONFIG.emailExtraction;
-    } else if (
-      toolName.includes("yellow") ||
-      toolName.includes("yellowpages")
-    ) {
-      return RATE_LIMIT_CONFIG.yellowPages;
     } else if (toolName === "file_read") {
       return RATE_LIMIT_CONFIG.fileRead;
     } else if (toolName === "glob_files" || toolName === "grep_files") {
@@ -370,12 +357,6 @@ export class ToolExecutor {
           toolParams,
           context
         );
-
-      case "search_yellow_pages":
-        return await this.executeYellowPagesSearch(toolParams);
-
-      case "get_available_yellow_pages_platforms":
-        return await this.executeGetYellowPagesPlatforms(toolParams);
 
       case "extract_emails_from_urls":
         return await this.executeEmailExtraction(toolParams);
@@ -830,188 +811,7 @@ export class ToolExecutor {
     }
   }
 
-  /**
-   * Execute Yellow Pages search
-   */
-  private static async executeYellowPagesSearch(
-    toolParams: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const yellowPagesController = YellowPagesController.getInstance();
-    const platform =
-      typeof toolParams.platform === "string" ? toolParams.platform : "";
-    const searchTerm =
-      typeof toolParams.search_term === "string" ? toolParams.search_term : "";
-    const location =
-      typeof toolParams.location === "string" ? toolParams.location : "";
-    const numResults =
-      typeof toolParams.num_results === "number" ? toolParams.num_results : 20;
 
-    if (!platform || !searchTerm || !location) {
-      throw new Error(
-        "Platform, search_term, and location are required parameters"
-      );
-    }
-
-    // Calculate max_pages based on num_results (assuming ~20 results per page)
-    const maxPages = Math.max(1, Math.ceil(numResults / 20));
-
-    // Create task
-    const taskId = await yellowPagesController.createTask({
-      name: `AI Chat Search: ${searchTerm} in ${location}`,
-      platform: platform,
-      keywords: [searchTerm],
-      location: location,
-      max_pages: maxPages,
-      concurrency: 1,
-      headless: true,
-      delay_between_requests: 2000,
-    });
-
-    // Start the task
-    await yellowPagesController.startTask(taskId);
-
-    // Poll task status until complete or error (max 10 minutes)
-    let taskStatus: YellowPagesTaskStatus | null = null;
-    const maxWaitTime = 600000; // 10 minutes
-    const pollInterval = 2000; // 2 seconds
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitTime) {
-      const taskInfo = await yellowPagesController.getTask(taskId);
-      taskStatus = taskInfo.status;
-
-      if (
-        taskStatus === YellowPagesTaskStatus.Completed ||
-        taskStatus === YellowPagesTaskStatus.Failed
-      ) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-    }
-
-    // Check if task completed successfully
-    if (taskStatus !== YellowPagesTaskStatus.Completed) {
-      const taskInfo = await yellowPagesController.getTask(taskId);
-      const errorMsg =
-        taskInfo.task.error_log ||
-        `Task ${taskId} did not complete successfully. Status: ${taskStatus}`;
-      throw new Error(errorMsg);
-    }
-
-    // Get search results
-    const taskResults = await yellowPagesController.getTaskResults(taskId, {
-      page: 0,
-      size: numResults,
-    });
-
-    // Format results for LLM consumption
-    const formattedResults = formatYellowPagesResultsForLLM(taskResults.data);
-    const cleanResults = taskResults.data
-      .slice(0, numResults)
-      .map((result) => ({
-        business_name: result.business_name,
-        phone: result.phone,
-        email: result.email,
-        website: result.website,
-        address: result.address,
-        rating: result.rating,
-        review_count: result.review_count,
-        categories: result.categories,
-        platform: result.platform,
-      }));
-
-    // Create comprehensive tool result
-    return {
-      success: true,
-      taskId: taskId,
-      platform: platform,
-      search_term: searchTerm,
-      location: location,
-      totalResults: taskResults.data.length,
-      resultsReturned: Math.min(numResults, taskResults.data.length),
-      // Formatted summary for LLM
-      summary: formattedResults,
-      // Clean structured data
-      results: cleanResults,
-    };
-  }
-
-  /**
-   * Get available Yellow Pages platforms
-   */
-  private static async executeGetYellowPagesPlatforms(
-    toolParams: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const yellowPagesController = YellowPagesController.getInstance();
-    let platforms = await yellowPagesController.getAvailablePlatforms();
-
-    // Filter by country code if provided
-    const countryCode =
-      typeof toolParams.country_code === "string"
-        ? toolParams.country_code.toUpperCase().trim()
-        : undefined;
-
-    if (countryCode) {
-      platforms = platforms.filter(
-        (platform) => platform.country?.toUpperCase() === countryCode
-      );
-    }
-
-    // Format platforms for LLM consumption
-    // `id` is the canonical identifier — pass it verbatim as `platform` to
-    // search_yellow_pages (names like "YellowPages.com" also resolve).
-    const formattedPlatforms = platforms.map((platform) => ({
-      id: platform.id,
-      name: platform.name,
-      display_name: platform.display_name,
-      country: platform.country,
-      language: platform.language,
-      is_active: platform.is_active,
-      location_required: platform.locationRequired || false,
-      authentication_required:
-        platform.authentication?.requiresAuthentication || false,
-      requires_cookies: platform.authentication?.requiresCookies || false,
-      rate_limit: platform.rate_limit,
-    }));
-
-    // Create formatted summary for LLM
-    const countryFilterNote = countryCode
-      ? ` (filtered by country code: ${countryCode})`
-      : "";
-    const formattedSummary =
-      platforms.length > 0
-        ? `Available Yellow Pages Platforms${countryFilterNote} (${
-            platforms.length
-          }):\n\n${platforms
-            .map(
-              (p, idx) =>
-                `${idx + 1}. **${p.display_name}** — use id \`${
-                  p.id
-                }\` for search_yellow_pages\n   Country: ${
-                  p.country
-                }, Language: ${p.language}\n   ${
-                  p.is_active ? "✅ Active" : "❌ Inactive"
-                }${
-                  p.locationRequired ? " | Location Required" : ""
-                }\n   Rate Limit: ${p.rate_limit} requests/hour${
-                  p.authentication?.requiresCookies
-                    ? " | Requires Cookies/Authentication"
-                    : ""
-                }`
-            )
-            .join("\n\n")}`
-        : countryCode
-        ? `No Yellow Pages platforms found for country code: ${countryCode}`
-        : "No Yellow Pages platforms are currently available.";
-
-    return {
-      success: true,
-      totalPlatforms: platforms.length,
-      countryCode: countryCode || null,
-      summary: formattedSummary,
-      platforms: formattedPlatforms,
-    };
-  }
 
   /**
    * Execute email extraction from URLs
