@@ -150,4 +150,40 @@ describe("PluginMcpRuntimeResolver", () => {
     resolver.release(r.launch);
     resolver.release(r.launch); // must not throw
   });
+
+  it("release removes the launched map entry so repeated resolutions do not grow state (B13)", () => {
+    const resolver = makeResolver("exec-1");
+    const launches: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = resolver.resolveForDiscovery("demo-plugin", "dist/server.cjs");
+      if (r.ok) {
+        launches.push(r.launch.executionId);
+        expect(fs.existsSync(r.launch.hostContextFile ?? "")).toBe(true);
+      }
+    }
+    expect(launches).toEqual(["exec-1", "exec-1", "exec-1"]);
+    for (const ctxFile of fs.readdirSync(ctxRoot)) {
+      expect(path.basename(ctxFile)).not.toMatch(/\.tmp$/);
+    }
+    // Audit-trail map: each resolution replaces the entry; one file per id.
+    expect(fs.readdirSync(ctxRoot)).toEqual(["exec-1.json"]);
+    const r = resolver.resolveForDiscovery("demo-plugin", "dist/server.cjs");
+    if (r.ok) {
+      resolver.release(r.launch);
+      expect(fs.existsSync(r.launch.hostContextFile ?? "")).toBe(false);
+    }
+  });
+
+  it("failed context writes leave no .tmp residue and no released entries behind", () => {
+    const resolver = makeResolver("exec-1");
+    // Force the rename to fail: pretend the final path already exists as a
+    // directory so rename cannot succeed.
+    fs.mkdirSync(path.join(ctxRoot, "exec-1.json"), { recursive: true });
+    const r = resolver.resolveForDiscovery("demo-plugin", "dist/server.cjs");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("install-io-failed");
+    // No .tmp residue (B13): the failed write path removes its staging file.
+    expect(fs.readdirSync(ctxRoot).some((f) => f.endsWith(".tmp"))).toBe(false);
+    fs.rmSync(path.join(ctxRoot, "exec-1.json"), { recursive: true, force: true });
+  });
 });

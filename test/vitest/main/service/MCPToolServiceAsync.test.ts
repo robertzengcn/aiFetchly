@@ -35,17 +35,21 @@ const { mcpClientMock } = vi.hoisted(() => {
       isError: boolean;
     }>;
     disconnectImpl: () => Promise<void>;
+    instances: unknown[];
   } = {
     connectImpl: async () => undefined,
     callToolContentImpl: async () => ({ content: [], isError: false }),
     disconnectImpl: async () => undefined,
+    instances: [],
   };
   return { mcpClientMock };
 });
 
 vi.mock("@/modules/MCPClient", () => ({
   MCPClient: class {
-    constructor(public cfg: unknown) {}
+    constructor(public cfg: unknown) {
+      mcpClientMock.instances.push(cfg);
+    }
     async connect(): Promise<void> {
       await mcpClientMock.connectImpl();
     }
@@ -72,6 +76,8 @@ vi.mock("@/modules/MCPToolModule", () => ({
 
 import { MCPToolService } from "@/service/MCPToolService";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
+import { HOST_RUNTIME_METADATA_FIELD, PLUGIN_MCP_HOST_RUNTIME } from "@/entityTypes/pluginExecutionTypes";
+import { PluginMcpOwnershipChecker } from "@/service/PluginMcpOwnershipChecker";
 
 function makeService(): MCPToolService {
   const svc = new MCPToolService();
@@ -99,6 +105,7 @@ describe("MCPToolService.executeMCPToolContent (managed async)", () => {
       isError: false,
     });
     mcpClientMock.disconnectImpl = async () => undefined;
+    mcpClientMock.instances.length = 0;
   });
 
   afterEach(() => {
@@ -234,5 +241,142 @@ describe("MCPToolService.executeMCPToolContent (managed async)", () => {
       })
     ).rejects.toThrow(/transport died/);
     expect(disconnectSpy).toHaveBeenCalled();
+  });
+});
+
+describe("MCPToolService host-runtime ownership gate (B13)", () => {
+  beforeEach(() => {
+    mcpClientMock.connectImpl = async () => undefined;
+    mcpClientMock.callToolContentImpl = async () => ({
+      content: [],
+      isError: false,
+    });
+    mcpClientMock.disconnectImpl = async () => undefined;
+    mcpClientMock.instances.length = 0;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeHostRuntimeService(
+    ownership: () => Promise<
+      | { ok: true; descriptor: { entry: string; runtime: string }; pluginVersion: string }
+      | { ok: false; error: string }
+    >
+  ): MCPToolService {
+    const checker = {
+      check: ownership,
+    } as unknown as PluginMcpOwnershipChecker;
+    return new MCPToolService(undefined, checker);
+  }
+
+  function hostRuntimeServer(metadata: string | undefined): {
+    id: number;
+    serverName: string;
+    pluginName: string;
+    enabled: boolean;
+    toolConfig: string;
+    transport: "stdio";
+    host: string;
+    port: number;
+    authType: "none";
+    timeout: number;
+    metadata?: string;
+  } {
+    return {
+      id: 2,
+      serverName: "demo-plugin__demo-mcp",
+      pluginName: "demo-plugin",
+      enabled: true,
+      toolConfig: "",
+      transport: "stdio",
+      host: "",
+      port: 0,
+      authType: "none",
+      timeout: 30_000,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
+  }
+
+  function descriptorMetadata(): string {
+    return JSON.stringify({
+      pluginServerName: "demo-mcp",
+      pluginOwner: "demo-plugin",
+      [HOST_RUNTIME_METADATA_FIELD]: {
+        contractVersion: 1,
+        runtime: PLUGIN_MCP_HOST_RUNTIME,
+        entry: "dist/server.cjs",
+      },
+    });
+  }
+
+  it("launches only after the ownership contract passes; metadata alone is not authority", async () => {
+    const svc = makeHostRuntimeService(async () => {
+      throw new Error(
+        "[plugin-runtime] forged descriptor failed validation"
+      );
+    });
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(descriptorMetadata()),
+    };
+
+    await expect(
+      svc.executeMCPToolContent(2, "scrape", {}, {})
+    ).rejects.toThrow(/\[plugin-runtime\] forged descriptor failed validation/);
+  });
+
+  it("propagates the real installed pluginVersion into the launch config", async () => {
+    const svc = makeHostRuntimeService(async () => ({
+      ok: true,
+      descriptor: {
+        entry: "dist/server.cjs",
+        runtime: PLUGIN_MCP_HOST_RUNTIME,
+      },
+      pluginVersion: "1.4.2",
+    }));
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(descriptorMetadata()),
+    };
+
+    const result = await svc.executeMCPToolContent(2, "scrape", {}, {});
+    expect(result).toBeDefined();
+    const cfg = mcpClientMock.instances[0] as {
+      hostRuntime?: {
+        pluginName?: string;
+        entry?: string;
+        pluginVersion?: string;
+      };
+    };
+    expect(cfg).toBeDefined();
+    expect(cfg.hostRuntime).toBeDefined();
+    expect(cfg.hostRuntime?.pluginName).toBe("demo-plugin");
+    expect(cfg.hostRuntime?.entry).toBe("dist/server.cjs");
+    // The REAL installed version — never the placeholder "unknown" (B13).
+    expect(cfg.hostRuntime?.pluginVersion).toBe("1.4.2");
+  });
+
+  it("does not consult the checker when the row carries no runtime descriptor", async () => {
+    let checks = 0;
+    const svc = makeHostRuntimeService(async () => {
+      checks += 1;
+      throw new Error("[plugin-runtime] must not be reached");
+    });
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(undefined),
+    };
+
+    const connectSpy = vi.fn();
+    mcpClientMock.connectImpl = connectSpy;
+    const result = await svc.executeMCPToolContent(2, "scrape", {}, {});
+    expect(result).toBeDefined();
+    expect(checks).toBe(0);
+    expect(connectSpy).toHaveBeenCalled();
   });
 });

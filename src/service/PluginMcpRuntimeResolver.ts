@@ -40,6 +40,8 @@ export interface ResolvedPluginLaunch {
   readonly extraArgs: readonly string[];
   /** Absolute path of the written host-context JSON file (when present). */
   readonly hostContextFile: string | null;
+  /** Execution id the launch (and its released map entry) is bound to. */
+  readonly executionId: string;
 }
 
 export type RuntimeResolveResult =
@@ -51,7 +53,7 @@ export interface ResolverFs {
   existsSync(p: string): boolean;
   statSync(p: string): { isFile(): boolean; isDirectory(): boolean };
   realpathSync(p: string): string;
-  mkdirSync(p: string, options?: { recursive: boolean }): string | undefined;
+  mkdirSync(p: string, options?: { recursive: boolean; mode?: number }): string | undefined;
   writeFileSync(p: string, data: string, options?: { mode: number }): void;
   renameSync(from: string, to: string): void;
   unlinkSync(p: string): void;
@@ -206,18 +208,32 @@ export class PluginMcpRuntimeResolver {
     let hostContextFile: string | null = null;
     const extraArgs: string[] = [];
     try {
-      this.fs.mkdirSync(this.tmpRoot, { recursive: true });
+      // The transient directory is host-owned and permission-restricted
+      // (0700) — plugins and other local users must never read the
+      // host-context contents (design §5.3).
+      this.fs.mkdirSync(this.tmpRoot, { recursive: true, mode: 0o700 });
       const finalPath = path.join(
         this.tmpRoot,
         `${context.executionId}.json`
       );
       const stagingPath = `${finalPath}.tmp`;
-      this.fs.writeFileSync(
-        stagingPath,
-        JSON.stringify(context),
-        { mode: 0o600 }
-      );
-      this.fs.renameSync(stagingPath, finalPath);
+      try {
+        this.fs.writeFileSync(
+          stagingPath,
+          JSON.stringify(context),
+          { mode: 0o600 }
+        );
+        this.fs.renameSync(stagingPath, finalPath);
+      } catch (e) {
+        // A failed rename would otherwise leave the .tmp file behind and
+        // grow the temporary root on every retry (B13).
+        try {
+          this.fs.unlinkSync(stagingPath);
+        } catch {
+          /* already gone */
+        }
+        throw e;
+      }
       hostContextFile = finalPath;
       extraArgs.push(HOST_CONTEXT_ARG, finalPath);
     } catch (e) {
@@ -236,21 +252,30 @@ export class PluginMcpRuntimeResolver {
       ownerId: `plugin-mcp:${pluginName}`,
       extraArgs,
       hostContextFile,
+      executionId: context.executionId,
     };
     this.launched.set(context.executionId, launch);
     return { ok: true, launch };
   }
 
   /**
-   * Release a launch: delete the transient host-context file. Idempotent and
-   * safe on every terminal path (completion, failure, cancellation, timeout).
+   * Release a launch: delete the transient host-context file AND the
+   * launched-map entry, so repeated discovery/executions cannot grow state
+   * without bound (B13). Idempotent and safe on every terminal path
+   * (completion, failure, cancellation, timeout).
    */
   public release(launch: ResolvedPluginLaunch): void {
-    if (!launch.hostContextFile) return;
+    if (launch.hostContextFile) {
+      try {
+        this.fs.unlinkSync(launch.hostContextFile);
+      } catch {
+        // best-effort: file may already be gone
+      }
+    }
     try {
-      this.fs.unlinkSync(launch.hostContextFile);
+      this.launched.delete(launch.executionId);
     } catch {
-      // best-effort: file may already be gone
+      /* structural map — cannot fail in practice */
     }
   }
 }

@@ -24,6 +24,7 @@ import {
 import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
+import { PluginMcpOwnershipChecker } from "@/service/PluginMcpOwnershipChecker";
 import {
   readRuntimeDescriptorFromMetadata,
   HOST_CLEANUP_RESERVE_MS,
@@ -117,8 +118,15 @@ export interface MCPToolWithServer {
  * Build an MCPClient config from a persisted MCPToolEntity. Plugin-owned stdio
  * servers store command/args/env in dedicated columns; legacy manual servers
  * store the space-separated command in `host`. (Design §9.2, §9.3)
+ *
+ * The validated host-runtime descriptor is injected by the caller after the
+ * launch-time ownership contract (B13) has passed: buildClientConfig itself
+ * never authorizes a launch.
  */
-function buildClientConfig(server: MCPToolEntity): {
+function buildClientConfig(
+  server: MCPToolEntity,
+  hostRuntime?: { entry: string; pluginVersion: string }
+): {
   host?: string;
   port?: number;
   transport: "stdio" | "sse" | "websocket";
@@ -185,15 +193,24 @@ function buildClientConfig(server: MCPToolEntity): {
   // Host-managed runtime branch (plugin PRD §19.5): a validated runtime
   // descriptor in host-owned metadata wins over any command — the MCPClient
   // resolves the trusted launch (process.execPath + entry + host context)
-  // and ignores command-style spawning for this server.
+  // and ignores command-style spawning for this server. The descriptor is
+  // injected by the caller AFTER the B13 ownership contract passes; a
+  // present descriptor without a validated descriptor from the caller is an
+  // internal error (never launch on metadata alone).
   if (server.transport === "stdio" && server.pluginName) {
     const descriptor = readRuntimeDescriptorFromMetadata(
       safeJsonParse(server.metadata ?? "")
     );
     if (descriptor) {
+      if (!hostRuntime) {
+        throw new Error(
+          "Host runtime descriptor present but ownership validation did not run; refusing to build a launch config."
+        );
+      }
       base.hostRuntime = {
         pluginName: server.pluginName,
-        entry: descriptor.entry,
+        entry: hostRuntime.entry,
+        pluginVersion: hostRuntime.pluginVersion,
       };
       return base;
     }
@@ -285,16 +302,48 @@ function safeJsonParseRecord(
  */
 export class MCPToolService {
   private mcpToolModule: MCPToolModule;
+  private readonly ownershipChecker: PluginMcpOwnershipChecker;
 
   /**
    * @param mcpToolModule Optional injected module for unit testing. Production
    * callers omit it and get a real MCPToolModule instance.
    */
-  constructor(mcpToolModule?: MCPToolModule) {
+  constructor(
+    mcpToolModule?: MCPToolModule,
+    ownershipChecker?: PluginMcpOwnershipChecker
+  ) {
     this.mcpToolModule = mcpToolModule ?? new MCPToolModule();
+    this.ownershipChecker = ownershipChecker ?? new PluginMcpOwnershipChecker();
   }
 
-  private createClientForServer(
+  /**
+   * B13 launch-time ownership contract: a hostManaged runtime row is only
+   * launchable when (a) its metadata carries a valid descriptor, (b) the
+   * owning plugin row exists, is enabled and healthy, and (c) the descriptor
+   * entry still matches the CURRENT on-disk manifest declaration. Returns
+   * null when the row is not a host runtime row; throws when it is one and
+   * the contract fails, so a stale/forged descriptor never spawns.
+   */
+  private async resolveValidatedHostRuntime(
+    server: MCPToolEntity
+  ): Promise<{ entry: string; pluginVersion: string } | null> {
+    if (server.transport !== "stdio" || !server.pluginName) return null;
+    const descriptor = readRuntimeDescriptorFromMetadata(
+      safeJsonParse(server.metadata ?? "")
+    );
+    if (!descriptor) return null;
+    const ownership = await this.ownershipChecker.check({
+      pluginName: server.pluginName,
+      rowServerName: server.serverName,
+      rowMetadata: server.metadata ?? undefined,
+    });
+    if (!ownership.ok) {
+      throw new Error(`[plugin-runtime] ${ownership.error}`);
+    }
+    return { entry: descriptor.entry, pluginVersion: ownership.pluginVersion };
+  }
+
+  private async createClientForServer(
     server: MCPToolEntity,
     executeContext?: {
       readonly executionId: string;
@@ -303,8 +352,9 @@ export class MCPToolService {
       /** Recovery attempt the ledger authorized for this call (H1/H3). */
       readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
     }
-  ): MCPClient {
-    const config = buildClientConfig(server);
+  ): Promise<MCPClient> {
+    const hostRuntime = await this.resolveValidatedHostRuntime(server);
+    const config = buildClientConfig(server, hostRuntime ?? undefined);
     // Execute-mode host context (design §6.2/§6.3): plugin runtime servers
     // receive the host-approved browser descriptor (capability-gated, no
     // application settings exposure), the authoritative deadline, the
@@ -644,7 +694,7 @@ export class MCPToolService {
 
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
 
     try {
       await client.connect();
@@ -784,7 +834,7 @@ export class MCPToolService {
     this.assertToolEnabled(server, toolName);
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
     const callTimeoutMs = MCP_CALL_TIMEOUT_MS;
 
     try {
@@ -875,7 +925,7 @@ export class MCPToolService {
     // file, staging directory, journal, and promotion share ONE id. Only a
     // caller with no id at all falls back to an untracked one.
     const executionId = options.executionId ?? randomUUID();
-    const client = this.createClientForServer(server, {
+    const client = await this.createClientForServer(server, {
       executionId,
       deadlineEpochMs: options.deadlineEpochMs,
       authorizedRecovery: options.authorizedRecovery,
@@ -979,7 +1029,7 @@ export class MCPToolService {
 
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
 
     try {
       await client.connect();

@@ -269,7 +269,7 @@ Evidence: [src/modules/PluginFileArtifactModule.ts:61](../../src/modules/PluginF
 
 ### B13 — P1 — Revalidate runtime ownership and installed generation before launch
 
-- [ ] Fix and verify B13.
+- [x] Done — d62bc63 recorded the reviewer-facing note below; code: `PluginMcpOwnershipChecker` + launch-gate wiring.
 
 Evidence: [src/service/MCPToolService.ts:189](../../src/service/MCPToolService.ts#L189); [src/service/MCPToolService.ts:360](../../src/service/MCPToolService.ts#L360); [src/service/PluginMcpRuntimeResolver.ts:127](../../src/service/PluginMcpRuntimeResolver.ts#L127); [src/service/PluginMcpRuntimeResolver.ts:240](../../src/service/PluginMcpRuntimeResolver.ts#L240).
 
