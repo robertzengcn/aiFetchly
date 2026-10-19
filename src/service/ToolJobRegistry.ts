@@ -525,6 +525,25 @@ export class ToolJobRegistry {
   }
 
   /**
+   * B08: attach a settlement listener by JOB id for callers that cannot use
+   * the spawn handle (a QUEUED job's spawn has not run yet, so its
+   * onSettled registration point does not exist). Known-settled or unknown
+   * ids fire immediately so no cleanup hook can be left waiting forever.
+   */
+  public onSettledById(jobId: string, handler: () => void): void {
+    const job = this.jobs.get(jobId);
+    if (!job || job.settled) {
+      try {
+        handler();
+      } catch {
+        /* best-effort */
+      }
+      return;
+    }
+    job.settledCallbacks.push(handler);
+  }
+
+  /**
    * Wait (bounded) for a job to reach a terminal state (design §7.3
    * cleanup completion). Resolves true once terminal, false on timeout or
    * when the job is unknown. Used by the poll loop to await bounded cleanup

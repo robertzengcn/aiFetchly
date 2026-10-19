@@ -4565,12 +4565,17 @@ export class AIChatQueryLoop {
               strategy?: unknown;
             })
           : undefined;
+      // B08: the ledger binds this scope to the HOST-verified request
+      // generation (sourceUserMessageId) so forged recovery fields cannot
+      // mint attempt 1 on a fresh scope and an explicit NEW user message
+      // resets the budget without a model bypass.
       const validation = ledger.validateAndReserve({
         conversationId: input.conversationId,
         pluginName,
         searchIdentity: identity,
         previousErrorId: recoveryArg?.previousErrorId,
         strategy: recoveryArg?.strategy,
+        userTurnId: input.sourceUserMessageId,
       });
       if (!validation.ok) {
         return {
@@ -4620,11 +4625,34 @@ export class AIChatQueryLoop {
         }),
         { fingerprint }
         );
+      if (startOutcome.queued) {
+        // B08: a QUEUED job's spawn callback has not run, so the settle hook
+        // inside spawnPluginAsyncTool does not exist yet. Attach the
+        // reservation cleanup HERE, before queue admission can be undone by
+        // a queued cancellation (which never invokes the spawn).
+        registry.onSettledById(startOutcome.jobId, () => {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+        });
+      }
       } catch (err) {
         // H5 (lifecycle): admission seals (disable/uninstall/update) reject
         // with a stable, retryable structured result — no job is created.
+        // B08: the attempt was reserved BEFORE admission; a sealed rejection
+        // must RELEASE the reservation here so the scope never keeps a
+        // dangling in-flight lock (the next call cannot be deadlocked).
         const sealedBy =
           err instanceof AdmissionSealedError ? err.sealedBy : null;
+        ledger.completeAttempt(
+          input.conversationId,
+          pluginName,
+          identity,
+          "failed"
+        );
         if (sealedBy === null) throw err;
         return {
           kind: "rejected",
@@ -4828,6 +4856,7 @@ export class AIChatQueryLoop {
             category?: unknown;
             allowedStrategies?: unknown;
             retryAfterMs?: unknown;
+            recoverable?: unknown;
             id?: unknown;
           };
           const allowed = Array.isArray(err.allowedStrategies)
@@ -4839,6 +4868,9 @@ export class AIChatQueryLoop {
                   s === "retry_after_delay"
               ) as readonly ("fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay")[])
             : [];
+          // B08: the ledger independently enforces the recoverable/fatal
+          // policy (unknown strategies drop; fatal/user-intervention and an
+          // envelope that claims recoverable:false never give strategies).
           const errorRef = ledger.recordFailure({
             conversationId: input.conversationId,
             pluginName: meta.pluginName,
@@ -4849,6 +4881,8 @@ export class AIChatQueryLoop {
             allowedStrategies: allowed,
             retryAfterMs:
               typeof err.retryAfterMs === "number" ? err.retryAfterMs : undefined,
+            recoverable: err.recoverable,
+            userTurnId: input.sourceUserMessageId,
           });
           const bound = ledger.bindPluginErrorId(errorRef, err.id);
           (result.result as Record<string, unknown>).error = {
@@ -4864,6 +4898,7 @@ export class AIChatQueryLoop {
             conversationId: input.conversationId,
             pluginName: meta.pluginName,
             searchIdentity: meta.identity,
+            userTurnId: input.sourceUserMessageId,
           });
         }
       } else {
@@ -4897,6 +4932,7 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         pluginName: meta.pluginName,
         searchIdentity: meta.identity,
+        userTurnId: input.sourceUserMessageId,
       });
       // Crash salvage: register whatever candidates were already finalized.
       try {

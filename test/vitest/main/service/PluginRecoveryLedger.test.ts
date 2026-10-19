@@ -5,6 +5,7 @@ import {
   canonicalJson,
   searchIdentityFromArgs,
   jobFingerprintFromArgs,
+  type RecoveryStrategy,
 } from "@/service/PluginRecoveryLedger";
 import { ToolJobRegistry } from "@/service/ToolJobRegistry";
 
@@ -94,7 +95,9 @@ describe("PluginRecoveryLedger", () => {
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.reason).toBe("unknown_error_ref");
 
-    // Same ref in another conversation is also foreign.
+    // Same ref in another conversation is ALSO foreign: B08 closes the
+    // old loophole where recovery fields minted attempt 1 on a fresh scope
+    // (wrong conversation / post-restart references must fail closed).
     const other = ledger.validateAndReserve({
       conversationId: "c2",
       pluginName: "p1",
@@ -102,7 +105,8 @@ describe("PluginRecoveryLedger", () => {
       previousErrorId: "err_whatever",
       strategy: "fallback_adapter",
     });
-    expect(other.ok).toBe(true); // no ledger entry in c2 → first attempt
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.reason).toBe("unknown_error_ref");
   });
 
   it("accepts a valid retry and reserves atomically", () => {
@@ -413,12 +417,14 @@ describe("PluginRecoveryLedger", () => {
       // A subsequent domain failure inherits the SAME attempt count.
       record();
       // Attempt 2 via a different strategy consumes the retry budget.
+      // (B08 host policy: plugin_bug/fatal categories never carry strategies,
+      // so the retry path uses a recoverable failure category.)
       const errorRef = ledger.recordFailure({
         conversationId: "c1",
         pluginName: "p1",
         searchIdentity: identity,
         code: "OTHER",
-        category: "plugin_bug",
+        category: "site_changed",
         allowedStrategies: ["reduced_scope"],
       });
       expect(
@@ -437,7 +443,7 @@ describe("PluginRecoveryLedger", () => {
         pluginName: "p1",
         searchIdentity: identity,
         code: "OTHER2",
-        category: "plugin_bug",
+        category: "site_changed",
         allowedStrategies: ["reduced_scope"],
       });
       expect(
@@ -455,7 +461,7 @@ describe("PluginRecoveryLedger", () => {
         pluginName: "p1",
         searchIdentity: identity,
         code: "OTHER3",
-        category: "plugin_bug",
+        category: "site_changed",
         allowedStrategies: ["reduced_scope"],
       });
       const exhausted = ledger.validateAndReserve({
@@ -503,4 +509,245 @@ describe("ToolJobRegistry duplicate suppression", () => {
     );
     expect(registry.findActiveJobByFingerprint("c9", "fpX")).toBeNull();
   });
+});
+
+describe("B08: fail-closed recovery references", () => {
+  const identity = () => searchIdentityFromArgs(ARGS);
+  let ledger: PluginRecoveryLedger;
+  let now: number;
+  beforeEach(() => {
+    now = 1_000_000;
+    ledger = new PluginRecoveryLedger({}, () => now);
+  });
+
+  it("recovery fields can never mint attempt 1 on a fresh scope", () => {
+    const v = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: "err_forged",
+      strategy: "switch_platform",
+      userTurnId: "turn-1",
+    });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe("unknown_error_ref");
+  });
+
+  it("post-restart references fail closed", () => {
+    const errorRef = ledger.recordFailure({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      code: "RESULT_SELECTOR_NOT_FOUND",
+      category: "site_changed",
+      allowedStrategies: ["switch_platform"],
+    });
+    expect(typeof errorRef).toBe("string");
+
+    // Fresh ledger instance == application restart: the reference existed in
+    // a dead process and must never authorize work.
+    const ledger2 = new PluginRecoveryLedger({}, () => now);
+    const restarted = ledger2.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: errorRef,
+      strategy: "switch_platform",
+      userTurnId: "turn-1",
+    });
+    expect(restarted.ok).toBe(false);
+    if (!restarted.ok) expect(restarted.reason).toBe("unknown_error_ref");
+  });
+
+  it("an explicit new user message resets the budget without a model bypass", () => {
+    const errorRef = ledger.recordFailure({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      code: "RESULT_SELECTOR_NOT_FOUND",
+      category: "site_changed",
+      allowedStrategies: ["switch_platform"],
+      userTurnId: "turn-1",
+    });
+    // Same generation, no recovery acknowledgement → blocked.
+    const sameTurn = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-1",
+    });
+    expect(sameTurn.ok).toBe(false);
+    if (!sameTurn.ok) expect(sameTurn.reason).toBe("missing_recovery_field");
+
+    // A NEW host-verified user turn without recovery fields is a fresh
+    // search — the budget resets with no host error reference minted.
+    const freshUser = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-2",
+    });
+    expect(freshUser.ok).toBe(true);
+    if (freshUser.ok) {
+      expect(freshUser.context.attempt).toBe(1);
+      expect(freshUser.context.errorRef).toBeNull();
+    }
+    // The old reference is dead: presenting it later must fail.
+    const stale = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: errorRef,
+      strategy: "switch_platform",
+      userTurnId: "turn-2",
+    });
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.reason).toBe("unknown_error_ref");
+  });
+
+  it("a fatal envelope (recoverable:false / fatal category) strips strategies", () => {
+    const fatalRef = ledger.recordFailure({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      code: "FATAL_PLUGIN_CRASH",
+      category: "plugin_bug",
+      allowedStrategies: ["switch_platform"],
+      recoverable: false,
+    });
+    const fatalRetry = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: fatalRef,
+      strategy: "switch_platform",
+    });
+    expect(fatalRetry.ok).toBe(false);
+    if (!fatalRetry.ok) {
+      expect(fatalRetry.reason).toBe("strategy_not_allowed");
+    }
+
+    ledger.clearForTest();
+    const listRef = ledger.recordFailure({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      code: "X",
+      category: "rate_limited",
+      // Unknown strategy values are dropped by the host policy: an
+      // arbitrary string list must never widen the allowed set.
+      allowedStrategies: ["not-a-strategy", "fallback_adapter"] as unknown as readonly RecoveryStrategy[],
+    });
+    const listRetry = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: listRef,
+      strategy: "fallback_adapter",
+    });
+    expect(listRetry.ok).toBe(true);
+  });
+});
+
+describe("B08: reservation lifecycle", () => {
+  const identity = () => searchIdentityFromArgs(ARGS);
+  let ledger: PluginRecoveryLedger;
+  beforeEach(() => {
+    ledger = new PluginRecoveryLedger({}, () => 1_000_000);
+  });
+
+  it("a queued cancellation releases the in-flight reservation", () => {
+    // Fill the single concurrency slot with a hanging job.
+    const registry = new ToolJobRegistry({ maxConcurrent: 1 });
+    const blocker = registry.start(
+      "plugin__p1__scrape",
+      {},
+      { conversationId: "c1", toolCallId: "t-block" },
+      () => new Promise(() => undefined)
+    );
+    expect(blocker.queued).toBe(false);
+    const blockers: string[] = [blocker.jobId];
+
+    ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-1",
+    });
+
+    // Second job is queued; the loop attaches the reservation-cleanup hook
+    // at queue admission (the spawn callback has not run yet).
+    const queued = registry.start(
+      "plugin__p1__scrape",
+      {},
+      { conversationId: "c1", toolCallId: "t-queue" },
+      async (handle) => {
+        handle.onSettled(() => {
+          ledger.completeAttempt("c1", "p1", identity(), "failed");
+        });
+        await new Promise<void>(() => undefined);
+      }
+    );
+    if (!queued.queued) throw new Error("expected job to be queued");
+    registry.onSettledById(queued.jobId, () => {
+      ledger.completeAttempt("c1", "p1", identity(), "failed");
+    });
+
+    // Cancel the QUEUED job: the spawn NEVER runs, the settle hook does.
+    expect(registry.cancel(queued.jobId).cancelled).toBe(true);
+    const after = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-2",
+    });
+    expect(after.ok).toBe(true); // no reservation_in_flight lock
+    if (!after.ok) {
+      throw new Error(
+        `expected a released reservation, got ${String(after.reason)}`
+      );
+    }
+
+    for (const id of blockers) registry.cancel(id);
+  });
+
+  it("a sealed admission releases the reservation before returning", () => {
+    registry_sealTest();
+  });
+
+  function registry_sealTest(): void {
+    const registry = new ToolJobRegistry();
+    registry.sealAdmission("plugin__p1__scrape");
+    ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-1",
+    });
+    try {
+      registry.start(
+        "plugin__p1__scrape",
+        {},
+        { conversationId: "c1", toolCallId: "t1" },
+        async () => 1
+      );
+      throw new Error("expected AdmissionSealedError");
+    } catch {
+      // Sealed rejection; the loop releases the reservation here.
+      ledger.completeAttempt("c1", "p1", identity(), "failed");
+    }
+    const after = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      userTurnId: "turn-1",
+    });
+    // The deleted-job attempt was released: no reservation_in_flight lock
+    // survives the sealed rejection (the same generation still owes its
+    // recovery acknowledgement, so the follow-up is refused politely).
+    expect(after.ok).toBe(false);
+    if (!after.ok) {
+      expect(after.reason).not.toBe("reservation_in_flight");
+    }
+  }
 });
