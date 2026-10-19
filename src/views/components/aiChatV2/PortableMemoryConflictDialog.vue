@@ -15,7 +15,9 @@
         <span class="pmc__subtitle">{{ memory?.relativePath }}</span>
       </v-card-title>
 
-      <v-card-text v-if="loading" class="pmc__loading">{{ loadingText }}</v-card-text>
+      <v-card-text v-if="loading" class="pmc__loading">{{
+        loadingText
+      }}</v-card-text>
 
       <v-card-text v-else-if="!conflict" class="pmc__empty">
         {{ noConflictText }}
@@ -91,7 +93,12 @@
           />
         </div>
 
-        <v-radio-group v-model="action" density="compact" hide-details class="mt-3">
+        <v-radio-group
+          v-model="action"
+          density="compact"
+          hide-details
+          class="mt-3"
+        >
           <v-radio :value="'use-file'" :label="useFileText" />
           <v-radio :value="'use-app'" :label="useAiFetchlyText" />
           <v-radio :value="'merge'" :label="mergeText" />
@@ -107,7 +114,9 @@
           color="primary"
           variant="flat"
           :loading="resolving"
-          :disabled="loading || !conflict || (action === 'merge' && !mergeValid)"
+          :disabled="
+            loading || !conflict || (action === 'merge' && !mergeValid)
+          "
           @click="onResolve"
         >
           {{ resolveText }}
@@ -148,7 +157,9 @@ const conflict = ref<PortableMemoryConflictView | null>(null);
 const action = ref<"use-file" | "use-app" | "merge">("use-file");
 const mergeTitle = ref("");
 const mergeContent = ref("");
-const mergeType = ref<"project" | "decision" | "workflow" | "convention" | "reference" | "warning">("decision");
+const mergeType = ref<
+  "project" | "decision" | "workflow" | "convention" | "reference" | "warning"
+>("decision");
 const mergeStatus = ref<"active" | "archived" | "contradicted">("active");
 const mergeVisibility = ref<"local" | "team">("local");
 const mergeConfidence = ref<number>(90);
@@ -159,18 +170,30 @@ const typeItems = computed(() => [
   { title: tr("portableMemory.typeProject", "Project"), value: "project" },
   { title: tr("portableMemory.typeDecision", "Decision"), value: "decision" },
   { title: tr("portableMemory.typeWorkflow", "Workflow"), value: "workflow" },
-  { title: tr("portableMemory.typeConvention", "Convention"), value: "convention" },
-  { title: tr("portableMemory.typeReference", "Reference"), value: "reference" },
+  {
+    title: tr("portableMemory.typeConvention", "Convention"),
+    value: "convention",
+  },
+  {
+    title: tr("portableMemory.typeReference", "Reference"),
+    value: "reference",
+  },
   { title: tr("portableMemory.typeWarning", "Warning"), value: "warning" },
 ]);
 const statusItems = computed(() => [
   { title: tr("portableMemory.statusActive", "Active"), value: "active" },
   { title: tr("portableMemory.statusArchived", "Archived"), value: "archived" },
-  { title: tr("portableMemory.statusContradicted", "Contradicted"), value: "contradicted" },
+  {
+    title: tr("portableMemory.statusContradicted", "Contradicted"),
+    value: "contradicted",
+  },
 ]);
 const visibilityItems = computed(() => [
   { title: tr("portableMemory.visibilityLocal", "Local only"), value: "local" },
-  { title: tr("portableMemory.visibilityTeam", "Team shareable"), value: "team" },
+  {
+    title: tr("portableMemory.visibilityTeam", "Team shareable"),
+    value: "team",
+  },
 ]);
 
 const mergeValid = computed(() => {
@@ -182,11 +205,12 @@ const mergeValid = computed(() => {
   );
 });
 
-// Load the conflict on open.
+// Load the conflict on open. When no specific memoryId is given (the banner
+// "Resolve conflicts" entry), fall back to the first conflicted record.
 watch(
   () => [props.open, props.memoryId] as const,
   async ([open, id]) => {
-    if (!open || !id) return;
+    if (!open) return;
     loading.value = true;
     conflict.value = null;
     try {
@@ -194,8 +218,9 @@ watch(
         props.conversationId
       );
       if (resp.status && resp.data) {
-        conflict.value =
-          resp.data.find((c) => c.memoryId === id) ?? null;
+        conflict.value = id
+          ? resp.data.find((c) => c.memoryId === id) ?? null
+          : resp.data[0] ?? null;
         // Seed the merge editor with the current file content if parseable.
         if (conflict.value?.currentFileContent) {
           seedMergeFromContent(conflict.value.currentFileContent);
@@ -218,7 +243,10 @@ function seedMergeFromContent(content: string): void {
     mergeTitle.value = lines[h1Idx].replace(/^#\s+/, "").trim();
     const rest = lines.slice(h1Idx + 1);
     const bodyStart = rest.findIndex((l) => l.trim() !== "");
-    mergeContent.value = rest.slice(bodyStart >= 0 ? bodyStart : 0).join("\n").trim();
+    mergeContent.value = rest
+      .slice(bodyStart >= 0 ? bodyStart : 0)
+      .join("\n")
+      .trim();
   } else {
     mergeContent.value = content.trim();
   }
@@ -254,31 +282,55 @@ async function onResolve(): Promise<void> {
 }
 
 // i18n strings (fallback-enabled).
-const titleText = computed(() => tr("portableMemory.conflictTitle", "Resolve conflict"));
-const loadingText = computed(() => tr("portableMemory.loadingConflict", "Loading conflict…"));
-const noConflictText = computed(() => tr("portableMemory.noConflict", "No conflict found."));
+const titleText = computed(() =>
+  tr("portableMemory.conflictTitle", "Resolve conflict")
+);
+const loadingText = computed(() =>
+  tr("portableMemory.loadingConflict", "Loading conflict…")
+);
+const noConflictText = computed(() =>
+  tr("portableMemory.noConflict", "No conflict found.")
+);
 const warningText = computed(() =>
   tr(
     "portableMemory.conflictWarning",
     "The memory file was edited externally between your read and save. Choose a version to keep."
   )
 );
-const aiFetchlyVersionText = computed(() => tr("portableMemory.aiFetchlyVersion", "AiFetchly projection"));
-const fileVersionText = computed(() => tr("portableMemory.fileVersion", "Current file"));
-const aiFetchlyProjectionText = computed(() =>
-  conflict.value?.message ?? ""
+const aiFetchlyVersionText = computed(() =>
+  tr("portableMemory.aiFetchlyVersion", "AiFetchly projection")
 );
-const fileAbsentText = computed(() => tr("portableMemory.fileAbsent", "(file absent)"));
-const mergeTitleText = computed(() => tr("portableMemory.mergeEditor", "Merge editor"));
+const fileVersionText = computed(() =>
+  tr("portableMemory.fileVersion", "Current file")
+);
+const aiFetchlyProjectionText = computed(() => conflict.value?.message ?? "");
+const fileAbsentText = computed(() =>
+  tr("portableMemory.fileAbsent", "(file absent)")
+);
+const mergeTitleText = computed(() =>
+  tr("portableMemory.mergeEditor", "Merge editor")
+);
 const mergeTitleLabel = computed(() => tr("portableMemory.title", "Title"));
-const mergeContentLabel = computed(() => tr("portableMemory.content", "Content"));
+const mergeContentLabel = computed(() =>
+  tr("portableMemory.content", "Content")
+);
 const typeLabel = computed(() => tr("portableMemory.type", "Type"));
 const statusLabel = computed(() => tr("portableMemory.status", "Status"));
-const visibilityLabel = computed(() => tr("portableMemory.visibility", "Visibility"));
-const confidenceLabel = computed(() => tr("portableMemory.confidence", "Confidence"));
-const useFileText = computed(() => tr("portableMemory.actionUseFile", "Use file version"));
-const useAiFetchlyText = computed(() => tr("portableMemory.actionUseAiFetchly", "Use AiFetchly version"));
-const mergeText = computed(() => tr("portableMemory.actionMerge", "Merge manually"));
+const visibilityLabel = computed(() =>
+  tr("portableMemory.visibility", "Visibility")
+);
+const confidenceLabel = computed(() =>
+  tr("portableMemory.confidence", "Confidence")
+);
+const useFileText = computed(() =>
+  tr("portableMemory.actionUseFile", "Use file version")
+);
+const useAiFetchlyText = computed(() =>
+  tr("portableMemory.actionUseAiFetchly", "Use AiFetchly version")
+);
+const mergeText = computed(() =>
+  tr("portableMemory.actionMerge", "Merge manually")
+);
 const cancelText = computed(() => tr("common.cancel", "Cancel"));
 const resolveText = computed(() => tr("portableMemory.resolve", "Resolve"));
 </script>

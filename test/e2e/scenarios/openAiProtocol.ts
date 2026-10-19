@@ -222,6 +222,49 @@ export const SECTION_SUMMARY_CONTENT = JSON.stringify({
 export const NON_STREAMING_DEFAULT_CONTENT = "Non-streaming e2e completion.";
 
 /**
+ * A valid workspace auto-dream plan the fake server returns for workspace
+ * consolidation requests (non-streaming path). The workspaceKey is omitted on
+ * purpose: a single-workspace run has exactly one valid key and the production
+ * parser defaults it (AIWorkspaceAutoDreamPromptBuilder
+ * resolveCreateWorkspaceKey), which is what the small route does in practice.
+ */
+export const WORKSPACE_AUTO_DREAM_PLAN_CONTENT = JSON.stringify({
+  create: [
+    {
+      type: "decision",
+      title: "Approved the e2e workspace memory decision",
+      content:
+        "During the e2e session the workspace was approved; auto dream recorded the durable decision.",
+      confidence: 88,
+      sourceKind: "chat_v2",
+      sourceId: "e2e-auto-dream-source",
+      sourceMessageIds: ["e2e-auto-dream-message"],
+      reason: "e2e scripted consolidation plan",
+    },
+  ],
+  update: [],
+  archive: [],
+});
+
+/**
+ * True when the request carries the workspace auto-dream consolidation prompt:
+ * AIWorkspaceAutoDreamPromptBuilder.buildWorkspaceAutoDreamSystemPrompt() is
+ * emitted with the stable first line "You consolidate workspace memories for
+ * AiFetchly." (the user-memory variant says "durable user memories"), making it
+ * a deterministic content marker — same posture as isSectionSummaryRequest.
+ */
+export function isWorkspaceAutoDreamRequest(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>
+): boolean {
+  return messages.some(
+    (m) =>
+      m.role === "system" &&
+      typeof m.content === "string" &&
+      m.content.includes("You consolidate workspace memories for AiFetchly.")
+  );
+}
+
+/**
  * A non-streaming chat completion body, mirroring the production
  * `OpenAIChatCompletionResponse` shape that `OpenAICompatibleProviderClient.complete`
  * (and the compaction coordinator's summarize callback via
@@ -289,6 +332,9 @@ export function isSectionSummaryRequest(
 export function nonStreamingContent(
   messages: ReadonlyArray<{ role?: string; content?: unknown }>
 ): string {
+  if (isWorkspaceAutoDreamRequest(messages)) {
+    return WORKSPACE_AUTO_DREAM_PLAN_CONTENT;
+  }
   return isSectionSummaryRequest(messages)
     ? SECTION_SUMMARY_CONTENT
     : NON_STREAMING_DEFAULT_CONTENT;
