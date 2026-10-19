@@ -178,7 +178,7 @@ import AIContentReportDialog from "@/views/components/aiContentReport/AIContentR
 import { buildKeywordSetDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 

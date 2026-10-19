@@ -58,6 +58,21 @@ export class SearchKeywordModel extends BaseDb {
     }
 
     /**
+     * B03 (FR-02/03/10/24): list every keyword id + text (bounded) for
+     * target attribution outside a task scope. Executions without a task
+     * linkage can only attribute rows by matching the criterion target
+     * against global keyword text — the only linkage available without a
+     * row-level execution column. Bounded (never an unbounded table scan).
+     */
+    async getAllKeywordTexts(limit = 2000): Promise<Array<{ id: number; keyword: string }>> {
+        const rows = await this.repository.find({
+            select: ['id', 'keyword'],
+            take: limit,
+        })
+        return rows.map((row) => ({ id: row.id, keyword: row.keyword }))
+    }
+
+    /**
      * Delete keyword by keyword string and task id
      */
     async deleteKeyword(keyword: string, taskId: number): Promise<boolean> {

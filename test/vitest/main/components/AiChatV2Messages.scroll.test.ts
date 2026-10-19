@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatV2Messages from "@/views/components/aiChatV2/AiChatV2Messages.vue";
@@ -51,6 +51,37 @@ function stubScrollGeometry(el: HTMLElement, height: number): void {
     },
     configurable: true,
   });
+}
+
+/**
+ * Variant of {@link stubScrollGeometry} that counts every `scrollTop` write.
+ * Used by the throttling tests to assert how many reflows a token stream
+ * triggers: each `scrollTop = scrollHeight` assignment is one forced layout
+ * reflow over the whole message DOM. Returns a getter the test reads on
+ * demand (the setter closure captures `count` by reference).
+ */
+function mountScrollCounter(el: HTMLElement, height: number): {
+  getWriteCount: () => number;
+} {
+  let top = 0;
+  let count = 0;
+  Object.defineProperty(el, "scrollHeight", {
+    get: () => height,
+    configurable: true,
+  });
+  Object.defineProperty(el, "clientHeight", {
+    get: () => 100,
+    configurable: true,
+  });
+  Object.defineProperty(el, "scrollTop", {
+    get: () => top,
+    set: (v: number) => {
+      count++;
+      top = v;
+    },
+    configurable: true,
+  });
+  return { getWriteCount: () => count };
 }
 
 function mountMessages(messages: ChatV2MessageView[]) {
@@ -206,6 +237,141 @@ describe("AiChatV2Messages auto-scroll on history load", () => {
       wrapper.find(".v2-messages__wrapper").element
     );
 
+    wrapper.unmount();
+  });
+});
+
+describe("AiChatV2Messages streaming scroll throttling", () => {
+  // The last-message content.length watcher fires on EVERY streamed token
+  // (50–100/sec). Before throttling, each token forced one scrollTop write =
+  // one full-DOM layout reflow. These tests guard the rAF coalescing: many
+  // tokens within one frame collapse into a single write, and a scrolled-up
+  // user is never fought.
+
+  /**
+   * Mount with a counting scrollTop stub so we can assert the exact number of
+   * reflow-causing writes. The list starts at the bottom (pinnedToBottom true).
+   */
+  async function mountForStreaming() {
+    const startMessage = makeMessage("m-0", "first");
+    const messages = [startMessage];
+    const wrapper = mountMessages(messages);
+    await wrapper.vm.$nextTick();
+    const scroller = wrapper.find(".v2-messages").element as HTMLElement;
+    const counter = mountScrollCounter(scroller, 1000);
+    return { wrapper, scroller, counter, startMessage };
+  }
+
+  /**
+   * Simulate the token stream: grow the last message's content one delta at a
+   * time by re-setting the messages prop (exactly how the streaming path in
+   * AiChatV2.vue drives this component). The starting message is passed in
+   * rather than read back via wrapper.props("messages"), whose generic overload
+   * infers `never` for string-key prop access.
+   */
+  async function streamTokens(
+    wrapper: ReturnType<typeof mountMessages>,
+    start: ChatV2MessageView,
+    count: number
+  ): Promise<void> {
+    let current = start;
+    for (let i = 0; i < count; i++) {
+      const updated: ChatV2MessageView = {
+        ...current,
+        content: `${current.content}tok${i} `,
+      };
+      current = updated;
+      await wrapper.setProps({ messages: [updated] });
+    }
+  }
+
+  it("coalesces many streamed tokens into a single scrollTop write per frame", async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, counter, startMessage } = await mountForStreaming();
+      const writesBefore = counter.getWriteCount();
+
+      // Stream 50 tokens without advancing the fake clock — they all land
+      // within the same animation frame, so the coalesced scheduler must
+      // drop the redundant 49 and keep only ONE pending rAF.
+      await streamTokens(wrapper, startMessage, 50);
+      // No rAF has fired yet (clock frozen) → zero NEW writes so far.
+      expect(counter.getWriteCount()).toBe(writesBefore);
+
+      // Flush the single queued animation frame.
+      await vi.advanceTimersByTimeAsync(16);
+      // Exactly one write for all 50 tokens — the core reflow win.
+      expect(counter.getWriteCount() - writesBefore).toBe(1);
+
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not schedule scroll-to-bottom while the user is scrolled up", async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, scroller, counter, startMessage } = await mountForStreaming();
+      // User scrolls away from the bottom → pinnedToBottom flips false.
+      scroller.scrollTop = 0;
+      scroller.dispatchEvent(new Event("scroll"));
+      const writesBefore = counter.getWriteCount();
+
+      await streamTokens(wrapper, startMessage, 20);
+      // Flush any frame that might (wrongly) have been scheduled.
+      await vi.advanceTimersByTimeAsync(16);
+
+      // No writes: we must not fight a user who scrolled up to read history.
+      expect(counter.getWriteCount()).toBe(writesBefore);
+
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending coalesced scroll on unmount (no late write)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, counter, startMessage } = await mountForStreaming();
+      const writesBefore = counter.getWriteCount();
+
+      // One token schedules a rAF but does not flush it.
+      await streamTokens(wrapper, startMessage, 1);
+      expect(counter.getWriteCount()).toBe(writesBefore); // frame not fired yet
+
+      // Unmount BEFORE the queued rAF fires. The onBeforeUnmount hook must
+      // cancelAnimationFrame so the callback never runs against a detached
+      // scroller.
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(16);
+      // Still zero new writes — the pending frame was cancelled, not executed.
+      expect(counter.getWriteCount()).toBe(writesBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still pins to the bottom immediately on a non-streaming transition", async () => {
+    // Guards against over-throttling: the messages.length watcher (history
+    // load, new conversation) uses the immediate path, not the coalesced one,
+    // so a fresh conversation shows its first messages without a frame delay.
+    const messages = [makeMessage("m-0", "first")];
+    const wrapper = mountMessages(messages);
+    await wrapper.vm.$nextTick();
+    const scroller = wrapper.find(".v2-messages").element as HTMLElement;
+    const counter = mountScrollCounter(scroller, 1000);
+    const writesBefore = counter.getWriteCount();
+
+    // Append a NEW message (length changes) — drives the immediate watcher.
+    await wrapper.setProps({
+      messages: [makeMessage("m-0", "first"), makeMessage("m-1", "second")],
+    });
+    await wrapper.vm.$nextTick();
+
+    // Immediate path writes synchronously, no rAF needed.
+    expect(counter.getWriteCount()).toBeGreaterThan(writesBefore);
     wrapper.unmount();
   });
 });

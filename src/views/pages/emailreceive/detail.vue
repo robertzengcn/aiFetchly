@@ -46,7 +46,7 @@ import { useI18n } from "vue-i18n";
 import { getReceivedMessage } from "@/views/api/emailreceive";
 import type { ReceivedMessageDetailDto } from "@/entityTypes/emailReceiveTypes";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 

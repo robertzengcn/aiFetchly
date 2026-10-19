@@ -46,6 +46,25 @@ export class EmailReplyApprovalModule extends BaseModule {
     }
   }
 
+  /**
+   * Approval record for a one-time token hash regardless of consumption state
+   * (R14). The delivery preflight resolves consumed approvals through this so
+   * an exact replay of a finalized attempt can reach the idempotency lookup;
+   * NEW work must still be gated on the returned record's invalidatedAt/
+   * expiresAt.
+   */
+  async findByTokenHash(
+    tokenHash: string
+  ): Promise<EmailReplyApprovalEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.approvalModel.findByTokenHash(tokenHash);
+    } catch (error) {
+      console.error("Error finding reply approval by token:", error);
+      throw error;
+    }
+  }
+
   async findActiveByDraft(
     draftId: number,
     revisionId: number

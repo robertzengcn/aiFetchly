@@ -13,6 +13,16 @@ import {
 } from "./activeBrowserRegistry";
 import { extractContactInfoWithWorkerAi } from "./ContactExtractionAiClient";
 import { navigateForContactExtraction } from "./ContactNavigation";
+import {
+  CONTACT_LINK_SCAN_LIMIT,
+  CONTACT_LINK_TAIL,
+  readContactLinkCandidates,
+  readPageText,
+} from "./contactPageSnapshot";
+import {
+  CONTACT_EXTRACTION_PROTOCOL_TIMEOUT_MS,
+  contactViewportScreenshotOptions,
+} from "@/modules/puppeteerLaunchPolicy";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -86,20 +96,11 @@ async function scanHomepageForContactInfo(
  */
 async function findContactPageHeuristic(page: Page): Promise<string | null> {
   try {
-    const links = await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll("a"));
-      return anchors
-        .map((a) => ({
-          href: (a as HTMLAnchorElement).href,
-          text: (a.innerText || "").toLowerCase().trim(),
-          aria: a.getAttribute("aria-label") || "",
-          visible: a.offsetWidth > 0 && a.offsetHeight > 0,
-        }))
-        .filter(
-          (link: { href: string }) =>
-            link.href && !link.href.startsWith("javascript")
-        );
-    });
+    const links = await page.evaluate(
+      readContactLinkCandidates,
+      CONTACT_LINK_SCAN_LIMIT,
+      CONTACT_LINK_TAIL
+    );
 
     let bestLink: string | null = null;
     let highestScore = 0;
@@ -133,7 +134,7 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
         return link.href; // Return mailto directly
       }
 
-      if (score > highestScore && link.visible) {
+      if (score > highestScore) {
         highestScore = score;
         bestLink = link.href;
       }
@@ -170,22 +171,24 @@ async function checkStandardRoutes(): Promise<string | null> {
 }
 
 /**
- * Capture screenshot as base64 for AI visual context
+ * Capture a viewport JPEG for AI visual context.
+ * Headless launches used to disable the compositor, so Page.captureScreenshot
+ * waited until protocolTimeout. A viewport JPEG also encodes faster than a PNG.
  */
-async function captureScreenshot(page: Page): Promise<string | undefined> {
+async function captureViewportScreenshot(
+  page: Page
+): Promise<string | undefined> {
   try {
-    const screenshot = await page.screenshot({
-      encoding: "base64",
-      type: "png",
-      fullPage: false, // Only capture viewport for performance
-    });
-    return `data:image/png;base64,${screenshot}`;
-  } catch (error) {
+    const screenshot = await page.screenshot(contactViewportScreenshotOptions());
+    if (typeof screenshot !== "string") {
+      return undefined;
+    }
+    return `data:image/jpeg;base64,${screenshot}`;
+  } catch (error: unknown) {
     log.error("Screenshot capture failed:", error);
     return undefined;
   }
 }
-void captureScreenshot;
 
 /**
  * AI-Assisted Extraction (Primary Method)
@@ -199,12 +202,7 @@ async function extractWithAI(
 ): Promise<ExtractionResult> {
   try {
     // Clean page content (remove scripts, styles, images)
-    const cleanedContent = await page.evaluate(() => {
-      document
-        .querySelectorAll("script, style, img, svg, nav, footer")
-        .forEach((e) => e.remove());
-      return (document.body?.innerText || "").substring(0, 15000); // Limit to 15k chars
-    });
+    const cleanedContent = await page.evaluate(readPageText, 15000);
 
     // Derive entity name from page title or URL
     const hostname = new URL(url).hostname.replace("www.", "").split(".")[0];
@@ -212,7 +210,7 @@ async function extractWithAI(
 
     // Capture screenshot for visual context (optional)
     const screenshot = captureScreenshot
-      ? await captureScreenshotForAI(page)
+      ? await captureViewportScreenshot(page)
       : undefined;
 
     // Call the worker-safe AI client with screenshot. The worker must not
@@ -264,23 +262,6 @@ async function extractWithAI(
 }
 
 /**
- * Helper function to capture screenshot for AI
- */
-async function captureScreenshotForAI(page: Page): Promise<string | undefined> {
-  try {
-    const screenshot = await page.screenshot({
-      encoding: "base64",
-      type: "png",
-      fullPage: false,
-    });
-    return `data:image/png;base64,${screenshot}`;
-  } catch (error) {
-    log.error("Screenshot capture failed:", error);
-    return undefined;
-  }
-}
-
-/**
  * Complete AI-First Discovery Pipeline
  * Prioritizes AI extraction for comprehensive data, falls back to regex for basic data
  */
@@ -302,6 +283,7 @@ export async function discoverAndExtractContactInfo(
   // Use browserManager to launch browser with stealth mode
   const browser = await browserManager.launchWithStealth({
     headless: true,
+    protocolTimeout: CONTACT_EXTRACTION_PROTOCOL_TIMEOUT_MS,
   });
   // WS-4 R4.5: track the browser so the worker can close it on shutdown if
   // this function is interrupted by SIGTERM (the `finally` below wouldn't run).

@@ -8,18 +8,22 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
 } from "@/config/channellist";
 import type {
   ReplyIdentityProfileDto,
   AutoReplyAuditDto,
 } from "@/entityTypes/emailReceiveTypes";
 import type { AiEmailReplyDraftResult } from "@/entityTypes/emailReceiveAiTypes";
+import type { SendApprovedReplyOutcome } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { CheckEmailRepliedResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 
 // ---- Identity profile ----
 
@@ -62,9 +66,23 @@ export interface ReplyDraftDetail {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
+  /** R07: reply recipient envelope shown on the review screen. */
+  recipientAddress: string | null;
   status: string;
   generationSource: string;
   confidence: number | null;
+  /** R21: the model's persisted review request (decoded flag). */
+  requiresHumanReview: boolean;
+  /** R21: schema-bounded review reasons (raw bounded JSON from storage). */
+  reviewReasonsJson: string | null;
+  /** R21: schema-bounded unresolved questions (raw bounded JSON from storage). */
+  unresolvedQuestionsJson: string | null;
+  /** G02: when a human resolved the review request (null = unresolved). */
+  humanReviewResolvedAt: string | null;
+  /** G02: the revision the human reviewed (must equal current to count). */
+  humanReviewResolvedRevisionId: number | null;
+  /** T02: the draft's current revision id (null until materialized). */
+  currentRevisionId: number | null;
   knowledgeSourcesJson: string | null;
   warningsJson: string | null;
   sentAt: string | null;
@@ -91,12 +109,15 @@ export async function sendEmailReply(input: {
   draftId: number;
   emailServiceId?: number;
   approvalToken?: string;
-}): Promise<{
-  success: boolean;
-  draft_id: number;
-  message_id: number;
-  sent_at: string;
-}> {
+}): Promise<SendApprovedReplyOutcome> {
+  // B12: the IPC handler returns SendApprovedReplyOutcome (sent / failed /
+  // delivery_unknown / already_processed), each carrying attemptId +
+  // requestCorrelationId. The previous return type was a stale {success,
+  // draft_id, message_id, sent_at} shape that never matched the actual
+  // delivery-service outcome. Callers that need a typed failure should
+  // catch IpcRequestError (apirequest.ts) and read its `code` /
+  // `next_action` / `requestCorrelationId` fields instead of parsing the
+  // leading [code] bracket out of the message.
   return await windowInvoke(EMAIL_REPLY_SEND, input);
 }
 
@@ -110,6 +131,19 @@ export async function approveEmailReplyDraft(draftId: number): Promise<{
   contentHash: string;
 }> {
   return await windowInvoke(EMAIL_REPLY_DRAFT_APPROVE, { draftId });
+}
+
+/**
+ * G02: resolve the model's human-review request for the current revision.
+ * User gesture only (renderer) — never called by AI tools. Revision-bound:
+ * pass the revision the human reviewed; a stale revision refuses.
+ */
+export async function resolveEmailReplyHumanReview(input: {
+  draftId: number;
+  revisionId: number;
+  note?: string;
+}): Promise<{ resolved: boolean; reason?: string }> {
+  return await windowInvoke(EMAIL_REPLY_DRAFT_RESOLVE_REVIEW, input);
 }
 
 /** Send attempts for a draft (audit / recovery UI). No secrets. */
@@ -195,4 +229,16 @@ export async function getAutoReplyAuditLog(
   id: number
 ): Promise<AutoReplyAuditDto> {
   return await windowInvoke(EMAIL_AUTO_REPLY_AUDIT_DETAIL, { id });
+}
+
+/**
+ * FR-032: diagnostic reply-check. Runs the shared §7.1 detection algorithm
+ * (ordinary cache, no forceRefresh) and returns the three-state typed DTO.
+ * Read-only — does not mutate the mailbox. AI must be enabled; the AI-gated
+ * IPC handler returns `{ status: false, msg, data: null }` when disabled.
+ */
+export async function checkEmailReplied(
+  messageId: number
+): Promise<CheckEmailRepliedResult> {
+  return await windowInvoke(EMAIL_REPLY_CHECK_REPLIED, { messageId });
 }

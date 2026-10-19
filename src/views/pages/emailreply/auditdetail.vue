@@ -28,6 +28,34 @@
             <div>{{ audit.confidence != null ? (audit.confidence * 100).toFixed(0) + "%" : "—" }}</div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.reason") }}</div>
             <div>{{ audit.reason || "—" }}</div>
+            <div v-if="audit.metadataCode" class="mt-2">
+              <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.reply_evidence") }}</div>
+              <div class="d-flex align-center flex-wrap">
+                <v-chip
+                  :color="evidenceColor(audit.metadataCode)"
+                  size="small"
+                  data-testid="audit-detail-evidence-chip"
+                >
+                  {{ evidenceLabel(audit.metadataCode) }}
+                </v-chip>
+                <v-chip
+                  v-if="nextAction !== 'no_action'"
+                  class="ml-2"
+                  size="small"
+                  variant="outlined"
+                  data-testid="audit-detail-next-action"
+                >
+                  {{ t("emailReply.nextAction." + nextAction) }}
+                </v-chip>
+              </div>
+              <div
+                v-if="audit.metadataStage"
+                class="mt-1 text-caption text-medium-emphasis"
+                data-testid="audit-detail-stage"
+              >
+                {{ t("emailAutoReplyAudit.stage") }}: {{ audit.metadataStage }}
+              </div>
+            </div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.requires_approval") }}</div>
             <div>
               <v-icon :color="audit.requiresUserApproval ? 'warning' : 'success'">
@@ -44,7 +72,17 @@
             <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.knowledge_query") }}</div>
             <div class="text-body-2">{{ audit.knowledgeQuery || "—" }}</div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.knowledge_source_count") }}</div>
-            <div>{{ audit.knowledgeSourceCount }}</div>
+            <div data-testid="audit-detail-knowledge-sources">
+              <template v-if="audit.retrievedKnowledgeSourceCount > audit.knowledgeSourceCount">
+                {{
+                  t("emailAutoReplyAudit.knowledge_sources_supplied", {
+                    supplied: audit.knowledgeSourceCount,
+                    retrieved: audit.retrievedKnowledgeSourceCount,
+                  })
+                }}
+              </template>
+              <template v-else>{{ audit.knowledgeSourceCount }}</template>
+            </div>
             <div class="mt-2 text-subtitle-2">{{ t("emailAutoReplyAudit.created_at") }}</div>
             <div>{{ formatDate(audit.createdAt) }}</div>
           </v-card>
@@ -72,6 +110,66 @@
         <div class="text-subtitle-2 mt-2">{{ t("emailAutoReplyAudit.sent_body_preview") }}</div>
         <pre class="text-body-2">{{ audit.sentBodyPreview || "—" }}</pre>
       </v-card>
+
+      <!-- R07: product link into the human-review screen. The audit's
+           draftId is context, not an approval signal (R22) — this button
+           only navigates to the draft's review page, where the revision
+           content and envelope render before acknowledgment. -->
+      <v-card v-if="audit.draftId !== null" variant="outlined" class="pa-3 mt-4">
+        <div class="d-flex align-center flex-wrap">
+          <v-btn
+            color="primary"
+            variant="tonal"
+            size="small"
+            data-testid="audit-detail-view-draft"
+            @click="openRelatedDraft"
+          >
+            {{ t("emailAutoReplyAudit.view_related_draft") }}
+          </v-btn>
+        </div>
+      </v-card>
+
+      <!-- T10 (FR-032): diagnostic reply recheck via the AI-gated
+           EMAIL_REPLY_CHECK_REPLIED channel. Read-only. -->
+      <v-card variant="outlined" class="pa-3 mt-4">
+        <div class="d-flex align-center flex-wrap">
+          <v-btn
+            color="primary"
+            variant="tonal"
+            size="small"
+            :loading="recheckLoading"
+            :disabled="recheckLoading"
+            data-testid="audit-detail-recheck"
+            @click="recheckReplyStatus"
+          >
+            {{ t("emailReply.replyDetection.check_button") }}
+          </v-btn>
+          <v-chip
+            v-if="recheckResult"
+            class="ml-2"
+            :color="detectionStateColor(recheckResult.state)"
+            size="small"
+            data-testid="audit-detail-recheck-result"
+          >
+            {{ detectionStateLabel(recheckResult.state) }}
+          </v-chip>
+          <span
+            v-if="recheckError"
+            class="ml-2 text-caption text-error"
+            data-testid="audit-detail-recheck-error"
+          >
+            {{ recheckError }}
+          </span>
+        </div>
+        <div v-if="recheckResult" class="mt-2 text-caption text-medium-emphasis">
+          <span v-if="recheckResult.checked_at">
+            {{ t("emailReply.replyDetection.checked_at") }}: {{ formatDate(recheckResult.checked_at) }}
+          </span>
+          <span v-if="recheckResult.coverage" class="ml-2">
+            {{ coverageLabel(recheckResult.coverage) }}
+          </span>
+        </div>
+      </v-card>
     </div>
     </v-sheet>
   <!-- AI Content Report dialog (PRD §8.2 automatic email reply surface) -->
@@ -89,19 +187,38 @@ import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { getAutoReplyAuditLog } from "@/views/api/emailreply";
+import { getAutoReplyAuditLog, checkEmailReplied } from "@/views/api/emailreply";
+import { nextActionForCode } from "@/service/emailReply/EmailReplyNextAction";
 import type { AutoReplyAuditDto } from "@/entityTypes/emailReceiveTypes";
+import type { CheckEmailRepliedResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildAutoReplyDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
 const audit = ref<AutoReplyAuditDto | null>(null);
 const loading = ref(true);
+
+// R07: navigate to the related draft's human-review screen (route
+// AI_Reply_Draft_Detail). Navigation only — no approval signal crosses
+// here (R22); the review card enforces revision-bound acknowledgment.
+function openRelatedDraft(): void {
+  const draftId = audit.value?.draftId;
+  if (draftId === null || draftId === undefined) return;
+  void router.push({
+    name: "AI_Reply_Draft_Detail",
+    params: { id: String(draftId) },
+  });
+}
+
+// T10 (FR-032): diagnostic reply recheck state.
+const recheckLoading = ref(false);
+const recheckResult = ref<CheckEmailRepliedResult | null>(null);
+const recheckError = ref<string | null>(null);
 
 // AI Content Report state (PRD §8.2 automatic email reply surface).
 const replyReportDialog = ref(false);
@@ -135,6 +252,105 @@ const statusColor = computed(() => {
       return "default";
   }
 });
+
+/**
+ * T10 (FR-033): the typed metadata code is the trusted source for the
+ * next-action chip (B12 — derive from the typed store, never parse the
+ * English reason text). Delegate to the canonical `nextActionForCode` so
+ * the detail page stays in lockstep with the service-layer mapping and
+ * the AI tool's next-action hint — never duplicate the code→action table
+ * here (review R-5: the inline copy had drifted, omitting `provider_error`
+ * from the discard list and `already_replied` (no draft) from the
+ * await_human_review list, so the chip showed `no_action` where the
+ * service says `discard_and_retry` / `await_human_review`).
+ *
+ * R22: an audit record is a refusal record — its draftId is context (which
+ * draft the refusal touched), never evidence that the draft is eligible to
+ * approve/send. The refusal-side map routes already_replied to
+ * await_human_review regardless of the draftId; approval guidance belongs
+ * only to the reused:true success path (nextActionForReuse).
+ */
+const nextAction = computed(() =>
+  nextActionForCode(audit.value?.metadataCode)
+);
+
+function evidenceColor(code: string): string {
+  switch (code) {
+    case "already_replied":
+    case "no_reply_observed":
+      return "success";
+    case "reply_in_progress":
+    case "generation_in_progress":
+      return "info";
+    case "needs_human_review":
+    case "delivery_unknown":
+    case "reply_state_unknown":
+    case "reply_state_conflict":
+    case "unsupported_protocol":
+    case "missing_message_id":
+    case "receive_unavailable":
+    case "sent_folder_unavailable":
+    case "ambiguous_match":
+    case "identity_conflict":
+      return "warning";
+    case "probe_timeout":
+    case "probe_limit_exceeded":
+    case "probe_failed":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
+function evidenceLabel(code: string): string {
+  return t("emailReply.policyCode." + code) || code;
+}
+
+function detectionStateColor(state: string): string {
+  switch (state) {
+    case "replied":
+      return "success";
+    case "not_replied":
+      return "info";
+    default:
+      return "warning";
+  }
+}
+
+function detectionStateLabel(state: string): string {
+  return (
+    t("emailReply.replyDetection.state_" + state) || state
+  );
+}
+
+function coverageLabel(coverage: string): string {
+  return (
+    t("emailReply.replyDetection.coverage_" + coverage) || coverage
+  );
+}
+
+/**
+ * T10 (FR-032): run the diagnostic reply check through the AI-gated IPC
+ * channel. The typed IpcRequestError carries the structured failure fields;
+ * the user sees a bounded message, never a raw provider error.
+ */
+async function recheckReplyStatus(): Promise<void> {
+  const a = audit.value;
+  if (!a || recheckLoading.value) return;
+  recheckLoading.value = true;
+  recheckError.value = null;
+  try {
+    recheckResult.value = await checkEmailReplied(a.messageId);
+  } catch (err: unknown) {
+    recheckResult.value = null;
+    recheckError.value =
+      err instanceof Error && err.message
+        ? err.message
+        : t("emailAutoReplyAudit.recheck_failed");
+  } finally {
+    recheckLoading.value = false;
+  }
+}
 
 onMounted(async () => {
   const id = Number(route.params.id);

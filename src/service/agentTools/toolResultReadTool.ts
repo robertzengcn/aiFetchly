@@ -15,7 +15,9 @@ import {
 } from "@/schemas/toolResult";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { StoredToolOutputRef } from "@/entityTypes/toolResultTypes";
@@ -66,7 +68,9 @@ export async function handleToolResultRead(
   const outcome = await service.read({
     target: target.target,
     cursor: parsed.data.cursor,
-    maxTokens: parsed.data.max_tokens,
+    // Always take the model page budget. Omitting max_tokens used to select
+    // the 32 KiB UI page, which then got saved as another output.
+    maxTokens: parsed.data.max_tokens ?? TOOL_RESULT_CONFIG.readMaxTokens,
   });
   toolResultMetrics.recordLatency(
     "retrieval.latency_ms",
@@ -81,8 +85,9 @@ export async function handleToolResultRead(
   }
 
   const page = outcome.page;
-  const envelope = {
+  const fitted = fitWrappedRetrievalResult({
     output_id: page.outputId,
+    revision: target.target.revision,
     text: page.text,
     start_byte: page.startByte,
     end_byte: page.endByte,
@@ -90,7 +95,16 @@ export async function handleToolResultRead(
     complete: page.complete,
     next_cursor: page.nextCursor,
     source_completeness: target.target.sourceCompleteness,
-  };
+  });
+  const envelope =
+    fitted !== null && typeof fitted === "object"
+      ? (fitted as Record<string, unknown>)
+      : {
+          success: false,
+          error: "RETRIEVAL_PAGE_TOO_LARGE",
+          analysis_complete: false,
+          output_id: page.outputId,
+        };
   // Settle the tokens actually returned, so a caller asking for a smaller page
   // spends proportionally less of the turn's allowance.
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));

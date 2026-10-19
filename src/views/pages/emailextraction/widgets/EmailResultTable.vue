@@ -54,7 +54,7 @@ import router from '@/views/router';
 // import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { EmailsearchTaskEntityDisplay } from '@/entityTypes/emailextraction-type'
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 import { Header } from "@/entityTypes/commonType"
 // Define props
 const props = defineProps({

@@ -1819,6 +1819,91 @@ function initialize() {
         );
       }
 
+      // Post-synchronize email-reply upgrade validation (R23, technical design
+      // §5.3). Runs AFTER ensureInitialized() has applied TypeORM synchronize
+      // over the POPULATED database. Read-only: never repairs, drops, or
+      // backfills. On a non-empty failure list (or a validator exception) it
+      // DISABLES guarded reply work (draft generation + new send claims) via
+      // the emergency kill-switch Token flag so the refusal is visible to
+      // operators, and PRESERVES the database — the §5.3 rollout contract.
+      // The mandatory local duplicate protection (sent/unknown/conflict
+      // clusters blocking acquireReservation) has no feature-flag dependency
+      // and runs unconditionally, so this disable cannot remove it.
+      // Fire-and-forget so a slow or stuck validation never blocks startup;
+      // the kill switch takes effect on the next draft/send IPC call.
+      // N08: shared admission barrier — new guarded work refuses while
+      // validation is pending/failed (EmailReplyReadiness). Audit/recovery
+      // paths never consult the gate and stay available (§5.3).
+      if (startupPolicy.validateReplyUpgradeOnStartup) {
+        try {
+          const {
+            markUpgradeValidationPending,
+            markUpgradeValidationPassed,
+            markUpgradeValidationFailed,
+          } = await import("@/service/emailReply/EmailReplyReadiness");
+          // N08: hold new guarded work synchronously at startup (before the
+          // async validation settles). Audit/recovery stay open.
+          markUpgradeValidationPending();
+          const { runReplyUpgradeValidationOnStartup } = await import(
+            "@/service/emailReply/EmailReplyUpgradeValidation"
+          );
+          void runReplyUpgradeValidationOnStartup(
+            appDataSource.connection,
+            "startup-upgrade-validation"
+          ).then(
+            (report) => {
+              if (!report.ok) {
+                markUpgradeValidationFailed();
+                log.error(
+                  "[email-reply-upgrade-validation] FAILED — guarded reply work disabled via kill switch. Failures:",
+                  JSON.stringify(report.failures)
+                );
+              } else {
+                markUpgradeValidationPassed();
+                log.info(
+                  "[email-reply-upgrade-validation] passed — reply schema invariants verified"
+                );
+              }
+            },
+            (error) => {
+              // N08: promise rejection (not just a failure report) fails
+              // closed explicitly — guarded work stays held.
+              markUpgradeValidationFailed();
+              log.error(
+                "[email-reply-upgrade-validation] startup validation rejected:",
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          );
+        } catch (err) {
+          // N08: wiring/import failure fails closed explicitly instead of
+          // only logging. Guarded work is held; audit/recovery stay open.
+          try {
+            const { markUpgradeValidationFailed } = await import(
+              "@/service/emailReply/EmailReplyReadiness"
+            );
+            markUpgradeValidationFailed();
+          } catch {
+            /* readiness import itself failed — gate defaults to pending (held) */
+          }
+          log.error(
+            "[email-reply-upgrade-validation] startup wiring failed to launch:",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      } else {
+        // Validation disabled by policy — treat as passed so the gate does
+        // not hold guarded work forever. The kill switch still applies.
+        try {
+          const { markUpgradeValidationPassed } = await import(
+            "@/service/emailReply/EmailReplyReadiness"
+          );
+          markUpgradeValidationPassed();
+        } catch {
+          /* best-effort */
+        }
+      }
+
       // Best-effort cache cleanup so stale paste expansions do not grow
       // without bound. Fire-and-forget so it never blocks startup.
       try {
@@ -1844,6 +1929,53 @@ function initialize() {
       } catch (err) {
         log.warn(
           "[archive-recovery] startup sweep failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
+      // Task completion policy (T24, PRD NFR-05/AC-13): finalize executions
+      // left unfinalized by a crash/kill as interrupted.
+      // G02: await a bounded recovery barrier BEFORE scheduler/effect
+      // startup so a recovered row cannot race a fresh dispatch. The sweep
+      // itself is bounded (capped sweeps); the barrier additionally times
+      // out instead of hanging boot — on timeout the sweep continues in the
+      // background and startup proceeds (logged, never fatal).
+      // Pure no-op when the completion-policy flag is off (§17 rollback);
+      // never fatal.
+      try {
+        const {
+          TaskExecutionRestartRecovery,
+          awaitRecoveryBarrier,
+        } = await import(
+          "@/service/aiTaskExecution/TaskExecutionRestartRecovery"
+        );
+        const gated = await awaitRecoveryBarrier(
+          new TaskExecutionRestartRecovery()
+            .recoverInterruptedExecutions()
+            .catch((err: unknown) => {
+              log.warn(
+                "[task-recovery] sweep failed:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return {
+                scanned: 0,
+                recovered: 0,
+                skipped: 0,
+                failed: 0,
+                overflow: 0,
+                listError: true,
+                ledgersReleased: 0,
+              };
+            })
+        );
+        if (!gated.completed) {
+          log.warn(
+            "[task-recovery] sweep barrier timed out; schedulers starting while recovery continues in the background"
+          );
+        }
+      } catch (err) {
+        log.warn(
+          "[task-recovery] startup sweep failed to launch:",
           err instanceof Error ? err.message : String(err)
         );
       }

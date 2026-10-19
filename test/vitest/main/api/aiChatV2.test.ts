@@ -5,12 +5,16 @@ import {
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_STREAM_STOP,
+  AI_CHAT_V2_TASK_CONTINUE,
+  AI_CHAT_V2_TASK_RETRY,
 } from "@/config/channellist";
 import {
+  attachChatV2SuccessorStream,
   clearChatV2StreamListeners,
   startCompaction,
   streamChatV2Message,
 } from "@/views/api/aiChatV2";
+import { IpcRequestError } from "@/views/utils/apirequest";
 
 type ReceiveHandler = (raw: string) => void;
 
@@ -291,5 +295,183 @@ describe("aiChatV2 renderer API", () => {
       JSON.stringify({ conversationId: "v2-1", model: "gpt-4o" })
     );
     expect(result).toEqual({ started: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // T09 (FR-14/21/22, AC-16/27/28): attachChatV2SuccessorStream — the
+  // Continue/Retry successor's background turn streams over the recovery
+  // channel, not AI_CHAT_V2_STREAM (nothing ever `windowSend`s that channel
+  // for a successor). The helper invokes the successor IPC (which both
+  // creates the successor AND dispatches the engine) and forwards
+  // task_execution_state chunks to the caller while listeners are attached.
+  // -------------------------------------------------------------------------
+
+  it("attachChatV2SuccessorStream invokes the recovery channel and routes successor task_execution_state chunks", async () => {
+    invoke.mockResolvedValueOnce({
+      status: true,
+      msg: "",
+      data: { executionId: "exec-succ-1", status: "created" },
+    });
+    const onState = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const promise = attachChatV2SuccessorStream({
+      mode: "continue",
+      parentExecutionId: "exec-parent-1",
+      submissionId: "sub-succ-1",
+      conversationId: "v2-1",
+      executionId: "exec-succ-1",
+      onTaskExecutionState: onState,
+      onComplete,
+      onError,
+    });
+
+    await Promise.resolve();
+
+    // The invoke reaches the recovery channel with the successor payload.
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(
+      AI_CHAT_V2_TASK_CONTINUE,
+      JSON.stringify({
+        parentExecutionId: "exec-parent-1",
+        submissionId: "sub-succ-1",
+      })
+    );
+    // Successor stream listeners are registered on the shared channels.
+    expect(handlers.has(AI_CHAT_V2_STREAM_CHUNK)).toBe(true);
+    expect(handlers.has(AI_CHAT_V2_STREAM_COMPLETE)).toBe(true);
+
+    // A task_execution_state chunk for the successor conversation routes to
+    // the state callback (the badge update path).
+    handlers.get(AI_CHAT_V2_STREAM_CHUNK)?.(
+      JSON.stringify({
+        eventType: "task_execution_state",
+        conversationId: "v2-1",
+        messageId: "m-1",
+        taskExecutionState: {
+          executionId: "exec-succ-1",
+          conversationId: "v2-1",
+          status: "active",
+        },
+      })
+    );
+    expect(onState).toHaveBeenCalledWith({
+      executionId: "exec-succ-1",
+      conversationId: "v2-1",
+      status: "active",
+    });
+
+    // The terminal complete event resolves and detaches both listeners.
+    handlers.get(AI_CHAT_V2_STREAM_COMPLETE)?.(
+      JSON.stringify({ eventType: "complete", conversationId: "v2-1" })
+    );
+    await promise;
+    expect(onComplete).toHaveBeenCalledWith({
+      eventType: "complete",
+      conversationId: "v2-1",
+    });
+    expect(handlers.has(AI_CHAT_V2_STREAM_CHUNK)).toBe(false);
+    expect(handlers.has(AI_CHAT_V2_STREAM_COMPLETE)).toBe(false);
+  });
+
+  it("attachChatV2SuccessorStream uses the retry channel for mode retry and filters stale conversation chunks", async () => {
+    invoke.mockResolvedValueOnce({
+      status: true,
+      msg: "",
+      data: { executionId: "exec-succ-2", status: "created" },
+    });
+    const onState = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const promise = attachChatV2SuccessorStream({
+      mode: "retry",
+      parentExecutionId: "exec-parent-2",
+      submissionId: "sub-succ-2",
+      conversationId: "v2-2",
+      executionId: "exec-succ-2",
+      onTaskExecutionState: onState,
+      onComplete,
+      onError,
+    });
+
+    await Promise.resolve();
+
+    expect(invoke).toHaveBeenCalledWith(
+      AI_CHAT_V2_TASK_RETRY,
+      JSON.stringify({
+        parentExecutionId: "exec-parent-2",
+        submissionId: "sub-succ-2",
+      })
+    );
+
+    const chunkHandler = handlers.get(AI_CHAT_V2_STREAM_CHUNK);
+    const completeHandler = handlers.get(AI_CHAT_V2_STREAM_COMPLETE);
+    chunkHandler?.(
+      JSON.stringify({
+        eventType: "task_execution_state",
+        conversationId: "v2-other",
+        taskExecutionState: {
+          executionId: "exec-x",
+          conversationId: "v2-other",
+          status: "active",
+        },
+      })
+    );
+    expect(onState).not.toHaveBeenCalled();
+    completeHandler?.(
+      JSON.stringify({ eventType: "complete", conversationId: "v2-other" })
+    );
+    // A stale terminal event neither resolves nor detaches.
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(handlers.has(AI_CHAT_V2_STREAM_CHUNK)).toBe(true);
+
+    completeHandler?.(
+      JSON.stringify({ eventType: "complete", conversationId: "v2-2" })
+    );
+    await promise;
+    expect(handlers.has(AI_CHAT_V2_STREAM_COMPLETE)).toBe(false);
+  });
+
+  it("attachChatV2SuccessorStream surfaces a non-created invoke response through onError", async () => {
+    invoke.mockResolvedValueOnce({
+      status: false,
+      msg: "Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED",
+      data: undefined,
+    });
+    const onState = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const promise = attachChatV2SuccessorStream({
+      mode: "continue",
+      parentExecutionId: "exec-parent-3",
+      submissionId: "sub-succ-3",
+      conversationId: "v2-3",
+      executionId: "exec-succ-3",
+      onTaskExecutionState: onState,
+      onComplete,
+      onError,
+    });
+
+    await expect(promise).rejects.toThrow(
+      "Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED"
+    );
+    // B12 (merged): windowInvoke throws the typed IpcRequestError for a
+    // status:false envelope, and the attach path surfaces it through onError
+    // unchanged so callers can read the structured fields (code /
+    // requestCorrelationId). Assert the typed contract, not a plain Error.
+    expect(onError).toHaveBeenCalledTimes(1);
+    const surfaced = onError.mock.calls[0][0] as IpcRequestError;
+    expect(surfaced).toBeInstanceOf(IpcRequestError);
+    expect(surfaced.message).toBe(
+      "Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED"
+    );
+    expect(onState).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    // The failed attach cleans up its listeners.
+    expect(handlers.has(AI_CHAT_V2_STREAM_CHUNK)).toBe(false);
+    expect(handlers.has(AI_CHAT_V2_STREAM_COMPLETE)).toBe(false);
   });
 });

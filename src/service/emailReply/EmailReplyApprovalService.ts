@@ -23,6 +23,7 @@ import {
 import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import { isValidReplyAddress } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import { isHumanReviewPendingForRevision } from "@/service/emailReply/EmailReplyNextAction";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 
@@ -69,11 +70,42 @@ export class EmailReplyApprovalService {
   }
 
   async approveDraft(input: ApproveDraftInput): Promise<ApprovalResult> {
-    const draft = await this.draftModule.readAggregate(input.draftId);
+    let draft = await this.draftModule.readAggregate(input.draftId);
     if (!draft) {
       throw new Error("Cannot approve: draft not found");
     }
-    if (draft.status !== "draft") {
+    // R13: a definite SMTP rejection finalizes the draft as `failed`. The
+    // generation reuse path (B08) hands the failed draft back with
+    // `existing_draft_id`, but nothing could approve/send it. Reopen the
+    // draft for a fresh approval ONLY when retry is safe (fenced: no cluster
+    // positive, no unknown/sent/in-flight sibling, conditional on
+    // `status='failed' + currentRevisionId`). The reopen throws a typed
+    // refusal when the fence fails — surface it; the draft stays `failed`.
+    // Ambiguous (`delivery_unknown`), `sent`, `sending`, `approved`,
+    // `discarded` stay blocked (the reopen refuses non-`failed`).
+    if (draft.status === "failed") {
+      const emailServiceId = draft.emailServiceId;
+      if (emailServiceId == null) {
+        throw new Error(
+          "Cannot approve: failed draft has no bound email service for the reopen fence"
+        );
+      }
+      await this.draftModule.reopenFailedDraftForRetry({
+        draftId: draft.id,
+        messageId: draft.messageId,
+        emailServiceId,
+      });
+      // Reload the reopened draft so the normal path sees `status = "draft"`.
+      const reopened = await this.draftModule.readAggregate(input.draftId);
+      if (!reopened || reopened.status !== "draft") {
+        throw new Error(
+          `Cannot approve: failed-draft reopen did not yield a 'draft' state (current '${
+            reopened?.status ?? "missing"
+          }')`
+        );
+      }
+      draft = reopened;
+    } else if (draft.status !== "draft") {
       throw new Error(
         `Cannot approve: draft must be in 'draft' state (current '${draft.status}')`
       );
@@ -100,6 +132,30 @@ export class EmailReplyApprovalService {
         .join(",");
       throw new Error(
         `Cannot approve: validation findings [${codes}] require review before sending`
+      );
+    }
+
+    // R21/G02/F09: the model's persisted review request gates approval the
+    // same way a deterministic review finding does — a draft with PENDING
+    // review cannot be approved as clean (never silently lighter-review
+    // output). Pending is the EFFECTIVE status (model flag minus a
+    // revision-bound human resolution for the CURRENT revision), computed
+    // by the single shared helper so the gate, reuse guidance, and DTOs
+    // never disagree. Reading draft columns (not tool inputs) keeps the
+    // gate authoritative. The model's original reasons stay immutable as
+    // provenance (resolveHumanReview never clears them); any edit
+    // invalidates the stamp so a stale acknowledgment cannot authorize
+    // changed content.
+    if (
+      isHumanReviewPendingForRevision({
+        requiresHumanReview: draft.requiresHumanReview,
+        currentRevisionId: draft.currentRevisionId,
+        humanReviewResolvedAt: draft.humanReviewResolvedAt,
+        humanReviewResolvedRevisionId: draft.humanReviewResolvedRevisionId,
+      })
+    ) {
+      throw new Error(
+        "Cannot approve: the model flagged this draft as requiring human review before sending — resolve it explicitly for the current revision first"
       );
     }
 

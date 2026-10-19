@@ -812,6 +812,71 @@ describe("AIChatQueryLoop", () => {
       expect(fakeExecute).toHaveBeenCalledTimes(2);
     });
 
+    it("B12d: enrolled standalone turn beside an active goal uses the neutral round-cap prompt (FR-20, no stacked nudges)", async () => {
+      // goalAutoContinue is true (an active goal exists) but the enrolled
+      // binding is explicitly standalone (unrelated task). The round-cap
+      // continuation must use the neutral TOOL prompt, not the
+      // goal-flavored one.
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount <= 2) {
+            onChunk(
+              makeToolCallChunk(
+                `call-b12-${callCount}`,
+                "search",
+                `{"q":"${callCount}"}`
+              )
+            );
+            return;
+          }
+          const lastUser = [...req.messages]
+            .reverse()
+            .find((m) => m.role === "user");
+          expect(lastUser?.content).toBe(TOOL_ROUND_CAP_CONTINUATION_PROMPT);
+          expect(lastUser?.content).not.toBe(
+            GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+          );
+          onChunk(makeChunk("Contacts saved.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-b12",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "Extract contacts from the uploaded CSV.",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 1,
+        goalAutoContinue: true,
+        taskExecutionBinding: {
+          completionOwner: "standalone",
+        } as never,
+      });
+      expect(result.type).toBe("completed");
+    });
+
     it("nudges the model when a /goal turn text-stops after tools mid-task", async () => {
       // Reproduces the real-world premature stop: mid-goal the model writes
       // "Now at 54 records. Let me continue building volume..." with

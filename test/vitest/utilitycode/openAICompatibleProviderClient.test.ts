@@ -36,6 +36,106 @@ function signalAwareHangingFetch(): typeof fetch {
     })) as unknown as typeof fetch;
 }
 
+/**
+ * B13: a fetch that returns response headers (200 ok) but whose `res.json()`
+ * never resolves on its own — it only rejects when the request signal aborts.
+ * Simulates a provider that sends headers then stalls mid-body. The returned
+ * `Response.json()` reads the signal via the captured `init`; real fetch
+ * rejects the body read on abort, so the fake mirrors that contract.
+ */
+function signalAwareHangingBodyFetch(): typeof fetch {
+  return ((url: string | URL | Request, init?: RequestInit) => {
+    const sig = init?.signal as AbortSignal | undefined;
+    const body: Promise<Response> = new Promise((resolve) => {
+      // Headers arrive immediately.
+      resolve(
+        new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+    });
+    // Patch `.json()` so the body read honors the abort signal — mirroring
+    // the real fetch contract where an aborted signal rejects body reads.
+    return body.then((res) => {
+      const patched = {
+        ...res,
+        ok: res.ok,
+        status: res.status,
+        headers: res.headers,
+        json: () =>
+          new Promise<unknown>((_resolveJson, rejectJson) => {
+            const fail = (): void => {
+              const err = new Error("The operation was aborted.");
+              err.name = "AbortError";
+              rejectJson(err);
+            };
+            if (sig) {
+              if (sig.aborted) {
+                fail();
+              } else {
+                sig.addEventListener("abort", fail, { once: true });
+              }
+            }
+            // otherwise: body never resolves
+          }),
+      };
+      return patched as unknown as Response;
+    });
+  }) as unknown as typeof fetch;
+}
+
+/**
+ * R17: a fetch that returns NON-2xx response headers (an error status) but whose
+ * error body (`res.text()`) never resolves on its own — it only rejects when the
+ * request signal aborts. Simulates a provider that sends error headers then
+ * stalls the error body. This is the regression vehicle for Trigger B: without
+ * a deadline spanning the error-body read, `toProviderError`'s `res.text()`
+ * hangs past the call/invocation budget.
+ *
+ * The patched `.text()` rejects when the signal passed to fetch aborts — the
+ * same contract real fetch follows for a stalled body. In `complete()` the body
+ * timer aborts that very controller, so the read rejects within the budget. In
+ * `stream()` the client bounds the error-body read on its own internal timer
+ * (not the fetch signal), so the wall-clock assertion is what proves the fix
+ * there; the `.catch(() => "")` inside `toProviderError` never runs because the
+ * read is abandoned by the racing timeout, not by a signal rejection.
+ */
+function signalAwareHangingErrorBodyFetch(
+  status: number
+): typeof fetch {
+  return ((_url: string | URL | Request, init?: RequestInit) => {
+    const sig = init?.signal as AbortSignal | undefined;
+    const res = new Response("", {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+    const patched = {
+      ...res,
+      ok: false,
+      status,
+      headers: res.headers,
+      text: () =>
+        new Promise<string>((_resolveText, rejectText) => {
+          const fail = (): void => {
+            const err = new Error("The operation was aborted.");
+            err.name = "AbortError";
+            rejectText(err);
+          };
+          if (sig) {
+            if (sig.aborted) {
+              fail();
+            } else {
+              sig.addEventListener("abort", fail, { once: true });
+            }
+          }
+          // otherwise: error body never resolves
+        }),
+    };
+    return Promise.resolve(patched as unknown as Response);
+  }) as unknown as typeof fetch;
+}
+
 describe("OpenAICompatibleProviderClient timeouts", () => {
   it("rejects with a timeout network error when the provider never responds", async () => {
     const client = new OpenAICompatibleProviderClient(
@@ -89,6 +189,174 @@ describe("OpenAICompatibleProviderClient timeouts", () => {
       const name = err instanceof Error ? err.name : "";
       return name === "AbortError";
     });
+  });
+
+  it("B13: aborts a stalled response body within the callBudgetMs budget", async () => {
+    // Headers arrive (200 ok) but res.json() never resolves. Without the
+    // body-phase deadline the call would hang forever. With callBudgetMs the
+    // shared AbortController fires and res.json() rejects within the budget.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 5000
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("B13: surfaces the body-phase timeout as an AIProviderError (network)", async () => {
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      5000,
+      5000
+    );
+    try {
+      await client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AIProviderError);
+      expect((err as AIProviderError).code).toBe("network");
+    }
+  });
+
+  it("B13: without callBudgetMs a stalled body still aborts via bodyTimeoutMs", async () => {
+    // No callBudgetMs supplied — fall back to the per-phase body timeout.
+    // Use a tiny bodyTimeoutMs so the test stays fast.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 20
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({ messages: [{ role: "user", content: "hi" }] })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("B13: a fast body resolves normally under a generous budget", async () => {
+    // Headers + body both resolve immediately — the budget must not fire.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "x",
+          object: "chat.completion",
+          created: 0,
+          model: "llama3.1",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "pong" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch,
+      undefined,
+      5000,
+      5000
+    );
+    const result = await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      callBudgetMs: 5000,
+    });
+    expect(result.choices?.[0]?.message?.content).toBe("pong");
+  });
+
+  it("R17: complete() bounds a stalled NON-2xx error body within the budget (no hang)", async () => {
+    // Headers arrive as 500, but res.text() never resolves. Before the fix the
+    // !res.ok branch ran BEFORE the body timer was armed, so toProviderError's
+    // res.text() hung forever. Now the body-phase timer is armed first and the
+    // abort rejects the read within the budget → network timeout error.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 5000
+    );
+    const start = Date.now();
+    await expect(
+      client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      })
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("R17: the stalled-error-body timeout surfaces as AIProviderError (network), not a compat/validation error", async () => {
+    // The abort during the error-body read must classify as a network timeout
+    // INDEPENDENTLY of compatibility — never an unsupported/validation signal
+    // that would trigger a no-hint retry or a validation strike.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      5000,
+      5000
+    );
+    try {
+      await client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AIProviderError);
+      expect((err as AIProviderError).code).toBe("network");
+      // No 5xx status is attached to a timeout — it is a transport failure.
+      expect((err as AIProviderError).status).toBeUndefined();
+    }
+  });
+
+  it("R17: stream() bounds a stalled NON-2xx error body under a tiny budget (no hang)", async () => {
+    // The streaming path armed no body timer after fetchWithResponseTimeout
+    // returned, so a stalled non-2xx error body hung toProviderError forever.
+    // The fix bounds the error-body read with its own timer (bodyTimeoutMs).
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingErrorBodyFetch(500),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 20
+    );
+    const start = Date.now();
+    await expect(
+      client.stream(
+        { messages: [{ role: "user", content: "hi" }] },
+        () => undefined
+      )
+    ).rejects.toThrow(/stalled before finishing the body/i);
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 });
 
@@ -158,5 +426,67 @@ describe("OpenAICompatibleProviderClient small-model alias", () => {
       model: "qwen3:8b",
     });
     expect(wireBody(fetchMock).model).toBe("qwen3:8b");
+  });
+});
+
+describe("OpenAICompatibleProviderClient configured context size (G01)", () => {
+  // G01: the operator-verified `contextSize` must reach the models response
+  // (live and synthetic-fallback paths) so the catalog → reply budget chain
+  // treats it as a confirmed window (R04). Without this link the configured
+  // limit would never take effect and unknown small models could be
+  // over-admitted.
+  const sizedConfig: LocalAIProviderConfig = {
+    ...CONFIG,
+    defaultModel: "small-local",
+    contextSize: 4096,
+  };
+  function modelsResponse(models: unknown): Response {
+    return new Response(JSON.stringify({ object: "list", data: models }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("injects the configured contextSize when the server omits context fields", async () => {
+    const fetchImpl = (async (url: unknown) => {
+      expect(String(url)).toContain("/models");
+      return modelsResponse([{ id: "small-local" }]);
+    }) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      sizedConfig,
+      "",
+      fetchImpl
+    );
+    const { models, usedFallback } =
+      await client.listModelsWithFallbackStatus();
+    expect(usedFallback).toBe(false);
+    expect(models.data).toHaveLength(1);
+    expect(models.data[0].context_size).toBe(4096);
+  });
+
+  it("carries the configured contextSize on the synthetic fallback list", async () => {
+    const fetchImpl = (async () =>
+      new Response("", { status: 500 })) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      sizedConfig,
+      "",
+      fetchImpl
+    );
+    const { models, usedFallback } =
+      await client.listModelsWithFallbackStatus();
+    expect(usedFallback).toBe(true);
+    expect(models.data.some((m) => m.context_size === 4096)).toBe(true);
+  });
+
+  it("omits context_size when no contextSize is configured", async () => {
+    const fetchImpl = (async () =>
+      modelsResponse([{ id: "small-local" }])) as unknown as typeof fetch;
+    const client = new OpenAICompatibleProviderClient(
+      { ...sizedConfig, contextSize: undefined },
+      "",
+      fetchImpl
+    );
+    const { models } = await client.listModelsWithFallbackStatus();
+    expect(models.data[0].context_size).toBeUndefined();
   });
 });

@@ -137,6 +137,7 @@ export type ChatRunDetailEventType =
   | "goal_verification"
   | "attention_cleared"
   | "direction_updated"
+  | "task_execution_state"
   | "error"
   | "cancelled"
   | "complete";

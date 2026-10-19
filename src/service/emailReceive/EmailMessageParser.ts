@@ -22,6 +22,25 @@ export function buildSnippet(text: string | null, max = 280): string | null {
   return single.slice(0, max).trimEnd() + "…";
 }
 
+/**
+ * D8.3 (security): strip control characters from a header value (subject).
+ * Control chars (NUL, BEL, CR, LF, other C0 controls) break log lines,
+ * storage, and downstream rendering, and are a known log-injection vector.
+ * Collapses embedded CR/LF runs to a single space; strips other control
+ * chars; preserves printable ASCII + tab. Applies the model's 998-char
+ * subject cap. Shared by both POP3 and IMAP receive clients.
+ */
+export function sanitizeHeaderValue(value: string): string {
+  // The control-char class is intentional — this is the security filter that
+  // removes log-injection / control-char vectors from header values.
+  /* eslint-disable no-control-regex -- stripping control chars is the purpose */
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
+    .slice(0, 998);
+  /* eslint-enable no-control-regex */
+}
+
 /** JSON-encode an address list, tolerating null/undefined. */
 export function encodeAddresses(addresses: ReadonlyArray<string>): string {
   return JSON.stringify(addresses.slice());

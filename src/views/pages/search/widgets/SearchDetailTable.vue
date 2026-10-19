@@ -485,7 +485,7 @@ import { buildWebsiteAnalysisDescriptor } from '@/views/components/aiContentRepo
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo'
 
 const $route = useRoute();
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 const taskid = parseInt($route.params.id.toString());
 
 const initialize = async () => {

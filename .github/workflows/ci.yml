@@ -79,6 +79,20 @@ jobs:
       - name: Run main process unit tests
         run: yarn testmain
 
+      # B22 isolation lane: these suites are timing-marginal under full-suite
+      # parallel load (skill-registry FS init, heavy lazy transforms, real FS
+      # externalization writes) and carry extended in-test budgets for it. If
+      # the parallel run above flakes on exactly these files, this serial
+      # re-run distinguishes infra contention (green here) from real
+      # regressions (red here too) without hiding failures.
+      - name: Re-run load-sensitive suites serially
+        run: >
+          node scripts/run-main-tests.js
+          test/vitest/main/service/StreamEventProcessorToolResults.test.ts
+          test/vitest/main/service/HookDispatcher.skillRef.test.ts
+          test/vitest/main/service/ToolExecutor.searchRecovery.test.ts
+          --maxWorkers 1
+
       - name: Guard forge asar unpack (renderer must stay packed)
         run: yarn verify-forge-asar-unpack
 

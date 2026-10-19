@@ -29,6 +29,12 @@ import {
 import type { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultPreviewService } from "@/service/toolResult/ToolResultPreviewService";
 import type { ToolResultModule } from "@/modules/ToolResultModule";
+import { TOOL_RESULT_RETRIEVAL_TOOL_NAMES } from "@/entityTypes/toolResultToolTypes";
+import {
+  fitWrappedRetrievalResult,
+  retrievalSerializedFits,
+} from "@/service/toolResult/retrievalInlineBound";
+import { encodeToolResultCursor } from "@/service/toolResult/ToolResultCursorCodec";
 
 /**
  * The single shared preparation boundary (technical design §9.1).
@@ -144,6 +150,12 @@ export class ToolResultPreparationService {
     const operationStatus = outcome.operationStatus ?? deriveStatus(outcome);
     const control = this.buildControl(outcome);
 
+    // Read/search pages must stay in the model message. Saving them creates
+    // another receipt whose preview hides next_cursor.
+    if (TOOL_RESULT_RETRIEVAL_TOOL_NAMES.has(deps.context.toolName)) {
+      return this.prepareBoundedRetrieval(outcome, operationStatus);
+    }
+
     // Small results keep their existing wire shape (AC-01): no needless
     // artifact, no receipt, no behavior change.
     //
@@ -254,6 +266,18 @@ export class ToolResultPreparationService {
         outputRef.preservation === "complete" &&
         (outcome.sourceCompleteness ?? "complete") === "complete",
     });
+
+    // The first page the model can request. Without this, the receipt names
+    // tool_result_read but has no cursor, and the model invents one or spends
+    // a call just to learn the token.
+    if (outputRef && !preview.previewComplete) {
+      control.next_cursor = encodeToolResultCursor({
+        outputId: outputRef.outputId,
+        revision: outputRef.revision,
+        mode: "read",
+        position: 0,
+      });
+    }
 
     const receipt = this.buildReceipt({
       outcome,
@@ -499,6 +523,59 @@ export class ToolResultPreparationService {
   }
 
   /**
+   * Keep a retrieval page in the model message.
+   *
+   * A page that does not fit is shrunk (fewer matches, shorter text) until it
+   * does. If it still cannot fit, the model gets a bounded error. Neither
+   * path writes an artifact.
+   */
+  private prepareBoundedRetrieval(
+    outcome: ToolOutcome,
+    operationStatus: ToolOperationStatus
+  ): PreparedToolResult {
+    const fitted = fitWrappedRetrievalResult(outcome.output);
+    const output =
+      fitted === null
+        ? {
+            success: false,
+            error: "RETRIEVAL_PAGE_TOO_LARGE",
+            analysis_complete: false,
+          }
+        : fitted;
+    const controlSource =
+      typeof output === "object" && output !== null && !Array.isArray(output)
+        ? (output as Record<string, unknown>)
+        : {};
+    const control = this.buildControl({
+      ...outcome,
+      control: controlSource,
+    });
+    const serialized = trySerializeInline({
+      ...outcome,
+      output,
+      control,
+    });
+    const body =
+      serialized !== undefined && retrievalSerializedFits(serialized)
+        ? serialized
+        : JSON.stringify({
+            success: false,
+            error: "RETRIEVAL_PAGE_TOO_LARGE",
+            analysis_complete: false,
+          });
+    return {
+      canonicalMessageContent: body,
+      modelContent: body,
+      uiMetadata: {
+        ...(operationStatus !== "success" ? { operationStatus } : {}),
+        ...control,
+      },
+      serializedBytes: utf8ByteLength(body),
+      accountedTokens: countTextTokens(body),
+    };
+  }
+
+  /**
    * Model-facing projection of a receipt.
    *
    * Preserves identity, outcome, preservation, and the retrieval method -
@@ -524,14 +601,27 @@ export class ToolResultPreparationService {
             source_completeness: first.sourceCompleteness,
           }
         : null,
-      // Always say the preview is partial: a small sample must never read as
-      // a complete review of the output.
       preview,
-      preview_complete: false,
-      retrieval: {
-        read_tool: "tool_result_read",
-        search_tool: "tool_result_search",
-      },
+      preview_complete: receipt.previewComplete,
+      // One next call. A menu of read and search made the model search for a
+      // token that appears on every row, then lose the continuation cursor
+      // inside the truncated search preview.
+      ...(first && !receipt.previewComplete
+        ? {
+            next: {
+              tool: "tool_result_read",
+              arguments: {
+                output_id: first.outputId,
+                ...(typeof receipt.control.next_cursor === "string"
+                  ? { cursor: receipt.control.next_cursor }
+                  : {}),
+              },
+            },
+            ...(typeof receipt.control.next_cursor === "string"
+              ? { next_cursor: receipt.control.next_cursor }
+              : {}),
+          }
+        : {}),
       ...(receipt.storageErrorCode ? { storage_error: receipt.storageErrorCode } : {}),
     };
     return JSON.stringify(payload);

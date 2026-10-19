@@ -303,7 +303,7 @@ import { buildEmailTemplateDescriptor } from "@/views/components/aiContentReport
 import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 import { useEntitlement } from "@/views/utils/subscriptionEntitlement"
 // import { VueEditor } from "vue2-editor";
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const templateId = ref<number>(0);
 
 // AI Content Report state (PRD §8.1, §9.3). Reports the generated version

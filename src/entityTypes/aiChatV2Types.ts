@@ -14,6 +14,7 @@ import type {
   ChatV2GoalEvidenceEvent,
   ChatV2GoalVerificationEvent,
 } from "@/entityTypes/aiChatGoalTypes";
+import type { ChatV2TaskExecutionStateEvent } from "@/entityTypes/aiTaskExecutionTypes";
 import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 import type {
   AIChatRecoveryLayer,
@@ -152,6 +153,15 @@ export interface ChatV2MessageMetadata {
   toolArguments?: Record<string, unknown>;
   toolResult?: Record<string, unknown>;
   toolResultStatus?: "success" | "error";
+  /**
+   * B10 (FR-13/14/21/22, AC-25/27): successor-turn disclosure. Marks an
+   * assistant message rendered from a Continue/Retry successor turn (with
+   * the successor execution id) so the UI — and any future caption — can
+   * distinguish the new attempt from the superseded parent turn. Set by the
+   * renderer at successor attach; never sent to the model.
+   */
+  successorMode?: "continue" | "retry";
+  successorExecutionId?: string;
   /**
    * Bounded preserved-output references for a large tool result
    * (recoverable large tool results). These descriptors contain NO bulk
@@ -413,7 +423,8 @@ export type ChatV2StreamEventType =
   | "goal_iteration"
   | "goal_evidence"
   | "goal_verification"
-  | "direction_updated";
+  | "direction_updated"
+  | "task_execution_state";
 
 export interface ChatV2StreamChunk {
   eventType: ChatV2StreamEventType;
@@ -497,6 +508,8 @@ export interface ChatV2StreamChunk {
   directionBoundary?: AIChatSafeBoundary;
   directionPendingMessageIds?: string[];
   directionContentOffset?: number;
+  // Task execution payload (present only on task_execution_state chunks).
+  taskExecutionState?: ChatV2TaskExecutionStateEvent;
 }
 
 /**

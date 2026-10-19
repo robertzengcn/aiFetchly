@@ -56,8 +56,98 @@ async function dispatchValidated<TInput, TOutput>(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     log.error(`[${channel}] handler error: ${msg}`);
-    return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    // B12: preserve structured-failure fields from typed error classes
+    // (SendPolicyRejection / SendBindingError) or errors built from a widened
+    // CreateDraftOutcome failure. Structural duck-typing on a string `code`
+    // property avoids importing service error classes into this shared wrapper.
+    // `msg` still carries the human-readable text (unchanged legacy contract);
+    // `code` / `existing_draft_id` / `next_action` / `requestCorrelationId`
+    // are pure additions that stay undefined when the error carries no code,
+    // so existing failure consumers continue to work.
+    const structured = extractStructuredFailure(err);
+    return {
+      status: false,
+      msg,
+      data: null,
+      ...structured,
+    } satisfies CommonMessage<null>;
   }
+}
+
+/**
+ * B12: copy safe structured-failure fields off an error object via structural
+ * duck-typing. Returns an empty object for non-B12 errors (input errors,
+ * AI-disabled, generic internal exceptions, Node system errors like ENOENT),
+ * so the failure envelope keeps only the legacy `{status, msg, data: null}`
+ * shape.
+ *
+ * Identity is established by the error's `name` property, not by importing the
+ * service error classes (dependency inversion: this shared wrapper must not
+ * depend on email-reply service modules). Only the three B12 typed error
+ * classes surface structured fields:
+ *   - `StructuredIpcError` — built from a widened {@link CreateDraftOutcome}
+ *     failure; may carry `code` (when the failure is a policy refusal) OR
+ *     only `existing_draft_id` + `next_action` + `requestCorrelationId`
+ *     (audit-persistence / provider_error paths where `code` is intentionally
+ *     absent — the existing draft id must still survive so the renderer can
+ *     route the user to the reused draft).
+ *   - `SendPolicyRejection` / `SendBindingError` — pre-send typed refusals;
+ *     carry `code` only.
+ *
+ * Never parses English: the `code` must be a property on the error object, not
+ * a prefix recovered from `err.message`. A Node system error carries a string
+ * `code` (e.g. `"ENOENT"`) but is NOT one of the named typed classes, so its
+ * `code` is correctly NOT surfaced as a policy refusal.
+ */
+function extractStructuredFailure(err: unknown): {
+  code?: string;
+  existing_draft_id?: number;
+  next_action?: string;
+  requestCorrelationId?: string;
+} {
+  if (!err || typeof err !== "object") return {};
+  const e = err as {
+    name?: unknown;
+    code?: unknown;
+    existing_draft_id?: unknown;
+    next_action?: unknown;
+    requestCorrelationId?: unknown;
+  };
+  // Gate on the typed-error class name so plain Errors, Node system errors,
+  // and ZodErrors do not surface structured fields even if they happen to
+  // carry a string `code` property.
+  const name = typeof e.name === "string" ? e.name : "";
+  if (
+    name !== "StructuredIpcError" &&
+    name !== "SendPolicyRejection" &&
+    name !== "SendBindingError"
+  ) {
+    return {};
+  }
+  const code = typeof e.code === "string" ? e.code : undefined;
+  const existingDraftId =
+    typeof e.existing_draft_id === "number"
+      ? e.existing_draft_id
+      : undefined;
+  const nextAction =
+    typeof e.next_action === "string" ? e.next_action : undefined;
+  const requestCorrelationId =
+    typeof e.requestCorrelationId === "string" ? e.requestCorrelationId : undefined;
+  // Each field is surfaced independently — a StructuredIpcError for an
+  // audit-persistence failure carries existing_draft_id + next_action +
+  // requestCorrelationId but NO code; one for a policy refusal carries code +
+  // next_action but NO existing_draft_id. Both shapes survive correctly.
+  const result: {
+    code?: string;
+    existing_draft_id?: number;
+    next_action?: string;
+    requestCorrelationId?: string;
+  } = {};
+  if (code) result.code = code;
+  if (existingDraftId !== undefined) result.existing_draft_id = existingDraftId;
+  if (nextAction !== undefined) result.next_action = nextAction;
+  if (requestCorrelationId !== undefined) result.requestCorrelationId = requestCorrelationId;
+  return result;
 }
 
 /**

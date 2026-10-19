@@ -23,6 +23,22 @@ export type EmailReplySendAttemptStatus =
   | "failed"
   | "delivery_unknown";
 
+/**
+ * Phase of the message-level generation/send guard (FR-035/FR-036, technical
+ * design §5.2). The guard is an ownership index over `(emailServiceId,
+ * replyKey)`; it transitions through these phases as work progresses. Recovery
+ * reclaims an expired `generating`/`draft_ready` lease only after reconciling
+ * against actual draft/attempt records (§8.2).
+ */
+export type GuardPhase =
+  | "idle"
+  | "generating"
+  | "draft_ready"
+  | "sending"
+  | "sent"
+  | "delivery_unknown"
+  | "conflict";
+
 /** How confidently a message was placed in a conversation (FR-001, §7.3). */
 export type EmailConversationContextConfidence =
   | "exact"
@@ -35,6 +51,11 @@ export type EmailReplyPolicyStage = "pre_draft" | "pre_send";
 /**
  * Machine-readable policy reason codes. UI maps each code to a translated
  * string; backend free-form English is never shown as primary copy (FR-023).
+ *
+ * The duplicate/unknown/conflict codes (FR-028/029) are returned by the
+ * message-level guard layer and surfaced through tool/IPC failure envelopes.
+ * They never originate from the legacy evaluator; {@link mapLegacyDecision}
+ * continues to emit the historical `allowed`/`bounce`/etc. codes.
  */
 export type EmailReplyPolicyCode =
   | "allowed"
@@ -53,7 +74,36 @@ export type EmailReplyPolicyCode =
   | "context_ambiguous"
   | "draft_not_approved"
   | "approval_stale"
-  | "draft_terminal";
+  | "draft_terminal"
+  // FR-028/029: message-level duplicate guard codes. Refuse drafting or sending
+  // when the inbound message already has a reply, an in-flight attempt, an
+  // unresolved delivery, or contradictory records. See PRD §5 for precedence.
+  | "already_replied"
+  | "reply_in_progress"
+  | "generation_in_progress"
+  | "reply_state_conflict"
+  | "reply_state_unknown"
+  // FR-027: generation produced invalid content twice; no draft persisted.
+  | "needs_human_review"
+  // FR-036: ambiguous delivery outcome on a prior attempt for this message.
+  | "delivery_unknown"
+  // FR-031: detection-engine unknown codes that surface as refusals when the
+  // shared mailbox detector returns inconclusive before draft generation or
+  // SMTP. Never treated as a negative — generation/sending does not proceed on
+  // an inconclusive reply state. See ReplyDetectionUnknownCode (§4.2) for the
+  // verbatim meanings. `no_reply_observed` is the complete-negative code; it
+  // is a policy code so the post-detection allow path can carry it on the
+  // success side without a separate union.
+  | "unsupported_protocol"
+  | "missing_message_id"
+  | "receive_unavailable"
+  | "sent_folder_unavailable"
+  | "ambiguous_match"
+  | "identity_conflict"
+  | "probe_timeout"
+  | "probe_limit_exceeded"
+  | "probe_failed"
+  | "no_reply_observed";
 
 /** Authoritative decision returned by the policy orchestrator. */
 export interface EmailReplyPolicyDecision {
@@ -153,18 +203,25 @@ export type SendApprovedReplyOutcome =
       readonly status: "sent";
       readonly attemptId: number;
       readonly sentAt: string;
+      readonly requestCorrelationId: string;
     }
   | {
       readonly status: "failed";
       readonly attemptId: number;
       readonly error: string;
+      readonly requestCorrelationId: string;
     }
   | {
       readonly status: "delivery_unknown";
       readonly attemptId: number;
       readonly error: string;
+      readonly requestCorrelationId: string;
     }
-  | { readonly status: "already_processed"; readonly attemptId: number };
+  | {
+      readonly status: "already_processed";
+      readonly attemptId: number;
+      readonly requestCorrelationId: string;
+    };
 
 /**
  * How certain we are about an SMTP submission outcome (technical design §15.4).

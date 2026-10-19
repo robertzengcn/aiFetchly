@@ -75,7 +75,7 @@ import { SearchResult } from '@/views/api/types'
 import router from '@/views/router';
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {CapitalizeFirstLetter} from "@/views/utils/function"
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 
 const props = defineProps<{
     search?: string

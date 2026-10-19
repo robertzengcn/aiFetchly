@@ -241,7 +241,7 @@ interface PlatformItem {
   url: string;
 }
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const show = ref<boolean>(false);
 const $route = useRoute();
 const router = useRouter();
