@@ -165,7 +165,7 @@ Evidence: [src/service/ToolJobRegistry.ts:214](../../src/service/ToolJobRegistry
 
 ### B05 — P1 — Hold lifecycle admission seals through disable/uninstall/update
 
-- [ ] Fix and verify B05.
+- [x] Done — `withPluginLifecycleSeal` owns the seal for the whole transaction (quiesce → op → release); disable/uninstall IPC + overwrite import migrated; boundary tests added.
 
 Evidence: [src/service/PluginComponentRegistryService.ts:153](../../src/service/PluginComponentRegistryService.ts#L153); [src/main-process/communication/plugin-ipc.ts:584](../../src/main-process/communication/plugin-ipc.ts#L584); [src/service/PluginImportService.ts:539](../../src/service/PluginImportService.ts#L539).
 

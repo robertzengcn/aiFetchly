@@ -23,12 +23,14 @@ import {
 import {
   resolvePluginRelativePath,
   type PluginError,
+  type PluginManifest,
   type PluginSummary,
   type PluginSource,
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
 import { MCPToolService } from "@/service/MCPToolService";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
@@ -424,6 +426,21 @@ function removePath(p: string): void {
   }
 }
 
+/**
+ * B05: parameters for `runInstallTransactionPhase` — the extracted steps
+ * 5–12 of `installFromLocalRoot` (validation → file swap → persistence →
+ * discovery → activation) that the plugin lifecycle seal wraps for
+ * overwrite updates.
+ */
+interface InstallTransactionParams {
+  readonly localRoot: string;
+  readonly manifest: PluginManifest;
+  readonly provenance?: PluginSourceProvenance;
+  readonly pluginModule: PluginManagementModule;
+  readonly isOverwrite: boolean;
+  readonly preservedDisabledAgentIds: ReadonlySet<string>;
+}
+
 export class PluginImportService {
   /**
    * Import a plugin from a local zip. Atomic: on any failure after files
@@ -515,9 +532,11 @@ export class PluginImportService {
     // If overwrite, the old generation is uninstalled later in this flow
     // (see the deferred overwrite teardown before the file swap) so a
     // validation failure up to that point aborts without touching it.
-    // H6/update-transaction: BEFORE any teardown the plugin's MCP children
-    // are quiesced — admission sealed, jobs aborted + awaited; a timeout is
-    // a retryable error and the previous generation stays untouched.
+    // B05: quiescence no longer happens here — the plugin lifecycle seal
+    // (withPluginLifecycleSeal) opens BEFORE any further await below and
+    // performs the quiesce itself; a cleanup timeout then propagates as the
+    // retryable uninstall-failed result with the previous generation fully
+    // intact (no files touched).
     let preservedDisabledAgentIds = new Set<string>();
     let deferredOverwriteTeardown = false;
     if (existing && overwrite) {
@@ -532,47 +551,81 @@ export class PluginImportService {
       } catch {
         // best-effort
       }
-      try {
-        const { PluginComponentRegistryService } = await import(
-          "@/service/PluginComponentRegistryService"
-        );
-        await PluginComponentRegistryService.stopActiveJobsForPlugin(
-          manifest.name
-        );
-      } catch (e) {
-        return {
-          success: false,
-          errors: [
-            {
-              code: "uninstall-failed",
-              pluginName: manifest.name,
-              message: `Active MCP tool jobs for "${manifest.name}" did not quiesce; the previous generation was left intact. Retry the update.`,
-              recoverable: true,
-            },
-          ],
-        };
-      }
       deferredOverwriteTeardown = true;
     }
 
+    // 5..12: the transactional component-install phase. For an overwrite
+    // (B05) the plugin lifecycle SEAL wraps the ENTIRE remainder —
+    // validation, staging copy, file swap, DB writes, discovery, rollback
+    // AND activation — so no new MCP job can be admitted between
+    // quiescence and transaction completion. Fresh installs run the
+    // identical phase unsealed (a not-yet-installed plugin cannot own
+    // running jobs).
+    const transactionPhase = (): Promise<PluginImportResult> =>
+      PluginImportService.runInstallTransactionPhase({
+        localRoot,
+        manifest,
+        provenance,
+        pluginModule,
+        isOverwrite: deferredOverwriteTeardown,
+        preservedDisabledAgentIds,
+      });
+
+    if (deferredOverwriteTeardown) {
+      try {
+        return await PluginComponentRegistryService.withPluginLifecycleSeal(
+          manifest.name,
+          transactionPhase
+        );
+      } catch (e: unknown) {
+        if (
+          e instanceof Error &&
+          e.message.includes("AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT")
+        ) {
+          return {
+            success: false,
+            errors: [
+              {
+                code: "uninstall-failed",
+                pluginName: manifest.name,
+                message: `Active MCP tool jobs for "${manifest.name}" did not quiesce; the previous generation was left intact. Retry the update.`,
+                recoverable: true,
+              },
+            ],
+          };
+        }
+        throw e;
+      }
+    }
+    return await transactionPhase();
+  }
+
+  /**
+   * B05: steps 5–12 of `installFromLocalRoot`, extracted so the lifecycle
+   * seal can wrap them for overwrites. Component validation + file swap +
+   * row persistence + discovery smoke test + activation, with the previous
+   * generation preserved on every rolled-back failure.
+   */
+  private static async runInstallTransactionPhase(p: InstallTransactionParams): Promise<PluginImportResult> {
+
     // 5. Validate skill components
-    const skillPaths = manifest.skills ?? [];
+    const skillPaths = p.manifest.skills ?? [];
     const skills: Array<{
       manifest: SkillManifest;
       relManifestPath: string;
     }> = [];
     const skillErrors: PluginError[] = [];
-    const isClaudeFormat = manifest.format === "claude";
+    const isClaudeFormat = p.manifest.format === "claude";
     for (const skillPath of skillPaths) {
       if (isClaudeFormat) {
-        const r = readPluginClaudeSkillsFromPath(localRoot, skillPath);
+        const r = readPluginClaudeSkillsFromPath(p.localRoot, skillPath);
         if (!r.ok) {
           skillErrors.push(...r.errors);
         } else {
           skills.push(...r.skills);
         }
       } else {
-        const r = readPluginSkillManifest(localRoot, skillPath);
+        const r = readPluginSkillManifest(p.localRoot, skillPath);
         if (!r.ok) {
           skillErrors.push(r.error);
         } else {
@@ -588,17 +641,17 @@ export class PluginImportService {
     }
 
     // 6. Validate MCP components
-    const mcpPaths = manifest.mcpServers ?? [];
+    const mcpPaths = p.manifest.mcpServers ?? [];
     const mcpServers: NormalizedMcpServer[] = [];
     const mcpErrors: PluginError[] = [];
-    const isClaudeMcp = manifest.format === "claude";
+    const isClaudeMcp = p.manifest.format === "claude";
 
     if (isClaudeMcp) {
       // Claude plugins: prefer inline mcp map (alternative B); fall back to
       // sibling .mcp.json (alternative A). Re-adapt here to recover the
       // inlineMcp / mcpServersPaths context the adapter produced.
       const claudeManifestPath = path.join(
-        localRoot,
+        p.localRoot,
         ".claude-plugin",
         "plugin.json"
       );
@@ -622,21 +675,21 @@ export class PluginImportService {
         };
       }
       const adapted = ClaudePluginAdapter.adapt(claudeRaw, {
-        pluginRoot: localRoot,
+        pluginRoot: p.localRoot,
       });
       if (!adapted.ok) {
         return { success: false, errors: toErrors([...adapted.errors]) };
       }
 
       if (adapted.adapted.inlineMcp) {
-        const r = normalizeInlineMcpMap(adapted.adapted.inlineMcp, localRoot);
+        const r = normalizeInlineMcpMap(adapted.adapted.inlineMcp, p.localRoot);
         if (!r.ok) mcpErrors.push(...r.errors);
         else mcpServers.push(...r.servers);
       } else {
         // Try sibling .mcp.json at plugin root.
-        const siblingMcp = path.join(localRoot, ".mcp.json");
+        const siblingMcp = path.join(p.localRoot, ".mcp.json");
         if (fs.existsSync(siblingMcp)) {
-          const r = readPluginMcpServers(localRoot, ".mcp.json");
+          const r = readPluginMcpServers(p.localRoot, ".mcp.json");
           if (!r.ok) mcpErrors.push(...r.errors);
           else mcpServers.push(...r.servers);
         }
@@ -644,7 +697,7 @@ export class PluginImportService {
     } else {
       // AiFetchly native path: each path is a servers.json file.
       for (const mcpPath of mcpPaths) {
-        const r = readPluginMcpServers(localRoot, mcpPath);
+        const r = readPluginMcpServers(p.localRoot, mcpPath);
         if (!r.ok) {
           mcpErrors.push(...r.errors);
         } else {
@@ -659,8 +712,8 @@ export class PluginImportService {
     // 6c. Validate plugin agents (design §12.1). Errors fail import before
     // any files are copied; warnings do not.
     const agentParse = PluginAgentImportService.parsePluginAgents({
-      pluginRoot: localRoot,
-      manifest,
+      pluginRoot: p.localRoot,
+      manifest: p.manifest,
     });
     if (!agentParse.ok) {
       return { success: false, errors: toErrors([...agentParse.errors]) };
@@ -671,24 +724,24 @@ export class PluginImportService {
     // a server named "linkedin" become "plugin-a__linkedin" and
     // "plugin-b__linkedin" to prevent collisions in the MCP client manager.
     // The original (un-scoped) name is preserved in metadata.serverName.
-    if (isClaudeMcp || manifest.format === "aifetchly") {
+    if (isClaudeMcp || p.manifest.format === "aifetchly") {
       for (let i = 0; i < mcpServers.length; i += 1) {
         const s = mcpServers[i];
-        const scopedName = `${manifest.name}__${s.serverName}`;
+        const scopedName = `${p.manifest.name}__${s.serverName}`;
         mcpServers[i] = {
           ...s,
           serverName: scopedName,
           metadata: {
             ...s.metadata,
             pluginServerName: s.serverName,
-            pluginOwner: manifest.name,
+            pluginOwner: p.manifest.name,
           },
         };
       }
     }
 
     // 7. Resolve final install path + copy via sibling temp (atomic-ish rename)
-    const installPath = getPluginInstallRoot(manifest.name);
+    const installPath = getPluginInstallRoot(p.manifest.name);
     const parentDir = path.dirname(installPath);
     try {
       fs.mkdirSync(parentDir, { recursive: true });
@@ -710,19 +763,19 @@ export class PluginImportService {
     const stagingDir = `${installPath}.staging-${Date.now()}`;
     const backupDir = `${installPath}.backup-${Date.now()}`;
     try {
-      copyDirSync(localRoot, stagingDir);
+      copyDirSync(p.localRoot, stagingDir);
       // H6_update-transaction: the previous generation is moved aside (a
       // rename, not a delete) so a failed swap can restore it. The rename
       // keeps artifacts readable throughout — nothing old is removed until
       // the new generation is fully promoted.
-      if (deferredOverwriteTeardown && fs.existsSync(installPath)) {
+      if (p.isOverwrite && fs.existsSync(installPath)) {
         fs.renameSync(installPath, backupDir);
       }
       fs.renameSync(stagingDir, installPath);
       // Old rows must die after the files swapped so a rename failure never
       // leaves rows pointing at a gone generation.
-      if (deferredOverwriteTeardown) {
-        await pluginModule.uninstallPlugin(manifest.name);
+      if (p.isOverwrite) {
+        await p.pluginModule.uninstallPlugin(p.manifest.name);
       }
     } catch (e: unknown) {
       removePath(stagingDir);
@@ -757,8 +810,8 @@ export class PluginImportService {
     // servers — the model can never fall through to the 90-second
     // name-inference timeout for a tool the plugin declared managed-async.
     const policyGate = getPluginToolPolicyRegistry().registerFromManifest(
-      manifest.name,
-      manifest
+      p.manifest.name,
+      p.manifest
     );
     const policyGateBlocked = policyGate.errors.length > 0;
 
@@ -770,7 +823,7 @@ export class PluginImportService {
     // completes (PluginBrowserCapabilityService).
     const browserMissing =
       !policyGateBlocked &&
-      manifest.capabilities?.browserExecutable === true &&
+      p.manifest.capabilities?.browserExecutable === true &&
       getPluginBrowserCapabilityService().describe() === null;
 
     // 8. Persist InstalledPlugin row.
@@ -782,18 +835,18 @@ export class PluginImportService {
     const hasPythonSkill = skills.some((s) => s.manifest.runtime === "python");
     let pluginId: number | null = null;
     try {
-      pluginId = await pluginModule.createPlugin({
-        name: manifest.name,
-        displayName: manifest.displayName,
-        version: manifest.version,
-        description: manifest.description,
-        author: manifest.author,
-        source: (provenance?.source ??
-          manifest.source ??
+      pluginId = await p.pluginModule.createPlugin({
+        name: p.manifest.name,
+        displayName: p.manifest.displayName,
+        version: p.manifest.version,
+        description: p.manifest.description,
+        author: p.manifest.author,
+        source: (p.provenance?.source ??
+          p.manifest.source ??
           "local") as PluginSource,
         installPath,
-        manifestJson: JSON.stringify(manifest),
-        permissionsJson: JSON.stringify(manifest.permissions ?? []),
+        manifestJson: JSON.stringify(p.manifest),
+        permissionsJson: JSON.stringify(p.manifest.permissions ?? []),
         componentStateJson: "{}",
         enabled: 1,
         health: policyGateBlocked
@@ -801,19 +854,19 @@ export class PluginImportService {
           : browserMissing || hasPythonSkill
           ? "needs_configuration"
           : "healthy",
-        sourceKind: provenance?.sourceKind,
-        sourceUri: provenance?.sourceUri,
-        sourceRef: provenance?.sourceRef,
-        sourceMetaJson: provenance?.sourceMeta
-          ? JSON.stringify(provenance.sourceMeta)
+        sourceKind: p.provenance?.sourceKind,
+        sourceUri: p.provenance?.sourceUri,
+        sourceRef: p.provenance?.sourceRef,
+        sourceMetaJson: p.provenance?.sourceMeta
+          ? JSON.stringify(p.provenance.sourceMeta)
           : "{}",
       });
       // Persist the stable diagnostic for a blocked activation (HOST-04):
       // the caller sees one machine-readable error per issue, and the plugin
       // row keeps `invalid` health so it is never reported healthy.
       if (policyGateBlocked) {
-        await pluginModule.updatePluginState({
-          name: manifest.name,
+        await p.pluginModule.updatePluginState({
+          name: p.manifest.name,
           health: "invalid",
           lastLoadErrorsJson: JSON.stringify(policyGate.errors),
         });
@@ -846,12 +899,12 @@ export class PluginImportService {
           manifest_json: JSON.stringify(skillManifest),
           permissions_json: JSON.stringify(skillManifest.permissions ?? []),
           enabled: 1,
-          pluginName: manifest.name,
+          pluginName: p.manifest.name,
           pluginComponentPath: relManifestPath,
         });
       }
     } catch (e: unknown) {
-      await rollbackRowsAndFiles(manifest.name, installPath);
+      await rollbackRowsAndFiles(p.manifest.name, installPath);
       return {
         success: false,
         errors: [
@@ -912,7 +965,7 @@ export class PluginImportService {
           source: "user",
           documentationOnly: true,
           supportedFileTypes: skillManifest.supportedFileTypes,
-          pluginOwner: manifest.name,
+          pluginOwner: p.manifest.name,
           execute,
         });
       } catch (e) {
@@ -939,7 +992,7 @@ export class PluginImportService {
         entity.tools = JSON.stringify([]);
         entity.toolConfig = JSON.stringify({});
         entity.metadata = JSON.stringify(server.metadata ?? {});
-        entity.pluginName = manifest.name;
+        entity.pluginName = p.manifest.name;
         entity.pluginComponentPath = server.componentPath;
         entity.origin = "plugin";
         if (server.command) entity.command = server.command;
@@ -952,7 +1005,7 @@ export class PluginImportService {
         mcpServerIds.push({ id, isStdio: server.transport === "stdio" });
       }
     } catch (e: unknown) {
-      await rollbackRowsAndFiles(manifest.name, installPath);
+      await rollbackRowsAndFiles(p.manifest.name, installPath);
       return {
         success: false,
         errors: [
@@ -985,10 +1038,10 @@ export class PluginImportService {
           await new MCPToolService().discoverTools(id);
         } catch (e) {
           log.warn(`Failed to discover MCP tools for server ${id}:`, e);
-          await rollbackRowsAndFiles(manifest.name, installPath);
+          await rollbackRowsAndFiles(p.manifest.name, installPath);
           // H6/update-transaction: best-effort restore of the previous
           // generation so a failed update leaves the plugin usable.
-          if (deferredOverwriteTeardown && fs.existsSync(backupDir)) {
+          if (p.isOverwrite && fs.existsSync(backupDir)) {
             if (fs.existsSync(installPath)) removePath(installPath);
             try {
               fs.renameSync(backupDir, installPath);
@@ -1002,7 +1055,7 @@ export class PluginImportService {
               {
                 code: "mcp-discovery-failed",
                 componentType: "mcpServer",
-                pluginName: manifest.name,
+                pluginName: p.manifest.name,
                 message: `MCP discovery smoke test failed for server ${id}: ${
                   e instanceof Error ? e.message : String(e)
                 }`,
@@ -1019,19 +1072,19 @@ export class PluginImportService {
     const agentModule = new AgentDefinitionModule();
     try {
       await agentModule.upsertPluginAgents(
-        manifest.name,
+        p.manifest.name,
         pluginAgents,
-        preservedDisabledAgentIds
+        p.preservedDisabledAgentIds
       );
     } catch (e: unknown) {
-      await rollbackRowsAndFiles(manifest.name, installPath);
+      await rollbackRowsAndFiles(p.manifest.name, installPath);
       return {
         success: false,
         errors: [
           {
             code: "agent-manifest-invalid",
             componentType: "agent",
-            pluginName: manifest.name,
+            pluginName: p.manifest.name,
             message:
               e instanceof Error
                 ? `Failed to persist plugin agents: ${e.message}`
@@ -1058,11 +1111,11 @@ export class PluginImportService {
     // from `invalid` to `partial_load`).
     if (browserMissing && !policyGateBlocked) {
       try {
-        await pluginModule.setLoadErrors(manifest.name, [
+        await p.pluginModule.setLoadErrors(p.manifest.name, [
           {
             code: "dependency-unsatisfied",
             componentType: "skill",
-            pluginName: manifest.name,
+            pluginName: p.manifest.name,
             message:
               "The plugin requires an approved browser executable. Resolve the browser dependency, then reload or re-run discovery to enable its tools.",
             recoverable: true,
@@ -1074,11 +1127,11 @@ export class PluginImportService {
     }
     if (hasPythonSkill && !policyGateBlocked && !browserMissing) {
       try {
-        await pluginModule.setLoadErrors(manifest.name, [
+        await p.pluginModule.setLoadErrors(p.manifest.name, [
           {
             code: "dependency-unsatisfied",
             componentType: "skill",
-            pluginName: manifest.name,
+            pluginName: p.manifest.name,
             message:
               "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
             recoverable: true,
@@ -1094,7 +1147,7 @@ export class PluginImportService {
     // healthy — warnings never block the runtime (design §12.5).
     if (agentParse.warnings.length > 0 && !policyGateBlocked) {
       try {
-        await pluginModule.setLoadErrors(manifest.name, agentParse.warnings);
+        await p.pluginModule.setLoadErrors(p.manifest.name, agentParse.warnings);
       } catch {
         // best-effort
       }
@@ -1103,7 +1156,7 @@ export class PluginImportService {
     // 11d. H6/update-transaction: the new generation is fully promoted
     // (rows, discovery, agents) — the previous-generation backup (if any)
     // is retired now.
-    if (deferredOverwriteTeardown && fs.existsSync(backupDir)) {
+    if (p.isOverwrite && fs.existsSync(backupDir)) {
       try {
         removePath(backupDir);
       } catch {
@@ -1114,10 +1167,10 @@ export class PluginImportService {
     // 12. Return summary
     const summary: PluginSummary = {
       id: pluginId,
-      name: manifest.name,
-      displayName: manifest.displayName,
-      version: manifest.version,
-      source: (manifest.source ?? "local") as PluginSource,
+      name: p.manifest.name,
+      displayName: p.manifest.displayName,
+      version: p.manifest.version,
+      source: (p.manifest.source ?? "local") as PluginSource,
       enabled: true,
       health: policyGateBlocked
         ? "invalid"
@@ -1132,7 +1185,7 @@ export class PluginImportService {
       commandCount: 0,
       // Hooks are promoted post-install by PluginComponentRegistryService.
       hookCount: 0,
-      permissions: manifest.permissions ?? [],
+      permissions: p.manifest.permissions ?? [],
       lastUpdated: new Date().toISOString(),
     };
     return { success: true, plugin: summary };

@@ -138,17 +138,19 @@ export class PluginComponentRegistryService {
   }
 
   /**
-   * H5 (lifecycle): quiesce every active MCP tool job owned by a plugin
-   * BEFORE its binaries/files are removed (disable / uninstall / update).
+   * H5 (lifecycle) + B05: quiesce every active MCP tool job owned by a
+   * plugin WITHOUT owning the admission seal.
    *
-   * Order matters: admission is sealed for the plugin's tool namespace
-   * (`mcp__<plugin>__…`) first so no new browser can spawn behind the
-   * teardown, then every active job is aborted (process-group kill) and
-   * awaited, then the seal is released.
+   * Sealing is the caller's job now (`withPluginLifecycleSeal`): the seal
+   * must remain held across the ENTIRE lifecycle transaction (disable /
+   * uninstall / update state changes, file removal, staging swap, DB rows)
+   * — not merely while jobs are being torn down. Releasing it here would
+   * let a new job enter during the async gaps between quiescence and the
+   * destructive part of the operation.
    *
-   * Throws a retryable error when jobs are still unwinding past the grace
-   * window — the caller may surface it and let the user retry; no files
-   * have been removed at that point.
+   * Throws the retryable AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT error when jobs
+   * are still unwinding (or quarantined by B04) past the grace window —
+   * no files have been removed at that point.
    */
   static async stopActiveJobsForPlugin(
     pluginName: string,
@@ -156,20 +158,47 @@ export class PluginComponentRegistryService {
   ): Promise<void> {
     const registry = getDefaultToolJobRegistry();
     const prefix = `mcp__${pluginName}__`;
+    const jobIds = registry.listActiveJobIdsByToolPrefix(prefix);
+    if (jobIds.length === 0) return;
+    log.info(
+      `[PluginComponentRegistryService] aborting ${jobIds.length} active MCP job(s) for "${pluginName}".`
+    );
+    await registry.abortAndAwaitJobs(jobIds, graceMs);
+    const remaining = registry.listActiveJobIdsByToolPrefix(prefix).length;
+    if (remaining > 0) {
+      throw new Error(
+        `AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT: ${remaining} MCP tool job(s) for "${pluginName}" are still unwinding; no files were removed — retry the operation.`
+      );
+    }
+  }
+
+  /**
+   * B05: hold the plugin admission seal for the ENTIRE lifecycle
+   * transaction. The seal is taken synchronously BEFORE any await, the
+   * plugin's active jobs are quiesced while sealed, and `operation` runs
+   * with admission suppressed for every one of its awaited boundaries —
+   * state toggles, file deletion/replacement, DB writes and re-activation
+   * alike. The seal is released only after `operation` settles (including
+   * its rollback path), so no job can be admitted between quiescence and
+   * the safe end of the transaction.
+   *
+   * When quiescence FAILS (jobs outlive the grace window / B04 quarantine),
+   * `operation` is never invoked — no binary is deleted under live work.
+   */
+  static async withPluginLifecycleSeal<T>(
+    pluginName: string,
+    operation: () => Promise<T>,
+    graceMs: number = TOOL_JOB_SETTLE_GRACE_MS
+  ): Promise<T> {
+    const registry = getDefaultToolJobRegistry();
+    const prefix = `mcp__${pluginName}__`;
     registry.sealAdmission(prefix);
     try {
-      const jobIds = registry.listActiveJobIdsByToolPrefix(prefix);
-      if (jobIds.length === 0) return;
-      log.info(
-        `[PluginComponentRegistryService] aborting ${jobIds.length} active MCP job(s) for "${pluginName}".`
+      await PluginComponentRegistryService.stopActiveJobsForPlugin(
+        pluginName,
+        graceMs
       );
-      await registry.abortAndAwaitJobs(jobIds, graceMs);
-      const remaining = registry.listActiveJobIdsByToolPrefix(prefix).length;
-      if (remaining > 0) {
-        throw new Error(
-          `AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT: ${remaining} MCP tool job(s) for "${pluginName}" are still unwinding; no files were removed — retry the operation.`
-        );
-      }
+      return await operation();
     } finally {
       registry.releaseAdmissionSeal(prefix);
     }

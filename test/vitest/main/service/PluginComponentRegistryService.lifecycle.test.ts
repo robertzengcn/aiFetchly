@@ -89,28 +89,146 @@ describe("PluginComponentRegistryService.stopActiveJobsForPlugin", () => {
     ).toEqual([otherPlugin.jobId]);
   });
 
-  it("refuses new admission for the plugin's namespace while sealed", async () => {
+  it("refuses new admission for the plugin's namespace while sealed (B05 transaction)", async () => {
     const registry = new ToolJobRegistry();
     setDefaultToolJobRegistry(registry);
     spawnHangingJob(registry, "mcp__my-plugin__scrape", "tc-run");
 
-    // The helper seals admission synchronously before its first await, so
-    // a concurrent start (not awaited here) observes the seal on return.
-    const quiescence = PluginComponentRegistryService.stopActiveJobsForPlugin(
-      "my-plugin",
-      GRACE
-    );
+    let operationRan = false;
+    await expect(
+      PluginComponentRegistryService.withPluginLifecycleSeal(
+        "my-plugin",
+        async () => {
+          // Inside the operation — every awaited boundary is sealed.
+          expect(() =>
+            registry.start(
+              "mcp__my-plugin__scrape",
+              {},
+              { conversationId: "c", toolCallId: "tc-new" },
+              () => new Promise(() => undefined)
+            )
+          ).toThrow(AdmissionSealedError);
+          operationRan = true;
+          return "done";
+        },
+        GRACE
+      )
+    ).resolves.toBe("done");
+    expect(operationRan).toBe(true);
+  });
 
+  it("a cleanup failure never runs the operation and reopens admission after (B05)", async () => {
+    const registry = new ToolJobRegistry();
+    setDefaultToolJobRegistry(registry);
+    // A continuation that ignores abort signals entirely — the registry
+    // settle-grace is the only cleanup path, so a tiny caller grace makes
+    // the helper report the failure honestly.
+    registry.start(
+      "mcp__sticky-plugin__scrape",
+      {},
+      { conversationId: "c", toolCallId: "tc-run" },
+      () => new Promise(() => undefined)
+    );
+    let operationRan = false;
+    await expect(
+      PluginComponentRegistryService.withPluginLifecycleSeal(
+        "sticky-plugin",
+        async () => {
+          operationRan = true;
+          return "should-not-happen";
+        },
+        30
+      )
+    ).rejects.toThrow(/AI_FETCHLY_PLUGIN_CLEANUP_TIMEOUT/i);
+    // No destructive work happened under live jobs.
+    expect(operationRan).toBe(false);
+    // The finally-released seal keeps the registry usable for the retry.
     expect(() =>
       registry.start(
-        "mcp__my-plugin__scrape",
+        "mcp__other-plugin__scrape",
         {},
         { conversationId: "c", toolCallId: "tc-new" },
         () => new Promise(() => undefined)
       )
-    ).toThrow(AdmissionSealedError);
+    ).not.toThrow();
+  });
 
-    await expect(quiescence).resolves.toBeUndefined();
+  it("holds the seal at EVERY awaited boundary until safe completion (B05)", async () => {
+    const registry = new ToolJobRegistry();
+    setDefaultToolJobRegistry(registry);
+    const boundaries: string[] = [];
+    const observedRefusals: string[] = [];
+
+    await PluginComponentRegistryService.withPluginLifecycleSeal(
+      "my-plugin",
+      async () => {
+        // Simulated lifecycle transaction with awaited boundaries —
+        // quiesce-less (no live jobs), then several async stages.
+        const stages = ["toggle-state", "delete-rows", "swap-files", "activate"];
+        for (const stage of stages) {
+          await Promise.resolve();
+          boundaries.push(stage);
+          try {
+            registry.start(
+              "mcp__my-plugin__scrape",
+              {},
+              { conversationId: "c", toolCallId: `tc-${stage}` },
+              () => new Promise(() => undefined)
+            );
+            observedRefusals.push(`${stage}:admitted`);
+          } catch (e) {
+            if (e instanceof AdmissionSealedError) {
+              observedRefusals.push(`${stage}:refused`);
+            } else {
+              throw e;
+            }
+          }
+        }
+        return true;
+      },
+      GRACE
+    );
+
+    expect(boundaries).toEqual([
+      "toggle-state",
+      "delete-rows",
+      "swap-files",
+      "activate",
+    ]);
+    expect(observedRefusals).toEqual([
+      "toggle-state:refused",
+      "delete-rows:refused",
+      "swap-files:refused",
+      "activate:refused",
+    ]);
+    // After safe completion, admission is open again.
+    expect(() =>
+      registry.start(
+        "mcp__my-plugin__scrape",
+        {},
+        { conversationId: "c", toolCallId: "tc-after" },
+        async () => undefined
+      )
+    ).not.toThrow();
+  });
+
+  it("unrelated plugin jobs are not sealed by this plugin's transaction", async () => {
+    const registry = new ToolJobRegistry();
+    setDefaultToolJobRegistry(registry);
+    await PluginComponentRegistryService.withPluginLifecycleSeal(
+      "my-plugin",
+      async () => {
+        const { jobId } = registry.start(
+          "mcp__other-plugin__scrape",
+          {},
+          { conversationId: "c", toolCallId: "tc-run" },
+          async () => "other"
+        );
+        expect(jobId).toBeTruthy();
+        return true;
+      },
+      GRACE
+    );
   });
 
   it("throws a retryable cleanup error when jobs outlive the grace window", async () => {

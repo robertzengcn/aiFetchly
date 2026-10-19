@@ -555,13 +555,27 @@ export function registerPluginIpcHandlers(): void {
     PLUGIN_TOGGLE,
     pluginToggleInputSchema,
     async (input) => {
-      // H5: when disabling, abort + await the plugin's active MCP children
-      // BEFORE their binaries/browser capability is dropped — throws a
-      // retryable error instead of tearing down under a running scrape.
+      // H5/B05: when disabling, the admission seal must hold across the
+      // WHOLE transaction — quiesce of the plugin's MCP children, the DB
+      // toggle, and re-activation — so no new job can be admitted between
+      // quiescence and the capability drop. Enabling has no teardown.
       if (!input.enabled) {
-        await PluginComponentRegistryService.stopActiveJobsForPlugin(
-          input.name
+        await PluginComponentRegistryService.withPluginLifecycleSeal(
+          input.name,
+          async () => {
+            const module = new PluginManagementModule();
+            const ok = await module.togglePlugin(input.name, input.enabled);
+            if (!ok) {
+              throw new Error("Plugin not found");
+            }
+            await PluginComponentRegistryService.applyLoadedPlugins();
+            // Enable/disable changed the effective command set — refresh
+            // suggestions.
+            broadcastAifetchlyConfigChanged({ source: "plugin" });
+            return null;
+          }
         );
+        return null;
       }
       const module = new PluginManagementModule();
       const ok = await module.togglePlugin(input.name, input.enabled);
@@ -579,27 +593,34 @@ export function registerPluginIpcHandlers(): void {
     PLUGIN_UNINSTALL,
     pluginByNameInputSchema,
     async (input) => {
-      // H5: quiesce (seal admission, abort + tree-kill, await cleanup)
-      // BEFORE removing files so a running scrape cannot race the delete.
-      await PluginComponentRegistryService.stopActiveJobsForPlugin(input.name);
-      const module = new PluginManagementModule();
-      const result = await module.uninstallPlugin(input.name);
-      if (!result.removedPlugin) {
-        throw new Error("Plugin not found");
-      }
-      // Best-effort remove install path.
-      const installPath = getPluginInstallRoot(input.name);
-      try {
-        const fs = await import("fs");
-        fs.rmSync(installPath, { recursive: true, force: true });
-      } catch {
-        // best-effort
-      }
-      await PluginComponentRegistryService.unregisterPluginCapabilities(
-        input.name
+      // H5/B05: the admission seal spans the ENTIRE uninstall — quiesce,
+      // row removal, file deletion, and catalog unregistration — so a new
+      // scrape cannot be admitted at any awaited boundary while the plugin
+      // is being removed.
+      await PluginComponentRegistryService.withPluginLifecycleSeal(
+        input.name,
+        async () => {
+          const module = new PluginManagementModule();
+          const result = await module.uninstallPlugin(input.name);
+          if (!result.removedPlugin) {
+            throw new Error("Plugin not found");
+          }
+          // Best-effort remove install path.
+          const installPath = getPluginInstallRoot(input.name);
+          try {
+            const fs = await import("fs");
+            fs.rmSync(installPath, { recursive: true, force: true });
+          } catch {
+            // best-effort
+          }
+          await PluginComponentRegistryService.unregisterPluginCapabilities(
+            input.name
+          );
+          // Plugin removed — refresh any open slash suggestions (PRD Problem 2).
+          broadcastAifetchlyConfigChanged({ source: "plugin" });
+          return null;
+        }
       );
-      // Plugin removed — refresh any open slash suggestions (PRD Problem 2).
-      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
