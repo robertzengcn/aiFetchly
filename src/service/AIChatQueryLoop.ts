@@ -1137,6 +1137,26 @@ function toReadonlyStringArraySafeRecords(value: unknown): unknown[] {
  * Host-attached artifact reference (design §13.4): id + descriptor only —
  * never a path, never the plugin's own bookkeeping fields.
  */
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+interface PluginArtifactPromotionOutcome {
+  /** Staging directory finalized for the execution. */
+  stagingExists: boolean;
+  /** Candidates listed in the staging `candidates.json` (if any). */
+  candidateCount: number;
+  /** Files actually promoted into the host-owned artifact store. */
+  registeredCount: number;
+  /** Per-candidate promotion errors (partial-failure warnings). */
+  errors: readonly string[];
+  /**
+   * B03: a success payload was degraded to a truthful failure because
+   * nothing was registered while the tool was graded on artifacts.
+   */
+  degradedToFailure: boolean;
+}
+
 function toArtifactRef(
   artifact: RegisteredPluginArtifact
 ): Record<string, unknown> {
@@ -4891,6 +4911,20 @@ export class AIChatQueryLoop {
         },
       });
 
+      // B03: promote artifacts BEFORE final ledger settlement and verdict.
+      // A plugin result claiming success whose staged files failed to
+      // register is degraded inside `promotePluginArtifactsToPayload`; the
+      // OUTER verdict and the ledger must agree with the degraded payload
+      // instead of reporting success for nothing usable.
+      const promotion = isRecordLike(result.result)
+        ? this.promotePluginArtifactsToPayload({
+            conversationId: input.conversationId,
+            executionId,
+            pluginName: meta.pluginName,
+            payload: result.result,
+          })
+        : undefined;
+
       // Recoverable domain failure → record + bind the host error reference
       // BEFORE the result reaches the model (design §12.2: the plugin's
       // diagnostic id is preserved as pluginErrorId; the authoritative id the
@@ -4953,6 +4987,20 @@ export class AIChatQueryLoop {
             userTurnId: input.sourceUserMessageId,
           });
         }
+      }
+      if (!result.success) {
+        // Ledger already settled as "failed" through its onSettled hook.
+      } else if (promotion?.degradedToFailure) {
+        // B03: success-with-no-usable-artifacts is a truthful failure for
+        // the ledger too — a repeat of the same run must consume budget
+        // instead of counting a phantom success.
+        result.success = false;
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "failed"
+        );
       } else {
         ledger.completeAttempt(
           input.conversationId,
@@ -4962,18 +5010,6 @@ export class AIChatQueryLoop {
         );
       }
 
-      // H2: the plugin process and its browser are already gone (the MCP
-      // client disconnects before this point), so staging files are final.
-      // Register/promote candidates BEFORE the result reaches the model, then
-      // attach opaque host ids and strip every staging path from the payload.
-      if (isRecordLike(result.result)) {
-        this.promotePluginArtifactsToPayload({
-          conversationId: input.conversationId,
-          executionId,
-          pluginName: meta.pluginName,
-          payload: result.result,
-        });
-      }
       handle.resolve(result);
     } catch (err) {
       // H3: crash/exit rejected the call — the FIRST arrival of this path
@@ -5017,8 +5053,16 @@ export class AIChatQueryLoop {
     pluginName: string;
     /** Model-facing payload when the tool produced one (undefined on crash). */
     payload?: Record<string, unknown>;
-  }): void {
-    if (!input.executionId) return;
+  }): PluginArtifactPromotionOutcome {
+    /** No-op outcome for missing execution id. */
+    const noop: PluginArtifactPromotionOutcome = {
+      stagingExists: false,
+      candidateCount: 0,
+      registeredCount: 0,
+      errors: [],
+      degradedToFailure: false,
+    };
+    if (!input.executionId) return noop;
     const artifactsService = getPluginFileArtifactService();
     const stagingOk = artifactsService.stagingExists(input.executionId);
     const candidates = artifactsService.readCandidates(input.executionId);
@@ -5038,6 +5082,14 @@ export class AIChatQueryLoop {
 
     const declined =
       !stagingOk || candidates.length === 0 || errors.length > 0;
+    // B03: only a plugin that DECLARES fileArtifact capability (manifest
+    // `capabilities.fileArtifacts`) — or one that already staged candidates
+    // — is graded on registered artifacts. A generic async tool (e.g. a
+    // platform listing) legitimately returns success with no staging dir.
+    const requiresArtifacts =
+      getPluginToolPolicyRegistry().getPluginArtifactFormats(input.pluginName)
+        .length > 0;
+    let degradedToFailure = false;
     if (input.payload) {
       // Strip candidate/staging references — the renderer and the model see
       // opaque artifact ids only (design §13: paths never leave the host).
@@ -5054,38 +5106,51 @@ export class AIChatQueryLoop {
             `Artifact registration partially failed: ${errors.join("; ")}`,
           ].slice(0, 8);
         }
-      } else if (declined && input.payload.success === true) {
-        // H2: a scrape that reported success but produced NO durable,
-        // registered artifacts is NOT a success from the user's point of
-        // view (nothing is previewable or exportable). Degrade to a truthful
-        // structured failure instead of advertising exportable files that
-        // do not exist.
-        const previewKey = "preview" in input.payload ? input.payload.preview : [];
-        input.payload = Object.assign(input.payload, {
-          status: "failed",
-          success: false,
-          summary: input.payload.summary,
-          error: {
-            id: `art_${input.executionId.slice(0, 12)}`,
-            code: "ARTIFACT_REGISTRATION_FAILED",
-            category: "host_bug",
-            stage: "artifacts",
-            message: !stagingOk
-              ? "The scrape reported success but its staging directory was not finalized."
-              : candidates.length === 0
-                ? "The scrape reported success but registered no finalized result files."
-                : "Result files could not be registered by the host.",
-            recoverable: false,
-            allowedStrategies: [],
-          },
-          // Preserve the in-message preview only; records stay host-side.
-          preview: toReadonlyStringArraySafeRecords(previewKey),
-        });
-        if (isRecordLike(input.payload.error)) {
-          input.payload.error.id = `art_${input.executionId.slice(0, 12)}`;
+      } else if (input.payload.success === true) {
+        // H2/B03: a success with NO durable, registered artifacts is NOT a
+        // success from the user's point of view when the plugin declared
+        // artifact capability or staged any candidates (nothing is
+        // previewable or exportable / the staging never finalized). Degrade
+        // to a truthful structured failure instead of advertising files
+        // that do not exist. A plugin WITHOUT declared artifact capability
+        // and WITHOUT staging keeps its legacy generic semantics.
+        if (requiresArtifacts || stagingOk || candidates.length > 0) {
+          const previewKey =
+            "preview" in input.payload ? input.payload.preview : [];
+          degradedToFailure = true;
+          input.payload = Object.assign(input.payload, {
+            status: "failed",
+            success: false,
+            summary: input.payload.summary,
+            error: {
+              id: `art_${input.executionId.slice(0, 12)}`,
+              code: "ARTIFACT_REGISTRATION_FAILED",
+              category: "host_bug",
+              stage: "artifacts",
+              message: !stagingOk
+                ? "The scrape reported success but its staging directory was not finalized."
+                : candidates.length === 0
+                  ? "The scrape reported success but registered no finalized result files."
+                  : "Result files could not be registered by the host.",
+              recoverable: false,
+              allowedStrategies: [],
+            },
+            // Preserve the in-message preview only; records stay host-side.
+            preview: toReadonlyStringArraySafeRecords(previewKey),
+          });
+          if (isRecordLike(input.payload.error)) {
+            input.payload.error.id = `art_${input.executionId.slice(0, 12)}`;
+          }
         }
       }
     }
+    return {
+      stagingExists: stagingOk,
+      candidateCount: candidates.length,
+      registeredCount: artifacts.length,
+      errors,
+      degradedToFailure,
+    };
   }
 
   /**

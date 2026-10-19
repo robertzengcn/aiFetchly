@@ -5,6 +5,7 @@ import {
   evaluateHostRequirements,
   pluginToolPolicySchema,
   pluginHostRequirementsSchema,
+  pluginCapabilitiesSchema,
   type PluginToolPolicy,
 } from "@/entityTypes/pluginExecutionTypes";
 
@@ -56,6 +57,13 @@ export class PluginToolPolicyRegistry {
   private entries = new Map<string, PluginToolPolicyEntry>();
   /** plugin name → canonical names registered for that plugin */
   private byPlugin = new Map<string, Set<string>>();
+  /**
+   * B03: plugin name → declared file-artifact formats (manifest
+   * `capabilities.fileArtifacts`). Artifacts-required semantics in artifact
+   * promotion consult this instead of assuming every async plugin tool
+   * produces files.
+   */
+  private artifactFormats = new Map<string, readonly string[]>();
 
   /**
    * Register every valid policy declared in a plugin manifest.
@@ -95,6 +103,19 @@ export class PluginToolPolicyRegistry {
       return { errors };
     }
     const record = manifest as Record<string, unknown>;
+
+    // B03: record the plugin's declared file-artifact formats. Promotion
+    // require-artifacts semantics use this, never the presence of a
+    // staging directory, so generic non-artifact tools are never graded as
+    // missing files. Invalid/absent capabilities degrade to none.
+    const declaredCaps = pluginCapabilitiesSchema.safeParse(
+      record.capabilities
+    );
+    if (declaredCaps.success && declaredCaps.data.fileArtifacts) {
+      this.artifactFormats.set(pluginName, declaredCaps.data.fileArtifacts.slice());
+    } else {
+      this.artifactFormats.set(pluginName, []);
+    }
 
     // Host requirements gate activation (design §5.4): an unsupported
     // required capability means the plugin cannot run here — register none
@@ -241,12 +262,24 @@ export class PluginToolPolicyRegistry {
 
   /** Remove every policy registered for a plugin (disable/uninstall/update). */
   public unregisterPlugin(pluginName: string): void {
+    // B03: capability records follow the plugin's lifecycle even when the
+    // manifest registered zero tool policies.
+    this.artifactFormats.delete(pluginName);
     const names = this.byPlugin.get(pluginName);
     if (!names) return;
     for (const canonical of names) {
       this.entries.delete(canonical);
     }
     this.byPlugin.delete(pluginName);
+  }
+
+  /**
+   * B03: the file-artifact formats the plugin declares (manifest
+   * `capabilities.fileArtifacts`); an empty list means the plugin produces
+   * no host-registered artifacts.
+   */
+  public getPluginArtifactFormats(pluginName: string): readonly string[] {
+    return this.artifactFormats.get(pluginName) ?? [];
   }
 
   /** Resolve a policy by canonical AI tool name (`mcp__plugin__server__tool`). */
@@ -269,6 +302,7 @@ export class PluginToolPolicyRegistry {
   public clearForTest(): void {
     this.entries.clear();
     this.byPlugin.clear();
+    this.artifactFormats.clear();
   }
 }
 
