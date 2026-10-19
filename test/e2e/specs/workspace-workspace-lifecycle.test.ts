@@ -8,6 +8,10 @@ import {
 import { launchAiFetchly } from "../fixtures/electronApp";
 import { closeApp } from "../support/processCleanup";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
+import {
+  seedAgentTasks,
+  readAgentTaskStatuses,
+} from "../support/agentTaskSeed";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -278,6 +282,193 @@ test.describe("workspace lifecycle through the default surface", () => {
           /email service/i,
           { timeout: 15_000 }
         );
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
+
+  test("workspace-scoped slash suggestions register with the approved workspace and drop after removal (FR-SUB scope, Phase-14 D-TrustUX)", async ({
+    page: _page,
+  }, testInfo) => {
+    test.setTimeout(210_000);
+    const fakeAi = await startFakeOpenAiServer();
+    await fakeAi.setScenario("stream-text");
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    const alpha = path.join(root.workspacePath, "projects-cmds");
+    fs.mkdirSync(path.join(alpha, ".aifetchly", "commands"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(alpha, ".aifetchly", "commands", "wslintpatch.md"),
+      "---\nname: wslintpatch\ndescription: e2e workspace slash journey\ntype: prompt\n---\nLint and patch $ARGUMENTS\n",
+      "utf8"
+    );
+    try {
+      writeStateManifest(root, {
+        authState: "authenticated",
+        aiState: "local-enabled",
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+        dialogResponses: {
+          open: { action: "confirmed", paths: [alpha] },
+        },
+      });
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+      try {
+        const page = app.mainWindow;
+        await openCenter(page);
+        await page.getByTestId("workspace-new-chat").click();
+        const textarea = composerTextarea(page);
+        await expect(textarea).toBeVisible({ timeout: 10_000 });
+
+        // Persist the conversation row; the scope is resolved per bound
+        // conversation.
+        await textarea.fill(`setup ${Date.now()}`);
+        await page.getByTestId("ai-chat-send").click();
+        await expect(page.getByTestId("workspace-transcript")).toContainText(
+          "Hello world!",
+          { timeout: 30_000 }
+        );
+
+        // Approve the workspace. Approval is the only trust gate — commands
+        // register through the D-TrustUX single gate (no AGENTS.md here).
+        await page.getByTestId("workspace-badge-choose").click();
+        await pickFolderFromCard(page);
+        const badge = page.getByTestId("workspace-badge");
+        await expect(badge).toBeVisible({ timeout: 15_000 });
+        await expect(badge.locator(".workspace-badge__status")).toHaveText(
+          /approved/i,
+          { timeout: 15_000 }
+        );
+
+        // Typing "/wslint…" opens the dropdown; only an APPROVED workspace's
+        // commands reach the scope (the resolver reads the bound conversation
+        // from the module, not the renderer).
+        const suggestions = page.locator(".slash-suggestions");
+        await textarea.fill("/wslint");
+        await expect(
+          suggestions.locator(".slash-suggestions__name").filter({
+            hasText: "/wslintpatch",
+          })
+        ).toBeVisible({ timeout: 20_000 });
+
+        // Removing the workspace unbinds the conversation; a fresh slash
+        // query must no longer return the workspace-sourced command.
+        await textarea.fill("");
+        await page.getByTestId("workspace-badge-remove").click();
+        await expect(page.getByTestId("workspace-badge-unset")).toBeVisible({
+          timeout: 15_000,
+        });
+        await textarea.fill("/wslint");
+        await expect(suggestions).toBeVisible({ timeout: 10_000 });
+        await expect(
+          suggestions.locator(".slash-suggestions__name").filter({
+            hasText: "/wslintpatch",
+          })
+        ).toHaveCount(0, { timeout: 10_000 });
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
+  test("background agent tasks cancel EXACTLY the targeted task from the surface menu (FR-INT-004, T5/D7)", async ({
+    page: _page,
+  }, testInfo) => {
+    test.setTimeout(210_000);
+    const fakeAi = await startFakeOpenAiServer();
+    await fakeAi.setScenario("stream-text");
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    fs.mkdirSync(root.workspacePath, { recursive: true });
+    try {
+      writeStateManifest(root, {
+        authState: "authenticated",
+        aiState: "local-enabled",
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+        dialogResponses: {
+          open: { action: "confirmed", paths: [root.workspacePath] },
+        },
+      });
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+      try {
+        const page = app.mainWindow;
+        await openCenter(page);
+        await page.getByTestId("workspace-new-chat").click();
+        await expect(composerTextarea(page)).toBeVisible({
+          timeout: 10_000,
+        });
+
+        // Two seeded rows: only the running one offers the surface cancel; the
+        // completed sibling must survive the cancellation untouched.
+        await seedAgentTasks(root, [
+          {
+            agentTaskId: "agt-run-e2e",
+            agentId: "lint-reviewer",
+            status: "running",
+          },
+          {
+            agentTaskId: "agt-done-e2e",
+            agentId: "summarizer",
+            status: "completed",
+          },
+        ]);
+
+        const menu = page.getByTitle("Background Agents", { exact: true });
+        await expect(menu).toBeVisible({ timeout: 10_000 });
+        await menu.click();
+
+        // The list loads through the real agent-runtime channel: both rows are
+        // rendered with their exact agent ids.
+        await expect(page.getByText("lint-reviewer")).toBeVisible({
+          timeout: 15_000,
+        });
+        await expect(page.getByText("summarizer")).toBeVisible();
+
+        // Only the running row exposes the cancel affordance.
+        const runningItem = page
+          .locator(".agent-task-item")
+          .filter({ hasText: "lint-reviewer" });
+        const doneItem = page
+          .locator(".agent-task-item")
+          .filter({ hasText: "summarizer" });
+        await runningItem.getByTitle("Cancel", { exact: true }).click();
+
+        // Poll refresh (5s) flips the chip to Cancelled inside the open menu.
+        await expect(runningItem.locator(".v-chip")).toHaveText(/cancelled/i, {
+          timeout: 12_000,
+        });
+
+        const statuses = await readAgentTaskStatuses(root, [
+          "agt-run-e2e",
+          "agt-done-e2e",
+        ]);
+        expect(statuses.get("agt-run-e2e")?.status).toBe("cancelled");
+        expect(statuses.get("agt-run-e2e")?.finishedAt).toBeTruthy();
+        expect(statuses.get("agt-done-e2e")?.status).toBe("completed");
+
+        // The terminal sibling never re-opens a cancel affordance.
+        await expect(
+          doneItem.getByTitle("Cancel", { exact: true })
+        ).toHaveCount(0);
       } finally {
         await closeApp(app);
       }
