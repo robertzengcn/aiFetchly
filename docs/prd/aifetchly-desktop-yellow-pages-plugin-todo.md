@@ -177,7 +177,7 @@ Evidence: [src/service/PluginComponentRegistryService.ts:153](../../src/service/
 
 ### B06 — P1 — Restore the complete previous installation on failed update
 
-- [ ] Fix and verify B06.
+- [x] Fix and verify B06. — restorePreviousGeneration() wired into every post-teardown failure branch (plugin row, skills, MCP rows, agents, discovery smoke test, activation-gate-blocked overwrite): failed gen unregistered (doc skills + capabilities), backup moved back, plugin/skill/MCP/agent rows recreated (original MCP row ids preserved so Token trust maps), old policies re-registered; 5 injected-failure integration tests pass (utilitycode/pluginImportServiceB06rollback.test.ts). This last commit records the reviewer-facing note.
 
 Evidence: [src/service/PluginImportService.ts:711](../../src/service/PluginImportService.ts#L711); [src/service/PluginImportService.ts:752](../../src/service/PluginImportService.ts#L752); [src/service/PluginImportService.ts:971](../../src/service/PluginImportService.ts#L971); [src/service/PluginImportService.ts:1180](../../src/service/PluginImportService.ts#L1180).
 

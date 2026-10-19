@@ -27,6 +27,8 @@ import {
   type PluginSummary,
   type PluginSource,
   type PluginSourceProvenance,
+  type PluginHealth,
+  type PluginSourceKind,
 } from "@/entityTypes/pluginTypes";
 import { MCPToolService } from "@/service/MCPToolService";
 import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
@@ -36,6 +38,9 @@ import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
 import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
+import type { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type {
@@ -427,11 +432,11 @@ function removePath(p: string): void {
 }
 
 /**
- * B05: parameters for `runInstallTransactionPhase` — the extracted steps
- * 5–12 of `installFromLocalRoot` (validation → file swap → persistence →
- * discovery → activation) that the plugin lifecycle seal wraps for
- * overwrite updates.
- */
+  * B05: parameters for `runInstallTransactionPhase` — the extracted steps
+  * 5–12 of `installFromLocalRoot` (validation → file swap → persistence →
+  * discovery → activation) that the plugin lifecycle seal wraps for
+  * overwrite updates.
+  */
 interface InstallTransactionParams {
   readonly localRoot: string;
   readonly manifest: PluginManifest;
@@ -439,6 +444,26 @@ interface InstallTransactionParams {
   readonly pluginModule: PluginManagementModule;
   readonly isOverwrite: boolean;
   readonly preservedDisabledAgentIds: ReadonlySet<string>;
+  /**
+   * B06: full snapshot of the previous generation taken BEFORE teardown
+   * (plugin row + owned skills, MCP servers, agents). Null for fresh
+   * installs. Used to restore rows AND files together on any failure.
+   */
+  readonly previousGeneration: PreviousGenerationSnapshot | null;
+}
+
+/**
+ * B06: a complete snapshot of the previous installed generation, captured
+ * before the overwrite teardown. Every component's persisted state
+ * (enablement, health, manifest, trust relationships via stable server
+ * ids) is preserved so a failed update can restore the exact executable
+ * configuration.
+ */
+interface PreviousGenerationSnapshot {
+  readonly plugin: InstalledPluginEntity;
+  readonly skills: ReadonlyArray<Partial<InstalledSkillEntity>>;
+  readonly mcp: readonly MCPToolEntity[];
+  readonly agents: readonly AgentDefinitionView[];
 }
 
 export class PluginImportService {
@@ -537,20 +562,46 @@ export class PluginImportService {
     // performs the quiesce itself; a cleanup timeout then propagates as the
     // retryable uninstall-failed result with the previous generation fully
     // intact (no files touched).
-    let preservedDisabledAgentIds = new Set<string>();
+    // B06: the whole previous generation is SNAPSHOTTED here (plugin row,
+    // owned skills, MCP servers, agents) so any later failure can restore
+    // rows and files TOGETHER — an incompatible update can never replace a
+    // healthy plugin with a broken one.
     let deferredOverwriteTeardown = false;
+    let snapshot: PreviousGenerationSnapshot | null = null;
+    let preservedDisabledAgentIds = new Set<string>();
     if (existing && overwrite) {
+      const skillModule = new SkillManagementModule();
+      const mcpModule = new MCPToolModule();
+      const agentModule = new AgentDefinitionModule();
+      let ownedSkills: Partial<InstalledSkillEntity>[] = [];
       try {
-        const prevAgents =
-          await new AgentDefinitionModule().findAgentsByPluginName(
-            manifest.name
-          );
+        ownedSkills = (await skillModule.findSkillsByPluginName(
+          manifest.name
+        )) as Partial<InstalledSkillEntity>[];
+      } catch {
+        // best-effort — snapshot what we can
+      }
+      let ownedMcp: MCPToolEntity[] = [];
+      try {
+        ownedMcp = await mcpModule.findMcpByPluginName(manifest.name);
+      } catch {
+        // best-effort — snapshot what we can
+      }
+      let ownedAgents: AgentDefinitionView[] = [];
+      try {
+        ownedAgents = await agentModule.findAgentsByPluginName(manifest.name);
         preservedDisabledAgentIds = new Set(
-          prevAgents.filter((a) => a.status === "disabled").map((a) => a.id)
+          ownedAgents.filter((a) => a.status === "disabled").map((a) => a.id)
         );
       } catch {
-        // best-effort
+        // best-effort — snapshot what we can
       }
+      snapshot = {
+        plugin: existing,
+        skills: ownedSkills,
+        mcp: ownedMcp,
+        agents: ownedAgents,
+      };
       deferredOverwriteTeardown = true;
     }
 
@@ -561,6 +612,7 @@ export class PluginImportService {
     // quiescence and transaction completion. Fresh installs run the
     // identical phase unsealed (a not-yet-installed plugin cannot own
     // running jobs).
+    const previousGeneration: PreviousGenerationSnapshot | null = snapshot;
     const transactionPhase = (): Promise<PluginImportResult> =>
       PluginImportService.runInstallTransactionPhase({
         localRoot,
@@ -569,6 +621,7 @@ export class PluginImportService {
         pluginModule,
         isOverwrite: deferredOverwriteTeardown,
         preservedDisabledAgentIds,
+        previousGeneration,
       });
 
     if (deferredOverwriteTeardown) {
@@ -802,6 +855,186 @@ export class PluginImportService {
       };
     }
 
+    // B06: full compensating restore of the previous generation. Invoked on
+    // every post-teardown failure path: rows and files are restored
+    // TOGETHER, and runtime artifacts the failed generation registered
+    // (doc skills, tool policies, hooks) are unregistered first. Note the
+    // failed swap branch above handles the pre-teardown window; this
+    // covers the window AFTER the previous rows were uninstalled.
+    const newlyRegisteredSkills: string[] = [];
+    const registerDocStateSkill = (
+      skillManifest: SkillManifest,
+      relativePath: string,
+      installBase: string
+    ): void => {
+      const skillDir = path.join(installBase, path.dirname(relativePath));
+      const skillMdPath = path.join(skillDir, "SKILL.md");
+      const execute = buildDocSkillExecuteHandler(skillMdPath);
+      let skillMdContent = "";
+      try {
+        skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
+      } catch (e) {
+        log.warn(`[PluginImport]   SKILL.md not readable:`, e);
+      }
+      const wrapperCode = `setResult({
+  success: true,
+  mode: "documentation_skill",
+  skillName: ${JSON.stringify(skillManifest.name)},
+  skillFile: ${JSON.stringify(skillMdPath)},
+  guidance: ${JSON.stringify(skillMdContent)},
+  message: "This skill was imported from SKILL.md and runs in documentation-only mode.",
+});`;
+      const wrapperPath = path.join(skillDir, "__skill_md_wrapper__.js");
+      fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
+      if (SkillRegistry.isRegistered(skillManifest.name)) {
+        SkillRegistry.unregisterSkill(skillManifest.name);
+      }
+      SkillRegistry.registerSkill({
+        name: skillManifest.name,
+        description: skillManifest.description,
+        parameters: skillManifest.parameters ?? {},
+        tier: "sandboxed",
+        permissionCategory: "pure",
+        requiresConfirmation: false,
+        source: "user",
+        documentationOnly: true,
+        supportedFileTypes: skillManifest.supportedFileTypes,
+        pluginOwner: p.manifest.name,
+        execute,
+      });
+      newlyRegisteredSkills.push(skillManifest.name);
+    };
+
+    const restorePreviousGeneration = async (): Promise<void> => {
+      const prev = p.previousGeneration;
+      if (!prev) return;
+      // 1. Unregister artifacts the FAILED generation registered.
+      for (const name of newlyRegisteredSkills) {
+        try {
+          SkillRegistry.unregisterSkill(name);
+        } catch {
+          // best-effort
+        }
+      }
+      try {
+        PluginComponentRegistryService.unregisterPluginCapabilities(
+          p.manifest.name
+        );
+      } catch (e) {
+        log.warn(`[PluginImport] B06: failed to unregister capabilities:`, e);
+      }
+      // 2. Files: drop the failed new generation and move the backup back.
+      removePath(installPath);
+      if (fs.existsSync(backupDir)) {
+        try {
+          fs.renameSync(backupDir, installPath);
+        } catch (e) {
+          log.warn(
+            `[PluginImport] B06: failed to restore backup directory:`,
+            e
+          );
+        }
+      }
+      // 3. Rows: recreate the previous plugin row + owned rows exactly.
+      try {
+        await p.pluginModule.createPlugin({
+          name: prev.plugin.name,
+          displayName: prev.plugin.displayName ?? prev.plugin.name,
+          version: prev.plugin.version ?? "",
+          description: prev.plugin.description ?? "",
+          author: prev.plugin.author ?? "",
+          source: (prev.plugin.source ?? "local") as PluginSource,
+          installPath: prev.plugin.installPath ?? installPath,
+          manifestJson: prev.plugin.manifestJson ?? "{}",
+          permissionsJson: prev.plugin.permissionsJson ?? "[]",
+          componentStateJson: prev.plugin.componentStateJson ?? "{}",
+          enabled: prev.plugin.enabled ?? 1,
+          health: (prev.plugin.health ?? "healthy") as PluginHealth,
+          sourceKind: prev.plugin.sourceKind as PluginSourceKind | undefined,
+          sourceUri: prev.plugin.sourceUri,
+          sourceRef: prev.plugin.sourceRef,
+          sourceMetaJson: prev.plugin.sourceMetaJson ?? "{}",
+        });
+      } catch (e) {
+        log.warn(`[PluginImport] B06: failed to restore plugin row:`, e);
+      }
+      const restoreSkillModule = new SkillManagementModule();
+      for (const oldSkill of prev.skills) {
+        try {
+          await restoreSkillModule.installSkill({
+            name: oldSkill.name ?? "",
+            version: oldSkill.version ?? "",
+            source: oldSkill.source ?? "user",
+            manifest_json: oldSkill.manifest_json ?? "{}",
+            permissions_json: oldSkill.permissions_json ?? "[]",
+            enabled: oldSkill.enabled ?? 0,
+            pluginName: oldSkill.pluginName ?? prev.plugin.name,
+            pluginComponentPath: oldSkill.pluginComponentPath ?? undefined,
+          });
+        } catch (e) {
+          log.warn(
+            `[PluginImport] B06: failed to restore skill row "${oldSkill.name}":`,
+            e
+          );
+        }
+      }
+      const restoreMcpModule = new MCPToolModule();
+      for (const oldServer of prev.mcp) {
+        try {
+          // Preserve the ORIGINAL row ids so Token-keyed trust state
+          // (MCP_TRUST_<id>) and any references survive the restore.
+          await restoreMcpModule.saveMCPTool(oldServer);
+        } catch (e) {
+          log.warn(
+            `[PluginImport] B06: failed to restore MCP row "${oldServer.serverName}":`,
+            e
+          );
+        }
+      }
+      const restoreAgentModule = new AgentDefinitionModule();
+      try {
+        await restoreAgentModule.restorePluginAgents(
+          prev.plugin.name,
+          prev.agents,
+          p.preservedDisabledAgentIds
+        );
+      } catch (e) {
+        log.warn(`[PluginImport] B06: failed to restore agent rows:`, e);
+      }
+      // 4. Re-register the previous generation's runtime artifacts.
+      for (const oldSkill of prev.skills) {
+        try {
+          const manifestJson = oldSkill.manifest_json ?? "{}";
+          const oldManifest = JSON.parse(manifestJson) as SkillManifest;
+          const relPath = oldSkill.pluginComponentPath ?? "skills/SKILL.md";
+          registerDocStateSkill(oldManifest, relPath, installPath);
+        } catch (e) {
+          log.warn(
+            `[PluginImport] B06: failed to re-register doc skill "${oldSkill.name}":`,
+            e
+          );
+        }
+      }
+      try {
+        const oldManifest = JSON.parse(
+          prev.plugin.manifestJson ?? "{}"
+        ) as PluginManifest;
+        const reapply =
+          getPluginToolPolicyRegistry().registerFromManifest(
+            prev.plugin.name,
+            oldManifest
+          );
+        if (reapply.errors.length > 0) {
+          log.warn(
+            `[PluginImport] B06: policy re-registration warnings:`,
+            reapply.errors.map((e) => e.message).join("; ")
+          );
+        }
+      } catch (e) {
+        log.warn(`[PluginImport] B06: policy re-registration failed:`, e);
+      }
+    };
+
     // 7b. HOST-04 activation gate: validate the manifest's tool policies and
     // host requirements through the SAME registry the query loop consults.
     // An unknown required host capability or an invalid policy shape is an
@@ -814,6 +1047,29 @@ export class PluginImportService {
       p.manifest
     );
     const policyGateBlocked = policyGate.errors.length > 0;
+
+    // B06: on an OVERWRITE, a policy-validated-blocked update is ABANDONED
+    // (and the executable previous generation retained) instead of retiring
+    // a healthy plugin to install an always-invalid new one. Fresh installs
+    // keep the HOST-04 behavior — the plugin persists with `invalid` health
+    // so the renderer can show a stable diagnostic.
+    if (policyGateBlocked && p.isOverwrite) {
+      await rollbackRowsAndFiles(p.manifest.name, installPath);
+      await restorePreviousGeneration();
+      return {
+        success: false,
+        errors: [
+          {
+            code: "dependency-unsatisfied",
+            pluginName: p.manifest.name,
+            message: `Plugin update blocked by the activation gate: ${policyGate.errors
+              .map((err) => err.message)
+              .join("; ")}. The previous working version was retained.`,
+            recoverable: false,
+          },
+        ],
+      };
+    }
 
     // H6: a plugin that DECLARES browser execution survives a missing
     // browser as `needs_configuration` — a user-resolvable dependency, not
@@ -873,6 +1129,7 @@ export class PluginImportService {
       }
     } catch (e: unknown) {
       rollbackInstall(installPath);
+      await restorePreviousGeneration();
       return {
         success: false,
         errors: [
@@ -905,6 +1162,7 @@ export class PluginImportService {
       }
     } catch (e: unknown) {
       await rollbackRowsAndFiles(p.manifest.name, installPath);
+      await restorePreviousGeneration();
       return {
         success: false,
         errors: [
@@ -926,48 +1184,7 @@ export class PluginImportService {
     // on restart.
     for (const { manifest: skillManifest, relManifestPath } of skills) {
       try {
-        const skillDir = path.join(installPath, path.dirname(relManifestPath));
-        const skillMdPath = path.join(skillDir, "SKILL.md");
-        const execute = buildDocSkillExecuteHandler(skillMdPath);
-
-        // Write the wrapper JS so registerImportedSkill() works on restart
-        let skillMdContent = "";
-        try {
-          skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
-        } catch (e) {
-          log.warn(`[PluginImport]   SKILL.md not readable:`, e);
-        }
-        const wrapperCode = `setResult({
-  success: true,
-  mode: "documentation_skill",
-  skillName: ${JSON.stringify(skillManifest.name)},
-  skillFile: ${JSON.stringify(skillMdPath)},
-  guidance: ${JSON.stringify(skillMdContent)},
-  message: "This skill was imported from SKILL.md and runs in documentation-only mode.",
-});`;
-        const wrapperPath = path.join(skillDir, "__skill_md_wrapper__.js");
-        fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
-
-        // Idempotent: if the plugin-owned skill is already registered
-        // (e.g. from a prior install in the same session, because
-        // globalThis.__aifetchlySkillRegistry survives HMR), unregister
-        // it first so the reinstall doesn't throw.
-        if (SkillRegistry.isRegistered(skillManifest.name)) {
-          SkillRegistry.unregisterSkill(skillManifest.name);
-        }
-        SkillRegistry.registerSkill({
-          name: skillManifest.name,
-          description: skillManifest.description,
-          parameters: skillManifest.parameters ?? {},
-          tier: "sandboxed",
-          permissionCategory: "pure",
-          requiresConfirmation: false,
-          source: "user",
-          documentationOnly: true,
-          supportedFileTypes: skillManifest.supportedFileTypes,
-          pluginOwner: p.manifest.name,
-          execute,
-        });
+        registerDocStateSkill(skillManifest, relManifestPath, installPath);
       } catch (e) {
         log.warn(`Failed to hot-register skill "${skillManifest.name}":`, e);
       }
@@ -1006,6 +1223,7 @@ export class PluginImportService {
       }
     } catch (e: unknown) {
       await rollbackRowsAndFiles(p.manifest.name, installPath);
+      await restorePreviousGeneration();
       return {
         success: false,
         errors: [
@@ -1039,16 +1257,10 @@ export class PluginImportService {
         } catch (e) {
           log.warn(`Failed to discover MCP tools for server ${id}:`, e);
           await rollbackRowsAndFiles(p.manifest.name, installPath);
-          // H6/update-transaction: best-effort restore of the previous
-          // generation so a failed update leaves the plugin usable.
-          if (p.isOverwrite && fs.existsSync(backupDir)) {
-            if (fs.existsSync(installPath)) removePath(installPath);
-            try {
-              fs.renameSync(backupDir, installPath);
-            } catch {
-              // best-effort — the user is told the update failed either way
-            }
-          }
+          // B06: full compensating restore (rows AND files TOGETHER) of
+          // the previous generation — a failed discovery smoke test can
+          // never leave a healthy plugin replaced by a broken one.
+          await restorePreviousGeneration();
           return {
             success: false,
             errors: [
@@ -1078,6 +1290,7 @@ export class PluginImportService {
       );
     } catch (e: unknown) {
       await rollbackRowsAndFiles(p.manifest.name, installPath);
+      await restorePreviousGeneration();
       return {
         success: false,
         errors: [
