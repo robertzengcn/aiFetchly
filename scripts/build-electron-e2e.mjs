@@ -76,6 +76,16 @@ async function main() {
       projectRoot,
       "vite.e2e.aiChatVoiceWorker.config.mjs"
     ),
+  });
+
+  step(
+    "Building workspace watch worker into .vite/e2e/build (WorkspaceConfigWatchWorker.js)"
+  );
+  await build({
+    configFile: path.resolve(
+      projectRoot,
+      "vite.e2e.workspaceConfigWatchWorker.config.mjs"
+    ),
     mode: "development",
   });
 

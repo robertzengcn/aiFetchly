@@ -1,5 +1,8 @@
 import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
-import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
 /**
  * WorkspaceWatchManager — main-process owner of the watcher worker lifecycle.
  *
@@ -114,6 +117,7 @@ interface WorkerHandle {
   postMessage(msg: unknown): void;
   on(event: "message", cb: (msg: unknown) => void): void;
   on(event: "exit", cb: (code: number) => void): void;
+  on(event: "spawn", cb: () => void): void;
   once(event: "exit", cb: (code: number) => void): void;
   removeListener(event: string, cb: (...args: unknown[]) => void): void;
   kill(): void;
@@ -126,10 +130,8 @@ const defaultUtilityFork = (
   args: readonly string[],
   opts: { env?: NodeJS.ProcessEnv }
 ): WorkerHandle => {
-  const child = spawnOwned(
-    "workspace-watch",
-    () =>
-      utilityProcess.fork(entry, [...args], { env: opts.env })
+  const child = spawnOwned("workspace-watch", () =>
+    utilityProcess.fork(entry, [...args], { env: opts.env })
   );
   return child as unknown as WorkerHandle;
 };
@@ -259,6 +261,17 @@ export class WorkspaceWatchManager {
   private worker: WorkerHandle | null = null;
   private workerState: "not-started" | "running" | "restarting" | "failed" =
     "not-started";
+  /**
+   * True once the forked worker has actually booted. Electron's
+   * utilityProcess reports `pid === undefined` until its 'spawn' event fires
+   * (test doubles may set pid synchronously), so this flag — not the pid —
+   * decides when worker-bound commands can be postMessage'd. Commands that
+   * arrive while the worker is still booting are buffered in
+   * {@link pendingCommands} and flushed on 'spawn'.
+   */
+  private workerReady = false;
+  /** Commands buffered until the worker spawns (see workerReady). */
+  private pendingCommands: WorkspaceWatchCommand[] = [];
   /** Set by shutdown() — exit handler becomes a no-op (no auto-restart). */
   private disposed = false;
 
@@ -270,8 +283,9 @@ export class WorkspaceWatchManager {
     e: WorkspaceWatchManagerEvent
   ) => void;
   private readonly trustResolver: (workspaceId: string) => boolean;
-  private readonly portableMemorySnapshotCallback?:
-    | NonNullable<WorkspaceWatchManagerOptions["portableMemorySnapshotCallback"]>;
+  private readonly portableMemorySnapshotCallback?: NonNullable<
+    WorkspaceWatchManagerOptions["portableMemorySnapshotCallback"]
+  >;
   private readonly forkFn: ForkFn;
   private readonly workerEntry: string;
   private readonly restarter: WorkspaceWatchRestarter;
@@ -383,7 +397,8 @@ export class WorkspaceWatchManager {
    */
   async shutdown(): Promise<void> {
     this.disposed = true;
-    if (this.worker && this.worker.pid !== undefined) {
+    this.pendingCommands = [];
+    if (this.worker && this.worker.pid !== undefined && this.workerReady) {
       try {
         this.worker.postMessage({
           type: "shutdown",
@@ -401,6 +416,7 @@ export class WorkspaceWatchManager {
       }
     }
     this.worker = null;
+    this.workerReady = false;
     this.workerState = "not-started";
   }
 
@@ -460,18 +476,47 @@ export class WorkspaceWatchManager {
     });
     this.worker = worker;
     this.workerState = "running";
+    this.workerReady = worker.pid !== undefined;
+    const flushPending = (): void => {
+      this.workerReady = true;
+      this.flushPendingCommands();
+    };
+    // Electron's UtilityProcess sets pid + fires 'spawn' once the child is
+    // actually running. Fakes used by unit tests set pid synchronously and
+    // may never fire 'spawn', hence the pid fallback below.
+    worker.on("spawn", flushPending);
+    if (this.workerReady) flushPending();
     worker.on("message", (raw: unknown) => this.handleWorkerMessage(raw));
     worker.on("exit", (code: number) => this.handleWorkerExit(code, "exit"));
   }
 
+  private flushPendingCommands(): void {
+    while (this.pendingCommands.length > 0) {
+      const cmd = this.pendingCommands.shift() as WorkspaceWatchCommand;
+      this.post(cmd);
+    }
+  }
+
   private send(cmd: WorkspaceWatchCommand): void {
     const w = this.worker;
-    if (w && w.pid !== undefined) {
-      try {
-        w.postMessage(cmd);
-      } catch (err) {
-        this.logger("warn", `failed to send ${cmd.type} command`, err);
-      }
+    if (!w) return;
+    if (this.workerReady && w.pid !== undefined) {
+      this.post(cmd);
+      return;
+    }
+    // Worker present but still booting (UtilityProcess pid is undefined until
+    // 'spawn') — buffer the command so acquire flows that race the spawn
+    // don't silently lose their watch request.
+    this.pendingCommands.push(cmd);
+  }
+
+  private post(cmd: WorkspaceWatchCommand): void {
+    const w = this.worker;
+    if (!w) return;
+    try {
+      w.postMessage(cmd);
+    } catch (err) {
+      this.logger("warn", `failed to send ${cmd.type} command`, err);
     }
   }
 
@@ -571,10 +616,7 @@ export class WorkspaceWatchManager {
         // event processing stays responsive; the coordinator serializes per
         // scope and attaches its own error handling. Unapproved snapshots are
         // still forwarded so the coordinator can clear state (§13.2).
-        if (
-          this.portableMemorySnapshotCallback &&
-          snapshot.portableMemory
-        ) {
+        if (this.portableMemorySnapshotCallback && snapshot.portableMemory) {
           try {
             this.portableMemorySnapshotCallback({
               workspaceId: event.workspaceId,
@@ -653,6 +695,10 @@ export class WorkspaceWatchManager {
    */
   private handleWorkerExit(code: number | null, signal: string): void {
     this.worker = null;
+    this.workerReady = false;
+    // Drain buffered commands: every acquire that raced the old worker's
+    // spawn is re-sent by resendAllWatches() on the fresh spawn.
+    this.pendingCommands = [];
     if (this.disposed) return; // app shutdown
     if (this.watched.size === 0) {
       this.workerState = "not-started";
