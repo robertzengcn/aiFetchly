@@ -244,28 +244,6 @@ export const PLATFORM_VALIDATE = "platform:validate";
 export const PLATFORM_STATISTICS = "platform:statistics";
 export const PLATFORM_TOGGLE = "platform:toggle";
 
-// Yellow Pages Management Channels
-export const YELLOW_PAGES_CREATE = "yellow_pages:create";
-export const YELLOW_PAGES_UPDATE = "yellow_pages:update";
-export const YELLOW_PAGES_DELETE = "yellow_pages:delete";
-export const YELLOW_PAGES_START = "yellow_pages:start";
-export const YELLOW_PAGES_STOP = "yellow_pages:stop";
-export const YELLOW_PAGES_PAUSE = "yellow_pages:pause";
-export const YELLOW_PAGES_RESUME = "yellow_pages:resume";
-export const YELLOW_PAGES_LIST = "yellow_pages:list";
-export const YELLOW_PAGES_DETAIL = "yellow_pages:detail";
-export const YELLOW_PAGES_PROGRESS = "yellow_pages:progress";
-export const YELLOW_PAGES_RESULTS = "yellow_pages:results";
-export const YELLOW_PAGES_EXPORT = "yellow_pages:export";
-export const YELLOW_PAGES_BULK = "yellow_pages:bulk";
-export const YELLOW_PAGES_HEALTH = "yellow_pages:health";
-export const YELLOW_PAGES_PLATFORMS = "yellow_pages:platforms";
-export const YELLOW_PAGES_STATISTICS = "yellow_pages:statistics";
-export const YELLOW_PAGES_KILL_PROCESS = "yellow_pages:kill_process";
-export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES =
-  "yellow_pages:check_orphaned_processes";
-export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION =
-  "yellow_pages:handle_previous_session";
 
 // Language Preference Channels
 export const LANGUAGE_PREFERENCE_GET = "language:preference:get";

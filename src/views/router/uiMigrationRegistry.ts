@@ -229,29 +229,6 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     routeNames: ["Email_Extraction_Task_Detail"],
   },
   {
-    surfaceId: "yellowpages-list",
-    family: "yellowpages",
-    template: "collection",
-    state: "shell",
-    routeNames: ["YellowPagesList"],
-  },
-  {
-    surfaceId: "yellowpages-editor",
-    family: "yellowpages",
-    template: "form",
-    state: "shell",
-    routeNames: ["CreateYellowPagesTask", "EditYellowPagesTask"],
-    supportingTemplates: ["results"],
-  },
-  {
-    surfaceId: "yellowpages-results",
-    family: "yellowpages",
-    template: "results",
-    state: "shell",
-    routeNames: ["YellowPagesTaskDetail", "YellowPagesResults"],
-    supportingTemplates: ["detail"],
-  },
-  {
     surfaceId: "map-scraper-form",
     family: "map-scraper",
     template: "form",
@@ -473,7 +450,6 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
   { routeName: "Moduleslist", reason: "inactive-modules" },
   { routeName: "Search", reason: "layout-parent" },
   { routeName: "Email_Extraction", reason: "layout-parent" },
-  { routeName: "Yellow_Pages", reason: "layout-parent" },
   { routeName: "Map_Scraper", reason: "layout-parent" },
   { routeName: "Email_Marketing", reason: "layout-parent" },
   { routeName: "Proxy", reason: "layout-parent" },
@@ -488,7 +464,7 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
 
 /** Total in-scope surface count, including the unified send-log surfaces
  * (dev) and the managed-browser settings surface (this branch). */
-export const IN_SCOPE_SURFACE_COUNT = 53;
+export const IN_SCOPE_SURFACE_COUNT = 50;
 
 /** Look up the registry entry owning a route name. */
 export function findSurfaceByRouteName(
