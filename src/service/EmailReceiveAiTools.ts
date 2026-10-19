@@ -20,6 +20,7 @@ import {
   replyRecipientAddress,
 } from "@/service/emailReceive/EmailMessageParser";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
+import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import {
@@ -439,9 +440,38 @@ export async function sendEmailReply(args: unknown): Promise<
     }
     // R13: a `failed` draft (definite SMTP rejection) reaches the fenced
     // reopen inside `approveDraft`; the reopen refuses when retry is unsafe
-    // (cluster positive / unknown / sent / in-flight sibling). Other
-    // non-`draft` states stay refused at this gate.
-    if (draft.status !== "draft" && draft.status !== "failed") {
+    // (cluster positive / unknown / sent / in-flight sibling). An `approved`
+    // draft whose previous send stopped before SMTP is returned to `draft`
+    // so this confirmation can approve and deliver it. Other non-`draft`
+    // states stay refused at this gate.
+    if (draft.status === "approved") {
+      // A previous confirmed send approved this draft and then stopped before
+      // SMTP. The one-time token from that attempt is gone, so retire the
+      // unused approval, return the draft to `draft`, and approve again.
+      const inFlight = await draftModule.countActiveSendAttempts(draft.id);
+      if (inFlight > 0) {
+        return {
+          success: false,
+          error: "A send for this draft is already in flight",
+        };
+      }
+      const approvalModule = new EmailReplyApprovalModule();
+      if (draft.currentRevisionId != null) {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const active = await approvalModule.findActiveByDraft(
+            draft.id,
+            draft.currentRevisionId
+          );
+          if (!active) break;
+          await approvalModule.invalidate(
+            active.id,
+            "Re-confirming send after the previous attempt did not deliver",
+            new Date()
+          );
+        }
+      }
+      await draftModule.updateStatus(draft.id, "draft", null);
+    } else if (draft.status !== "draft" && draft.status !== "failed") {
       return {
         success: false,
         error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' (or a definitely-failed draft the approval service reopens) may be sent`,
