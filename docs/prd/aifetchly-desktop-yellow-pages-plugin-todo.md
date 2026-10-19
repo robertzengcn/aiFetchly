@@ -115,9 +115,11 @@ yarn test:components
 
 ### B01 — P1 — Fix CSV preview and enforce byte-bounded previews
 
-- [ ] Fix and verify B01.
+- [x] Fixed — bounded UTF-8 filesystem adapter, byte-capped RFC-4180-aware previews, allowlisted JSON envelope, renderer truncation note (B01).
 
-Evidence: [src/service/PluginFileArtifactService.ts:75](../../src/service/PluginFileArtifactService.ts#L75); [src/service/PluginFileArtifactService.ts:405](../../src/service/PluginFileArtifactService.ts#L405).
+**Fix committed:** `defaultFs()` is now an explicit adapter — `readFileSync` decodes as UTF-8 (the prior `{...fs} as ArtifactFs` cast promised `string` reads that broke real CSV previews) and a new `readBufferSliceSync(p, end)` positional read previews WITHOUT loading a 100 MiB artifact. `preview()` reads at most `maxPreviewReadBytes` (1 MiB), splits CSV by RFC-4180 record rules (`extractCsvPreviewRecords`: quoted commas/newlines are not boundaries, CRLF/LF/CR all terminate), builds JSON envelopes through `extractJsonPreviewRecords` (full parse, scanner-based salvage of complete records when the input slice cuts mid-document) with an allowlisted envelope (`schemaVersion`/`records`/`truncated`), 512-char per-field cap with 32-entry nesting cap, hard 16 KiB (maxPreviewBytes) envelope cap, and a `truncated` flag whenever rows/bytes/fields were dropped or the input was cut (legacy unparseable content falls back to a bounded text slice). Renderer: `PluginArtifactCard` surfaces an explicit truncation note (`data-testid="plugin-artifact-preview-truncated"`, i18n key present in all six languages) when the host capped the preview or the display rows were capped, plus a genuine reactivity fix — `ensureRow` now returns a `reactive()` row so per-row preview writes actually re-render (previously stored as a raw object, writes never triggered). 32 service + 960 full component-suite tests green (new suite: 5 cards tests). This last commit records the reviewer-facing note.
+
+Evidence: [src/service/PluginFileArtifactService.ts](../../src/service/PluginFileArtifactService.ts) (bounded preview machinery), [src/views/components/aiChatV2/PluginArtifactCard.vue](../../src/views/components/aiChatV2/PluginArtifactCard.vue).
 
 **Observed:** production `defaultFs()` casts Node `fs` to an interface claiming `readFileSync()` returns a string, but supplies no encoding. Real CSV preview throws `TypeError: text.split is not a function`. JSON with one 100,000-character record returned a **100,025-byte** preview; five-row slicing does not bound bytes and preserves arbitrary top-level fields.
 
