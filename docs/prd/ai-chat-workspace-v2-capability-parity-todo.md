@@ -19,6 +19,20 @@ route E2E certification), T11 (a11y/security review + soak), and T12
 (history Electron journey) require packaged-app environments and are
 still open. See docs/superpowers/plans/2026-10-11-workspace-v2-capability-parity.md.
 
+**Remediation update (2026-10-19, A03 reconciliation):** T6 is formally
+closed as the documented §23.1 revision (V2 stays the rollback surface;
+shared orchestration ships as five independently togglable rollout controls,
+commits `24386459`/`a546beaa`). T10 has advanced far beyond its 2026-10-14
+gap — the default-route E2E matrix now covers queue, history, outbound,
+plans, slash/skill, generated-image batch, workspace lifecycle, portable
+memory, report (incl. the un-fixme'd success journey), voice and
+managed-browser real-fork journeys; see the 2026-10-19 reconciliation
+block in `ai-chat-workspace-v2-capability-parity-audit-todo-2026-10-14.md`.
+T11 is partially advanced (unit + drill evidence; the security and A11Y-001–010
+certifications remain open per the 2026-10-17 audit) and T12 is fulfilled by
+the recoverable-history Electron suite (11 journeys, `b9ae2472`).
+The preserved tables still describe the 2026-10-12 audited HEAD by design.
+
 | Field | Value |
 | --- | --- |
 | Worktree | `/home/robertzeng/project/aiFetchly/.worktrees/workspace-parity` |

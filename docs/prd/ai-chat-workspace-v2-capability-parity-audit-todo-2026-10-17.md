@@ -180,7 +180,7 @@ Local logs are `/tmp/workspace-parity-audit-{components,typecheck,vue-typecheck,
 
 ### A03 — P2: Reconcile stale audit completion claims
 
-- [ ] Update the earlier TODOs after implementing/verifying this follow-up.
+- [x] Update the earlier TODOs after implementing/verifying this follow-up. DONE 2026-10-19: both historical records now carry reconciliation updates stating exactly which of their dated prose claims have since advanced — `ai-chat-workspace-v2-capability-parity-audit-todo-2026-10-14.md` gained a 2026-10-19 block (G03 complete incl. §23.1 adapters; G01 closed as the documented §23.1 revision; G02 journey matrix with current counts incl. conversation-report 4/4 and the legacy-locator retarget list down to three specs; G04 security/A11Y and G05 soak still open) and `ai-chat-workspace-v2-capability-parity-todo.md` gained a 2026-10-19 block (T6 closed as the documented revision, T10 advanced with pointers, T12 fulfilled by the recoverable-history suite). The as-audited tables stay point-in-time by design — the header banners (A03's required labeling) already declare them non-evidence.
 - The Oct 14 audit now checks G01/G03 as complete while its prose still describes unfinished extraction and coupled flags. Its coverage table also retains descriptions of bugs subsequently fixed. The older parity TODO has the same historical-baseline problem.
 - Treat those files as historical remediation records, not current acceptance evidence. This audit reopens specific remaining requirements; it does not refile all old B01–B16 issues as unfixed.
 
