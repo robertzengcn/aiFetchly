@@ -151,14 +151,6 @@ vi.mock("@/controller/SearchController", () => ({
   SearchController: { resetInstance: vi.fn() },
 }));
 
-vi.mock("@/controller/YellowPagesController", () => ({
-  YellowPagesController: { resetInstance: vi.fn() },
-}));
-
-vi.mock("@/modules/YellowPagesProcessManager", () => ({
-  YellowPagesProcessManager: { resetInstance: vi.fn() },
-}));
-
 vi.mock("@/main-process/communication/websocket-ipc", () => ({
   initializeWebSocketConnection: vi.fn().mockResolvedValue(undefined),
 }));

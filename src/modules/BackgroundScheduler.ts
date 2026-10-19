@@ -20,7 +20,6 @@ import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 import { SqliteDb } from "@/config/SqliteDb";
 import { SearchController } from "@/controller/SearchController";
-import { YellowPagesController } from "@/controller/YellowPagesController";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
 import { SCHEDULED_LOOP_STALE_RUN_MS } from "@/config/aiChatScheduledLoopConfig";
@@ -176,7 +175,6 @@ export class BackgroundScheduler extends BaseDb {
     // Reset controller singletons so they re-create modules/models
     // with the new SqliteDb instance on next use
     SearchController.resetInstance();
-    YellowPagesController.resetInstance();
     log.info("Controller singletons reset after SqliteDb path change");
 
     // Ensure the new connection is initialized with retry logic for database locks

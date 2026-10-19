@@ -334,19 +334,6 @@ export function createShutdownParticipants(
     finalize: async () => undefined,
   };
 
-  const yellowPages: ShutdownParticipant = {
-    id: "yellow-pages",
-    freeze: () => undefined,
-    stop: async () => {
-      const { YellowPagesProcessManager } = await import(
-        "@/modules/YellowPagesProcessManager"
-      );
-      await YellowPagesProcessManager.getInstance().terminateAllProcesses();
-      log.info("Yellow Pages processes terminated");
-    },
-    finalize: async () => undefined,
-  };
-
   const appResources: ShutdownParticipant = {
     id: "app-resources",
     freeze: () => undefined,
@@ -370,7 +357,6 @@ export function createShutdownParticipants(
     schedulers,
     marketingWebSocket,
     workspaceWatch,
-    yellowPages,
     searchScraper,
     durableTasks,
     workerProtocol,

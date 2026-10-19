@@ -89,7 +89,6 @@ import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { runafterbootup } from "@/modules/bootuprun";
-import { YellowPagesController } from "./controller/YellowPagesController";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
@@ -1974,33 +1973,6 @@ function initialize() {
           log.info("Schedulers initialized with auto-start functionality");
         } catch (error) {
           log.error("Failed to initialize schedulers:", error);
-        }
-      }
-
-      // Check for orphaned Yellow Pages processes on startup
-      if (startupPolicy.inspectOrphanedTasks) {
-        try {
-          const yellowPagesCtrl = YellowPagesController.getInstance();
-
-          // Handle tasks from previous session first
-          const previousSessionCount =
-            await yellowPagesCtrl.handleTasksFromPreviousSession();
-          log.info(
-            `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
-          );
-
-          // Then check for orphaned processes
-          const orphanedCheckResult =
-            await yellowPagesCtrl.checkForOrphanedProcesses();
-          log.info(
-            "Yellow Pages orphaned process check completed:",
-            orphanedCheckResult
-          );
-        } catch (error) {
-          log.error(
-            "Failed to check for orphaned Yellow Pages processes:",
-            error
-          );
         }
       }
 

@@ -12,7 +12,6 @@ import {
 import { SearchTaskModule } from "@/modules/SearchTaskModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
-import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
@@ -175,15 +174,6 @@ export async function validateTaskReference(
       const task = await module.read(taskId);
       if (task === undefined || task === null) {
         throw new Error(`Buck email task ${taskId} not found`);
-      }
-      break;
-    }
-
-    case TaskType.YELLOW_PAGES: {
-      const module = new YellowPagesTaskModule();
-      const task = await module.getTaskById(taskId);
-      if (task === undefined || task === null) {
-        throw new Error(`Yellow pages task ${taskId} not found`);
       }
       break;
     }
