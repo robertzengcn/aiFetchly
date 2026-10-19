@@ -8,7 +8,11 @@ import {
   ToolJobRegistry,
   AdmissionSealedError,
   TOOL_JOB_SETTLE_GRACE_MS,
+  type ToolJobSpawnHandle,
 } from "@/service/ToolJobRegistry";
+
+/** Test-only narrowing: the settle-path mutations exercised in B04 specs. */
+type ToolJobSpawnHandleForTest = Pick<ToolJobSpawnHandle, "resolve" | "reject">;
 
 describe("ToolJobRegistry settlement", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -98,7 +102,7 @@ describe("ToolJobRegistry H5 deferred settlement on cancel", () => {
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the lease after the settle-grace window even when the spawn hangs", async () => {
+  it("quarantines the job when the settle-grace window lapses without proof of cleanup (B04)", async () => {
     const registry = new ToolJobRegistry();
     const settled = vi.fn();
     let resolver: ((v: unknown) => void) | undefined;
@@ -110,10 +114,17 @@ describe("ToolJobRegistry H5 deferred settlement on cancel", () => {
     registry.cancel(jobId);
     expect(settled).toHaveBeenCalledTimes(0);
     vi.advanceTimersByTime(TOOL_JOB_SETTLE_GRACE_MS + 1);
-    expect(settled).toHaveBeenCalledTimes(1);
-    // A very late resolution must not double-fire after the grace settle.
+    // B04: grace lapse is a CLEANUP FAILURE, not a success — no settlement,
+    // explicit verdict, ownership retained (the job keeps unwinding status).
+    expect(settled).toHaveBeenCalledTimes(0);
+    expect(registry.getCleanupOutcome(jobId)).toBe("grace-lapsed");
+    expect(registry.isJobActive(jobId)).toBe(true);
+    // A very late resolution proves quiescence only now: the lease is then
+    // released exactly once, but the recorded failure verdict stands.
     resolver?.("very-late");
     expect(settled).toHaveBeenCalledTimes(1);
+    expect(registry.getCleanupOutcome(jobId)).toBe("grace-lapsed");
+    expect(await registry.waitForSettled(jobId, 10)).toBe(true);
   });
 
   it("keeps the admission slot occupied until the cancelled job settles", async () => {
@@ -268,5 +279,161 @@ describe("ToolJobRegistry H5 admission seals", () => {
     resolver?.("done");
     await promise;
     expect(settled).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ToolJobRegistry B04 idempotent settlement + cleanup quarantine", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function eventuallyRun(
+    registry: ToolJobRegistry,
+    marker: { called: boolean }
+  ): { queued: boolean; jobId: string } {
+    return registry.start(
+      "replacement",
+      {},
+      { conversationId: "c", toolCallId: "next" },
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      async (_handle) => {
+        marker.called = true;
+        await new Promise(() => undefined);
+      }
+    );
+  }
+
+  it("a duplicate resolve after another job claimed the slot cannot free a second slot", () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 1 });
+    let first: ToolJobSpawnHandleForTest | undefined;
+    registry.start("a", {}, { conversationId: "c", toolCallId: "t0" }, async (handle) => {
+      first = handle;
+      await new Promise(() => undefined);
+    });
+    first?.resolve("real"); // A settles; the single slot is released.
+    // B now legitimately owns the slot and never settles on its own.
+    registry.start(
+      "b",
+      {},
+      { conversationId: "c", toolCallId: "t1" },
+      async () => {
+        await new Promise(() => undefined);
+      }
+    );
+    const third = eventuallyRun(registry, { called: false });
+    expect(third.queued).toBe(true);
+    // Re-fire A's resolve (stale duplicate path): the old double-release bug
+    // would decrement capacity again and let the third job start while B
+    // still holds the only slot.
+    first?.resolve("duplicate");
+    expect(registry.getStatus(third.jobId).status).toBe("queued");
+  });
+
+  it("duplicate resolve does not overwrite the recorded result", () => {
+    const registry = new ToolJobRegistry();
+    let second: ToolJobSpawnHandleForTest | undefined;
+    const secondJob = registry.start(
+      "t2",
+      {},
+      { conversationId: "c", toolCallId: "t1" },
+      async (handle) => {
+        second = handle;
+        await new Promise(() => undefined);
+      }
+    );
+    second?.resolve("first-wins");
+    second?.resolve("corrupted");
+    second?.reject(new Error("late reject"));
+    const snapshot = registry.getStatus(secondJob.jobId);
+    expect(snapshot.status).toBe("completed");
+    expect(snapshot.result).toBe("first-wins");
+    expect(snapshot.error).toBeNull();
+  });
+
+  it("resolve-then-reject leaves the settled result and terminal state unchanged", () => {
+    const registry = new ToolJobRegistry();
+    let handle: ToolJobSpawnHandleForTest | undefined;
+    const { jobId } = registry.start("t", {}, { conversationId: "c", toolCallId: "tc" }, async (h) => {
+      handle = h;
+      await new Promise(() => undefined);
+    });
+    handle?.resolve("kept");
+    handle?.reject(new Error("must be ignored"));
+    const snapshot = registry.getStatus(jobId);
+    expect(snapshot.status).toBe("completed");
+    expect(snapshot.result).toBe("kept");
+    expect(snapshot.error).toBeNull();
+  });
+
+  it("late progress and partial updates after settlement are ignored", () => {
+    const registry = new ToolJobRegistry();
+    let handle: ToolJobSpawnHandleForTest | undefined;
+    const { jobId } = registry.start("t", {}, { conversationId: "c", toolCallId: "tc" }, async (h) => {
+      handle = h;
+      await new Promise(() => undefined);
+    });
+    handle?.resolve("done");
+    registry.updateProgress(jobId, {
+      phase: "finalizing",
+      message: "late",
+      progress: 100,
+      partialCount: null,
+      expectedCount: null,
+    });
+    registry.updatePartial(jobId, { data: { late: true }, collectedCount: 1, expectedCount: 1 });
+    const snapshot = registry.getStatus(jobId);
+    expect(snapshot.progress).toBeNull();
+    expect(snapshot.partial).toBeNull();
+  });
+
+  it("a never-settling cancelled job blocks replacement/admission until quiescence is proven", () => {
+    const registry = new ToolJobRegistry({ maxConcurrent: 1 });
+    let second: ToolJobSpawnHandleForTest | undefined;
+    const secondJob = registry.start(
+      "mcp__yplugins__server__scrape",
+      {},
+      { conversationId: "c", toolCallId: "t1" },
+      async (handle) => {
+        second = handle;
+        await new Promise(() => undefined);
+      },
+      { fingerprint: "fp-replace" }
+    );
+    registry.cancel(secondJob.jobId);
+    vi.advanceTimersByTime(TOOL_JOB_SETTLE_GRACE_MS + 1);
+    // Quarantine retained BOTH the capacity slot and the fingerprint lease.
+    expect(registry.getCleanupOutcome(secondJob.jobId)).toBe("grace-lapsed");
+    expect(registry.findActiveJobByFingerprint("c", "fp-replace")).toEqual({
+      jobId: secondJob.jobId,
+    });
+    const replacement = eventuallyRun(registry, { called: false });
+    expect(replacement.queued).toBe(true);
+    // A stray continuation exiting later proves quiescence and frees the
+    // slot — the queued replacement can then start.
+    second?.resolve("late-exit");
+    expect(registry.getStatus(replacement.jobId).status).toBe("running");
+  });
+
+  it("stale eviction is the last-resort release for a quarantined job's slot", () => {
+    const registry = new ToolJobRegistry({
+      maxConcurrent: 1,
+      staleAfterMs: 100,
+    });
+    let hung: ToolJobSpawnHandleForTest | undefined;
+    const job = registry.start("t", {}, { conversationId: "c", toolCallId: "t0" }, async (handle) => {
+      hung = handle;
+      await new Promise(() => undefined);
+    });
+    registry.cancel(job.jobId);
+    vi.advanceTimersByTime(TOOL_JOB_SETTLE_GRACE_MS + 1);
+    expect(registry.getCleanupOutcome(job.jobId)).toBe("grace-lapsed");
+    // The continuation NEVER exits: eviction releases the retained slot so
+    // the capacity budget cannot leak forever.
+    vi.advanceTimersByTime(150);
+    expect(registry.evictStale()).toBe(1);
+    const freed = eventuallyRun(registry, { called: false });
+    expect(registry.getStatus(freed.jobId).status).toBe("running");
+    void hung;
   });
 });

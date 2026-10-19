@@ -151,7 +151,7 @@ Evidence: [src/service/AIChatQueryLoop.ts:4879](../../src/service/AIChatQueryLoo
 
 ### B04 — P1 — Make job settlement idempotent and separate cleanup failure from success
 
-- [ ] Fix and verify B04.
+- [x] Done — idempotent terminal settlement, late-update suppression, quarantine on unproven cleanup (`getCleanupOutcome`).
 
 Evidence: [src/service/ToolJobRegistry.ts:214](../../src/service/ToolJobRegistry.ts#L214); [src/service/ToolJobRegistry.ts:282](../../src/service/ToolJobRegistry.ts#L282); [src/service/ToolJobRegistry.ts:428](../../src/service/ToolJobRegistry.ts#L428).
 

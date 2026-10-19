@@ -129,6 +129,20 @@ interface InternalJob {
   abortController: AbortController;
   /** Timer that force-releases the admission lease after a cancel (H5). */
   settleTimer?: NodeJS.Timeout;
+  /**
+   * B04: set when the cancel grace window lapsed WITHOUT proof of process
+   * cleanup (the spawn continuation was still pending). A quarantined job
+   * retains its admission lease (blocked replacement/admission) until the
+   * continuation finally exits and quiescence is proven — or until stale
+   * eviction. Never silently "declares" cleanup complete after a timeout.
+   */
+  quarantined?: boolean;
+  /**
+   * B04: explicit cleanup result for cancelled jobs — "clean" when
+   * quiescence was proven before the grace window, "grace-lapsed" when the
+   * settle window lapsed without proof, null when not applicable.
+   */
+  cleanupOutcome?: "clean" | "grace-lapsed" | null;
 }
 
 export class ToolJobRegistry {
@@ -192,6 +206,8 @@ export class ToolJobRegistry {
       settled: false,
       lastPolledAt: 0,
       abortController,
+      quarantined: false,
+      cleanupOutcome: null,
     };
     this.jobs.set(jobId, job);
 
@@ -212,10 +228,13 @@ export class ToolJobRegistry {
       },
       signal: abortController.signal,
       resolve: (result) => {
+        // B04: idempotent settlement — a duplicate resolve must NOT change
+        // the recorded result or release capacity a second time.
+        if (job.settled) return;
         if (job.status === "cancelled") {
-          // H5: a cancelled job whose spawn continuation finally exited —
-          // THIS is the moment cleanup has quiesced. Release the admission
-          // lease now (the deferred grace timer becomes unnecessary).
+          // H5/B04: a cancelled job whose spawn continuation finally exited —
+          // THIS is the moment cleanup has quiesced. The deferred grace timer
+          // becomes unnecessary; release the admission lease exactly once.
           this.finishSettling(job);
           return;
         }
@@ -228,6 +247,9 @@ export class ToolJobRegistry {
         this.drainQueue();
       },
       reject: (err) => {
+        // B04: resolve-then-reject leaves the settled result and capacity
+        // untouched — the first terminal transition always wins.
+        if (job.settled) return;
         if (job.status === "cancelled") {
           // Same quiesced-cleanup release as the resolve path above.
           this.finishSettling(job);
@@ -281,10 +303,17 @@ export class ToolJobRegistry {
 
   updateProgress(jobId: string, progress: ToolJobProgress): void {
     const job = this.jobs.get(jobId);
-    if (job) {
-      job.progress = progress;
-      job.updatedAt = Date.now();
+    if (!job) return;
+    // B04: late updates must never mutate a settled/terminal snapshot.
+    if (
+      job.settled ||
+      job.status === "completed" ||
+      job.status === "failed"
+    ) {
+      return;
     }
+    job.progress = progress;
+    job.updatedAt = Date.now();
   }
 
   updatePartial(
@@ -292,10 +321,18 @@ export class ToolJobRegistry {
     partial: { data: unknown; collectedCount: number; expectedCount: number }
   ): void {
     const job = this.jobs.get(jobId);
-    if (job) {
-      job.partial = partial;
-      job.updatedAt = Date.now();
+    if (!job) return;
+    // B04: same terminal guard as updateProgress — partials of settled jobs
+    // are immutable snapshots.
+    if (
+      job.settled ||
+      job.status === "completed" ||
+      job.status === "failed"
+    ) {
+      return;
     }
+    job.partial = partial;
+    job.updatedAt = Date.now();
   }
 
   /**
@@ -429,7 +466,12 @@ export class ToolJobRegistry {
     if (job.settled || job.settleTimer) return;
     const timer = setTimeout(() => {
       job.settleTimer = undefined;
-      this.finishSettling(job);
+      // B04: the grace window lapsed WITHOUT proof that the spawn
+      // continuation (process/browser teardown) finished. Never silently
+      // release ownership or report success here — quarantine the job so
+      // replacement/admission stays blocked (fingerprint + capacity slot)
+      // and surface an explicit cleanup failure via getCleanupOutcome.
+      this.quarantine(job);
     }, TOOL_JOB_SETTLE_GRACE_MS);
     // Never keep the event loop alive just for lease accounting.
     timer.unref?.();
@@ -437,8 +479,25 @@ export class ToolJobRegistry {
   }
 
   /**
-   * H5: release a cancelled RUNNING job's admission lease exactly once —
-   * clear the pending grace timer, mark settled, free the slot, drain.
+   * B04: quarantine a cancelled job whose cleanup did not quiesce within
+   * the grace window. Ownership (capacity slot + duplicate-suppression
+   * fingerprint) is RETAINED; settled callbacks are NOT fired; the job
+   * continues reporting as active/unwinding. If the stray continuation
+   * eventually exits, the normal resolve/reject path releases ownership
+   * (the cleanup-failure verdict stands in getCleanupOutcome).
+   */
+  private quarantine(job: InternalJob): void {
+    if (job.settled || job.quarantined) return;
+    job.quarantined = true;
+    job.cleanupOutcome = "grace-lapsed";
+  }
+
+  /**
+   * H5/B04: release a cancelled job's admission lease exactly once — clear
+   * the pending grace timer, mark settled, fire callbacks, free the slot,
+   * drain. Called only when cleanup quiescence has actually been observed
+   * (the spawn continuation exited). A grace-lapsed quarantine is a
+   * separate, explicit failure state — never routed here silently.
    */
   private finishSettling(job: InternalJob): void {
     if (job.settled) return;
@@ -446,6 +505,7 @@ export class ToolJobRegistry {
       clearTimeout(job.settleTimer);
       job.settleTimer = undefined;
     }
+    if (job.cleanupOutcome === null) job.cleanupOutcome = "clean";
     this.running--;
     this.markSettled(job);
     this.drainQueue();
@@ -502,11 +562,33 @@ export class ToolJobRegistry {
         job.status === "failed" ||
         job.status === "cancelled";
       if (terminal && now - job.updatedAt > this.limits.staleAfterMs) {
+        // B04: a quarantined job retained its capacity slot (cleanup never
+        // proved quiescent). Eviction is the last-resort release for that
+        // leak so a hung tool cannot clutter the budget forever — the
+        // cleanup-failure verdict stays with the record prior to removal.
+        if (job.quarantined && !job.settled) this.running--;
         this.jobs.delete(id);
         count++;
       }
     }
     return count;
+  }
+
+  /**
+   * B04: explicit cleanup outcome for a terminal-or-unwinding job.
+   *   "clean"        — quiescence proved within the settle grace window.
+   *   "grace-lapsed" — the grace window expired while the spawn
+   *                    continuation was still pending: cleanup is NOT
+   *                    proven; lifecycle callers must refuse destructive
+   *                    follow-ups (file deletion/replacement).
+   *   null           — no cleanup result yet (active work / normal paths).
+   */
+  getCleanupOutcome(
+    jobId: string
+  ): "clean" | "grace-lapsed" | null {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    return job.cleanupOutcome ?? null;
   }
 
   /**
