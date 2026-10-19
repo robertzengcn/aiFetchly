@@ -4,7 +4,10 @@ import type {
   EmailMessageClassification,
   EmailAutoReplyDecisionStatus,
 } from "@/entityTypes/emailReceiveTypes";
-import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import {
+  isAutomatedSender,
+  replyRecipientAddress,
+} from "@/service/emailReceive/EmailMessageParser";
 
 /** Inputs to the policy evaluator. */
 export interface EmailAutoReplyPolicyInput {
@@ -65,9 +68,18 @@ export function evaluateAutoReplyPolicy(
 ): EmailAutoReplyPolicyDecision {
   const { message, classification, confidence, rule, sendCounts } = input;
 
-  // 1. Loop prevention: never reply to automated senders.
-  if (isAutomatedSender({ fromAddress: message.fromAddress })) {
-    return blocked("Sender is an automated/no-reply address");
+  // 1. Loop prevention: never reply to an automated mailbox. The address
+  // that would receive the reply is Reply-To when present, otherwise From.
+  // This is the inbound message, not the mailbox's configured send address.
+  const recipient = replyRecipientAddress(
+    message.fromAddress,
+    message.replyToAddress
+  );
+  if (isAutomatedSender({ fromAddress: recipient })) {
+    return blocked(
+      `Reply recipient "${recipient}" is an automated/no-reply address. ` +
+        "This check uses the inbound message From or Reply-To, not the mailbox's configured send address."
+    );
   }
 
   // 2. Classification hard block.

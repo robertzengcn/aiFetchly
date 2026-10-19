@@ -14,8 +14,11 @@ import {
 } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
-import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
-import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import {
+  decodeAddresses,
+  isAutomatedSender,
+  replyRecipientAddress,
+} from "@/service/emailReceive/EmailMessageParser";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
@@ -262,7 +265,12 @@ export async function getEmailMessage(
       snippet: msg.snippet,
       bodyText: input.include_body ? msg.bodyText : null,
       bodyHtmlSanitized: input.include_body ? msg.bodyHtmlSanitized : null,
-      isAutomatedSender: isAutomatedSender({ fromAddress: msg.fromAddress }),
+      isAutomatedSender: isAutomatedSender({
+        fromAddress: replyRecipientAddress(
+          msg.fromAddress,
+          msg.replyToAddress
+        ),
+      }),
     };
 
     await writeReadAudit(msg.emailServiceId, msg.id, "AI read message body");
