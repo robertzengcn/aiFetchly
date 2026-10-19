@@ -12,6 +12,7 @@ import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { setPluginToolPolicyRegistryForTest } from "@/service/PluginToolPolicyRegistry";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
+import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
 
 const VALID_POLICY = {
   contractVersion: 1,
@@ -101,12 +102,72 @@ describe("PluginComponentRegistryService HOST-04 activation gate", () => {
       ]
     );
 
+    const hookSpy = vi.spyOn(PluginHookRegistrar, "registerFromLoadedPlugins");
     await PluginComponentRegistryService.applyLoadedPlugins();
     PluginRuntimeCache.clear("gate-test-cleanup");
 
     expect(updateSpy).not.toHaveBeenCalled();
     expect(disableSpy).not.toHaveBeenCalled();
+    // G01: hooks follow policy validation — the passing plugin keeps them.
+    const hookCall = hookSpy.mock.calls.at(-1)?.[0] ?? [];
+    expect(hookCall.some((plugin: { name: string }) => plugin.name === "clean-plugin")).toBe(true);
   });
+
+  it("a gate-failed plugin exposes no hooks, commands or agents until it passes (G01)", async () => {
+    setPluginToolPolicyRegistryForTest(undefined);
+    loadSpy.mockResolvedValue({
+      enabled: [
+        loadedPlugin({
+          name: "broken-plugin",
+          version: "1.0.0",
+          toolPolicies: { "scraper/scrape": VALID_POLICY },
+        }),
+      ] as never,
+      disabled: [],
+      errors: [],
+    });
+    // No MCP rows exist for "broken-plugin" in this harness: the policy
+    // target universe is empty, so the gate fails closed.
+    const updateSpy = vi
+      .spyOn(PluginManagementModule.prototype, "updatePluginState")
+      .mockResolvedValue(true);
+    const disableSpy = vi
+      .spyOn(MCPToolModule.prototype, "setPluginServersEnabled")
+      .mockResolvedValue(0);
+    const hookSpy = vi.spyOn(PluginHookRegistrar, "registerFromLoadedPlugins");
+    const unregisterCapsSpy = vi
+      .spyOn(
+        PluginComponentRegistryService,
+        "unregisterPluginCapabilities"
+      )
+      .mockResolvedValue(undefined);
+    const promoteSpy = vi
+      .spyOn(
+        PluginComponentRegistryService,
+        "promotePluginCommandsAndAgents"
+      )
+      .mockResolvedValue({ diagnostics: [] });
+
+    await PluginComponentRegistryService.applyLoadedPlugins();
+
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "broken-plugin", health: "invalid" })
+    );
+    // Hooks skip the failed plugin; its runtime capabilities are stripped.
+    const hookCall = hookSpy.mock.calls.at(-1)?.[0] ?? [];
+    expect(
+      hookCall.some((plugin: { name: string }) => plugin.name === "broken-plugin")
+    ).toBe(false);
+    expect(unregisterCapsSpy).toHaveBeenCalledWith("broken-plugin");
+    // Commands/agents promotion reconciles the failed plugin separately.
+    const promoted =
+      (promoteSpy.mock.calls.at(-1)?.[2] as readonly { name: string }[]) ?? [];
+    expect(pred(promoted, "broken-plugin")).toBe(false);
+  });
+
+  function pred(list: readonly { name: string }[], name: string): boolean {
+    return list.some((entry: { name: string }) => entry.name === name);
+  }
 
   it("an unsupported required capability marks the plugin invalid and hides its MCP servers", async () => {
     setPluginToolPolicyRegistryForTest(undefined);

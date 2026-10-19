@@ -68,13 +68,16 @@ export class PluginComponentRegistryService {
     // Register plugin-declared hooks (Phase 3 plumbing). Re-registration
     // is idempotent per hook id, so calling this on every apply is safe.
     const loaded = await PluginLoaderService.loadAllPlugins();
-    PluginHookRegistrar.registerFromLoadedPlugins(loaded.enabled);
+    // G01: hook registration moves AFTER the policy gate below — a plugin
+    // that fails activation must not expose hooks, skills, commands or
+    // agents, and its previously registered hooks/skills return empty.
     // Register validated MCP tool policies for enabled plugins and drop them
     // for disabled ones (HOST-01/HOST-03 wiring: policy resolution in the
     // query loop consults this registry between skill lookup and name
     // inference). Activation errors are logged, never thrown — a broken
     // plugin must not break applying the rest.
     const policyRegistry = getPluginToolPolicyRegistry();
+    const gateFailedPlugins: string[] = [];
     for (const plugin of loaded.enabled) {
       // G01/HOST-04: validate policy targets against the plugin's persisted
       // MCP rows (scoped row name → unscoped policy name) plus its declared
@@ -107,6 +110,7 @@ export class PluginComponentRegistryService {
         declaredTargets
       );
       if (result.errors.length > 0) {
+        gateFailedPlugins.push(plugin.name);
         log.warn(
           `[PluginComponentRegistryService] tool policy registration failed for "${plugin.name}":`,
           result.errors.map((e) => e.message).join("; ")
@@ -139,15 +143,33 @@ export class PluginComponentRegistryService {
         }
       }
     }
+    // G01: the ENTIRE activation gate must succeed before ANY non-MCP
+    // capability registers. Hooks follow policy validation, and a
+    // gate-failed plugin loses its skills, commands, agents, hooks and
+    // policy leases until its manifest passes again (the DB rows stay; the
+    // next successful apply re-registers everything).
+    PluginHookRegistrar.registerFromLoadedPlugins(
+      loaded.enabled.filter(
+        (plugin) => !gateFailedPlugins.includes(plugin.name)
+      )
+    );
+    for (const pluginName of gateFailedPlugins) {
+      await PluginComponentRegistryService.unregisterPluginCapabilities(
+        pluginName
+      );
+    }
     for (const plugin of loaded.disabled) {
       PluginHookRegistrar.unregisterPlugin(plugin.name);
       policyRegistry.unregisterPlugin(plugin.name);
     }
     const manager = getAIFetchlyConfigManager();
+    const gatePromotable = loaded.enabled.filter(
+      (plugin) => !gateFailedPlugins.includes(plugin.name)
+    );
     await PluginComponentRegistryService.promotePluginCommandsAndAgents(
       manager.getCommandRegistry(),
       manager.getAgentRegistry(),
-      [...loaded.enabled, ...loaded.disabled]
+      [...gatePromotable, ...loaded.disabled]
     );
   }
 
