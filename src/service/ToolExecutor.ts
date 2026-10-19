@@ -5,6 +5,7 @@ import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
 import { MCPToolService } from "@/service/MCPToolService";
 import { normalizeMcpToolOutcome } from "@/service/McpResultNormalizer";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
@@ -456,7 +457,13 @@ export class ToolExecutor {
 
         const isManagedAsync =
           context?.deadlineEpochMs !== undefined || context?.signal !== undefined;
-        if (isManagedAsync) {
+        // B02: normalization is selected by the REGISTERED result contract,
+        // not by any signal/deadline. Only plugin tools with an active
+        // registered policy take the versioned domain-envelope path; a
+        // deadline on an unregistered tool keeps legacy semantics.
+        const contractRegistered =
+          getPluginToolPolicyRegistry().resolveByToolName(toolName) !== null;
+        if (isManagedAsync && contractRegistered) {
           const outcome = await mcpService.executeMCPToolContent(
             server.id,
             parsed.toolName,

@@ -28,7 +28,7 @@ describe("normalizeMcpToolOutcome (design §10.4 precedence)", () => {
   it("preserves a success:true envelope", () => {
     const outcome = normalizeMcpToolOutcome(
       content({
-        structuredContent: { success: true, status: "completed" },
+        structuredContent: { schemaVersion: 1, success: true, status: "completed" },
       })
     );
     expect(outcome.success).toBe(true);
@@ -41,7 +41,11 @@ describe("normalizeMcpToolOutcome (design §10.4 precedence)", () => {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ success: false, error: { code: "X" } }),
+            text: JSON.stringify({
+            schemaVersion: 1,
+            success: false,
+            error: { code: "X" },
+          }),
           },
         ],
       })
@@ -100,5 +104,158 @@ describe("normalizeMcpToolOutcome (design §10.4 precedence)", () => {
     );
     expect(outcome.isDomainEnvelope).toBe(false);
     expect(outcome.success).toBe(true);
+  });
+
+  it("rejects schemaVersion 999 with a stable safe failure (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        structuredContent: { schemaVersion: 999, success: true },
+      })
+    );
+    expect(outcome.success).toBe(false);
+    expect(outcome.isDomainEnvelope).toBe(false);
+    expect((outcome.payload as { error: string }).error).toContain("999");
+    expect((outcome.payload as { invalidResult: boolean }).invalidResult).toBe(
+      true
+    );
+  });
+
+  it("rejects a success-claiming envelope with no schemaVersion (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        structuredContent: { success: true, status: "completed" },
+      })
+    );
+    expect(outcome.success).toBe(false);
+    expect((outcome.payload as { error: string }).error).toContain(
+      "missing schemaVersion"
+    );
+  });
+
+  it("rejects a JSON-text fallback envelope with an unsupported version (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        content: [
+          { type: "text", text: JSON.stringify({ schemaVersion: 2, success: true }) },
+        ],
+      })
+    );
+    expect(outcome.success).toBe(false);
+    expect((outcome.payload as { error: string }).error).toContain("2");
+  });
+
+  it("rejects contradictory structured/text success flags (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        structuredContent: { schemaVersion: 1, success: true },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ schemaVersion: 1, success: false }),
+          },
+        ],
+      })
+    );
+    expect(outcome.success).toBe(false);
+    expect((outcome.payload as { error: string }).error).toContain(
+      "contradictory"
+    );
+  });
+
+  it("accepts a matching text copy alongside the structured envelope", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        structuredContent: { schemaVersion: 1, success: false, preview: [] },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ schemaVersion: 1, success: false, preview: [] }),
+          },
+        ],
+      })
+    );
+    expect(outcome.success).toBe(false);
+    expect(outcome.isDomainEnvelope).toBe(true);
+  });
+
+  it("prefers structuredContent over the text copy even when the text is not JSON (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        structuredContent: { schemaVersion: 1, success: true },
+        content: [{ type: "text", text: "prose summary, not JSON" }],
+      })
+    );
+    expect(outcome.success).toBe(true);
+    expect(outcome.isDomainEnvelope).toBe(true);
+  });
+
+  it("keeps the original structured error object reachable for recovery (B02)", () => {
+    const structuredError = {
+      id: "err_input",
+      code: "INVALID_RECOVERY_REQUEST",
+      category: "invalid_input",
+      stage: "validation",
+      message: "Invalid scrape arguments: recovery.abc",
+      recoverable: false,
+      retryAfterMs: null,
+      allowedStrategies: [],
+    };
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        isError: true,
+        structuredContent: {
+          schemaVersion: 1,
+          success: false,
+          status: "failed",
+          error: structuredError,
+          preview: [],
+          pluginSecret: "s3cr3t",
+        },
+      })
+    );
+    expect(outcome.success).toBe(false);
+    const payload = outcome.payload as {
+      error: Record<string, unknown> | string;
+      message?: string;
+      diagnostics?: Record<string, unknown>;
+    };
+    // The loop reads the error OBJECT (code/strategies), not a flat string.
+    expect(typeof payload.error).toBe("object");
+    const errObj = payload.error as Record<string, unknown>;
+    expect(errObj.code).toBe("INVALID_RECOVERY_REQUEST");
+    expect(Array.isArray(errObj.allowedStrategies)).toBe(true);
+    expect(payload.message).toContain("Invalid scrape arguments");
+    // The contradictory success flag is still dropped; sensitive keys are
+    // redacted inside the bounded diagnostics.
+    const diag = payload.diagnostics as Record<string, unknown>;
+    expect((diag as { success?: unknown }).success).toBeUndefined();
+    expect(Object.values(diag)).toContain("[redacted]");
+  });
+
+  it("bounds oversized structured error diagnostics (B02)", () => {
+    const outcome = normalizeMcpToolOutcome(
+      content({
+        isError: true,
+        structuredContent: {
+          big: "y".repeat(200_000),
+          list: Array.from({ length: 500 }, (_, i) => `item-${i}`),
+        },
+      })
+    );
+    expect(outcome.success).toBe(false);
+    const payload = outcome.payload as {
+      error: string;
+      diagnostics?: Record<string, unknown>;
+    };
+    const diagBytes = Buffer.byteLength(JSON.stringify(payload.diagnostics), "utf8");
+    expect(diagBytes).toBeLessThanOrEqual(8_192);
+    const bigField = (payload.diagnostics as Record<string, unknown>).big as string | undefined;
+    if (bigField) {
+      expect(bigField.length).toBeLessThanOrEqual(257);
+      expect(bigField.endsWith("…")).toBe(true);
+    }
+    expect(((payload.diagnostics as Record<string, unknown>).list as unknown[]).length).toBeLessThanOrEqual(16);
+    // The capped message still carries a recognizable error.
+    expect(payload.error.length).toBeLessThanOrEqual(8_192);
   });
 });
