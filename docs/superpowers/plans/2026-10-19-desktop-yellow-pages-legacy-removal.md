@@ -68,12 +68,12 @@
 **Interfaces:**
 - Produces: `src/modules/ScraperAiSupportHandler.ts` with class `ScraperAiSupportHandler`, public API `handleAiSupportRequest`, `AiSupportErrorCode` unchanged — SearchModule is the surviving consumer.
 
-- [ ] **Step 1: `git mv src/modules/YellowPagesAiSupportHandler.ts src/modules/ScraperAiSupportHandler.ts`; inside the file rename class `YellowPagesAiSupportHandler` → `ScraperAiSupportHandler` (constructor/exports/types). Do NOT rename its two internal fallback platform strings (`"yellowpages"` @402/550) — they are data defaults, tuned for search scrapers' non-YP failures; leave values as-is.**
-- [ ] **Step 2: Update `SearchModule.ts`:** line 71 `import { ScraperAiSupportHandler } from "./ScraperAiSupportHandler";`, lines 468/487 `new ScraperAiSupportHandler()`.
-- [ ] **Step 3: Update `YellowPagesProcessManager.ts:57` import path/name.**
-- [ ] **Step 4: Update any test files importing `YellowPagesAiSupportHandler` (`grep -rln YellowPagesAiSupportHandler test/`), same mechanical rename. Run them: `yarn testmain <found paths>`.**
-- [ ] **Step 5: Verify:** `npx tsc --noEmit` green; `yarn testmain test/vitest/main/modules/SearchModule.test.ts` green.
-- [ ] **Step 6: Commit:** `git add -A && git commit -m "refactor: rename YellowPagesAiSupportHandler to ScraperAiSupportHandler for shared search-scrapers use (PRD §28.1)"`.
+- [x] **Step 1: `git mv src/modules/YellowPagesAiSupportHandler.ts src/modules/ScraperAiSupportHandler.ts`; inside the file rename class `YellowPagesAiSupportHandler` → `ScraperAiSupportHandler` (constructor/exports/types). Do NOT rename its two internal fallback platform strings (`"yellowpages"` @402/550) — they are data defaults, tuned for search scrapers' non-YP failures; leave values as-is.**
+- [x] **Step 2: Update `SearchModule.ts`:** line 71 `import { ScraperAiSupportHandler } from "./ScraperAiSupportHandler";`, lines 468/487 `new ScraperAiSupportHandler()`.
+- [x] **Step 3: Update `YellowPagesProcessManager.ts:57` import path/name.**
+- [x] **Step 4: Update any test files importing `YellowPagesAiSupportHandler` (`grep -rln YellowPagesAiSupportHandler test/`), same mechanical rename. Run them: `yarn testmain <found paths>`.**
+- [x] **Step 5: Verify:** `npx tsc --noEmit` green; `yarn testmain test/vitest/main/modules/SearchModule.test.ts` green.
+- [x] **Step 6: Commit:** `git add -A && git commit -m "refactor: rename YellowPagesAiSupportHandler to ScraperAiSupportHandler for shared search-scrapers use (PRD §28.1)"`.
 
 ## Task 2: Worker build graph deletion (childprocess entries, forge, vite, verify lists)
 
@@ -87,12 +87,12 @@
 
 No other module imports these four child/schema files (verified: only each other + the deleted configs).
 
-- [ ] **Step 1: Delete the 6 files (2 childprocess, 2 worker schemas, 2 vite configs) with `git rm`.**
-- [ ] **Step 2: Edit `forge.config.js` to remove the two `{ entry: "src/childprocess/YellowPages*.ts", ... }` rows (lines ~1135-1141).**
-- [ ] **Step 3: Edit `scripts/verify-packaged-childprocess.js`: drop the two required-worker entries and the `YellowPagesScraperProcess.js` filter at 695-697.**
-- [ ] **Step 4: Edit `test/vitest/main/verifyPackagedChildprocessLayout.test.ts` worker lists (lines 17/20) to match the script.**
-- [ ] **Step 5: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/verifyPackagedChildprocessLayout.test.ts`.
-- [ ] **Step 6: Commit:** `feat: remove yellow pages worker build targets, schemas, and verify list entries (PRD §17.2)`.
+- [x] **Step 1: Delete the 6 files (2 childprocess, 2 worker schemas, 2 vite configs) with `git rm`.**
+- [x] **Step 2: Edit `forge.config.js` to remove the two `{ entry: "src/childprocess/YellowPages*.ts", ... }` rows (lines ~1135-1141).**
+- [x] **Step 3: Edit `scripts/verify-packaged-childprocess.js`: drop the two required-worker entries and the `YellowPagesScraperProcess.js` filter at 695-697.**
+- [x] **Step 4: Edit `test/vitest/main/verifyPackagedChildprocessLayout.test.ts` worker lists (lines 17/20) to match the script.**
+- [x] **Step 5: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/verifyPackagedChildprocessLayout.test.ts`.
+- [x] **Step 6: Commit:** `feat: remove yellow pages worker build targets, schemas, and verify list entries (PRD §17.2)`.
 
 ## Task 3: Built-in AI tool graph removal
 
@@ -106,15 +106,24 @@ No other module imports these four child/schema files (verified: only each other
 
 Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usages FIRST unblocks the controller deletion in Task 5. `ToolExecutionService.ts:230-263` and `ToolExecutor.ts:374-378` are keyed on the exact tool-name strings; no other tool semantics change.
 
-- [ ] **Step 1: Delete the two tool defs + two skill entries.**
-- [ ] **Step 2: Delete TaskExecutor-coupled YP branches in `ToolExecutor.ts` listed above; remove the 3 imports.**
-- [ ] **Step 3: Delete `ToolExecutionService.ts:230-263` branch; verify no other branch keys on those strings (`grep -n "search_yellow_pages\|get_available_yellow_pages" src/`).**
-- [ ] **Step 4: `ToolTimeoutPolicy.ts:68` — drop only `|| name === "search_yellow_pages"`.**
-- [ ] **Step 5: Update `test/modules/ToolTimeoutPolicy.test.ts` (fixture @46).**
-- [ ] **Step 6: Verify:** `npx tsc --noEmit`; `env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ToolTimeoutPolicy.test.ts`; `yarn testmain test/vitest/main/service/ToolJobRegistry.settled.test.ts`.
-- [ ] **Step 7: Commit:** `feat: remove built-in search_yellow_pages and get_available_yellow_pages_platforms tools (PRD HOST-13/AC-18)`.
+- [x] **Step 1: Delete the two tool defs + two skill entries.**
+- [x] **Step 2: Delete TaskExecutor-coupled YP branches in `ToolExecutor.ts` listed above; remove the 3 imports.**
+- [x] **Step 3: Delete `ToolExecutionService.ts:230-263` branch; verify no other branch keys on those strings (`grep -n "search_yellow_pages\|get_available_yellow_pages" src/`).**
+- [x] **Step 4: `ToolTimeoutPolicy.ts:68` — drop only `|| name === "search_yellow_pages"`.**
+- [x] **Step 5: Update `test/modules/ToolTimeoutPolicy.test.ts` (fixture @46).**
+- [x] **Step 6: Verify:** `npx tsc --noEmit`; `env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ToolTimeoutPolicy.test.ts`; `yarn testmain test/vitest/main/service/ToolJobRegistry.settled.test.ts`.
+- [x] **Step 7: Commit:** `feat: remove built-in search_yellow_pages and get_available_yellow_pages_platforms tools (PRD HOST-13/AC-18)`.
 
 ## Task 4: Domain modules, lifecycle, and legacy message-union deletion
+(Executed jointly with Task 5 as commit `83d8abe9` — the module deletions pull
+the controller/dashboard/types files, so the two tasks share one compile-green commit.
+Legacy scratch suites (comprehensiveTestSuite, yellowPagesEndToEnd/Integration,
+runYellowPagesTests, YellowPagesOrchestrator/ProcessManager tests,
+yellowPagesController.test, comprehensive YP mocha suites) were deleted in the
+same commit because tsc covers test/. Bonus cleanup found while executing:
+BackgroundScheduler reset, preload handler duplicate case, 
+test/vitest/main/e2e/AppStartupPolicy.test.ts inspectOrphanedTasks assertions,
+UrlHostAllowlist test assertions committed in `fb18b6ae`.)
 
 **Files:**
 - Delete: `src/modules/YellowPagesModule.ts`, `YellowPagesProcessManager.ts`, `YellowPagesOrchestrator.ts`, `YellowPagesInitModule.ts`, `YellowPagesHealthCheck.ts`, `YellowPagesPlatformModule.ts`, `YellowPagesResultModule.ts`, `YellowPagesTaskModule.ts`
@@ -133,16 +142,16 @@ Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usa
 - Also delete UI: `src/views/pages/task/widgets/PlatformManagementDashboard.vue:393` icon entry (listed above).
 - Check `grep -rn "inspectOrphanedTasks" test/` and update any AppStartupPolicy test touching the removed field.
 
-- [ ] **Step 1: `git rm` the 8 module files + `src/utils/yellowPagesProxyLaunch.ts`.**
-- [ ] **Step 2: Apply `BackgroundProcessMessages.ts` union/guard deletions.**
-- [ ] **Step 3: Apply `bootuprun.ts`, `background.ts` block, and `AppStartupPolicy.ts` field deletions.**
-- [ ] **Step 4: Apply `ShutdownParticipants.ts` deletions.**
-- [ ] **Step 5: Apply `TaskExecutorService.ts` + `ScheduleAiTools.ts` deletions.**
-- [ ] **Step 6: Apply `user.ts` + `desktopLoginCompletion.ts` deletions.**
-- [ ] **Step 7: Apply schedule/task-widget UI case deletions (detail.vue, ScheduleTable.vue, PlatformManagementDashboard.vue).**
-- [ ] **Step 8: Update the 5-6 listed test files.**
-- [ ] **Step 9: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/lifecycle/ShutdownParticipants.test.ts test/vitest/main/modules/TaskExecutorService.test.ts test/vitest/main/desktopLoginWindowResolution.test.ts test/vitest/main/modules/SearchModule.test.ts`; `env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ScheduleAiTools.test.ts`; `yarn test:components`.
-- [ ] **Step 10: Commit:** `feat: remove yellow pages domain modules, process lifecycle, and message unions (PRD §17.2/AC-12)`.
+- [x] **Step 1: `git rm` the 8 module files + `src/utils/yellowPagesProxyLaunch.ts`.**
+- [x] **Step 2: Apply `BackgroundProcessMessages.ts` union/guard deletions.**
+- [x] **Step 3: Apply `bootuprun.ts`, `background.ts` block, and `AppStartupPolicy.ts` field deletions.**
+- [x] **Step 4: Apply `ShutdownParticipants.ts` deletions.**
+- [x] **Step 5: Apply `TaskExecutorService.ts` + `ScheduleAiTools.ts` deletions.**
+- [x] **Step 6: Apply `user.ts` + `desktopLoginCompletion.ts` deletions.**
+- [x] **Step 7: Apply schedule/task-widget UI case deletions (detail.vue, ScheduleTable.vue, PlatformManagementDashboard.vue).**
+- [x] **Step 8: Update the 5-6 listed test files.**
+- [x] **Step 9: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/lifecycle/ShutdownParticipants.test.ts test/vitest/main/modules/TaskExecutorService.test.ts test/vitest/main/desktopLoginWindowResolution.test.ts test/vitest/main/modules/SearchModule.test.ts`; `env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ScheduleAiTools.test.ts`; `yarn test:components`.
+- [x] **Step 10: Commit:** `feat: remove yellow pages domain modules, process lifecycle, and message unions (PRD §17.2/AC-12)`.
 
 ## Task 5: Controller, singleton resets, and dashboard/statistics UI chain
 
@@ -156,12 +165,12 @@ Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usa
 - Tests: dashboard components have no existing vitest files; per AGENTS "UI changes require UI tests", ADD `test/vitest/main/components/DashboardSummaryCards.yellowPagesRemoval.test.ts` asserting the summary card renders pink-item removal correctly — actually scope this tight (one test asserting no 'Directory Assistant'/yellowpages key bindings render and the other cards still mount). If a full mount fixture is heavy, a lighter `DashboardSummaryCards.test.ts` mount covering 4 remaining cards satisfies the gate.
 - Run `yarn test:components` (hard gate).
 
-- [ ] **Step 1: `git rm src/controller/YellowPagesController.ts`.**
-- [ ] **Step 2: BackgroundScheduler cleanup; tsc.**
-- [ ] **Step 3: DashboardController + dashboardType + 3 dashboard views + statistic case edits.**
-- [ ] **Step 4: Add the folded dashboard component test (red→green cycle: write test, run, adjust component binding leftovers it exposes).**
-- [ ] **Step 5: Verify:** `npx tsc --noEmit`; `yarn test:components`; `yarn testmain test/vitest/main/modules/BackgroundScheduler*` if a test exists.
-- [ ] **Step 6: Commit:** `feat: remove yellow pages controller and dashboard/statistics exposure (PRD §17.2/AC-01)`.
+- [x] **Step 1: `git rm src/controller/YellowPagesController.ts`.**
+- [x] **Step 2: BackgroundScheduler cleanup; tsc.**
+- [x] **Step 3: DashboardController + dashboardType + 3 dashboard views + statistic case edits.**
+- [x] **Step 4: Add the folded dashboard component test (red→green cycle: write test, run, adjust component binding leftovers it exposes).**
+- [x] **Step 5: Verify:** `npx tsc --noEmit`; `yarn test:components`; `yarn testmain test/vitest/main/modules/BackgroundScheduler*` if a test exists.
+- [x] **Step 6: Commit:** `feat: remove yellow pages controller and dashboard/statistics exposure (PRD §17.2/AC-01)`.
 
 ## Task 6: Platform adapters, factory cases, catalog, and URL allowlist cleanup
 
@@ -176,11 +185,11 @@ Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usa
 - Modify: `src/modules/lib/urlHostAllowlist.ts:16` — delete the `yellowpages` key.
 - Tests: `test/vitest/utilitycode/urlHostAllowlist.test.ts:35-36,67` — remove assertions on the deleted key; `test/vitest/main/modules/platforms/JapaneseYellowPagesAdapter.test.ts` + ITown + USonar tests KEEP passing untouched; delete `test/vitest/main/modules/platforms/*` only if they imported deleted adapters (grep first; none expected).
 
-- [ ] **Step 1: `git rm` the 3 adapter files + `ChildProcessAdapterFactory.ts`.**
-- [ ] **Step 2: Apply `platforms/index.ts`, `PlatformAdapterFactory.ts`, `config/platforms/index.ts`, `generate.ts`, `urlHostAllowlist.ts` edits.**
-- [ ] **Step 3: Update `urlHostAllowlist.test.ts`.**
-- [ ] **Step 4: Verify:** `npx tsc --noEmit`; `npx vitest run --config vite.utilityCode.config.mjs test/vitest/utilitycode/urlHostAllowlist.test.ts test/vitest/utilitycode/platformMatcher.test.ts`; `yarn testmain test/vitest/main/modules/platforms/JapaneseYellowPagesAdapter.test.ts test/vitest/main/modules/platforms/ITownPageAdapter.test.ts`.
-- [ ] **Step 5: Commit:** `feat: remove yellow pages platform adapters from shared factory and catalog (PRD §17.2)`.
+- [x] **Step 1: `git rm` the 3 adapter files + `ChildProcessAdapterFactory.ts`.**
+- [x] **Step 2: Apply `platforms/index.ts`, `PlatformAdapterFactory.ts`, `config/platforms/index.ts`, `generate.ts`, `urlHostAllowlist.ts` edits.**
+- [x] **Step 3: Update `urlHostAllowlist.test.ts`.**
+- [x] **Step 4: Verify:** `npx tsc --noEmit`; `npx vitest run --config vite.utilityCode.config.mjs test/vitest/utilitycode/urlHostAllowlist.test.ts test/vitest/utilitycode/platformMatcher.test.ts`; `yarn testmain test/vitest/main/modules/platforms/JapaneseYellowPagesAdapter.test.ts test/vitest/main/modules/platforms/ITownPageAdapter.test.ts`.
+- [x] **Step 5: Commit:** `feat: remove yellow pages platform adapters from shared factory and catalog (PRD §17.2)`.
 
 ## Task 7: IPC, preload, routes, navigation, i18n, and cloudflare notification removal
 
@@ -194,12 +203,12 @@ Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usa
 - i18n: remove YP keys from all 6 lang files (grep `yellow_pages\|yellow_pages_list\|create_yellow_pages_task\|edit_yellow_pages_task\|yellow_pages_task_detail\|yellow_pages_results\|router.yellow_pages` in `src/views/lang/{en,zh,es,fr,de,ja}.ts`); include `home.yellow_pages` dashboard nouns and `router.*` route titles. Update `test/vitest/utilitycode/complianceNouns.test.ts:35` (drop the `yellow_pages` noun assertion, keep the file's other assertions intact).
 - UI tests gate: `yarn test:components` must pass.
 
-- [ ] **Step 1: `git rm` the IPC/schema/API/pages/widget/manager files.**
-- [ ] **Step 2: Edit `communication/index.ts`, `preload.ts` blocks.**
-- [ ] **Step 3: Edit the 4 router/nav files.**
-- [ ] **Step 4: Remove YP i18n keys from all 6 lang files; update `complianceNouns.test.ts`.**
-- [ ] **Step 5: Verify:** `npx tsc --noEmit`; `yarn test:components`; `npx vitest run --config vite.utilityCode.config.mjs test/vitest/utilitycode/complianceNouns.test.ts`.
-- [ ] **Step 6: Commit:** `feat: remove yellow pages IPC, routes, navigation, cloudflare notification widget, and i18n (PRD §17.2/AC-01)`.
+- [x] **Step 1: `git rm` the IPC/schema/API/pages/widget/manager files.**
+- [x] **Step 2: Edit `communication/index.ts`, `preload.ts` blocks.**
+- [x] **Step 3: Edit the 4 router/nav files.**
+- [x] **Step 4: Remove YP i18n keys from all 6 lang files; update `complianceNouns.test.ts`.**
+- [x] **Step 5: Verify:** `npx tsc --noEmit`; `yarn test:components`; `npx vitest run --config vite.utilityCode.config.mjs test/vitest/utilitycode/complianceNouns.test.ts`.
+- [x] **Step 6: Commit:** `feat: remove yellow pages IPC, routes, navigation, cloudflare notification widget, and i18n (PRD §17.2/AC-01)`.
 
 ## Task 8: Persistence surface + agent-harness removal (data preserved)
 
@@ -211,11 +220,13 @@ Note: `ToolExecutor` imports `YellowPagesController` (@4) — removing these usa
 - Delete: `agent-harness/src/commands/yellow-pages.ts`; modify `agent-harness/src/commands/index.ts:14` + `agent-harness/src/repl/repl.ts:21,184`
 - KEEP: `src/entity/ScheduleTask.entity.ts:8` `YELLOW_PAGES = "yellow_pages"` enum member (legacy persisted rows).
 
-- [ ] **Step 1: `git rm` the 5 entity/model files + 3 SQL files + the agent-harness command; apply the 3 registration edits + baseline-migration edit + agent-harness registration/repl hint removals.**
-- [ ] **Step 2: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/config` (if a SqliteDb test exists; otherwise grep `grep -rn "YellowPages" src/config src/entity src/model` → only the enum member + nothing above should remain).
-- [ ] **Step 3: Commit:** `feat: unregister yellow pages entities, sql init, migration lines, and agent-harness command; preserve legacy tables (PRD §28.3)`.
+- [x] **Step 1: `git rm` the 5 entity/model files + 3 SQL files + the agent-harness command; apply the 3 registration edits + baseline-migration edit + agent-harness registration/repl hint removals.**
+- [x] **Step 2: Verify:** `npx tsc --noEmit`; `yarn testmain test/vitest/main/config` (if a SqliteDb test exists; otherwise grep `grep -rn "YellowPages" src/config src/entity src/model` → only the enum member + nothing above should remain).
+- [x] **Step 3: Commit:** `feat: unregister yellow pages entities, sql init, migration lines, and agent-harness command; preserve legacy tables (PRD §28.3)`.
 
 ## Task 9: Legacy test cleanup + absence (AC-01/AC-18) tests
+(Executed as `306130db`; `test/yellComAdapterTest.ts` was accidentally deleted
+and restored — it is a YellCom adapter test, not YP.)
 
 **Files:**
 - Delete legacy feature tests: `test/modules/yellowPagesController.test.ts`, `test/YellowPagesCaAdapter.test.ts`, `test/verifyYellowPagesCaAdapter.ts`, `test/runYellowPagesTests.ts`, `test/yellowPagesAdapterTest.ts`, `test/yellowPagesEndToEndTest.ts`, `test/yellowPagesIntegrationTest.ts`, `test/dataValidationTest.ts`, `test/simpleDataValidation.ts`, `test/simpleDataValidation.js`, `test/runTestSuite.ts`, `test/comprehensiveTestSuite.ts`, `test/mocks/MockScraperEngine.ts`, `test/vitest/main/modules/YellowPagesOrchestrator.test.ts`, `test/vitest/main/modules/YellowPagesProcessManager.test.ts`, `test/vitest/main/SanitizeHtmlYellowPagesViteBundle.test.ts`
@@ -274,21 +285,26 @@ describe("yellow pages legacy removal (AC-01/AC-18)", () => {
 ```
 (Adjust the two config imports to the actual exports discovered while writing — read the exported symbols first. If the config exports differ in shape, assert via the same source-scan pattern used above.)
 
-- [ ] **Step 1: `git rm` the 16 listed legacy test files.**
-- [ ] **Step 2: Create the absence test file with real exports (`grep -n "^export" src/config/aiTools.config.ts src/config/skillsRegistry.ts` first).**
-- [ ] **Step 3: Run:** `yarn testmain test/vitest/main/yellowPagesLegacyRemoval.test.ts`.
-- [ ] **Step 4: Verify no remaining importer breakage:** `grep -rln "YellowPagesController\|YellowPagesModule\|YellowPagesProcessManager\|YellowPagesScraper\|YellowPagesTaskModule\|YellowPagesResultModule\|YellowPagesPlatformModule\|YellowPagesInitModule\|YellowPagesHealthCheck\|yellowPagesProxyLaunch\|yellowPagesResultFormatter\|yellowPagesIpc" src test agent-harness --include='*.ts' --include='*.vue' -g '!*jpeg*'` — expect ONLY: `src/entity/ScheduleTask.entity.ts` (enum), `src/modules/ScraperAiSupportHandler.ts`-adjacent doc comments, `src/childprocess/{AiSupportBridge,ObserveExecuteLoop,ObserveExecuteExecutor}.ts` doc comments, `src/modules/lifecycle/ownedSpawn.ts:19,58` doc example, `src/entityTypes/pluginExecutionTypes.ts:9-13` comment, shared JapaneseYellowPagesAdapter/ITown/USonar files + their tests + urlHostAllowlist.test/fixture mentions, `platformMatcher.test.ts` fixture strings.
-- [ ] **Step 5: Commit:** `test: remove legacy yellow pages test harnesses and add AC-01/AC-18 absence tests`.
+- [x] **Step 1: `git rm` the 16 listed legacy test files.**
+- [x] **Step 2: Create the absence test file with real exports (`grep -n "^export" src/config/aiTools.config.ts src/config/skillsRegistry.ts` first).**
+- [x] **Step 3: Run:** `yarn testmain test/vitest/main/yellowPagesLegacyRemoval.test.ts`.
+- [x] **Step 4: Verify no remaining importer breakage:** `grep -rln "YellowPagesController\|YellowPagesModule\|YellowPagesProcessManager\|YellowPagesScraper\|YellowPagesTaskModule\|YellowPagesResultModule\|YellowPagesPlatformModule\|YellowPagesInitModule\|YellowPagesHealthCheck\|yellowPagesProxyLaunch\|yellowPagesResultFormatter\|yellowPagesIpc" src test agent-harness --include='*.ts' --include='*.vue' -g '!*jpeg*'` — expect ONLY: `src/entity/ScheduleTask.entity.ts` (enum), `src/modules/ScraperAiSupportHandler.ts`-adjacent doc comments, `src/childprocess/{AiSupportBridge,ObserveExecuteLoop,ObserveExecuteExecutor}.ts` doc comments, `src/modules/lifecycle/ownedSpawn.ts:19,58` doc example, `src/entityTypes/pluginExecutionTypes.ts:9-13` comment, shared JapaneseYellowPagesAdapter/ITown/USonar files + their tests + urlHostAllowlist.test/fixture mentions, `platformMatcher.test.ts` fixture strings.
+- [x] **Step 5: Commit:** `test: remove legacy yellow pages test harnesses and add AC-01/AC-18 absence tests`.
 
 ## Task 10: Cutover documentation + full verification
+(Executed as `c0cf16d2`. Full-suite result: identical pre/post failure sets at
+HEAD vs pre-change worktree `/tmp/opencode/aifetch-pre-yp` (d62a7ac6): all
+remaining vitest-main failures are pre-existing/flaky under parallel load.
+`npx tsc --noEmit` green; `yarn test:components` 127 files/955 tests green;
+mocha ScheduleAiTools 65 passing, ToolTimeoutPolicy 19 passing.)
 
 **Files:**
 - Create: `docs/yellow-pages-cutover.md` documenting: two-stage cutover policy (this removal + plugin delivery), legacy data policy (tables preserved, export via pre-cutover build, scheduled YP tasks no longer run with the "unsupported task type" message, no automatic silent deletion), parity basis (plugin `yellowpages-com` v1; com-sg/CA deferred with the parity matrix evidence in the plugin repo commit `8b16766`), deferred items (Hub publication gate per PRD §27 Phase 3b; in-session AI recovery broker Phase 5), and that release acceptance (staging Hub install → scrape → export/cancel on packaged app) remains the gate before shipping per AC-16..AC-18.
 
-- [ ] **Step 1: Write the doc.**
-- [ ] **Step 2: Full checks:** `npx tsc --noEmit`; `yarn testmain` (all main vitest suites); `yarn test:components`; module tests for touched domains (`env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ToolTimeoutPolicy.test.ts test/modules/ScheduleAiTools.test.ts`).
-- [ ] **Step 3: Run the mocha module suite if stable:** `yarn test` (record failures unrelated to this change as pre-existing, if any).
-- [ ] **Step 4: Commit:** `docs: document yellow pages cutover policy and pending release gates (PRD §28.3)`.
+- [x] **Step 1: Write the doc.**
+- [x] **Step 2: Full checks:** `npx tsc --noEmit`; `yarn testmain` (all main vitest suites); `yarn test:components`; module tests for touched domains (`env TS_NODE_COMPILER_OPTIONS='{"module": "commonjs"}' npx mocha -r ts-node/register test/modules/ToolTimeoutPolicy.test.ts test/modules/ScheduleAiTools.test.ts`).
+- [x] **Step 3: Run the mocha module suite if stable:** `yarn test` (record failures unrelated to this change as pre-existing, if any).
+- [x] **Step 4: Commit:** `docs: document yellow pages cutover policy and pending release gates (PRD §28.3)`.
 
 ## Self-review notes (checks performed)
 
