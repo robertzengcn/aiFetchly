@@ -133,6 +133,13 @@ export class SupervisedStdioTransport implements Transport {
   private started = false;
   private closed = false;
   private closePromise: Promise<void> | null = null;
+  /**
+   * B07: exit confirmation for the LAST close attempt (null = close never
+   * ran). True only when the close escalation OBSERVED the child exit;
+   * a close that escalated all the way to SIGKILL without observing death
+   * reports false so callers cannot claim cleanup success.
+   */
+  private exitConfirmed: boolean | null = null;
   /** Resolve hook for the exit wait inside close(). */
   private exitWaiters: Array<() => void> = [];
 
@@ -303,6 +310,7 @@ export class SupervisedStdioTransport implements Transport {
   private async doClose(): Promise<void> {
     const child = this.child;
     if (!child) {
+      this.exitConfirmed = true;
       this.finishClose();
       return;
     }
@@ -314,6 +322,7 @@ export class SupervisedStdioTransport implements Transport {
       /* stream may already be destroyed */
     }
 
+    this.exitConfirmed = true;
     const exited = await this.waitForExit(this.options.gracefulCloseMs);
     if (exited) return;
 
@@ -325,9 +334,17 @@ export class SupervisedStdioTransport implements Transport {
     const terminated = await this.waitForExit(this.options.terminateCloseMs);
     if (terminated) return;
 
+    // B07: the hard-kill path is only "confirmed" when the final bounded
+    // wait actually observes the exit; otherwise the caller must report
+    // cleanup as pending instead of asserting the work stopped.
     this.killChild();
-    await this.waitForExit(1_000);
+    this.exitConfirmed = await this.waitForExit(1_000);
     this.finishClose();
+  }
+
+  /** B07: did the last close OBSERVE the child exit? null before close. */
+  exitConfirmation(): boolean | null {
+    return this.exitConfirmed;
   }
 
   /** True when the child exited within `timeoutMs`. */

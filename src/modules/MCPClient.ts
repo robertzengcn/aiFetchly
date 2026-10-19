@@ -140,6 +140,8 @@ export class MCPClient {
   private sdk: McpSdkClient | null = null;
   /** Trusted host-runtime launch adopted by connectStdioHostRuntime. */
   private hostLaunch: ResolvedPluginLaunch | null = null;
+  /** B07: transport adopted for the CURRENT SDK session (shutdown truth). */
+  private supervisedTransport: SupervisedStdioTransport | null = null;
   /**
    * H5: plugin-partial snapshot sink — set by MCPToolService for managed
    * async calls; validates + maps `notifications/aifetchly/plugin-partial`
@@ -359,6 +361,10 @@ export class MCPClient {
   private async adoptSdkTransport(
     transport: SupervisedStdioTransport
   ): Promise<void> {
+    // B07: kept for shutdown truth — disconnect() reports whether the
+    // transport observed the child exit, so a kill that could not be
+    // confirmed is never reported as successful cleanup.
+    this.supervisedTransport = transport;
     const client = new McpSdkClient(
       { name: "aiFetchly", version: "1.0.0" },
       { capabilities: {} }
@@ -771,9 +777,9 @@ export class MCPClient {
    * Close connection: SDK graceful close (drain stdin, then escalate to
    * SIGTERM/SIGKILL) for stdio; direct close for the legacy WebSocket path.
    */
-  async disconnect(): Promise<void> {
+  async disconnect(): Promise<boolean> {
     if (!this.connected && !this.sdk) {
-      return;
+      return true;
     }
 
     // Host-runtime launches own a transient host-context file; release it on
@@ -785,12 +791,23 @@ export class MCPClient {
 
     if (this.sdk) {
       const sdk = this.sdk;
+      const supervised = this.supervisedTransport;
+      this.supervisedTransport = null;
       this.sdk = null;
       this.connected = false;
-      await sdk.close().catch(() => {
-        /* best-effort: transport close escalates to SIGKILL */
-      });
-      return;
+      // B07: a close() failure is RECORDABLE, not swallowed — combined with
+      // the transport's exit confirmation this decides whether callers may
+      // claim the shutdown happened.
+      let closeOk = true;
+      try {
+        await sdk.close();
+      } catch {
+        closeOk = false;
+      }
+      const exitConfirmed = supervised
+        ? (supervised.exitConfirmation() ?? false)
+        : true;
+      return closeOk && exitConfirmed;
     }
 
     if (
@@ -814,6 +831,7 @@ export class MCPClient {
       pending.reject(new Error("MCP client disconnected"));
     }
     this.pendingRequests.clear();
+    return true;
   }
 }
 

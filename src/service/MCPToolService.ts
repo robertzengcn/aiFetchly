@@ -906,18 +906,22 @@ export class MCPToolService {
     this.assertToolEnabled(server, toolName);
     this.assertStdioTrusted(server);
 
-    const remainingMs =
+    // B07: the deadline is recomputed before EVERY awaited step — browser /
+    // context setup, connect() and tools/call each take a FRESH remaining
+    // budget, so a slow earlier step can never silently consume or extend
+    // the whole plan.
+    const remainingMsNow = (): number =>
       options.deadlinePerfMs !== undefined
         ? // H5: monotonic-clock budget when the caller anchored one.
           Math.max(0, options.deadlinePerfMs - performance.now())
         : options.deadlineEpochMs !== undefined
-          ? options.deadlineEpochMs - Date.now()
+          ? Math.max(0, options.deadlineEpochMs - Date.now())
           : Number.POSITIVE_INFINITY;
-    if (remainingMs <= HOST_CLEANUP_RESERVE_MS) {
+    if (remainingMsNow() <= HOST_CLEANUP_RESERVE_MS) {
       throw new MCPTimeoutError(
         toolName,
         server.serverName,
-        Math.max(0, remainingMs)
+        Math.max(0, remainingMsNow())
       );
     }
 
@@ -953,48 +957,151 @@ export class MCPToolService {
       }
       return outcome;
     });
+    // B07: connect() is bounded by the SAME remaining budget — a delayed
+    // handshake or slow capability resolution cannot extend the plan.
+    const connectBudgetMs = remainingMsNow();
+    if (connectBudgetMs <= HOST_CLEANUP_RESERVE_MS) {
+      throw new MCPTimeoutError(
+        toolName,
+        server.serverName,
+        connectBudgetMs
+      );
+    }
     try {
-      await client.connect();
-      return await client.callToolContent(toolName, params, {
-        timeoutMs: remainingMs,
-        maxTotalTimeoutMs: remainingMs,
-        signal: options.signal,
-        resetTimeoutOnProgress: false,
-        onprogress: options.onProgress
-          ? (notification) => {
-              // Design §9.2: units are collected records, not elapsed-time
-              // percentage; `total` is omitted by servers that cannot know it.
-              const bounded = Number.isFinite(notification.progress)
-                ? Math.max(0, notification.progress)
-                : 0;
-              const total =
-                notification.total !== undefined &&
-                Number.isFinite(notification.total) &&
-                notification.total > 0
-                  ? notification.total
-                  : null;
-              const message =
-                typeof notification.message === "string" &&
-                notification.message.length > 0
-                  ? notification.message.slice(0, 200)
-                  : total !== null
-                    ? `Collected ${bounded} of ${total} records`
-                    : `Collected ${bounded} records`;
-              options.onProgress?.({
-                phase: "extracting",
-                message,
-                progress:
-                  total !== null && total > 0 ? bounded / total : null,
-                partialCount: bounded,
-                expectedCount: total,
-              });
-            }
-          : undefined,
-      });
+      await this.raceDeadlineStep(
+        () => client.connect(),
+        connectBudgetMs,
+        toolName,
+        server.serverName
+      );
+
+      // B07: recompute AFTER connect, then SUBTRACT the cleanup reserve —
+      // `tools/call` can never consume the five seconds the shutdown needs.
+      const callBudgetMs = remainingMsNow() - HOST_CLEANUP_RESERVE_MS;
+      if (callBudgetMs <= 0) {
+        throw new MCPTimeoutError(
+          toolName,
+          server.serverName,
+          remainingMsNow()
+        );
+      }
+
+      let result: MCPToolCallContent | undefined;
+      let callError: unknown = undefined;
+      try {
+        result = await this.raceDeadlineStep(
+          () =>
+            client.callToolContent(toolName, params, {
+              timeoutMs: callBudgetMs,
+              maxTotalTimeoutMs: callBudgetMs,
+              signal: options.signal,
+              resetTimeoutOnProgress: false,
+              onprogress: options.onProgress
+                ? (notification) => {
+                    // Design §9.2: units are collected records, not
+                    // elapsed-time percentage; `total` is omitted by servers
+                    // that cannot know it.
+                    const bounded = Number.isFinite(notification.progress)
+                      ? Math.max(0, notification.progress)
+                      : 0;
+                    const total =
+                      notification.total !== undefined &&
+                      Number.isFinite(notification.total) &&
+                      notification.total > 0
+                        ? notification.total
+                        : null;
+                    const message =
+                      typeof notification.message === "string" &&
+                      notification.message.length > 0
+                        ? notification.message.slice(0, 200)
+                        : total !== null
+                          ? `Collected ${bounded} of ${total} records`
+                          : `Collected ${bounded} records`;
+                    options.onProgress?.({
+                      phase: "extracting",
+                      message,
+                      progress:
+                        total !== null && total > 0 ? bounded / total : null,
+                      partialCount: bounded,
+                      expectedCount: total,
+                    });
+                  }
+                : undefined,
+            }),
+          callBudgetMs,
+          toolName,
+          server.serverName
+        );
+      } catch (e) {
+        callError = e;
+      }
+
+      // B07: cleanup is awaited (bounded by the reserve) BEFORE classifying
+      // the outcome. An unconfirmed shutdown is never reported as a definite
+      // stop: the deadline error carries `cleanupPending`.
+      let cleanupConfirmed = true;
+      try {
+        cleanupConfirmed = await Promise.race([
+          client.disconnect(),
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), HOST_CLEANUP_RESERVE_MS);
+          }),
+        ]);
+      } catch {
+        cleanupConfirmed = false;
+      }
+      if (callError !== undefined || result === undefined) {
+        const failure =
+          callError !== undefined
+            ? callError
+            : new Error(`MCP tool ${toolName} produced no result`);
+        if (
+          failure instanceof MCPTimeoutError &&
+          !cleanupConfirmed
+        ) {
+          failure.cleanupPending = true;
+        }
+        throw failure;
+      }
+      return result;
     } finally {
-      await client.disconnect().catch(() => {
-        /* best-effort disconnect */
-      });
+      // The classify-with-cleanup flow above already awaited disconnect in
+      // every path; this belt-and-suspenders call is a no-op then — except
+      // when it is not (no-op early return path), so stay bounded here too:
+      // a hung shutdown must never hang the caller.
+      await Promise.race([
+        client.disconnect().catch(() => undefined),
+        new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), HOST_CLEANUP_RESERVE_MS);
+        }),
+      ]);
+    }
+  }
+
+  /**
+   * B07: race one awaited MCP step (connect / tools/call) against the given
+   * deadline budget. A slow step aborts with MCPTimeoutError instead of
+   * extending the plan; a result that arrives in time resolves normally.
+   */
+  private async raceDeadlineStep<T>(
+    op: () => Promise<T>,
+    budgetMs: number,
+    toolName: string,
+    serverName: string
+  ): Promise<T> {
+    if (!Number.isFinite(budgetMs)) {
+      return await op();
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new MCPTimeoutError(toolName, serverName, budgetMs));
+      }, budgetMs);
+    });
+    try {
+      return await Promise.race([op(), timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

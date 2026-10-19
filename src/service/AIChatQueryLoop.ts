@@ -22,6 +22,10 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import {
+  buildDeadlineExceededResult,
+  buildTurnCancelledResult,
+} from "@/service/AIChatBackgroundJobResults";
 import type { ChatProviderStreamEvent } from "@/service/aiProvider/ChatProviderClient";
 import { runToolWithProgress } from "@/service/aiChat/runToolWithProgress";
 import type {
@@ -5095,7 +5099,13 @@ export class AIChatQueryLoop {
 
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
     while (true) {
-      await sleepUntilAbortOrTimeout(ASYNC_POLL_INTERVAL_MS);
+      // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
+      // the poll interval is only a backstop; the absolute deadline governs
+      // the longest wait between wakes.
+      const msUntilDeadline = deadlinePerfAt - performance.now();
+      await sleepUntilAbortOrTimeout(
+        Math.min(ASYNC_POLL_INTERVAL_MS, Math.max(0, msUntilDeadline))
+      );
 
       if (input.abortController.signal.aborted) {
         try {
@@ -5103,13 +5113,16 @@ export class AIChatQueryLoop {
         } catch {
           // Best-effort; the turn is dead anyway.
         }
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: { error: "Turn cancelled" },
-          execution_time_ms: Date.now() - startedAt,
-        };
+        // B07: a user Stop must not return before cleanup is awaited (the
+        // deadline path already did) — the result carries the ACTUAL
+        // cleanup confirmation instead of assumed success.
+        const stopCleanedUp = await registry.waitForSettled(jobId, 5_000);
+        return buildTurnCancelledResult(
+          call,
+          jobId,
+          stopCleanedUp,
+          startedAt
+        );
       }
 
       if (performance.now() >= deadlinePerfAt) {
@@ -5126,20 +5139,10 @@ export class AIChatQueryLoop {
           // Best-effort; report the deadline either way.
         }
         const cleanedUp = await registry.waitForSettled(jobId, 5_000);
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: {
-            error:
-              "Background job exceeded its deadline and was cancelled. " +
-              "The underlying work has been stopped; a retry starts a new job.",
-            code: "JOB_DEADLINE_EXCEEDED",
-            job_id: jobId,
-            cleaned_up: cleanedUp,
-          },
-          execution_time_ms: Date.now() - startedAt,
-        };
+        // B07: the error text and payload must reflect what actually
+        // happened — an unconfirmed shutdown is reported as
+        // cleanup_pending, never as a definite stop.
+        return buildDeadlineExceededResult(call, jobId, cleanedUp, startedAt);
       }
 
       const snap = registry.getStatus(jobId);

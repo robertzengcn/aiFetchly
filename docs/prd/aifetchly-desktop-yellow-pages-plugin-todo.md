@@ -189,7 +189,7 @@ Evidence: [src/service/PluginImportService.ts:711](../../src/service/PluginImpor
 
 ### B07 — P1 — Enforce one deadline across connection, execution and cleanup
 
-- [ ] Fix and verify B07.
+- [x] Fix and verify B07. — executeMCPToolContent recomputes the monotonic deadline before connect() AND tools/call, bounds connect with the same budget, subtracts HOST_CLEANUP_RESERVE_MS from the call budget, races cleanup and reports cleanupPending on unconfirmed shutdown; query loop wakes exactly on the deadline, awaits cleanup on user Stop, and buildDeadlineExceededResult/buildTurnCancelledResult report truthful cleaned_up/cleanup_pending; 9 new tests pass (MCPToolServiceDeadline.test.ts + AIChatBackgroundJobResults.test.ts). This last commit records the reviewer-facing note.
 
 Evidence: [src/service/MCPToolService.ts:859](../../src/service/MCPToolService.ts#L859); [src/service/MCPToolService.ts:909](../../src/service/MCPToolService.ts#L909); [src/service/AIChatQueryLoop.ts:5128](../../src/service/AIChatQueryLoop.ts#L5128).
 
