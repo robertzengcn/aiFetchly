@@ -6,6 +6,7 @@ import { createRouter, createMemoryHistory } from "vue-router";
 import { createI18n } from "vue-i18n";
 
 const getWorkspaceMock = vi.fn();
+const revokeWorkspaceMock = vi.fn();
 const workspaceMemoryListMock = vi.fn();
 const acquireWorkspaceWatchMock = vi.fn();
 const releaseWorkspaceWatchMock = vi.fn();
@@ -23,6 +24,7 @@ const recoverPlanContinuationMock = vi.fn();
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...args: unknown[]) => getWorkspaceMock(...args),
+  revokeWorkspace: (...args: unknown[]) => revokeWorkspaceMock(...args),
 }));
 
 vi.mock("@/views/api/workspaceWatch", () => ({
@@ -217,8 +219,7 @@ const i18n = createI18n({
         },
         command: {
           clearFailed: "Could not clear this chat. Try again.",
-          busy:
-            "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+          busy: "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
           staleAborted: "Selection changed — the command was not run.",
           noConversation: "No chat is selected — the command was not run.",
         },
@@ -270,7 +271,6 @@ const i18n = createI18n({
         changes_requested_continue_message:
           "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
       },
-
     },
   },
 });
@@ -440,7 +440,8 @@ beforeEach(() => {
   // R12: main reconcile defaults to "nothing recoverable" — every existing
   // selection path then keeps banner-less behavior.
   recoverPlanContinuationMock.mockResolvedValue(null);
-  getWorkspaceMock.mockResolvedValue(null);  workspaceMemoryListMock.mockResolvedValue({ status: true, data: [] });
+  getWorkspaceMock.mockResolvedValue(null);
+  workspaceMemoryListMock.mockResolvedValue({ status: true, data: [] });
   acquireWorkspaceWatchMock.mockResolvedValue(null);
   releaseWorkspaceWatchMock.mockResolvedValue(undefined);
   previewWorkspaceAgentsMock.mockResolvedValue("");
@@ -494,9 +495,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     chatWorkspace.setSelected("conv-1");
     await flushPromises();
 
-    await wrapper
-      .get('[data-testid="header-compact-stub"]')
-      .trigger("click");
+    await wrapper.get('[data-testid="header-compact-stub"]').trigger("click");
     await flushPromises();
 
     const { startCompaction } = await import("@/views/api/aiChatV2");
@@ -518,8 +517,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      strip.compareDocumentPosition(composer) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+      strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 
@@ -556,9 +554,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     const wrapper = mountSurface();
     await flushPromises();
     // Empty state: no conversation selected — the composer is still mounted.
-    expect(
-      wrapper.find('[data-testid="workspace-empty-state"]').exists()
-    ).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-empty-state"]').exists()).toBe(
+      true
+    );
 
     const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
     composer.vm.$emit("send", "hello from empty state", []);
@@ -792,7 +790,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       // The dialog closed (and unmounted) after the decision.
       expect(
-        wrapper.findComponent({ name: "ScheduledLoopToolApprovalDialog" }).exists()
+        wrapper
+          .findComponent({ name: "ScheduledLoopToolApprovalDialog" })
+          .exists()
       ).toBe(false);
     });
 
@@ -820,7 +820,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
 
       expect(
-        wrapper.findComponent({ name: "ScheduledLoopToolApprovalDialog" }).exists()
+        wrapper
+          .findComponent({ name: "ScheduledLoopToolApprovalDialog" })
+          .exists()
       ).toBe(true);
       // Nothing persisted yet AND nothing accepted yet.
       expect(
@@ -1053,11 +1055,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
 
       expect(approveMock).toHaveBeenCalledTimes(1);
-      expect(approveMock.mock.calls[0]).toEqual([
-        "fresh-chat",
-        "plan-1",
-        2,
-      ]);
+      expect(approveMock.mock.calls[0]).toEqual(["fresh-chat", "plan-1", 2]);
       // Exactly one continuation turn, in chat mode, with the shared text.
       expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
         conversationId: "fresh-chat",
@@ -1212,7 +1210,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     function resumeCalls(): Array<[string, unknown]> {
       return (window.api.invoke as ReturnType<typeof vi.fn>).mock.calls
         .filter((call) => call[0] === "ai-chat-v2:resume-tool-after-permission")
-        .map((call) => [call[0] as string, call[1]]) as Array<[string, unknown]>;
+        .map((call) => [call[0] as string, call[1]]) as Array<
+        [string, unknown]
+      >;
     }
 
     async function mountWithPermission(): Promise<
@@ -1345,9 +1345,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
     }
 
-    function shownMode(
-      mounted: ReturnType<typeof mountSurface>
-    ): string {
+    function shownMode(mounted: ReturnType<typeof mountSurface>): string {
       return mounted
         .get('[data-testid="approval-mode-selector-stub"]')
         .text()
@@ -1681,14 +1679,10 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
           .findComponent({ name: "WorkspaceRequiredCard" })
           .vm.$emit("approved", 7, "/tmp/ws");
         await flushPromises();
-        expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(
-          2,
-          "conv-a",
-          {
-            messageId: "m1",
-            imageIndex: 0,
-          }
-        );
+        expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(2, "conv-a", {
+          messageId: "m1",
+          imageIndex: 0,
+        });
         expect(
           wrapper.get('[data-testid="workspace-genimg-notice"]').text()
         ).toContain("late-image.png");
@@ -1823,16 +1817,18 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       sourceId: string,
       text: string
     ): void {
-      wrapper.findComponent({ name: "AiChatHistoryDrawer" }).vm.$emit("select", {
-        sourceId,
-        messageId: `msg-${sourceId}`,
-        role: "user",
-        timestamp: "2026-10-11T00:00:00.000Z",
-        text,
-        exact: true,
-        redacted: false,
-        hasMore: false,
-      });
+      wrapper
+        .findComponent({ name: "AiChatHistoryDrawer" })
+        .vm.$emit("select", {
+          sourceId,
+          messageId: `msg-${sourceId}`,
+          role: "user",
+          timestamp: "2026-10-11T00:00:00.000Z",
+          text,
+          exact: true,
+          redacted: false,
+          hasMore: false,
+        });
     }
 
     it("hides every history surface when the rollout flag is off (FR-HIS-001 fail-closed)", async () => {
@@ -1860,9 +1856,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
         wrapper.get('[data-testid="workspace-history-toggle"]')
       ).toBeTruthy();
       expect(
-        wrapper.findComponent({ name: "AiChatHistoryDrawer" }).props(
-          "conversationId"
-        )
+        wrapper
+          .findComponent({ name: "AiChatHistoryDrawer" })
+          .props("conversationId")
       ).toBe("conv-his");
     });
 
@@ -1980,9 +1976,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
      * references from the next send.
      */
     describe("route remount restoration (R06)", () => {
-      async function mountForRemount(
-        conversation: string
-      ): Promise<{
+      async function mountForRemount(conversation: string): Promise<{
         wrapper: ReturnType<typeof mountSurface>;
         pinia: ReturnType<typeof createPinia>;
       }> {
@@ -2225,7 +2219,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     it("numbered references above the direct limit open batch confirmation, never silent truncation (FR-IMG-008)", async () => {
       const wrapper = await mountWithImages(4);
       const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
-      composer.vm.$emit("send", "sharpen image 1, image 2, image 3 and image 4", []);
+      composer.vm.$emit(
+        "send",
+        "sharpen image 1, image 2, image 3 and image 4",
+        []
+      );
       await flushPromises();
 
       expect(startChatRunMock).not.toHaveBeenCalled();
@@ -2251,7 +2249,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     it("declining the batch confirmation sends nothing", async () => {
       const wrapper = await mountWithImages(4);
       const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
-      composer.vm.$emit("send", "sharpen image 1, image 2, image 3 and image 4", []);
+      composer.vm.$emit(
+        "send",
+        "sharpen image 1, image 2, image 3 and image 4",
+        []
+      );
       await flushPromises();
 
       wrapper
@@ -2452,9 +2454,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       }) as never
     );
     await flushPromises();
-    expect(wrapper.get('[data-testid="workspace-recovery-detail"]').text()).toContain(
-      "Recovering via fallback_model: primary provider rate limited"
-    );
+    expect(
+      wrapper.get('[data-testid="workspace-recovery-detail"]').text()
+    ).toContain("Recovering via fallback_model: primary provider rate limited");
 
     // Real content resolves both — the detail line disappears.
     selected.applyDetailEvent(
@@ -2709,7 +2711,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       },
     };
 
-    async function mountOnConv(conversationId: string): Promise<ReturnType<typeof mountSurface>> {
+    async function mountOnConv(
+      conversationId: string
+    ): Promise<ReturnType<typeof mountSurface>> {
       const pinia = createPinia();
       setActivePinia(pinia);
       const wrapper = mountSurface(pinia);
@@ -2764,7 +2768,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
       // ...and the banner.
       expect(
-        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+        wrapper
+          .find('[data-testid="workspace-plan-continuation-banner"]')
+          .exists()
       ).toBe(false);
     });
 
@@ -2786,7 +2792,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       const wrapper = await mountOnConv("conv-rec");
       await flushPromises();
       expect(
-        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+        wrapper
+          .find('[data-testid="workspace-plan-continuation-banner"]')
+          .exists()
       ).toBe(true);
 
       startChatRunMock.mockResolvedValue({
@@ -2804,7 +2812,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(startChatRunMock.mock.calls[0][0].message).toBe(
         "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.\n\nFeedback: Too vague"
       );
-      expect(startChatRunMock.mock.calls[0][0].clientRequestId).toBe(expectedId);
+      expect(startChatRunMock.mock.calls[0][0].clientRequestId).toBe(
+        expectedId
+      );
     });
 
     it("renderer-saved intents stay authoritative over main reconcile", async () => {
@@ -2893,9 +2903,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
       // Every selection asks main once (cheap read): leave + return.
       expect(recoverPlanContinuationMock).toHaveBeenCalledTimes(3);
-      const replyIds = recoverPlanContinuationMock.mock.calls.map(
-        (c) => c[0]
-      );
+      const replyIds = recoverPlanContinuationMock.mock.calls.map((c) => c[0]);
       expect(replyIds.slice(-2)).toEqual(["conv-other", "conv-rec"]);
       expect(wrapper.find(bannerSel).exists()).toBe(false);
       expect(startChatRunMock).not.toHaveBeenCalled();
@@ -2908,7 +2916,9 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       await flushPromises();
       expect(recoverPlanContinuationMock).toHaveBeenCalledTimes(1);
       expect(
-        wrapper.find('[data-testid="workspace-plan-continuation-banner"]').exists()
+        wrapper
+          .find('[data-testid="workspace-plan-continuation-banner"]')
+          .exists()
       ).toBe(false);
       expect(startChatRunMock).not.toHaveBeenCalled();
     });
@@ -2983,7 +2993,8 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       selected.messages.some(
         (m: ChatV2MessageView) =>
-          m.role === "assistant" && m.content.includes("AI features are disabled")
+          m.role === "assistant" &&
+          m.content.includes("AI features are disabled")
       )
     ).toBe(true);
   });
@@ -3017,8 +3028,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
     const composer = wrapper.get('[data-testid="composer-stub"]').element;
     expect(
-      strip.compareDocumentPosition(composer) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+      strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 
@@ -3050,6 +3060,37 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
     const badge = wrapper.get('[data-testid="workspace-badge-stub"]');
     expect(badge.text()).toBe("/tmp/project");
+  });
+
+  it("removes the approved workspace through the canonical revoke channel then refreshes (FR-WSP-002)", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="workspace-badge-stub"]').text()).toBe(
+      "/tmp/project"
+    );
+
+    // Next refresh after the revoke resolves null (revoked bindings are no
+    // longer active) so the badge must return to its unset state.
+    getWorkspaceMock.mockResolvedValueOnce(null);
+    wrapper
+      .findComponent({ name: "WorkspaceBadge" })
+      .vm.$emit("request-remove-workspace");
+    await flushPromises();
+
+    expect(revokeWorkspaceMock).toHaveBeenCalledWith(7);
+    expect(getWorkspaceMock.mock.calls.length).toBeGreaterThan(1);
+    expect(wrapper.get('[data-testid="workspace-badge-stub"]').text()).toBe(
+      "none"
+    );
   });
 
   it("keeps next-message selectors below the composer textarea in DOM order", async () => {
@@ -3853,7 +3894,9 @@ describe("AiChatCenterSurface approval-mode load scoping (audit R04)", () => {
     wrapper: ReturnType<typeof mountSurface>,
     text: string
   ): void {
-    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", text, []);
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", text, []);
   }
 
   it("drops a late reply from conversation A after B is selected (reversed completion)", async () => {
@@ -4200,7 +4243,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await flushPromises();
 
     // Submit [m1] — accepted, streams.
-    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "", []);
     await flushPromises();
     expect(useSelectedConversationStore().streamStatus).toBe("streaming");
 
@@ -4217,7 +4262,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
 
     // run-1 completes: only ITS snapshot ([m1]) may be removed.
     await completeRun("conv-1", "run-1");
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 1 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 1 },
+    ]);
   });
 
   it("keeps the tray when an image send is rejected while another turn streams and the user switches away", async () => {
@@ -4261,12 +4308,16 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await loadConversation("conv-2");
 
     // The switch must NOT clear conv-1's tray: the send was never accepted.
-    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(draftReferences("conv-1")).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
 
     // The rejection lands afterwards — still no destruction.
     rejectImageSend(new Error("queue limit reached"));
     await flushPromises();
-    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(draftReferences("conv-1")).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
   });
 
   it("keeps the tray when a send is rejected while idle and recovers on the next accepted send", async () => {
@@ -4290,7 +4341,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await flushPromises();
     expect(startChatRunMock).toHaveBeenCalledTimes(1);
     // FR-SUB-003: the rejection retains the draft.
-    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(draftReferences("conv-1")).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
 
     // The user stages one more reference and recovers with an ordinary
     // send — the staged references ride along with it (tray semantics).
@@ -4326,7 +4379,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await flushPromises();
 
     // Submit [m1] in A — accepted, streams.
-    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "", []);
     await flushPromises();
     expect(useSelectedConversationStore().streamStatus).toBe("streaming");
 
@@ -4334,7 +4389,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await loadConversation("conv-2");
 
     // A's tray must survive the switch…
-    expect(draftReferences("conv-1")).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(draftReferences("conv-1")).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
 
     // …B stages its own reference, untouched by A's transition. The real
     // handshake remounts the transcript (loading state) — re-find it.
@@ -4346,7 +4403,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
       imageIndex: 0,
     });
     await flushPromises();
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
 
     // Return to A, whose turn is still running remotely (snapshot says so).
     mockSelectionSnapshot("running", "run-1");
@@ -4369,7 +4428,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
 
     // run-1 completes: its snapshot clears, the later addition stays.
     await completeRun("conv-1", "run-1");
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
   });
 
   it("clears each accepted submission's own snapshot across queued, overlapping runs", async () => {
@@ -4415,7 +4476,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
 
     // run-1 completes → only ITS snapshot ([m1]) is removed.
     await completeRun("conv-1", "run-1");
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
 
     // run-2 drains and completes → its own submitted snapshot ([m1, m2]) clears.
     useSelectedConversationStore().applyDetailEvent({
@@ -4451,7 +4514,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
 
     // The text turn completes — nothing was armed, so nothing is cleared.
     await completeRun("conv-1", "run-1");
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
   });
 
   it("keeps the armed snapshot when a mid-run tool event follows an A→B→A re-selection; only the real terminal clears it", async () => {
@@ -4469,7 +4534,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await flushPromises();
 
     // Submit [m1] — accepted, streams.
-    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "", []);
     await flushPromises();
     expect(useSelectedConversationStore().streamStatus).toBe("streaming");
 
@@ -4508,7 +4575,11 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
       sequence: 2,
       emittedAt: "2026-10-17T00:00:02.000Z",
       eventType: "tool_call",
-      payload: { eventType: "tool_call", toolCallId: "t-1", toolName: "search" },
+      payload: {
+        eventType: "tool_call",
+        toolCallId: "t-1",
+        toolName: "search",
+      },
     });
     await flushPromises();
     expect(trayReferences(wrapper)).toEqual([
@@ -4522,7 +4593,9 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     // The REAL terminal — a genuine event, sequence beyond the tool event —
     // is the only transition allowed to pop the armed snapshot.
     await completeRun("conv-1", "run-1", 3);
-    expect(trayReferences(wrapper)).toEqual([{ messageId: "m2", imageIndex: 0 }]);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
   });
 });
 
@@ -4572,7 +4645,6 @@ describe("AiChatCenterSurface speech cancellation (R07)", () => {
     wrapper.unmount();
   });
 });
-
 
 /**
  * R10 (audit 2026-10-17): /clear must not reload the OLD conversation into

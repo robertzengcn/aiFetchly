@@ -3380,6 +3380,7 @@ export default {
     notSet: "Sin espacio de trabajo",
     selectFolder: "Seleccionar carpeta",
     changeFolder: "Cambiar carpeta",
+    removeAction: "Quitar área de trabajo",
     approve: "Aprobar espacio de trabajo",
     revoke: "Revocar espacio de trabajo",
     rootPath: "Ruta raíz",

@@ -3190,6 +3190,7 @@ export default {
     notSet: "未设置工作区",
     selectFolder: "选择文件夹",
     changeFolder: "更换文件夹",
+    removeAction: "移除工作区",
     approve: "批准工作区",
     revoke: "撤销工作区",
     rootPath: "根目录",

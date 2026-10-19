@@ -3305,6 +3305,7 @@ export default {
     notSet: "ワークスペース未設定",
     selectFolder: "フォルダを選択",
     changeFolder: "フォルダを変更",
+    removeAction: "ワークスペースを解除",
     approve: "ワークスペースを承認",
     revoke: "ワークスペースを取り消し",
     rootPath: "ルートパス",

@@ -346,6 +346,7 @@
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
           @request-open-memory="openWorkspaceMemory"
+          @request-remove-workspace="onWorkspaceRemoveRequest"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -1809,6 +1810,11 @@ function handleWorkspaceSetupRequest(): void {
   // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
   conversationWorkspace.requestSetup();
+}
+
+/** FR-WSP-002 remove affordance — classic-chat parity with the chat center. */
+function onWorkspaceRemoveRequest(): void {
+  void conversationWorkspace.removeWorkspace();
 }
 
 /**

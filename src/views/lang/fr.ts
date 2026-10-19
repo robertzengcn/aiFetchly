@@ -3361,6 +3361,7 @@ export default {
     notSet: "Aucun espace défini",
     selectFolder: "Choisir un dossier",
     changeFolder: "Changer de dossier",
+    removeAction: "Retirer l'espace de travail",
     approve: "Approuver l'espace",
     revoke: "Révoquer l'espace",
     rootPath: "Chemin racine",

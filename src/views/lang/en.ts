@@ -3355,6 +3355,7 @@ export default {
     notSet: "No workspace set",
     selectFolder: "Select folder",
     changeFolder: "Change folder",
+    removeAction: "Remove workspace",
     approve: "Approve workspace",
     revoke: "Revoke workspace",
     rootPath: "Root path",

@@ -54,6 +54,18 @@
       {{ busyReasonText }}
     </span>
     <button
+      type="button"
+      class="workspace-badge__remove"
+      :title="busy ? busyReasonText : removeText"
+      :aria-label="busy ? busyReasonText : removeText"
+      :disabled="busy"
+      data-testid="workspace-badge-remove"
+      @click.stop="requestRemoveWorkspace"
+    >
+      <v-icon size="x-small">mdi-delete-outline</v-icon>
+      <span class="sr-only">{{ removeText }}</span>
+    </button>
+    <button
       v-if="showMemory"
       type="button"
       class="workspace-badge__memory"
@@ -122,6 +134,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "request-set-workspace"): void;
   (e: "request-open-memory"): void;
+  (e: "request-remove-workspace"): void;
 }>();
 
 const { t } = useI18n();
@@ -129,9 +142,7 @@ const { t } = useI18n();
 const loadingText = computed(
   () => t("workspace.loading") || "Loading workspace…"
 );
-const notSetText = computed(
-  () => t("workspace.notSet") || "No workspace set"
-);
+const notSetText = computed(() => t("workspace.notSet") || "No workspace set");
 const chooseActionText = computed(
   () => t("workspace.chooseAction") || "Choose workspace"
 );
@@ -145,6 +156,9 @@ const memoryLabel = computed(
 );
 const changeFolderText = computed(
   () => t("workspace.changeFolder") || "Change folder"
+);
+const removeText = computed(
+  () => t("workspace.removeAction") || "Remove workspace"
 );
 const busyReasonText = computed(
   () => t("workspace.busyReason") || "Available after current run"
@@ -204,6 +218,14 @@ function requestSetWorkspace(): void {
 function requestOpenMemory(): void {
   if (!props.workspace) return;
   emit("request-open-memory");
+}
+
+/** FR-WSP-002 remove leg: drop the workspace binding for this conversation.
+ * The busy guard blocks the action while a run is active (FR-WS-007). */
+function requestRemoveWorkspace(): void {
+  if (props.busy) return;
+  if (!props.workspace) return;
+  emit("request-remove-workspace");
 }
 </script>
 
@@ -276,7 +298,8 @@ button.workspace-badge__path--button:disabled {
   cursor: default;
 }
 .workspace-badge__choose,
-.workspace-badge__memory {
+.workspace-badge__memory,
+.workspace-badge__remove {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
@@ -293,11 +316,13 @@ button.workspace-badge__path--button:disabled {
   border-radius: 0;
 }
 .workspace-badge__choose:hover:not(:disabled),
-.workspace-badge__memory:hover {
+.workspace-badge__memory:hover,
+.workspace-badge__remove:hover:not(:disabled) {
   background: rgba(var(--v-theme-primary), 0.12);
 }
 .workspace-badge__choose:focus-visible,
-.workspace-badge__memory:focus-visible {
+.workspace-badge__memory:focus-visible,
+.workspace-badge__remove:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 1px;
 }
@@ -330,6 +355,17 @@ button.workspace-badge__path--button:disabled {
 }
 .workspace-badge__memory {
   border-radius: 0 4px 4px 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .workspace-badge__memory-count {
   margin-left: 4px;

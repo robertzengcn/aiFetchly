@@ -42,6 +42,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: vi.fn().mockResolvedValue(null),
+  revokeWorkspace: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/views/api/aiChat", () => ({

@@ -3374,6 +3374,7 @@ export default {
     notSet: "Kein Arbeitsbereich festgelegt",
     selectFolder: "Ordner wählen",
     changeFolder: "Ordner wechseln",
+    removeAction: "Arbeitsbereich entfernen",
     approve: "Arbeitsbereich genehmigen",
     revoke: "Arbeitsbereich widerrufen",
     rootPath: "Stammpfad",

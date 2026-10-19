@@ -136,6 +136,7 @@
         :show-memory="voiceMemoryEnabled"
         @request-set-workspace="onRequestWorkspaceSetup"
         @request-open-memory="openWorkspaceMemory"
+        @request-remove-workspace="onRequestWorkspaceRemove"
       />
       <template v-if="conversationId">
         <AIConversationReportButton
@@ -868,6 +869,13 @@ function onRequestWorkspaceSetup(): void {
 /** The required-card flow created + approved a workspace in the main process. */
 function onWorkspaceApproved(workspaceId: number, rootPath: string): void {
   conversationWorkspace.applyApprovedWorkspace(workspaceId, rootPath);
+}
+
+/** FR-WSP-002 remove affordance: revoking the binding is unsafe while a
+ * workspace-backed tool may be running, so the FR-WS-007 gate applies. */
+function onRequestWorkspaceRemove(): void {
+  if (workspaceChangesBlocked.value) return; // FR-WS-007 safety gate
+  void conversationWorkspace.removeWorkspace();
 }
 
 // --- Header + run strip projection ------------------------------------------
