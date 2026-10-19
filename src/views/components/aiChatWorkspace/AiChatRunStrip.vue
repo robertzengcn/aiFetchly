@@ -175,6 +175,8 @@ const label = computed(() => {
   border: none;
   border-radius: 6px;
   padding: 4px 12px;
+  /* A11Y-007: minimum sizing per the layout rule (layout.scss 36px). */
+  min-height: 36px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
