@@ -1319,7 +1319,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         cursor: {
           type: "string",
@@ -1376,7 +1380,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         query: {
           type: "string",

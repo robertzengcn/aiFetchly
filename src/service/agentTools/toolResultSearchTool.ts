@@ -11,6 +11,7 @@
  */
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import { TOOL_RESULT_DENIAL_RECOVERY } from "@/service/agentTools/toolResultDenialRecovery";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
 import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
@@ -27,7 +28,13 @@ export async function handleToolResultSearch(
 
   const trusted = getToolResultContext(context);
   if (!trusted) {
-    return { success: false, result: { error: "OUTPUT_NOT_AVAILABLE" } };
+    return {
+      success: false,
+      result: {
+        error: "OUTPUT_NOT_AVAILABLE",
+        recovery: TOOL_RESULT_DENIAL_RECOVERY,
+      },
+    };
   }
 
   // Resolve and authorize BEFORE charging the allowance.
@@ -39,7 +46,14 @@ export async function handleToolResultSearch(
   // it never used.
   const target = await trusted.resolveTarget(parsed.data.output_id);
   if (!target.ok) {
-    return { success: false, result: { error: target.code } };
+    // A bare `{ error }` stub invites the model to retry and to fabricate
+    // further ids. Pair every denial with a recovery instruction so the model
+    // re-uses an existing receipt's output_id verbatim instead of inventing
+    // one (same class as the `check_tool_job_status` fix 6a25f7b56).
+    return {
+      success: false,
+      result: { error: target.code, recovery: TOOL_RESULT_DENIAL_RECOVERY },
+    };
   }
 
   // Charge the shared per-turn allowance BEFORE doing the work, so concurrent
