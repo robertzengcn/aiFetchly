@@ -20,10 +20,8 @@ const REQUIRED_WORKERS = [
   "SkillWorker.js",
   "WorkspaceConfigWatchWorker.js",
   "YandexMapsWorker.js",
-  "YellowPagesScraperProcess.js",
   "googleProxyCheck.js",
   "websiteContentScraper.js",
-  "YellowPagesScraper.js",
 ];
 const RENDERER_HTML_RELATIVE = ".vite/renderer/main_window/index.html";
 
@@ -691,10 +689,7 @@ function run() {
   }
 
   let failed = false;
-  const expectedWorkers = REQUIRED_WORKERS.filter(
-    (workerFile) => workerFile !== "YellowPagesScraperProcess.js"
-  );
-  for (const workerFile of expectedWorkers) {
+  for (const workerFile of REQUIRED_WORKERS) {
     const matches = resourcesDirs
       .map((resourcesDir) => hasWorker(resourcesDir, workerFile))
       .filter((result) => result.found);

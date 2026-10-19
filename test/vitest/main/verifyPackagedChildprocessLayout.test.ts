@@ -14,10 +14,8 @@ const REQUIRED_WORKERS = [
   "SkillWorker.js",
   "WorkspaceConfigWatchWorker.js",
   "YandexMapsWorker.js",
-  "YellowPagesScraperProcess.js",
   "googleProxyCheck.js",
   "websiteContentScraper.js",
-  "YellowPagesScraper.js",
 ];
 
 describe("verify-packaged-childprocess layout detection", () => {
