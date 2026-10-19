@@ -539,6 +539,7 @@ import {
   SLASH_COMMAND_DISPATCH,
   AIFETCHLY_CONFIG_RELOAD,
   AIFETCHLY_CONFIG_STATUS,
+  AIFETCHLY_CONFIG_CHANGED,
   // Workspace Watcher Channels
   AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
@@ -790,6 +791,8 @@ contextBridge.exposeInMainWorld("api", {
       APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -871,6 +874,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
       // Managed Browser events (main -> renderer, design §22)
@@ -943,6 +948,8 @@ contextBridge.exposeInMainWorld("api", {
       APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);

@@ -384,6 +384,119 @@ test.describe("workspace lifecycle through the default surface", () => {
       root.remove();
     }
   });
+  test("live watcher events refresh an open slash dropdown without keystrokes (Phase-14 D-04 watcher-status)", async ({
+    page: _page,
+  }, testInfo) => {
+    test.setTimeout(210_000);
+    const fakeAi = await startFakeOpenAiServer();
+    await fakeAi.setScenario("stream-text");
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    const alpha = path.join(root.workspacePath, "projects-watch");
+    const commandsDir = path.join(alpha, ".aifetchly", "commands");
+    fs.mkdirSync(commandsDir, { recursive: true });
+    const seedPath = path.join(commandsDir, "wssteady.md");
+    fs.writeFileSync(
+      seedPath,
+      "---\nname: wssteady\ndescription: stationary watcher command\ntype: prompt\n---\nSteady $ARGUMENTS\n",
+      "utf8"
+    );
+    try {
+      writeStateManifest(root, {
+        authState: "authenticated",
+        aiState: "local-enabled",
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+        dialogResponses: {
+          open: { action: "confirmed", paths: [alpha] },
+        },
+      });
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+      try {
+        const page = app.mainWindow;
+        await openCenter(page);
+        await page.getByTestId("workspace-new-chat").click();
+        const textarea = composerTextarea(page);
+        await expect(textarea).toBeVisible({ timeout: 10_000 });
+
+        // Persist the conversation row first.
+        await textarea.fill(`setup ${Date.now()}`);
+        await page.getByTestId("ai-chat-send").click();
+        await expect(page.getByTestId("workspace-transcript")).toContainText(
+          "Hello world!",
+          { timeout: 30_000 }
+        );
+
+        // Approve — approval spawns the watch (acquire is chat-open; the
+        // references land once the renderer binds the conversation).
+        await page.getByTestId("workspace-badge-choose").click();
+        await pickFolderFromCard(page);
+        const badge = page.getByTestId("workspace-badge");
+        await expect(badge).toBeVisible({ timeout: 15_000 });
+        await expect(badge.locator(".workspace-badge__status")).toHaveText(
+          /approved/i,
+          { timeout: 15_000 }
+        );
+
+        // Seed the dropdown from the pre-existing command.
+        const suggestions = page.locator(".slash-suggestions");
+        await textarea.fill("/ws");
+        await expect(
+          suggestions.locator(".slash-suggestions__name").filter({
+            hasText: "/wssteady",
+          })
+        ).toBeVisible({ timeout: 20_000 });
+
+        // DROP a new command file while the dropdown is open — the workspace
+        // watcher (.aifetchly/**, awaitWriteFinish 500ms) must turn the file
+        // event into AIFETCHLY_CONFIG_CHANGED and the composer refreshes the
+        // OPEN dropdown without any further keystrokes.
+        const addedPath = path.join(commandsDir, "wsquiver.md");
+        await page.evaluate(() => {
+          const w = window as unknown as {
+            api: {
+              receive: (c: string, cb: (...a: unknown[]) => void) => void;
+            };
+            __configEvents?: string[];
+          };
+          w.__configEvents = [];
+          w.api.receive("aifetchly-config:changed", (...args: unknown[]) => {
+            if (w.__configEvents) {
+              w.__configEvents.push(String(args[0]));
+            }
+          });
+        });
+        fs.writeFileSync(
+          addedPath,
+          "---\nname: wsquiver\ndescription: watcher live add probe\ntype: prompt\n---\nQuiver $ARGUMENTS\n",
+          "utf8"
+        );
+        await expect(
+          suggestions.locator(".slash-suggestions__name").filter({
+            hasText: "/wsquiver",
+          })
+        ).toBeVisible({ timeout: 40_000 });
+
+        // Delete it — the watcher must drop it from the still-open dropdown.
+        fs.unlinkSync(addedPath);
+        await expect(
+          suggestions.locator(".slash-suggestions__name").filter({
+            hasText: "/wsquiver",
+          })
+        ).toHaveCount(0, { timeout: 40_000 });
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
   test("background agent tasks cancel EXACTLY the targeted task from the surface menu (FR-INT-004, T5/D7)", async ({
     page: _page,
   }, testInfo) => {
