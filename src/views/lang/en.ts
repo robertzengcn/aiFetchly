@@ -13,6 +13,11 @@ export default {
     settings: { localVision: "Local vision", visualPlanner: "Visual planner mode", stopHotkey: "Stop hotkey", debugCapture: "Debug capture", save: "Save" },
   },
   common: {
+    back: "Back",
+    continue: "Continue",
+    dismiss: "Dismiss",
+    retry: "Retry",
+    user: "You",
     more: "More",
     actions: "Actions",
     confirmation: "confirmation",
@@ -3799,6 +3804,11 @@ export default {
       revoked: "Revoked",
     },
     execution: {
+      arguments: "Arguments",
+      details: "Details",
+      duration: "Duration",
+      finishedAt: "Finished",
+      resultSummary: "Result",
       groupTitle: "Execution",
       progress: "{completed} of {total} complete",
       runningTool: "Running {tool}",

@@ -14,6 +14,11 @@ export default {
     settings: { localVision: "Visión local", visualPlanner: "Modo planificador visual", stopHotkey: "Atajo de parada", debugCapture: "Captura de depuración", save: "Guardar" },
   },
   common: {
+    back: "Atrás",
+    continue: "Continuar",
+    dismiss: "Descartar",
+    retry: "Reintentar",
+    user: "Tú",
     more: "Más",
     actions: "Acciones",
     confirmation: "Confirmación",
@@ -3375,6 +3380,8 @@ export default {
       "Mostrando resultados parciales ({collected} de {expected}). La herramienta agotó el tiempo de espera pero devolvió lo que tenía.",
   },
   workspace: {
+    chooseHint: "Elige una carpeta para que las herramientas de archivos de IA puedan leer y escribir.",
+    pathUnavailable: "La carpeta del espacio de trabajo no está accesible ahora mismo.",
     title: "Espacio de trabajo",
     badgeLabel: "Espacio de trabajo",
     notSet: "Sin espacio de trabajo",
@@ -3830,6 +3837,11 @@ export default {
       revoked: "Revocado",
     },
     execution: {
+      arguments: "Argumentos",
+      details: "Detalles",
+      duration: "Duración",
+      finishedAt: "Finalizado",
+      resultSummary: "Resultado",
       groupTitle: "Ejecución",
       progress: "{completed} de {total} completado",
       runningTool: "Ejecutando {tool}",

@@ -14,6 +14,11 @@ export default {
     settings: { localVision: "Lokale Bildverarbeitung", visualPlanner: "Visueller Planermodus", stopHotkey: "Stopptastenkombination", debugCapture: "Debug-Aufzeichnung", save: "Speichern" },
   },
   common: {
+    back: "Zurück",
+    continue: "Fortfahren",
+    dismiss: "Schließen",
+    retry: "Wiederholen",
+    user: "Du",
     more: "Mehr",
     actions: "Aktionen",
     confirmation: "Bestätigung",
@@ -3369,6 +3374,8 @@ export default {
       "Teilergebnisse werden angezeigt ({collected} von {expected}). Das Tool hat das Zeitlimit überschritten, aber die bisherigen Daten zurückgegeben.",
   },
   workspace: {
+    chooseHint: "Wählen Sie einen Ordner, damit die KI-Datei-Tools lesen und schreiben können.",
+    pathUnavailable: "Der Arbeitsbereich-Ordner ist zurzeit nicht zugreifbar.",
     title: "Arbeitsbereich",
     badgeLabel: "Arbeitsbereich",
     notSet: "Kein Arbeitsbereich festgelegt",
@@ -3831,6 +3838,11 @@ export default {
       revoked: "Widerrufen",
     },
     execution: {
+      arguments: "Argumente",
+      details: "Details",
+      duration: "Dauer",
+      finishedAt: "Beendet",
+      resultSummary: "Ergebnis",
       groupTitle: "Ausführung",
       progress: "{completed} von {total} abgeschlossen",
       runningTool: "{tool} wird ausgeführt",

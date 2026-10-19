@@ -5,6 +5,11 @@ export default {
     settings: { localVision: "本地视觉", visualPlanner: "视觉规划模式", stopHotkey: "停止热键", debugCapture: "调试采集", save: "保存" },
   },
   common: {
+    back: "返回",
+    continue: "继续",
+    dismiss: "关闭",
+    retry: "重试",
+    user: "我",
     more: "更多",
     actions: "操作",
     confirmation: "确认",
@@ -3610,6 +3615,11 @@ export default {
       revoked: "已撤销",
     },
     execution: {
+      arguments: "参数",
+      details: "详情",
+      duration: "时长",
+      finishedAt: "完成",
+      resultSummary: "结果",
       groupTitle: "执行",
       progress: "已完成 {completed}/{total}",
       runningTool: "正在运行 {tool}",

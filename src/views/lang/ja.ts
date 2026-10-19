@@ -14,6 +14,11 @@ export default {
     settings: { localVision: "ローカルビジョン", visualPlanner: "ビジュアルプランナーモード", stopHotkey: "停止ホットキー", debugCapture: "デバッグキャプチャ", save: "保存" },
   },
   common: {
+    back: "戻る",
+    continue: "続行",
+    dismiss: "閉じる",
+    retry: "再試行",
+    user: "あなた",
     more: "もっと",
     actions: "操作",
     confirmation: "確認",
@@ -3300,6 +3305,7 @@ export default {
       "部分的な結果を表示中（{collected} / {expected}）。ツールはタイムアウトしましたが、取得済みのデータを返しました。",
   },
   workspace: {
+    chooseHint: "AIのファイルツールが読み書きできるフォルダを選択してください。",
     title: "ワークスペース",
     badgeLabel: "ワークスペース",
     notSet: "ワークスペース未設定",
@@ -3747,6 +3753,11 @@ export default {
       revoked: "失効",
     },
     execution: {
+      arguments: "引数",
+      details: "詳細",
+      duration: "所要時間",
+      finishedAt: "完了",
+      resultSummary: "結果",
       groupTitle: "実行",
       progress: "{total} 件中 {completed} 件完了",
       runningTool: "{tool} を実行中",
