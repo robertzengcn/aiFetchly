@@ -54,7 +54,7 @@ import {
 } from "@/modules/lib/function";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
 import { Token } from "@/modules/token";
-import { YellowPagesAiSupportHandler } from "@/modules/YellowPagesAiSupportHandler";
+import { ScraperAiSupportHandler } from "@/modules/ScraperAiSupportHandler";
 import { v4 as uuidv4 } from "uuid";
 import * as path from "path";
 import { parseYellowPagesProxyConfigJson } from "@/utils/yellowPagesProxyLaunch";
@@ -98,7 +98,7 @@ export interface YellowPagesProcessManagerDeps {
   resultModel: YellowPagesResultModel;
   platformRegistry: PlatformRegistry;
   accountCookiesModule: AccountCookiesModule;
-  aiSupportHandler: YellowPagesAiSupportHandler;
+  aiSupportHandler: ScraperAiSupportHandler;
 }
 
 export class YellowPagesProcessManager extends BaseModule {
@@ -110,7 +110,7 @@ export class YellowPagesProcessManager extends BaseModule {
   private platformRegistry: PlatformRegistry;
   private accountCookiesModule: AccountCookiesModule;
   private accountSessionService: AccountSessionService;
-  private aiSupportHandler: YellowPagesAiSupportHandler;
+  private aiSupportHandler: ScraperAiSupportHandler;
 
   /**
    * Private constructor to prevent direct instantiation
@@ -131,7 +131,7 @@ export class YellowPagesProcessManager extends BaseModule {
     this.accountSessionService = new AccountSessionService();
     // Initialize AI support handler (will be configured per task)
     this.aiSupportHandler =
-      deps?.aiSupportHandler ?? new YellowPagesAiSupportHandler();
+      deps?.aiSupportHandler ?? new ScraperAiSupportHandler();
   }
 
   /**
@@ -790,7 +790,7 @@ export class YellowPagesProcessManager extends BaseModule {
 
   /**
    * Handle AI support requests from the child process.
-   * Delegates to YellowPagesAiSupportHandler which provides:
+   * Delegates to ScraperAiSupportHandler which provides:
    * - Response caching with TTL
    * - Rate limiting
    * - Request timeout handling
@@ -808,7 +808,7 @@ export class YellowPagesProcessManager extends BaseModule {
 
     // Configure handler with log file for this task
     if (logFile) {
-      this.aiSupportHandler = new YellowPagesAiSupportHandler(
+      this.aiSupportHandler = new ScraperAiSupportHandler(
         undefined,
         logFile
       );

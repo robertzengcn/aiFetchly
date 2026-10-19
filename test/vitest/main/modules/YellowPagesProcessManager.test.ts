@@ -14,7 +14,7 @@ import type { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
 import type { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import type { PlatformRegistry } from "@/modules/PlatformRegistry";
 import type { AccountCookiesModule } from "@/modules/accountCookiesModule";
-import type { YellowPagesAiSupportHandler } from "@/modules/YellowPagesAiSupportHandler";
+import type { ScraperAiSupportHandler } from "@/modules/ScraperAiSupportHandler";
 
 function makeFakeDeps(
   overrides: Partial<YellowPagesProcessManagerDeps> = {}
@@ -24,7 +24,7 @@ function makeFakeDeps(
     resultModel: {} as unknown as YellowPagesResultModel,
     platformRegistry: {} as unknown as PlatformRegistry,
     accountCookiesModule: {} as unknown as AccountCookiesModule,
-    aiSupportHandler: {} as unknown as YellowPagesAiSupportHandler,
+    aiSupportHandler: {} as unknown as ScraperAiSupportHandler,
     ...overrides,
   };
 }

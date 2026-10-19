@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import {
-  YellowPagesAiSupportHandler,
-} from "@/modules/YellowPagesAiSupportHandler";
+  ScraperAiSupportHandler,
+} from "@/modules/ScraperAiSupportHandler";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import type { UtilityProcess } from "electron";
 
@@ -41,8 +41,8 @@ vi.mock("@/modules/lib/function", () => ({
   WriteLog: vi.fn(),
 }));
 
-describe("YellowPagesAiSupportHandler", () => {
-  let handler: YellowPagesAiSupportHandler;
+describe("ScraperAiSupportHandler", () => {
+  let handler: ScraperAiSupportHandler;
   let mockChildProcess: Partial<UtilityProcess>;
   let mockPostMessage: Mock;
 
@@ -57,7 +57,7 @@ describe("YellowPagesAiSupportHandler", () => {
     };
 
     // Create handler with default config
-    handler = new YellowPagesAiSupportHandler();
+    handler = new ScraperAiSupportHandler();
   });
 
   afterEach(() => {
@@ -68,7 +68,7 @@ describe("YellowPagesAiSupportHandler", () => {
   describe("AI Enabled Check", () => {
     it("should return error when AI is not enabled", async () => {
       // Create handler that mocks AI as disabled
-      const disabledHandler = new YellowPagesAiSupportHandler();
+      const disabledHandler = new ScraperAiSupportHandler();
       vi.spyOn(
         disabledHandler as unknown as { isAiEnabled: () => Promise<boolean> },
         "isAiEnabled"
@@ -172,7 +172,7 @@ describe("YellowPagesAiSupportHandler", () => {
   describe("Rate Limiting", () => {
     it("should enforce rate limit", async () => {
       // Create handler with low rate limit for testing
-      const rateLimitedHandler = new YellowPagesAiSupportHandler({
+      const rateLimitedHandler = new ScraperAiSupportHandler({
         rateLimitPerMinute: 2,
       });
 
@@ -278,7 +278,7 @@ describe("YellowPagesAiSupportHandler", () => {
       });
 
       // Create handler with very short TTL
-      const shortLivedHandler = new YellowPagesAiSupportHandler({
+      const shortLivedHandler = new ScraperAiSupportHandler({
         cacheTtl: 100, // 100ms
       });
 

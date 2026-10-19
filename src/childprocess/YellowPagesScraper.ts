@@ -256,7 +256,7 @@ export class YellowPagesScraper {
   private pendingAiRequests: Map<string, PendingAiRequest> = new Map();
   private aiRequestCounter = 0;
   private static readonly AI_REQUEST_TIMEOUT_MS = 60000;
-  /** Max page content size for AI support (match YellowPagesAiSupportHandler) */
+  /** Max page content size for AI support (match ScraperAiSupportHandler) */
   private static readonly MAX_PAGE_CONTENT_BYTES = 50 * 1024;
   private static readonly TRUNCATION_SUFFIX = "\n[Content truncated]";
 

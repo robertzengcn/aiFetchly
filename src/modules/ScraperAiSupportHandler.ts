@@ -101,11 +101,11 @@ export enum AiSupportErrorCode {
  *
  * @example
  * ```typescript
- * const handler = new YellowPagesAiSupportHandler();
+ * const handler = new ScraperAiSupportHandler();
  * await handler.handleAiSupportRequest(request, childProcess);
  * ```
  */
-export class YellowPagesAiSupportHandler {
+export class ScraperAiSupportHandler {
   private aiApi: AiChatApi;
   private cache: Map<string, CachedResponse>;
   private requestTimestamps: number[] = [];
