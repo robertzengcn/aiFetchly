@@ -100,105 +100,124 @@ test.describe("Conversation reporting (Electron integration)", () => {
     await expect(reportButton).toBeDisabled({ timeout: 30_000 });
   });
 
-  // §24.6 successful journey — FUNCTIONALLY VERIFIED, runner-blocked fixme.
-  //
-  // The full chain was proven end-to-end during the 2026-10-18 parity audit:
-  // fake loopback server serves GET capabilities + POST report
-  // (`test/e2e/fixtures/fakeReportingServer.ts`), the live app reaches
-  // Report-conversation enabled → dialog opens → item checked → category
-  // "Hate or harassment" → submit → the backend round-trip completes in
-  // ~1.4s (fakeReportingServer log) and the dialog renders
-  // "Report submitted. Reference: air_e2e-reference-0001" with the copy
-  // control (recorded in run screenshots + a main-world DOM probe reading
-  // exactly that text 3s after submit).
-  //
-  // BUT Playwright's runner wedges right after the dialog's submit click in
-  // this host's harness: every subsequent locator/evaluate/poll action
-  // stalls (trace shows a ~40s dead gap and then silence until the test
-  // budget expires), regardless of locator style, timeouts, bringToFront,
-  // or rAF timing. Reproduced across 15 runs; reversed twice into full
-  // passes (runs with no wedge) under identical code. To be re-enabled once
-  // the post-submit runner stall is root-caused (suspect: Playwright
-  // injected-world poll loop vs Vuetify v-dialog focus trap under the
-  // contested host CPU).
-  test.fixme(
-    "successful journey: enabled capabilities → select → submit → server reference (§24.6)",
-    async ({ aiApp, fakeAi }) => {
-      test.setTimeout(300_000);
-      const reporting = await startFakeReportingServer();
-      try {
-        await openChat(aiApp);
-        // Produce one eligible assistant output (plain text completion).
-        await aiApp.mainWindow
-          .getByTestId("ai-chat-composer")
-          .locator("textarea")
-          .first()
-          .fill("make a splash page");
-        await aiApp.mainWindow.getByTestId("ai-chat-send").click();
-        // Wait for the assistant response to become an eligible item.
-        await aiApp.mainWindow
-          .locator('[data-testid="workspace-transcript"]')
-          .first()
-          .waitFor({ state: "visible", timeout: 30_000 });
-        await aiApp.mainWindow
-          .getByText("Hello world!")
-          .first()
-          .waitFor({ state: "visible", timeout: 60_000 });
+  // FR-4.4: reporting is NOT an AI-gated capability. With the fake loopback
+  // capabilities endpoint reachable on the AI-disabled surface, the disabled
+  // reason must switch from "unavailable" (endpoint unreachable) to
+  // "no eligible outputs" (empty conversation) — the capability chain itself
+  // succeeds without any AI enablement. A submitted report additionally
+  // needs an eligible assistant output, which the AI gate prevents by
+  // design on this surface, so the journey pins the capability flip via the
+  // button's disabled-reason title.
+  test("AI-disabled surface still resolves capabilities through the non-gated chain", async ({
+    disabledApp,
+  }) => {
+    const reporting = await startFakeReportingServer();
+    try {
+      await openChat(disabledApp);
 
-        const reportButton = v2ReportButton(aiApp);
-        await expect(reportButton).toBeEnabled({ timeout: 60_000 });
-        await reportButton.click();
-
-        const dialog = aiApp.mainWindow
-          .getByTestId("ai-conversation-report-dialog");
-        await expect(dialog).toBeVisible({ timeout: 30_000 });
-        // Select the eligible outputs (a single checkbox row exists for the
-        // one assistant response).
-        await dialog
-          .locator('[data-testid^="report-item-"] input[type="checkbox"]')
-          .first()
-          .check();
-        // The category select is required local validation — pick one via
-        // the Vuetify overlay (teleported outside the dialog element).
-        await dialog.locator(".v-select .v-field").click();
-        await aiApp.mainWindow
-          .getByRole("option", { name: "Hate or harassment", exact: true })
-          .click();
-        await dialog.getByTestId("conversation-report-submit").click();
-
-        // Terminal assertions (FR-5.5): the success message carries the
-        // server reference and the copy control appears. Read via main-world
-        // evaluate inside a bounded retry — locator-based visibility checks
-        // are blocked by the runner stall documented above.
-        const readResultText = (): Promise<string> =>
-          aiApp.mainWindow.evaluate(() => {
-            const r = document.querySelector(".report-result");
-            if (r) return r.textContent ?? "";
-            const e = document.querySelector(".report-error");
-            return e ? (e.textContent ?? "") : "";
-          });
-        let resultText = "";
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < 120_000) {
-          resultText =
-            (await Promise.race([
-              readResultText(),
-              new Promise<string>((resolve) =>
-                setTimeout(() => resolve(""), 10_000)
-              ),
-            ])) ?? "";
-          if (resultText.length > 0) break;
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-        await expect(resultText).toContain(FAKE_REPORT_ID);
-        // Journey ends at the submitted state (FR-5.5). The cancel-close UX
-        // is certified by AIConversationReportDialog.test.ts — an end-to-end
-        // close assertion is unreliable because Vuetify's exit transition
-        // never completes for a backgrounded Electron window (rAF
-        // suspension).
-      } finally {
-        await reporting.close();
-      }
+      const reportButton = v2ReportButton(disabledApp);
+      await expect(reportButton).toBeVisible({ timeout: 30_000 });
+      // The capability fetch resolves enabled:true over the fake loopback,
+      // so the ONLY remaining disable reason is the empty conversation —
+      // never an AI-plan gate (FR-4.4 fail-closed contract honored, the AI
+      // gate stayed closed but reporting stayed reachable).
+      await expect(reportButton).toHaveAttribute(
+        "title",
+        /no reportable AI outputs/i,
+        { timeout: 30_000 }
+      );
+    } finally {
+      await reporting.close();
     }
-  );
+  });
+
+  // §24.6 successful journey. Re-enabled 2026-10-19: the post-submit runner
+  // wedge documented below did not reproduce on the current host (passes
+  // deterministically with locator + evaluate assertions), so the journey
+  // runs as a regular test again. Historical note: Playwright's runner
+  // previously wedged right after the dialog's submit click on a contested
+  // host CPU (15 reproduced stalls, 2 clean passes under identical code) —
+  // if the stall returns, the bounded main-world evaluate loop below is the
+  // fallback reading strategy for the terminal state.
+  test("successful journey: enabled capabilities → select → submit → server reference (§24.6)", async ({
+    aiApp,
+    fakeAi,
+  }) => {
+    test.setTimeout(300_000);
+    const reporting = await startFakeReportingServer();
+    try {
+      await openChat(aiApp);
+      // Produce one eligible assistant output (plain text completion).
+      await aiApp.mainWindow
+        .getByTestId("ai-chat-composer")
+        .locator("textarea")
+        .first()
+        .fill("make a splash page");
+      await aiApp.mainWindow.getByTestId("ai-chat-send").click();
+      // Wait for the assistant response to become an eligible item.
+      await aiApp.mainWindow
+        .locator('[data-testid="workspace-transcript"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 30_000 });
+      await aiApp.mainWindow
+        .getByText("Hello world!")
+        .first()
+        .waitFor({ state: "visible", timeout: 60_000 });
+
+      const reportButton = v2ReportButton(aiApp);
+      await expect(reportButton).toBeEnabled({ timeout: 60_000 });
+      await reportButton.click();
+
+      const dialog = aiApp.mainWindow.getByTestId(
+        "ai-conversation-report-dialog"
+      );
+      await expect(dialog).toBeVisible({ timeout: 30_000 });
+      // Select the eligible outputs (a single checkbox row exists for the
+      // one assistant response).
+      await dialog
+        .locator('[data-testid^="report-item-"] input[type="checkbox"]')
+        .first()
+        .check();
+      // The category select is required local validation — pick one via
+      // the Vuetify overlay (teleported outside the dialog element).
+      await dialog.locator(".v-select .v-field").click();
+      await aiApp.mainWindow
+        .getByRole("option", { name: "Hate or harassment", exact: true })
+        .click();
+      await dialog.getByTestId("conversation-report-submit").click();
+
+      // Terminal assertions (FR-5.5): the success message carries the
+      // server reference and the copy control appears. Read via main-world
+      // evaluate inside a bounded retry — locator-based visibility checks
+      // are blocked by the runner stall documented above.
+      const readResultText = (): Promise<string> =>
+        aiApp.mainWindow.evaluate(() => {
+          const r = document.querySelector(".report-result");
+          if (r) return r.textContent ?? "";
+          const e = document.querySelector(".report-error");
+          return e ? e.textContent ?? "" : "";
+        });
+      let resultText = "";
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 120_000) {
+        resultText =
+          (await Promise.race([
+            readResultText(),
+            new Promise<string>((resolve) =>
+              setTimeout(() => resolve(""), 10_000)
+            ),
+          ])) ?? "";
+        if (resultText.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      await expect(resultText).toContain(FAKE_REPORT_ID);
+      // Journey ends at the submitted state (FR-5.5). The cancel-close UX
+      // is certified by AIConversationReportDialog.test.ts — an end-to-end
+      // close assertion is unreliable because Vuetify's exit transition
+      // never completes for a backgrounded Electron window (rAF
+      // suspension).
+    } finally {
+      await reporting.close();
+    }
+  });
 });

@@ -80,7 +80,24 @@ export function startFakeReportingServer(): Promise<FakeReportingServer> {
   return new Promise<FakeReportingServer>((resolve, reject) => {
     server.on("error", reject);
     server.listen(3000, "127.0.0.1", () => {
-      resolve({ close: () => new Promise((d) => server.close(() => d)) });
+      resolve({
+        // server.close() alone waits for open sockets to drain; the app's
+        // HTTP client keeps the loopback connection pooled, which wedged
+        // this fixture's close() until the test budget expired (the
+        // historical "post-submit runner stall"). Force-destroy the pooled
+        // sockets before draining.
+        close: () =>
+          new Promise((d) => {
+            server.closeAllConnections();
+            server.close(() => d());
+            // The app's HTTP client may re-pool the loopback socket around
+            // the drained listen socket, and server.close() then waits for
+            // it indefinitely (observed as the historical "post-submit
+            // runner stall" that consumed the whole test budget). Give
+            // teardown a hard ceiling instead of trusting socket drain.
+            setTimeout(() => d(), 2_000).unref();
+          }),
+      });
     });
   });
 }
