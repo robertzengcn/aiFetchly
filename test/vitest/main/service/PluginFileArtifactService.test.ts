@@ -6,6 +6,8 @@ import * as os from "os";
 import * as path from "path";
 import {
   PluginFileArtifactService,
+  PLUGIN_ARTIFACT_LIMITS,
+  validatePluginArtifactCsvText,
   type PluginArtifactCandidate,
 } from "@/service/PluginFileArtifactService";
 
@@ -209,6 +211,7 @@ describe("PluginFileArtifactService", () => {
     fs.writeFileSync(
       path.join(staging, "records.json"),
       JSON.stringify({
+        schemaVersion: 1,
         records: Array.from({ length: 50 }, (_, i) => ({ i })),
       })
     );
@@ -256,6 +259,285 @@ describe("PluginFileArtifactService", () => {
     expect(fs.existsSync(service.stagingDir("exec-clean"))).toBe(true);
     service.releaseStaging("exec-clean");
     expect(fs.existsSync(service.stagingDir("exec-clean"))).toBe(false);
+  });
+});
+
+describe("PluginFileArtifactService candidate hardening (B10)", () => {
+  function promoteErr(
+    executionId: string,
+    candidate: PluginArtifactCandidate
+  ): string {
+    const { artifacts, errors } = service.promoteCandidates({
+      executionId,
+      conversationId: "conv-b10",
+      pluginName: "demo-plugin",
+      candidates: [candidate],
+    });
+    expect(artifacts).toHaveLength(0);
+    expect(errors.length).toBeGreaterThan(0);
+    return errors.join(" ");
+  }
+
+  function stagedText(
+    executionId: string,
+    name: "records.json" | "records.csv",
+    text: string
+  ): void {
+    const staging = service.provisionStaging(executionId);
+    fs.writeFileSync(path.join(staging, name), text);
+  }
+
+  it("rejects an in-staging relative symlink (validated before following the link)", () => {
+    const executionId = "b10-link-inside";
+    const staging = service.provisionStaging(executionId);
+    const target = path.join(staging, "target.csv");
+    fs.writeFileSync(target, JSON.stringify(RECORDS));
+    fs.symlinkSync(target, path.join(staging, "records.csv"));
+    const error = promoteErr(executionId, {
+      version: 1,
+      relativePath: "records.csv",
+      format: "csv",
+      recordCount: 2,
+      complete: true,
+    });
+    expect(error).toMatch(/not a regular file/);
+  });
+
+  it("rejects a hard-linked candidate", () => {
+    const executionId = "b10-hardlink";
+    const staging = service.provisionStaging(executionId);
+    const outside = path.join(root, "..", "b10-hardlink-source.json");
+    fs.writeFileSync(outside, JSON.stringify(RECORDS));
+    fs.linkSync(outside, path.join(staging, "records.json"));
+    const error = promoteErr(executionId, JSON_CANDIDATE);
+    expect(error).toMatch(/hard link/);
+    fs.unlinkSync(outside);
+  });
+
+  it("binds filename and format (records.csv + format:json fails)", () => {
+    const executionId = "b10-bind";
+    stagedText(executionId, "records.csv", "businessName,phone\nA,111\n");
+    const error = promoteErr(executionId, {
+      version: 1,
+      relativePath: "records.csv",
+      format: "json",
+      recordCount: 1,
+      complete: true,
+    });
+    expect(error).toMatch(/filename\/format mismatch/);
+  });
+
+  it("rejects JSON without a records array / with a non-1 schemaVersion / with non-object records", () => {
+    stagedText(
+      "b10-no-records",
+      "records.json",
+      JSON.stringify({ schemaVersion: 1, summary: "no records here" })
+    );
+    const missing = promoteErr("b10-no-records", {
+      ...JSON_CANDIDATE,
+      recordCount: 0,
+    });
+    expect(missing).toMatch(/missing the records array/);
+
+    stagedText(
+      "b10-ver",
+      "records.json",
+      JSON.stringify({ schemaVersion: 2, records: [] })
+    );
+    const version = promoteErr("b10-ver", {
+      ...JSON_CANDIDATE,
+      recordCount: 0,
+    });
+    expect(version).toMatch(/schemaVersion/);
+
+    stagedText(
+      "b10-objs",
+      "records.json",
+      JSON.stringify({ schemaVersion: 1, records: [1, "str"] })
+    );
+    const shape = promoteErr("b10-objs", {
+      ...JSON_CANDIDATE,
+      recordCount: 2,
+    });
+    expect(shape).toMatch(/records must be objects/);
+  });
+
+  it("recounts CSV data records and rejects a bogus claim (one row claiming 999)", () => {
+    const executionId = "b10-csv-count";
+    stagedText(
+      executionId,
+      "records.csv",
+      "businessName,phone\nA,111\n"
+    );
+    const error = promoteErr(executionId, {
+      version: 1,
+      relativePath: "records.csv",
+      format: "csv",
+      recordCount: 999,
+      complete: true,
+    });
+    expect(error).toMatch(/record count mismatch.*claimed 999, found 1/);
+  });
+
+  it("rejects CSV formula-like leading cells whether quoted or not", () => {
+    stagedText(
+      "b10-risky-unquoted",
+      "records.csv",
+      'businessName,phone\n=CMD("calc"),123\n'
+    );
+    expect(
+      promoteErr("b10-risky-unquoted", {
+        version: 1,
+        relativePath: "records.csv",
+        format: "csv",
+        recordCount: 1,
+        complete: true,
+      })
+    ).toMatch(/spreadsheet-formula-like/);
+
+    stagedText(
+      "b10-risky-quoted",
+      "records.csv",
+      'businessName,phone\n"x",@abadcell\n'
+    );
+    expect(
+      promoteErr("b10-risky-quoted", {
+        version: 1,
+        relativePath: "records.csv",
+        format: "csv",
+        recordCount: 1,
+        complete: true,
+      })
+    ).toMatch(/spreadsheet-formula-like/);
+  });
+
+  it("accepts valid quoted CSV with escaped quotes and in-quote newlines", () => {
+    const executionId = "b10-csv-valid";
+    const staging = service.provisionStaging(executionId);
+    fs.writeFileSync(
+      path.join(staging, "records.csv"),
+      'businessName,phone\n"A ""Q"" Co","555-1212"\n"B, Multi\nline","555-1213"\n'
+    );
+    const { artifacts, errors } = service.promoteCandidates({
+      executionId,
+      conversationId: "conv-b10",
+      pluginName: "demo-plugin",
+      candidates: [
+        {
+          version: 1,
+          relativePath: "records.csv",
+          format: "csv",
+          recordCount: 2,
+          complete: true,
+        },
+      ],
+    });
+    expect(errors).toEqual([]);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].recordCount).toBe(2);
+    expect(artifacts[0].sizeBytes).toBeGreaterThan(0);
+  });
+
+  it("rejects unterminated quotes inside CSV", () => {
+    stagedText(
+      "b10-csv-unterm",
+      "records.csv",
+      'businessName,phone\n"A "open,123\n'
+    );
+    expect(
+      promoteErr("b10-csv-unterm", {
+        version: 1,
+        relativePath: "records.csv",
+        format: "csv",
+        recordCount: 1,
+        complete: true,
+      })
+    ).toMatch(/unexpected (?:quote|characters after a closing quote)|unterminated/);
+  });
+
+  it("records the host-computed sha256 digest on promoted artifacts", async () => {
+    const executionId = "b10-digest";
+    stagedText(executionId, "records.json", JSON.stringify(RECORDS));
+    const { artifacts, errors } = service.promoteCandidates({
+      executionId,
+      conversationId: "conv-b10",
+      pluginName: "demo-plugin",
+      candidates: [JSON_CANDIDATE],
+    });
+    expect(errors).toEqual([]);
+    expect(artifacts).toHaveLength(1);
+    const { createHash } = await import("crypto");
+    const expected = createHash("sha256")
+      .update(
+        fs.readFileSync(
+          path.join(service.stagingDir(executionId), "records.json")
+        )
+      )
+      .digest("hex");
+    expect(artifacts[0].digest).toBe(expected);
+    const meta = JSON.parse(
+      fs.readFileSync(
+        path.join(root, "artifacts", artifacts[0].id, "metadata.json"),
+        "utf8"
+      )
+    ) as { digest?: string };
+    expect(meta.digest).toBe(expected);
+  });
+});
+
+describe("PluginFileArtifactService.readCandidates bounds (B10)", () => {
+  it("ignores an oversized candidates.json manifest", () => {
+    const executionId = "b10-manifest-big";
+    const staging = service.provisionStaging(executionId);
+    fs.writeFileSync(
+      path.join(staging, "records.json"),
+      JSON.stringify(RECORDS)
+    );
+    fs.writeFileSync(
+      path.join(staging, "candidates.json"),
+      JSON.stringify({
+        candidates: [JSON_CANDIDATE],
+        padding: "x".repeat(PLUGIN_ARTIFACT_LIMITS.maxCandidatesManifestBytes + 16),
+      })
+    );
+    expect(service.readCandidates(executionId)).toEqual([]);
+  });
+
+  it("ignores a symlinked candidates.json manifest", () => {
+    const executionId = "b10-manifest-link";
+    const staging = service.provisionStaging(executionId);
+    fs.writeFileSync(
+      path.join(staging, "records.json"),
+      JSON.stringify(RECORDS)
+    );
+    fs.writeFileSync(
+      path.join(root, "..", "b10-manifest.json"),
+      JSON.stringify({ candidates: [JSON_CANDIDATE] })
+    );
+    fs.symlinkSync(
+      path.join(root, "..", "b10-manifest.json"),
+      path.join(staging, "candidates.json")
+    );
+    expect(service.readCandidates(executionId)).toEqual([]);
+    fs.unlinkSync(path.join(root, "..", "b10-manifest.json"));
+  });
+});
+
+describe("validatePluginArtifactCsvText", () => {
+  it("counts logical data records across CRLF/BOM/trailing newlines", () => {
+    const text = "\uFEFFbusinessName,phone\r\nA,111\r\nB,222\r\n";
+    const result = validatePluginArtifactCsvText(text);
+    expect(result).toEqual({ ok: true, dataRecords: 2 });
+    // Trailing newline must not create a phantom record.
+    expect(validatePluginArtifactCsvText("a,b\n")).toEqual({
+      ok: true,
+      dataRecords: 0,
+    });
+  });
+
+  it("rejects malformed quotes at end of input", () => {
+    const result = validatePluginArtifactCsvText('a,b\n"unterminated');
+    expect(result.ok).toBe(false);
   });
 });
 

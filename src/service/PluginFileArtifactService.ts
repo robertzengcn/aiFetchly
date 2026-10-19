@@ -3,6 +3,8 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { log } from "@/modules/Logger";
 import { getElectronUserDataPath } from "@/service/SkillEnvironmentManager";
+import { Token } from "@/modules/token";
+import { USERID } from "@/config/usersetting";
 
 /**
  * PluginFileArtifactService — host-owned file-artifact store (HOST-17,
@@ -45,6 +47,8 @@ export interface RegisteredPluginArtifact {
   readonly expiresAt: string;
   readonly conversationId: string;
   readonly pluginName: string;
+  /** Host-computed sha256 of the promoted content bytes (design §13.2). */
+  readonly digest?: string;
 }
 
 export const PLUGIN_ARTIFACT_LIMITS = {
@@ -54,12 +58,20 @@ export const PLUGIN_ARTIFACT_LIMITS = {
   maxArtifactsPerExecution: 2,
   /** Default retention for unexported completed artifacts. */
   defaultRetentionMs: 30 * 24 * 60 * 60_000,
+  /** Max bytes of a candidates.json manifest read by the host (B10). */
+  maxCandidatesManifestBytes: 1024 * 1024,
 } as const;
 
 /** Structural fs seam for tests. */
 export interface ArtifactFs {
   existsSync(p: string): boolean;
-  statSync(p: string): { isFile(): boolean; isDirectory(): boolean; size: number };
+  statSync(p: string): {
+    isFile(): boolean;
+    isDirectory(): boolean;
+    size: number;
+    /** Hard-link count when the underlying fs exposes it (real fs does). */
+    nlink?: number;
+  };
   lstatSync(p: string): { isFile(): boolean; isSymbolicLink(): boolean };
   realpathSync(p: string): string;
   mkdirSync(p: string, options?: { recursive: boolean }): string | undefined;
@@ -67,13 +79,166 @@ export interface ArtifactFs {
   copyFileSync(from: string, to: string): void;
   writeFileSync(p: string, data: string, options?: { mode: number }): void;
   readFileSync(p: string): string;
+  /** Byte read used for digest computation and bounded parses. */
+  readBufferSync(p: string): Buffer;
   unlinkSync(p: string): void;
   rmSync(p: string, options?: { recursive: boolean; force: boolean }): void;
   renameSync(from: string, to: string): void;
 }
 
 function defaultFs(): ArtifactFs {
-  return fs as unknown as ArtifactFs;
+  return {
+    ...fs,
+    readBufferSync: (p: string) => fs.readFileSync(p) as Buffer,
+  } as unknown as ArtifactFs;
+}
+
+/** Leading characters Excel/Sheets treat as formula-like (design §13.3). */
+const CSV_RISKY_LEADING_CHARS = new Set(["=", "+", "-", "@", "\t", "\r"]);
+
+/**
+ * Parse a v1 plugin CSV document (RFC 4180 comma-delimited) and verify the
+ * spreadsheet-safe export policy at the host boundary (B10): risky leading
+ * cells (unquoted or quoted) are rejected, malformed CSV fails, and the
+ * count of parsed data records (all logical records minus the fixed header)
+ * is returned for verification against the plugin's claim.
+ */
+export function validatePluginArtifactCsvText(
+  text: string
+): { ok: true; dataRecords: number } | { ok: false; error: string } {
+  let logicalRecords = 0;
+  let recordHasContent = false;
+  let inQuotes = false;
+  /** True between the opening quote and the first quoted content char. */
+  let insideOpeningQuote = false;
+  /** True immediately after a closing quote (RFC 4180 delimiter must follow). */
+  let afterClosingQuote = false;
+  let atCellStart = true;
+  let i = 0;
+  if (text.charCodeAt(0) === 0xfeff) i = 1; // tolerate a BOM
+  while (i < text.length) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (insideOpeningQuote) {
+        insideOpeningQuote = false;
+        if (CSV_RISKY_LEADING_CHARS.has(ch)) {
+          return {
+            ok: false,
+            error: "spreadsheet-formula-like cell (must be neutralized by the plugin)",
+          };
+        }
+      }
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        afterClosingQuote = true;
+        i += 1;
+        continue;
+      }
+      recordHasContent = true;
+      if (ch === "\r" && text[i + 1] === "\n") {
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (afterClosingQuote) {
+      if (ch === ",") {
+        atCellStart = true;
+        afterClosingQuote = false;
+        i += 1;
+        continue;
+      }
+      if (ch === "\n" || ch === "\r") {
+        afterClosingQuote = false;
+        // fall through to the record-end handling below without consuming.
+      } else {
+        return { ok: false, error: "unexpected characters after a closing quote" };
+      }
+    }
+    if (atCellStart && ch === '"') {
+      inQuotes = true;
+      insideOpeningQuote = true;
+      atCellStart = false;
+      recordHasContent = true;
+      i += 1;
+      continue;
+    }
+    if (ch === ",") {
+      atCellStart = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      logicalRecords += 1;
+      recordHasContent = false;
+      atCellStart = true;
+      if (ch === "\r" && text[i + 1] === "\n") {
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+    if (atCellStart && CSV_RISKY_LEADING_CHARS.has(ch)) {
+      return {
+        ok: false,
+        error: "spreadsheet-formula-like cell (must be neutralized by the plugin)",
+      };
+    }
+    atCellStart = false;
+    recordHasContent = true;
+    i += 1;
+  }
+  if (inQuotes) {
+    return { ok: false, error: "unterminated quoted field in CSV" };
+  }
+  let logicalFinal = logicalRecords;
+  if (recordHasContent) logicalFinal += 1;
+  if (logicalFinal === 0) return { ok: true, dataRecords: 0 };
+  // Record 1 is always the fixed header row.
+  return { ok: true, dataRecords: Math.max(0, logicalFinal - 1) };
+}
+
+/**
+ * Validate a v1 JSON artifact document (design §13.3): an object with
+ * schemaVersion 1, a REQUIRED `records` array, and object records. A missing
+ * records array must never masquerade as an empty dataset (B10).
+ */
+export function validatePluginArtifactJsonDoc(
+  text: string
+): { ok: true; recordCount: number } | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "not valid JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: "JSON artifact must be an object with a records array" };
+  }
+  const doc = parsed as Record<string, unknown>;
+  if (!Array.isArray(doc.records)) {
+    return { ok: false, error: "JSON artifact is missing the records array" };
+  }
+  const schemaVersion = doc.schemaVersion;
+  if (
+    typeof schemaVersion !== "number" ||
+    !Number.isInteger(schemaVersion) ||
+    schemaVersion !== 1
+  ) {
+    return { ok: false, error: "unsupported JSON artifact schemaVersion" };
+  }
+  for (const record of doc.records as unknown[]) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      return { ok: false, error: "JSON artifact records must be objects" };
+    }
+  }
+  return { ok: true, recordCount: doc.records.length };
 }
 
 export class PluginFileArtifactService {
@@ -139,8 +304,26 @@ export class PluginFileArtifactService {
     );
     if (!this.fs.existsSync(manifest)) return [];
     let parsed: unknown;
+    // Plugin-controlled metadata: bound the read before parsing (B10) —
+    // an oversized manifest is never fed to JSON.parse.
     try {
-      parsed = JSON.parse(this.fs.readFileSync(manifest));
+      const manifestStat = this.fs.lstatSync(manifest);
+      if (
+        manifestStat.isSymbolicLink() ||
+        manifestStat.isFile() !== true ||
+        this.fs.statSync(manifest).size >
+          PLUGIN_ARTIFACT_LIMITS.maxCandidatesManifestBytes
+      ) {
+        log.warn(
+          `[PluginFileArtifactService] candidates manifest rejected for ${executionId} (missing/oversized/not-a-regular-file)`
+        );
+        return [];
+      }
+    } catch {
+      return [];
+    }
+    try {
+      parsed = JSON.parse(this.fs.readBufferSync(manifest).toString("utf8"));
     } catch {
       return [];
     }
@@ -296,6 +479,30 @@ export class PluginFileArtifactService {
     if (!this.fs.existsSync(staging)) {
       return { artifacts, errors: ["staging directory does not exist"] };
     }
+    // Staging/root ownership: resolve every symlink first; the staging root
+    // must still live inside the host store (a swapped/staged symlinked
+    // staging root would defeat containment — B10).
+    let realRoot: string;
+    let realStaging: string;
+    try {
+      realRoot = this.fs.realpathSync(this.root);
+      realStaging = this.fs.realpathSync(staging);
+    } catch (e) {
+      return {
+        artifacts,
+        errors: [`staging path could not be resolved: ${String(e)}`],
+      };
+    }
+    const stagingRootPrefix = path.join(realRoot, "staging");
+    if (
+      realStaging !== stagingRootPrefix &&
+      !realStaging.startsWith(`${stagingRootPrefix}${path.sep}`)
+    ) {
+      return {
+        artifacts,
+        errors: ["staging directory is not owned by the artifact store"],
+      };
+    }
     if (
       input.candidates.length > PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution
     ) {
@@ -311,7 +518,7 @@ export class PluginFileArtifactService {
       0,
       PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution
     )) {
-      const validated = this.validateCandidate(staging, candidate);
+      const validated = this.validateCandidate(staging, candidate, realStaging);
       if ("error" in validated) {
         errors.push(validated.error);
         continue;
@@ -334,7 +541,12 @@ export class PluginFileArtifactService {
         this.fs.mkdirSync(destDir, { recursive: true });
         // Copy into a NEW host-owned file (never accept a mutable link).
         this.fs.copyFileSync(validated.file, path.join(destDir, contentName));
-        const stat = this.fs.statSync(path.join(destDir, contentName));
+        const contentPath = path.join(destDir, contentName);
+        const stat = this.fs.statSync(contentPath);
+        // Host-authoritative digest over the promoted bytes (design §13.2).
+        const digest = createHash("sha256")
+          .update(this.fs.readBufferSync(contentPath))
+          .digest("hex");
         const registered: RegisteredPluginArtifact = {
           id: artifactId,
           format: candidate.format,
@@ -346,6 +558,7 @@ export class PluginFileArtifactService {
           ).toISOString(),
           conversationId: input.conversationId,
           pluginName: input.pluginName,
+          digest,
         };
         // Atomic metadata write: metadata is authoritative only after the
         // content copy completed.
@@ -402,7 +615,7 @@ export class PluginFileArtifactService {
     if (!this.fs.existsSync(contentPath)) {
       return { ok: false, error: "artifact content missing" };
     }
-    const text = this.fs.readFileSync(contentPath);
+    const text = this.fs.readBufferSync(contentPath).toString("utf8");
     if (artifact.format === "csv") {
       const lines = text.split("\n").slice(0, maxRows + 1); // header + rows
       return { ok: true, format: "csv", rows: lines.join("\n") };
@@ -503,18 +716,36 @@ export class PluginFileArtifactService {
 
   private validateCandidate(
     staging: string,
-    candidate: PluginArtifactCandidate
+    candidate: PluginArtifactCandidate,
+    realStaging: string
   ):
     | { file: string; recordCount: number }
     | { error: string } {
-    const allowed = new Set(["records.json", "records.csv"]);
-    if (!allowed.has(candidate.relativePath)) {
+    // Fixed v1 filename allowlist kept ahead of the filename↔format binding
+    // so traversal/renamed paths are rejected by name, never followed.
+    if (candidate.relativePath !== "records.json" && candidate.relativePath !== "records.csv") {
       return { error: `candidate path "${candidate.relativePath}" is not allowed` };
     }
+    // Bind filename ↔ format (B10): "records.csv" + format:json (or the
+    // reverse) can never be registered by claiming a mismatched pair.
+    const expectedFormat: PluginArtifactFormat =
+      candidate.relativePath === "records.json" ? "json" : "csv";
+    if (candidate.format !== expectedFormat) {
+      return {
+        error: `filename/format mismatch for "${candidate.relativePath}" (declared format ${candidate.format})`,
+      };
+    }
     const resolved = path.resolve(staging, candidate.relativePath);
-    const realStaging = this.fs.realpathSync(staging);
-    // Containment: realpath must stay inside the staging root; reject
-    // symlinks, non-files, and traversal.
+    // Validate the ORIGINAL filesystem entry before following anything (B10).
+    let originalStat: ReturnType<ArtifactFs["lstatSync"]>;
+    try {
+      originalStat = this.fs.lstatSync(resolved);
+    } catch {
+      return { error: `candidate "${candidate.relativePath}" does not exist` };
+    }
+    if (originalStat.isSymbolicLink() || !originalStat.isFile()) {
+      return { error: `candidate "${candidate.relativePath}" is not a regular file` };
+    }
     let real: string;
     try {
       real = this.fs.realpathSync(resolved);
@@ -524,6 +755,8 @@ export class PluginFileArtifactService {
     if (real !== realStaging && !real.startsWith(`${realStaging}${path.sep}`)) {
       return { error: `candidate "${candidate.relativePath}" escapes the staging directory` };
     }
+    // Re-validate the fully resolved path: directories or the entry itself
+    // could have been swapped between lstat and realpath.
     try {
       const lstat = this.fs.lstatSync(real);
       if (lstat.isSymbolicLink() || !lstat.isFile()) {
@@ -536,24 +769,32 @@ export class PluginFileArtifactService {
     if (stat.size > PLUGIN_ARTIFACT_LIMITS.maxArtifactBytes) {
       return { error: `candidate "${candidate.relativePath}" exceeds the size cap` };
     }
-    // JSON candidates must parse and their actual record count must match
-    // the plugin's claim (the host never trusts plugin assertions).
-    if (candidate.format === "json") {
-      try {
-        const parsed = JSON.parse(this.fs.readFileSync(real)) as {
-          records?: unknown[];
-        };
-        const actual = Array.isArray(parsed.records) ? parsed.records.length : 0;
-        if (actual !== candidate.recordCount) {
-          return {
-            error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${actual})`,
-          };
-        }
-      } catch {
-        return { error: `candidate "${candidate.relativePath}" is not valid JSON` };
-      }
+    if (typeof stat.nlink === "number" && stat.nlink > 1) {
+      return { error: `candidate "${candidate.relativePath}" has multiple hard links` };
     }
-    return { file: real, recordCount: candidate.recordCount };
+    const text = this.fs.readBufferSync(real).toString("utf8");
+    if (candidate.format === "json") {
+      const validation = validatePluginArtifactJsonDoc(text);
+      if (!validation.ok) {
+        return { error: `candidate "${candidate.relativePath}": ${validation.error}` };
+      }
+      if (validation.recordCount !== candidate.recordCount) {
+        return {
+          error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${validation.recordCount})`,
+        };
+      }
+      return { file: real, recordCount: validation.recordCount };
+    }
+    const csv = validatePluginArtifactCsvText(text);
+    if (!csv.ok) {
+      return { error: `candidate "${candidate.relativePath}": ${csv.error}` };
+    }
+    if (csv.dataRecords !== candidate.recordCount) {
+      return {
+        error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${csv.dataRecords})`,
+      };
+    }
+    return { file: real, recordCount: csv.dataRecords };
   }
 
   private requireOwned(
@@ -572,13 +813,17 @@ export class PluginFileArtifactService {
     const metaPath = path.join(dir, "metadata.json");
     if (!this.fs.existsSync(metaPath)) return null;
     try {
-      const parsed = JSON.parse(this.fs.readFileSync(metaPath)) as {
+      const parsed = JSON.parse(
+        this.fs.readBufferSync(metaPath).toString("utf8")
+      ) as {
         id?: unknown;
         conversationId?: unknown;
+        digest?: unknown;
       };
       if (
         typeof parsed.id === "string" &&
-        typeof parsed.conversationId === "string"
+        typeof parsed.conversationId === "string" &&
+        (parsed.digest === undefined || typeof parsed.digest === "string")
       ) {
         return parsed as RegisteredPluginArtifact;
       }
@@ -630,17 +875,45 @@ export class PluginFileArtifactService {
   }
 }
 
-let defaultService: PluginFileArtifactService | undefined;
-
-export function getPluginFileArtifactService(): PluginFileArtifactService {
-  if (!defaultService) defaultService = new PluginFileArtifactService();
-  return defaultService;
+/**
+ * Resolve the artifact-store scope from the AUTHENTICATED host identity
+ * (Token `user_id`, hashed — B09). The scoped service cache means an account
+ * change immediately redirects all reads/writes to that account's own store;
+ * previous-account content keeps its separate on-disk scope and is never
+ * reachable through the new identity without the host re-deriving it.
+ */
+export function resolvePluginArtifactScopeId(): string {
+  let userId = "";
+  try {
+    userId = new Token().getValue(USERID) ?? "";
+  } catch {
+    userId = "";
+  }
+  const normalized = userId.trim();
+  if (normalized.length === 0) return "anonymous";
+  return `u_${createHash("sha256")
+    .update("aifetchly-plugin-artifacts:1:")
+    .update(normalized)
+    .digest("hex")
+    .slice(0, 16)}`;
 }
 
-export function setPluginFileArtifactServiceForTest(
-  service: PluginFileArtifactService | undefined
-): void {
-  defaultService = service;
+const MAX_CACHED_SCOPED_SERVICES = 8;
+const scopedServices = new Map<string, PluginFileArtifactService>();
+
+export function getPluginFileArtifactService(
+  scopeId?: string
+): PluginFileArtifactService {
+  const scope = scopeId ?? resolvePluginArtifactScopeId();
+  const cached = scopedServices.get(scope);
+  if (cached) return cached;
+  const service = new PluginFileArtifactService({ scopeId: scope });
+  if (scopedServices.size >= MAX_CACHED_SCOPED_SERVICES) {
+    const oldest = scopedServices.keys().next();
+    if (!oldest.done) scopedServices.delete(oldest.value);
+  }
+  scopedServices.set(scope, service);
+  return service;
 }
 
 /** Fresh unique execution id (host-generated). */

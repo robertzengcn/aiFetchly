@@ -1,6 +1,7 @@
 import { log } from "@/modules/Logger";
 import { ipcMain, dialog, type IpcMainInvokeEvent } from "electron";
 import { PluginFileArtifactModule } from "@/modules/PluginFileArtifactModule";
+import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import {
   PLUGIN_ARTIFACT_LIST,
   PLUGIN_ARTIFACT_PREVIEW,
@@ -12,13 +13,24 @@ import type { CommonMessage } from "@/entityTypes/commonType";
 /**
  * IPC handlers for the host-owned plugin artifact store (design §13.4).
  *
- * Ownership: every operation is scoped to a conversation id verified in the
- * Module against host-written metadata — a renderer-supplied artifact id is
- * a reference, never authorization. Export destinations are chosen through
- * the native save dialog (never a renderer-supplied absolute path). Reads
- * are not AI-gated: no AI request is made; the store holds already-created
- * local content (mirrors ai-artifact-ipc policy).
+ * Ownership: every operation is authenticated twice (B09):
+ *  1. the IPC sender frame must be a trusted app origin (see OriginTrust), and
+ *  2. the Module verifies conversation ownership server-side against
+ *     host-written metadata before any read/preview/export/delete — a
+ *     renderer-supplied artifact id is a reference, never authorization.
+ * Export destinations are chosen through the native save dialog (never a
+ * renderer-supplied absolute path). Reads are not AI-gated: no AI request is
+ * made; the store holds already-created local content (mirrors
+ * ai-artifact-ipc policy).
  */
+
+function assertTrustedSender(event?: IpcMainInvokeEvent): void {
+  if (!event || !isAppTrustedOrigin(event?.senderFrame?.url)) {
+    throw new Error(
+      "Plugin artifact request from an untrusted origin was denied."
+    );
+  }
+}
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -71,34 +83,41 @@ function parseArtifactRequest(
   return { ok: true, value: { conversationId: conv.value, artifactId } };
 }
 
-async function handleList(data: unknown) {
+async function handleList(event?: IpcMainInvokeEvent, data?: unknown) {
   const req = parseConversationId(data);
   if (!req.ok) return denied(req.error);
   try {
+    assertTrustedSender(event);
     const module = new PluginFileArtifactModule();
     return ok(await module.listForConversation(req.value));
   } catch (err) {
     log.error("[plugin-artifact] list failed:", err);
-    return denied("Failed to list plugin artifacts.");
+    return denied(
+      err instanceof Error ? err.message : "Failed to list plugin artifacts."
+    );
   }
 }
 
-async function handlePreview(data: unknown) {
+async function handlePreview(event?: IpcMainInvokeEvent, data?: unknown) {
   const req = parseArtifactRequest(data);
   if (!req.ok) return denied(req.error);
   try {
+    assertTrustedSender(event);
     const module = new PluginFileArtifactModule();
     return ok(await module.preview(req.value.conversationId, req.value.artifactId));
   } catch (err) {
     log.error("[plugin-artifact] preview failed:", err);
-    return denied("Failed to preview the plugin artifact.");
+    return denied(
+      err instanceof Error ? err.message : "Failed to preview the plugin artifact."
+    );
   }
 }
 
-async function handleExport(event: IpcMainInvokeEvent, data: unknown) {
+async function handleExport(event: IpcMainInvokeEvent | undefined, data: unknown) {
   const req = parseArtifactRequest(data);
   if (!req.ok) return denied(req.error);
   try {
+    assertTrustedSender(event);
     const module = new PluginFileArtifactModule();
     const list = await module.listForConversation(req.value.conversationId);
     const artifact = list.find((a) => a.id === req.value.artifactId);
@@ -123,35 +142,40 @@ async function handleExport(event: IpcMainInvokeEvent, data: unknown) {
     return ok({ cancelled: false, sizeBytes: exported.sizeBytes });
   } catch (err) {
     log.error("[plugin-artifact] export failed:", err);
-    return denied("Failed to export the plugin artifact.");
+    return denied(
+      err instanceof Error ? err.message : "Failed to export the plugin artifact."
+    );
   }
 }
 
-async function handleDelete(data: unknown) {
+async function handleDelete(event?: IpcMainInvokeEvent, data?: unknown) {
   const req = parseArtifactRequest(data);
   if (!req.ok) return denied(req.error);
   try {
+    assertTrustedSender(event);
     const module = new PluginFileArtifactModule();
     const result = await module.delete(req.value.conversationId, req.value.artifactId);
     if (!result.ok) return denied(result.error ?? "Delete failed.");
     return ok({ deleted: true });
   } catch (err) {
     log.error("[plugin-artifact] delete failed:", err);
-    return denied("Failed to delete the plugin artifact.");
+    return denied(
+      err instanceof Error ? err.message : "Failed to delete the plugin artifact."
+    );
   }
 }
 
 export function registerPluginArtifactIpcHandlers(): void {
-  ipcMain.handle(PLUGIN_ARTIFACT_LIST, async (_e, data: unknown) =>
-    handleList(data)
+  ipcMain.handle(PLUGIN_ARTIFACT_LIST, async (event, data: unknown) =>
+    handleList(event, data)
   );
-  ipcMain.handle(PLUGIN_ARTIFACT_PREVIEW, async (_e, data: unknown) =>
-    handlePreview(data)
+  ipcMain.handle(PLUGIN_ARTIFACT_PREVIEW, async (event, data: unknown) =>
+    handlePreview(event, data)
   );
-  ipcMain.handle(PLUGIN_ARTIFACT_EXPORT, async (e, data: unknown) =>
-    handleExport(e, data)
+  ipcMain.handle(PLUGIN_ARTIFACT_EXPORT, async (event, data: unknown) =>
+    handleExport(event, data)
   );
-  ipcMain.handle(PLUGIN_ARTIFACT_DELETE, async (_e, data: unknown) =>
-    handleDelete(data)
+  ipcMain.handle(PLUGIN_ARTIFACT_DELETE, async (event, data: unknown) =>
+    handleDelete(event, data)
   );
 }

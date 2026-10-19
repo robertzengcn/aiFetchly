@@ -215,7 +215,7 @@ Evidence: [src/service/PluginRecoveryLedger.ts:235](../../src/service/PluginReco
 
 ### B09 — P1 — Authenticate artifact access instead of trusting supplied conversation IDs
 
-- [ ] Fix and verify B09.
+- [x] Fix and verify B09.
 
 Evidence: [src/main-process/communication/plugin-artifact-ipc.ts:74](../../src/main-process/communication/plugin-artifact-ipc.ts#L74); [src/modules/PluginFileArtifactModule.ts:25](../../src/modules/PluginFileArtifactModule.ts#L25); [src/service/PluginFileArtifactService.ts:93](../../src/service/PluginFileArtifactService.ts#L93); [src/service/PluginFileArtifactService.ts:559](../../src/service/PluginFileArtifactService.ts#L559).
 
@@ -229,7 +229,7 @@ Evidence: [src/main-process/communication/plugin-artifact-ipc.ts:74](../../src/m
 
 ### B10 — P1 — Validate actual artifact files, records and path/format agreement
 
-- [ ] Fix and verify B10.
+- [x] Fix and verify B10.
 
 Evidence: [src/service/PluginFileArtifactService.ts:130](../../src/service/PluginFileArtifactService.ts#L130); [src/service/PluginFileArtifactService.ts:504](../../src/service/PluginFileArtifactService.ts#L504).
 
