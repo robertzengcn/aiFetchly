@@ -10,11 +10,13 @@ import { REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVe
  *  - block:   AI disclosure / prompt / tool / retrieval leakage; configured
  *             forbidden phrases. Never sendable — approval refuses.
  *  - warning: unsupported commitments (refund/discount/guaranteed price or date,
- *             legal/credential/account), new URLs, payment instructions, new
+ *             legal/credential/account), payment instructions, new
  *             recipients, attachment-inspection claims. Advisory only: persisted
  *             in `validationFindingsJson` for audit and does NOT gate approval —
  *             the send tool's `requiresConfirmation` gesture (or the renderer's
  *             explicit approve action) is the human gate for advisory content.
+ *             A URL in the body is not a finding and does not require extra
+ *             confirmation.
  *
  * Revisions materialized before 2026-10-18 may persist the retired `review`
  * severity in their stored findings JSON; that value was non-gating after the
@@ -82,9 +84,6 @@ const ATTACHMENT_CLAIM_PATTERNS: readonly CompiledPattern[] = [
   warn("attachment_inspection_claim", /\b(?:i|we)\s+(?:opened|read|checked|verified|inspected|reviewed)\s+(?:the\s+)?attach/i, "Draft claims the attachment was opened/read (the system never opens attachments)"),
 ];
 
-// ---- URL detection (advisory warning) ----
-const URL_PATTERN = /https?:\/\/[^\s)]+|www\.[^\s)]+/i;
-
 // ---- Recipient-in-body detection (advisory warning) ----
 const NEW_RECIPIENT_PATTERN = /\b(?:cc|bcc|reply-all|forward to)\b/i;
 
@@ -149,15 +148,6 @@ export function validateReplyOutput(
   for (const p of COMMITMENT_PATTERNS) push(p);
   for (const p of ATTACHMENT_CLAIM_PATTERNS) push(p);
 
-  const urlMatch = URL_PATTERN.exec(combined);
-  if (urlMatch) {
-    findings.push({
-      code: "new_url",
-      severity: "warning",
-      message: "Draft introduces a URL not present in the inbound message",
-      evidence: urlMatch[0].slice(0, 120),
-    });
-  }
   const recipientMatch = NEW_RECIPIENT_PATTERN.exec(combined);
   if (recipientMatch) {
     findings.push({

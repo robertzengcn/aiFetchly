@@ -24,3 +24,26 @@ export const TOOL_RESULT_DENIAL_RECOVERY =
   "tool call (e.g. knowledge_library_search) to obtain a fresh receipt, or " +
   "copy the output_id exactly as printed in a prior saved-result receipt " +
   "(out_...) and call tool_result_read with it.";
+
+/**
+ * Shown with `INVALID_OUTPUT_CURSOR`. A bare code makes the model retry the
+ * same damaged cursor. The text tells it to drop that cursor and continue
+ * from a verbatim next_cursor or from the start.
+ */
+export const TOOL_RESULT_CURSOR_RECOVERY =
+  "INVALID_OUTPUT_CURSOR means this cursor was changed, truncated, or does not " +
+  "match this output_id, mode, and query. Do not retry the same cursor. " +
+  "Copy next_cursor from the latest successful page exactly, including the " +
+  "signature after the final dot, or omit cursor and pass only output_id to " +
+  "start over. Never reconstruct a cursor. A search continuation must reuse " +
+  "the same query string.";
+
+/** Attach cursor recovery only for the invalid-cursor failure. */
+export function toolResultReadFailure(
+  code: string
+): Record<string, unknown> {
+  if (code === "INVALID_OUTPUT_CURSOR") {
+    return { error: code, recovery: TOOL_RESULT_CURSOR_RECOVERY };
+  }
+  return { error: code };
+}

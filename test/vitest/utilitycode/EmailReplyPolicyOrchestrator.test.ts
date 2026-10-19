@@ -175,8 +175,9 @@ describe("EmailReplyPolicyCode — FR-028/029/036/027 duplicate/refusal codes", 
 
   it("maps classification-flavored blocked reasons to accurate codes (FR-007 §10.1 follow-up)", () => {
     // The classification hard-block reason carries the classification literal.
-    // 'unknown' must surface as classification_unknown (pre-send / non-tool
-    // producers), NOT the generic blocked_sender the old fallthrough emitted.
+    // An unattended evaluator that still emits the unknown reason maps to
+    // classification_unknown, not the generic blocked_sender fallthrough.
+    // A human-confirmed send does not feed stored `unknown` into that evaluator.
     const unknownBlock = mapLegacyDecision(
       "blocked",
       "Classification 'unknown' must not be auto-replied",

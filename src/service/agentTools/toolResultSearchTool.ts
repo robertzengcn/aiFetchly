@@ -11,7 +11,10 @@
  */
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
-import { TOOL_RESULT_DENIAL_RECOVERY } from "@/service/agentTools/toolResultDenialRecovery";
+import {
+  TOOL_RESULT_DENIAL_RECOVERY,
+  toolResultReadFailure,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
 import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
@@ -93,7 +96,7 @@ export async function handleToolResultSearch(
     // `reservedCalls`, an unsettled reservation permanently consumes one of the
     // turn's 32 calls.
     await trusted.settleWork(0);
-    return { success: false, result: { error: outcome.code } };
+    return { success: false, result: toolResultReadFailure(outcome.code) };
   }
 
   const page = outcome.page;
@@ -102,6 +105,10 @@ export async function handleToolResultSearch(
     output_id: page.outputId,
     revision: target.target.revision,
     query: parsed.data.query,
+    // Cursor before the match list so a tail truncation cannot drop it.
+    next_cursor: page.nextCursor,
+    scan_complete: page.scanComplete,
+    source_completeness: page.sourceCompleteness,
     matches: page.matches.map((m) => ({
       start_byte: m.startByte,
       end_byte: m.endByte,
@@ -109,9 +116,6 @@ export async function handleToolResultSearch(
       read_cursor: m.readCursor,
       match_count_in_window: m.matchCountInWindow,
     })),
-    scan_complete: page.scanComplete,
-    next_cursor: page.nextCursor,
-    source_completeness: page.sourceCompleteness,
   });
   const envelope =
     fitted !== null && typeof fitted === "object"

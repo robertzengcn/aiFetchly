@@ -3,6 +3,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -12,7 +13,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
  * `approved`. The approval service recomputes validation from the trusted
  * revision body and throws before writing an approval or transitioning state.
  *
- * 2026-10-18 policy change: advisory findings (commitments, URLs, payment
+ * 2026-10-18 policy change: advisory findings (commitments, payment
  * instructions, recipients, attachment claims) are non-blocking warnings —
  * they persist for audit and approval succeeds. The send tool's
  * `requiresConfirmation` gesture is the human gate for advisory content, and
@@ -22,8 +23,13 @@ describe("P0.4 — approval blocked by validation findings", () => {
   const draftModule = new EmailReplyDraftModule();
   const approvalService = new EmailReplyApprovalService();
 
-  async function seedDraftWithBody(bodyText: string): Promise<{
+  async function seedDraftWithBody(
+    bodyText: string,
+    classification: "interested" | "unknown" = "interested",
+    emailServiceId = 7
+  ): Promise<{
     draftId: number;
+    messageId: number;
     revisionId: number;
   }> {
     // Approval proceeds past validation to message load + policy gates, so a
@@ -31,7 +37,7 @@ describe("P0.4 — approval blocked by validation findings", () => {
     // policy scans the INBOUND message, not the draft).
     const messageModule = new EmailReceivedMessageModule();
     const msg = new EmailReceivedMessageEntity();
-    msg.emailServiceId = 7;
+    msg.emailServiceId = emailServiceId;
     msg.providerUid = `p04-${Math.random()}`;
     msg.messageId = `<p04-${Math.random()}@x>`;
     msg.threadKey = msg.messageId;
@@ -46,7 +52,7 @@ describe("P0.4 — approval blocked by validation findings", () => {
     msg.snippet = null;
     msg.receivedAt = new Date();
     msg.isUnread = 1;
-    msg.classification = "interested";
+    msg.classification = classification;
     msg.classificationConfidence = 0.9;
     msg.replyStatus = "not_started";
     msg.processedAt = null;
@@ -54,7 +60,7 @@ describe("P0.4 — approval blocked by validation findings", () => {
 
     const draft = new EmailReplyDraftEntity();
     draft.messageId = savedMsg.id;
-    draft.emailServiceId = 7;
+    draft.emailServiceId = emailServiceId;
     draft.subject = "Re: Pricing";
     draft.bodyText = bodyText;
     draft.bodyHtml = null;
@@ -69,10 +75,14 @@ describe("P0.4 — approval blocked by validation findings", () => {
       bodyHtml: null,
       senderAddress: "owner@svc.com",
       recipientAddress: "prospect@example.com",
-      emailServiceId: 7,
+      emailServiceId,
       originalMessageId: savedMsg.id,
     });
-    return { draftId: saved.id, revisionId: rev.revisionId };
+    return {
+      draftId: saved.id,
+      messageId: savedMsg.id,
+      revisionId: rev.revisionId,
+    };
   }
 
   it("refuses approval when the body leaks AI self-disclosure (block)", async () => {
@@ -130,7 +140,7 @@ describe("P0.4 — approval blocked by validation findings", () => {
   });
 
   it("approves a body introducing a new URL (user's reported repro shape)", async () => {
-    const { draftId } = await seedDraftWithBody(
+    const { draftId, revisionId } = await seedDraftWithBody(
       "Please complete payment at https://pay.example.com/x"
     );
     await approvalService.approveDraft({
@@ -140,6 +150,33 @@ describe("P0.4 — approval blocked by validation findings", () => {
     });
     const draft = await draftModule.readAggregate(draftId);
     expect(draft?.status).toBe("approved");
+    const revision = await new EmailReplyDraftRevisionModule().read(revisionId);
+    const persisted = JSON.parse(
+      (revision?.validationFindingsJson ?? "{}") as string
+    ) as { findings: { code: string }[] };
+    expect(persisted.findings.some((f) => f.code === "new_url")).toBe(false);
+  });
+
+  it("approves and allows pre-send when classification is unknown and the body has a URL", async () => {
+    const { draftId, messageId } = await seedDraftWithBody(
+      "Proxy setup is documented at https://docs.aifetchly.com/docs/lead-generation/proxy-setup",
+      "unknown",
+      88019
+    );
+    await approvalService.approveDraft({
+      draftId,
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
+    });
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("approved");
+    const decision = await new EmailReplyPolicyOrchestrator().evaluate({
+      stage: "pre_send",
+      messageId,
+      draftId,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).not.toBe("classification_unknown");
   });
 });
 

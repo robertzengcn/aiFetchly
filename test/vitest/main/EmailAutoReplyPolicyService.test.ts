@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
+import {
+  classificationForConfirmedSend,
+  evaluateAutoReplyPolicy,
+} from "@/service/emailReply/EmailAutoReplyPolicyService";
 import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import type { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 
@@ -114,6 +117,31 @@ describe("evaluateAutoReplyPolicy (Phase 1 — auto-send disabled)", () => {
       sendCounts: emptyCounts,
     });
     expect(d.status).toBe("draft_created");
+  });
+
+  it("lets a confirmed send proceed when classification is unknown", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("unknown") as never,
+      confidence: null,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).not.toBe("blocked");
+    expect(d.status).not.toBe("skipped");
+    expect(d.reason).not.toMatch(/unknown/);
+  });
+
+  it("still blocks bounce after the confirmed-send classification mapping", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("bounce") as never,
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).toBe("blocked");
+    expect(d.reason).toMatch(/bounce/);
   });
 
   it("blocks bounce / unsubscribe / auto_reply classifications", () => {

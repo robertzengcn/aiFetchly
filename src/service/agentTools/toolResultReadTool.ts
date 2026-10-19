@@ -15,7 +15,10 @@ import {
 } from "@/schemas/toolResult";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
-import { TOOL_RESULT_DENIAL_RECOVERY } from "@/service/agentTools/toolResultDenialRecovery";
+import {
+  TOOL_RESULT_DENIAL_RECOVERY,
+  toolResultReadFailure,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
 import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
@@ -95,19 +98,20 @@ export async function handleToolResultRead(
   if (!outcome.ok) {
     await trusted.settleWork(0);
     // An exhausted allowance is reported, never silently treated as empty.
-    return { success: false, result: { error: outcome.code } };
+    return { success: false, result: toolResultReadFailure(outcome.code) };
   }
 
   const page = outcome.page;
   const fitted = fitWrappedRetrievalResult({
     output_id: page.outputId,
     revision: target.target.revision,
-    text: page.text,
+    // Cursor before the page text so a tail truncation cannot drop it.
+    next_cursor: page.nextCursor,
+    complete: page.complete,
     start_byte: page.startByte,
     end_byte: page.endByte,
     total_bytes: page.totalBytes,
-    complete: page.complete,
-    next_cursor: page.nextCursor,
+    text: page.text,
     source_completeness: target.target.sourceCompleteness,
   });
   const envelope =

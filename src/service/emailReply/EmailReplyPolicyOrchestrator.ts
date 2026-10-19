@@ -4,7 +4,10 @@ import type {
   EmailReplyPolicyStage,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import { REPLY_POLICY_VERSION } from "@/service/emailReply/replyReliabilityVersions";
-import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
+import {
+  classificationForConfirmedSend,
+  evaluateAutoReplyPolicy,
+} from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
@@ -296,9 +299,9 @@ export class EmailReplyPolicyOrchestrator {
     // on the refined value. Feeding the stage-agnostic evaluator `null`
     // (pending refinement) here is what makes that refinement reachable — a
     // hard block would deadlock drafting before the classifier could run.
-    // Pre-send NEVER exempts: an approved draft's classification must be
-    // decided, and `unknown` stays a hard block there (surfaced as
-    // classification_unknown by classifyBlock).
+    // Pre-send uses the same exemption for a stored `unknown`: by then a
+    // human has confirmed the draft, and an inconclusive classification is
+    // not a bounce, unsubscribe, or automated-sender block.
     const refinementPending = message.classification === "unknown";
     const decision = evaluateAutoReplyPolicy({
       message: message as never,
@@ -425,10 +428,18 @@ export class EmailReplyPolicyOrchestrator {
     const threadCount = await this.attemptModule.countAttemptsForMessage(
       message.id
     );
+    // Human-confirmed send: `unknown` is inconclusive, not a hard block.
+    // Bounce, unsubscribe, auto_reply, and needs_human_review still refuse.
+    const confirmedClassification = classificationForConfirmedSend(
+      message.classification
+    );
     const legacy = evaluateAutoReplyPolicy({
       message: message as never,
-      classification: message.classification as never,
-      confidence: message.classificationConfidence,
+      classification: confirmedClassification as never,
+      confidence:
+        confirmedClassification == null
+          ? null
+          : message.classificationConfidence,
       rule,
       sendCounts: { todayForService, threadCount },
     });

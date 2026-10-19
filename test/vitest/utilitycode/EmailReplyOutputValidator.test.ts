@@ -174,16 +174,15 @@ describe("validateReplyOutput — unsupported commitments (warning)", () => {
     expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("the reported repro — URL + credential mention is sendable with warnings only", () => {
+  it("the reported repro — a URL is not a finding; a credential mention stays a warning", () => {
     const r = validateReplyOutput(
       "Re: Feature question",
       "See https://docs.aifetchly.com/docs/lead-generation for details — no passwords or credentials needed."
     );
-    const url = r.findings.find((f) => f.code === "new_url");
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
     const credential = r.findings.find(
       (f) => f.code === "commitment_credential"
     );
-    expect(url?.severity).toBe("warning");
     expect(credential?.severity).toBe("warning");
     expect(r.findings.some((f) => f.severity === "block")).toBe(false);
     expect(r.sendableAfterApproval).toBe(true);
@@ -207,7 +206,6 @@ describe("validateReplyOutput — unsupported commitments (warning)", () => {
       "commitment_account_change",
       "commitment_payment_instruction",
       "attachment_inspection_claim",
-      "new_url",
       "new_recipient_directive",
     ]) {
       expect(r.findings.some((f) => f.code === code)).toBe(true);
@@ -221,13 +219,13 @@ describe("validateReplyOutput — unsupported commitments (warning)", () => {
 });
 
 describe("validateReplyOutput — URLs, recipients, attachments", () => {
-  it("flags a newly introduced URL as a non-blocking warning", () => {
+  it("does not flag a URL in the reply body", () => {
     const r = validateReplyOutput(
       "Re: x",
-      "See https://evil.example.com/promo for details."
+      "See https://docs.aifetchly.com/docs/lead-generation/proxy-setup for details."
     );
-    const url = r.findings.find((f) => f.code === "new_url");
-    expect(url?.severity).toBe("warning");
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
+    expect(r.findings).toHaveLength(0);
     expect(r.sendableAfterApproval).toBe(true);
   });
 
@@ -260,7 +258,7 @@ describe("validateReplyOutput — URLs, recipients, attachments", () => {
       "Re: x",
       "As an AI language model, I recommend https://example.com/pricing."
     );
-    expect(r.findings.some((f) => f.code === "new_url")).toBe(true);
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
     expect(r.findings.some((f) => f.severity === "block")).toBe(true);
     expect(r.sendableAfterApproval).toBe(false);
   });
