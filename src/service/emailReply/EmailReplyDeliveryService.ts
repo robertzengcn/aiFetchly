@@ -512,7 +512,7 @@ export class EmailReplyDeliveryService {
     // 2. Mailbox + envelope binding (FR-017, P0.2). Pure validation; throws
     //    SendBindingError before the atomic claim so no SMTP submission can
     //    occur on any mismatch (wrong mailbox / sender / recipient / draft).
-    //    §18.2/§18.3: identity comparison (v2) or legacy gate (v1) runs here too.
+    //    §18.2: a v2 revision also compares its frozen SMTP username and Reply-To.
     //    R20: validateSendBinding is pure (no invocation context), so a thrown
     //    SendBindingError carries no correlation id. Re-throw with the id
     //    attached (new object — immutable) so the tool/IPC envelope can join

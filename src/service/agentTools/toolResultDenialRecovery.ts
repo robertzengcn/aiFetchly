@@ -38,6 +38,19 @@ export const TOOL_RESULT_CURSOR_RECOVERY =
   "start over. Never reconstruct a cursor. A search continuation must reuse " +
   "the same query string.";
 
+/**
+ * Shown when `tool_result_search` arguments fail schema validation. A bare
+ * code makes the model change the query and retry the same illegal
+ * `max_matches`.
+ */
+export const TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY =
+  "INVALID_OUTPUT_ARGUMENTS means a search field was invalid. " +
+  "output_id must be copied verbatim from a receipt (out_...). " +
+  "query must be literal text of 1 to 200 characters, never a regex. " +
+  "max_matches must be an integer from 1 to 20; omit it to use 10. " +
+  "Do not pass 30, 50, or any value above 20. " +
+  "cursor, when present, must be the previous search next_cursor copied verbatim.";
+
 /** Attach cursor recovery only for the invalid-cursor failure. */
 export function toolResultReadFailure(
   code: string

@@ -1380,7 +1380,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "A read cursor cannot continue a search. If the result is INVALID_OUTPUT_CURSOR, do not retry that cursor: omit it and search again with output_id and query. " +
       "scan_complete refers to the saved bytes only - if source_completeness is 'partial', " +
       "the producer itself truncated and absence cannot be concluded. " +
-      "The query is literal text, never a regular expression.",
+      "The query is literal text, never a regular expression. " +
+      "max_matches must be an integer from 1 to 20. Omit it to use 10. " +
+      "Do not pass 30, 50, or any larger number: one page holds at most 20 matches, " +
+      "and a larger value is capped at 20. Continue with next_cursor for more hits.",
     parameters: {
       type: "object",
       properties: {
@@ -1406,7 +1409,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         max_matches: {
           type: "number",
-          description: "Max matches to return (default 10, max 20).",
+          description:
+            "How many matches to return on this page. Integer from 1 to 20. " +
+            "Default 10 when omitted. A value above 20, such as 30 or 50, is capped at 20. " +
+            "Ask for more results by calling again with next_cursor, not by raising this number.",
           default: 10,
           minimum: 1,
           maximum: 20,

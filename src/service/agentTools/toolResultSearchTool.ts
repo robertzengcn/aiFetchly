@@ -9,10 +9,12 @@
  * producer that truncated upstream leaves `source_completeness: "partial"`,
  * which is reported separately so absence is never overclaimed.
  */
+import { TOOL_RESULT_DEFAULTS } from "@/config/toolResultConfig";
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import {
   TOOL_RESULT_DENIAL_RECOVERY,
+  TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY,
   toolResultReadFailure,
 } from "@/service/agentTools/toolResultDenialRecovery";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
@@ -20,13 +22,53 @@ import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineB
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
+const SEARCH_MAX_MATCHES = TOOL_RESULT_DEFAULTS.searchMaxMatches;
+
+/**
+ * Models often ask for more matches than one page allows (30, 50). The schema
+ * rejects those with INVALID_OUTPUT_ARGUMENTS. Cap the count first so the
+ * search runs and returns next_cursor for the rest.
+ */
+export function clampToolResultSearchArgs(
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(args, "max_matches")) {
+    return args;
+  }
+  const raw = args.max_matches;
+  if (raw === undefined || raw === null) {
+    const next: Record<string, unknown> = { ...args };
+    delete next.max_matches;
+    return next;
+  }
+  let value: number | null = null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    value = Math.trunc(raw);
+  } else if (typeof raw === "string" && /^-?\d+$/.test(raw.trim())) {
+    value = Number.parseInt(raw.trim(), 10);
+  }
+  if (value === null) return args;
+  return {
+    ...args,
+    max_matches: Math.min(SEARCH_MAX_MATCHES, Math.max(1, value)),
+  };
+}
+
 export async function handleToolResultSearch(
   args: Record<string, unknown>,
   context: SkillExecutionContext
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
-  const parsed = toolResultSearchInputSchema.safeParse(args);
+  const parsed = toolResultSearchInputSchema.safeParse(
+    clampToolResultSearchArgs(args)
+  );
   if (!parsed.success) {
-    return { success: false, result: { error: "INVALID_OUTPUT_ARGUMENTS" } };
+    return {
+      success: false,
+      result: {
+        error: "INVALID_OUTPUT_ARGUMENTS",
+        recovery: TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY,
+      },
+    };
   }
 
   const trusted = getToolResultContext(context);
