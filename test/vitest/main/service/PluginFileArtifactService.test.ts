@@ -81,6 +81,10 @@ describe("PluginFileArtifactService", () => {
       pluginName: "demo-plugin",
       candidates: [JSON_CANDIDATE],
     });
+    // B12: clean promotion releases staging. The plugin re-finalizes the
+    // same execution's candidates (re-stage, e.g. a retry after a lost
+    // response) and registration must return the EXISTING artifact.
+    stageExecution("exec-idem");
     const second = service.promoteCandidates({
       executionId: "exec-idem",
       conversationId: "conv-1",
@@ -469,10 +473,12 @@ describe("PluginFileArtifactService candidate hardening (B10)", () => {
     expect(errors).toEqual([]);
     expect(artifacts).toHaveLength(1);
     const { createHash } = await import("crypto");
+    // B12: staging is released on clean promotion — digest the promoted
+    // store copy (host-authoritative bytes) instead of the staging copy.
     const expected = createHash("sha256")
       .update(
         fs.readFileSync(
-          path.join(service.stagingDir(executionId), "records.json")
+          path.join(root, "artifacts", artifacts[0].id, "content.json")
         )
       )
       .digest("hex");
@@ -555,11 +561,11 @@ describe("PluginFileArtifactService.recoverStartupExecutions", () => {
         () => Date.parse("2026-10-16T00:00:00Z")
       );
       // Simulate a crashed execution: staging with candidates but no journal.
-      const staging = orphanService.provisionStaging("exec-crashed");
-      fs.writeFileSync(
-        path.join(staging, "records.json"),
-        JSON.stringify(RECORDS)
-      );
+    const staging = orphanService.provisionStaging("exec-crashed");
+    fs.writeFileSync(
+      path.join(staging, "records.json"),
+      JSON.stringify(RECORDS)
+    );
 
       const result = orphanService.recoverStartupExecutions();
       expect(result.interrupted).toEqual(["exec-crashed"]);
@@ -593,7 +599,7 @@ describe("PluginFileArtifactService.recoverStartupExecutions", () => {
     }
   });
 
-  it("ages out stale retained staging after promotion but respects fresh ones", () => {
+  it("ages out stale retained staging after promotion but respects fresh ones (B12 auto-release lifecycle)", () => {
     const agedRoot = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "yp-startup-")),
       "store"
@@ -615,30 +621,40 @@ describe("PluginFileArtifactService.recoverStartupExecutions", () => {
         candidates: [JSON_CANDIDATE],
       });
       expect(promoted.errors).toEqual([]);
+      // B12: clean promotion releases staging right away.
+      expect(fs.existsSync(agedService.stagingDir("exec-old"))).toBe(false);
 
-      // Fresh staging retained after promotion (staging is retained post-
-      // promotion) — promotion journaled it just before the sweep, so it
-      // must NOT be aged out even though the dir still exists. The clock
-      // jumps 30 days between the two promotions.
+      // Crash-residue: a host death between the journal write and the
+      // release can still leave retained staging; simulate that state for
+      // BOTH executions — an aged one (journal at 01-01) and a fresh one.
+      for (const id of ["exec-old", "exec-fresh"]) {
+        fs.mkdirSync(agedService.stagingDir(id), { recursive: true });
+        fs.writeFileSync(
+          path.join(agedService.stagingDir(id), "records.json"),
+          JSON.stringify(RECORDS)
+        );
+      }
+      // Fresh execution: journaled 30 days after the aged one.
       const freshClock = new PluginFileArtifactService(
         { root: agedRoot },
         () => Date.parse("2026-01-31T00:00:00Z")
       );
-      const freshStaging = freshClock.provisionStaging("exec-fresh");
-      fs.writeFileSync(
-        path.join(freshStaging, "records.json"),
-        JSON.stringify(RECORDS)
-      );
-      const freshPromoted = freshClock.promoteCandidates({
+      freshClock.promoteCandidates({
         executionId: "exec-fresh",
         conversationId: "conv-fresh",
         pluginName: "demo-plugin",
         candidates: [JSON_CANDIDATE],
       });
-      expect(freshPromoted.errors).toEqual([]);
-      expect(fs.existsSync(agedService.stagingDir("exec-fresh"))).toBe(true);
+      // Re-fabricate the fresh residue (the promote re-released it).
+      fs.mkdirSync(freshClock.stagingDir("exec-fresh"), { recursive: true });
+      fs.writeFileSync(
+        path.join(freshClock.stagingDir("exec-fresh"), "records.json"),
+        JSON.stringify(RECORDS)
+      );
 
-      // A service 31 days later performs the sweep.
+      // A service 31 days after the AGED promotion performs the sweep: the
+      // aged journal (01-01) pushes its residue past retention, the fresh
+      // journal (01-31) does not.
       const later = new PluginFileArtifactService({ root: agedRoot }, () =>
         Date.parse("2026-02-02T00:00:00Z")
       );

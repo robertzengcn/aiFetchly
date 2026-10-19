@@ -1866,6 +1866,22 @@ function initialize() {
         );
       }
 
+      // B12: retention actually runs — the startup expiry sweep plus a
+      // periodic interval sweep remove expired promoted artifacts and age
+      // out quarantine/journals while the app stays open. Fire-and-forget,
+      // never fatal, and the interval never keeps the process alive.
+      try {
+        const { initializePluginArtifactStore } = await import(
+          "@/modules/PluginFileArtifactModule"
+        );
+        void initializePluginArtifactStore();
+      } catch (err) {
+        log.warn(
+          "[plugin-artifacts] retention setup failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Preserved tool outputs: install the persistent cursor key and run the
       // reconciliation sweep (technical design §12.2). Without this the cursor
       // key is ephemeral per process, so every cursor a model received before a

@@ -75,6 +75,8 @@ export interface ArtifactFs {
     size: number;
     /** Hard-link count when the underlying fs exposes it (real fs does). */
     nlink?: number;
+    /** Modification time for retention sweeps (real fs). */
+    mtimeMs?: number;
   };
   lstatSync(p: string): { isFile(): boolean; isSymbolicLink(): boolean };
   realpathSync(p: string): string;
@@ -857,6 +859,14 @@ export class PluginFileArtifactService {
     }
 
     this.writeJournal(input.executionId, { artifacts, errors });
+    // B12: staging is transient — once promotion is fully confirmed (no
+    // errors, journal written), release it so normal outputs are not kept
+    // duplicated in staging until a restart sweep. On partial errors the
+    // staging dir is retained for idempotent re-promotion and the later
+    // aging sweep.
+    if (errors.length === 0) {
+      this.releaseStaging(input.executionId);
+    }
     return { artifacts, errors };
   }
 
@@ -867,13 +877,16 @@ export class PluginFileArtifactService {
     conversationId: string
   ): RegisteredPluginArtifact[] {
     const out: RegisteredPluginArtifact[] = [];
+    const nowIso = new Date(this.now()).toISOString();
     const artifactsRoot = path.join(this.root, "artifacts");
     if (!this.fs.existsSync(artifactsRoot)) return out;
     for (const id of this.fs.readdirSync(artifactsRoot)) {
       const artifact = this.readArtifact(path.join(artifactsRoot, id));
-      if (artifact && artifact.conversationId === conversationId) {
-        out.push(artifact);
-      }
+      if (!artifact || artifact.conversationId !== conversationId) continue;
+      // B12: expired artifacts stay server-side garbage until the sweep;
+      // listings never surface them.
+      if (artifact.expiresAt <= nowIso) continue;
+      out.push(artifact);
     }
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
@@ -1011,20 +1024,123 @@ export class PluginFileArtifactService {
     }
   }
 
-  /** Expire artifacts past their retention (startup / periodic sweep). */
-  public sweepExpired(): number {
+  /**
+   * Expire artifacts past their retention (startup / periodic sweep).
+   * B12: also ages OUT quarantine entries and orphaned journals with the
+   * same retention window so interrupted executions do not accumulate
+   * forever. Staging dirs with no journal are untouched here — they are
+   * reported + quarantined by the startup `recoverStartupExecutions` sweep.
+   */
+  public sweepExpired(
+    retentionMs: number = PLUGIN_ARTIFACT_LIMITS.defaultRetentionMs
+  ): number {
+    let removed = 0;
+    const nowIso = new Date(this.now()).toISOString();
+
+    // 1. Promoted artifacts past their retention.
+    const artifactsRoot = path.join(this.root, "artifacts");
+    if (this.fs.existsSync(artifactsRoot)) {
+      for (const id of this.fs.readdirSync(artifactsRoot)) {
+        const artifact = this.readArtifact(path.join(artifactsRoot, id));
+        if (artifact && artifact.expiresAt <= nowIso) {
+          this.fs.rmSync(path.join(artifactsRoot, id), {
+            recursive: true,
+            force: true,
+          });
+          removed += 1;
+        }
+      }
+    }
+
+    // 2. Quarantined staging older than the retention window (mtime serves
+    // as the quarantine timestamp — the journal does not survive the move).
+    const quarantineRoot = path.join(this.root, "staging-quarantine");
+    if (this.fs.existsSync(quarantineRoot)) {
+      for (const id of this.fs.readdirSync(quarantineRoot)) {
+        try {
+          const entry = path.join(quarantineRoot, id);
+          let mtime: number;
+          try {
+            mtime = this.fs.statSync(entry).mtimeMs ?? 0;
+          } catch {
+            continue;
+          }
+          if (this.now() - mtime > retentionMs) {
+            this.fs.rmSync(entry, { recursive: true, force: true });
+            removed += 1;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    // 3. Journals whose transient data is fully gone and that are past the
+    // retention window: the journal exists for honest re-poll resolution and
+    // as the aging key for retained staging — once both staging and
+    // quarantine are gone it is pure residue.
+    const journalDir = path.join(this.root, "journal");
+    if (this.fs.existsSync(journalDir)) {
+      for (const name of this.fs.readdirSync(journalDir)) {
+        if (!name.endsWith(".json")) continue;
+        try {
+          const journalPath = path.join(journalDir, name);
+          const parsed = JSON.parse(
+            this.fs.readFileSync(journalPath)
+          ) as { at?: string };
+          const createdAt =
+            typeof parsed?.at === "string" ? Date.parse(parsed.at) : NaN;
+          const stamp = Number.isFinite(createdAt)
+            ? createdAt
+            : (this.fs.statSync(journalPath).mtimeMs ?? 0);
+          if (this.now() - stamp <= retentionMs) continue;
+          const stagingPath = path.join(
+            this.root,
+            "staging",
+            name.replace(/\.json$/, "")
+          );
+          const quarantinePath = path.join(
+            quarantineRoot,
+            name.replace(/\.json$/, "")
+          );
+          if (
+            !this.fs.existsSync(stagingPath) &&
+            !this.fs.existsSync(quarantinePath)
+          ) {
+            this.fs.unlinkSync(journalPath);
+            removed += 1;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    return removed;
+  }
+
+  /**
+   * Confirmed conversation deletion (B12): remove every promoted artifact
+   * owned by the conversation. Called Module-side from the conversation
+   * clear/delete flows; staging/quarantine are NOT conversation-owned —
+   * they follow the normal startup/periodic aging sweeps.
+   */
+  public removeForConversation(conversationId: string): number {
     let removed = 0;
     const artifactsRoot = path.join(this.root, "artifacts");
     if (!this.fs.existsSync(artifactsRoot)) return 0;
-    const nowIso = new Date(this.now()).toISOString();
     for (const id of this.fs.readdirSync(artifactsRoot)) {
-      const artifact = this.readArtifact(path.join(artifactsRoot, id));
-      if (artifact && artifact.expiresAt <= nowIso) {
-        this.fs.rmSync(path.join(artifactsRoot, id), {
-          recursive: true,
-          force: true,
-        });
-        removed += 1;
+      try {
+        const artifact = this.readArtifact(path.join(artifactsRoot, id));
+        if (artifact && artifact.conversationId === conversationId) {
+          this.fs.rmSync(path.join(artifactsRoot, id), {
+            recursive: true,
+            force: true,
+          });
+          removed += 1;
+        }
+      } catch {
+        continue;
       }
     }
     return removed;
@@ -1124,7 +1240,11 @@ export class PluginFileArtifactService {
       path.join(this.root, "artifacts", artifactId)
     );
     if (!artifact) return null;
-    return artifact.conversationId === conversationId ? artifact : null;
+    if (artifact.conversationId !== conversationId) return null;
+    // B12: expired metadata never serves content between sweeps — reads
+    // reject it so retention holds even before the next sweep runs.
+    if (artifact.expiresAt <= new Date(this.now()).toISOString()) return null;
+    return artifact;
   }
 
   private readArtifact(dir: string): RegisteredPluginArtifact | null {

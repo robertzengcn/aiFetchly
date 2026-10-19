@@ -117,19 +117,65 @@ export class PluginFileArtifactModule {
   public async sweepExpired(): Promise<number> {
     return this.service.sweepExpired();
   }
+
+  /**
+   * B12: conversation deletion cascade — remove every promoted artifact
+   * owned by the conversation. Best-effort (storage failure never blocks
+   * the conversation deletion itself); the failed artifacts stay expirable
+   * by the periodic sweep.
+   */
+  public async removeForConversation(conversationId: string): Promise<number> {
+    try {
+      return this.service.removeForConversation(conversationId);
+    } catch (e) {
+      log.warn(
+        `[PluginFileArtifactModule] conversation artifact removal failed: ${String(e)}`
+      );
+      return 0;
+    }
+  }
 }
 
-/** Lazily log-guarded startup hook used by the IPC registration path. */
+/**
+ * Lazily log-guarded startup hook used by the IPC registration path.
+ * B12: also installs the process-wide periodic retention sweep so expiry
+ * runs while the app stays open. The singleton guard keeps repeated calls
+ * (e.g. background.ts + IPC init) from stacking intervals; the interval is
+ * unref'd so it never keeps the process alive.
+ */
+export const PLUGIN_ARTIFACT_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+let periodicSweepInterval: ReturnType<typeof setInterval> | null = null;
+
 export async function initializePluginArtifactStore(): Promise<void> {
-  try {
-    const module = new PluginFileArtifactModule();
-    const removed = await module.sweepExpired();
-    if (removed > 0) {
-      log.info(`[PluginFileArtifactModule] expired ${removed} artifact(s)`);
+  const runSweep = async (): Promise<void> => {
+    try {
+      const module = new PluginFileArtifactModule();
+      const removed = await module.sweepExpired();
+      if (removed > 0) {
+        log.info(`[PluginFileArtifactModule] expired ${removed} artifact(s)`);
+      }
+    } catch (e) {
+      log.warn(
+        `[PluginFileArtifactModule] startup sweep failed: ${String(e)}`
+      );
     }
-  } catch (e) {
-    log.warn(
-      `[PluginFileArtifactModule] startup sweep failed: ${String(e)}`
-    );
+  };
+
+  await runSweep();
+
+  if (periodicSweepInterval === null) {
+    periodicSweepInterval = setInterval(() => {
+      void runSweep();
+    }, PLUGIN_ARTIFACT_SWEEP_INTERVAL_MS);
+    periodicSweepInterval.unref?.();
+  }
+}
+
+/** Test hook: clears the singleton periodic-sweep guard. */
+export function resetPluginArtifactSweepForTest(): void {
+  if (periodicSweepInterval !== null) {
+    clearInterval(periodicSweepInterval);
+    periodicSweepInterval = null;
   }
 }
