@@ -253,9 +253,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         (p) =>
           (p as { type?: string; text?: string })?.type === "text" &&
           typeof (p as { text?: string }).text === "string" &&
-          (p as { text?: string }).text.includes(
-            "[AIFETCHLY_IMAGE_HANDOFF_V1]"
-          )
+          (p as { text?: string }).text.includes("[AIFETCHLY_IMAGE_HANDOFF_V1]")
       );
     }
     return false;
@@ -279,9 +277,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       let idx = parsed.messages.length - 1;
       while (idx >= 0 && isHandoffMessage(parsed.messages[idx])) idx -= 1;
       if (idx < 0) return false;
-      return (
-        (parsed.messages[idx] as { role?: string }).role === "tool"
-      );
+      return (parsed.messages[idx] as { role?: string }).role === "tool";
     } catch {
       return false;
     }
@@ -453,6 +449,21 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       // generic completion. Existing SSE scenarios are untouched (stream:true).
       const parsedBody = parseChatRequestBody(rawBody);
       if (!parsedBody.stream) {
+        // Summarize-only control scenarios (recoverable-history FR-HIS-005):
+        // the compaction coordinator's summarize calls are the non-streaming
+        // path, so a spec can settle a run FAILED or keep it cancellable
+        // without ever breaking streaming chat sends.
+        if (scenario === "summarize-http-500") {
+          await sleep(200);
+          requestLog.push(redactChatRequest(req, rawBody, false));
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "summarize down" } }));
+          return;
+        }
+        if (scenario === "summarize-delayed") {
+          // Hold the summarize behind a barrier the spec can cancel inside.
+          await sleep(6_000);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(

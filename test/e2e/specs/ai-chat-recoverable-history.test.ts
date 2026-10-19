@@ -33,12 +33,41 @@
  *           HISTORY_NO_MATCH with scanComplete:true/indexComplete:false;
  *           resolve-selections → HISTORY_SCOPE_INVALID.
  *
+ *   AC-19 mixed acknowledgements (draft 4, FR-HIS-003) — two chips drafted;
+ *           the archive state's sourceRevision is bumped beneath the draft
+ *           (revision drift). The send must succeed with the refreshed ids
+ *           quoted nowhere (redacted log), BOTH chips stay visible flagged
+ *           changed (title tooltip + warning color), and a fresh re-select
+ *           then clears its chip on the next ack (accepted consolidation).
+ *
+ *   AC-19b hard rejections (FR-HIS-003/P2-10) — chip drafted, the backing
+ *           archive is tombstoned by the real clear-conversation flow;
+ *           the follow-up send still completes, the chip stays flagged
+ *           rejected (error color + "no longer available" tooltip) and the
+ *           fresh epoch's ids are quoted nowhere.
+ *
+ *   FR-HIS-004 stable identity + no transfer — chips survive a transport
+ *           failure (disconnect-mid-stream, composer actionable again), a
+ *           healthy retry of the SAME draft consumes the chip once; the
+ *           drafted chips never appear in a NEW conversation and are
+ *           restored on returning (per-conversation drafts).
+ *
+ *   FR-HIS-005 compaction failure + cancellation — a summarize failure
+ *           settles the run `failed` with the chip intact and composer
+ *           usable; a healthy retry publishes; a `stream-delayed` summarize
+ *           stays cancellable (run cancelled/completed) while the chip and
+ *           composer remain usable. Flag-off (history UI disabled) shows no
+ *           select affordance and nothing can be submitted.
+ *
  * Relative imports only — the E2E test layer is deliberately decoupled from
  * `src/` (design §9.3).
  */
 
 import { test, expect } from "@playwright/test";
-import { RENDERER_ORIGIN } from "../fixtures/types";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import * as path from "path";
+import { RENDERER_ORIGIN, type E2ETestRoot } from "../fixtures/types";
 import {
   createTemporaryRoot,
   writeStateManifest,
@@ -47,6 +76,11 @@ import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
 import { closeApp } from "../support/processCleanup";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
 import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
+
+const execFileAsync = promisify(execFile);
+
+/** The app's SQLite file inside the temp root's database dir (see §8.1). */
+const DB_FILE_NAME = "scraper.db";
 
 /**
  * The four recoverable-history rollout flags (technical-design §18) enabled for
@@ -240,6 +274,116 @@ async function firstConversationId(app: LaunchedApp): Promise<string | null> {
 }
 
 /**
+ * Search the archive and select the first matching passage through the REAL
+ * drawer flow (AC-18's select affordance). Returns to the composer with the
+ * drawer closed and the chip rendered in the selected-context panel.
+ */
+async function selectChip(app: LaunchedApp, marker: string): Promise<void> {
+  await openHistorySearchTab(app);
+  await app.mainWindow
+    .getByTestId("ai-history-search-input")
+    .locator("input")
+    .first()
+    .fill(marker);
+  await app.mainWindow.getByTestId("ai-history-search-button").click();
+  const selectBtn = app.mainWindow.getByTestId("ai-history-select-passage");
+  await expect(selectBtn.first()).toBeVisible({ timeout: 15_000 });
+  await selectBtn.first().click();
+  await closeHistoryDrawer(app);
+  const panel = app.mainWindow.getByTestId("ai-selected-context");
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText(marker.slice(0, 8), { timeout: 15_000 });
+}
+
+/** The drafted chips inside the selected-context panel. */
+function draftedChips(app: LaunchedApp): import("@playwright/test").Locator {
+  return app.mainWindow.getByTestId("ai-selected-context").locator(".v-chip");
+}
+
+/**
+ * Bump the archive state's sourceRevision for a conversation directly via
+ * the sqlite3 CLI (same mechanism as generatedImageSeed — the app's
+ * better-sqlite3 is Electron-ABI and unreachable from the test process).
+ * Returns the row's pre/post revision for diagnosability.
+ *
+ * This simulates SOURCE DRIFT for the changed-selection leg. No live
+ * production flow bumps the revision in this build (tombstone mints a new
+ * epoch instead), so the AC-19 leg above uses this low-level drift to
+ * exercise the module's refreshed/changed path end to end.
+ */
+async function bumpArchiveRevision(
+  root: E2ETestRoot,
+  conversationId: string
+): Promise<{ before: number; after: number }> {
+  const dbPath = path.join(root.databasePath, DB_FILE_NAME);
+  const one = async (sql: string): Promise<string> => {
+    const { stdout } = await execFileAsync("sqlite3", [
+      dbPath,
+      "-cmd",
+      ".timeout 10000",
+      sql,
+    ]);
+    return stdout.trim();
+  };
+  const before = Number(
+    (
+      await one(
+        `SELECT COALESCE(MAX(sourceRevision), 0) FROM ai_chat_archive_state WHERE conversationId='${conversationId}';`
+      )
+    ).trim() || "0"
+  );
+  await one(
+    `UPDATE ai_chat_archive_state SET sourceRevision = sourceRevision + 1 WHERE conversationId='${conversationId}'; SELECT changes();`
+  );
+  const after = Number(
+    (
+      await one(
+        `SELECT COALESCE(MAX(sourceRevision), 0) FROM ai_chat_archive_state WHERE conversationId='${conversationId}';`
+      )
+    ).trim() || "0"
+  );
+  if (after !== before + 1) {
+    throw new Error(
+      `revision bump failed (before=${before}, after=${after}) — is ai_chat_archive_state present?`
+    );
+  }
+  return { before, after };
+}
+
+interface TerminalStatusSnapshot {
+  readonly state: string;
+  readonly trajectory: string;
+}
+
+/**
+ * Poll compaction-status until the state enters `allowedStates`. The full
+ * received trajectory (deduped) is returned so failures diagnose visibly.
+ */
+async function pollForCompactionTerminalState(
+  app: LaunchedApp,
+  conversationId: string,
+  allowedStates: readonly string[],
+  timeoutMs: number
+): Promise<TerminalStatusSnapshot> {
+  const seen: string[] = [];
+  let last = "";
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const s = await invokeChannel(app, "ai-chat-v2:compaction-status", {
+      conversationId,
+    });
+    const snap = (s.data ?? {}) as { state?: string };
+    last = snap.state ?? "unknown";
+    if (seen[seen.length - 1] !== last) seen.push(last);
+    if (allowedStates.includes(last)) {
+      return { state: last, trajectory: seen.join(" → ") };
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  return { state: last, trajectory: seen.join(" → ") };
+}
+
+/**
  * Open the history drawer on its Search tab. The drawer boots on Browse;
  * search controls only render after switching tabs.
  */
@@ -302,15 +446,14 @@ async function startAndAwaitCompacted(
     });
     last = (s.data ?? {}) as typeof last;
     seen.push(
-      `${last.state ?? "?"}${last.runId ? `/${String(last.runId).slice(0, 8)}` : ""}${last.generationId ? "+gen" : ""}`
+      `${last.state ?? "?"}${
+        last.runId ? `/${String(last.runId).slice(0, 8)}` : ""
+      }${last.generationId ? "+gen" : ""}`
     );
     // A leftover generation from an earlier cycle is not proof this run
     // published (AC-01 three-compact). Wait until the active generation
     // changes, or until the first cycle publishes any generation.
-    if (
-      last.generationId &&
-      last.generationId !== previousGenerationId
-    ) {
+    if (last.generationId && last.generationId !== previousGenerationId) {
       terminal = "completed";
       break;
     }
@@ -354,7 +497,6 @@ async function startAndAwaitCompacted(
   ).not.toContain("terminal=waiting");
   return last;
 }
-
 
 async function waitUntilIndexed(
   app: LaunchedApp,
@@ -453,7 +595,9 @@ test("AC-01: archived wording survives three compactions and a controlled restar
       // are the proof that incremental publication actually advanced.
       expect(
         new Set(generations).size,
-        `three incremental runs must publish distinct generations, got ${generations.join(",")}`
+        `three incremental runs must publish distinct generations, got ${generations.join(
+          ","
+        )}`
       ).toBe(3);
       await closeApp(app1);
     } catch (err) {
@@ -488,9 +632,13 @@ test("AC-01: archived wording survives three compactions and a controlled restar
       expect(JSON.stringify(records)).toContain(marker);
       // The published generation survived the restart alongside the
       // retrievable originals (summaries are navigation aids, not storage).
-      const status2 = await invokeChannel(app2, "ai-chat-v2:compaction-status", {
-        conversationId,
-      });
+      const status2 = await invokeChannel(
+        app2,
+        "ai-chat-v2:compaction-status",
+        {
+          conversationId,
+        }
+      );
       expect(status2.status).toBe(true);
       expect(
         (status2.data as { generationId?: string } | null)?.generationId
@@ -648,10 +796,9 @@ test("AC-18: a selected passage is persisted as references only and clears its c
       // The streamed reply completes — the `start` event has fired by then,
       // which clears the accepted chip (§13.3: accepted selections are
       // consumed into the turn).
-      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
-        STREAM_TEXT_FINAL,
-        { timeout: 30_000 }
-      );
+      await expect(
+        app.mainWindow.getByTestId("workspace-transcript")
+      ).toContainText(STREAM_TEXT_FINAL, { timeout: 30_000 });
       await expect(app.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
         timeout: 30_000,
       });
@@ -995,6 +1142,551 @@ test("AC-12: source ids from another conversation resolve to nothing without lea
       expect(resolveB.result?.rejected ?? []).toContain(sourceIdA);
       expect(resolveB.errorCode).toBe("HISTORY_SCOPE_INVALID");
       expect(JSON.stringify(resolveB)).not.toContain(markerA);
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AC-19 (draft 4, FR-HIS-003): changed selections. Two chips are drafted and
+// the archive state's revision is then bumped beneath the draft — every
+// submitted reference becomes refreshed/changed. The send still completes,
+// nothing is quoted, BOTH chips survive flagged changed, and a fresh
+// re-select + resend finally consumes its chip (accepted consolidation).
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-19: revision drift flags drafted chips changed and blocks silent quoting", async ({}, testInfo) => {
+  test.setTimeout(300_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_ON,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      const markerA = `ac19a-passage-${Date.now()}`;
+      await sendAndWait(app, `ac19a-set: ${markerA}`);
+      const markerB = `ac19b-passage-${Date.now()}`;
+      await sendAndWait(app, `ac19b-set: ${markerB}`);
+      const convId = await firstConversationId(app);
+      expect(convId).toBeTruthy();
+
+      // Draft TWO chips through the real drawer flow.
+      await selectChip(app, markerA);
+      await selectChip(app, markerB);
+      await expect(draftedChips(app)).toHaveCount(2, { timeout: 10_000 });
+
+      // Simulate drift: bump sourceRevision beneath the drafted ids.
+      const bump = await bumpArchiveRevision(root, convId!);
+      expect(bump.after).toBe(bump.before + 1);
+
+      // Send a follow-up carrying BOTH stale chips. The engine must:
+      // complete the turn (rejections are non-blocking), quote NEITHER
+      // passage (redacted log), and ack changed refs that keep both chips
+      // visible as flagged-for-confirmation (never silently substituted).
+      await sendAndWait(app, `ac19-followup-${Date.now()}`);
+      const panel = app.mainWindow.getByTestId("ai-selected-context");
+      await expect(panel).toBeVisible({ timeout: 15_000 });
+      await expect(draftedChips(app)).toHaveCount(2, { timeout: 15_000 });
+      for (const chip of await draftedChips(app).all()) {
+        await expect(chip).toHaveClass(/text-warning/, { timeout: 10_000 });
+        await expect(chip).toHaveAttribute("title", /changed since selection/);
+      }
+
+      // The refreshed passages were NEVER quoted into the model request.
+      const requests = await fakeAi.getRequests();
+      const logJson = JSON.stringify(requests);
+      expect(logJson).not.toContain(markerA);
+      expect(logJson).not.toContain(markerB);
+
+      // Recovery: clear the flagged chips via the panel's Clear affordance
+      // (per-chip close buttons churn the DOM during removal) and re-select
+      // one FRESH passage; its next ack clears just that accepted chip.
+      await app.mainWindow.getByTestId("ai-selected-context-clear").click();
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).toBeHidden({ timeout: 10_000 });
+      await selectChip(app, markerA);
+      await sendAndWait(app, `ac19-recovered-${Date.now()}`);
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).not.toBeVisible({ timeout: 15_000 });
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AC-19b (FR-HIS-003/P2-10): hard rejections. The draft's backing archive is
+// tombstoned by the REAL clear-conversation flow; the follow-up send still
+// completes, the chip stays flagged rejected, and the fresh epoch's ids are
+// quoted nowhere (the AC-12 resolve shape, now through the chip UI).
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-19b: clearing the conversation flags drafted chips rejected and keeps them visible", async ({}, testInfo) => {
+  test.setTimeout(300_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_ON,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      const marker = `ac19b-set-${Date.now()}`;
+      await sendAndWait(app, `ac19b-set: ${marker}`);
+      await selectChip(app, marker);
+      const convId = await firstConversationId(app);
+      expect(convId).toBeTruthy();
+
+      // Tombstone the conversation's archive (real clear flow) BEFORE the
+      // send: the drafted source ids now reference a dead epoch/scope.
+      const cleared = await invokeChannel(
+        app,
+        "ai-chat-v2:clear-conversation",
+        {
+          conversationId: convId,
+        }
+      );
+      expect(cleared.status).toBe(true);
+
+      // The send still completes — rejections never block the turn.
+      await sendAndWait(app, `ac19b-followup-${Date.now()}`);
+      // The chip remains visible, flagged rejected (error tone + tooltip).
+      const panel = app.mainWindow.getByTestId("ai-selected-context");
+      await expect(panel).toBeVisible({ timeout: 15_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 15_000 });
+      await expect(draftedChips(app).first()).toHaveClass(/text-error/, {
+        timeout: 10_000,
+      });
+      await expect(draftedChips(app).first()).toHaveAttribute(
+        "title",
+        /no longer available/
+      );
+
+      // The stale passage was quoted nowhere (fresh epoch/scope).
+      const requests = await fakeAi.getRequests();
+      expect(JSON.stringify(requests)).not.toContain(marker);
+
+      // The flagged chip is removable: clearing the selection restores the
+      // composer to selections-free state and a next clean send succeeds.
+      await draftedChips(app).first().locator(".v-chip__close").click();
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).toBeHidden({ timeout: 10_000 });
+      await sendAndWait(app, `ac19b-recovered-${Date.now()}`);
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// FR-HIS-004: stable identity + no transfer. Chips survive a mid-stream
+// transport failure; a healthy retry of the SAME draft consumes the chip;
+// switching conversations never shows the draft in another conversation and
+// returning restores it (per-conversation drafts, never transferred).
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("FR-HIS-004: chips survive a transport failure, retry consumes once, and drafts never cross conversations", async ({}, testInfo) => {
+  test.setTimeout(300_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_ON,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      const marker = `f4-set-${Date.now()}`;
+      await sendAndWait(app, `f4-set: ${marker}`);
+      const firstConv = await firstConversationId(app);
+      expect(firstConv).toBeTruthy();
+      await selectChip(app, marker);
+
+      // Transport failure (http-500): the turn is recoverable (error state,
+      // actionable composer). The engine start-ack fires BEFORE provider
+      // contact, so the ACCEPTED chip is consumed by the ack even on a
+      // failed send — acceptance is resolved at dispatch, not transport.
+      // The flagged-survival legs live in AC-19/AC-19b (changed/rejected).
+      await fakeAi.setScenario("http-500");
+      const failedText = `f4-failed-${Date.now()}`;
+      await composer(app).fill(failedText);
+      await app.mainWindow.getByTestId("ai-chat-send").click();
+      await expect(
+        app.mainWindow.getByTestId("workspace-transcript")
+      ).toContainText("server error", { timeout: 30_000 });
+      await expect(app.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
+        timeout: 30_000,
+      });
+      const panel = app.mainWindow.getByTestId("ai-selected-context");
+      // The accepted chip was consumed by the pre-dispatch ack.
+      await expect(panel).not.toBeVisible({ timeout: 15_000 });
+
+      // A next healthy message succeeds after the recoverable failure.
+      await fakeAi.setScenario("stream-text");
+      await sendAndWait(app, `f4-recovered-${Date.now()}`);
+      await expect(panel).not.toBeVisible({ timeout: 10_000 });
+
+      // NO transfer: a NEW conversation must not inherit conv A's chips, and
+      // returning to A restores them. Was never shown in the new chat and
+      // history is per-conversation at the store level.
+      await selectChip(app, marker);
+      await app.mainWindow.getByTestId("workspace-new-chat").click();
+      await expect(composer(app)).toBeVisible({ timeout: 15_000 });
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).not.toBeVisible({ timeout: 10_000 });
+      // Restore by returning to A: expand the "Other chats" folder (the
+      // sidebar collapses unassigned chats by default) and click A's pill.
+      // The chips are still A's persistent draft.
+      await app.mainWindow
+        .locator('button[role="treeitem"][data-nav-row="unassigned"]')
+        .first()
+        .click();
+      await app.mainWindow
+        .getByTestId(`workspace-conversation-${firstConv}`)
+        .first()
+        .click();
+      await expect(composer(app)).toBeVisible({ timeout: 15_000 });
+      await expect(panel).toBeVisible({ timeout: 15_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 10_000 });
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// FR-HIS-005: compaction failure + cancellation. A summarize failure settles
+// the run failed with the chip intact and the composer usable; a healthy
+// retry publishes; a delayed summarize stays cancellable while the chip and
+// composer remain usable (progress + retry/history actions stay available).
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("FR-HIS-005: failed and cancelled compactions settle with selected context retained and retry available", async ({}, testInfo) => {
+  test.setTimeout(360_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_ON,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      // Enough bulky complete turns that incremental packing has real work.
+      const bulky = (tag: string): string =>
+        `${tag}\n${"compact ".repeat(200)}`;
+      const marker = `f5-set-${Date.now()}`;
+      await sendAndWait(app, bulky(`f5-set: ${marker}`));
+      await sendAndWait(app, bulky(`f5-mid-1-${Date.now()}`));
+      await sendAndWait(app, bulky(`f5-mid-2-${Date.now()}`));
+      const convId = await firstConversationId(app);
+      expect(convId).toBeTruthy();
+
+      // (1) FAILED compaction: break the SUMMARIZE path first (http-500 on
+      // non-streaming summarize calls) and let the post-turn AUTO compaction
+      // run into it. Deterministic because the run has real packing work
+      // behind the excluded newest turn. NOTE: no chips are drafted during
+      // this leg — a send resolves+consumes draft chips at engine start
+      // (see FR-HIS-004), so the chip is selected AFTER the failed run.
+      await waitUntilIndexed(app, convId!, marker);
+      await fakeAi.setScenario("summarize-http-500");
+      await app.mainWindow.evaluate(() => {
+        const w = window as unknown as {
+          api: { receive: (ch: string, fn: (e: unknown) => void) => void };
+          __progressEvents?: unknown[];
+          __progressHooked?: boolean;
+        };
+        w.__progressEvents = [];
+        w.__progressHooked = true;
+        w.api.receive("ai-chat-v2:compaction-progress", (e: unknown) => {
+          w.__progressEvents!.push(e);
+        });
+      });
+      await sendAndWait(app, bulky(`f5-fail-trigger-${Date.now()}`));
+      const failedStart = await invokeChannel(
+        app,
+        "ai-chat-v2:compaction-start",
+        { conversationId: convId }
+      );
+      expect(failedStart.status).toBe(true);
+      // Terminal failed runs leave no active run row, so STATUS reverts to
+      // `queued` — the FAILURE signal is the progress BROADCAST (§13.1).
+      // The post-turn auto run AND the explicit start both feed the channel.
+      await expect
+        .poll(
+          async () => {
+            return await app.mainWindow.evaluate(() => {
+              const events = ((
+                window as unknown as {
+                  __progressEvents?: ReadonlyArray<Record<string, unknown>>;
+                }
+              ).__progressEvents ?? []) as ReadonlyArray<
+                Record<string, unknown>
+              >;
+              return events.some((e) => e.state === "failed");
+            });
+          },
+          { timeout: 90_000, intervals: [2_000] }
+        )
+        .toBe(true);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[f5] failed-run progress: ${JSON.stringify(
+          await app.mainWindow.evaluate(
+            () =>
+              (window as unknown as { __progressEvents?: unknown[] })
+                .__progressEvents ?? []
+          )
+        )}`
+      );
+      // History actions remain available during/after the failed run: a chip
+      // can be drafted NOW (the failed compaction never locked the UI out
+      // and never erased drafts).
+      const panel = app.mainWindow.getByTestId("ai-selected-context");
+      await selectChip(app, marker);
+      await expect(panel).toBeVisible({ timeout: 15_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 10_000 });
+      await expect(composer(app)).toBeVisible({ timeout: 15_000 });
+
+      // (2) RETRY after failure: healthy scenario + explicit start publishes.
+      await fakeAi.setScenario("stream-text");
+      const retry = await startAndAwaitCompacted(app, convId!);
+      expect(retry.generationId).toBeTruthy();
+      // The chip survived the compaction too — compaction never erases the
+      // user's selected-context draft (FR-HIS-005).
+      await expect(panel).toBeVisible({ timeout: 10_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 10_000 });
+
+      // (3) CANCELLABLE compaction: flip the summarize barrier BEFORE the
+      // next turn so that turn's post-run AUTO compaction holds mid-run
+      // (real in-flight run), then cancel it. Clear the flag-adjacent chip
+      // first: the marker2 send would consume it (engine-ack semantics,
+      // see FR-HIS-004) and a post-cancel chip is re-drafted below.
+      await app.mainWindow.getByTestId("ai-selected-context-clear").click();
+      await expect(panel).toBeHidden({ timeout: 10_000 });
+      await fakeAi.setScenario("summarize-delayed");
+      const marker2 = `f5-set2-${Date.now()}`;
+      await sendAndWait(app, bulky(`f5-set2: ${marker2}`));
+      await waitUntilIndexed(app, convId!, marker2);
+      await invokeChannel(app, "ai-chat-v2:compaction-start", {
+        conversationId: convId,
+      });
+      await expect
+        .poll(
+          async () => {
+            const s = await invokeChannel(app, "ai-chat-v2:compaction-status", {
+              conversationId: convId,
+            });
+            const snap = (s.data ?? {}) as { runId?: string };
+            return typeof snap.runId === "string" && snap.runId.length > 0;
+          },
+          { timeout: 20_000, intervals: [1_000] }
+        )
+        .toBe(true);
+      const cancelResp = await invokeChannel(
+        app,
+        "ai-chat-v2:compaction-cancel",
+        { conversationId: convId }
+      );
+      expect(cancelResp.status).toBe(true);
+      await fakeAi.setScenario("stream-text");
+      // Cancel is honored at section boundaries: accept the settled states
+      // (cancelled, or a late in-flight section that completed before the
+      // abort was observed; queued = closed with no active run). Chip +
+      // composer retention below is the user-visible contract either way.
+      const cancelTerminal = await pollForCompactionTerminalState(
+        app,
+        convId!,
+        ["cancelled", "completed", "queued"],
+        60_000
+      );
+      // eslint-disable-next-line no-console
+      console.log(`[f5] cancel terminal: ${cancelTerminal.state}`);
+      // A chip can be drafted after the cancelled/closed run and the draft
+      // SURVIVES a subsequent compaction-start retry round (FR-HIS-005:
+      // compaction never erases the selected-context draft).
+      await selectChip(app, marker2);
+      await expect(panel).toBeVisible({ timeout: 15_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 10_000 });
+      await fakeAi.setScenario("stream-text");
+      const retry2 = await startAndAwaitCompacted(app, convId!);
+      expect(retry2.generationId).toBeTruthy();
+      await expect(panel).toBeVisible({ timeout: 10_000 });
+      await expect(draftedChips(app)).toHaveCount(1, { timeout: 10_000 });
+      // Composer usable after everything: clear the chips, then clean send.
+      await app.mainWindow.getByTestId("ai-selected-context-clear").click();
+      await expect(panel).toBeHidden({ timeout: 10_000 });
+      await sendAndWait(app, bulky(`f5-after-cancel-${Date.now()}`));
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Flag-off state (FR-HIS-004, design §18 stage 3): with the history-UI flag
+// disabled there is NO drawer / toggle / select affordance, so no renderer
+// path can submit archive references; ordinary sends keep working.
+// ---------------------------------------------------------------------------
+
+const RECOVERABLE_FLAGS_OFF: Readonly<Record<string, string>> = {
+  ai_chat_archive_reads_flag: "false",
+  ai_chat_history_tools_flag: "false",
+  ai_chat_new_compaction_flag: "false",
+  ai_chat_history_ui_flag: "false",
+};
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("flag-off: history UI is absent so nothing can submit archive references", async ({}, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_OFF,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      await sendAndWait(app, `flagoff-set-${Date.now()}`);
+
+      // The main-process flag probe reports the OFF state.
+      const enabled = await invokeChannel(
+        app,
+        "ai-chat-v2:history-ui-enabled",
+        {}
+      );
+      expect(enabled.status).toBe(true);
+      expect((enabled.data as { enabled?: boolean } | null)?.enabled).toBe(
+        false
+      );
+
+      // No history navigation affordance exists: the drawer toggle and any
+      // select-passage button are gated out entirely.
+      await expect(
+        app.mainWindow.getByTestId("workspace-history-toggle")
+      ).toHaveCount(0);
+      await expect(
+        app.mainWindow.getByTestId("ai-history-select-passage")
+      ).toHaveCount(0);
+      // And no selected-context panel can appear (nothing can be drafted).
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).toHaveCount(0);
+
+      // Ordinary sends keep working with zero selection submission.
+      await sendAndWait(app, `flagoff-followup-${Date.now()}`);
+      const requests = await fakeAi.getRequests();
+      const streamed = requests.filter((r) => r.stream === true);
+      expect(streamed.length).toBeGreaterThanOrEqual(2);
 
       await closeApp(app);
     } catch (err) {

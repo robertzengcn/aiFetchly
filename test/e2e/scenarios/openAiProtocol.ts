@@ -30,7 +30,10 @@ export type FakeAiScenarioName =
   | "http-500"
   | "http-500-delayed"
   | "malformed-sse"
-  | "disconnect-mid-stream";
+  | "disconnect-mid-stream"
+  /** Non-streaming summarize-only failures (compaction runs, FR-HIS-005). */
+  | "summarize-http-500"
+  | "summarize-delayed";
 
 /** Build a standard text-content chunk payload string. */
 export function textChunk(

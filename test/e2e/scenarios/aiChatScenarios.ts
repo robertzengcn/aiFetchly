@@ -163,6 +163,19 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         kind: "disconnect",
         leadingFrames: [frame(0, textChunk("partial"))],
       };
+    case "summarize-http-500":
+    case "summarize-delayed":
+      // Summarize-only scenarios: on the STREAMING chat path they behave as
+      // plain stream-text (the server's non-streaming branch interprets
+      // them — failed/cancellable compaction runs, FR-HIS-005). Tests never
+      // flip these while a streaming send is pending.
+      return {
+        kind: "sse",
+        frames: [
+          ...STREAM_TEXT_CHUNKS.map((c) => frame(0, textChunk(c))),
+          frame(0, stopChunk()),
+        ],
+      };
     default: {
       // Exhaustiveness guard.
       const _exhaustive: never = name;
