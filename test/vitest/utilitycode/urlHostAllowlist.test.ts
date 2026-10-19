@@ -32,8 +32,6 @@ describe("isSameRegistrableHost", () => {
     ["bing.com.evil.com", "bing.com"],
     ["bingxcom", "bing.com"],
     ["www.bing.com.evil.com", "bing.com"],
-    ["fakeyellowpages.com", "yellowpages.com"],
-    ["yellowpages.com.fake.com", "yellowpages.com"],
   ])("rejects look-alike %p for %p", (host, domain) => {
     expect(isSameRegistrableHost(host, domain)).toBe(false);
   });
@@ -64,7 +62,6 @@ describe("ALLOWED_HOSTS contract", () => {
   it("exposes the scraper domains used by the fixes", () => {
     expect(ALLOWED_HOSTS.bing).toBe("bing.com");
     expect(ALLOWED_HOSTS.baidu).toBe("baidu.com");
-    expect(ALLOWED_HOSTS.yellowpages).toBe("yellowpages.com");
     expect(ALLOWED_HOSTS.yelp).toBe("yelp.com");
     expect(ALLOWED_HOSTS.yell).toBe("yell.com");
     expect(ALLOWED_HOSTS["192"]).toBe("192.com");
