@@ -13,7 +13,11 @@ import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginComm
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
-import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  buildPluginPolicyTargetUniverse,
+  getPluginToolPolicyRegistry,
+  type PluginPolicyTargetUniverse,
+} from "@/service/PluginToolPolicyRegistry";
 import {
   getDefaultToolJobRegistry,
   TOOL_JOB_SETTLE_GRACE_MS,
@@ -72,9 +76,35 @@ export class PluginComponentRegistryService {
     // plugin must not break applying the rest.
     const policyRegistry = getPluginToolPolicyRegistry();
     for (const plugin of loaded.enabled) {
+      // G01/HOST-04: validate policy targets against the plugin's persisted
+      // MCP rows (scoped row name → unscoped policy name) plus its declared
+      // discovered tool lists. A policy referencing a server the plugin
+      // does not own — or a tool the row never declared/discovered — fails
+      // activation exactly like an invalid policy shape.
+      let declaredTargets: PluginPolicyTargetUniverse | undefined;
+      try {
+        const ownedMcp = await new MCPToolModule().findMcpByPluginName(
+          plugin.name
+        );
+        declaredTargets = buildPluginPolicyTargetUniverse(
+          plugin.name,
+          ownedMcp.map((row) => ({
+            serverName: row.serverName,
+            metadata: row.metadata ?? null,
+            tools: row.tools ?? null,
+          }))
+        );
+      } catch (dbErr) {
+        log.warn(
+          `[PluginComponentRegistryService] declared-target lookup failed for "${plugin.name}":`,
+          dbErr
+        );
+        declaredTargets = undefined;
+      }
       const result = policyRegistry.registerFromManifest(
         plugin.name,
-        plugin.manifest
+        plugin.manifest,
+        declaredTargets
       );
       if (result.errors.length > 0) {
         log.warn(

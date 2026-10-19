@@ -80,6 +80,26 @@ describe("PluginComponentRegistryService HOST-04 activation gate", () => {
     const disableSpy = vi
       .spyOn(MCPToolModule.prototype, "setPluginServersEnabled")
       .mockResolvedValue(0);
+    // G01: the target universe comes from the plugin's persisted MCP rows —
+    // seed one scoped row (empty tool list = declared, tools unknown).
+    vi.spyOn(MCPToolModule.prototype, "findMcpByPluginName").mockResolvedValue(
+      [
+        {
+          id: 1,
+          serverName: "clean-plugin__scraper",
+          transport: "stdio",
+          enabled: 1,
+          authType: "none",
+          timeout: 30000,
+          tools: "[]",
+          toolConfig: "{}",
+          metadata: JSON.stringify({
+            pluginServerName: "scraper",
+            pluginOwner: "clean-plugin",
+          }),
+        } as never,
+      ]
+    );
 
     await PluginComponentRegistryService.applyLoadedPlugins();
     PluginRuntimeCache.clear("gate-test-cleanup");

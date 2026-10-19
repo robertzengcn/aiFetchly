@@ -31,7 +31,10 @@ import {
   type PluginSourceKind,
 } from "@/entityTypes/pluginTypes";
 import { MCPToolService } from "@/service/MCPToolService";
-import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  buildPluginPolicyTargetUniverse,
+  getPluginToolPolicyRegistry,
+} from "@/service/PluginToolPolicyRegistry";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
 import { SkillImportService } from "@/service/SkillImportService";
@@ -1022,7 +1025,8 @@ export class PluginImportService {
         const reapply =
           getPluginToolPolicyRegistry().registerFromManifest(
             prev.plugin.name,
-            oldManifest
+            oldManifest,
+            buildPluginPolicyTargetUniverse(prev.plugin.name, prev.mcp ?? [])
           );
         if (reapply.errors.length > 0) {
           log.warn(
@@ -1044,7 +1048,18 @@ export class PluginImportService {
     // name-inference timeout for a tool the plugin declared managed-async.
     const policyGate = getPluginToolPolicyRegistry().registerFromManifest(
       p.manifest.name,
-      p.manifest
+      p.manifest,
+      // G01/HOST-04: the installer KNOWS the declared MCP surface — a policy
+      // pointing at a server the manifest does not resolve is undeclared by
+      // definition. Tools are not probed yet, so the tool-level check fires
+      // only once row metadata carries a discovered tool list.
+      buildPluginPolicyTargetUniverse(
+        p.manifest.name,
+        mcpServers.map((server) => ({
+          serverName: server.serverName,
+          metadata: server.metadata,
+        }))
+      )
     );
     const policyGateBlocked = policyGate.errors.length > 0;
 

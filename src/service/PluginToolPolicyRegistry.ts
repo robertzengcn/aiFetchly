@@ -34,6 +34,23 @@ export interface PluginToolPolicyEntry {
   readonly policy: PluginToolPolicy;
 }
 
+/**
+ * HOST-04 (G01): declared execution targets the manifest's toolPolicies may
+ * reference. Keyed by the UN-scoped server name (policy keys are
+ * `<unscoped server>/<tool>`); the value lists the tools known to exist for
+ * that server. An `undefined` (or empty) tool list means "declared, tools
+ * unknown" — e.g. freshly persisted rows that have not been probed yet —
+ * so only the server-level check applies for that entry.
+ *
+ * When no universe is supplied the registry falls back to inline `mcp`
+ * declaration keys in the manifest itself; servers declared only in a file
+ * (`mcp/servers.json`, `.mcp.json`) cannot be validated without the caller's
+ * universe and are accepted (structurally validated only).
+ */
+export interface PluginPolicyTargetUniverse {
+  readonly toolsByServer: ReadonlyMap<string, readonly string[] | undefined>;
+}
+
 export class PluginToolPolicyRegistry {
   /** canonical AI tool name → entry */
   private entries = new Map<string, PluginToolPolicyEntry>();
@@ -52,7 +69,8 @@ export class PluginToolPolicyRegistry {
    */
   public registerFromManifest(
     pluginName: string,
-    manifest: unknown
+    manifest: unknown,
+    declaredTargets?: PluginPolicyTargetUniverse
   ): { readonly errors: readonly PluginError[] } {
     const errors: PluginError[] = [];
     const fail = (
@@ -116,6 +134,26 @@ export class PluginToolPolicyRegistry {
     const canonicalFor = (plugin: string, server: string, tool: string) =>
       `mcp__${plugin}__${server}__${tool}`;
 
+    // Target universe (G01): the explicit caller-provided map wins; the
+    // fallback derives conservative server-level knowledge from inline
+    // `mcp` declarations in the manifest itself.
+    let targetUniverse: PluginPolicyTargetUniverse | undefined =
+      declaredTargets;
+    if (!targetUniverse) {
+      const inlineMcp = record.mcp;
+      if (
+        typeof inlineMcp === "object" &&
+        inlineMcp !== null &&
+        !Array.isArray(inlineMcp)
+      ) {
+        const toolsByServer = new Map<string, readonly string[] | undefined>();
+        for (const server of Object.keys(inlineMcp as Record<string, unknown>)) {
+          if (server.length > 0) toolsByServer.set(server, undefined);
+        }
+        if (toolsByServer.size > 0) targetUniverse = { toolsByServer };
+      }
+    }
+
     const pending: PluginToolPolicyEntry[] = [];
     for (const [key, rawPolicy] of Object.entries(
       toolPolicies as Record<string, unknown>
@@ -139,6 +177,38 @@ export class PluginToolPolicyRegistry {
           key
         );
         continue;
+      }
+      // The policy points at an execution surface the plugin exposes. When
+      // the host knows the declared/discovered targets it MUST reject a
+      // policy aimed at a server the plugin does not declare or a tool the
+      // server has not declared/been discovered to provide — otherwise the
+      // tool would still become reachable through fake-policy paths.
+      if (targetUniverse) {
+        if (!targetUniverse.toolsByServer.has(serverName)) {
+          fail(
+            "manifest-schema-invalid",
+            `toolPolicies["${key}"] references server "${serverName}" which the plugin does not declare`,
+            key
+          );
+          continue;
+        }
+        const knownTools = targetUniverse.toolsByServer.get(serverName);
+        // Only a NON-EMPTY tool list is proof a tool exists (rows persist
+        // an empty JSON array until the first discovery probe; an empty
+        // probed server executes nothing anyway). `undefined` and `[]` both
+        // mean "tools unknown": the server-level check still applies.
+        if (
+          knownTools !== undefined &&
+          knownTools.length > 0 &&
+          !knownTools.includes(toolName)
+        ) {
+          fail(
+            "manifest-schema-invalid",
+            `toolPolicies["${key}"] references tool "${toolName}" which is neither declared nor discovered for server "${serverName}"`,
+            key
+          );
+          continue;
+        }
       }
       pending.push({
         pluginName,
@@ -203,6 +273,79 @@ export class PluginToolPolicyRegistry {
 }
 
 let defaultRegistry: PluginToolPolicyRegistry | undefined;
+
+/**
+ * Build a HOST-04 target universe from persisted MCP rows (the
+ * `applyLoadedPlugins` path and the B06 restore path) or from the normalized
+ * server descriptors of an in-flight install.
+ *
+ * Rows store the SCOPED server name (`<plugin>__<server>`) while policy keys
+ * and built policies use the UN-scoped name; `metadata.pluginServerName`
+ * (written by the scoping step) is authoritative, with a strict prefix strip
+ * as fallback. `tools` may arrive as a JSON string (entity column) or as an
+ * already-parsed array; anything unparseable degrades to "tools unknown".
+ */
+export function buildPluginPolicyTargetUniverse(
+  pluginName: string,
+  servers: ReadonlyArray<{
+    readonly serverName: string;
+    readonly metadata?: Record<string, unknown> | string | null;
+    readonly tools?: string | readonly string[] | null;
+  }>
+): PluginPolicyTargetUniverse {
+  const toolsByServer = new Map<string, readonly string[] | undefined>();
+  const scopedPrefix = `${pluginName}__`;
+
+  const unscopedName = (serverName: string, metadata?: Record<string, unknown>): string => {
+    const declared = metadata?.pluginServerName;
+    // The scoping step writes the plain (un-scoped) server label; trust it
+    // when present and never re-derive it from a scoped form.
+    if (typeof declared === "string" && declared.length > 0) return declared;
+    if (serverName.startsWith(scopedPrefix)) return serverName.slice(scopedPrefix.length);
+    return serverName;
+  };
+
+  for (const server of servers) {
+    let metadata: Record<string, unknown> | undefined;
+    if (typeof server.metadata === "string") {
+      try {
+        const parsed: unknown = JSON.parse(server.metadata);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          metadata = parsed as Record<string, unknown>;
+        }
+      } catch {
+        metadata = undefined;
+      }
+    } else if (server.metadata && typeof server.metadata === "object") {
+      metadata = server.metadata;
+    }
+
+    const name = unscopedName(server.serverName, metadata);
+    if (name.length === 0 || toolsByServer.has(name)) continue;
+
+    let tools: readonly string[] | undefined;
+    if (typeof server.tools === "string") {
+      try {
+        const parsedTools: unknown = JSON.parse(server.tools);
+        if (
+          Array.isArray(parsedTools) &&
+          parsedTools.every((t) => typeof t === "string")
+        ) {
+          tools = parsedTools as readonly string[];
+        }
+      } catch {
+        tools = undefined;
+      }
+    } else if (Array.isArray(server.tools)) {
+      tools = server.tools.every((t) => typeof t === "string")
+        ? (server.tools as readonly string[])
+        : undefined;
+    }
+    toolsByServer.set(name, tools);
+  }
+
+  return { toolsByServer };
+}
 
 export function getPluginToolPolicyRegistry(): PluginToolPolicyRegistry {
   if (!defaultRegistry) defaultRegistry = new PluginToolPolicyRegistry();
