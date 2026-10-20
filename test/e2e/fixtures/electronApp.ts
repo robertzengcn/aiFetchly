@@ -226,10 +226,6 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
-  if (options.extraEnv) {
-    Object.assign(env, options.extraEnv);
-  }
   const env = buildSanitizedEnv(
     options.testRoot,
     options.fakeAiBaseUrl,
