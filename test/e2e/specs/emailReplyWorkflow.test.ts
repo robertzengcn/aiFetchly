@@ -12,9 +12,8 @@
  *   1. already_replied refusal at DRAFT_CREATE — a message with local sent
  *      state refuses BEFORE the model runs (zero FakeAi requests), with
  *      next_action routed to await_human_review (R22 semantics).
- *   2. receive_unavailable refusal at DRAFT_CREATE — a clean message whose
- *      service has no receive config fails the §7.1 probe deterministically;
- *      again zero model calls (B01: detection precedes classification).
+ *   2. A clean message with no receive config still reaches draft generation.
+ *      Mailbox reply detection is check_email_replied, not create-draft.
  *   3. Approval binding → fresh send check — the seeded approval token drives
  *      the real EMAIL_REPLY_SEND; the forced pre-send detection refuses with
  *      receive_unavailable BEFORE the atomic claim, so the attempt ledger is
@@ -30,8 +29,7 @@
  *      through the audit UI's i18n map and the derived next-action chip.
  *
  * Not provable here (documented in the todo's E2E-boundary paragraph): the
- * eligible-reuse SUCCESS path (runPreDraftDetection runs first and refuses on
- * a config-less service), the happy-path send (no SMTP server in the E2E
+ * eligible-reuse SUCCESS path, the happy-path send (no SMTP server in the E2E
  * network), delayed-send freshness, and recovery races — those are covered by
  * the vitest integration suites with injected ports.
  */
@@ -244,43 +242,33 @@ test.describe("Critical reply workflows (G03)", () => {
       .toEqual(0);
   });
 
-  test("receive_unavailable refuses a clean message's draft creation with zero model calls", async ({
+  test("a clean message reaches draft generation without a mailbox reply probe", async ({
     aiApp,
     fakeAi,
   }) => {
     test.setTimeout(150_000);
     const serviceId = await seedService(aiApp, "E2E Workflow NoRecv Sender");
-    // Clean message (no local evidence): classification is null (passes the
-    // legacy pre-draft evaluator), the sender avoids automated-sender
-    // substrings, the body avoids sensitive keywords — so the ONLY gate that
-    // can refuse is the §7.1 probe. The seeded service has no receive config
-    // (receiveEnabled defaults 0) → deterministic receive_unavailable. The
-    // RFC-shaped messageId keeps the missing_message_id gate (which runs
-    // BEFORE the config check) satisfied.
+    // No receive config. Draft creation must not refuse with
+    // receive_unavailable; that check belongs to check_email_replied and to
+    // send. The model is reached.
     const messageId = await seedMessage(aiApp, {
       emailServiceId: serviceId,
       providerUid: "e2e-wf-norecv-1",
       messageId: "<e2e-wf-original-2@example.com>",
       fromAddress: "e2e-recipient@example.com",
-      subject: "E2E workflow probe-refused original",
+      subject: "E2E workflow draft without probe",
       replyStatus: "not_started",
     });
 
-    const refusal = (await invoke(aiApp, "email:reply:draft:create", {
+    const result = (await invoke(aiApp, "email:reply:draft:create", {
       messageId,
     })) as FailureEnvelope;
-    expect(refusal.status).toBe(false);
-    expect(refusal.code).toBe("receive_unavailable");
-    expect(refusal.next_action).toBe("await_human_review");
-    expect(refusal.data).toBeNull();
-
-    // The refusal fired inside runPreDraftDetection — still zero model calls
-    // (no classification, no generation).
+    expect(result.code).not.toBe("receive_unavailable");
     await expect
       .poll(async () => (await fakeAi.getRequests()).length, {
         timeout: 15_000,
       })
-      .toEqual(0);
+      .toBeGreaterThan(0);
   });
 
   test("approval token binds to send; fresh pre-send detection refuses before the claim leaves any attempt row", async ({
@@ -437,19 +425,20 @@ test.describe("Critical reply workflows (G03)", () => {
       messageId: "<e2e-wf-original-6@example.com>",
       fromAddress: "e2e-recipient@example.com",
       subject: "E2E workflow refusal-guidance original",
-      replyStatus: "not_started",
+      replyStatus: "sent",
+      isAnswered: 1,
     });
 
-    // Drive the production pre-draft gate so the refusal audit row is written
-    // by the same code path production uses (not a seeded audit row).
+    // Local sent state still refuses at the pre-draft policy gate, so the
+    // audit row is written by production (not a seeded audit row).
     const refusal = (await invoke(aiApp, "email:reply:draft:create", {
       messageId,
     })) as FailureEnvelope;
     expect(refusal.status).toBe(false);
-    expect(refusal.code).toBe("receive_unavailable");
+    expect(refusal.code).toBe("already_replied");
 
     // The audit UI surfaces the typed code through the i18n map
-    // (emailReply.policyCode.receive_unavailable) and the derived next action
+    // (emailReply.policyCode.already_replied) and the derived next action
     // (emailReply.nextAction.await_human_review).
     const page = aiApp.mainWindow;
     await page.evaluate(() => {
@@ -462,11 +451,11 @@ test.describe("Critical reply workflows (G03)", () => {
     // evidence chip text rather than the message subject.
     await page
       .locator("tbody tr")
-      .filter({ hasText: "Receive unavailable" })
+      .filter({ hasText: "Already replied" })
       .locator('[data-testid="audit-row-open"]')
       .click();
     await expect(page.getByTestId("audit-detail-evidence-chip")).toContainText(
-      "Receive unavailable",
+      "Already replied",
       { timeout: 15_000 }
     );
     await expect(page.getByTestId("audit-detail-stage")).toContainText(

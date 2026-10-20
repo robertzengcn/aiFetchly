@@ -191,6 +191,8 @@ describe("Email reply draft/send AI tools", () => {
     expect(skill!.permissionCategory).toBe("automation");
     expect(skill!.requiresConfirmation).toBe(false);
     expect(skill!.parameters.required).toContain("message_id");
+    expect(skill!.description).toContain("check_email_replied");
+    expect(skill!.description).toContain("does not probe");
   });
 
   it("send_email_reply REQUIRES confirmation (it sends email)", () => {
@@ -480,6 +482,8 @@ describe("check_email_replied — registration (FR-032)", () => {
     expect(skill!.requiresConfirmation).toBe(false);
     expect(skill!.parameters.required).toContain("message_id");
     expect(typeof skill!.execute).toBe("function");
+    expect(skill!.description).toContain("create_email_reply_draft");
+    expect(skill!.description).toContain("before");
   });
 
   it("advertises check_email_replied to the LLM", async () => {

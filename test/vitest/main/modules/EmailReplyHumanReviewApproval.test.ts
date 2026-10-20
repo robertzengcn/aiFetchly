@@ -3,8 +3,6 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
-import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
-import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -173,25 +171,8 @@ describe("G02 human-review gate on approval", () => {
   });
 });
 
-const NOT_REPLIED: ReplyDetectionResult = {
-  state: "not_replied",
-  replied: false,
-  source: "sent_search",
-  matchedMessageId: null,
-  reasonCode: "no_reply_observed",
-  checkedAt: new Date().toISOString(),
-  fromCache: false,
-  coverage: "configured_imap",
-};
-
 function reuseGuidanceService(): EmailReplyDraftGenerationService {
-  return new EmailReplyDraftGenerationService({
-    detectionServiceFactory: () => {
-      const svc = new EmailReplyDetectionService();
-      vi.spyOn(svc, "detect").mockResolvedValue(NOT_REPLIED);
-      return svc;
-    },
-  });
+  return new EmailReplyDraftGenerationService();
 }
 
 describe("F09 effective review status in reuse guidance", () => {

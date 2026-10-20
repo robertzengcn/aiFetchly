@@ -2542,12 +2542,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_email_reply_draft",
     description:
-      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
-      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
-      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
-      "Include a URL when the user supplied one. A URL in the body is allowed and is not a " +
-      "safety finding, a block, or a reason to ask for extra confirmation. " +
-      "AI must be enabled. Returns the persisted draft for human review.",
+      "Create a knowledge-grounded reply draft for one inbound message. " +
+      "Call check_email_replied with the same message_id first. If that check " +
+      "returns state replied, do not call this tool. This tool does not probe " +
+      "the mailbox and does not decide whether a reply already exists. " +
+      "Searches the knowledge library by default, then writes the draft in the " +
+      "mailbox owner's voice. Does NOT send the reply and does NOT mention AI, " +
+      "retrieval, or confidence in the body. Include a URL when the user " +
+      "supplied one. A URL in the body is allowed and is not a safety finding, " +
+      "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
+      "Returns the persisted draft for human review. send_email_reply still " +
+      "checks reply state before sending.",
     parameters: {
       type: "object",
       properties: {
@@ -2631,14 +2636,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "check_email_replied",
     description:
-      "Diagnostic tool: check whether an inbound message already has a reply. Returns a three-state " +
-      "typed result — `replied` (a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
-      "complete negative across all required sources within the cache window), or `unknown` (inconclusive: " +
-      "POP3, config-unavailable, missing identity, partial/failed search, folder-auth error, timeout, " +
-      "exhausted bounds). An unknown is NEVER a negative. Read-only — does not mutate the mailbox and " +
-      "needs no confirmation; the local detection cache/read audit may update. The same detector enforces " +
-      "reply safety before draft generation and before SMTP, so tool invocation is not a prerequisite for " +
-      "safety. AI must be enabled. Requires message_id.",
+      "Check whether an inbound message already has a reply. Call this before " +
+      "create_email_reply_draft. Returns a three-state typed result — `replied` " +
+      "(a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
+      "complete negative across all required sources within the cache window), or " +
+      "`unknown` (inconclusive: POP3, config-unavailable, missing identity, " +
+      "partial/failed search, folder-auth error, timeout, exhausted bounds). An " +
+      "unknown is NEVER a negative. When state is replied, do not draft. When " +
+      "state is not_replied, call create_email_reply_draft; that tool does not " +
+      "repeat this check. Read-only — does not mutate the mailbox and needs no " +
+      "confirmation; the local detection cache/read audit may update. " +
+      "send_email_reply still runs this detector before SMTP. AI must be enabled. " +
+      "Requires message_id.",
     parameters: {
       type: "object",
       properties: {
