@@ -61,10 +61,12 @@ async function openChat(app: {
  */
 async function sendAndAwaitStreaming(app: {
   readonly mainWindow: import("@playwright/test").Page;
+  readonly draft: string;
 }): Promise<void> {
   const send = app.mainWindow.getByTestId("ai-chat-send");
   const stop = app.mainWindow.getByTestId("ai-chat-stop");
   const root = app.mainWindow.getByTestId("workspace-transcript");
+  const draft = composerTextarea(app);
   await send.click();
   await expect
     .poll(
@@ -74,6 +76,18 @@ async function sendAndAwaitStreaming(app: {
           return "streaming";
         }
         if ((await send.count()) > 0) {
+          // Two known races can strand the retry loop on a dead composer:
+          // an accepted-but-never-started turn already cleared the draft,
+          // and the app's late landing-nav remount can wipe a freshly
+          // filled draft (the emailServiceTags boot race). Either leaves
+          // Send visible but disabled (empty composer) — clicks became
+          // no-ops. Restore the draft before every retry click.
+          if (
+            (await draft.count()) > 0 &&
+            (await draft.inputValue()) !== app.draft
+          ) {
+            await draft.fill(app.draft);
+          }
           await send.click();
           // Let a just-started turn render before the next check so a slow
           // runner cannot stack a second send behind the first.
@@ -149,8 +163,13 @@ test.describe("AI output actions row (copy + compact report)", () => {
     await openChat(aiApp);
     await composerTextarea(aiApp).fill("e2e-streaming-no-actions");
 
-    // The first chunk renders, proving the turn started.
-    await sendAndAwaitStreaming(aiApp);
+    // The first chunk renders, proving the turn started (the helper re-fills
+    // the identified draft on every retry cycle to survive the boot-remount
+    // draft wipe).
+    await sendAndAwaitStreaming({
+      mainWindow: aiApp.mainWindow,
+      draft: "e2e-streaming-no-actions",
+    });
 
     // While streaming, the actions row (copy + report) must NOT be present —
     // it appears only on completed assistant text/image messages.
