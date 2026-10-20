@@ -23,6 +23,7 @@ export interface SseFrame {
 export type FakeAiScenarioName =
   | "stream-text"
   | "stream-delayed"
+  | "stream-hold-30s"
   | "stream-generated-image"
   | "stream-generated-image-delayed"
   | "tool-requires-permission"

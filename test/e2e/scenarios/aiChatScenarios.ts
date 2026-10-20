@@ -98,6 +98,19 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         ],
       };
     }
+    case "stream-hold-30s": {
+      // Same shape as stream-delayed with a 30s hold: mid-stream assertions
+      // in specs that run late in the full suite still land inside the
+      // streaming window even when prior suites leave the host busy.
+      return {
+        kind: "sse",
+        frames: [
+          frame(0, textChunk("Streaming")),
+          frame(30_000, textChunk("-should-be-cancelled")),
+          frame(0, stopChunk()),
+        ],
+      };
+    }
     case "stream-generated-image":
       // A normal chat turn whose completion metadata carries one generated
       // image; the desktop storage service persists it and the renderer maps

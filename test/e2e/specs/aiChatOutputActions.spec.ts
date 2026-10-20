@@ -141,9 +141,11 @@ test.describe("AI output actions row (copy + compact report)", () => {
     aiApp,
     fakeAi,
   }) => {
-    // stream-delayed emits one chunk fast, then holds a bounded 10s delay —
-    // enough margin to assert the actions row is absent mid-stream.
-    await fakeAi.setScenario("stream-delayed");
+    // stream-hold-30s emits one chunk fast, then holds a bounded 30s delay —
+    // the 10s stream-delayed barrier proved load-sensitive in full-suite
+    // runs (the whole mid-stream window closed once a worker got stuck on a
+    // busy host), so this assertion class uses the wider window.
+    await fakeAi.setScenario("stream-hold-30s");
     await openChat(aiApp);
     await composerTextarea(aiApp).fill("e2e-streaming-no-actions");
 

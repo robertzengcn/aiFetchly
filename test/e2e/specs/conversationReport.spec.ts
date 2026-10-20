@@ -16,10 +16,13 @@
 import { e2eTest as test, expect } from "../fixtures/base";
 import { RENDERER_ORIGIN } from "../fixtures/types";
 import { assertCleanTeardown } from "../support/assertions";
+import { closeApp } from "../support/processCleanup";
 import {
   FAKE_REPORT_ID,
   startFakeReportingServer,
 } from "../fixtures/fakeReportingServer";
+import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
+import { writeStateManifest } from "../fixtures/temporaryState";
 
 function composerTextarea(app: {
   readonly mainWindow: import("@playwright/test").Page;
@@ -100,33 +103,55 @@ test.describe("Conversation reporting (Electron integration)", () => {
     await expect(reportButton).toBeDisabled({ timeout: 30_000 });
   });
 
-  // FR-4.4: reporting is NOT an AI-gated capability. With the fake loopback
-  // capabilities endpoint reachable on the AI-disabled surface, the disabled
-  // reason must switch from "unavailable" (endpoint unreachable) to
-  // "no eligible outputs" (empty conversation) — the capability chain itself
-  // succeeds without any AI enablement. A submitted report additionally
-  // needs an eligible assistant output, which the AI gate prevents by
-  // design on this surface, so the journey pins the capability flip via the
-  // button's disabled-reason title.
+  // FR-4.4: reporting is NOT an AI-gated capability. The capability hook
+  // fetches once at surface mount and only re-arms retries when eligible
+  // content exists (reportCapabilities.ts hasEligibleOutput gate); an
+  // AI-disabled surface stays non-eligible, so the fake loopback endpoint
+  // must be bound BEFORE the app launches — then the mount-time fetch
+  // itself resolves enabled:true and the journey observes the enabled
+  // capability chain without any AI enablement. A submitted report
+  // additionally needs an eligible assistant output, which the AI gate
+  // prevents by design on this surface, so the journey pins the state via
+  // the button's disabled-reason title.
   test("AI-disabled surface still resolves capabilities through the non-gated chain", async ({
-    disabledApp,
+    testRoot,
+    fakeAi,
   }) => {
     const reporting = await startFakeReportingServer();
+    let app: LaunchedApp | null = null;
     try {
-      await openChat(disabledApp);
+      // Mirror the disabledApp fixture (authenticated, hosted AI disabled,
+      // provider pointed at the fake so any transport use is observable).
+      await fakeAi.reset();
+      writeStateManifest(testRoot, {
+        authState: "authenticated",
+        aiState: "hosted-disabled",
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: testRoot.workspacePath,
+      });
+      app = await launchAiFetchly({
+        testRoot,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+      await openChat(app);
 
-      const reportButton = v2ReportButton(disabledApp);
+      const reportButton = v2ReportButton(app);
       await expect(reportButton).toBeVisible({ timeout: 30_000 });
-      // The capability fetch resolves enabled:true over the fake loopback,
+      // The capability fetch resolved enabled:true over the fake loopback,
       // so the ONLY remaining disable reason is the empty conversation —
-      // never an AI-plan gate (FR-4.4 fail-closed contract honored, the AI
-      // gate stayed closed but reporting stayed reachable).
+      // never an AI-plan gate and never "unavailable" (FR-4.4 fail-closed
+      // contract honored, the AI gate stayed closed but reporting stayed
+      // reachable).
       await expect(reportButton).toHaveAttribute(
         "title",
         /no reportable AI outputs/i,
         { timeout: 30_000 }
       );
+      assertCleanTeardown(app);
     } finally {
+      if (app) {
+        await closeApp(app);
+      }
       await reporting.close();
     }
   });
