@@ -736,6 +736,30 @@ function appendTranscript(text: string): void {
 }
 
 /**
+ * Park a late-resolved voice transcript for its originating conversation
+ * (audit 2026-10-20 B01). The chain resolved after the user switched
+ * conversations; the transcript must never reach the newly selected one, so
+ * it goes straight into the originating conversation's persisted draft.
+ */
+function parkVoiceTranscript(
+  ownerKey: string | null,
+  transcript: string
+): void {
+  const clean = transcript.trim();
+  if (!draftStore || !ownerKey || clean.length === 0) return;
+  const prev = draftStore.getDraft(ownerKey);
+  const prevText = (prev?.text ?? "").trim();
+  const text = prevText.length === 0 ? clean : `${prevText} ${clean}`;
+  draftStore.updateComposerState(
+    ownerKey,
+    text,
+    prev?.files ?? [],
+    prev?.pastedContents ?? {},
+    prev?.pastedChips ?? []
+  );
+}
+
+/**
  * Map a recorder error kind to a translated composer notice (TODO P2). Falls
  * back to English copy when the key is absent so the user always sees a clear
  * message rather than a raw exception string.
@@ -800,6 +824,17 @@ async function onMicClick(): Promise<void> {
     return;
   }
   if (isRecording.value) {
+    // Audit 2026-10-20 B01/B02: stop -> convert -> transcribe is a chain of
+    // awaits. Capture the conversation owner AND the pre-voice draft/files
+    // BEFORE the first await so every later mutation can stay with the
+    // originating conversation instead of whatever is selected when the
+    // chain resolves (the composer is reused across conversations via
+    // `draftKey`).
+    const voiceOwnerDraftKey = props.draftKey ?? null;
+    const draftBeforeVoiceSend = draft.value;
+    const filesBeforeVoiceSend: File[] = [...selectedFiles.value];
+    const stillOwnsComposition = (): boolean =>
+      (props.draftKey ?? null) === voiceOwnerDraftKey;
     isRecording.value = false;
     isTranscribing.value = true;
     try {
@@ -810,10 +845,14 @@ async function onMicClick(): Promise<void> {
       try {
         audioBase64 = await blobToWavBase64(recording.blob);
       } catch {
-        showNotice(
-          t("aiChatV2.voice.conversion_failed") ||
-            "Could not convert the recording.",
-        );
+        // A stale chain (conversation switched, audit 2026-10-20 B01) shows
+        // nothing in the newly selected conversation.
+        if (stillOwnsComposition()) {
+          showNotice(
+            t("aiChatV2.voice.conversion_failed") ||
+              "Could not convert the recording.",
+          );
+        }
         return;
       }
       // Transcribe via the worker IPC.
@@ -826,18 +865,33 @@ async function onMicClick(): Promise<void> {
       } catch {
         // Bounded public message only (PRD §14.5/§23): the worker's raw
         // exception can carry filesystem paths or provider details and is
-        // never appended to renderer-visible text.
-        showNotice(
-          t("aiChatV2.voice.transcription_failed") ||
-            "Voice transcription failed.",
-        );
+        // never appended to renderer-visible text. Stale chains (audit
+        // 2026-10-20 B01) stay silent in the switched conversation.
+        if (stillOwnsComposition()) {
+          showNotice(
+            t("aiChatV2.voice.transcription_failed") ||
+              "Voice transcription failed.",
+          );
+        }
         return;
       }
       const transcript = result.transcript.trim();
+      // Ownership re-check (audit 2026-10-20 B01): if the conversation
+      // switched while stop/convert/transcribe were pending, this result
+      // belongs to the originating conversation, never to the newly
+      // selected one.
+      const resolvedInOwner = stillOwnsComposition();
       if (transcript.length === 0) {
-        showNotice(
-          t("aiChatV2.voice.empty_transcript") || "No speech was detected.",
-        );
+        if (resolvedInOwner) {
+          showNotice(
+            t("aiChatV2.voice.empty_transcript") || "No speech was detected.",
+          );
+        }
+      } else if (!resolvedInOwner) {
+        // Park the transcript in the originating conversation's draft (no
+        // auto-send, no append into the switched conversation); the user
+        // finds it when they return.
+        parkVoiceTranscript(voiceOwnerDraftKey, transcript);
       } else if (props.voiceAutoSend) {
         if (props.voiceChatReady === false) {
           // Chat can't accept the message right now (no model / unavailable).
@@ -851,19 +905,31 @@ async function onMicClick(): Promise<void> {
           return;
         }
         // Auto-send: route the transcript through the existing send path,
-        // preserving any selected attachments (PRD §7.4). Flag the send as
-        // voice-originated so `after_voice_input` TTS speaks the reply.
-        const files = [...selectedFiles.value];
-        const draftBeforeVoiceSend = draft.value;
+        // preserving the pre-voice attachments snapshot (PRD §7.4). Flag the
+        // send as voice-originated so `after_voice_input` TTS speaks the
+        // reply.
         appendTranscript(transcript);
-        emit("send", transcript, files, {
+        const submittedDraftText = draft.value;
+        emit("send", transcript, filesBeforeVoiceSend, {
           fromVoice: true,
           onAccepted: () => {
             // Only the transcript and attachments belong to this voice
-            // request. Preserve older typed/pasted content that was never
-            // included in the emitted message.
-            draft.value = draftBeforeVoiceSend;
-            selectedFiles.value = [];
+            // request (audit 2026-10-20 B02): a stale acceptance callback
+            // must not touch the currently selected conversation, and the
+            // restore must not roll back edits the user made after the send.
+            if (!stillOwnsComposition()) return;
+            if (draft.value === submittedDraftText) {
+              draft.value = draftBeforeVoiceSend;
+            }
+            if (
+              selectedFiles.value.length === filesBeforeVoiceSend.length &&
+              selectedFiles.value.every(
+                (file: File, index: number) =>
+                  file === filesBeforeVoiceSend[index]
+              )
+            ) {
+              selectedFiles.value = [];
+            }
           },
         });
       } else {
@@ -871,7 +937,9 @@ async function onMicClick(): Promise<void> {
       }
     } catch (err) {
       // voiceRecorder.stop() failure (rare) — classify into a clear kind.
-      showNotice(recorderErrorNotice(err));
+      if (stillOwnsComposition()) {
+        showNotice(recorderErrorNotice(err));
+      }
     } finally {
       isTranscribing.value = false;
     }
