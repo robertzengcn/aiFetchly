@@ -111,6 +111,8 @@ export interface AIChatTurnQueueServiceDeps {
   readonly streamSinkFactory: (identity?: {
     readonly runId: string;
     readonly conversationId: string;
+    /** Audit R03: the accepted append identity this stream serves from. */
+    readonly sourceRunId?: string | null;
   }) => AIChatQueryEventSink;
   /**
    * B06: bounded sidebar summary hook (allowlisted reasons only — never
@@ -121,6 +123,12 @@ export interface AIChatTurnQueueServiceDeps {
   readonly summarySink?: (input: {
     readonly conversationId: string;
     readonly runId: string | null;
+    /**
+     * Audit R03: the accepted append identity (`pending-<pendingMessageId>`)
+     * this fact's turn was scheduled from, so the renderer can bind the
+     * fact to its own accepted-send ledger entry exactly.
+     */
+    readonly sourceRunId?: string | null;
     readonly reason:
       | "run_queued"
       | "run_started"
@@ -760,6 +768,9 @@ export class AIChatTurnQueueService {
         this.deps.summarySink?.({
           conversationId,
           runId: parked.runId,
+          sourceRunId: parked.pendingMessageId
+            ? `pending-${parked.pendingMessageId}`
+            : null,
           reason:
             outcome === "completed"
               ? "run_completed"
@@ -983,6 +994,7 @@ export class AIChatTurnQueueService {
       this.deps.summarySink?.({
         conversationId,
         runId: bridgeResult.runId,
+        sourceRunId: `pending-${row.pendingMessageId}`,
         reason: "run_queued",
       });
       const queuedView = await this.deps.pendingModule.getView(
@@ -1008,6 +1020,7 @@ export class AIChatTurnQueueService {
     this.deps.summarySink?.({
       conversationId,
       runId: bridgeRunId?.runId ?? null,
+      sourceRunId: `pending-${row.pendingMessageId}`,
       reason: "run_started",
     });
 
@@ -1044,6 +1057,7 @@ export class AIChatTurnQueueService {
         this.deps.summarySink?.({
           conversationId,
           runId: bridgeRunId?.runId ?? null,
+          sourceRunId: `pending-${row.pendingMessageId}`,
           reason: "run_failed",
         });
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
@@ -1087,8 +1101,14 @@ export class AIChatTurnQueueService {
       // events flush only after the run transition commits below.
       // B06: the sink carries the REAL durable run id so live detail events
       // and the Activity envelope agree (selection can reconstruct it).
+      // Audit R03: the sink also carries the accepted append identity so
+      // detail-driven bindings resolve against the accepted send exactly.
       const streamIdentity = bridgeRunId
-        ? { runId: bridgeRunId.runId, conversationId }
+        ? {
+            runId: bridgeRunId.runId,
+            conversationId,
+            sourceRunId: `pending-${row.pendingMessageId}`,
+          }
         : undefined;
       const terminalGate = new AIChatTerminalGate(
         this.deps.streamSinkFactory(streamIdentity)
@@ -1164,6 +1184,7 @@ export class AIChatTurnQueueService {
         this.deps.summarySink?.({
           conversationId,
           runId: bridgeRunId?.runId ?? null,
+          sourceRunId: `pending-${row.pendingMessageId}`,
           reason: "run_failed",
         });
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
@@ -1189,6 +1210,7 @@ export class AIChatTurnQueueService {
         this.deps.summarySink?.({
           conversationId,
           runId: bridgeRunId?.runId ?? null,
+          sourceRunId: `pending-${row.pendingMessageId}`,
           reason: "run_completed",
         });
         const done = await this.deps.pendingModule.getView(
@@ -1252,6 +1274,7 @@ export class AIChatTurnQueueService {
         this.deps.summarySink?.({
           conversationId,
           runId: bridgeRunIdValue,
+          sourceRunId: `pending-${row.pendingMessageId}`,
           reason:
             waiting === "awaiting_permission"
               ? "permission_required"
@@ -1273,6 +1296,7 @@ export class AIChatTurnQueueService {
       this.deps.summarySink?.({
         conversationId,
         runId: bridgeRunId?.runId ?? null,
+        sourceRunId: `pending-${row.pendingMessageId}`,
         reason:
           failedStatus === "cancelled" ? "run_cancelled" : "run_failed",
       });

@@ -71,7 +71,12 @@ describe("queue run identity + background summaries (B06)", () => {
     const scheduler = new AIChatExecutionScheduler();
     const bridge = new AIChatWorkspaceRunDispatchBridge(undefined, scheduler);
     const sinkIdentities: Array<{ runId: string; conversationId: string } | undefined> = [];
-    const summaries: Array<{ conversationId: string; runId: string | null; reason: string }> = [];
+    const summaries: Array<{
+      conversationId: string;
+      runId: string | null;
+      reason: string;
+      sourceRunId?: string | null;
+    }> = [];
     const engine: AIChatTurnQueueEngine = {
       getConversationRuntimeStatus: () => "idle",
       submitPersistedUserMessage: (async () => ({
@@ -128,11 +133,16 @@ describe("queue run identity + background summaries (B06)", () => {
       expect(s.conversationId).toBe(convA);
       expect(s.runId).toBe(run!.runId);
     }
-    // Bounded: reason-only, no transcript/tool bodies.
+    // Bounded: reason-only + the accepted append identity (audit R03), no
+    // transcript/tool bodies.
     for (const s of summaries) {
-      expect(Object.keys(s).sort()).toEqual(
-        ["conversationId", "reason", "runId"]
-      );
+      expect(Object.keys(s).sort()).toEqual([
+        "conversationId",
+        "reason",
+        "runId",
+        "sourceRunId",
+      ]);
+      expect(String(s.sourceRunId)).toMatch(/^pending-/);
     }
     expect(summaries.map((s) => s.reason)).toContain("run_started");
     expect(summaries.map((s) => s.reason)).toContain("run_completed");

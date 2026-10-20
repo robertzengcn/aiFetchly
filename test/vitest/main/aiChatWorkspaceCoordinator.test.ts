@@ -908,6 +908,8 @@ describe("summary event privacy (FR-022)", () => {
       "unread",
       "lastActivityAt",
       "runId",
+      "sourceRunId",
+      "runOwner",
       "title",
       "reason",
     ]);

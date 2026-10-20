@@ -63,6 +63,9 @@ export async function createOwnerAdapterSink(
       unread: isUnreadFor(status),
       lastActivityAt: new Date().toISOString(),
       runId,
+      // Audit R03: sign the originating owner — non-interactive facts are
+      // background-only for the selected store (never bind its ledger).
+      runOwner: deps.owner,
       reason,
     });
   };

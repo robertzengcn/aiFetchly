@@ -1261,6 +1261,9 @@ export class AIChatCoordinator {
       unread: this.liveUnread.get(conversationId) ?? false,
       lastActivityAt: new Date().toISOString(),
       runId: live?.runId,
+      // Audit R03: the coordinator runs INTERACTIVE sends only — sign the
+      // fact so the selected store treats these as bindable.
+      runOwner: "interactive",
       ...(title !== undefined ? { title } : {}),
       reason,
     });

@@ -608,6 +608,8 @@ let pendingTurnSinkCounter = 0;
 function createBroadcastEventSink(identity?: {
   runId: string;
   conversationId: string;
+  /** Audit R03: the accepted append identity this stream serves from. */
+  sourceRunId?: string | null;
 }): AIChatQueryEventSink {
   const broadcaster = AIChatV2EventBroadcaster.getInstance();
   pendingTurnSinkCounter += 1;
@@ -625,6 +627,9 @@ function createBroadcastEventSink(identity?: {
       conversationId: chunk.conversationId || identity?.conversationId || "",
       // B06: the envelope run id is the durable bridge run when known.
       ...(identity?.runId ? { runId: identity.runId } : {}),
+      // Audit R03: the accepted append identity rides the envelope so the
+      // renderer's start facts bind the accepted send exactly.
+      ...(identity?.sourceRunId ? { sourceRunId: identity.sourceRunId } : {}),
     });
   };
   return createChatV2StreamSink({
@@ -648,6 +653,8 @@ function createBroadcastEventSink(identity?: {
 function broadcastQueueSummary(input: {
   conversationId: string;
   runId: string | null;
+  /** Audit R03: accepted append identity the fact's turn was scheduled from. */
+  sourceRunId?: string | null;
   reason:
     | "run_queued"
     | "run_started"
@@ -682,6 +689,7 @@ function broadcastQueueSummary(input: {
     unread: input.reason !== "run_completed",
     lastActivityAt: new Date().toISOString(),
     ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.sourceRunId ? { sourceRunId: input.sourceRunId } : {}),
     reason: input.reason,
   });
 }

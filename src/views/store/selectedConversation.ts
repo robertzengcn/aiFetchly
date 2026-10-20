@@ -4,6 +4,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatRunDetailEvent,
+  ChatRunOwner,
   ChatRunTerminalRecord,
   ConversationRuntimeStatus,
   ConversationSummaryEvent,
@@ -389,44 +390,137 @@ export const useSelectedConversationStore = defineStore(
       while (ledger.length > ACCEPTED_RUN_LEDGER_CAP) {
         ledger.shift();
       }
+      // Audit R03: facts that arrived while this acceptance was in flight
+      // now have their acceptance to resolve against — replay once, drop.
+      replayEarlySummaryFacts(conversationId);
       return ordinal;
     }
 
     /**
-     * Rebind the next unresolved, unbound accepted send to the real bridge
-     * run id that just started (queue drain, FIFO accept order).
+     * Audit R03: exact-or-legacy binding of a run-start identity.
+     *
+     * exact    — the fact carries the accepted append identity
+     *            (`sourceRunId` = `pending-<pendingMessageId>` or the
+     *            accepted run id): only the entry registered for THAT
+     *            send may bind, so a duplicate or reordered start fact can
+     *            never consume the next pending acceptance.
+     * legacy   — pre-parity facts carry the real run id only: fall back to
+     *            accept-ordered FIFO, but ONLY while no entry is already
+     *            bound to that run id (duplicate starts would otherwise
+     *            walk the ledger and wrongly bind later pending sends).
+     *
+     * Returns true when the fact was fully consumed (bind happens or it is
+     * a duplicate that must never re-apply); false when it should wait for
+     * an acceptance to exist (caller may buffer it).
      */
-    function bindNextUnboundAcceptedRun(
+    function reconcileRunStartedIdentity(
       conversationId: string,
-      realRunId: string
-    ): void {
-      const ledger = acceptedRunLedgerByConversation.get(conversationId);
-      if (!ledger) return;
+      realRunId: string,
+      sourceRunId?: string | null
+    ): boolean {
+      const ledger = acceptedRunLedgerByConversation.get(conversationId) ?? [];
+      // Duplicate start guard (audit R03): an entry already bound to this
+      // real run consumes the fact — never rebind onto the next acceptance.
+      if (ledger.some((entry) => entry.boundRunId === realRunId)) {
+        return true;
+      }
+      if (sourceRunId) {
+        const entry = ledger.find(
+          (candidate) =>
+            !candidate.resolved &&
+            candidate.boundRunId === null &&
+            candidate.runIdAtAccept === sourceRunId
+        );
+        if (entry) {
+          entry.boundRunId = realRunId;
+          return true;
+        }
+        return false;
+      }
       const entry = ledger.find(
         (candidate) => !candidate.resolved && candidate.boundRunId === null
       );
-      if (entry) {
-        entry.boundRunId = realRunId;
+      if (!entry) return false;
+      entry.boundRunId = realRunId;
+      return true;
+    }
+
+    /**
+     * Audit R03: summary facts that arrive while their acceptance is still
+     * in flight (the durable queue starts the run before the renderer's
+     * `startChatRun` reply resolves) are buffered per conversation and
+     * replayed exactly once on the next acceptance. Bounded like the other
+     * per-conversation registries.
+     */
+    interface EarlySummaryFact {
+      runId: string;
+      reason:
+        | "run_started"
+        | "run_completed"
+        | "run_failed"
+        | "run_cancelled"
+        | "run_interrupted";
+      sourceRunId?: string | null;
+    }
+    const EARLY_SUMMARY_FACT_CAP = 32;
+    const earlySummaryFactsByConversation = new Map<
+      string,
+      EarlySummaryFact[]
+    >();
+
+    function recordEarlySummaryFact(
+      conversationId: string,
+      fact: EarlySummaryFact
+    ): void {
+      let buffer = earlySummaryFactsByConversation.get(conversationId);
+      if (!buffer) {
+        buffer = [];
+        earlySummaryFactsByConversation.set(conversationId, buffer);
+      }
+      buffer.push(fact);
+      while (buffer.length > EARLY_SUMMARY_FACT_CAP) {
+        buffer.shift();
+      }
+    }
+
+    function replayEarlySummaryFacts(conversationId: string): void {
+      const buffered = earlySummaryFactsByConversation.get(conversationId);
+      if (!buffered || buffered.length === 0) return;
+      earlySummaryFactsByConversation.delete(conversationId);
+      for (const fact of buffered.splice(0)) {
+        tryBindSummaryFact(conversationId, fact);
       }
     }
 
     /**
      * Resolve one terminal fact by durable identity; publishes the accepted
      * entry's ordinal so component bookkeeping can consume its snapshot.
+     * Audit R03: returns whether the terminal was consumed so unmatched
+     * facts can be buffered until their acceptance registers. A fact that
+     * carries the accepted append identity resolves against that entry
+     * FIRST (exactly), then falls back to the bound/accepted real identity.
      */
     function resolveTerminalFact(
       conversationId: string,
       runId: string,
-      kind: "complete" | "error" | "cancelled"
-    ): void {
+      kind: "complete" | "error" | "cancelled",
+      sourceRunId?: string | null
+    ): boolean {
       const ledger = acceptedRunLedgerByConversation.get(conversationId);
-      if (!ledger) return;
-      const entry = ledger.find(
-        (candidate) =>
-          !candidate.resolved &&
-          (candidate.boundRunId ?? candidate.runIdAtAccept) === runId
-      );
-      if (!entry) return;
+      if (!ledger) return false;
+      const entry =
+        (sourceRunId
+          ? ledger.find(
+              (candidate) =>
+                !candidate.resolved && candidate.runIdAtAccept === sourceRunId
+            )
+          : undefined) ??
+        ledger.find(
+          (candidate) =>
+            !candidate.resolved &&
+            (candidate.boundRunId ?? candidate.runIdAtAccept) === runId
+        );
+      if (!entry) return false;
       entry.resolved = true;
       while (ledger.length > 0 && ledger[0].resolved) {
         ledger.shift();
@@ -437,31 +531,93 @@ export const useSelectedConversationStore = defineStore(
         kind,
         ordinal: entry.acceptOrdinal,
       };
+      return true;
     }
 
     /**
      * Redacted summary facts (any conversation, no content bodies): keep the
      * accept ledger reconciled for background runs the selected-only detail
-     * stream never sees. Includes the queue-drain rebind on `run_started`.
+     * stream never sees. Audit R03:
+     *   exact    — facts carrying the accepted append identity (`sourceRunId`)
+     *              bind/resolve against THAT accepted send only;
+     *   owner    — facts signed with a non-interactive `runOwner` are
+     *              background-only (sidebar state) and never touch ledger;
+     *   buffering— facts that arrive while their acceptance is still in
+     *              flight are replayed once on the next acceptance;
+     *   legacy   — facts without identity metadata keep the guarded accept-
+     *              ordered fallback (R2 N04 behavior).
      */
     function handleSummaryFact(event: ConversationSummaryEvent): void {
       if (!event.runId) return;
-      switch (event.reason) {
+      if (event.runOwner && event.runOwner !== "interactive") return;
+      if (!isLedgerRelevantReason(event.reason)) return;
+      tryBindSummaryFact(event.conversationId, {
+        runId: event.runId,
+        reason: event.reason,
+        sourceRunId: event.sourceRunId,
+      });
+    }
+
+    /** Only these summary reasons participate in run-identity binding. */
+    function isLedgerRelevantReason(
+      reason: ConversationSummaryEvent["reason"]
+    ): reason is EarlySummaryFact["reason"] {
+      return (
+        reason === "run_started" ||
+        reason === "run_completed" ||
+        reason === "run_failed" ||
+        reason === "run_cancelled" ||
+        reason === "run_interrupted"
+      );
+    }
+
+    /**
+     * Audit R03: route one summary fact into the ledger; returns whether it
+     * was consumed. Unconsumed ledger-relevant facts buffer for their
+     * acceptance; non-ledger reasons are ignored (background state only).
+     */
+    function tryBindSummaryFact(
+      conversationId: string,
+      fact: EarlySummaryFact
+    ): boolean {
+      switch (fact.reason) {
         case "run_started":
-          bindNextUnboundAcceptedRun(event.conversationId, event.runId);
-          break;
+          if (
+            reconcileRunStartedIdentity(
+              conversationId,
+              fact.runId,
+              fact.sourceRunId
+            )
+          ) {
+            return true;
+          }
+          recordEarlySummaryFact(conversationId, fact);
+          return false;
         case "run_completed":
-          resolveTerminalFact(event.conversationId, event.runId, "complete");
-          break;
         case "run_failed":
-          resolveTerminalFact(event.conversationId, event.runId, "error");
-          break;
         case "run_cancelled":
-        case "run_interrupted":
-          resolveTerminalFact(event.conversationId, event.runId, "cancelled");
-          break;
+        case "run_interrupted": {
+          const kind =
+            fact.reason === "run_completed"
+              ? ("complete" as const)
+              : fact.reason === "run_failed"
+              ? ("error" as const)
+              : ("cancelled" as const);
+          if (
+            resolveTerminalFact(
+              conversationId,
+              fact.runId,
+              kind,
+              fact.sourceRunId
+            )
+          ) {
+            return true;
+          }
+          recordEarlySummaryFact(conversationId, fact);
+          return false;
+        }
         default:
-          break;
+          return true;
       }
     }
 
@@ -538,11 +694,16 @@ export const useSelectedConversationStore = defineStore(
       // update per flush window, not one per token chunk.
       // FR-026: an openImmediately artifact opens the inspector preview for
       // the SELECTED conversation only (events arrive selected-only).
-      // Audit R2 N04: a drained queued send's bridge run starts here — bind
-      // the next unresolved accepted send (FIFO accept order) so its queued
-      // identity resolves against this run's terminal.
+      // Audit R2 N04 / R03: a drained queued send's bridge run starts here —
+      // bind the accepted send it serves exactly (source identity) or, for
+      // legacy envelopes, in accept order guarded against duplicates, so the
+      // queued identity resolves against this run's terminal.
       if (event.eventType === "start") {
-        bindNextUnboundAcceptedRun(event.conversationId, event.runId);
+        reconcileRunStartedIdentity(
+          event.conversationId,
+          event.runId,
+          event.sourceRunId
+        );
       }
       if (event.eventType === "tool_result") {
         const pending = presenter.consumePendingArtifactOpen();

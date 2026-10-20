@@ -97,6 +97,21 @@ export interface ConversationSummaryEvent {
   readonly unread: boolean;
   readonly lastActivityAt: string;
   readonly runId?: string;
+  /**
+   * Audit R03: the accepted append identity the fact belongs to — the
+   * `pending-<pendingMessageId>` the renderer registered (queue-dominated
+   * facts carry it). Allows an exact-source binding instead of the
+   * accept-ordered fallback. Absent on legacy senders (pre-parity facts).
+   */
+  readonly sourceRunId?: string | null;
+  /**
+   * Audit R03: originating run owner. Facts signed with a NON-interactive
+   * owner are background-only for the selected store: they update sidebar
+   * state but must never bind/resolve accepted-send ledger entries.
+   * Absent means an interactive-path fact (interactive producers stay
+   * unsigned; only explicit owners are stamped).
+   */
+  readonly runOwner?: ChatRunOwner;
   readonly title?: string;
   readonly reason:
     | "run_queued"
@@ -146,6 +161,8 @@ export type ChatRunDetailEventType =
 export interface ChatRunDetailEvent {
   readonly conversationId: string;
   readonly runId: string;
+  /** Audit R03: the accepted append identity this detail stream serves from. */
+  readonly sourceRunId?: string | null;
   readonly sequence: number;
   readonly emittedAt: string;
   readonly eventType: ChatRunDetailEventType;

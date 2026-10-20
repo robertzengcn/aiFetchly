@@ -309,4 +309,32 @@ describe("selectedConversation durable run identity (audit R2 N04)", () => {
       ordinal: 2,
     });
   });
+
+  describe("AUDIT3 durable identity edge ordering", () => {
+    it("AUDIT3 preserves a run-start fact arriving before its acceptance reply", async () => {
+      await selectId("conv-1");
+      let reply: (value: unknown) => void = () => undefined;
+      startChatRunMock.mockImplementationOnce(() => new Promise(resolve => { reply = resolve; }));
+      const sent = submitText("conv-1", "first");
+      await flushPromises();
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_started" });
+      reply({ conversationId: "conv-1", runId: "pending-p1", status: "queued" });
+      await sent;
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_completed" });
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+    it("AUDIT3 duplicate starts and terminals never consume the next pending identity", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "first");
+      acceptRun("conv-1", "pending-p2", "queued");
+      await submitText("conv-1", "second");
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_started" });
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_started" });
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_completed" });
+      expect(lastResolution()?.ordinal).toBe(1);
+      summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_completed" });
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+  });
 });
