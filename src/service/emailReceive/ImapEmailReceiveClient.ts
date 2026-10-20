@@ -44,6 +44,12 @@ const MAX_FETCH_CAP = 50;
 const IMAP_IMPLICIT_TLS_PORT = 993;
 type ImapConnectionMode = "configured" | "implicitTls";
 
+/** `probe` sessions are short and must not enter IDLE or die on a slow greeting. */
+export type ImapFlowSessionPurpose = "sync" | "probe";
+
+/** Greeting wait for a reply-detection probe. Longer than imapflow's 16s default so a slow mailbox can still authenticate inside the probe budget. */
+export const IMAP_PROBE_GREETING_TIMEOUT_MS = 30_000;
+
 /**
  * Conventional Sent-folder names tried when the server advertises no `\Sent`
  * special-use folder (FR-031 §7.2). Exactly ONE unambiguous match is accepted.
@@ -101,6 +107,8 @@ export interface ImapProbeSession {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
+    /** Ignore Sent mail dated before this instant. */
+    notBefore?: Date;
   }): Promise<ReplyHeaderSearchResult | false>;
 }
 
@@ -181,9 +189,10 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
 
   private createClient(
     config: EmailReceiveConnectionConfig,
-    mode: ImapConnectionMode = "configured"
+    mode: ImapConnectionMode = "configured",
+    purpose: ImapFlowSessionPurpose = "sync"
   ): ImapFlowConnection {
-    return this.imapFlowFactory(buildImapFlowOptions(config, mode));
+    return this.imapFlowFactory(buildImapFlowOptions(config, mode, purpose));
   }
 
   /**
@@ -191,7 +200,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
    * refresh, Sent discovery, and header search on the session; this method
    * owns connect, implicit-TLS retry, abort, and logout.
    *
-   * A probe that opens a new connection per step spends the 15s deadline on
+   * A probe that opens a new connection per step spends the deadline on
    * handshakes and returns `probe_timeout` before it can decide whether a
    * reply already exists.
    */
@@ -203,7 +212,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     if (signal?.aborted) {
       throw new Error("IMAP probe aborted before connect");
     }
-    let client = this.createClient(config);
+    let client = this.createClient(config, "configured", "probe");
     let detachAbort = attachAbortListener(client, signal);
     try {
       try {
@@ -217,7 +226,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         if (signal?.aborted) {
           throw error;
         }
-        client = this.createClient(config, "implicitTls");
+        client = this.createClient(config, "implicitTls", "probe");
         detachAbort = attachAbortListener(client, signal);
         await client.connect();
       }
@@ -255,7 +264,8 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
           input.folder,
           input.originalMessageId,
           input.cap,
-          input.signal ?? signal
+          input.signal ?? signal,
+          input.notBefore
         ),
     };
   }
@@ -417,6 +427,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
+    notBefore?: Date;
   }): Promise<ReplyHeaderSearchResult | false> {
     // R08: reject already-aborted work before opening a socket.
     if (input.signal?.aborted) return false;
@@ -432,7 +443,8 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         input.folder,
         input.originalMessageId,
         input.cap,
-        input.signal
+        input.signal,
+        input.notBefore
       );
     } finally {
       detachAbort?.();
@@ -445,7 +457,8 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     folder: string,
     originalMessageId: string,
     cap: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    notBefore?: Date
   ): Promise<ReplyHeaderSearchResult | false> {
     // Open the Sent folder before searching — imapflow requires a selected
     // mailbox before `search`/`fetchOne` (omitting `mailboxOpen` runs the
@@ -461,15 +474,16 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     if (abortIfSignaled(client, signal)) return false;
     // substring search on both threading headers — exact equality is
     // validated locally from the fetched header block (§7.2).
-    const uids = await client.search(
-      {
-        or: [
-          { header: { "in-reply-to": originalMessageId } },
-          { header: { references: originalMessageId } },
-        ],
-      },
-      { uid: true }
-    );
+    const query: SearchObject = {
+      or: [
+        { header: { "in-reply-to": originalMessageId } },
+        { header: { references: originalMessageId } },
+      ],
+    };
+    if (notBefore instanceof Date && Number.isFinite(notBefore.getTime())) {
+      query.since = notBefore;
+    }
+    const uids = await client.search(query, { uid: true });
     if (uids === false) return false;
 
     // R05: report truncation. When the server returned more UIDs than the
@@ -786,7 +800,8 @@ function attachAbortListener(
 
 export function buildImapFlowOptions(
   config: EmailReceiveConnectionConfig,
-  mode: ImapConnectionMode = "configured"
+  mode: ImapConnectionMode = "configured",
+  purpose: ImapFlowSessionPurpose = "sync"
 ): ImapFlowOptions {
   const useImplicitTls =
     config.ssl &&
@@ -800,6 +815,12 @@ export function buildImapFlowOptions(
     doSTARTTLS: useStartTls,
     auth: { user: config.username, pass: config.password },
     logger: false,
+    ...(purpose === "probe"
+      ? {
+          disableAutoIdle: true,
+          greetingTimeout: IMAP_PROBE_GREETING_TIMEOUT_MS,
+        }
+      : {}),
   };
 }
 
