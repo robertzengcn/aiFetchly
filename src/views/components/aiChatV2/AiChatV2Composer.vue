@@ -1459,19 +1459,73 @@ const onSend = (): void => {
   // the originating key always; touch the visible composer only when it still
   // shows that same conversation (review: cross-conversation accept fix).
   const originatingDraftKey = props.draftKey ?? null;
+  // Audit 2026-10-20 B03: snapshot the submitted composer content so a
+  // durable acceptance clears exactly what this send consumed. Edits typed
+  // while the receipt is pending — in the live composer or already
+  // persisted under the originating key — are newer unsent content and must
+  // survive a late acceptance.
+  const submittedDraftValue = draft.value;
+  const submittedFiles = files;
+  const submittedPasted = pastedContents
+    ? { ...pastedContents }
+    : undefined;
+  const submittedChipIds = pastedChips.value.map((chip) => chip.id);
+  const pastedSectionMatches = (
+    contents: Readonly<Record<string, string>>,
+    chipIds: readonly number[]
+  ): boolean =>
+    (submittedPasted !== undefined
+      ? Object.keys(submittedPasted).length === Object.keys(contents).length &&
+        Object.keys(submittedPasted).every(
+          (pasteId) => contents[pasteId] === submittedPasted[pasteId]
+        )
+      : Object.keys(contents).length === 0) &&
+    submittedChipIds.length === chipIds.length &&
+    submittedChipIds.every((chipId, index) => chipIds[index] === chipId);
   emit("send", text, files, {
     pastedContents,
     onAccepted: () => {
-      if (draftStore && originatingDraftKey !== null) {
-        draftStore.clearDraft(originatingDraftKey);
-      }
+      const originatingStillSelected =
+        (props.draftKey ?? null) === originatingDraftKey;
+      const filesUnchanged =
+        selectedFiles.value.length === submittedFiles.length &&
+        submittedFiles.every(
+          (file: File, index: number) => file === submittedFiles[index]
+        );
       if (
-        originatingDraftKey === null ||
-        (props.draftKey ?? null) === originatingDraftKey
+        originatingStillSelected &&
+        draft.value === submittedDraftValue &&
+        filesUnchanged &&
+        pastedSectionMatches(
+          { ...pastedContentsById.value },
+          pastedChips.value.map((chip) => chip.id)
+        )
       ) {
+        // The whole composer still belongs to this submission: consume it.
         draft.value = "";
         selectedFiles.value = [];
         resetPastedState();
+      }
+      // Persisted slice for the originating key: cleared only when the
+      // stored content is still exactly the submitted snapshot, so newer
+      // unsent drafts persisted under that key survive (B03), and a stale
+      // duplicate dispatch after an earlier clear is a no-op.
+      if (draftStore && originatingDraftKey !== null) {
+        const stored = draftStore.getDraft(originatingDraftKey);
+        if (
+          stored !== null &&
+          stored.text === submittedDraftValue &&
+          stored.files.length === submittedFiles.length &&
+          submittedFiles.every(
+            (file: File, index: number) => file === stored.files[index]
+          ) &&
+          pastedSectionMatches(
+            stored.pastedContents,
+            stored.pastedChips.map((chip) => chip.id)
+          )
+        ) {
+          draftStore.clearDraft(originatingDraftKey);
+        }
       }
       closeSlash();
     },
