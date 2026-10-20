@@ -652,6 +652,30 @@ describe("B08: fail-closed recovery references", () => {
       strategy: "fallback_adapter",
     });
     expect(listRetry.ok).toBe(true);
+
+    // G04: `user_intervention` was missing from this policy's test surface —
+    // it must behave identically to the other fatal categories.
+    ledger.clearForTest();
+    const uiRef = ledger.recordFailure({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      code: "NEEDS_APPROVAL",
+      category: "user_intervention",
+      allowedStrategies: ["switch_platform"],
+      recoverable: true,
+    });
+    const uiRetry = ledger.validateAndReserve({
+      conversationId: "c1",
+      pluginName: "p1",
+      searchIdentity: identity(),
+      previousErrorId: uiRef,
+      strategy: "switch_platform",
+    });
+    expect(uiRetry.ok).toBe(false);
+    if (!uiRetry.ok) {
+      expect(uiRetry.reason).toBe("strategy_not_allowed");
+    }
   });
 });
 

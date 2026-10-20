@@ -258,4 +258,48 @@ describe("normalizeMcpToolOutcome (design §10.4 precedence)", () => {
     // The capped message still carries a recognizable error.
     expect(payload.error.length).toBeLessThanOrEqual(8_192);
   });
+
+  it("flags diagnosticsTruncated when oversized diagnostics were clipped (B02/G04)", () => {
+    // > MAX_DIAGNOSTIC_KEYS (24) fields → the truncated marker is nested in
+    // the clipped diagnostics and the excess keys are gone.
+    const manyKeys = normalizeMcpToolOutcome(
+      content({
+        isError: true,
+        structuredContent: Object.fromEntries(
+          Array.from({ length: 40 }, (_, i) => [`key-${i}`, `value-${i}`])
+        ),
+      })
+    );
+    expect(manyKeys.success).toBe(false);
+    const manyDiag = (manyKeys.payload as { diagnostics: Record<string, unknown> })
+      .diagnostics;
+    expect(manyDiag.diagnosticsTruncated).toBe(true);
+    expect(Object.keys(manyDiag).length).toBeLessThanOrEqual(25);
+
+    // Whole diagnostics object > 8 KiB even AFTER field clipping → replaced
+    // entirely by the marker (oversized content leaks nothing).
+    const nestedBlob: Record<string, unknown> = { leaf: "x".repeat(300) };
+    let nestedCursor: Record<string, unknown> = nestedBlob;
+    for (let i = 0; i < 38; i++) {
+      const next: Record<string, unknown> = { leaf: "y".repeat(300), child: nestedCursor };
+      nestedCursor = next;
+    }
+    const oversize = normalizeMcpToolOutcome(
+      content({ isError: true, structuredContent: nestedCursor })
+    );
+    expect(oversize.success).toBe(false);
+    expect(
+      (oversize.payload as { diagnostics: Record<string, unknown> }).diagnostics
+    ).toEqual({ diagnosticsTruncated: true });
+
+    // Small payloads keep no marker (no lie).
+    const small = normalizeMcpToolOutcome(
+      content({ isError: true, structuredContent: { one: "two" } })
+    );
+    expect((small.payload as Record<string, unknown>).diagnosticsTruncated).toBeUndefined();
+    expect(
+      (small.payload as { diagnostics: Record<string, unknown> }).diagnostics
+        .diagnosticsTruncated
+    ).toBeUndefined();
+  });
 });

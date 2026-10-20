@@ -212,8 +212,43 @@ describe("PluginFileArtifactService", () => {
     expect(service.listForConversation("conv-owner")).toHaveLength(0);
   });
 
-  it("bounds the preview row count", () => {
-    const staging = service.provisionStaging("exec-preview");
+  it("rejects export of a tampered artifact via digest mismatch (G04)", () => {
+    stageExecution("exec-tamper");
+    const { artifacts } = service.promoteCandidates({
+      executionId: "exec-tamper",
+      conversationId: "conv-owner",
+      pluginName: "demo-plugin",
+      candidates: [JSON_CANDIDATE],
+    });
+    const id = artifacts[0].id;
+    expect(typeof artifacts[0].digest).toBe("string");
+
+    const contentPath = path.join(root, "artifacts", id, "content.json");
+    fs.writeFileSync(contentPath, JSON.stringify({ schemaVersion: 1, records: [] }));
+
+    const dest = path.join(root, "..", "export-tampered.json");
+    const result = service.exportToPath("conv-owner", id, dest);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/integrity/i);
+    }
+    expect(fs.existsSync(dest)).toBe(false);
+
+    // Untampered artifacts still export.
+    stageExecution("exec-clean");
+    const clean = service.promoteCandidates({
+      executionId: "exec-clean",
+      conversationId: "conv-owner",
+      pluginName: "demo-plugin",
+      candidates: [JSON_CANDIDATE],
+    });
+    expect(service.exportToPath("conv-owner", clean.artifacts[0].id, dest).ok).toBe(
+      true
+    );
+    fs.unlinkSync(dest);
+  });
+
+  it("bounds the preview row count", () => {    const staging = service.provisionStaging("exec-preview");
     fs.writeFileSync(
       path.join(staging, "records.json"),
       JSON.stringify({
@@ -408,6 +443,59 @@ describe("PluginFileArtifactService candidate hardening (B10)", () => {
     );
     expect(
       promoteErr("b10-risky-quoted", {
+        version: 1,
+        relativePath: "records.csv",
+        format: "csv",
+        recordCount: 1,
+        complete: true,
+      })
+    ).toMatch(/spreadsheet-formula-like/);
+
+    // G04: cover the remaining risky leading characters the host treats as
+    // formula-like (`+`, `-`, TAB), quoted or plain; CR is only risky when
+    // QUOTED (an unquoted stray CR is a record separator in the RFC walk).
+    for (const [label, cell] of [
+      ["plus", "+2+2"],
+      ["minus", "-VLOOKUP(x)"],
+      ["tab", "\tSUM(A1:A9)"],
+    ] as const) {
+      stagedText(
+        `b10-risky-${label}`,
+        "records.csv",
+        `businessName,phone\n${cell},123\n`
+      );
+      expect(
+        promoteErr(`b10-risky-${label}`, {
+          version: 1,
+          relativePath: "records.csv",
+          format: "csv",
+          recordCount: 1,
+          complete: true,
+        })
+      ).toMatch(/spreadsheet-formula-like/);
+      stagedText(
+        `b10-risky-${label}-quoted`,
+        "records.csv",
+        `businessName,phone\n"${cell}",123\n`
+      );
+      expect(
+        promoteErr(`b10-risky-${label}-quoted`, {
+          version: 1,
+          relativePath: "records.csv",
+          format: "csv",
+          recordCount: 1,
+          complete: true,
+        })
+      ).toMatch(/spreadsheet-formula-like/);
+    }
+    // Quoted CR leading cell (inside quotes it stays a literal cell char).
+    stagedText(
+      "b10-risky-cr-quoted",
+      "records.csv",
+      'businessName,phone\n"\rSUM(A1:A9)",123\n'
+    );
+    expect(
+      promoteErr("b10-risky-cr-quoted", {
         version: 1,
         relativePath: "records.csv",
         format: "csv",

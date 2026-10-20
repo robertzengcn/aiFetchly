@@ -1943,6 +1943,13 @@ export class PluginFileArtifactService {
     if (!this.fs.existsSync(contentPath)) {
       return { ok: false, error: "artifact content missing" };
     }
+    // G04: the durable export path re-verifies the recorded sha256 digest so
+    // a tampered or corrupted artifact never leaves as "the run's data".
+    // Legacy rows recorded before digests existed skip the check (marked).
+    if (typeof artifact.digest === "string" && artifact.digest.length > 0) {
+      const verdict = this.verifyPersistedDigest(contentPath, artifact.digest);
+      if (!verdict.ok) return verdict;
+    }
     try {
       this.fs.copyFileSync(contentPath, destination);
       return { ok: true, sizeBytes: this.fs.statSync(destination).size };
@@ -1967,6 +1974,39 @@ export class PluginFileArtifactService {
     } catch (e) {
       return { ok: false, error: String(e) };
     }
+  }
+
+  /**
+   * G04: verify the persisted artifact against its recorded sha256 digest
+   * using the same bounded positional chunk loop as validation scans
+   * (constant memory even for a 100 MiB artifact).
+   */
+  private verifyPersistedDigest(
+    contentPath: string,
+    expectedDigest: string
+  ): { ok: true } | { ok: false; error: string } {
+    const hash = createHash("sha256");
+    const chunkSize = this.limits.scanChunkBytes;
+    let offset = 0;
+    try {
+      for (;;) {
+        const chunk = this.fs.readChunkAtSync(contentPath, offset, chunkSize);
+        if (chunk.length === 0) break;
+        hash.update(chunk);
+        offset += chunk.length;
+        if (chunk.length < chunkSize) break;
+      }
+    } catch (e) {
+      return { ok: false, error: `artifact integrity check failed: ${String(e)}` };
+    }
+    const actual = hash.digest("hex");
+    if (actual !== expectedDigest) {
+      return {
+        ok: false,
+        error: "artifact content integrity check failed: digest mismatch",
+      };
+    }
+    return { ok: true };
   }
 
   // ----------------------------------------------------------------- cleanup
