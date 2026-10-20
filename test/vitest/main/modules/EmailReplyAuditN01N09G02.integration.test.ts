@@ -29,6 +29,7 @@ import {
   setUpgradeValidationStateForTests,
 } from "@/service/emailReply/EmailReplyReadiness";
 import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
+import { PROBE_DEADLINE_MS } from "@/service/emailReceive/EmailReplyDetectionService";
 
 // N01–N09 + G02 — audit regression suite for the 2026-10-15 TODO. Each test
 // proves its fix against real SQLite transactions (no mocks for the cluster
@@ -776,9 +777,22 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
       "@/service/emailReceive/EmailReplyDetectionService"
     );
     const model = await messageModel();
-    // Manual clock: the probe deadline honors it, while the racer's timer
-    // is real — pre-advancing shrinks the real budget deterministically.
-    let nowMs = 2_000_000_000_000;
+    const nowMs = 2_000_000_000_000;
+    // The racer snapshots remainingMs() once, immediately after the deadline
+    // captures its start (the first now() call). Later reads sit 500ms before
+    // that end, so the real timer is ~500ms instead of the full probe budget.
+    // "past" is set only after that timeout, before the gated write is released.
+    let clockPhase: "start" | "within" | "past" = "start";
+    const now = (): number => {
+      if (clockPhase === "start") {
+        clockPhase = "within";
+        return nowMs;
+      }
+      if (clockPhase === "past") {
+        return nowMs + PROBE_DEADLINE_MS + 1_000;
+      }
+      return nowMs + PROBE_DEADLINE_MS - 500;
+    };
     const rawId = `<f03-${Math.random()}@x.com>`;
     const seed = await seedMessage({
       messageId: rawId,
@@ -873,18 +887,16 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         async readIdentity() { return identity; },
       },
       imapPort,
-      now: () => nowMs,
+      now,
     });
 
-    // Shrink the real race budget to ~500ms, then out-wait it.
-    nowMs += 14_500;
     const first = service.detect({ messageId: seed.id });
     await new Promise((resolve) => setTimeout(resolve, 800));
     const r1 = await first;
     expect(r1.state).toBe("unknown");
     // Expire the manual clock too, then let the late write complete. The
     // expired probe stages its row but never confirms it.
-    nowMs += 15_500;
+    clockPhase = "past";
     releaseWrite!();
     let storedHash: string | null | undefined = null;
     for (let i = 0; i < 100 && storedHash == null; i++) {
@@ -1035,9 +1047,9 @@ describe("Email reply audit N01–N09 + G02 regressions", () => {
         PENDING_NEGATIVE_CONTEXT;
     }
     expect(staged).toBe(true);
-    // Push the manual clock past the 15s probe deadline while the confirm
+    // Push the manual clock past the probe deadline while the confirm
     // is still held, then release it — completion is late.
-    nowMs += 30_000;
+    nowMs += PROBE_DEADLINE_MS + 1_000;
     releaseConfirm!();
     const r1 = await first;
     expect(r1.state).toBe("unknown");
