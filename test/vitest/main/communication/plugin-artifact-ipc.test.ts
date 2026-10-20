@@ -74,6 +74,7 @@ import {
   PLUGIN_ARTIFACT_PREVIEW,
   PLUGIN_ARTIFACT_EXPORT,
   PLUGIN_ARTIFACT_DELETE,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
 } from "@/config/channellist";
 import type { IpcMainInvokeEvent } from "electron";
 
@@ -174,6 +175,24 @@ describe("plugin artifact IPC sender authentication (B09)", () => {
     expect(result.msg).toMatch(/untrusted origin/i);
   });
 
+  it("rejects journal listings from untrusted sender frames (G04)", async () => {
+    const result = await call(
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
+      ipcEvent(UNTRUSTED_URL),
+      JSON.stringify({ conversationId: OWNED_CONV })
+    );
+    expect(result.status).toBe(false);
+    expect(result.msg).toMatch(/untrusted origin/i);
+
+    const missingFrame = await call(
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
+      undefined,
+      JSON.stringify({ conversationId: OWNED_CONV })
+    );
+    expect(missingFrame.status).toBe(false);
+    expect(missingFrame.msg).toMatch(/untrusted origin/i);
+  });
+
   it("rejects an undefined event entirely", async () => {
     const result = await call(PLUGIN_ARTIFACT_LIST, undefined, JSON.stringify({ conversationId: OWNED_CONV }));
     expect(result.status).toBe(false);
@@ -266,6 +285,35 @@ describe("plugin artifact IPC conversation ownership (B09)", () => {
       (afterDelete.data as Array<{ id: string }>).some((a) => a.id === id)
     ).toBe(false);
   });
+
+  it("serves journal listings only for owned conversations (G04)", async () => {
+    const id = promoteFixture("v2-journal-owned");
+    ownedConversations.add("v2-journal-owned");
+
+    const denied = await call(
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
+      ipcEvent(TRUSTED_URL),
+      JSON.stringify({ conversationId: FOREIGN_CONV })
+    );
+    expect(denied.status).toBe(false);
+    expect(denied.msg).toMatch(/Conversation not found/);
+
+    const junk = await call(
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
+      ipcEvent(TRUSTED_URL),
+      JSON.stringify({ artifactId: id })
+    );
+    expect(junk.status).toBe(false);
+    expect(junk.msg).toMatch(/conversationId is required/);
+
+    const ok = await call(
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
+      ipcEvent(TRUSTED_URL),
+      JSON.stringify({ conversationId: "v2-journal-owned" })
+    );
+    expect(ok.status).toBe(true);
+    expect(Array.isArray(ok.data)).toBe(true);
+  });
 });
 
 describe("PluginFileArtifactModule conversation verification", () => {
@@ -290,6 +338,10 @@ describe("PluginFileArtifactModule conversation verification", () => {
       async () => false
     );
     await expect(service.delete("conv-x", "pa_y")).rejects.toThrow(
+      /Conversation not found/
+    );
+    // G04: journal listing requires the same ownership check.
+    await expect(service.listExecutionJournals("conv-x")).rejects.toThrow(
       /Conversation not found/
     );
   });
