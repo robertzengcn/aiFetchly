@@ -1,4 +1,5 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { PluginFileArtifactModule } from "@/modules/PluginFileArtifactModule";
 import { log } from "@/modules/Logger";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -616,6 +617,17 @@ export function registerPluginIpcHandlers(): void {
           await PluginComponentRegistryService.unregisterPluginCapabilities(
             input.name
           );
+          // G03: the uninstalled plugin's existing artifacts adopt the
+          // short uninstall retention window (user data, best-effort).
+          const artifactModule = new PluginFileArtifactModule();
+          const reconfirmed = await artifactModule.applyPluginUninstallRetention(
+            input.name
+          );
+          if (reconfirmed > 0) {
+            log.info(
+              `[plugin-ipc] uninstall retention applied to ${reconfirmed} artifact(s) of ${input.name}`
+            );
+          }
           // Plugin removed — refresh any open slash suggestions (PRD Problem 2).
           broadcastAifetchlyConfigChanged({ source: "plugin" });
           return null;

@@ -7,6 +7,7 @@ import {
   PLUGIN_ARTIFACT_PREVIEW,
   PLUGIN_ARTIFACT_EXPORT,
   PLUGIN_ARTIFACT_DELETE,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
 } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -165,6 +166,21 @@ async function handleDelete(event?: IpcMainInvokeEvent, data?: unknown) {
   }
 }
 
+async function handleListJournals(event?: IpcMainInvokeEvent, data?: unknown) {
+  const req = parseConversationId(data);
+  if (!req.ok) return denied(req.error);
+  try {
+    assertTrustedSender(event);
+    const module = new PluginFileArtifactModule();
+    return ok(await module.listExecutionJournals(req.value));
+  } catch (err) {
+    log.error("[plugin-artifact] list journals failed:", err);
+    return denied(
+      err instanceof Error ? err.message : "Failed to list plugin execution journals."
+    );
+  }
+}
+
 export function registerPluginArtifactIpcHandlers(): void {
   ipcMain.handle(PLUGIN_ARTIFACT_LIST, async (event, data: unknown) =>
     handleList(event, data)
@@ -177,5 +193,8 @@ export function registerPluginArtifactIpcHandlers(): void {
   );
   ipcMain.handle(PLUGIN_ARTIFACT_DELETE, async (event, data: unknown) =>
     handleDelete(event, data)
+  );
+  ipcMain.handle(PLUGIN_ARTIFACT_LIST_JOURNAL, async (event, data: unknown) =>
+    handleListJournals(event, data)
   );
 }

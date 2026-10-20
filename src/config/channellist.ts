@@ -765,6 +765,8 @@ export const PLUGIN_ARTIFACT_LIST = "plugin-artifact:list";
 export const PLUGIN_ARTIFACT_PREVIEW = "plugin-artifact:preview";
 export const PLUGIN_ARTIFACT_EXPORT = "plugin-artifact:export";
 export const PLUGIN_ARTIFACT_DELETE = "plugin-artifact:delete";
+/** G03: execution journals (interrupted/salvaged runs) for a conversation. */
+export const PLUGIN_ARTIFACT_LIST_JOURNAL = "plugin-artifact:list-journal";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
 export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";

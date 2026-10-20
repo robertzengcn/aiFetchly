@@ -34,6 +34,9 @@
           <span v-if="artifact.createdAt">
             {{ t("aiChatV2.pluginArtifact.saved_at", { time: savedTimeLabel(artifact) }) || artifact.createdAt }}
           </span>
+          <span v-if="expiryMeta(artifact)" data-testid="plugin-artifact-expires">
+            {{ expiryMeta(artifact) }}
+          </span>
         </div>
         <div
           v-if="row(artifact.id)?.error"
@@ -96,6 +99,32 @@
       </div>
     </div>
 
+    <!-- G03: conversation-level interrupted executions. Journals with no
+         registered artifact never appear as a row above, so without this
+         block an interrupted run would leave no visible trace at all. -->
+    <div
+      v-if="interruptedRuns.length > 0"
+      class="plugin-artifact-card__interrupted"
+      role="alert"
+      data-testid="plugin-artifact-interrupted"
+    >
+      <div class="plugin-artifact-card__interrupted-title">
+        {{ t("aiChatV2.pluginArtifact.recovered_title") || "Recovered executions" }}
+      </div>
+      <ul class="plugin-artifact-card__interrupted-list">
+        <li
+          v-for="run in interruptedRuns"
+          :key="run.executionId"
+          data-testid="plugin-artifact-interrupted-entry"
+        >
+          {{ journalEntryLabel(run) }}
+        </li>
+      </ul>
+      <div class="plugin-artifact-card__interrupted-note">
+        {{ t("aiChatV2.pluginArtifact.recovered_note") || "An earlier run was interrupted before its results were saved." }}
+      </div>
+    </div>
+
     <div v-if="deletedAll" class="plugin-artifact-card__notice" data-testid="plugin-artifact-deleted-notice">
       {{ t("aiChatV2.pluginArtifact.deleted_all") || "Files deleted" }}
     </div>
@@ -103,11 +132,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   deletePluginArtifact,
   exportPluginArtifact,
+  listPluginExecutionJournals,
   previewPluginArtifact,
   type PluginArtifactView,
 } from "@/views/api/pluginArtifact";
@@ -213,6 +243,74 @@ function savedTimeLabel(artifact: PluginArtifactView): string {
   if (Number.isNaN(date.getTime())) return raw;
   return date.toLocaleString();
 }
+
+/** G03: pending/uninstall-shortened expiry stays user-visible per row. */
+function expiryMeta(artifact: PluginArtifactView): string | null {
+  if (typeof artifact.expiresAt !== "string" || artifact.expiresAt.length === 0) {
+    return null;
+  }
+  const date = new Date(artifact.expiresAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime() < Date.now()
+    ? t("aiChatV2.pluginArtifact.expired_at", { time: date.toLocaleString() }) ||
+        `Expired ${date.toLocaleString()}`
+    : t("aiChatV2.pluginArtifact.expires_at", { time: date.toLocaleString() }) ||
+        `Expires ${date.toLocaleString()}`;
+}
+
+// --- G03: interrupted executions for this conversation ---------------------
+interface InterruptedRun {
+  executionId: string;
+  pluginName: string | null;
+  at: string | null;
+  message: string | null;
+}
+
+const interruptedRuns = ref<InterruptedRun[]>([]);
+
+function journalTimeLabel(raw: string | null): string {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleString();
+}
+
+function journalEntryLabel(run: InterruptedRun): string {
+  return (
+    t("aiChatV2.pluginArtifact.recovered_entry", {
+      plugin: run.pluginName ?? "",
+      time: journalTimeLabel(run.at),
+    }) || `${run.pluginName ?? ""} · ${journalTimeLabel(run.at)}`
+  );
+}
+
+/**
+ * Journals with registeredCount === 0 produce no artifact row anywhere, so
+ * they must be surfaced here (newest-first from the host, bounded inline).
+ * Failures are silent: this is an extra courtesy, never a required column.
+ */
+async function loadInterruptedRuns(): Promise<void> {
+  try {
+    const list = await listPluginExecutionJournals(props.conversationId);
+    interruptedRuns.value = list
+      .filter(
+        (j) => j.status === "interrupted" && j.registeredCount === 0
+      )
+      .slice(0, 8)
+      .map((j) => ({
+        executionId: j.executionId,
+        pluginName: j.pluginName,
+        at: j.at,
+        message: j.message,
+      }));
+  } catch {
+    interruptedRuns.value = [];
+  }
+}
+
+onMounted(() => {
+  void loadInterruptedRuns();
+});
 
 function truncatedPreviewLabel(): string {
   return (
@@ -415,5 +513,30 @@ const deletedAll = ref(false);
   font-size: 12px;
   opacity: 0.75;
   margin-top: 4px;
+}
+
+.plugin-artifact-card__interrupted {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  background: rgba(var(--v-theme-warning), 0.08);
+}
+
+.plugin-artifact-card__interrupted-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plugin-artifact-card__interrupted-list {
+  margin: 4px 0 2px;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.plugin-artifact-card__interrupted-note {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 2px;
 }
 </style>

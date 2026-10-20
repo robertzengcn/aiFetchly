@@ -3,6 +3,7 @@ import {
   PluginFileArtifactService,
   getPluginFileArtifactService,
   type RegisteredPluginArtifact,
+  type PluginExecutionJournalState,
 } from "@/service/PluginFileArtifactService";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
@@ -111,6 +112,35 @@ export class PluginFileArtifactModule {
   ): Promise<{ ok: boolean; error?: string }> {
     await this.assertConversationOwned(conversationId);
     return this.service.delete(conversationId, artifactId);
+  }
+
+  /**
+   * G03: execution journals for a conversation (interrupted-but-real
+   * executions the UI must surface). Ownership first, then the journal dir.
+   */
+  public async listExecutionJournals(
+    conversationId: string
+  ): Promise<PluginExecutionJournalState[]> {
+    await this.assertConversationOwned(conversationId);
+    return this.service.listJournalStatesForConversation(conversationId);
+  }
+
+  /**
+   * G03: after a plugin is uninstalled its existing artifacts adopt a much
+   * shorter retention window. Best-effort: uninstall never fails because
+   * retention bookkeeping hiccuped.
+   */
+  public async applyPluginUninstallRetention(
+    pluginName: string
+  ): Promise<number> {
+    try {
+      return this.service.applyPluginUninstallRetention(pluginName);
+    } catch (e) {
+      log.warn(
+        `[PluginFileArtifactModule] uninstall retention failed for ${pluginName}: ${String(e)}`
+      );
+      return 0;
+    }
   }
 
   /** Startup retention sweep — safe to call repeatedly. */

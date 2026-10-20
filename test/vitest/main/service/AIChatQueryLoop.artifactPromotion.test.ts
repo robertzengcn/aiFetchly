@@ -66,6 +66,13 @@ const artifactService = {
   stagingExistsResult: false,
   candidatesResult: [] as unknown[],
   promotionResult: { artifacts: [] as unknown[], errors: [] as string[] },
+  journalBegins: [] as Array<{
+    executionId: string;
+    conversationId: string;
+    pluginName: string;
+  }>,
+  recordedPromotions: [] as Array<Record<string, unknown>>,
+  quotaResult: null as null | { ok: false; code: string; error: string },
   stagingExists(executionId: string): boolean {
     void executionId;
     return artifactService.stagingExistsResult;
@@ -80,11 +87,32 @@ const artifactService = {
     pluginName: string;
     candidates: readonly unknown[];
   }): { artifacts: unknown[]; errors: string[] } {
-    void input;
+    artifactService.recordedPromotions.push(
+      input as unknown as Record<string, unknown>
+    );
     return {
       artifacts: artifactService.promotionResult.artifacts,
       errors: [...artifactService.promotionResult.errors],
     };
+  },
+  beginExecutionJournal(input: {
+    executionId: string;
+    conversationId: string;
+    pluginName: string;
+  }): void {
+    artifactService.journalBegins.push({
+      executionId: input.executionId,
+      conversationId: input.conversationId,
+      pluginName: input.pluginName,
+    });
+  },
+  preflightArtifactQuota(
+    _pluginName: string
+  ):
+    | { ok: true; storeUsageBytes: number; pluginUsageBytes: number; freeDiskBytes: number | null }
+    | { ok: false; code: string; error: string } {
+    if (artifactService.quotaResult) return artifactService.quotaResult as never;
+    return { ok: true, storeUsageBytes: 0, pluginUsageBytes: 0, freeDiskBytes: null };
   },
 };
 
@@ -95,7 +123,7 @@ vi.mock("@/service/PluginFileArtifactService", () => ({
 vi.mock("@/config/usersetting", () => ({
   Token: class {
     getValue() {
-      return "";
+      return "true";
     }
   },
   USER_AI_ENABLED: "true",
@@ -105,7 +133,7 @@ vi.mock("@/config/usersetting", () => ({
 vi.mock("@/modules/token", () => ({
   Token: class {
     getValue() {
-      return "";
+      return "true";
     }
   },
 }));
@@ -257,6 +285,9 @@ beforeEach(() => {
   artifactService.stagingExistsResult = false;
   artifactService.candidatesResult = [];
   artifactService.promotionResult = { artifacts: [], errors: [] };
+  artifactService.journalBegins = [];
+  artifactService.recordedPromotions = [];
+  artifactService.quotaResult = null;
   ledgerState.completeAttempts = [];
 });
 
@@ -449,6 +480,196 @@ describe("AIChatQueryLoop artifact promotion verdict (B03)", () => {
       registeredCount: 0,
       errors: ["bad"],
       degradedToFailure: true,
+      artifacts: [],
     });
+  }, 25_000);
+});
+
+describe("AIChatQueryLoop G03 artifact lifecycle wiring", () => {
+  interface ExecInternals {
+    executeAsyncTool: (
+      input: Record<string, unknown>,
+      call: { id: string; name: string; arguments?: Record<string, unknown> },
+      outboundAuthorization: undefined,
+      onProgress?: undefined,
+      deadlineMs?: number
+    ) => Promise<
+      | { kind: "job"; jobId: string; deadlinePerfMs: number }
+      | { kind: "rejected"; result: ToolExecutionResultLike }
+    >;
+  }
+
+  function rejectedInput(conversation: string): Record<string, unknown> {
+    return {
+      conversationId: conversation,
+      assistantMessageId: "m-g03",
+      sourceUserMessageId: "u-g03",
+      request: { model: "test-model" },
+      abortController: new AbortController(),
+    } as never;
+  }
+
+  it("rejects an artifact-capable spawn on quota exhaustion before a job exists (G03)", async () => {
+    setPluginToolPolicyRegistryForTest(registryWithArtifacts());
+    artifactService.quotaResult = {
+      ok: false,
+      code: "STORE_QUOTA",
+      error: "plugin artifact store quota exceeded",
+    };
+    const loop = makeLoop({ success: true, result: {}, execution_time_ms: 1 });
+    const admission = await (
+      loop as unknown as ExecInternals
+    ).executeAsyncTool.call(
+      loop,
+      rejectedInput("conv-g03-quota"),
+      {
+        id: "call_g03q",
+        name: "mcp__demo-plugin__scraper__scrape",
+        arguments: {},
+      },
+      undefined
+    );
+    expect(admission.kind).toBe("rejected");
+    if (admission.kind === "rejected") {
+      expect(admission.result.success).toBe(false);
+      expect(
+        (admission.result.result as Record<string, unknown>).code
+      ).toBe("ARTIFACT_QUOTA_EXCEEDED");
+      expect(
+        (admission.result.result as Record<string, unknown>).quota
+      ).toBe("STORE_QUOTA");
+    }
+    // Admission rejection never counts a usable run.
+    expect(ledgerState.completeAttempts).toContainEqual([
+      "conv-g03-quota",
+      "demo-plugin",
+      "ident-{}",
+      "failed",
+    ]);
+  }, 25_000);
+
+  it("writes a spawn journal for artifact-capable plugins only (G03)", async () => {
+    setPluginToolPolicyRegistryForTest(registryWithArtifacts());
+    artifactService.stagingExistsResult = true;
+    artifactService.candidatesResult = [{ path: "data.json", format: "json" }];
+    artifactService.promotionResult = {
+      artifacts: [
+        {
+          id: "art_g03j",
+          format: "json",
+          recordCount: 1,
+          sizeBytes: 20,
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      errors: [],
+    };
+    const loop = makeLoop({
+      success: true,
+      result: { success: true, summary: "scraped" },
+      execution_time_ms: 1,
+    });
+    await runSpawn(loop, {
+      call: { id: "call_g03j", name: "mcp__demo-plugin__scraper__scrape" },
+      meta: { pluginName: "demo-plugin", identity: "ident-g03j" },
+      conversationId: "conv-g03-journal",
+      jobId: "exec-g03-1",
+    });
+    expect(artifactService.journalBegins).toEqual([
+      {
+        executionId: "exec-b03-1",
+        conversationId: "conv-g03-journal",
+        pluginName: "demo-plugin",
+      },
+    ]);
+    // The same spawn promoted with the interrupted-with-no-payload path —
+    // normal results carry the payload result status.
+    expect(
+      artifactService.recordedPromotions.map(
+        (p) => p.resultStatus as string
+      )
+    ).toEqual(["complete"]);
+
+    // A plugin without declared artifact formats never journals.
+    setPluginToolPolicyRegistryForTest(registryWithoutArtifacts());
+    artifactService.journalBegins = [];
+    const plainLoop = makeLoop({
+      success: true,
+      result: { success: true, summary: "scraped" },
+      execution_time_ms: 1,
+    });
+    await runSpawn(plainLoop, {
+      call: { id: "call_g03j2", name: "mcp__demo-plugin__scraper__scrape" },
+      meta: { pluginName: "demo-plugin", identity: "ident-g03j2" },
+      conversationId: "conv-g03-journal2",
+      jobId: "exec-g03-2",
+    });
+    expect(artifactService.journalBegins).toEqual([]);
+  }, 25_000);
+
+  it("crash salvage resolves a truthful TRANSPORT_CRASHED envelope with artifact refs (G03)", async () => {
+    setPluginToolPolicyRegistryForTest(registryWithArtifacts());
+    artifactService.stagingExistsResult = true;
+    artifactService.candidatesResult = [{ path: "data.json", format: "json" }];
+    artifactService.promotionResult = {
+      artifacts: [
+        {
+          id: "art_c8",
+          format: "json",
+          recordCount: 2,
+          sizeBytes: 20,
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      errors: [],
+    };
+    const executeTool = vi.fn(async () => {
+      throw new Error("child process died");
+    });
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(() => undefined),
+      executeTool: executeTool as unknown as ConstructorParameters<
+        typeof AIChatQueryLoop
+      >[0]["executeTool"],
+    } as unknown as ConstructorParameters<typeof AIChatQueryLoop>[0]);
+    const state = await runSpawn(loop, {
+      call: { id: "call_g03c", name: "mcp__demo-plugin__scraper__scrape" },
+      meta: { pluginName: "demo-plugin", identity: "ident-g03c" },
+      conversationId: "conv-g03-crash",
+      jobId: "exec-g03-3",
+    });
+    // Resolved (not rejected) — salvage surfaced the files.
+    expect(state.rejected).toBeUndefined();
+    expect(state.resolved).toBeDefined();
+    const resolved = state.resolved as ToolExecutionResultLike;
+    expect(resolved.success).toBe(false);
+    expect(resolved.result.error).toEqual(
+      expect.objectContaining({
+        code: "TRANSPORT_CRASHED",
+        category: "host_bug",
+        recoverable: false,
+        allowedStrategies: [],
+        id: "art_exec-b03-1",
+      })
+    );
+    expect(resolved.result.artifacts).toEqual([
+      expect.objectContaining({ id: "art_c8" }),
+    ]);
+    expect(resolved.result.interrupted).toBe(true);
+    expect(resolved.result.job_id).toBe("exec-b03-1");
+    // The crashed promotion declared the interrupted result status.
+    expect(
+      artifactService.recordedPromotions.map((p) => p.resultStatus as string)
+    ).toEqual(["interrupted"]);
+    // The reservation was consumed: the settle hook settles the crashed
+    // attempt as "failed" — the salvage resolution is still a truthful
+    // attempt consumption (recoverable:false, strategies []).
+    expect(ledgerState.completeAttempts).toContainEqual([
+      "conv-g03-crash",
+      "demo-plugin",
+      "ident-g03c",
+      "failed",
+    ]);
   }, 25_000);
 });

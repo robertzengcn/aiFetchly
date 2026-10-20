@@ -49,7 +49,27 @@ export interface RegisteredPluginArtifact {
   readonly pluginName: string;
   /** Host-computed sha256 of the promoted content bytes (design §13.2). */
   readonly digest?: string;
+  // G03 identity + state ("required schema/user/job/plugin-version/
+  // generation identity, MIME, checksum and completion status"):
+  /** Metadata schema version (this layout: 1). */
+  readonly schemaVersion: 1;
+  /** Producing execution id (H1 — the registry job id and journal key). */
+  readonly executionId: string;
+  /** Host MIME type of the content file. */
+  readonly mimeType: string;
+  /** Hashed account scope the artifact belongs to (never the raw user id). */
+  readonly userScopeId: string;
+  /** Completion state of the producing tool call. */
+  readonly status: PluginArtifactStatus;
+  /** Plugin manifest version / generation at promotion time (G02/G03). */
+  readonly pluginVersion?: string;
+  readonly pluginGeneration?: string;
 }
+
+export type PluginArtifactStatus =
+  | "complete" // tool call settled with usable artifacts
+  | "degraded" // promotion produced failures or the call failed on the record path
+  | "interrupted"; // crashed / host-restart salvage, honest unresolved state
 
 export const PLUGIN_ARTIFACT_LIMITS = {
   /** Max bytes of one finalized artifact file. */
@@ -64,7 +84,51 @@ export const PLUGIN_ARTIFACT_LIMITS = {
   maxPreviewBytes: 16 * 1024,
   /** Bounded input slice a preview may read/parse (B01). */
   maxPreviewReadBytes: 1024 * 1024,
+  // G03 quotas:
+  /** Byte quota for the whole per-scope (per-user account) artifact store. */
+  maxStoreBytes: 512 * 1024 * 1024,
+  /** Byte quota for one plugin inside a scope's store. */
+  maxPluginStoreBytes: 256 * 1024 * 1024,
+  /** Free-disk cushion that must REMAIN after a promotion succeeds. */
+  minFreeDiskBytes: 128 * 1024 * 1024,
+  /** Chunk size for streaming validation/digest scans (bounded memory). */
+  scanChunkBytes: 1024 * 1024,
+  /** Retention applied to a plugin's artifacts after it is uninstalled. */
+  pluginUninstallRetentionMs: 7 * 24 * 60 * 60_000,
 } as const;
+
+/** Quota preflight failure categories (G03). */
+export type PluginArtifactQuotaCode =
+  | "STORE_QUOTA"
+  | "PLUGIN_QUOTA"
+  | "DISK_SPACE";
+
+export type PluginArtifactQuotaCheck =
+  | { ok: true; storeUsageBytes: number; pluginUsageBytes: number; freeDiskBytes: number | null }
+  | { ok: false; code: PluginArtifactQuotaCode; error: string };
+
+export type PluginArtifactQuotaCheckInput = {
+  readonly pluginName: string;
+  /** Bytes about to be admitted (staging/manifests/candidate size). */
+  readonly incomingBytes?: number;
+};
+
+/** Injectable limit overrides (tests); runtime callers get shipped defaults. */
+export type PluginArtifactLimitsOverrides = Partial<typeof PLUGIN_ARTIFACT_LIMITS>;
+
+/** Flattened execution-journal state surfaced to the conversation UI (G03). */
+export interface PluginExecutionJournalState {
+  readonly executionId: string;
+  /** running | degraded | interrupted | complete | failed. */
+  readonly status: string;
+  /** ISO timestamp of the LAST journal write, when readable. */
+  readonly at: string | null;
+  readonly conversationId: string | null;
+  readonly pluginName: string | null;
+  readonly registeredCount: number;
+  /** Human-agnostic diagnostic note (bounded). */
+  readonly message: string | null;
+}
 
 /** Structural fs seam for tests. */
 export interface ArtifactFs {
@@ -92,6 +156,17 @@ export interface ArtifactFs {
   unlinkSync(p: string): void;
   rmSync(p: string, options?: { recursive: boolean; force: boolean }): void;
   renameSync(from: string, to: string): void;
+  /**
+   * G03 bounded positional read used by streaming validation/digest scans:
+   * reads at most `length` bytes starting at `position` (never the whole
+   * file). An empty Buffer means EOF.
+   */
+  readChunkAtSync(p: string, position: number, length: number): Buffer;
+  /**
+   * G03 free-space probe (Node ≥ 18.15 fs.statfsSync). Optional: tests and
+   * platforms without it skip the disk-space check.
+   */
+  statfsSync?: (p: string) => { bsize: number; bavail: number };
 }
 
 function defaultFs(): ArtifactFs {
@@ -125,6 +200,27 @@ function defaultFs(): ArtifactFs {
     unlinkSync: (p) => fs.unlinkSync(p),
     rmSync: (p, options) => fs.rmSync(p, options),
     renameSync: (from, to) => fs.renameSync(from, to),
+    readChunkAtSync: (p, position, length) => {
+      const fd = fs.openSync(p, "r");
+      try {
+        const buffer = Buffer.alloc(Math.max(0, length));
+        const bytes = fs.readSync(fd, buffer, 0, buffer.length, position);
+        return buffer.subarray(0, bytes);
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+    // statfsSync landed in Node 18.15 but is missing from this project's
+    // @types/node version — probe through a typed view instead of relying
+    // on the ambient declaration.
+    ...(((): { statfsSync?: (p: string) => { bsize: number; bavail: number } } => {
+      const runtimeFs = fs as unknown as {
+        statfsSync?: (p: string) => { bsize: number; bavail: number };
+      };
+      return typeof runtimeFs.statfsSync === "function"
+        ? { statfsSync: (p: string) => runtimeFs.statfsSync?.(p) as { bsize: number; bavail: number } }
+        : {};
+    })()),
   };
 }
 
@@ -141,102 +237,194 @@ const CSV_RISKY_LEADING_CHARS = new Set(["=", "+", "-", "@", "\t", "\r"]);
 export function validatePluginArtifactCsvText(
   text: string
 ): { ok: true; dataRecords: number } | { ok: false; error: string } {
-  let logicalRecords = 0;
-  let recordHasContent = false;
-  let inQuotes = false;
+  const state = new CsvArtifactValidationState();
+  state.consume(text);
+  return state.finish();
+}
+
+/**
+ * G03 streaming CSV validator: the SAME RFC-4180 walk as
+ * `validatePluginArtifactCsvText`, but fed in bounded chunks so a 100 MiB
+ * artifact never needs a full-file buffer or a `toString` copy on the
+ * Electron main thread.
+ */
+export class CsvArtifactValidationState {
+  private logicalRecords = 0;
+  private recordHasContent = false;
+  private inQuotes = false;
   /** True between the opening quote and the first quoted content char. */
-  let insideOpeningQuote = false;
+  private insideOpeningQuote = false;
   /** True immediately after a closing quote (RFC 4180 delimiter must follow). */
-  let afterClosingQuote = false;
-  let atCellStart = true;
-  let i = 0;
-  if (text.charCodeAt(0) === 0xfeff) i = 1; // tolerate a BOM
-  while (i < text.length) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (insideOpeningQuote) {
-        insideOpeningQuote = false;
-        if (CSV_RISKY_LEADING_CHARS.has(ch)) {
-          return {
-            ok: false,
-            error: "spreadsheet-formula-like cell (must be neutralized by the plugin)",
-          };
-        }
+  private afterClosingQuote = false;
+  private atCellStart = true;
+  /** Set once validation fails; further input is ignored. */
+  private failure: string | null = null;
+  private bomSkipped = false;
+  /** True when the previous chunk ended with a bare `\r` (CRLF may continue). */
+  private bareCrCarried = false;
+
+  public get failed(): boolean {
+    return this.failure !== null;
+  }
+
+  public consume(text: string): void {
+    if (text.length === 0 || this.failure !== null) return;
+    let chunk = text;
+    if (!this.bomSkipped) {
+      if (chunk.charCodeAt(0) === 0xfeff) chunk = chunk.slice(1);
+      this.bomSkipped = true;
+      if (chunk.length === 0) return;
+    }
+    if (this.bareCrCarried) {
+      this.bareCrCarried = false;
+      if (chunk.charCodeAt(0) === 0x0a) {
+        // CRLF pair completed across the chunk boundary — skip the `\n`.
+        chunk = chunk.slice(1);
+        if (chunk.length === 0) return;
       }
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
+    }
+    let i = 0;
+    while (i < chunk.length) {
+      const ch = chunk[i];
+      if (this.inQuotes) {
+        if (this.insideOpeningQuote) {
+          this.insideOpeningQuote = false;
+          if (CSV_RISKY_LEADING_CHARS.has(ch)) {
+            this.failure =
+              "spreadsheet-formula-like cell (must be neutralized by the plugin)";
+            return;
+          }
+        }
+        if (ch === '"') {
+          if (chunk[i + 1] === '"') {
+            i += 2;
+            continue;
+          }
+          this.inQuotes = false;
+          this.afterClosingQuote = true;
+          i += 1;
+          continue;
+        }
+        this.recordHasContent = true;
+        if (ch === "\r" && chunk[i + 1] === "\n") {
           i += 2;
           continue;
         }
-        inQuotes = false;
-        afterClosingQuote = true;
+        if (ch === "\r" && i + 1 === chunk.length) {
+          this.bareCrCarried = true;
+        }
         i += 1;
         continue;
       }
-      recordHasContent = true;
-      if (ch === "\r" && text[i + 1] === "\n") {
-        i += 2;
+      if (this.afterClosingQuote) {
+        if (ch === '"') {
+          // Escaped quote pair straddling the chunk boundary — the apparent
+          // close actually reopened the quoted cell (`"a""b"`).
+          this.inQuotes = true;
+          this.insideOpeningQuote = false;
+          this.atCellStart = false;
+          this.afterClosingQuote = false;
+          this.recordHasContent = true;
+          i += 1;
+          continue;
+        }
+        if (ch === ",") {
+          this.atCellStart = true;
+          this.afterClosingQuote = false;
+          i += 1;
+          continue;
+        }
+        if (ch === "\n" || ch === "\r") {
+          this.afterClosingQuote = false;
+          // fall through to the record-end handling below without consuming.
+        } else {
+          this.failure = "unexpected characters after a closing quote";
+          return;
+        }
+      }
+      if (this.atCellStart && ch === '"') {
+        this.inQuotes = true;
+        this.insideOpeningQuote = true;
+        this.atCellStart = false;
+        this.recordHasContent = true;
+        i += 1;
         continue;
       }
-      i += 1;
-      continue;
-    }
-    if (afterClosingQuote) {
       if (ch === ",") {
-        atCellStart = true;
-        afterClosingQuote = false;
+        this.atCellStart = true;
         i += 1;
         continue;
       }
       if (ch === "\n" || ch === "\r") {
-        afterClosingQuote = false;
-        // fall through to the record-end handling below without consuming.
-      } else {
-        return { ok: false, error: "unexpected characters after a closing quote" };
+        this.logicalRecords += 1;
+        this.recordHasContent = false;
+        this.atCellStart = true;
+        if (ch === "\r" && chunk[i + 1] === "\n") {
+          i += 2;
+        } else {
+          if (ch === "\r" && i + 1 === chunk.length) {
+            this.bareCrCarried = true;
+          }
+          i += 1;
+        }
+        continue;
       }
-    }
-    if (atCellStart && ch === '"') {
-      inQuotes = true;
-      insideOpeningQuote = true;
-      atCellStart = false;
-      recordHasContent = true;
-      i += 1;
-      continue;
-    }
-    if (ch === ",") {
-      atCellStart = true;
-      i += 1;
-      continue;
-    }
-    if (ch === "\n" || ch === "\r") {
-      logicalRecords += 1;
-      recordHasContent = false;
-      atCellStart = true;
-      if (ch === "\r" && text[i + 1] === "\n") {
-        i += 2;
-      } else {
-        i += 1;
+      if (this.atCellStart && CSV_RISKY_LEADING_CHARS.has(ch)) {
+        this.failure =
+          "spreadsheet-formula-like cell (must be neutralized by the plugin)";
+        return;
       }
-      continue;
+      this.atCellStart = false;
+      this.recordHasContent = true;
+      i += 1;
     }
-    if (atCellStart && CSV_RISKY_LEADING_CHARS.has(ch)) {
-      return {
-        ok: false,
-        error: "spreadsheet-formula-like cell (must be neutralized by the plugin)",
-      };
+  }
+
+  public finish(): { ok: true; dataRecords: number } | { ok: false; error: string } {
+    if (this.failure !== null) return { ok: false, error: this.failure };
+    if (this.inQuotes) {
+      return { ok: false, error: "unterminated quoted field in CSV" };
     }
-    atCellStart = false;
-    recordHasContent = true;
-    i += 1;
+    let logicalFinal = this.logicalRecords;
+    if (this.recordHasContent) logicalFinal += 1;
+    if (logicalFinal === 0) return { ok: true, dataRecords: 0 };
+    // Record 1 is always the fixed header row.
+    return { ok: true, dataRecords: Math.max(0, logicalFinal - 1) };
   }
-  if (inQuotes) {
-    return { ok: false, error: "unterminated quoted field in CSV" };
+}
+
+/**
+ * G03 streaming UTF-8 chunk decoder: carries an unterminated multi-byte
+ * sequence into the next chunk so chunk boundaries never corrupt characters
+ * (the scanners above walk plain JS strings).
+ */
+export class Utf8ChunkDecoder {
+  private pending: Buffer = Buffer.alloc(0);
+
+  public decode(chunk: Buffer): string {
+    const buf =
+      this.pending.length > 0 ? Buffer.concat([this.pending, chunk]) : chunk;
+    if (buf.length === 0) return "";
+    const cut = utf8SplitPoint(buf);
+    this.pending = cut < buf.length ? buf.subarray(cut) : Buffer.alloc(0);
+    return buf.subarray(0, cut).toString("utf8");
   }
-  let logicalFinal = logicalRecords;
-  if (recordHasContent) logicalFinal += 1;
-  if (logicalFinal === 0) return { ok: true, dataRecords: 0 };
-  // Record 1 is always the fixed header row.
-  return { ok: true, dataRecords: Math.max(0, logicalFinal - 1) };
+}
+
+function utf8SplitPoint(buf: Buffer): number {
+  const n = buf.length;
+  for (let i = n - 1; i >= Math.max(0, n - 3); i -= 1) {
+    const b = buf[i] as number;
+    if ((b & 0x80) === 0) return n; // ASCII — everything decodable
+    if ((b & 0xc0) === 0xc0) {
+      // lead byte: hold it (and its continuation) for the next chunk unless
+      // the full sequence already fits.
+      const expected =
+        (b & 0xe0) === 0xc0 ? 2 : (b & 0xf0) === 0xe0 ? 3 : (b & 0xf8) === 0xf0 ? 4 : 1;
+      return i + expected <= n ? n : i;
+    }
+  }
+  return n; // drift/malformed — decode as replacement chars
 }
 
 /**
@@ -247,33 +435,476 @@ export function validatePluginArtifactCsvText(
 export function validatePluginArtifactJsonDoc(
   text: string
 ): { ok: true; recordCount: number } | { ok: false; error: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { ok: false, error: "not valid JSON" };
+  const state = new JsonArtifactValidationState();
+  state.consume(text);
+  return state.finish();
+}
+
+/**
+ * G03 streaming JSON artifact validator — an explicit, iterative, chunk-fed
+ * scanner for the FIXED v1 structure `{"schemaVersion":1,"records":[{...}]}`:
+ *
+ *  - the root must be an OBJECT (same error as the legacy whole-parse path),
+ *  - `records` must be an array whose items are objects, counted while fed,
+ *  - `schemaVersion` must be the number 1,
+ *  - unknown keys/other errors follow the exactly the legacy messages and
+ *    precedence, and
+ *  - everything is processed in bounded chunks — a 100 MiB file is parsed
+ *    through ≤1 MiB string slices, never held in one Buffer + one string.
+ *
+ * Consumes strictly-valid JSON (identical verdicts to JSON.parse for
+ * malformed input, trailing commas, control characters, bad numbers, etc.).
+ */
+export class JsonArtifactValidationState {
+  /** Structural failure, once set — every error message matches the legacy
+   * whole-parse verdicts (validatePluginArtifactJsonDoc). */
+  private failure: string | null = null;
+  private rootNotObject = false;
+  private recordsNotArray = false;
+  private recordsMissing = true;
+  private schemaBad = false;
+  private itemsBad = false;
+  private recordCount = 0;
+  /** True once the first non-whitespace char was seen. */
+  private rootStarted = false;
+  /** True once the root value CLOSED (trailing garbage check). */
+  private rootClosed = false;
+
+  private frames: Array<
+    | {
+        kind: "object";
+        hostRole: "root" | "item" | "skipped";
+        mode: "expectKey" | "expectKeyAfterComma" | "expectColon" | "expectValue" | "expectCommaOrClose";
+      }
+    | {
+        kind: "array";
+        hostRole: "records" | "skipped";
+        mode: "firstItem" | "expectItemAfterComma" | "expectCommaOrClose";
+      }
+  > = [];
+  /** What the NEXT value applies to (from the owning object's last key). */
+  private pendingKeyRole: "none" | "records" | "schemaVersion" = "none";
+  /** In-progress string reader ("key" vs "value"; key role decided on close). */
+  private stringReading: "none" | "key" | "value" = "none";
+  private stringEscaped = false;
+  private stringCodeUnits = 0;
+  private stringBuf = "";
+  /** In-progress JSON number. */
+  private numberBuf = "";
+  private numberReading = false;
+  /** In-progress literal (true/false/null). */
+  private literalExpected: "true" | "false" | "null" | null = null;
+  private literalPos = 0;
+
+  /** True when structural validation failed (stop-consuming hint for scans). */
+  public failed(): boolean {
+    return this.failure !== null;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, error: "JSON artifact must be an object with a records array" };
-  }
-  const doc = parsed as Record<string, unknown>;
-  if (!Array.isArray(doc.records)) {
-    return { ok: false, error: "JSON artifact is missing the records array" };
-  }
-  const schemaVersion = doc.schemaVersion;
-  if (
-    typeof schemaVersion !== "number" ||
-    !Number.isInteger(schemaVersion) ||
-    schemaVersion !== 1
-  ) {
-    return { ok: false, error: "unsupported JSON artifact schemaVersion" };
-  }
-  for (const record of doc.records as unknown[]) {
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      return { ok: false, error: "JSON artifact records must be objects" };
+
+  public consume(text: string): void {
+    if (this.failure !== null) return;
+    for (const ch of text) {
+      this.consumeChar(ch);
+      if (this.failure !== null) return;
     }
   }
-  return { ok: true, recordCount: doc.records.length };
+
+  private fail(error: string): void {
+    this.failure = error;
+  }
+
+  private consumeChar(ch: string): void {
+    if (this.stringReading !== "none") {
+      // Whitespace inside a string is a control char, not a token boundary.
+      this.consumeStringChar(ch);
+      return;
+    }
+    if (this.numberReading) {
+      // Whitespace terminates the number (the re-dispatch below skips it).
+      this.consumeNumberChar(ch);
+      return;
+    }
+    if (this.literalExpected !== null) {
+      // Whitespace inside a literal is a mismatch, not a boundary.
+      this.consumeLiteralChar(ch);
+      return;
+    }
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") return;
+
+    if (this.frames.length === 0) {
+      if (this.rootClosed) {
+        this.fail("not valid JSON"); // trailing non-whitespace
+        return;
+      }
+      this.rootStarted = true;
+      if (ch === "{") {
+        this.frames.push({ kind: "object", hostRole: "root", mode: "expectKey" });
+        return;
+      }
+      if (ch === "[") {
+        this.rootNotObject = true;
+        this.frames.push({ kind: "array", hostRole: "skipped", mode: "firstItem" });
+        return;
+      }
+      this.rootNotObject = true; // scalar root
+      if (ch === '"') this.startString("value");
+      else this.startScalarOrLiteral(ch);
+      return;
+    }
+
+    const top = this.frames[this.frames.length - 1] as
+      | (typeof this.frames)[number]
+      | undefined;
+    if (!top) return;
+    if (top.kind === "object") this.consumeObjectChar(top, ch);
+    else this.consumeArrayChar(top, ch);
+  }
+
+  private consumeObjectChar(
+    top: { kind: "object"; hostRole: "root" | "item" | "skipped"; mode: "expectKey" | "expectKeyAfterComma" | "expectColon" | "expectValue" | "expectCommaOrClose" },
+    ch: string
+  ): void {
+    switch (top.mode) {
+      case "expectKey":
+        if (ch === "}") {
+          // `{}` — an empty (item/root) object is legal JSON.
+          this.frames.pop();
+          this.settleContainerClose(top.hostRole === "item" ? "item" : undefined);
+          return;
+        }
+        if (ch === '"') {
+          this.startString("key");
+          top.mode = "expectColon";
+          return;
+        }
+        this.fail("not valid JSON");
+        return;
+      case "expectKeyAfterComma":
+        if (ch === "}") {
+          this.fail("not valid JSON"); // trailing comma
+          return;
+        }
+        if (ch !== '"') {
+          this.fail("not valid JSON");
+          return;
+        }
+        this.startString("key");
+        top.mode = "expectColon";
+        return;
+      case "expectColon":
+        if (ch !== ":") {
+          this.fail("not valid JSON");
+          return;
+        }
+        top.mode = "expectValue";
+        return;
+      case "expectValue":
+        this.startValue(ch, top);
+        return;
+      case "expectCommaOrClose":
+        this.closeObject(top, ch);
+        return;
+    }
+  }
+
+  private closeObject(
+    top: { kind: "object"; hostRole: "root" | "item" | "skipped"; mode: "expectKey" | "expectKeyAfterComma" | "expectColon" | "expectValue" | "expectCommaOrClose" },
+    ch: string
+  ): void {
+    if (ch === "}") {
+      if (top.mode === "expectValue") {
+        this.fail("not valid JSON"); // `{ "a": }`
+        return;
+      }
+      this.frames.pop();
+      this.settleContainerClose(top.hostRole === "item" ? "item" : undefined);
+      return;
+    }
+    if (ch === ",") {
+      if (top.mode === "expectValue") {
+        this.fail("not valid JSON"); // `{ "a": ,`
+        return;
+      }
+      top.mode = "expectKeyAfterComma";
+      return;
+    }
+    this.fail("not valid JSON");
+  }
+
+  private consumeArrayChar(
+    top: { kind: "array"; hostRole: "records" | "skipped"; mode: "firstItem" | "expectItemAfterComma" | "expectCommaOrClose" },
+    ch: string
+  ): void {
+    if (ch === "]") {
+      if (top.mode === "expectItemAfterComma") {
+        this.fail("not valid JSON"); // trailing comma
+        return;
+      }
+      if (top.mode === "firstItem" && top.hostRole === "records") {
+        // Empty records array is legal (0 records).
+        this.recordsMissing = false;
+      }
+      this.frames.pop();
+      this.settleContainerClose();
+      return;
+    }
+    if (ch === ",") {
+      if (top.mode === "expectCommaOrClose") {
+        top.mode = "expectItemAfterComma";
+        return;
+      }
+      this.fail("not valid JSON"); // leading/double comma
+      return;
+    }
+    if (top.mode === "expectCommaOrClose") {
+      this.fail("not valid JSON"); // missing comma between items
+      return;
+    }
+    this.startValue(ch, top);
+  }
+
+  /** Begin a value: nested containers push frames; scalars start readers. */
+  private startValue(
+    ch: string,
+    top:
+      | { kind: "object" }
+      | { kind: "array"; hostRole: "records" | "skipped" }
+  ): void {
+    if (ch === "{") {
+      // `records` must bind to an ARRAY — any object there is not it.
+      if (this.pendingKeyRole === "records") {
+        this.recordsNotArray = true;
+        this.recordsMissing = false;
+        this.pendingKeyRole = "none";
+        this.frames.push({ kind: "object", hostRole: "skipped", mode: "expectKey" });
+        return;
+      }
+      this.frames.push({
+        kind: "object",
+        hostRole:
+          top.kind === "array" && top.hostRole === "records" ? "item" : "skipped",
+        mode: "expectKey",
+      });
+      return;
+    }
+    if (ch === "[") {
+      if (this.pendingKeyRole === "records") {
+        this.recordsMissing = false;
+        this.pendingKeyRole = "none";
+        this.frames.push({ kind: "array", hostRole: "records", mode: "firstItem" });
+        return;
+      }
+      if (top.kind === "array" && top.hostRole === "records") {
+        this.itemsBad = true; // nested-array record
+      }
+      this.frames.push({ kind: "array", hostRole: "skipped", mode: "firstItem" });
+      return;
+    }
+    if (ch === '"') {
+      // String items directly in `records` are not objects.
+      if (top.kind === "array" && top.hostRole === "records") this.itemsBad = true;
+      this.startString("value");
+      return;
+    }
+    this.startScalarOrLiteral(ch, top.kind === "array" && top.hostRole === "records");
+  }
+
+  private startScalarOrLiteral(ch: string, inRecordsArray = false): void {
+    if (ch === "t") {
+      // `true` items directly in `records` are not objects.
+      if (inRecordsArray) this.itemsBad = true;
+      this.beginLiteral("true");
+    } else if (ch === "f") {
+      if (inRecordsArray) this.itemsBad = true;
+      this.beginLiteral("false");
+    } else if (ch === "n") {
+      if (inRecordsArray) this.itemsBad = true;
+      this.beginLiteral("null");
+    } else if (ch === "-" || /[0-9]/.test(ch)) {
+      if (inRecordsArray) this.itemsBad = true;
+      this.numberBuf = ch;
+      this.numberReading = true;
+      return;
+    } else this.fail("not valid JSON");
+  }
+
+  private beginLiteral(expected: "true" | "false" | "null"): void {
+    this.literalExpected = expected;
+    this.literalPos = 1;
+  }
+
+  private consumeLiteralChar(ch: string): void {
+    const expected = this.literalExpected as string;
+    if (this.literalPos >= expected.length) {
+      this.fail("not valid JSON"); // `truex`
+      return;
+    }
+    if (ch !== expected[this.literalPos]) {
+      this.fail("not valid JSON");
+      return;
+    }
+    this.literalPos += 1;
+    if (this.literalPos === expected.length) {
+      // Literal complete.
+      if (this.pendingKeyRole === "schemaVersion") this.schemaBad = true;
+      else if (this.pendingKeyRole === "records") this.recordsNotArray = true;
+      this.literalExpected = null;
+      this.settleScalarValue();
+    }
+  }
+
+  private consumeNumberChar(ch: string): void {
+    if (/^[-+0-9eE.]$/.test(ch)) {
+      this.numberBuf += ch;
+      return;
+    }
+    // Delimiter reached — validate the collected number.
+    const ok =
+      /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/.test(this.numberBuf);
+    this.numberReading = false;
+    if (!ok) {
+      this.numberBuf = "";
+      this.fail("not valid JSON");
+      return;
+    }
+    if (this.pendingKeyRole === "schemaVersion") {
+      this.schemaBad = Number(this.numberBuf) !== 1;
+    } else if (this.pendingKeyRole === "records") {
+      this.recordsNotArray = true;
+    }
+    this.numberBuf = "";
+    this.settleScalarValue();
+    // The delimiter that terminated the number was consumed here — re-run
+    // it through the normal dispatch so the owning frame advances.
+    this.consumeChar(ch);
+  }
+
+  /** A scalar value completed — advance/park the owning frame. */
+  private settleScalarValue(): void {
+    this.pendingKeyRole = "none";
+    const top = this.frames[this.frames.length - 1];
+    if (!top) {
+      // Root scalar finished.
+      this.rootClosed = true;
+      return;
+    }
+    if (top.kind === "object") top.mode = "expectCommaOrClose";
+    else top.mode = "expectCommaOrClose";
+  }
+
+  private startString(role: "key" | "value"): void {
+    this.stringReading = role;
+    this.stringBuf = "";
+    this.stringEscaped = false;
+    this.stringCodeUnits = 0;
+  }
+
+  private consumeStringChar(ch: string): void {
+    if (this.stringEscaped) {
+      this.stringEscaped = false;
+      if (this.stringCodeUnits > 0) {
+        if (/^[0-9a-fA-F]$/.test(ch)) {
+          this.stringCodeUnits -= 1;
+          return;
+        }
+        this.fail("not valid JSON");
+        return;
+      }
+      if (ch === "u") {
+        this.stringCodeUnits = 4;
+        return;
+      }
+      if ("\"\\/bfnrt".includes(ch)) {
+        return;
+      }
+      this.fail("not valid JSON");
+      return;
+    }
+    if (ch === "\\") {
+      this.stringEscaped = true;
+      return;
+    }
+    if (ch === '"') {
+      this.finishString();
+      return;
+    }
+    if (ch.charCodeAt(0) < 0x20) {
+      this.fail("not valid JSON");
+      return;
+    }
+    if (this.stringBuf.length < 4096) this.stringBuf += ch;
+  }
+
+  private finishString(): void {
+    const role = this.stringReading;
+    this.stringReading = "none";
+    const top = this.frames[this.frames.length - 1];
+    if (role === "key") {
+      if (top && top.kind === "object" && top.hostRole === "root") {
+        this.pendingKeyRole =
+          this.stringBuf === "records"
+            ? "records"
+            : this.stringBuf === "schemaVersion"
+              ? "schemaVersion"
+              : "none";
+      } else {
+        this.pendingKeyRole = "none";
+      }
+      if (top && top.kind === "object" && top.mode === "expectColon") {
+        // mode already expectColon (set at startString) — nothing to do.
+      }
+      this.stringBuf = "";
+      return;
+    }
+    // value string
+    if (this.pendingKeyRole === "records") {
+      this.recordsNotArray = true;
+      this.pendingKeyRole = "none";
+    } else if (this.pendingKeyRole === "schemaVersion") {
+      this.schemaBad = true;
+      this.pendingKeyRole = "none";
+    }
+    this.settleScalarValue();
+  }
+
+  /** A container frame closed — settle the owner and count records. */
+  private settleContainerClose(recordCountedFrame?: "item"): void {
+    if (recordCountedFrame === "item") this.recordCount += 1;
+    const owner = this.frames[this.frames.length - 1];
+    if (!owner) {
+      this.rootClosed = true;
+      return;
+    }
+    if (owner.kind === "object") owner.mode = "expectCommaOrClose";
+    else owner.mode = "expectCommaOrClose";
+  }
+
+  public finish(): { ok: true; recordCount: number } | { ok: false; error: string } {
+    if (this.failure !== null) return { ok: false, error: this.failure };
+    if (
+      !this.rootStarted ||
+      this.rootClosed === false ||
+      this.frames.length > 0 ||
+      this.numberReading ||
+      this.literalExpected !== null ||
+      this.stringReading !== "none"
+    ) {
+      return { ok: false, error: "not valid JSON" };
+    }
+    if (this.rootNotObject) {
+      return { ok: false, error: "JSON artifact must be an object with a records array" };
+    }
+    if (this.recordsMissing || this.recordsNotArray) {
+      return { ok: false, error: "JSON artifact is missing the records array" };
+    }
+    if (this.schemaBad) {
+      return { ok: false, error: "unsupported JSON artifact schemaVersion" };
+    }
+    if (this.itemsBad) {
+      return { ok: false, error: "JSON artifact records must be objects" };
+    }
+    return { ok: true, recordCount: this.recordCount };
+  }
 }
 
 /**
@@ -530,9 +1161,18 @@ export class PluginFileArtifactService {
   private readonly root: string;
   private readonly fs: ArtifactFs;
   private readonly now: () => number;
+  /** Scope identity used for metadata normalization (G03). */
+  private readonly scopeId: string;
+  /** Effective limits (defaults merged with injectable overrides — G03 seams). */
+  private readonly limits: typeof PLUGIN_ARTIFACT_LIMITS;
 
   constructor(
-    options?: { root?: string; scopeId?: string; fs?: ArtifactFs },
+    options?: {
+      root?: string;
+      scopeId?: string;
+      fs?: ArtifactFs;
+      limits?: PluginArtifactLimitsOverrides;
+    },
     now?: () => number
   ) {
     this.root =
@@ -542,8 +1182,10 @@ export class PluginFileArtifactService {
         "plugin-artifacts",
         options?.scopeId ?? "default"
       );
+    this.scopeId = options?.scopeId ?? "default";
     this.fs = options?.fs ?? defaultFs();
-    this.now = now ?? Date.now;
+    this.now = now ?? ((): number => Date.now());
+    this.limits = { ...PLUGIN_ARTIFACT_LIMITS, ...(options?.limits ?? {}) };
   }
 
   // ------------------------------------------------------------------ staging
@@ -553,6 +1195,273 @@ export class PluginFileArtifactService {
     const dir = this.stagingDir(executionId);
     this.fs.mkdirSync(dir, { recursive: true });
     return dir;
+  }
+
+  // --------------------------------------------------------------------- G03 quotas
+
+  /**
+   * Total bytes of READABLE promoted artifacts in this scope's store
+   * (authoritative metadata sizeBytes; unreadable/legacy entries count the
+   * content file when stat succeeds, else 0 — never claimed).
+   */
+  public storeUsageBytes(): number {
+    const artifactsRoot = path.join(this.root, "artifacts");
+    if (!this.fs.existsSync(artifactsRoot)) return 0;
+    let total = 0;
+    let ids: string[] = [];
+    try {
+      ids = this.fs.readdirSync(artifactsRoot);
+    } catch {
+      return 0;
+    }
+    for (const id of ids) {
+      try {
+        const artifact = this.readArtifact(path.join(artifactsRoot, id));
+        if (artifact) {
+          total += artifact.sizeBytes;
+          continue;
+        }
+        // Corrupt/legacy metadata: fall back to a content-file stat.
+        for (const name of ["content.json", "content.csv"]) {
+          const p = path.join(artifactsRoot, id, name);
+          if (this.fs.existsSync(p)) total += this.fs.statSync(p).size;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return total;
+  }
+
+  /** Store bytes attributable to ONE plugin (per-plugin quota, G03). */
+  public pluginUsageBytes(pluginName: string): number {
+    const artifactsRoot = path.join(this.root, "artifacts");
+    if (!this.fs.existsSync(artifactsRoot)) return 0;
+    let total = 0;
+    let ids: string[] = [];
+    try {
+      ids = this.fs.readdirSync(artifactsRoot);
+    } catch {
+      return 0;
+    }
+    for (const id of ids) {
+      try {
+        const artifact = this.readArtifact(path.join(artifactsRoot, id));
+        if (artifact && artifact.pluginName === pluginName) {
+          total += artifact.sizeBytes;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * G03 quota preflight: verifies BEFORE admission/spawn (and separately per
+   * candidate at promotion) that admitting `incomingBytes` more artifact
+   * bytes stays within the store and per-plugin quotas AND keeps the required
+   * free-disk cushion. Platforms without statfs (and every test without the
+   * seam) skip only the disk check.
+   */
+  public preflightArtifactQuota(
+    pluginName: string,
+    incomingBytes = 0
+  ): PluginArtifactQuotaCheck {
+    let storeUsage = 0;
+    let pluginUsage = 0;
+    let freeDiskBytes: number | null = null;
+    try {
+      storeUsage = this.storeUsageBytes();
+    } catch {
+      storeUsage = 0;
+    }
+    try {
+      pluginUsage = this.pluginUsageBytes(pluginName);
+    } catch {
+      pluginUsage = 0;
+    }
+    try {
+      const statfs = this.fs.statfsSync?.(this.root);
+      if (statfs) freeDiskBytes = statfs.bavail * statfs.bsize;
+    } catch {
+      freeDiskBytes = null; // unreadable volume → disk check skipped
+    }
+    if (storeUsage + incomingBytes > this.limits.maxStoreBytes) {
+      return {
+        ok: false,
+        code: "STORE_QUOTA",
+        error: `plugin artifact store quota exceeded (${storeUsage} bytes used, limit ${this.limits.maxStoreBytes})`,
+      };
+    }
+    if (
+      pluginUsage + incomingBytes >
+      this.limits.maxPluginStoreBytes
+    ) {
+      return {
+        ok: false,
+        code: "PLUGIN_QUOTA",
+        error: `per-plugin artifact quota exceeded for ${pluginName} (${pluginUsage} bytes used, limit ${this.limits.maxPluginStoreBytes})`,
+      };
+    }
+    if (
+      freeDiskBytes !== null &&
+      freeDiskBytes - incomingBytes < this.limits.minFreeDiskBytes
+    ) {
+      return {
+        ok: false,
+        code: "DISK_SPACE",
+        error: `insufficient free disk space for plugin artifacts (${freeDiskBytes} bytes free, ${this.limits.minFreeDiskBytes} required)`,
+      };
+    }
+    return { ok: true, storeUsageBytes: storeUsage, pluginUsageBytes: pluginUsage, freeDiskBytes };
+  }
+
+  // ------------------------------------------------------------------ journals (G03)
+
+  /**
+   * Create a journal at spawn (status "running") so executions interrupted
+   * by a crash/restart stay conversation-linkable. The atomic-rename writer
+   * guarantees a journal is never readable half-written (G03).
+   */
+  public beginExecutionJournal(input: {
+    readonly executionId: string;
+    readonly conversationId: string;
+    readonly pluginName: string;
+  }): void {
+    try {
+      this.assertSafeComponent(input.executionId);
+    } catch {
+      return;
+    }
+    this.writeJournal(input.executionId, {
+      status: "running",
+      artifacts: [],
+      errors: [],
+      conversationId: input.conversationId,
+      pluginName: input.pluginName,
+    });
+  }
+
+  /** Atomic-read a journal entry (null when missing/unreadable). */
+  public readJournalState(executionId: string): {
+    status: string;
+    at: string | null;
+    conversationId: string | null;
+    pluginName: string | null;
+    registeredCount: number;
+    message: string | null;
+  } | null {
+    try {
+      this.assertSafeComponent(executionId);
+      const parsed = this.readJournalFile(path.join(this.root, "journal", `${executionId}.json`));
+      if (!parsed) return null;
+      return {
+        status: parsed.status,
+        at: parsed.at,
+        conversationId: parsed.conversationId,
+        pluginName: parsed.pluginName,
+        registeredCount: parsed.registeredCount,
+        message: parsed.message,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Conversation-facing journal states (G03): executions linked to the
+   * conversation, used instead of a journal file the UI never reads —
+   * interrupted/failed executions are surfaced through the artifact card.
+   */
+  public listJournalStatesForConversation(
+    conversationId: string
+  ): PluginExecutionJournalState[] {
+    const out: PluginExecutionJournalState[] = [];
+    const journalDir = path.join(this.root, "journal");
+    if (!this.fs.existsSync(journalDir) || conversationId.length === 0) {
+      return out;
+    }
+    let names: string[] = [];
+    try {
+      names = this.fs.readdirSync(journalDir);
+    } catch {
+      return out;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const parsed = this.readJournalFile(path.join(journalDir, name));
+        if (!parsed || parsed.conversationId !== conversationId) continue;
+        out.push({
+          executionId: name.replace(/\.json$/, ""),
+          status: parsed.status,
+          at: parsed.at,
+          conversationId: parsed.conversationId,
+          pluginName: parsed.pluginName,
+          registeredCount: parsed.registeredCount,
+          message: parsed.message,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return out.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+  }
+
+  /**
+   * G03 uninstall retention: a plugin's artifacts keep their data for a
+   * SHORTER window after uninstall (user data, not plugin property — removal
+   * stays at natural expiry; exported copies are outside the store by
+   * definition and are never touched).
+   */
+  public applyPluginUninstallRetention(
+    pluginName: string,
+    retentionMs?: number
+  ): number {
+    const effectiveRetention =
+      retentionMs ?? this.limits.pluginUninstallRetentionMs;
+    let reconfirmed = 0;
+    const artifactsRoot = path.join(this.root, "artifacts");
+    if (!this.fs.existsSync(artifactsRoot)) return 0;
+    let ids: string[] = [];
+    try {
+      ids = this.fs.readdirSync(artifactsRoot);
+    } catch {
+      return 0;
+    }
+    const expiresAt = new Date(
+      this.now() + effectiveRetention
+    ).toISOString();
+    for (const id of ids) {
+      try {
+        const dir = path.join(artifactsRoot, id);
+        const artifact = this.readArtifact(dir);
+        if (!artifact || artifact.pluginName !== pluginName) continue;
+        if (artifact.expiresAt <= expiresAt) continue; // already expiring sooner
+        // Status is preserved: the artifacts are complete; only their
+        // retention window shrinks (they are user data, not plugin data).
+        const updated: RegisteredPluginArtifact = {
+          ...artifact,
+          expiresAt,
+        };
+        this.writeMetadataAtomic(dir, updated);
+        reconfirmed += 1;
+      } catch {
+        continue;
+      }
+    }
+    return reconfirmed;
+  }
+
+  /** Atomic metadata rewrite helper (tmp + rename). */
+  private writeMetadataAtomic(
+    dir: string,
+    artifact: RegisteredPluginArtifact
+  ): void {
+    const metaTmp = path.join(dir, "metadata.json.tmp");
+    this.fs.writeFileSync(metaTmp, JSON.stringify(artifact), { mode: 0o600 });
+    this.fs.renameSync(metaTmp, path.join(dir, "metadata.json"));
   }
 
   /** Staging path for an execution (does not create it). */
@@ -597,7 +1506,7 @@ export class PluginFileArtifactService {
         manifestStat.isSymbolicLink() ||
         manifestStat.isFile() !== true ||
         this.fs.statSync(manifest).size >
-          PLUGIN_ARTIFACT_LIMITS.maxCandidatesManifestBytes
+          this.limits.maxCandidatesManifestBytes
       ) {
         log.warn(
           `[PluginFileArtifactService] candidates manifest rejected for ${executionId} (missing/oversized/not-a-regular-file)`
@@ -651,21 +1560,25 @@ export class PluginFileArtifactService {
    * H6: startup sweep for executions interrupted by a host crash/restart.
    *
    * For every staging directory:
-   *  - No journal (promotion never happened): write an `interrupted` journal
-   *    entry so a conversation re-polling for the artifact gets an honest
-   *    resolution, then move the orphan staging dir into `staging-quarantine`
-   *    (plugin-owned bytes are never deleted directly — a human may inspect
-   *    them; the monitor sweeps quarantine by the same retention window).
-   *  - Journal exists but the staging dir was retained after promotion:
-   *    age out (remove) once the journal is older than the retention
-   *    window (default 30 days).
+   *  - No journal OR a journal WITHOUT registered artifacts (never-promoted,
+   *    interrupted, failed): the journal alone no longer counts as promotion
+   *    (G03) — write an honest `interrupted` entry (preserving the owner
+   *    identity when the previous journal had it), then move the orphan
+   *    staging dir into `staging-quarantine`. Plugin-owned bytes are never
+   *    deleted directly — a human may inspect them; the monitor sweeps
+   *    quarantine by the same retention window.
+   *  - Journal WITH registered artifacts (promotion finished, at least
+   *    partially): retained staging ages out once the journal is older than
+   *    the retention window (default 30 days).
    *
    * Runs BEFORE any plugin can start (background.ts whenReady), so races
    * with live executions are impossible.
    */
   public recoverStartupExecutions(
-    retentionMs: number = PLUGIN_ARTIFACT_LIMITS.defaultRetentionMs
+    retentionMs?: number
   ): { interrupted: string[]; agedPromotedStaging: string[] } {
+    const effectiveRetention =
+      retentionMs ?? this.limits.defaultRetentionMs;
     const out: { interrupted: string[]; agedPromotedStaging: string[] } = {
       interrupted: [],
       agedPromotedStaging: [],
@@ -694,16 +1607,23 @@ export class PluginFileArtifactService {
       }
 
       const journalPath = path.join(journalDir, `${id}.json`);
-      const promoted = this.fs.existsSync(journalPath);
+      const journal = this.readJournalFile(journalPath);
+      // G03: promotion is only real when the journal holds registered
+      // artifacts — mere journal existence (running/failed/empty) is an
+      // interrupted-by-crash execution, never a promoted one.
+      const promoted = journal !== null && journal.registeredCount > 0;
       if (!promoted) {
         try {
           this.writeJournal(id, {
+            status: "interrupted",
             artifacts: [],
             errors: [
               `interrupted: host restart before promotion (startup sweep at ${new Date(
                 this.now()
               ).toISOString()})`,
             ],
+            conversationId: journal?.conversationId ?? null,
+            pluginName: journal?.pluginName ?? null,
           });
           this.fs.mkdirSync(quarantineRoot, { recursive: true });
           try {
@@ -724,13 +1644,14 @@ export class PluginFileArtifactService {
       // Promoted earlier: stale retained staging older than the journal's
       // published timestamp ages out with the same retention window.
       try {
-        const parsed = JSON.parse(
-          this.fs.readFileSync(journalPath)
-        ) as { at?: string };
-        const at = typeof parsed?.at === "string" ? Date.parse(parsed.at) : NaN;
+        const parsed = this.readJournalFile(journalPath);
+        const at =
+          parsed?.at !== null && parsed?.at !== undefined
+            ? Date.parse(parsed.at)
+            : NaN;
         if (
           Number.isFinite(at) &&
-          this.now() - at > retentionMs &&
+          this.now() - at > effectiveRetention &&
           this.fs.existsSync(stagingPath)
         ) {
           this.fs.rmSync(stagingPath, { recursive: true, force: true });
@@ -756,6 +1677,11 @@ export class PluginFileArtifactService {
     readonly conversationId: string;
     readonly pluginName: string;
     readonly candidates: readonly PluginArtifactCandidate[];
+    /** G03 identity: plugin manifest version/generation at promotion. */
+    readonly pluginVersion?: string;
+    readonly pluginGeneration?: string;
+    /** G03 completion state of the producing tool call. */
+    readonly resultStatus?: PluginArtifactStatus;
   }): { artifacts: RegisteredPluginArtifact[]; errors: string[] } {
     const errors: string[] = [];
     const artifacts: RegisteredPluginArtifact[] = [];
@@ -789,23 +1715,41 @@ export class PluginFileArtifactService {
       };
     }
     if (
-      input.candidates.length > PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution
+      input.candidates.length > this.limits.maxArtifactsPerExecution
     ) {
       // The promote loop below slices to the cap; a candidate beyond it is
       // only reported as dropped (the previous dead `slice(...)` call was
       // discarded by callers AND by the loop).
       errors.push(
-        `too many candidates; only the first ${PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution} are considered`
+        `too many candidates; only the first ${this.limits.maxArtifactsPerExecution} are considered`
       );
     }
 
     for (const candidate of input.candidates.slice(
       0,
-      PLUGIN_ARTIFACT_LIMITS.maxArtifactsPerExecution
+      this.limits.maxArtifactsPerExecution
     )) {
       const validated = this.validateCandidate(staging, candidate, realStaging);
       if ("error" in validated) {
         errors.push(validated.error);
+        continue;
+      }
+      // G03: per-candidate quota check right before the copy — disk-full,
+      // store-plugin quota exceeded and similar conditions produce a
+      // TRUTHFUL per-candidate error instead of a crash mid-copy.
+      try {
+        const size = this.fs.statSync(validated.file).size;
+        const quota = this.preflightArtifactQuota(input.pluginName, size);
+        if (!quota.ok) {
+          errors.push(
+            `artifact quota exceeded for ${candidate.relativePath}: ${quota.error}`
+          );
+          continue;
+        }
+      } catch (e) {
+        errors.push(
+          `promotion failed for ${candidate.relativePath}: ${String(e)}`
+        );
         continue;
       }
       const artifactId = this.deriveArtifactId(input.executionId, candidate);
@@ -828,10 +1772,6 @@ export class PluginFileArtifactService {
         this.fs.copyFileSync(validated.file, path.join(destDir, contentName));
         const contentPath = path.join(destDir, contentName);
         const stat = this.fs.statSync(contentPath);
-        // Host-authoritative digest over the promoted bytes (design §13.2).
-        const digest = createHash("sha256")
-          .update(this.fs.readBufferSync(contentPath))
-          .digest("hex");
         const registered: RegisteredPluginArtifact = {
           id: artifactId,
           format: candidate.format,
@@ -839,26 +1779,45 @@ export class PluginFileArtifactService {
           sizeBytes: stat.size,
           createdAt: new Date(this.now()).toISOString(),
           expiresAt: new Date(
-            this.now() + PLUGIN_ARTIFACT_LIMITS.defaultRetentionMs
+            this.now() + this.limits.defaultRetentionMs
           ).toISOString(),
           conversationId: input.conversationId,
           pluginName: input.pluginName,
-          digest,
+          digest: validated.digest,
+          // G03 identity + state:
+          schemaVersion: 1,
+          executionId: input.executionId,
+          mimeType: candidate.format === "json" ? "application/json" : "text/csv",
+          userScopeId: this.scopeId,
+          status: input.resultStatus ?? "complete",
+          ...(input.pluginVersion !== undefined
+            ? { pluginVersion: input.pluginVersion }
+            : {}),
+          ...(input.pluginGeneration !== undefined
+            ? { pluginGeneration: input.pluginGeneration }
+            : {}),
         };
         // Atomic metadata write: metadata is authoritative only after the
         // content copy completed.
-        const metaTmp = path.join(destDir, "metadata.json.tmp");
-        this.fs.writeFileSync(metaTmp, JSON.stringify(registered), {
-          mode: 0o600,
-        });
-        this.fs.renameSync(metaTmp, path.join(destDir, "metadata.json"));
+        this.writeMetadataAtomic(destDir, registered);
         artifacts.push(registered);
       } catch (e) {
         errors.push(`promotion failed for ${candidate.relativePath}: ${String(e)}`);
       }
     }
 
-    this.writeJournal(input.executionId, { artifacts, errors });
+    this.writeJournal(input.executionId, {
+      status:
+        artifacts.length === 0
+          ? "failed"
+          : input.resultStatus === "degraded" || errors.length > 0
+            ? "degraded"
+            : "complete",
+      artifacts,
+      errors,
+      conversationId: input.conversationId,
+      pluginName: input.pluginName,
+    });
     // B12: staging is transient — once promotion is fully confirmed (no
     // errors, journal written), release it so normal outputs are not kept
     // duplicated in staging until a restart sweep. On partial errors the
@@ -919,12 +1878,12 @@ export class PluginFileArtifactService {
     if (!this.fs.existsSync(contentPath)) {
       return { ok: false, error: "artifact content missing" };
     }
-    const readBytes = PLUGIN_ARTIFACT_LIMITS.maxPreviewReadBytes;
+    const readBytes = this.limits.maxPreviewReadBytes;
     const slice = this.fs.readBufferSliceSync(contentPath, readBytes);
     const size = this.fs.statSync(contentPath).size;
     const inputWasCut = slice.length < size;
     const text = slice.toString("utf8");
-    const maxEnvelopeBytes = PLUGIN_ARTIFACT_LIMITS.maxPreviewBytes;
+    const maxEnvelopeBytes = this.limits.maxPreviewBytes;
 
     if (artifact.format === "csv") {
       // header row + maxRows data records
@@ -1032,8 +1991,10 @@ export class PluginFileArtifactService {
    * reported + quarantined by the startup `recoverStartupExecutions` sweep.
    */
   public sweepExpired(
-    retentionMs: number = PLUGIN_ARTIFACT_LIMITS.defaultRetentionMs
+    retentionMs?: number
   ): number {
+    const effectiveRetention =
+      retentionMs ?? this.limits.defaultRetentionMs;
     let removed = 0;
     const nowIso = new Date(this.now()).toISOString();
 
@@ -1065,7 +2026,7 @@ export class PluginFileArtifactService {
           } catch {
             continue;
           }
-          if (this.now() - mtime > retentionMs) {
+          if (this.now() - mtime > effectiveRetention) {
             this.fs.rmSync(entry, { recursive: true, force: true });
             removed += 1;
           }
@@ -1093,7 +2054,7 @@ export class PluginFileArtifactService {
           const stamp = Number.isFinite(createdAt)
             ? createdAt
             : (this.fs.statSync(journalPath).mtimeMs ?? 0);
-          if (this.now() - stamp <= retentionMs) continue;
+          if (this.now() - stamp <= effectiveRetention) continue;
           const stagingPath = path.join(
             this.root,
             "staging",
@@ -1153,7 +2114,7 @@ export class PluginFileArtifactService {
     candidate: PluginArtifactCandidate,
     realStaging: string
   ):
-    | { file: string; recordCount: number }
+    | { file: string; recordCount: number; digest: string }
     | { error: string } {
     // Fixed v1 filename allowlist kept ahead of the filename↔format binding
     // so traversal/renamed paths are rejected by name, never followed.
@@ -1200,35 +2161,96 @@ export class PluginFileArtifactService {
       return { error: `candidate "${candidate.relativePath}" is not a regular file` };
     }
     const stat = this.fs.statSync(real);
-    if (stat.size > PLUGIN_ARTIFACT_LIMITS.maxArtifactBytes) {
+    if (stat.size > this.limits.maxArtifactBytes) {
       return { error: `candidate "${candidate.relativePath}" exceeds the size cap` };
     }
     if (typeof stat.nlink === "number" && stat.nlink > 1) {
       return { error: `candidate "${candidate.relativePath}" has multiple hard links` };
     }
-    const text = this.fs.readBufferSync(real).toString("utf8");
-    if (candidate.format === "json") {
-      const validation = validatePluginArtifactJsonDoc(text);
-      if (!validation.ok) {
-        return { error: `candidate "${candidate.relativePath}": ${validation.error}` };
-      }
-      if (validation.recordCount !== candidate.recordCount) {
-        return {
-          error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${validation.recordCount})`,
-        };
-      }
-      return { file: real, recordCount: validation.recordCount };
-    }
-    const csv = validatePluginArtifactCsvText(text);
-    if (!csv.ok) {
-      return { error: `candidate "${candidate.relativePath}": ${csv.error}` };
-    }
-    if (csv.dataRecords !== candidate.recordCount) {
+
+    // G03 streaming validation: `scanCandidateFile` walks the file through
+    // bounded positional chunk reads, feeding the format validator AND the
+    // sha256 digest simultaneously — no full-file Buffer, no 100 MiB string
+    // parse, and no second read pass for the digest.
+    const scanned = this.scanCandidateFile(real, candidate.format === "json");
+    if ("error" in scanned) {
       return {
-        error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${csv.dataRecords})`,
+        error: `candidate "${candidate.relativePath}": ${scanned.error}`,
       };
     }
-    return { file: real, recordCount: csv.dataRecords };
+    if (
+      candidate.format === "json" &&
+      scanned.recordCount !== candidate.recordCount
+    ) {
+      return {
+        error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${scanned.recordCount})`,
+      };
+    }
+    if (
+      candidate.format === "csv" &&
+      scanned.recordCount !== candidate.recordCount
+    ) {
+      return {
+        error: `record count mismatch for "${candidate.relativePath}" (claimed ${candidate.recordCount}, found ${scanned.recordCount})`,
+      };
+    }
+    return { file: real, recordCount: scanned.recordCount, digest: scanned.digest };
+  }
+
+  /**
+   * G03: bounded-memory scan of a candidate file — chunked positional reads
+   * (≤ scanChunkBytes) feed a streaming CSV/JSON validator and an incremental
+   * sha256 over the exact content bytes. Stop scanning as soon as validation
+   * fails.
+   */
+  private scanCandidateFile(
+    file: string,
+    json: boolean
+  ): { recordCount: number; digest: string } | { error: string } {
+    const jsonValidator = json ? new JsonArtifactValidationState() : null;
+    const csvValidator = json ? null : new CsvArtifactValidationState();
+    const decoder = new Utf8ChunkDecoder();
+    const hash = createHash("sha256");
+    const chunkSize = this.limits.scanChunkBytes;
+    let offset = 0;
+    for (;;) {
+      let chunk: Buffer;
+      try {
+        chunk = this.fs.readChunkAtSync(file, offset, chunkSize);
+      } catch (e) {
+        return { error: `scan failed: ${String(e)}` };
+      }
+      if (chunk.length === 0) break;
+      hash.update(chunk);
+      const text = decoder.decode(chunk);
+      if (jsonValidator) jsonValidator.consume(text);
+      else if (csvValidator) csvValidator.consume(text);
+      // Fail fast — a malformed file stops the scan immediately.
+      const failedNow = jsonValidator
+        ? jsonValidator.failed()
+        : csvValidator
+          ? csvValidator.failed
+          : false;
+      if (failedNow) {
+        const verdict = jsonValidator
+          ? jsonValidator.finish()
+          : (csvValidator as CsvArtifactValidationState).finish();
+        return { error: verdict.ok ? "invalid file" : verdict.error };
+      }
+      offset += chunk.length;
+      if (chunk.length < chunkSize) break;
+    }
+    if (jsonValidator) {
+      const verdict = jsonValidator.finish();
+      if (!verdict.ok) return { error: verdict.error };
+      return { recordCount: verdict.recordCount, digest: hash.digest("hex") };
+    }
+    if (csvValidator) {
+      const verdict = csvValidator.finish();
+      if (!verdict.ok) return { error: verdict.error };
+      return { recordCount: verdict.dataRecords, digest: hash.digest("hex") };
+    }
+    return { error: "unknown validator" };
   }
 
   private requireOwned(
@@ -1257,18 +2279,60 @@ export class PluginFileArtifactService {
         id?: unknown;
         conversationId?: unknown;
         digest?: unknown;
+        format?: unknown;
+        recordCount?: unknown;
+        sizeBytes?: unknown;
+        createdAt?: unknown;
+        expiresAt?: unknown;
+        pluginName?: unknown;
+        schemaVersion?: unknown;
+        executionId?: unknown;
+        mimeType?: unknown;
+        userScopeId?: unknown;
+        status?: unknown;
+        pluginVersion?: unknown;
+        pluginGeneration?: unknown;
       };
       if (
         typeof parsed.id === "string" &&
-        typeof parsed.conversationId === "string" &&
-        (parsed.digest === undefined || typeof parsed.digest === "string")
+        typeof parsed.conversationId === "string"
       ) {
-        return parsed as RegisteredPluginArtifact;
+        // G03: normalize metadata written by pre-G03 hosts so every consumer
+        // can rely on the identity/state fields (legacy entries get the
+        // values the host can prove; unknowns stay honest/default).
+        const format = parsed.format === "csv" ? "csv" : "json";
+        return {
+          ...(parsed as RegisteredPluginArtifact),
+          format,
+          schemaVersion: 1,
+          executionId:
+            typeof parsed.executionId === "string" ? parsed.executionId : "",
+          mimeType:
+            typeof parsed.mimeType === "string"
+              ? parsed.mimeType
+              : format === "csv"
+                ? "text/csv"
+                : "application/json",
+          userScopeId: typeof parsed.userScopeId === "string" ? parsed.userScopeId : this.scopeId,
+          status: this.parseArtifactStatus(parsed.status),
+          ...(typeof parsed.pluginVersion === "string"
+            ? { pluginVersion: parsed.pluginVersion }
+            : {}),
+          ...(typeof parsed.pluginGeneration === "string"
+            ? { pluginGeneration: parsed.pluginGeneration }
+            : {}),
+        };
       }
     } catch {
       /* corrupt metadata → treat as absent */
     }
     return null;
+  }
+
+  private parseArtifactStatus(value: unknown): PluginArtifactStatus {
+    return value === "complete" || value === "degraded" || value === "interrupted"
+      ? value
+      : "complete";
   }
 
   private deriveArtifactId(
@@ -1284,19 +2348,87 @@ export class PluginFileArtifactService {
     return `pa_${hash}`;
   }
 
+  /**
+   * Journal payload (G03): status + owner identity + artifacts + errors.
+   * A journal with ZERO artifacts is NOT an active promise — startup treats
+   * mere journal existence as promotion is precisely the bug this fixes.
+   */
   private writeJournal(
     executionId: string,
-    entry: { artifacts: RegisteredPluginArtifact[]; errors: string[] }
+    entry: {
+      status?: string;
+      artifacts: RegisteredPluginArtifact[];
+      errors: string[];
+      conversationId?: string | null;
+      pluginName?: string | null;
+    }
   ): void {
     try {
+      this.assertSafeComponent(executionId);
       const journalDir = path.join(this.root, "journal");
       this.fs.mkdirSync(journalDir, { recursive: true });
-      this.fs.writeFileSync(
-        path.join(journalDir, `${executionId}.json`),
-        JSON.stringify({ at: new Date(this.now()).toISOString(), ...entry })
-      );
+      const payload = {
+        at: new Date(this.now()).toISOString(),
+        status: entry.status ?? (entry.artifacts.length > 0 ? "complete" : "failed"),
+        conversationId: entry.conversationId ?? null,
+        pluginName: entry.pluginName ?? null,
+        artifacts: entry.artifacts,
+        errors: entry.errors.slice(0, 16),
+      };
+      // Crash-safe: write to a temp file and ATOMICALLY rename (a half-written
+      // journal is never observable as a promoted state).
+      const tmp = path.join(journalDir, `${executionId}.json.tmp`);
+      this.fs.writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
+      this.fs.renameSync(tmp, path.join(journalDir, `${executionId}.json`));
     } catch (e) {
       log.warn(`[PluginFileArtifactService] journal write failed: ${String(e)}`);
+    }
+  }
+
+  /** Normalized, defensive journal read (legacy entries get defaults). */
+  private readJournalFile(journalPath: string): {
+    status: string;
+    at: string | null;
+    conversationId: string | null;
+    pluginName: string | null;
+    registeredCount: number;
+    message: string | null;
+  } | null {
+    if (!this.fs.existsSync(journalPath)) return null;
+    try {
+      const parsed = JSON.parse(
+        this.fs.readBufferSync(journalPath).toString("utf8")
+      ) as {
+        at?: unknown;
+        status?: unknown;
+        conversationId?: unknown;
+        pluginName?: unknown;
+        errors?: unknown;
+        artifacts?: unknown;
+      };
+      const artifacts = Array.isArray(parsed.artifacts)
+        ? (parsed.artifacts as unknown[]).filter(
+            (a): a is RegisteredPluginArtifact =>
+              !!a && typeof a === "object" && typeof (a as Record<string, unknown>).id === "string"
+          )
+        : [];
+      const errors = Array.isArray(parsed.errors)
+        ? (parsed.errors as unknown[]).filter(
+            (m): m is string => typeof m === "string"
+          )
+        : [];
+      const at = typeof parsed.at === "string" ? parsed.at : null;
+      return {
+        status: typeof parsed.status === "string" ? parsed.status : artifacts.length > 0 ? "complete" : "failed",
+        at,
+        conversationId:
+          typeof parsed.conversationId === "string" ? parsed.conversationId : null,
+        pluginName: typeof parsed.pluginName === "string" ? parsed.pluginName : null,
+        registeredCount: artifacts.length,
+        message: errors[0] ?? null,
+      };
+    } catch {
+      return null;
     }
   }
 

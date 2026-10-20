@@ -2749,6 +2749,12 @@ export default {
       export_failed: "Could not save the file",
       delete_failed: "Could not delete the file",
       deleted_all: "Files deleted",
+      expires_at: "Expires {time}",
+      expired_at: "Expired {time}",
+      recovered_title: "Recovered executions",
+      recovered_entry: "{plugin} · {time}",
+      recovered_note:
+        "An earlier run was interrupted before its results were saved.",
     },
     generated_image_alt: "AI generated image",
     open_generated_image: "Open generated image",

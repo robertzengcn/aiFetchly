@@ -2,7 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import PluginArtifactCard from "@/views/components/aiChatV2/PluginArtifactCard.vue";
-import type { PluginArtifactView } from "@/views/api/pluginArtifact";
+import type {
+  PluginArtifactView,
+  PluginExecutionJournalView,
+} from "@/views/api/pluginArtifact";
 
 /**
  * Component tests for the plugin artifact card (B01): the preview area stays
@@ -13,6 +16,7 @@ import type { PluginArtifactView } from "@/views/api/pluginArtifact";
 const previewPluginArtifact = vi.fn();
 const exportPluginArtifact = vi.fn();
 const deletePluginArtifact = vi.fn();
+const listPluginExecutionJournals = vi.fn();
 
 vi.mock("@/views/api/pluginArtifact", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -21,6 +25,8 @@ vi.mock("@/views/api/pluginArtifact", async (importOriginal) => {
     previewPluginArtifact: (...args: unknown[]) => previewPluginArtifact(...args),
     exportPluginArtifact: (...args: unknown[]) => exportPluginArtifact(...args),
     deletePluginArtifact: (...args: unknown[]) => deletePluginArtifact(...args),
+    listPluginExecutionJournals: (...args: unknown[]) =>
+      listPluginExecutionJournals(...args),
   };
 });
 
@@ -43,6 +49,11 @@ const i18n = createI18n({
           confirm_delete: "Confirm delete",
           deleted_all: "Files deleted",
           preview_truncated: "… (showing only the first rows)",
+          expires_at: "Expires {time}",
+          expired_at: "Expired {time}",
+          recovered_title: "Recovered executions",
+          recovered_entry: "{plugin} · {time}",
+          recovered_note: "An earlier run was interrupted before its results were saved.",
         },
       },
     },
@@ -91,6 +102,8 @@ beforeEach(() => {
   previewPluginArtifact.mockReset();
   exportPluginArtifact.mockReset();
   deletePluginArtifact.mockReset();
+  listPluginExecutionJournals.mockReset();
+  listPluginExecutionJournals.mockResolvedValue([]);
   previewPluginArtifact.mockResolvedValue({
     ok: true,
     format: "json",
@@ -202,5 +215,98 @@ describe("PluginArtifactCard", () => {
     expect(w.find('[data-testid="plugin-artifact-error"]').text()).toContain(
       "artifact not found"
     );
+  });
+
+  it("renders a future expiry as 'Expires' and a past expiry as 'Expired' (G03)", async () => {
+    const w = mountCard([
+      artifact({ expiresAt: "2030-01-01T00:00:00.000Z" }),
+    ]);
+    await flushPromises();
+    let label = w.find('[data-testid="plugin-artifact-expires"]').text();
+    expect(label).toContain("Expires");
+    expect(label).not.toContain("Expired 2");
+    // expect(label).not.toMatch(/^Expired/) -- formatted date, assert prefix
+    expect(label.startsWith("Expired")).toBe(false);
+
+    const w2 = mountCard([
+      artifact({ expiresAt: "2001-01-01T00:00:00.000Z" }),
+    ]);
+    await flushPromises();
+    label = w2.find('[data-testid="plugin-artifact-expires"]').text();
+    expect(label).toContain("Expired");
+
+    // Rows without expiry show no label.
+    const w3 = mountCard();
+    await flushPromises();
+    expect(
+      w3.find('[data-testid="plugin-artifact-expires"]').exists()
+    ).toBe(false);
+  });
+
+  it("lists interrupted executions that registered no artifact (G03)", async () => {
+    const journal = (
+      overrides: Partial<PluginExecutionJournalView>
+    ): PluginExecutionJournalView => ({
+      executionId: "exec-int-1",
+      status: "interrupted",
+      at: "2026-10-19T10:00:00.000Z",
+      pluginName: "hook-scrape",
+      registeredCount: 0,
+      message: null,
+      ...overrides,
+    });
+    listPluginExecutionJournals.mockResolvedValue([
+      journal({}),
+      journal({ executionId: "exec-int-2", pluginName: "hook-scrape" }),
+      // complete/degraded journals already surface as artifact rows — filtered.
+      journal({
+        executionId: "exec-done",
+        status: "complete",
+        registeredCount: 3,
+      }),
+      journal({ executionId: "exec-deg", status: "degraded", registeredCount: 1 }),
+    ]);
+    const w = mountCard();
+    await flushPromises();
+    expect(
+      w.find('[data-testid="plugin-artifact-interrupted"]').exists()
+    ).toBe(true);
+    const entries = w.findAll(
+      '[data-testid="plugin-artifact-interrupted-entry"]'
+    );
+    expect(entries).toHaveLength(2);
+    expect(entries[0].text()).toContain("hook-scrape");
+    expect(entries[0].text()).toContain("·");
+    expect(listPluginExecutionJournals).toHaveBeenCalledWith("conv-1");
+  });
+
+  it("caps recovered-execution entries bounded and stays silent when the journal fetch fails (G03)", async () => {
+    const journal = (
+      executionId: string
+    ): PluginExecutionJournalView => ({
+      executionId,
+      status: "interrupted",
+      at: "2026-10-19T10:00:00.000Z",
+      pluginName: "hook-scrape",
+      registeredCount: 0,
+      message: null,
+    });
+    listPluginExecutionJournals.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => journal(`exec-${i}`))
+    );
+    let w = mountCard();
+    await flushPromises();
+    expect(
+      w.findAll('[data-testid="plugin-artifact-interrupted-entry"]')
+    ).toHaveLength(8);
+
+    // Fetch failure → no section, no crash; later successful mounts work.
+    listPluginExecutionJournals.mockRejectedValue(new Error("boom"));
+    w = mountCard();
+    await flushPromises();
+    expect(
+      w.find('[data-testid="plugin-artifact-interrupted"]').exists()
+    ).toBe(false);
+    expect(w.find('[data-testid="plugin-artifact-row"]').exists()).toBe(true);
   });
 });

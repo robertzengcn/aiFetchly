@@ -4,6 +4,7 @@ import {
   PLUGIN_ARTIFACT_EXPORT,
   PLUGIN_ARTIFACT_LIST,
   PLUGIN_ARTIFACT_PREVIEW,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
 } from "@/config/channellist";
 
 /**
@@ -82,4 +83,22 @@ export async function deletePluginArtifact(
     conversationId,
     artifactId,
   })) as { deleted: boolean };
+}
+
+/** G03: interrupted/recovered execution journals for this conversation. */
+export interface PluginExecutionJournalView {
+  executionId: string;
+  status: "running" | "degraded" | "interrupted" | "complete" | "failed" | string;
+  at: string | null;
+  pluginName: string | null;
+  registeredCount: number;
+  message: string | null;
+}
+
+export async function listPluginExecutionJournals(
+  conversationId: string
+): Promise<PluginExecutionJournalView[]> {
+  return (await windowInvoke(PLUGIN_ARTIFACT_LIST_JOURNAL, {
+    conversationId,
+  })) as PluginExecutionJournalView[];
 }

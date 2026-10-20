@@ -1159,6 +1159,11 @@ interface PluginArtifactPromotionOutcome {
    * nothing was registered while the tool was graded on artifacts.
    */
   degradedToFailure: boolean;
+  /**
+   * G03: opaque host artifact references for every PROMOTED artifact — the
+   * crash path needs them (the tool result never returned). No paths.
+   */
+  artifacts?: readonly RegisteredPluginArtifact[];
 }
 
 function toArtifactRef(
@@ -4646,6 +4651,42 @@ export class AIChatQueryLoop {
         };
       }
 
+      // G03: artifact-quota preflight BEFORE a job exists — an artifact-
+      // capable plugin cannot consume a slot to write staging it could
+      // never legally promote. The reserved attempt is released because an
+      // admission rejection never counts a usable run.
+      if (
+        getPluginToolPolicyRegistry().getPluginArtifactFormats(pluginName)
+          .length > 0
+      ) {
+        const quota = getPluginFileArtifactService().preflightArtifactQuota(
+          pluginName
+        );
+        if (!quota.ok) {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "The local result-file storage is full. Export or delete old result files, free disk space, and retry.",
+                code: "ARTIFACT_QUOTA_EXCEEDED",
+                quota: quota.code,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
+      }
+
       let startOutcome: { jobId: string; queued: boolean };
       try {
         startOutcome = registry.start(
@@ -4877,6 +4918,25 @@ export class AIChatQueryLoop {
     // H1: the registry job id IS the execution id — one id binds the host
     // context file, the staging directory, the journal, and promotion.
     const executionId = handle.jobId;
+    // G03: write a crash-safe spawn journal (status "running") so an
+    // execution interrupted by a host crash/restart stays conversation-linkable
+    // and can never be mistaken for a promoted one (0 registered artifacts).
+    try {
+      if (
+        getPluginToolPolicyRegistry()
+          .getPluginArtifactFormats(meta.pluginName)
+          .length > 0
+      ) {
+        getPluginFileArtifactService().beginExecutionJournal({
+          executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+        });
+      }
+    } catch {
+      // Best-effort — journal absence only affects interrupted-state
+      // surfacing, never execution correctness.
+    }
     try {
       const result = await this.deps.executeTool(call.name, call.arguments ?? {}, {
         conversationId: input.conversationId,
@@ -5077,6 +5137,7 @@ export class AIChatQueryLoop {
       // Crash salvage: register whatever candidates were already finalized.
       let crashArtifactsRegistered = 0;
       let crashArtifactErrors = 0;
+      let crashSalvageResolved = false;
       try {
         const crashedPromotion = this.promotePluginArtifactsToPayload({
           conversationId: input.conversationId,
@@ -5086,6 +5147,37 @@ export class AIChatQueryLoop {
         });
         crashArtifactsRegistered = crashedPromotion.registeredCount;
         crashArtifactErrors = crashedPromotion.errors.length;
+        // G03: a crash that salvaged finalized artifacts is surfaced
+        // TRUTHFULLY through the tool channel: a failed result that carries
+        // the opaque artifact references (never paths) + `interrupted`, so
+        // the model can tell the user the files exist even though the tool
+        // call itself died. Without salvage the rejection path applies.
+        if (crashedPromotion.artifacts && crashedPromotion.artifacts.length > 0) {
+          handle.resolve({
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: {
+                code: "TRANSPORT_CRASHED",
+                category: "host_bug",
+                message:
+                  "The tool process crashed, but its finalized result files were registered by the host.",
+                recoverable: false,
+                allowedStrategies: [],
+                // H1-style host error id the model may echo.
+                id: `art_${executionId.slice(0, 12)}`,
+              },
+              artifacts: crashedPromotion.artifacts.map(toArtifactRef),
+              interrupted: true,
+              job_id: executionId,
+            },
+            execution_time_ms: Math.round(
+              performance.now() - spawnStartedPerf
+            ),
+          });
+          crashSalvageResolved = true;
+        }
       } catch {
         // Best-effort salvage on the crash path.
       }
@@ -5104,7 +5196,9 @@ export class AIChatQueryLoop {
         resultRecordCount: null,
         cleanupPending: null,
       });
-      handle.reject(err instanceof Error ? err : new Error(String(err)));
+      if (!crashSalvageResolved) {
+        handle.reject(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   }
 
@@ -5132,6 +5226,7 @@ export class AIChatQueryLoop {
       registeredCount: 0,
       errors: [],
       degradedToFailure: false,
+      artifacts: [],
     };
     if (!input.executionId) return noop;
     const artifactsService = getPluginFileArtifactService();
@@ -5141,11 +5236,25 @@ export class AIChatQueryLoop {
     let artifacts: RegisteredPluginArtifact[] = [];
     let errors: string[] = [];
     if (stagingOk && candidates.length > 0) {
+      // G03: identity + completion state recorded with the artifact
+      // metadata — the policy registry holds the ACTUAL manifest
+      // version/generation captured at registration (G02).
+      const registry = getPluginToolPolicyRegistry();
+      const pluginVersion = registry.getPluginVersion(input.pluginName) ?? undefined;
+      const pluginGeneration =
+        registry.getPluginGeneration(input.pluginName) ?? undefined;
       const promotion = artifactsService.promoteCandidates({
         executionId: input.executionId,
         conversationId: input.conversationId,
         pluginName: input.pluginName,
         candidates,
+        ...(pluginVersion !== undefined ? { pluginVersion } : {}),
+        ...(pluginGeneration !== undefined ? { pluginGeneration } : {}),
+        resultStatus: input.payload
+          ? input.payload.success === false
+            ? "degraded"
+            : "complete"
+          : "interrupted",
       });
       artifacts = promotion.artifacts;
       errors = promotion.errors;
@@ -5221,6 +5330,7 @@ export class AIChatQueryLoop {
       registeredCount: artifacts.length,
       errors,
       degradedToFailure,
+      artifacts,
     };
   }
 
