@@ -128,6 +128,13 @@ import type {
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
+import {
+  PlanApproveInputSchema,
+  PlanRejectInputSchema,
+  PlanRequestChangesInputSchema,
+  PlanVersionsInputSchema,
+  parsePlanDecisionInput,
+} from "@/main-process/communication/aiChatV2PlanDecisionSchema";
 import type {
   ChatV2StreamRequest,
   ChatV2StreamChunk,
@@ -1917,28 +1924,18 @@ async function handleApprovePlan(
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
+  // Audit R2 N07: bounded pre-validated schedules replace JSON.parse + casts
+  // at the IPC boundary.
+  const parsed = parsePlanDecisionInput(data, PlanApproveInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.approvePlan({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
     });
     return ok(planState);
   } catch (err) {
@@ -1953,30 +1950,17 @@ async function handleRejectPlan(
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-        feedback?: string;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
+  const parsed = parsePlanDecisionInput(data, PlanRejectInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.rejectPlan({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
-      feedback: parsed.feedback,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
+      feedback: parsed.value.feedback,
     });
     return ok(planState);
   } catch (err) {
@@ -1991,33 +1975,17 @@ async function handleRequestPlanChanges(
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-        feedback?: string;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
-  }
-  if (!parsed.feedback || parsed.feedback.trim().length === 0) {
-    return denied("feedback is required");
+  const parsed = parsePlanDecisionInput(data, PlanRequestChangesInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.requestPlanChanges({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
-      feedback: parsed.feedback,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
+      feedback: parsed.value.feedback,
     });
     return ok(planState);
   } catch (err) {
@@ -2032,13 +2000,13 @@ async function handlePlanVersions(
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
+  const parsed = parsePlanDecisionInput(data, PlanVersionsInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
-    const versions = await planModule.listVersions(parsed.planId);
+    const versions = await planModule.listVersions(parsed.value.planId);
     return ok(versions);
   } catch (err) {
     return denied(userSafeError(err));
