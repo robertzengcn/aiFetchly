@@ -46,7 +46,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N01 — P1, reproduced: recording ownership is captured at Stop instead of Start
 
-- [ ] Capture the draft/conversation owner before microphone acquisition begins and preserve it until recording, transcription and acceptance finish.
+- [x] Capture the draft/conversation owner before microphone acquisition begins and preserve it until recording, transcription and acceptance finish.
 - **Requirements:** FR-SUB-007, FR-VOI-005/010, FR-LIF-002; PRD §14 privacy.
 - **Evidence:** `src/views/components/aiChatV2/AiChatV2Composer.vue:835` captures `voiceOwnerDraftKey` only inside the `isRecording` Stop branch. The Start branch at :948–958 sets no owner. The workspace reuses the same composer across conversations.
 - **Reproduce:** In A, start recording; switch to B while still recording; press Stop in B with auto-send enabled.
@@ -56,7 +56,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N02 — P2, reproduced: accepting a voice send in the background leaves already-sent content in its draft
 
-- [ ] Consume the accepted voice snapshot in the originating stored draft even when that conversation is no longer selected; update the visible composer only when appropriate.
+- [x] Consume the accepted voice snapshot in the originating stored draft even when that conversation is no longer selected; update the visible composer only when appropriate.
 - **Requirements:** FR-SUB-002, FR-VOI-010, FR-LIF-004; design §6/§10 draft ownership.
 - **Evidence:** `AiChatV2Composer.vue:915–920` immediately returns from voice acceptance when `stillOwnsComposition()` is false. Unlike typed acceptance at :1526–1541, it never updates the origin's `composerDrafts` entry.
 - **Reproduce:** Type `A typed draft`, auto-send transcript `hello world`, defer acceptance, switch to B, accept the send, return to A.
@@ -66,7 +66,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N03 — P2, reproduced: voice acceptance rolls back typing done during transcription
 
-- [ ] Base transcript consumption on the current draft immediately before transcript insertion, or use draft revisions and a precise transcript delta; never restore an older text snapshot wholesale.
+- [x] Base transcript consumption on the current draft immediately before transcript insertion, or use draft revisions and a precise transcript delta; never restore an older text snapshot wholesale.
 - **Requirements:** FR-SUB-002/003/008, FR-VOI-005/010.
 - **Evidence:** `AiChatV2Composer.vue:836` captures `draftBeforeVoiceSend` before recorder stop/conversion/transcription. After those awaits, :911–912 appends the transcript to the **current** draft and captures `submittedDraftText`. Acceptance at :921–922 restores the **earlier** text if the post-append draft has not subsequently changed.
 - **Reproduce:** Start transcription with `old typed draft`; while it is pending replace the text with `new typed draft`; resolve transcription; accept the voice send without further typing.
@@ -75,7 +75,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N04 — P2, reproduced: image draft cleanup loses identity after a background completion
 
-- [ ] Match cleanup to actual pending/submission/run identity instead of pairing independent acceptance and visible-terminal counters; reconstruct cleanup across background completion and route remount.
+- [x] Match cleanup to actual pending/submission/run identity instead of pairing independent acceptance and visible-terminal counters; reconstruct cleanup across background completion and route remount.
 - **Requirements:** FR-IMG-002/015, FR-SUB-006, FR-LIF-001/004; AD-005 and the technical design's stable identity contracts.
 - **Evidence:** `src/views/store/selectedConversation.ts:274–300` increments one counter for accepted sends and another for consumed terminal detail events. Inactive-conversation detail events are ignored at :303–310; reselection at :354–405 restores history/runtime but does not reconcile these counters. `AiChatCenterSurface.vue:1543–1554` matches the submitted image snapshot using only `terminal.ordinal`, despite the terminal also having a real `runId`.
 - **Reproduce:** In A, submit image m1; switch to B; let A complete in the background (no selected-detail terminal). Return to A's idle snapshot, clear/reselect m2, submit it and receive its terminal while A is selected.
@@ -85,7 +85,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N05 — P2, source-confirmed: maximum-duration recording stop discards the audio result
 
-- [ ] Deliver the maximum-duration stop result through the same composer transcription path as explicit Stop, exactly once.
+- [x] Deliver the maximum-duration stop result through the same composer transcription path as explicit Stop, exactly once.
 - **Requirements:** FR-VOI-002/003/005/010; maximum-duration and recovery contracts inherited by the PRD.
 - **Evidence:** `src/views/components/aiChatV2/voice/BrowserVoiceRecorder.ts:134–138` calls `void this.stop().catch(...)` from the timer and discards its resolved recording. `onstop` at :124–130 resolves the current caller, then clears the recorded chunks. Composer `isRecording` is local state, updated only by mic clicks; it has no recorder-completion subscription. Its next Stop calls `voiceRecorder.stop()` again, which throws `Not recording` at recorder :145–147.
 - **Trigger/impact:** Record until the configured limit. Microphone tracks stop, but the composer still presents its recording state and does not transcribe the finished audio; a subsequent Stop produces an error after the recording data has been discarded.
@@ -94,7 +94,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N06 — P2, source-confirmed: recorder lifetime is not cleaned up with the composer
 
-- [ ] Stop/dispose microphone capture and invalidate outstanding acquisition/transcription callbacks on route unmount; preserve any retained transcript through its captured owner store.
+- [x] Stop/dispose microphone capture and invalidate outstanding acquisition/transcription callbacks on route unmount; preserve any retained transcript through its captured owner store.
 - **Requirements:** FR-VOI-003/010, FR-LIF-001/002; design §9/§10 lifecycle ownership and PRD §19 resources.
 - **Evidence:** `AiChatV2Composer.vue:666` creates a component-owned `BrowserVoiceRecorder`. Its only `onBeforeUnmount` registration at :1065–1071 unsubscribes configuration changes. No recorder cleanup or in-flight generation invalidation is registered. Recorder tracks are stopped only in its own `cleanup()` at `BrowserVoiceRecorder.ts:166–180`, reached through `onstop`.
 - **Trigger/impact:** Start recording, then navigate away so the composer unmounts. Capture can continue invisibly until the duration timer; returning mounts a separate recorder. A pending `getUserMedia` result can also start capture after the original composer has gone away. This is source-confirmed lifecycle exposure, not a measurement of physical microphone activity in this audit.
@@ -102,7 +102,7 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### N07 — P2, source-confirmed: plan decision IPC still bypasses the strict input contract
 
-- [ ] Apply strict bounded schemas and safe parse-error handling to approve, reject and request-changes handlers, preserving the existing AI gate before parsing.
+- [x] Apply strict bounded schemas and safe parse-error handling to approve, reject and request-changes handlers, preserving the existing AI gate before parsing.
 - **Requirements:** FR-PLN-004/005; PRD §14.3/§14.4; technical design §14 and §26.6.
 - **Evidence:** `src/main-process/communication/ai-chat-v2-ipc.ts:1913–2025` uses `JSON.parse` plus TypeScript casts and a few truthiness checks. The parse is outside the `try`. Unknown keys are accepted; IDs need only be truthy; version need only have type `number`; request-changes calls `feedback.trim()` before the guarded module call. The workspace invokes these shared handlers through its existing plan APIs.
 - **Trigger/impact:** Malformed JSON throws an IPC transport error instead of a bounded failure envelope. A truthy non-string feedback (e.g. `{}`) also throws before safe mapping; extra properties and invalid ID/version shapes are not strictly rejected at the edge. This establishes a contract/error-handling gap, not an authorization bypass.
@@ -112,16 +112,16 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 
 ### G01 — P2: timing names exist, but several required measurements are still missing or misleading
 
-- [ ] Measure plan decision → **durable continuation acceptance**, rather than just decision persistence. `ai-chat-v2-ipc.ts:2898–2906` records `plan_decision_to_continuation_ms` around `handleApprovePlan`; that function only persists the plan state and returns. The renderer sends the continuation later. A failed/missing continuation can therefore still produce a successful timing. Reject/change paths also need the specified continuation timing.
-- [ ] Instrument workspace selection reconstruction. `selection_request_to_transcript_ms` is observed only around `AI_CHAT_V2_HISTORY` at :2875–2884; the workspace uses `AI_CHAT_WORKSPACE_SELECT`. A timing-key definition and direct counter unit test do not establish that the default-route selection journey emits it.
-- [ ] Either measure submit-click → durable acceptance across renderer/IPC or rename and document the narrower metric. `ai-chat-workspace-ipc.ts:518–535` starts `submit_to_acceptance_ms` immediately before queue submission, excluding attachment encoding, validation and earlier IPC latency.
-- [ ] Connect renderer aggregates to a real diagnostics/soak consumer and measure through the intended projection completion boundary. `src/views/store/aiChatRendererMetrics.ts:56` exposes a snapshot, but source search found no production caller. Its comment claims it joins main structured telemetry, but no joining path exists. `selectedConversation.ts:317–320` stops timing immediately after `presenter.applyEvent`, before any deferred UI flush.
+- [x] Measure plan decision → **durable continuation acceptance**, rather than just decision persistence. `ai-chat-v2-ipc.ts:2898–2906` records `plan_decision_to_continuation_ms` around `handleApprovePlan`; that function only persists the plan state and returns. The renderer sends the continuation later. A failed/missing continuation can therefore still produce a successful timing. Reject/change paths also need the specified continuation timing.
+- [x] Instrument workspace selection reconstruction. `selection_request_to_transcript_ms` is observed only around `AI_CHAT_V2_HISTORY` at :2875–2884; the workspace uses `AI_CHAT_WORKSPACE_SELECT`. A timing-key definition and direct counter unit test do not establish that the default-route selection journey emits it.
+- [x] Either measure submit-click → durable acceptance across renderer/IPC or rename and document the narrower metric. `ai-chat-workspace-ipc.ts:518–535` starts `submit_to_acceptance_ms` immediately before queue submission, excluding attachment encoding, validation and earlier IPC latency.
+- [x] Connect renderer aggregates to a real diagnostics/soak consumer and measure through the intended projection completion boundary. `src/views/store/aiChatRendererMetrics.ts:56` exposes a snapshot, but source search found no production caller. Its comment claims it joins main structured telemetry, but no joining path exists. `selectedConversation.ts:317–320` stops timing immediately after `presenter.applyEvent`, before any deferred UI flush.
 - **Requirements:** Technical design §18.2–18.3; PRD §19/20/24.
 - **Done when:** Integration tests delay each stage and assert samples include the named endpoint; failed continuation produces no false accepted-continuation sample. Exercise the actual workspace channels and diagnostics export, with bounded identity/state labels and no content. Keep the valid new capability counters rather than reverting the G01 update.
 
 ### G02 — P2: `shared_orchestration` rollback flag is now inert
 
-- [ ] Define and implement a meaningful safe adapter effect, or explicitly retire/amend this flag in the rollout contract and tooling.
+- [x] Define and implement a meaningful safe adapter effect, or explicitly retire/amend this flag in the rollout contract and tooling.
 - **Evidence:** The flag remains stored, returned by `AI_CHAT_WORKSPACE_GET_FLAG`, and loaded into `useWorkspaceRolloutAdapters().sharedOrchestration`. Repository-wide source search finds no consumer of that value beyond its accessor/hydration. The B07 fix removed the center's binding and branch; `onComposerSend` now always runs the same routing path.
 - **Requirements:** Design §23.1 independent rollout adapters; updated PRD §11.2 explicitly retains independently switchable controls.
 - **Impact:** An operator can persist/read back a disabled flag without changing application behavior. Tests that only assert persistence or safe ordinary sends do not prove rollback behavior.
@@ -132,14 +132,14 @@ Temporary reproduction fixtures were removed from the worktree and retained as `
 ### V01 — Release evidence: complete the successful voice journey and new negative paths
 
 - [ ] Run record → successful transcription → auto-send → spoken response through `/` → `/aiworkspace`, using deterministic controlled audio/runtime services in CI and a separately configured real-runtime check.
-- [ ] Include N01–N06 lifecycle cases in appropriate component/integration/Electron coverage; assert actual owner, job, track and queue state, not only visible buttons.
+- [x] Include N01–N06 lifecycle cases in appropriate component/integration/Electron coverage; assert actual owner, job, track and queue state, not only visible buttons.
 - **Evidence:** `test/e2e/specs/aiChatVoiceParity.test.ts:97` still tests **missing runtime/model**, settings and bounded failure. It is useful negative coverage but not the successful voice journey required by design §21.4 item 8 and PRD §22/§23.
 
 ### V02 — Release evidence: manual/runtime accessibility, browser and final regression gates
 
 - [ ] Execute/record default-route focus entry/return/traps, safe Escape, one-time announcements, reduced motion, keyboard completion, narrow and 200% layouts, with platform/assistive-technology scope documented.
 - [ ] Record managed-browser authenticated start → handoff → verify → resume → stop, including expiry/stale approval/route return, separating deterministic fixtures from live-account checks.
-- [ ] After fixes, run both typechecks, component suite, affected modules, full main suite and critical/full Electron E2E. Explain unrelated baseline failures and skipped cases instead of treating them as passed.
+- [x] After fixes, run both typechecks, component suite, affected modules, full main suite and critical/full Electron E2E. Explain unrelated baseline failures and skipped cases instead of treating them as passed.
 - **Evidence:** Existing accessibility suite explicitly calls itself an automated subset; older audit records manual zoom and authenticated browser residuals. No fresh evidence closing those residuals was found in this update. These tasks identify missing certification, not absent UI implementation.
 - **Requirements:** A11Y-001–010, FR-BRW-001–006, PRD §22/§23/§28; design §16/§21/§26.
 
@@ -191,3 +191,36 @@ All 16 functional ranges are included. No new issue was established in a “pres
 3. Complete recorder lifecycle N05/N06 and strict plan input handling N07.
 4. Correct G01 measurements and give G02 a documented, safe behavior.
 5. Run V01/V02, then collect V03 evidence. Do not remove V2 based only on passing unit/component counts.
+
+## 8. R2 fix-outcome record (2026-10-21)
+
+All fixes shipped as commits on `workspace-v2-capability-parity`:
+`cd8918e2f` (N01–N03), `dd046e6e3` (N04), `f19e0eb97` (N05/N06), `8a3f71333` (N07),
+`8742d57ac` (G01+G02), `ece6c3c4f` (E2E fixture `router.isReady()` settle).
+
+**Fix gates (V02 item above):**
+
+- One-shot `tsc --noEmit`: 0 errors (each fix run and final run).
+- One-shot `vue-tsc --noEmit`: 0 errors (final run).
+- Component suite: 158 files / 1,286 tests, all pass (G01/G02 included).
+- Full main suite: 8,616 passed / 12 skipped. Explained baseline failures:
+  - `config/SqliteDb.ensureInitialized.test.ts > calls ensureConnection before querying tasks` — documented pre-existing environment-dependent flake (unchanged by these commits).
+  - `modules/SearchModule.test.ts > initializes the database before saving the search task` — same documented pre-existing flake class.
+  - `SkillInstallationLifecycle.test.ts > linked mode with a REMOTE source never links staging` — same documented pre-existing flake (remote-source environment case).
+  - `PortableMemoryPrivacyReview.test.ts > diagnostics use relative paths` — timing flake in this run; passes 3/3 when re-run in isolation.
+  - 12 skipped cases are the pre-existing suite skips (unchanged count across runs).
+- Full Electron E2E: **176 passed / 3 skipped**, no failures. First run had 4
+  `emailReply*` failures: 2 were transient (pass on rerun), 2 were a real
+  harness race fixed by `ece6c3c4f` — `#app` mounts before the router's
+  initial navigation (async permission guard) finalizes, so a typed-hash
+  navigation issued at that moment was overwritten by the boot navigation
+  bouncing back to `#/aiworkspace`. The fixture now waits for
+  `router.isReady()`; the affected spec families pass deterministically
+  afterwards (13/13 in isolation, then the full suite clean).
+
+**Still open (need human/production evidence — cannot be completed by code):**
+V01 successful voice journey in CI (deterministic controlled audio runtime) +
+real-runtime check; V02 manual accessibility/platform-AT record and
+managed-browser authenticated lifecycle record; V03 production soak metrics,
+incident-free record and owner sign-off.
+
