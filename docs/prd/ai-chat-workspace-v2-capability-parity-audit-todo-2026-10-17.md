@@ -9,6 +9,8 @@ Authorities: [PRD](./ai-chat-workspace-v2-capability-parity-prd.md) and [technic
 
 This is a documentation-only audit; no application fixes were applied. Checkboxes below represent remaining work. P1 means a blocking correctness/safety issue or release gate; P2 means a functional or architecture gap. Source-confirmed findings are distinguished from executed reproductions and unverified release evidence. Line references refer to the reviewed SHA.
 
+**Status reconciliation (2026-10-20):** the verdict above is the point-in-time 2026-10-17 audit statement and is kept verbatim per A03's historical-record rule. Current checkbox state as of this date: every R01–R13 defect closed with in-tree fixes and pinned tests, A01 closed by owner revision, A02/A03 done, V01 bullet set executed with live E2E evidence (journal below), V02 security/i18n/A11Y axes certified and the full `yarn test:e2e` gate green (159 passed / 3 skipped / 0 failed), and the requirement-coverage matrix below reconciled in place. **The only remaining unclosed work is the V03 production-soak gate** (three bullets carrying honest 2026-10-20 status records — no qualifying soak evidence or owner sign-off exists; engineering evidence is not presented as substitution).
+
 ## Verification performed
 
 | Command/check | Result |
@@ -327,6 +329,24 @@ Every functional requirement range in the PRD is represented below. **Present** 
 | PRD §19/20; design §17/18 | Bounded history, summary routing, batching, counters and performance tests exist; this audit did not certify every metric/resource limit | R01/R02 capacity; V01/V02 performance/privacy evidence |
 | PRD §28 / design §26 Definition of Done | Not met despite passing static/component/selected unit gates | Resolve bugs, A01/A02 and V01–V03 before declaring parity |
 
+### Matrix reconciliation (2026-10-20)
+
+The table above is the as-audited 2026-10-17 assessment. What has since advanced, per-range (dated records live in the bullets and journal above):
+- FR-SUB/FR-CMD/FR-LIF (R04/R05/R09/R10/R11 ownership and disposition gaps): fixed and pinned (component + E2E certificates, blocked-scope i18n verified in six languages).
+- FR-QUE (R01–R03 deferred admission/cancellation/parked terminal): fixed and pinned by bridge/scheduler/parked-lifecycle suites.
+- FR-PLN/FR-PER (R03 terminal publication, R04 policy isolation, R12 recovery): fixed; P-1..P-4 live journeys + plan-recovery units green.
+- FR-RPT: the "successful default-route end-to-end proof missing" cell is closed — the §24.6 success journey and the FR-4.4 non-gated AI-disabled journey both run green (journal; bullet 192).
+- FR-VOI: the switch/Stop cancellation gap (R07) is fixed and certified live (`aiChatVoiceParity`) + component suites.
+- FR-WSP/FR-INT: the export-triggered setup ownership gap (R08) is fixed and pinned; workspace lifecycle (①–⑥ incl. portable memory) live-certified.
+- FR-REC: parked terminal reconstruction fixed (R03) with durable gate flush evidence.
+- FR-SKL: failed-invocation error ownership fixed (R10); the credential/stale/duplicate/reload axes sit on the skill unit matrices plus the install E2E matrix specs.
+- FR-BRW: the full authenticated-cookie lifecycle phases remain unit-certified by design (audit record V01 bullet 4 documents the same manual-only residual).
+- FR-HIS: route restoration (R06) and background acknowledgement (R13) fixed + mixed-ack/retry/compaction/flag E2Es green (11 journeys).
+- FR-OUT: duplicate-claim, persistent-receipt and claim-time expiry certified (E2E + service units).
+- FR-IMG: R05/R08 fixed; batch certified 7/7 (already recorded cell-side).
+- A11Y/AD-006/AD-008: A11Y-001–010 certified at component level (commit `9a1293e9`, honest manual-zoom residual recorded); equivalence rows certified by the suite set named in V01/V02.
+- AD-009/010 + §17/18 soak/performance cells: unchanged — V03 production criteria remain open as the only outstanding gate; DoD "before defining parity" is therefore blocked exclusively by V03.
+
 ## Remediation addendum (2026-10-18 session)
 
 - R01–R06, R08, R12 were remediated in earlier commits on this branch
@@ -353,6 +373,11 @@ Every functional requirement range in the PRD is represented below. **Present** 
   (2026-10-18, single-authoritative-surface doctrine above); the dormant
   generator-streaming `dispatchQueuedTurn` seam stays in the queue service
   un-wired as the future unification path.
+  **RECONCILED 2026-10-20:** V01 and V02 have since been executed — V01's
+  bullet set carries live E2E certificates (journal below) and V02's
+  security/i18n/A11Y axes are certified with the full E2E gate green
+  (159/3 skipped/0 failed). Only the V03 production-soak gate remains
+  open, with honest status records on its three bullets.
 
 ## Suggested execution order
 
