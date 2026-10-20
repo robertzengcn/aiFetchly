@@ -23,8 +23,10 @@
  */
 
 import * as fs from "fs";
+import * as http from "http";
 import * as https from "https";
 import * as path from "path";
+import { isE2ELoopbackHttpZipUrl } from "./e2eLoopbackZipUrl";
 
 export interface PluginHttpHeaders {
   readonly [name: string]: string;
@@ -428,7 +430,16 @@ function defaultRequest(
   // Node's ClientRequest exposes `.on('error', …)` / `.destroy()` — adapt it
   // to the `{ destroy, onError }` seam `run()` consumes. Never return the raw
   // request: it has no `.onError` method and `hop()` throws TypeError.
-  const req = https.get(
+  // HTTPS-only in production. The single sanctioned exception mirrors the
+  // URL classifier: the launcher-gated E2E loopback zip URL (FakePluginHub,
+  // UPD-GAP-05/06) is fetched with the http module. Every other target —
+  // including plain http and https redirects that downgrade to http — keeps
+  // the https transport and fails exactly as before ("Protocol http:").
+  const transport =
+    url.protocol === "http:" && isE2ELoopbackHttpZipUrl(url.toString())
+      ? http
+      : https;
+  const req = transport.get(
     url,
     {
       headers: { ...headers, "accept-encoding": "identity" },
