@@ -1445,6 +1445,9 @@ export default {
     email_template_empty: "email template should not be empty",
     email_filter_empty: "email filter should not be empty",
     email_service_empty: "email service should bot be empty",
+    email_service_not_found:
+      "Le service de messagerie sélectionné n'existe pas. Choisissez un service dans la liste, puis réessayez.",
+    start_send_email_failed: "Impossible de démarrer l'envoi de l'e-mail.",
     choose_at_least_one_souce: "you should choose at least one source",
     avoid_duplicate: "avoid user to receive duplicate email",
     check_email_souce: "please check email source correct",

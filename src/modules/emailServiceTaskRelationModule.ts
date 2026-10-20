@@ -15,7 +15,10 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.create(relation);
         } catch (error) {
-            console.error('Error creating email service task relation:', error);
+            console.error(
+                `Error creating email service task relation (emailServiceId=${relation.emailServiceId}, buckemailTaskId=${relation.buckemailTaskId}):`,
+                error
+            );
             throw error;
         }
     }

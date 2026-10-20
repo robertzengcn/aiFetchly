@@ -1430,6 +1430,9 @@ export default {
     email_template_empty: "メールテンプレートは空にできません",
     email_filter_empty: "メールフィルターは空にできません",
     email_service_empty: "メールサービスは空にできません",
+    email_service_not_found:
+      "選択したメールサービスは存在しません。一覧からサービスを選び直して、もう一度お試しください。",
+    start_send_email_failed: "メール送信を開始できませんでした。",
     choose_at_least_one_souce: "少なくとも1つのソースを選択してください",
     avoid_duplicate: "重複メールの受信を防止",
     check_email_souce: "メールソースを確認してください",

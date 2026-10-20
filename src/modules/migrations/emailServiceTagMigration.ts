@@ -1,4 +1,4 @@
-import type { DataSource } from "typeorm";
+import type { DataSource, QueryRunner } from "typeorm";
 import type Database from "better-sqlite3";
 import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
 import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
@@ -32,6 +32,93 @@ interface LegacyRow {
 
 interface PragmaColumnInfo {
   name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, "\"\"")}"`;
+}
+
+/**
+ * Column definition for a rebuilt email_service table.
+ * `id` must stay `INTEGER PRIMARY KEY` so child foreign keys
+ * (email_service_task_relation, email_service_tag_relation) can reference it.
+ * A rebuild that copies only the declared type leaves `id` as a plain INTEGER,
+ * and SQLite then rejects those inserts.
+ */
+function columnDefinition(
+  column: PragmaColumnInfo,
+  ensureIdPrimaryKey: boolean
+): string {
+  const declaredType = column.type?.trim() ? column.type.trim() : "TEXT";
+  const isIdPrimary =
+    column.name === "id" && (column.pk > 0 || ensureIdPrimaryKey);
+  const parts = [
+    quoteIdent(column.name),
+    isIdPrimary ? "INTEGER" : declaredType,
+  ];
+  if (isIdPrimary) {
+    parts.push("PRIMARY KEY AUTOINCREMENT");
+  } else if (column.notnull === 1) {
+    parts.push("NOT NULL");
+  }
+  if (!isIdPrimary && column.dflt_value != null) {
+    parts.push(`DEFAULT ${column.dflt_value}`);
+  }
+  return parts.join(" ");
+}
+
+async function readEmailServiceColumns(
+  queryRunner: QueryRunner
+): Promise<PragmaColumnInfo[]> {
+  // manager.query returns the row array. query(..., [], true) returns a
+  // QueryResult object, and calling .filter on that throws before the rebuild.
+  const columns = (await queryRunner.manager.query(
+    `PRAGMA table_info(email_service)`
+  )) as PragmaColumnInfo[];
+  return Array.isArray(columns) ? columns : [];
+}
+
+/**
+ * Copy email_service into a new table and swap the names.
+ * Foreign keys are off only for the swap; they are turned back on before return.
+ */
+async function rebuildEmailServiceTable(
+  queryRunner: QueryRunner,
+  options: { dropColumn?: string; ensureIdPrimaryKey: boolean }
+): Promise<void> {
+  const columns = await readEmailServiceColumns(queryRunner);
+  const kept = columns.filter((column) => column.name !== options.dropColumn);
+  if (!kept.some((column) => column.name === "id")) {
+    throw new Error("email_service is missing an id column");
+  }
+  const colList = kept.map((column) => quoteIdent(column.name)).join(", ");
+  const colDefs = kept
+    .map((column) => columnDefinition(column, options.ensureIdPrimaryKey))
+    .join(", ");
+
+  await queryRunner.query(`PRAGMA foreign_keys = OFF`);
+  try {
+    await queryRunner.query(`DROP TABLE IF EXISTS email_service_new`);
+    await queryRunner.query(`BEGIN`);
+    await queryRunner.query(`CREATE TABLE email_service_new (${colDefs})`);
+    await queryRunner.query(
+      `INSERT INTO email_service_new (${colList}) SELECT ${colList} FROM email_service`
+    );
+    await queryRunner.query(`DROP TABLE email_service`);
+    await queryRunner.query(
+      `ALTER TABLE email_service_new RENAME TO email_service`
+    );
+    await queryRunner.query(`COMMIT`);
+  } catch (rebuildError) {
+    await queryRunner.query(`ROLLBACK`).catch(() => undefined);
+    throw rebuildError;
+  } finally {
+    await queryRunner.query(`PRAGMA foreign_keys = ON`).catch(() => undefined);
+  }
 }
 
 /**
@@ -122,9 +209,7 @@ export async function dropLegacyServiceTagColumn(
 ): Promise<boolean> {
   const queryRunner = connection.createQueryRunner();
   try {
-    const tableInfo = (await queryRunner.manager.query(
-      `PRAGMA table_info(email_service)`
-    )) as PragmaColumnInfo[];
+    const tableInfo = await readEmailServiceColumns(queryRunner);
     const hasLegacyColumn = tableInfo.some((c) => c.name === "tagId");
     if (!hasLegacyColumn) {
       return false;
@@ -133,42 +218,14 @@ export async function dropLegacyServiceTagColumn(
       await queryRunner.query(`ALTER TABLE email_service DROP COLUMN tagId`);
       return true;
     } catch {
-      // DROP COLUMN unsupported (old SQLite) or blocked by the FK definition
-      // — rebuild the table without the legacy column.
-      await queryRunner.query(`PRAGMA foreign_keys = OFF`);
-      try {
-        await queryRunner.query(`BEGIN`);
-        // Build the new-shape column list from the live table (everything
-        // except tagId), preserving declared types in the rebuilt table.
-        const keptCols = (
-          (await queryRunner.query(
-            `PRAGMA table_info(email_service)`,
-            [],
-            true
-          )) as unknown as Array<{ name: string; type: string }>
-        ).filter((c) => c.name !== "tagId");
-        const colList = keptCols.map((c) => `"${c.name}"`).join(", ");
-        const colDefs = keptCols
-          .map((c) => (c.type ? `"${c.name}" ${c.type}` : `"${c.name}"`))
-          .join(", ");
-        await queryRunner.query(
-          `CREATE TABLE email_service_new (${colDefs})`
-        );
-        await queryRunner.query(
-          `INSERT INTO email_service_new (${colList}) SELECT ${colList} FROM email_service`
-        );
-        await queryRunner.query(`DROP TABLE email_service`);
-        await queryRunner.query(
-          `ALTER TABLE email_service_new RENAME TO email_service`
-        );
-        await queryRunner.query(`COMMIT`);
-        return true;
-      } catch (rebuildError) {
-        await queryRunner.query(`ROLLBACK`).catch(() => undefined);
-        throw rebuildError;
-      } finally {
-        await queryRunner.query(`PRAGMA foreign_keys = ON`).catch(() => undefined);
-      }
+      // DROP COLUMN unsupported (old SQLite) or blocked by the FK definition.
+      // Rebuild without tagId and keep id as INTEGER PRIMARY KEY so child
+      // foreign keys can still reference email_service(id).
+      await rebuildEmailServiceTable(queryRunner, {
+        dropColumn: "tagId",
+        ensureIdPrimaryKey: true,
+      });
+      return true;
     }
   } finally {
     await queryRunner.release();
@@ -185,7 +242,11 @@ export async function dropLegacyServiceTagColumn(
  */
 export async function migrateEmailServiceTagsToManyToMany(
   connection: DataSource
-): Promise<{ backfilled: number; columnDropped: boolean }> {
+): Promise<{
+  backfilled: number;
+  columnDropped: boolean;
+  primaryKeyRepaired: boolean;
+}> {
   // Re-snapshot from the live DB: if synchronize left the column intact (older
   // SQLite), we can still read+replay+drop here. If synchronize already dropped
   // it, snapshot is empty and this is a no-op.
@@ -207,5 +268,31 @@ export async function migrateEmailServiceTagsToManyToMany(
 
   const backfilled = await replayLegacyServiceTags(connection, snapshot);
   const columnDropped = await dropLegacyServiceTagColumn(connection);
-  return { backfilled, columnDropped };
+  const primaryKeyRepaired = await repairEmailServicePrimaryKey(connection);
+  return { backfilled, columnDropped, primaryKeyRepaired };
+}
+
+/**
+ * Restore email_service.id as INTEGER PRIMARY KEY when a previous rebuild
+ * left it as a plain INTEGER. Child inserts then fail the foreign key.
+ * No-op when the table is missing or id is already the primary key.
+ */
+export async function repairEmailServicePrimaryKey(
+  connection: DataSource
+): Promise<boolean> {
+  const queryRunner = connection.createQueryRunner();
+  try {
+    const columns = await readEmailServiceColumns(queryRunner);
+    if (columns.length === 0) {
+      return false;
+    }
+    const idColumn = columns.find((column) => column.name === "id");
+    if (!idColumn || idColumn.pk > 0) {
+      return false;
+    }
+    await rebuildEmailServiceTable(queryRunner, { ensureIdPrimaryKey: true });
+    return true;
+  } finally {
+    await queryRunner.release();
+  }
 }

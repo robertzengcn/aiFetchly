@@ -98,6 +98,23 @@ export class EmailServiceModule
     }
   }
 
+  /**
+   * Whether a local email_service row exists. Does not decrypt credentials,
+   * so a decrypt failure is not reported as a missing service.
+   */
+  async emailServiceExists(id: number): Promise<boolean> {
+    if (!Number.isInteger(id) || id <= 0) {
+      return false;
+    }
+    const service = await this.emailServiceModel.read(id);
+    return service !== undefined;
+  }
+
+  /** Active (status === 1) service ids, without decrypting credentials. */
+  async listActiveEmailServiceIds(): Promise<number[]> {
+    return await this.emailServiceModel.listIdsByStatus(1);
+  }
+
   async updateEmailService(
     id: number,
     service: EmailServiceEntity

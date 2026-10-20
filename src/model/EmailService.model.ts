@@ -172,6 +172,16 @@ export class EmailServiceModel extends BaseDb {
     return entities;
   }
 
+  /** Ids of services with the given status. Does not load credentials. */
+  async listIdsByStatus(status: number): Promise<number[]> {
+    const services = await this.repository.find({
+      select: { id: true },
+      where: { status },
+      order: { id: "ASC" },
+    });
+    return services.map((service) => service.id);
+  }
+
   /** Services with inbound receive enabled. */
   async listReceiveEnabled(): Promise<EmailServiceEntity[]> {
     return await this.repository.find({

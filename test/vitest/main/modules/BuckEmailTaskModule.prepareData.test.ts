@@ -239,4 +239,70 @@ describe("BuckEmailTaskModule.prepareData local SMTP services", () => {
       replyTo: "replies@svc.com",
     });
   });
+
+  it("uses the only active service when every requested id is missing", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService();
+
+    const module = new BuckEmailTaskModule();
+    await module.ensureConnection();
+    const taskId = await module.createBuckEmailTask(skipReviewCampaign(99999));
+
+    const prepared = await module.prepareData(taskId);
+    expect(prepared.Emailservicelist).toHaveLength(1);
+    expect(prepared.Emailservicelist[0].id).toBe(serviceId);
+  });
+
+  it("rejects a missing service id when more than one mailbox is active and creates no task", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const firstId = await seedSmtpService();
+    const secondId = await seedAliasLoginService();
+
+    const module = new BuckEmailTaskModule();
+    await module.ensureConnection();
+    await expect(
+      module.createBuckEmailTask(skipReviewCampaign(99999))
+    ).rejects.toThrow(
+      `Email service not found: 99999. Available service ids: ${firstId}, ${secondId}.`
+    );
+    expect(await module.countBuckEmailTasks()).toBe(0);
+  });
+
+  it("keeps the existing service and drops an id that is not in email_service", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService();
+    await seedAliasLoginService();
+
+    const module = new BuckEmailTaskModule();
+    await module.ensureConnection();
+    const taskId = await module.createBuckEmailTask({
+      ...skipReviewCampaign(serviceId),
+      EmailServicelist: [serviceId, 99999],
+    });
+
+    const prepared = await module.prepareData(taskId);
+    expect(prepared.Emailservicelist.map((service) => service.id)).toEqual([
+      serviceId,
+    ]);
+  });
+
+  it("does not substitute an inactive mailbox when the requested id is missing", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService();
+    const model = new EmailServiceModel(tmpDir);
+    await model.updateServiceStatus(serviceId, 0);
+
+    const module = new BuckEmailTaskModule();
+    await module.ensureConnection();
+    await expect(
+      module.createBuckEmailTask(skipReviewCampaign(99999))
+    ).rejects.toThrow(
+      "Email service not found: 99999. No email service is configured."
+    );
+    expect(await module.countBuckEmailTasks()).toBe(0);
+  });
 });

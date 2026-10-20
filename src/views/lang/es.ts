@@ -1456,6 +1456,9 @@ export default {
     email_template_empty: "La plantilla de correo no debe estar vacía",
     email_filter_empty: "El filtro de correo no debe estar vacío",
     email_service_empty: "El servicio de correo no debe estar vacío",
+    email_service_not_found:
+      "El servicio de correo seleccionado no existe. Elige un servicio de la lista e inténtalo de nuevo.",
+    start_send_email_failed: "No se pudo iniciar el envío del correo.",
     choose_at_least_one_souce: "Debe elegir al menos una fuente",
     avoid_duplicate: "Evitar que el usuario reciba correos duplicados",
     check_email_souce:
