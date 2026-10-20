@@ -41,8 +41,16 @@ export type ChatCommandDisposition =
    * Command fully handled (local exchange / loop start / clear). When the
    * command expanded into a prompt send, `acceptedSend` reports that send's
    * outcome — `false` means the draft must NOT be cleared (FR-SUB-002).
+   * `acceptanceDelegated` (audit 2026-10-20 B04) is true when the expanded
+   * send itself owns the composer acceptance (it fired through the ordinary
+   * submission's accepted-send rule, including the park/rep replay path);
+   * the disposition handler must not fire it a second time.
    */
-  | { readonly kind: "completed"; readonly acceptedSend?: boolean }
+  | {
+      readonly kind: "completed";
+      readonly acceptedSend?: boolean;
+      readonly acceptanceDelegated?: boolean;
+    }
   /**
    * The command produced a prompt the caller must submit through its
    * ordinary send path ONCE, marked as an expanded prompt so it is never
@@ -334,7 +342,12 @@ export function useChatCommandRouting(
    * when the input was not registry-owned.
    */
   type GenericSlashOutcome =
-    | { kind: "handled"; acceptedSend: boolean }
+    | {
+        kind: "handled";
+        acceptedSend: boolean;
+        /** True when the expanded send fired the composer acceptance (B04). */
+        acceptanceDelegated: boolean;
+      }
     | { kind: "rejected_files"; message: string }
     | null;
 
@@ -360,7 +373,7 @@ export function useChatCommandRouting(
           "No chat is selected — the command was not run."
         )
       );
-      return { kind: "handled", acceptedSend: false };
+      return { kind: "handled", acceptedSend: false, acceptanceDelegated: false };
     }
     const hasFiles = (files?.length ?? 0) > 0;
     let result: SlashCommandDispatchResponse;
@@ -379,11 +392,11 @@ export function useChatCommandRouting(
         err instanceof Error ? err.message : String(err),
         conversationId
       );
-      return { kind: "handled", acceptedSend: false };
+      return { kind: "handled", acceptedSend: false, acceptanceDelegated: false };
     }
     if (!result.status) {
       ports.appendLocalExchange(rawInput, result.msg, conversationId);
-      return { kind: "handled", acceptedSend: true };
+      return { kind: "handled", acceptedSend: true, acceptanceDelegated: false };
     }
     if (result.action === "submit_prompt") {
       // The expanded prompt is submitted exactly once through the ordinary
@@ -400,9 +413,12 @@ export function useChatCommandRouting(
           onAccepted,
           files
         );
-        return { kind: "handled", acceptedSend };
+        // B04 (audit 2026-10-20): the expanded send fires the composer
+        // acceptance itself — the disposition handler must not fire it
+        // again, and a parked/replayed send keeps its single firing.
+        return { kind: "handled", acceptedSend, acceptanceDelegated: true };
       } catch {
-        return { kind: "handled", acceptedSend: false };
+        return { kind: "handled", acceptedSend: false, acceptanceDelegated: false };
       }
     }
     // B11: non-expanding outcomes (receipts, /clear) have no file channel —
@@ -417,10 +433,10 @@ export function useChatCommandRouting(
       // R10: a stale-aborted / denied / failed clear never accepted the
       // command — the caller keeps the draft instead of silently dropping it.
       const cleared = await ports.onClearConversation(conversationId);
-      return { kind: "handled", acceptedSend: cleared };
+      return { kind: "handled", acceptedSend: cleared, acceptanceDelegated: false };
     }
     ports.appendLocalExchange(rawInput, result.content, conversationId);
-    return { kind: "handled", acceptedSend: true };
+    return { kind: "handled", acceptedSend: true, acceptanceDelegated: false };
   }
 
   async function routeCommand(
@@ -615,7 +631,11 @@ export function useChatCommandRouting(
           message: outcome.message,
         };
       }
-      return { kind: "completed", acceptedSend: outcome.acceptedSend };
+      return {
+        kind: "completed",
+        acceptedSend: outcome.acceptedSend,
+        acceptanceDelegated: outcome.acceptanceDelegated,
+      };
     }
 
     return { kind: "not_command" };

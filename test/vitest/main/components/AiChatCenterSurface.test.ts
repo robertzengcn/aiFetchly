@@ -4732,3 +4732,77 @@ describe("AiChatCenterSurface /clear ownership after awaits (R10)", () => {
     wrapper.unmount();
   });
 });
+
+/**
+ * Audit 2026-10-20 B04: a registry-resolved expanded prompt must fire the
+ * composer acceptance callback EXACTLY once. Before the fix the expanded
+ * send fired it (performOrdinarySend's accepted-send rule) and the
+ * disposition's completed branch fired it again (acceptedSend !== false),
+ * double-consuming the composer draft clear.
+ */
+describe("AiChatCenterSurface expanded-command acceptance single-fire (B04)", () => {
+  beforeEach(() => {
+    // The REAL dispatchSlashCommand runs — the registry channel resolves an
+    // expansion into a prompt send (production path, like FR-CMD-003).
+    const invoke = window.api.invoke as unknown as ReturnType<typeof vi.fn>;
+    invoke.mockReset();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === SLASH_COMMAND_DISPATCH) {
+        return Promise.resolve({
+          status: true,
+          data: {
+            status: true,
+            action: "submit_prompt",
+            commandId: "plugin:p:command:slashexpand",
+            prompt: "expanded prompt body",
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  it("fires the acceptance callback once for an immediately accepted expanded send", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+
+    const onAccepted = vi.fn();
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/expand", [], { onAccepted });
+    await flushPromises();
+
+    // Exactly one provider submission and ONE acceptance.
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(onAccepted).toHaveBeenCalledTimes(1);
+
+    wrapper.unmount();
+  });
+
+  it("fires the acceptance callback zero times when the expanded send is rejected", async () => {
+    startChatRunMock.mockRejectedValue(new Error("start failed"));
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+
+    const onAccepted = vi.fn();
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/expand", [], { onAccepted });
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(onAccepted).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+});

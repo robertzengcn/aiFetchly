@@ -2083,7 +2083,12 @@ async function applyCommandDisposition(
   // completed: local exchange rendered / loop started / clear ran. When the
   // command expanded into a prompt send, clear the draft ONLY if that send
   // was accepted (FR-SUB-002: a rejected/parked expanded send keeps it).
-  if (disposition.acceptedSend !== false) {
+  // B04 (audit 2026-10-20 single-owner rule): for an expanded prompt the
+  // ordinary send itself fired the acceptance (its accepted-send rule,
+  // including the park/replay continuation), so the disposition handler
+  // must not fire options.onAccepted a second time here; locally-handled
+  // commands (exchange/clear) still consume the draft exactly once.
+  if (disposition.acceptedSend !== false && !disposition.acceptanceDelegated) {
     options?.onAccepted?.();
   }
 }
