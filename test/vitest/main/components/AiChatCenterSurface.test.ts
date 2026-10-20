@@ -17,10 +17,16 @@ const getVoiceSettingsMock = vi.fn();
 const setVoiceSettingsMock = vi.fn();
 const getVoiceStatusMock = vi.fn();
 const getLocalAiRuntimeStatusMock = vi.fn();
+const buildUploadedAttachmentsMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const startChatRunMock = vi.fn();
 const exportGeneratedImageMock = vi.fn();
 const recoverPlanContinuationMock = vi.fn();
+
+vi.mock("@/views/components/aiChatV2/aiChatV2Attachment", () => ({
+  buildUploadedAttachments: (...args: unknown[]) =>
+    buildUploadedAttachmentsMock(...args),
+}));
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...args: unknown[]) => getWorkspaceMock(...args),
@@ -3004,7 +3010,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     ).toBe(true);
   });
 
-  it("aborts an attachment send when the selection changes during file encoding (T7/D3)", async () => {
+  it("aborts an attachment send when the selection changes during file encoding (T7/D3, B08)", async () => {
     const wrapper = mountSurface();
     useChatWorkspaceStore().setSelected("conv-a");
     await flushPromises();
@@ -3017,6 +3023,13 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     await flushPromises();
 
     expect(startChatRunMock).not.toHaveBeenCalled();
+    // B08: the switched conversation shows NO stale notice; the abort
+    // feedback is retained under the origin (A) and revealed on return.
+    expect(wrapper.find('[data-testid="workspace-command-error"]').exists()).toBe(
+      false
+    );
+    useChatWorkspaceStore().setSelected("conv-a");
+    await flushPromises();
     const notice = wrapper.get('[data-testid="workspace-command-error"]');
     expect(notice.text()).toContain("Selection changed");
   });
@@ -4890,6 +4903,130 @@ describe("AiChatCenterSurface rollback keeps command interception (B07)", () => 
     expect(vi.mocked(clearChatV2Conversation)).toHaveBeenCalledWith("conv-1");
     // ...and the raw command text never reached the model.
     expect(startChatRunMock).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Audit 2026-10-20 B08: late operation failures must be scoped to their
+ * originating conversation. A failure that resolves after the user switched
+ * must not change the currently selected conversation's notice; the retained
+ * failure is revealed (bounded localized text) when the user selects the
+ * originating conversation again.
+ */
+describe("AiChatCenterSurface late-error ownership (B08)", () => {
+  beforeEach(() => {
+    vi.mocked(clearChatV2Conversation).mockReset();
+    buildUploadedAttachmentsMock.mockReset();
+  });
+
+  it("shows an attachment preparation failure in the origin conversation when the user stayed there", async () => {
+    buildUploadedAttachmentsMock.mockRejectedValue(
+      new Error("attachment invalid")
+    );
+    startChatRunMock.mockReset();
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-a",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-a");
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "explain this", [new File(["x"], "a.txt")]);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("attachment invalid");
+    wrapper.unmount();
+  });
+
+  it("retains a late attachment failure under its origin and never shows it in the switched conversation", async () => {
+    let rejectAttachment!: (err: Error) => void;
+    buildUploadedAttachmentsMock.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectAttachment = reject;
+        })
+    );
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "explain this", [new File(["x"], "a.txt")]);
+    await flushPromises();
+    // The user switches to B before the preparation fails.
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    rejectAttachment(new Error("attachment invalid"));
+    await flushPromises();
+
+    // B's notice and content are untouched...
+    expect(wrapper.text()).not.toContain("attachment invalid");
+    // ...and the failure is retained for A, revealed on return.
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    expect(wrapper.text()).toContain("attachment invalid");
+
+    wrapper.unmount();
+  });
+
+  it("retains a denied /clear under its origin when the selection moved (R10 + B08)", async () => {
+    // The real dispatchSlashCommand runs; registry resolves /clear.
+    const invoke = window.api.invoke as unknown as ReturnType<typeof vi.fn>;
+    invoke.mockReset();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === SLASH_COMMAND_DISPATCH) {
+        return Promise.resolve({
+          status: true,
+          data: {
+            status: true,
+            action: "show_result",
+            content: "",
+            commandId: "built-in:command:clear",
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    let resolveClear!: (value: { deleted: number } | null) => void;
+    vi.mocked(clearChatV2Conversation).mockImplementationOnce(
+      () =>
+        new Promise<{ deleted: number } | null>((res) => {
+          resolveClear = res;
+        })
+    );
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/clear", []);
+    await flushPromises();
+    chatWorkspace.setSelected("conv-b");
+    await flushPromises();
+    // Denial envelope arrives while B is selected.
+    resolveClear(null);
+    await flushPromises();
+
+    // B shows no clear failure...
+    expect(wrapper.text()).not.toContain("Could not clear this chat");
+    // ...and A's return reveals the retained retryable feedback.
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Could not clear this chat");
 
     wrapper.unmount();
   });

@@ -2038,10 +2038,13 @@ async function applyCommandDisposition(
       conversationId.value !== context.commandConversationId
     ) {
       // The goal/skill IPC awaited — the user switched chats. Abort the
-      // prompt send entirely (the goal/skill state lives in chat A).
-      commandErrorNotice.value =
+      // prompt send entirely (the goal/skill state lives in chat A). B08:
+      // the abort feedback is retained under the ORIGIN conversation.
+      setCommandErrorNotice(
         t("workspaceChat.command.staleAborted") ||
-        "Selection changed — the command was not run.";
+          "Selection changed — the command was not run.",
+        context.commandConversationId
+      );
       return;
     }
     // The command's side effects are done (goal created / skill invoked);
@@ -2184,17 +2187,26 @@ async function performOrdinarySend(
     try {
       uploadedFiles = await buildUploadedAttachments(files);
     } catch (err) {
-      commandErrorNotice.value =
-        err instanceof Error ? err.message : String(err);
+      // Audit 2026-10-20 B08: scoped to the send's origin conversation — a
+      // failure resolved after a switch is retained under that id (the
+      // builder's message can carry the rejected file's name, which must not
+      // surface on another conversation).
+      setCommandErrorNotice(
+        err instanceof Error ? err.message : String(err),
+        sendConversationId
+      );
       return false;
     }
   }
   if (conversationId.value !== sendConversationId) {
     // Selection changed while attachments encoded (audit T7/D3): keep the
-    // draft, keep the message out of the newly selected chat, explain.
-    commandErrorNotice.value =
+    // draft, keep the message out of the newly selected chat, explain —
+    // scoped to the origin (B08: the switched conversation is untouched).
+    setCommandErrorNotice(
       t("workspaceChat.command.staleAborted") ||
-      "Selection changed — the command was not run.";
+        "Selection changed — the command was not run.",
+      sendConversationId
+    );
     return false;
   }
   if (selectedModel.value) {
@@ -2276,6 +2288,38 @@ async function performOrdinarySend(
 // --- Shared command routing (capability parity FR-CMD / FR-SKL-005) --------
 /** Safe localized command error shown above the composer (FR-CMD-004). */
 const commandErrorNotice = ref<string | null>(null);
+
+/**
+ * Audit 2026-10-20 B08: per-conversation retention for command/send
+ * failures that resolve after the user switched conversations. A failure
+ * arriving for a conversation that is no longer selected is stored under
+ * its ORIGIN id (bounded localized text, never raw untrusted exception
+ * content on foreign surfaces); selecting that conversation again reveals
+ * and consumes the retained entry.
+ */
+const staleCommandNoticesByConversation = new Map<string, string>();
+function setCommandErrorNotice(
+  message: string,
+  originConversationId?: string | null
+): void {
+  if (
+    originConversationId !== undefined &&
+    originConversationId !== null &&
+    conversationId.value !== originConversationId
+  ) {
+    staleCommandNoticesByConversation.set(originConversationId, message);
+    return;
+  }
+  commandErrorNotice.value = message;
+}
+watch(conversationId, (id) => {
+  if (id === null) return;
+  const retained = staleCommandNoticesByConversation.get(id);
+  if (retained !== undefined) {
+    staleCommandNoticesByConversation.delete(id);
+    commandErrorNotice.value = retained;
+  }
+});
 /** Staged scheduled loop awaiting the up-front tool-policy approval. */
 const pendingScheduledLoop = ref<{
   action: StagedScheduledLoop;
@@ -2384,9 +2428,12 @@ const commandRouter = useChatCommandRouting({
     if (targetConversationId && conversationId.value !== targetConversationId) {
       // Codex High (cross-conversation command): a selection change during
       // registry dispatch aborts the expanded send — never into chat B.
-      commandErrorNotice.value =
+      // B08: scoped to the commanding conversation.
+      setCommandErrorNotice(
         t("workspaceChat.command.staleAborted") ||
-        "Selection changed — the command was not run.";
+          "Selection changed — the command was not run.",
+        targetConversationId
+      );
       return false;
     }
     // B11: files attached to the command ride through expansion (validated
@@ -2402,9 +2449,13 @@ const commandRouter = useChatCommandRouting({
     // still owns the CURRENT selection — a switch mid-dispatch aborts
     // rather than erasing the newly selected conversation.
     if (!targetConversationId || conversationId.value !== targetConversationId) {
-      commandErrorNotice.value =
+      // B08: the abort feedback is retained under the commanding
+      // conversation instead of decorating the switched selection.
+      setCommandErrorNotice(
         t("workspaceChat.command.staleAborted") ||
-        "Selection changed — the command was not run.";
+          "Selection changed — the command was not run.",
+        targetConversationId
+      );
       return false;
     }
     try {
@@ -2412,9 +2463,12 @@ const commandRouter = useChatCommandRouting({
       if (cleared === null) {
         // R10: the clear was not executed (denied/empty envelope) — retryable
         // feedback instead of a silent no-op that still consumed the draft.
-        commandErrorNotice.value =
+        // B08: retained under the clear's origin conversation.
+        setCommandErrorNotice(
           t("workspaceChat.command.clearFailed") ||
-          "Could not clear this chat. Try again.";
+            "Could not clear this chat. Try again.",
+          targetConversationId
+        );
         return false;
       }
       await workspaceStore.bootstrap();
@@ -2428,9 +2482,12 @@ const commandRouter = useChatCommandRouting({
       return true;
     } catch {
       // R10: surfaced as retryable feedback — the draft must be retained.
-      commandErrorNotice.value =
+      // B08: retained under the clear's origin conversation.
+      setCommandErrorNotice(
         t("workspaceChat.command.clearFailed") ||
-        "Could not clear this chat. Try again.";
+          "Could not clear this chat. Try again.",
+        targetConversationId
+      );
       return false;
     }
   },
