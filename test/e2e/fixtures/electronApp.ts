@@ -348,6 +348,32 @@ export async function launchAiFetchly(
     );
     // Vue app landmark mounted.
     await mainWindow.waitForSelector("#app", { timeout: 60_000 });
+    // Router boot navigation settled (audit-fix R2 G02 follow-up): "#app"
+    // mounts BEFORE the router's initial navigation (+ its async permission
+    // guard) finalizes. A typed-hash navigation issued in that window (the
+    // app boots on "#/") is overwritten by the still-pending boot navigation
+    // to "#/aiworkspace", so every first-post-boot hash navigation bounced
+    // back to the chat center and the audit list / draft detail E2E tests
+    // timed out waiting for a page that would only render on the SECOND
+    // navigation. Waiting for router.isReady() here (resolve the router
+    // through the mounted Vue app instance) makes the returned fixture
+    // settle the boot navigation exactly once, deterministically.
+    await mainWindow.waitForFunction(
+      async () => {
+        const appEl = document.querySelector("#app");
+        const router = (
+          appEl as unknown as
+            | { __vue_app__?: { config: { globalProperties: Record<string, unknown> } } }
+            | null
+        )?.__vue_app__?.config.globalProperties.$router as
+          | { isReady(): Promise<boolean> }
+          | undefined;
+        if (!router) return false;
+        return await router.isReady();
+      },
+      undefined,
+      { timeout: 60_000 }
+    );
   } catch (err) {
     // Readiness failed after Electron already started — close it so CI retries
     // don't accumulate orphan processes. Best-effort; rethrow the real error.
