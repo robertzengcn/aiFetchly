@@ -113,6 +113,58 @@ export const useComposerDraftStore = defineStore("composerDrafts", () => {
     });
   }
 
+  /**
+   * Accepted image submissions awaiting their run's completion (audit R2
+   * N04 / FR-IMG-002/015): app-scoped so the registry survives route
+   * remounts — the previous component-local Map destroyed the registered
+   * snapshot while this store (and the composer draft it clears) survived,
+   * losing both the cleanup and its durable identity. Entries carry the
+   * accepted send's ledger ordinal; consumption is driven by the
+   * selected-conversation store's durable run resolutions
+   * (`lastResolvedReferenceRun`), never by independent counters.
+   */
+  interface PendingReferenceClear {
+    readonly runOrdinal: number;
+    readonly references: readonly ChatV2GeneratedImageReference[];
+  }
+  const referenceClearsByDraftKey = ref<Map<string, PendingReferenceClear[]>>(
+    new Map()
+  );
+
+  function storeReferenceClear(
+    key: string,
+    entry: PendingReferenceClear
+  ): void {
+    const next = new Map(referenceClearsByDraftKey.value);
+    next.set(key, [...(next.get(key) ?? []), entry]);
+    referenceClearsByDraftKey.value = next;
+  }
+
+  /** Remove (and return) the entry registered with this ledger ordinal. */
+  function consumeReferenceClear(
+    key: string,
+    runOrdinal: number
+  ): PendingReferenceClear | null {
+    const queue = referenceClearsByDraftKey.value.get(key);
+    if (!queue) return null;
+    const index = queue.findIndex((entry) => entry.runOrdinal === runOrdinal);
+    if (index < 0) return null;
+    const consumed = queue[index];
+    const next = new Map(referenceClearsByDraftKey.value);
+    const remaining = queue.filter((_, i) => i !== index);
+    if (remaining.length === 0) next.delete(key);
+    else next.set(key, remaining);
+    referenceClearsByDraftKey.value = next;
+    return consumed;
+  }
+
+  function clearReferenceClears(key: string): void {
+    if (!referenceClearsByDraftKey.value.has(key)) return;
+    const next = new Map(referenceClearsByDraftKey.value);
+    next.delete(key);
+    referenceClearsByDraftKey.value = next;
+  }
+
   function clearDraft(key: string): void {
     commit(key, EMPTY_DRAFT);
   }
@@ -123,5 +175,8 @@ export const useComposerDraftStore = defineStore("composerDrafts", () => {
     updateComposerState,
     setGeneratedImageReferences,
     clearDraft,
+    storeReferenceClear,
+    consumeReferenceClear,
+    clearReferenceClears,
   };
 });

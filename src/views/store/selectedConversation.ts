@@ -6,6 +6,7 @@ import type {
   ChatRunDetailEvent,
   ChatRunTerminalRecord,
   ConversationRuntimeStatus,
+  ConversationSummaryEvent,
 } from "@/entityTypes/aiChatWorkspaceTypes";
 import {
   createWorkspaceStreamPresenter,
@@ -23,6 +24,7 @@ import {
   selectConversation,
   startChatRun,
   subscribeDetailEvents,
+  subscribeSummaryEvents,
   unsubscribeDetail,
 } from "@/views/api/aiChatWorkspace";
 import { denyChatV2ToolPermission } from "@/views/api/aiChatV2";
@@ -284,6 +286,152 @@ export const useSelectedConversationStore = defineStore(
     const acceptedRunOrdinalByConversation = new Map<string, number>();
     const consumedTerminalOrdinalByConversation = new Map<string, number>();
 
+    /**
+     * Accept-ordered run ledger per conversation for durable identity
+     * resolution (audit R2 N04 / FR-IMG-002/015, FR-LIF-001/004, AD-005).
+     * Every accepted send registers the durable run identity returned by the
+     * queue: the real bridge run id when accepted into an idle conversation,
+     * `pending-<pendingMessageId>` when queued. Terminal facts resolve an
+     * entry by DURABLE IDENTITY, replacing the paired-counters scheme whose
+     * ordinals drifted when a run completed while its conversation was
+     * deselected (the selected-only detail stream cannot see that terminal):
+     *
+     *   exact   — `entry.boundRunId ?? entry.runIdAtAccept === fact.runId`
+     *             (immediate runs match directly, no binding needed);
+     *   rebind  — a `run_started` fact carrying the real bridge run id binds
+     *             the next unresolved, unbound accepted send in order. Accept
+     *             order equals durable queue order (AD-001/003), so a drained
+     *             queued send rebinds to its own run.
+     *
+     * The resolution is published through `lastResolvedReferenceRun` with the
+     * entry's accept ordinal — the identity accepted-submission bookkeeping
+     * (generated-image reference tray clears) verifies against. Background
+     * completions arrive through the redacted summary channel
+     * (run_completed/failed/cancelled/interrupted + runId, no content).
+     * Bounded residual: a terminal summary without a run id cannot resolve
+     * by identity and is ignored.
+     */
+    interface AcceptedRunLedgerEntry {
+      readonly acceptOrdinal: number;
+      readonly runIdAtAccept: string;
+      boundRunId: string | null;
+      resolved: boolean;
+    }
+    const ACCEPTED_RUN_LEDGER_CAP = 64;
+    const acceptedRunLedgerByConversation = new Map<
+      string,
+      AcceptedRunLedgerEntry[]
+    >();
+    const lastResolvedReferenceRun = ref<{
+      conversationId: string;
+      runId: string;
+      kind: "complete" | "error" | "cancelled";
+      ordinal: number;
+    } | null>(null);
+
+    function ledgerFor(conversationId: string): AcceptedRunLedgerEntry[] {
+      let ledger = acceptedRunLedgerByConversation.get(conversationId);
+      if (!ledger) {
+        ledger = [];
+        acceptedRunLedgerByConversation.set(conversationId, ledger);
+      }
+      return ledger;
+    }
+
+    /** Register one accepted send in the durable ledger (accept order). */
+    function registerAcceptedRun(
+      conversationId: string,
+      runId: string
+    ): number {
+      const ledger = ledgerFor(conversationId);
+      const ordinal =
+        (acceptedRunOrdinalByConversation.get(conversationId) ?? 0) + 1;
+      acceptedRunOrdinalByConversation.set(conversationId, ordinal);
+      ledger.push({
+        acceptOrdinal: ordinal,
+        runIdAtAccept: runId,
+        boundRunId: null,
+        resolved: false,
+      });
+      while (ledger.length > ACCEPTED_RUN_LEDGER_CAP) {
+        ledger.shift();
+      }
+      return ordinal;
+    }
+
+    /**
+     * Rebind the next unresolved, unbound accepted send to the real bridge
+     * run id that just started (queue drain, FIFO accept order).
+     */
+    function bindNextUnboundAcceptedRun(
+      conversationId: string,
+      realRunId: string
+    ): void {
+      const ledger = acceptedRunLedgerByConversation.get(conversationId);
+      if (!ledger) return;
+      const entry = ledger.find(
+        (candidate) => !candidate.resolved && candidate.boundRunId === null
+      );
+      if (entry) {
+        entry.boundRunId = realRunId;
+      }
+    }
+
+    /**
+     * Resolve one terminal fact by durable identity; publishes the accepted
+     * entry's ordinal so component bookkeeping can consume its snapshot.
+     */
+    function resolveTerminalFact(
+      conversationId: string,
+      runId: string,
+      kind: "complete" | "error" | "cancelled"
+    ): void {
+      const ledger = acceptedRunLedgerByConversation.get(conversationId);
+      if (!ledger) return;
+      const entry = ledger.find(
+        (candidate) =>
+          !candidate.resolved &&
+          (candidate.boundRunId ?? candidate.runIdAtAccept) === runId
+      );
+      if (!entry) return;
+      entry.resolved = true;
+      while (ledger.length > 0 && ledger[0].resolved) {
+        ledger.shift();
+      }
+      lastResolvedReferenceRun.value = {
+        conversationId,
+        runId,
+        kind,
+        ordinal: entry.acceptOrdinal,
+      };
+    }
+
+    /**
+     * Redacted summary facts (any conversation, no content bodies): keep the
+     * accept ledger reconciled for background runs the selected-only detail
+     * stream never sees. Includes the queue-drain rebind on `run_started`.
+     */
+    function handleSummaryFact(event: ConversationSummaryEvent): void {
+      if (!event.runId) return;
+      switch (event.reason) {
+        case "run_started":
+          bindNextUnboundAcceptedRun(event.conversationId, event.runId);
+          break;
+        case "run_completed":
+          resolveTerminalFact(event.conversationId, event.runId, "complete");
+          break;
+        case "run_failed":
+          resolveTerminalFact(event.conversationId, event.runId, "error");
+          break;
+        case "run_cancelled":
+        case "run_interrupted":
+          resolveTerminalFact(event.conversationId, event.runId, "cancelled");
+          break;
+        default:
+          break;
+      }
+    }
+
     /** Ordinal of the most recent accepted send for one conversation. */
     function acceptedRunOrdinalFor(conversationId: string): number | null {
       return acceptedRunOrdinalByConversation.get(conversationId) ?? null;
@@ -298,11 +446,27 @@ export const useSelectedConversationStore = defineStore(
         (consumedTerminalOrdinalByConversation.get(conversationId) ?? 0) + 1;
       consumedTerminalOrdinalByConversation.set(conversationId, ordinal);
       lastTerminalRun.value = { conversationId, runId, kind, ordinal };
+      // Audit R2 N04: resolve the durable accept-ledger entry by identity —
+      // the paired-counters ordinals above are kept only for legacy
+      // consumers; the ledger ordinal is what accepted-submission
+      // bookkeeping now verifies against.
+      resolveTerminalFact(conversationId, runId, kind);
+    }
+
+    /** Ensure exactly one summary subscription exists for this renderer. */
+    let summaryUnsubscribe: (() => void) | null = null;
+    function ensureSummarySubscription(): void {
+      if (summaryUnsubscribe) return;
+      summaryUnsubscribe = subscribeSummaryEvents((event) => {
+        handleSummaryFact(event);
+      });
     }
 
     /** Ensure exactly one detail subscription exists for this renderer. */
     function ensureDetailSubscription(): void {
       if (detailUnsubscribe) return;
+      summaryUnsubscribe ??= null;
+      if (!summaryUnsubscribe) ensureSummarySubscription();
       detailUnsubscribe = subscribeDetailEvents((event) => {
         if (event.conversationId !== workspaceStore.selectedConversationId) {
           return; // stale or foreign conversation (design §18.4)
@@ -322,6 +486,12 @@ export const useSelectedConversationStore = defineStore(
       // update per flush window, not one per token chunk.
       // FR-026: an openImmediately artifact opens the inspector preview for
       // the SELECTED conversation only (events arrive selected-only).
+      // Audit R2 N04: a drained queued send's bridge run starts here — bind
+      // the next unresolved accepted send (FIFO accept order) so its queued
+      // identity resolves against this run's terminal.
+      if (event.eventType === "start") {
+        bindNextUnboundAcceptedRun(event.conversationId, event.runId);
+      }
       if (event.eventType === "tool_result") {
         const pending = presenter.consumePendingArtifactOpen();
         if (pending) {
@@ -536,13 +706,12 @@ export const useSelectedConversationStore = defineStore(
         // and is never collapsed into this row. (Rejections keep the entry
         // so an ambiguous retry reconciles by reuse.)
         lastSubmitByConversation.delete(originConversationId);
-        // Audit R05: this send is the origin conversation's next accepted
-        // run — its ordinal is the identity accepted-submission bookkeeping
-        // (image-reference draft clears) verifies against terminal records.
-        acceptedRunOrdinalByConversation.set(
-          originConversationId,
-          (acceptedRunOrdinalByConversation.get(originConversationId) ?? 0) + 1
-        );
+        // Audit R2 N04: this send is the origin conversation's next accepted
+        // run in the durable accept ledger — its entry carries the identity
+        // the queue returned (real run id, or `pending-…` when queued) and
+        // its accept index is the ordinal accepted-submission bookkeeping
+        // resolves against (replacing the paired-counters scheme).
+        registerAcceptedRun(originConversationId, response.runId);
         // B07: only when the selection still owns this send — after a
         // switch, A's durable row renders via subscription/summary when the
         // user returns; touching B's presenter/status here would corrupt it.
@@ -836,6 +1005,10 @@ export const useSelectedConversationStore = defineStore(
         detailUnsubscribe = null;
       }
       unsubscribeDetail();
+      if (summaryUnsubscribe) {
+        summaryUnsubscribe();
+        summaryUnsubscribe = null;
+      }
       presenter.dispose();
       syncFromPresenter();
     }
@@ -903,6 +1076,7 @@ export const useSelectedConversationStore = defineStore(
       runtimeStatus,
       activeRunId,
       lastTerminalRun,
+      lastResolvedReferenceRun,
       acceptedRunOrdinalFor,
       loading,
       loadError,

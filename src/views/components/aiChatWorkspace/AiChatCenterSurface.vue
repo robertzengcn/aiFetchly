@@ -744,7 +744,6 @@ import type {
   ChatV2Mode,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
-import type { ChatRunTerminalRecord } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
@@ -1510,51 +1509,48 @@ function onReorderGeneratedImages(
 
 /**
  * Accepted image submissions awaiting their turn's completion (audit R05 /
- * FR-SUB-002): per conversation, the EXACT reference snapshots submitted by
- * accepted sends, each tagged with that send's per-conversation accepted-run
- * ordinal (the store's acceptance registry). Arming happens only AFTER the
- * store accepts the submission (see performOrdinarySend) — a rejected send
- * (queue limit, gate, transport failure) never arms, so no later transition
- * can clear its retained draft. Registered entries are consumed ONLY by
- * genuine terminal records (see the watcher below); identity verification
- * keeps an unrelated completion (unarmed plain-text turn, coalesced or
- * dropped terminal) from consuming — or misaligning — another run's entry.
- * A plain Map is deliberate: the registry only changes alongside explicit
- * store transitions, never through UI reactivity.
+ * FR-SUB-002): the EXACT reference snapshots submitted by accepted sends,
+ * registered with that send's accepted-run ledger ORDINAL (the
+ * selected-conversation store's durable identity ledger). Arming happens
+ * only AFTER the store accepts the submission (see performOrdinarySend) — a
+ * rejected send (queue limit, gate, transport failure) never arms, so no
+ * later transition can clear its retained draft.
+ *
+ * Audit R2 N04: the registered queue lives in the app-scoped composer draft
+ * store (it survives route remounts — the previous component-local Map was
+ * destroyed by navigation while the draft store survived), and consumption
+ * is driven by the store's durable run resolutions
+ * (`lastResolvedReferenceRun`): identity-resolved terminals from BOTH the
+ * selected detail stream and the redacted background summary channel, so a
+ * run that completes while its conversation is deselected still consumes
+ * the snapshot submitted for it, and an unrelated completion can never
+ * consume another run's entry.
  */
-interface PendingImageReferenceClear {
-  readonly runOrdinal: number;
-  readonly references: ChatV2GeneratedImageReference[];
-}
-
-const pendingDraftClears = new Map<string, PendingImageReferenceClear[]>();
 
 /**
- * Consume one accepted submission's snapshot when ITS run's terminal event
- * is reported by the store (audit R05). The trigger is `lastTerminalRun` —
- * `complete`/`error`/`cancelled` events the store actually consumed for a
- * conversation — never a view-state shape: after an A→B→A re-selection the
- * handshake leaves the view idle while the run streams on, and a resumed
- * mid-run chunk (which re-arms the presenter's liveness instead of
- * clearing) must never be mistaken for a completion (FR-LIF-002). The
- * entry matching the terminal's accepted-run ordinal is consumed exactly
- * once; on `complete` its snapshot is removed from the CURRENT draft, so
- * references added after the submission survive (legacy retry parity:
- * `error`/`cancelled` dequeue but keep the tray).
+ * Consume one accepted submission's snapshot when ITS resolved terminal is
+ * reported by the store (audit R05, R2 N04). The trigger is
+ * `lastResolvedReferenceRun` — identity-resolved records whose ordinal is
+ * the accept ledger's index, covering detail terminals (selected) and
+ * redacted summary terminal facts (any conversation) — never a view-state
+ * shape: after an A→B→A re-selection the handshake leaves the view idle
+ * while the run streams on, and a resumed mid-run chunk (which re-arms the
+ * presenter's liveness instead of clearing) must never be mistaken for a
+ * completion (FR-LIF-002). The entry matching the resolution's accepted-run
+ * ordinal is consumed exactly once; on `complete` its snapshot is removed
+ * from the CURRENT draft, so references added after the submission survive
+ * (legacy retry parity: `error`/`cancelled` dequeue but keep the tray).
  */
 watch(
-  () => selectedStore.lastTerminalRun,
-  (terminal: ChatRunTerminalRecord | null) => {
-    if (!terminal) return;
-    const draftKey = composerDraftKeyFor(terminal.conversationId);
-    const queue = pendingDraftClears.get(draftKey);
-    const matched = queue
-      ? queue.findIndex((entry) => entry.runOrdinal === terminal.ordinal)
-      : -1;
-    if (!queue || matched < 0) return;
-    const submitted = queue.splice(matched, 1)[0];
-    if (queue.length === 0) pendingDraftClears.delete(draftKey);
-    if (!submitted || terminal.kind !== "complete") return;
+  () => selectedStore.lastResolvedReferenceRun,
+  (resolution) => {
+    if (!resolution) return;
+    const draftKey = composerDraftKeyFor(resolution.conversationId);
+    const submitted = composerDrafts.consumeReferenceClear(
+      draftKey,
+      resolution.ordinal
+    );
+    if (!submitted || resolution.kind !== "complete") return;
     const current =
       composerDrafts.getDraft(draftKey)?.generatedImageReferences ?? [];
     if (current.length === 0) return;
@@ -1564,8 +1560,8 @@ watch(
         (reference) =>
           !submitted.references.some((sent) =>
             sameGeneratedImageRef(reference, sent)
-          )
-      )
+          ),
+      ),
     );
   }
 );
@@ -2275,10 +2271,10 @@ async function performOrdinarySend(
       const runOrdinal =
         selectedStore.acceptedRunOrdinalFor(sendConversationId);
       const clearKey = composerDraftKeyFor(sendConversationId);
-      pendingDraftClears.set(clearKey, [
-        ...(pendingDraftClears.get(clearKey) ?? []),
-        { runOrdinal: runOrdinal ?? -1, references: submittedRefs },
-      ]);
+      composerDrafts.storeReferenceClear(clearKey, {
+        runOrdinal: runOrdinal ?? -1,
+        references: submittedRefs,
+      });
     }
     options?.onAccepted?.();
   }

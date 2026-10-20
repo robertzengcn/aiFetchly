@@ -156,6 +156,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
     title: "Selected chat",
   }),
   subscribeDetailEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
   unsubscribeDetail: vi.fn(),
   loadHistoryPage: vi.fn(),
   markConversationRead: vi.fn().mockResolvedValue(undefined),
@@ -168,6 +169,11 @@ import {
   resetWorkspaceRolloutAdaptersForTest,
 } from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
 import { fetchWorkspaceRolloutFlags } from "@/views/api/aiChatWorkspace";
+import {
+  selectConversation,
+  subscribeSummaryEvents,
+} from "@/views/api/aiChatWorkspace";
+import type { ConversationSummaryEvent } from "@/entityTypes/aiChatWorkspaceTypes";
 
 import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenterSurface.vue";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
@@ -181,7 +187,6 @@ import {
   clearChatV2Conversation,
 } from "@/views/api/aiChatV2";
 import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
-import { selectConversation } from "@/views/api/aiChatWorkspace";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
 import type { PlanContinuationDecision } from "@/views/utils/planContinuationIdentity";
 import {
@@ -4614,6 +4619,223 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     expect(trayReferences(wrapper)).toEqual([
       { messageId: "m2", imageIndex: 0 },
     ]);
+  });
+});
+
+/**
+ * Audit R2 N04 — background identity reconciliation for the image-
+ * reference draft registry. Fixed contract: the registry lives in the
+ * app-scoped composer draft store (route remounts no longer lose it), and
+ * consumption is driven by the selected-conversation store's durable
+ * identity resolutions — which include the redacted summary channel, so a
+ * run that completes while its conversation is deselected consumes the
+ * EXACT snapshot submitted for it (the R2 repro had a background gap
+ * desynchronize two independent ordinal counters and mispair the old
+ * snapshot with a newer run's terminal).
+ */
+describe("AiChatCenterSurface image-reference identity resolution (audit R2 N04)", () => {
+  let summaryHandler: ((event: ConversationSummaryEvent) => void) | null = null;
+
+  /** Tray references currently bound to the composer stub, order preserved. */
+  function trayN04References(
+    wrapper: ReturnType<typeof mountSurface>
+  ): unknown[] {
+    return [
+      ...(useComposerDraftStore()
+        .getDraft("conv-1")
+        ?.generatedImageReferences ?? []),
+    ];
+  }
+
+  function emitSummary(event: {
+    reason: ConversationSummaryEvent["reason"];
+    runId: string;
+  }): void {
+    if (!summaryHandler) throw new Error("no summary handler captured");
+    summaryHandler({
+      conversationId: "conv-1",
+      workspaceKey: null,
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-10-20T10:00:00.000Z",
+      reason: event.reason,
+      runId: event.runId,
+    });
+  }
+
+  function armSubmittedSnapshot(): void {
+    useComposerDraftStore().setGeneratedImageReferences("conv-1", [
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+  }
+
+  function summaryCaptureMock(): void {
+    vi.mocked(subscribeSummaryEvents).mockImplementation((callback) => {
+      summaryHandler = callback;
+      return () => {
+        summaryHandler = null;
+      };
+    });
+  }
+
+  /** Select a conversation and let the surface re-render. */
+  async function selectN04Conversation(conversationId: string): Promise<void> {
+    useChatWorkspaceStore().setSelected(conversationId);
+    await flushPromises();
+    await useSelectedConversationStore().loadSelection(conversationId);
+    await flushPromises();
+  }
+
+  /** Switch through the REAL selection handshake (dispose + snapshot). */
+  async function loadConversation(conversationId: string): Promise<void> {
+    await useSelectedConversationStore().loadSelection(conversationId);
+    await flushPromises();
+  }
+
+  /** Point the snapshot API at an idle persisted state. */
+  function mockSelectionSnapshot(): void {
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "Selected chat",
+    } as never);
+  }
+
+  /** A send accepted straight into a running turn. */
+  function acceptRun(conversationId: string, runId: string): void {
+    startChatRunMock.mockResolvedValue({
+      conversationId,
+      runId,
+      status: "running",
+      acceptedAt: "",
+    });
+  }
+
+  /** Drive the engine's terminal `complete` through the real presenter. */
+  async function completeRun(
+    conversationId: string,
+    runId: string,
+    sequence = 1
+  ): Promise<void> {
+    useSelectedConversationStore().applyDetailEvent({
+      conversationId,
+      runId,
+      sequence,
+      emittedAt: "2026-10-20T00:00:00.000Z",
+      eventType: "complete",
+      payload: { eventType: "complete" },
+    });
+    await flushPromises();
+  }
+
+  it("clears the accepted snapshot through the summary channel when the run completes in the background (repro)", async () => {
+    summaryCaptureMock();
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectN04Conversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+    expect(trayN04References(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+
+    // Switch to B while run-1 executes. No detail terminal for conv-1 can
+    // arrive (selected-only stream) — the completion comes as a summary.
+    mockSelectionSnapshot();
+    await loadConversation("conv-2");
+
+    emitSummary({ reason: "run_completed", runId: "run-1" });
+    await flushPromises();
+    // The registry entry was consumed by identity even while deselected…
+    expect(trayN04References(wrapper)).toEqual([]);
+
+    // …and returning to A shows the cleared tray (nothing stale to resend).
+    await loadConversation("conv-1");
+    expect(trayN04References(wrapper)).toEqual([]);
+
+    wrapper.unmount();
+    vi.mocked(subscribeSummaryEvents).mockReturnValue(() => undefined);
+    summaryHandler = null;
+  });
+
+  it("survives a route remount: the registry rides the app-scoped store and is consumed by a later terminal", async () => {
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectN04Conversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+
+    // Route destruction: unmount and remount a fresh surface.
+    wrapper.unmount();
+    const wrapper2 = mountSurface();
+    await selectN04Conversation("conv-1");
+    await flushPromises();
+
+    // The registered snapshot survived the remount and is consumed by ITS
+    // run's terminal (acceptance ledger resolution) exactly once.
+    await completeRun("conv-1", "run-1", 1);
+    expect(trayN04References(wrapper2)).toEqual([]);
+
+    // A duplicate terminal for the resolved run cannot double-consume.
+    armSubmittedSnapshot();
+    await completeRun("conv-1", "run-1", 9);
+    expect(trayN04References(wrapper2)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    wrapper2.unmount();
+  });
+
+  it("dequeues but deliberately retains the submitted references when the run fails in the background", async () => {
+    summaryCaptureMock();
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const wrapper = mountSurface();
+    await selectN04Conversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "", []);
+    await flushPromises();
+
+    mockSelectionSnapshot();
+    await loadConversation("conv-2");
+    emitSummary({ reason: "run_failed", runId: "run-1" });
+    await flushPromises();
+
+    // error: the entry dequeues (no double-consumption later) but the tray
+    // keeps the references for deliberate retry (legacy parity).
+    expect(trayN04References(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    wrapper.unmount();
+    vi.mocked(subscribeSummaryEvents).mockReturnValue(() => undefined);
+    summaryHandler = null;
   });
 });
 
