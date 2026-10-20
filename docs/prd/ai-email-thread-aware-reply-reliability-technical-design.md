@@ -978,6 +978,20 @@ configuration and maintain a human-review fallback.
 allow a visible draft but prevent approval until resolved or explicitly handled
 by the approved product policy.
 
+> **Policy update (2026-10-18):** the `review` severity tier was removed.
+> `EmailReplyValidationSeverity` is now `"block" | "warning"`; the commitment,
+> URL, payment-instruction, recipient, and attachment-claim findings above are
+> demoted to `warning` and do NOT gate approval — they persist in
+> `validationFindingsJson` for audit only. The human gate for advisory content
+> is the send tool's `requiresConfirmation` confirmation gesture (or the
+> renderer's explicit approve action); the separately persisted model
+> `requiresHumanReview` flag (§ FR-025/R21) still gates approval. Rationale:
+> no resolution path existed for `review` findings, so any draft mentioning a
+> URL or credential was permanently unsendable — a send deadlock. The
+> `REPLY_VALIDATOR_VERSION` constant was deliberately NOT bumped (patterns
+> unchanged): it is folded into the revision content hash (§14.1), and a bump
+> would strand all in-flight revisions as "content hash is stale".
+
 ## 14. Revision Hash And Approval
 
 ### 14.1 Canonical hash

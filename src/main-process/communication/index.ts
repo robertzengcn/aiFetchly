@@ -34,6 +34,7 @@ import {
   registerSkillInstallRunCommandIpcHandler,
   registerSkillInstallRevealSourceIpcHandler,
 } from "@/main-process/communication/skill-installation-ipc";
+import { registerAiTaskRolloutMetricsIpcHandlers } from "@/main-process/communication/aiTaskRolloutMetrics-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
@@ -138,6 +139,7 @@ export function registerCommunicationIpcHandlers(
     registerPromptSkillInvokeIpcHandler();
     registerSkillInstallRunCommandIpcHandler();
     registerSkillInstallRevealSourceIpcHandler();
+    registerAiTaskRolloutMetricsIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();

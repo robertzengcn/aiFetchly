@@ -170,10 +170,12 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     };
 
     processor.processEvent(streamEvent);
-    // The handler defers to an async IIFE; let it resolve. 30s budget —
-    // externalization does real filesystem writes that starve under
-    // full-suite parallel load; the bound is environmental (the asserted
-    // predicate is unchanged).
+    // The handler defers to an async IIFE; let it resolve. B22: 30s budget
+    // (was the ~1s default) — externalization does real filesystem writes
+    // that starve under full-suite parallel load; the bound is environmental.
+    // (T01 rationale preserved: cold TypeORM synchronize + FS externalization
+    // can stall the polling loop under a full parallel-suite run; the asserted
+    // predicate is unchanged.)
     await vi.waitFor(
       () => {
         expect(savedMessages.length).toBeGreaterThanOrEqual(1);
@@ -227,11 +229,16 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
       operation_status?: string;
       output?: { output_id?: string; captured_bytes?: number } | null;
       preview?: string;
-      retrieval?: { read_tool?: string; search_tool?: string };
+      next?: { tool?: string; arguments?: { output_id?: string; cursor?: string } };
+      next_cursor?: string;
     };
     expect(chunkContent.success).toBe(true);
     expect(chunkContent.output?.output_id).toBe(outputId);
-    expect(chunkContent.retrieval?.read_tool).toBe("tool_result_read");
+    expect(chunkContent.next?.tool).toBe("tool_result_read");
+    expect(chunkContent.next?.arguments?.output_id).toBe(outputId);
+    expect(chunkContent.next?.arguments?.cursor).toBe(chunkContent.next_cursor);
+    expect(typeof chunkContent.next?.arguments?.cursor).toBe("string");
+    expect((chunkContent.next?.arguments?.cursor ?? "").length).toBeGreaterThan(0);
     expect(chunkPayload.content).not.toContain("Biz 1199");
 
     // The chunk `toolResult` field is the bounded payload, not the raw body.
@@ -301,7 +308,7 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     };
 
     processor.processEvent(streamEvent);
-    // 30s budget (same rationale as the first externalization site).
+    // B22: same extended budget as above (filesystem writes under load).
     await vi.waitFor(
       () => {
         expect(savedMessages.length).toBeGreaterThanOrEqual(1);

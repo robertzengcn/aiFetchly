@@ -70,12 +70,14 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
   SOCIALACCOUNTlIST,
   SOCIALACCOUNTSAVE,
   SOCIAL_ACCOUNT_LOGIN_MESSSAGE,
@@ -300,6 +302,15 @@ import {
   AI_TOOL_RESULT_EXPORT,
   AI_CHAT_V2_GOAL_LOOP_START,
   AI_CHAT_V2_GOAL_LOOP_STOP,
+  // AI Task Completion Policy — recovery actions (PRD FR-14)
+  AI_CHAT_V2_TASK_CONTINUE,
+  AI_CHAT_V2_TASK_RETRY,
+  // D5 review fix: the state + rollout-metrics read channels were handled
+  // in main but missing from the preload invoke whitelist, so the renderer's
+  // task-state poll and the rollout metrics panel got an "Unknown channel"
+  // rejection.
+  AI_CHAT_V2_TASK_STATE_GET,
+  AI_TASK_ROLLOUT_METRICS_GET,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   AI_CHAT_V2_SCHEDULED_LOOP_GET,
   AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
@@ -607,10 +618,13 @@ import {
   APPLICATION_CLOSE_CHOICE_ACK,
   APPLICATION_CLOSE_CHOICE_SUBMIT,
   APPLICATION_LIFECYCLE_STATE_CHANGED,
-  // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
+  // E2E test-support channels — no handler exists outside AIFETCHLY_E2E=1, so
   // a production/dev invoke always fails with "No handler registered" (see
   // src/main-process/e2e/E2ESeedIpc.ts).
   E2E_SEED_EMAIL_SERVICE,
+  E2E_SEED_RECEIVED_MESSAGE,
+  E2E_SEED_AUTO_REPLY_AUDIT,
+  E2E_SEED_REPLY_DRAFT,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -1041,13 +1055,15 @@ contextBridge.exposeInMainWorld("api", {
       EMAIL_REPLY_DRAFT_DETAIL,
       EMAIL_REPLY_DRAFT_UPDATE,
       EMAIL_REPLY_SEND,
-      EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
       EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
       EMAIL_REPLY_DELIVERY_RECONCILE,
       EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
       EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
       EMAIL_AUTO_REPLY_AUDIT_LIST,
       EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+      EMAIL_REPLY_CHECK_REPLIED,
       VIDEODOWNLOAD_LIST,
       VIDEODOWN_TASK_ERROR_LOG_QUERY,
       VIDEODOWNLOAD_LOG_QUERY,
@@ -1221,6 +1237,11 @@ contextBridge.exposeInMainWorld("api", {
       AI_TOOL_RESULT_EXPORT,
       AI_CHAT_V2_GOAL_LOOP_START,
       AI_CHAT_V2_GOAL_LOOP_STOP,
+      // AI Task Completion Policy — recovery actions (PRD FR-14)
+      AI_CHAT_V2_TASK_CONTINUE,
+      AI_CHAT_V2_TASK_RETRY,
+      AI_CHAT_V2_TASK_STATE_GET,
+      AI_TASK_ROLLOUT_METRICS_GET,
       AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
       AI_CHAT_V2_SCHEDULED_LOOP_GET,
       AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
@@ -1528,6 +1549,9 @@ contextBridge.exposeInMainWorld("api", {
       // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
       // elsewhere this invoke fails with "No handler registered".
       E2E_SEED_EMAIL_SERVICE,
+      E2E_SEED_RECEIVED_MESSAGE,
+      E2E_SEED_AUTO_REPLY_AUDIT,
+      E2E_SEED_REPLY_DRAFT,
       // Application lifecycle (exit & system tray, design §10) — NOT AI-gated
       APPLICATION_LIFECYCLE_GET_STATE,
       APPLICATION_CLOSE_CHOICE_ACK,

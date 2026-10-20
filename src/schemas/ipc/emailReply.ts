@@ -74,6 +74,20 @@ export const emailReplyDraftApproveInputSchema = lazySchema(() =>
   })
 );
 
+/**
+ * G02: resolve the model's human-review request for the CURRENT revision.
+ * Renderer user gesture only — never exposed to AI tools. Revision-bound: the
+ * reviewed `revisionId` must equal the draft's current revision, or the call
+ * refuses (stale acknowledgment). The model's original reasons stay immutable.
+ */
+export const emailReplyDraftResolveReviewInputSchema = lazySchema(() =>
+  z.strictObject({
+    draftId: z.number().int().positive("Draft id is required"),
+    revisionId: z.number().int().positive("Revision id is required"),
+    note: z.string().max(2000).optional(),
+  })
+);
+
 /** Read send attempts for a draft (reliability v2 audit / recovery UI). */
 export const emailReplySendAttemptDetailInputSchema = lazySchema(() =>
   z.strictObject({
@@ -134,5 +148,18 @@ export const emailAutoReplyAuditListInputSchema = lazySchema(() =>
 export const emailAutoReplyAuditDetailInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.number().int().positive("Audit log id is required"),
+  })
+);
+
+/**
+ * FR-032: diagnostic reply-check IPC channel. Mirrors the
+ * `checkEmailRepliedSchema` AI-tool schema — a single `messageId` referencing a
+ * stored received message. The handler is AI-gated via `registerAiValidatedHandler`
+ * and delegates to `EmailReplyDetectionModule.checkReply` (ordinary cache, no
+ * forceRefresh per §7.3).
+ */
+export const emailReplyCheckRepliedInputSchema = lazySchema(() =>
+  z.strictObject({
+    messageId: z.number().int().positive("messageId is required"),
   })
 );

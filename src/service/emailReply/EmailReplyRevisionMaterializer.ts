@@ -69,7 +69,7 @@ export async function materializeRevision1(
 }> {
   // Run the deterministic output validator and persist machine-readable findings
   // on the immutable revision (FR-012, P0.4). The approval service blocks any
-  // revision with a block/review finding.
+  // revision with a `block` finding; advisory findings persist as warnings.
   const validation = validateReplyOutput(input.subject, input.bodyText);
 
   const appended = await draftAccess.appendRevision({

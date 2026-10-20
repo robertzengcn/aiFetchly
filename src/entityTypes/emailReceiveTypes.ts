@@ -23,6 +23,15 @@ export interface EmailReceiveConnectionConfig {
   readonly username: string;
   readonly password: string;
   readonly folder: string;
+  /**
+   * D8 (security): whether TLS certificate validation is enforced on SSL
+   * connections. Defaults to true (cert validation ON). Only set to false to
+   * allow self-signed certs on a user-acknowledged insecure mailbox — never
+   * the default, never silently applied. POP3 previously hardcoded
+   * `rejectUnauthorized: false`, disabling cert validation for every SSL
+   * connection (MITM risk).
+   */
+  readonly tlsRejectUnauthorized?: boolean;
 }
 
 /** Bounded fetch options for a receive sync. */
@@ -48,6 +57,13 @@ export interface ReceivedMessageListDto {
   classificationConfidence: number | null;
   replyStatus: EmailReplyStatus;
   processedAt: string | null;
+  // ---- Mailbox reply evidence (FR-030): renderer-safe observation fields ----
+  /** Raw provider `\Answered` flag at last check. */
+  isAnswered: boolean;
+  /** When the provider answered-flag was last observed. */
+  answeredFlagCheckedAt: string | null;
+  /** Sticky first positive detection time (never cleared). */
+  replyDetectedAt: string | null;
 }
 
 /** Detail DTO for one received message, including sanitized body. */
@@ -59,6 +75,17 @@ export interface ReceivedMessageDetailDto extends ReceivedMessageListDto {
   ccAddresses: string[];
   bodyText: string | null;
   bodyHtmlSanitized: string | null;
+  // ---- Full evidence set (diagnostic view, FR-030/FR-032) ----
+  /** Which source produced the sticky positive: `mailbox_flag` or `sent_search`. */
+  replyDetectionSource: string | null;
+  /** The Sent-folder message that matched (RFC Message-ID), diagnostics only. */
+  replyMatchedMessageId: string | null;
+  /** When the last complete negative observation was stored (cache freshness). */
+  replyNegativeCheckAt: string | null;
+  /** IMAP folder this message was synced from (UID provenance). */
+  providerFolder: string | null;
+  /** IMAP UIDVALIDITY of the source folder (lossless string). */
+  providerUidValidity: string | null;
 }
 
 /** Reply identity profile DTO (no secrets). */
@@ -88,7 +115,18 @@ export interface AutoReplyAuditDto {
   confidence: number | null;
   reason: string | null;
   knowledgeQuery: string | null;
+  /**
+   * R06: count of sources ACTUALLY SUPPLIED to the model prompt (entries
+   * marked supplied). Legacy rows without the flag count as supplied
+   * (pre-F07 surfaces presented everything retrieved).
+   */
   knowledgeSourceCount: number;
+  /**
+   * R06: total retrieved candidates including omitted ones. Equals
+   * `knowledgeSourceCount` when nothing was dropped; larger when input
+   * fitting omitted context (the UI shows "supplied of retrieved").
+   */
+  retrievedKnowledgeSourceCount: number;
   generatedSubject: string | null;
   generatedBodyPreview: string | null;
   sentSubject: string | null;
@@ -96,6 +134,15 @@ export interface AutoReplyAuditDto {
   requiresUserApproval: boolean;
   approvedByUser: boolean;
   errorMessage: string | null;
+  /**
+   * T10 (FR-033): the typed stage/code extracted from the row's structured
+   * `metadataJson` (written by the services as proper JSON fields — this is
+   * structured-data extraction at the IPC boundary, NOT English-text parsing).
+   * Null when the row carries no typed metadata (legacy rows, non-refusal
+   * events).
+   */
+  metadataStage: string | null;
+  metadataCode: string | null;
   createdAt: string;
 }
 
@@ -158,7 +205,9 @@ export type EmailReplyAuditAction =
   | "auto_reply_blocked"
   | "send_failed"
   | "send_claimed"
-  | "delivery_unknown";
+  | "delivery_unknown"
+  | "reconciliation_noted"
+  | "draft_reopened";
 
 /** Who triggered an audit action. */
 export type EmailReplyAuditActor = "user" | "ai" | "system";

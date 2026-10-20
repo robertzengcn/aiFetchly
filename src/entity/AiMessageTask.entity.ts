@@ -75,4 +75,21 @@ export class AiMessageTaskEntity extends AuditableEntity {
    * standalone schedule-page behavior (technical-design §9.3). */
   @Column("varchar", { length: 32, nullable: true })
   source_type?: "schedule_ui" | "chat_scheduled_loop";
+
+  // ----- Task-completion-policy V1 additive columns (technical-design §6.1) -----
+  // All nullable/default-0 so existing rows remain valid under synchronize.
+  // Slice 1 writes are feature-flagged (ai_task_completion_policy_v1_enabled);
+  // when the flag is OFF, behavior is byte-identical to legacy.
+
+  /** Frozen TaskCompletionContract JSON (§5.1). Null = legacy task (no contract). */
+  @Column("text", { nullable: true })
+  completion_contract_json!: string | null;
+
+  /** Frozen execution-policy snapshot JSON. Null = legacy task. */
+  @Column("text", { nullable: true })
+  execution_policy_json!: string | null;
+
+  /** Schema version for the policy snapshot. 0 = legacy (no policy). */
+  @Column("integer", { default: 0 })
+  execution_policy_version!: number;
 }

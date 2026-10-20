@@ -62,6 +62,10 @@ type GoogleSelectorDiagnostic = {
     }>;
 };
 
+type RecaptchaCapablePage = {
+    solveRecaptchas?: () => Promise<unknown>;
+};
+
 export class GoogleScraper extends SearchScrape {
     search_engine_name = "google"
     private readonly searchSelectors = [
@@ -639,9 +643,8 @@ export class GoogleScraper extends SearchScrape {
 
         try {
             const url = new URL(pageState.url);
-            const allowedHosts = ['google.com'];
             const hostname = url.hostname;
-            const isGoogleHost = allowedHosts.includes(hostname) || hostname.endsWith('.google.com');
+            const isGoogleHost = GoogleScraper.isGoogleHost(hostname);
             return isGoogleHost && url.pathname.includes("/search") && url.searchParams.has("q");
         } catch {
             return false;
@@ -863,16 +866,89 @@ export class GoogleScraper extends SearchScrape {
             return "";
         }
 
-        if (trimmedHref.startsWith("/url?") || trimmedHref.startsWith("https://www.google.com/url?")) {
+        if (trimmedHref.startsWith("/url?") || GoogleScraper.isGoogleRedirectUrl(trimmedHref)) {
             try {
                 const url = new URL(trimmedHref, "https://www.google.com");
-                return url.searchParams.get("q") || url.searchParams.get("url") || trimmedHref;
+                const target = url.searchParams.get("q") || url.searchParams.get("url");
+                if (target) {
+                    return GoogleScraper.canonicalizeResultLink(target);
+                }
             } catch {
                 return trimmedHref;
             }
         }
 
-        return trimmedHref;
+        return GoogleScraper.canonicalizeResultLink(trimmedHref);
+    }
+
+    /**
+     * Canonicalize an extracted link so dedupe sees identical URLs as one:
+     * - strip a leading "www." on the hostname ("www.example.com" -> "example.com")
+     * - strip a single trailing slash from non-root paths ("/page/" -> "/page")
+     * - treat the root path "/" and an empty path as the same form
+     * The transform happens on the textual href (not a URL round-trip) so bare-domain
+     * links never gain the WHATWG-implied "/" and stay stable in the dataset.
+     */
+    private static canonicalizeResultLink(href: string): string {
+        const stripTrailingSlash = (value: string): string => value.replace(/\/$/, "");
+
+        try {
+            const parsed = new URL(href);
+            if (!parsed.hostname) {
+                return stripTrailingSlash(href);
+            }
+        } catch {
+            // Not an absolute URL (e.g. relative href) — fall back to text-level cleanup.
+            return stripTrailingSlash(href);
+        }
+
+        const schemeMatch = /^([a-z][a-z0-9+.-]*:\/\/)/i.exec(href);
+        if (!schemeMatch) {
+            return stripTrailingSlash(href);
+        }
+        const afterScheme = href.slice(schemeMatch[1].length);
+        const queryIndex = afterScheme.search(/[?#]/);
+        const authorityAndPath = queryIndex === -1 ? afterScheme : afterScheme.slice(0, queryIndex);
+        const suffix = queryIndex === -1 ? "" : afterScheme.slice(queryIndex);
+
+        const slashIndex = authorityAndPath.indexOf("/");
+        const authority = slashIndex === -1 ? authorityAndPath : authorityAndPath.slice(0, slashIndex);
+        let path = slashIndex === -1 ? "" : authorityAndPath.slice(slashIndex);
+        path = path.length > 1 ? stripTrailingSlash(path) : "";
+
+        // Strip a single leading "www." from the host (after any userinfo), preserving port.
+        const atSign = authority.lastIndexOf("@");
+        const userinfo = atSign === -1 ? "" : authority.slice(0, atSign + 1);
+        const host = authority.slice(userinfo.length).replace(/^www\./i, "");
+
+        return schemeMatch[1] + userinfo + host + path + suffix;
+    }
+
+    private static isGoogleRedirectUrl(href: string): boolean {
+        if (!/^https?:\/\//i.test(href)) {
+            return false;
+        }
+
+        try {
+            const url = new URL(href);
+            return url.pathname === "/url" && GoogleScraper.isGoogleHost(url.hostname);
+        } catch {
+            return false;
+        }
+    }
+
+    private static isGoogleHost(hostname: string): boolean {
+        const host = (hostname || "").trim().toLowerCase();
+        if (!host) {
+            return false;
+        }
+
+        // Matches google.<tld> and *.google.<tld> across country TLDs
+        // (google.com, www.google.co.uk, maps.google.de, ...). The suffix is
+        // limited to one or two labels so attacker-controlled look-alikes such
+        // as google.com.evil.com are rejected, and the leading (^|\.) boundary
+        // rejects evilgoogle.com.
+        return /^(.*\.)?google\.[a-z]{2,}(\.[a-z]{2,})?$/.test(host);
     }
 
     private static isOrganicResultLink(href: string): boolean {
@@ -887,8 +963,11 @@ export class GoogleScraper extends SearchScrape {
 
         try {
             const parsed = new URL(normalized);
-            const hostname = parsed.hostname.toLowerCase();
-            return !["google.com", "www.google.com"].includes(hostname);
+            // Any Google-owned host: google.com, subdomains (maps.google.com) and
+            // country TLDs (www.google.co.uk, google.de). Redirect targets that
+            // resolve back to a Google host are rejected here too, because the
+            // normalized link is already unwrapped at this point.
+            return !GoogleScraper.isGoogleHost(parsed.hostname);
         } catch {
             return false;
         }
@@ -919,7 +998,7 @@ export class GoogleScraper extends SearchScrape {
                 if (process.env.TWOCAPTCHA_TOKEN && process.env.TWOCAPTCHA_TOKEN.trim() !== '') {
                     // The recaptcha plugin should handle this automatically
                     // If manual solving is needed, use type assertion
-                    await (this.page as any).solveRecaptchas?.()
+                    await (this.page as unknown as RecaptchaCapablePage).solveRecaptchas?.()
                 } else {
                     if (this.config.headless === false) {
                         this.logger.info(`Browser is not headless. Waiting for manual captcha solving...`);

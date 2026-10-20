@@ -1,19 +1,22 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, EntityManager } from "typeorm";
+import { IsNull, Repository, EntityManager } from "typeorm";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyApprovalWriteSchema } from "@/schemas/entity/emailReplyApproval";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 
 export class EmailReplyApprovalModel extends BaseDb {
-  private repository: Repository<EmailReplyApprovalEntity>;
+  /** Resolved per access — BaseDb rebinds the live singleton before every
+   * guarded async call; a construction-time repository could stay bound to a
+   * replaced DataSource (test describe-scope module construction). */
+  private get repository(): Repository<EmailReplyApprovalEntity> {
+    return this.sqliteDb.connection.getRepository(EmailReplyApprovalEntity);
+  }
 
   constructor(filepath: string) {
     super(filepath);
     rejectDatabaseAccessFromWorker("EmailReplyApprovalModel");
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyApprovalEntity
-    );
+
   }
 
   async create(
@@ -39,16 +42,30 @@ export class EmailReplyApprovalModel extends BaseDb {
   async findActiveByTokenHash(
     tokenHash: string
   ): Promise<EmailReplyApprovalEntity | null> {
-    const approval = await this.repository.findOne({
-      where: { approvalTokenHash: tokenHash },
-      order: { id: "DESC" },
-    });
+    const approval = await this.findByTokenHash(tokenHash);
     if (!approval) return null;
     if (approval.invalidatedAt) return null;
     if (approval.expiresAt && approval.expiresAt.getTime() < Date.now()) {
       return null;
     }
     return approval;
+  }
+
+  /**
+   * Approval record for a one-time token hash REGARDLESS of consumption state
+   * (R14): `finalizeSendOutcome` consumes the approval for every terminal
+   * outcome, so a replay of a finalized sent/delivery_unknown attempt must
+   * still resolve the record to reach the B04 idempotency lookup. Callers must
+   * gate NEW work on the returned record's `invalidatedAt`/`expiresAt` — this
+   * resolver only proves the token existed, never that it is spendable.
+   */
+  async findByTokenHash(
+    tokenHash: string
+  ): Promise<EmailReplyApprovalEntity | null> {
+    return await this.repository.findOne({
+      where: { approvalTokenHash: tokenHash },
+      order: { id: "DESC" },
+    });
   }
 
   /** Most recent active approval bound to a draft's current revision. */
@@ -78,7 +95,9 @@ export class EmailReplyApprovalModel extends BaseDb {
     const repo =
       manager?.getRepository(EmailReplyApprovalEntity) ?? this.repository;
     await repo.update(
-      { id, invalidatedAt: null as unknown as Date },
+      // IsNull() — a bare `null` in the criteria renders `invalidatedAt = NULL`
+      // (never matches), silently turning invalidation into a no-op.
+      { id, invalidatedAt: IsNull() },
       { invalidatedAt: at, invalidationReason: reason }
     );
   }
@@ -97,7 +116,8 @@ export class EmailReplyApprovalModel extends BaseDb {
     const repo =
       manager?.getRepository(EmailReplyApprovalEntity) ?? this.repository;
     const result = await repo.update(
-      { draftId, invalidatedAt: null as unknown as Date },
+      // IsNull() — a bare `null` criterion never matches (renders `= NULL`).
+      { draftId, invalidatedAt: IsNull() },
       { invalidatedAt: at, invalidationReason: reason }
     );
     return result.affected ?? 0;

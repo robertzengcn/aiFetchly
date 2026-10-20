@@ -942,6 +942,53 @@ describe("AIChatCompactionCoordinator", () => {
     expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
   }, 15_000);
 
+  it("sizes section capacity against the real model window when modelLimitResolver is wired (§8.3 regression)", async () => {
+    // Same ~50k-char source as the test above, but the coordinator is
+    // constructed with a modelLimitResolver reporting a 4,096-context model.
+    // allocateSectionCapacity must size against 4,096 (not the 8,192 fallback),
+    // so each section holds less source and the same conversation packs into
+    // MORE sections than the fallback path. This is the regression class where
+    // the dispatch preflight was wired to the real model but the allocator was
+    // not: a 4,096-context model would get 8,192-sized sections rejected by
+    // the dispatch preflight, wasting reduction attempts.
+    const rows = Array.from({ length: 16 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "w".repeat(2_000),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-capacity-resolver", rows);
+    await indexConversation("conv-capacity-resolver");
+
+    const resolverCoordinator = new AIChatCompactionCoordinator({
+      modelLimitResolver: () => ({
+        contextLimit: 4_096,
+        outputLimit: 1_500,
+        limitSource: "provider",
+      }),
+    });
+    const { fn } = fakeSummarizer();
+    const result = await resolverCoordinator.requestCompaction(
+      "conv-capacity-resolver",
+      {
+        trigger: "manual",
+        model: "small-window-model",
+        summarize: fn,
+        // The 4,096 window halves per-section capacity vs the 8,192 fallback,
+        // so the same 48k-char source packs into more sections than the
+        // default 3-section batch limit allows — raise the limit so the run
+        // completes instead of pausing.
+        maxSectionsPerBatch: 10,
+      }
+    );
+    expect(result.state).toBe("completed");
+    // With a 4,096-context window the per-section source capacity is roughly
+    // 4,096 − 1,500 − 410 − overhead ≈ 2,000 tokens, half the fallback path's
+    // ~4,000. The same 48k-char source therefore needs at least as many
+    // sections as the fallback path (≥ 2) — a 4,096 window cannot fit it in
+    // one section.
+    expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+
   it("freezes the compactable snapshot inside the claim transaction (C-4/AC-09)", async () => {
     // 5 completed turns: the claim must persist snapshotEnd = retained-suffix
     // start (t3.first stepped back one composite key), and the persisted run

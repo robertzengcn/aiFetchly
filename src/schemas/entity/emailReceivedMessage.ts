@@ -28,5 +28,15 @@ export const emailReceivedMessageWriteSchema = lazySchema(() =>
     classificationConfidence: z.number().nullable().optional(),
     replyStatus: z.string().optional(),
     processedAt: z.coerce.date().nullable().optional(),
+    // ---- Mailbox reply evidence (FR-030, technical design §5.1) ----
+    isAnswered: z.number().int().optional(),
+    answeredFlagCheckedAt: z.coerce.date().nullable().optional(),
+    replyDetectedAt: z.coerce.date().nullable().optional(),
+    replyDetectionSource: z.string().nullable().optional(),
+    replyMatchedMessageId: z.string().nullable().optional(),
+    replyNegativeCheckAt: z.coerce.date().nullable().optional(),
+    replyNegativeContextHash: z.string().nullable().optional(),
+    providerFolder: z.string().nullable().optional(),
+    providerUidValidity: z.string().nullable().optional(),
   }),
 );

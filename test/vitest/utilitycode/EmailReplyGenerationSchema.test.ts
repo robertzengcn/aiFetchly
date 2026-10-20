@@ -85,15 +85,66 @@ describe("parseStrictGeneratedReply (FR-011)", () => {
   });
 });
 
-describe("buildCorrectionPrompt (§12.3)", () => {
-  it("carries only the validation codes, no model prose", () => {
-    const p = buildCorrectionPrompt([
-      "subject:subject_empty",
-      "confidence:confidence_not_finite",
-    ]);
+describe("buildCorrectionPrompt (FR-025, §12.3)", () => {
+  it("carries the validation codes and names the correct field intentSuggestion", () => {
+    const p = buildCorrectionPrompt({
+      originalUserContent: "INBOUND: How much is the Team plan?",
+      codes: ["subject:subject_empty", "confidence:confidence_not_finite"],
+    });
     expect(p).toContain("subject:subject_empty");
     expect(p).toContain("confidence:confidence_not_finite");
-    expect(p).toContain("failed validation");
+    expect(p).toContain("strict validation");
+    // Names the correct field explicitly (the v1 bug was asking for
+    // `classification` while the schema required `intentSuggestion`).
+    expect(p).toContain("intentSuggestion");
+    // The legacy field name `classification` may appear ONLY inside the explicit
+    // correction instruction telling the model NOT to use it; it must never
+    // appear as the requested JSON field name in the shape line.
+    expect(p).toContain('"intentSuggestion"');
+    expect(p).not.toMatch(/"classification"/);
+  });
+
+  it("preserves the original inbound context so the model regenerates fresh", () => {
+    const p = buildCorrectionPrompt({
+      originalUserContent: "INBOUND: How much is the Team plan?",
+      codes: ["subject:subject_empty"],
+    });
+    expect(p).toContain("INBOUND: How much is the Team plan?");
+    expect(p).toContain("Original inbound email");
+  });
+
+  it("does NOT echo invalid raw model output (only codes + original context)", () => {
+    const p = buildCorrectionPrompt({
+      originalUserContent: "INBOUND: pricing question",
+      codes: ["root:malformed_json"],
+    });
+    // The codes and the original context appear. The instruction tells the
+    // model not to repeat the invalid reply. The invalid reply BODY itself
+    // is never embedded — only codes + original inbound context.
+    expect(p).toContain("root:malformed_json");
+    expect(p).toContain("INBOUND: pricing question");
+    expect(p).toContain("Do NOT repeat the invalid reply");
+    // No fenced code blocks carrying raw failed JSON.
+    expect(p).not.toContain("```");
+  });
+
+  it("adds a bounded shortening instruction when a length/truncation code is present", () => {
+    const p = buildCorrectionPrompt({
+      originalUserContent: "INBOUND: pricing",
+      codes: ["truncated_output"],
+    });
+    expect(p).toContain("truncated_output");
+    expect(p.toLowerCase()).toContain("shorter");
+    expect(p.toLowerCase()).toContain("under 300 words");
+  });
+
+  it("omits the shortening instruction when no length code is present", () => {
+    const p = buildCorrectionPrompt({
+      originalUserContent: "INBOUND: pricing",
+      codes: ["subject:subject_empty"],
+    });
+    expect(p.toLowerCase()).not.toContain("shorter");
+    expect(p.toLowerCase()).not.toContain("under 300 words");
   });
 });
 

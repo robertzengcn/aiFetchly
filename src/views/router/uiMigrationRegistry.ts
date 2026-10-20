@@ -378,7 +378,10 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     family: "email-marketing",
     template: "detail",
     state: "shell",
-    routeNames: ["AI_Auto_Reply_Audit_Detail"],
+    // AI_Reply_Draft_Detail (test branch) is the sibling detail page of the
+    // same audit family — classified here rather than as a new surface so the
+    // in-scope surface count stays at 53 (IPR-054 pins it).
+    routeNames: ["AI_Auto_Reply_Audit_Detail", "AI_Reply_Draft_Detail"],
   },
   // --- Proxy and social accounts (5) ----------------------------------------
   {

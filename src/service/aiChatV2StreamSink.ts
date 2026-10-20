@@ -174,6 +174,26 @@ export function createChatV2StreamSink(
             totalTokens: e.totalTokens,
           });
           break;
+        case "task_execution_state":
+          // T13 (FR-13/14, NFR-10/11): forward authoritative task-execution
+          // lifecycle state to the renderer badge. Non-terminal chunk on the
+          // shared STREAM_CHUNK channel; the terminal variant is emitted AFTER
+          // durable finalization at the engine complete/cancelled/failed gates.
+          // G02: forward the durable delivery identity for consumer dedup.
+          sinkTarget.sendChunk({
+            eventType: "task_execution_state",
+            conversationId: e.conversationId,
+            taskExecutionState: {
+              executionId: e.executionId,
+              conversationId: e.conversationId,
+              status: e.status,
+              reasonCode: e.reasonCode,
+              outcome: e.outcome,
+              remainingWork: e.remainingWork,
+              finalEventIdentity: e.finalEventIdentity,
+            },
+          } as ChatV2StreamChunk);
+          break;
         case "direction_updated":
           // Steering applied at a safe boundary: ids and offset only —
           // never steering content (message-queue design §11.5).

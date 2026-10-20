@@ -35,6 +35,7 @@
         :workspace-root="workspaceRoot"
         :show-reasoning="showReasoning"
         :reported="props.reportedMessageIds.has(m.id)"
+        :tool-awaiting-result="awaitingToolMessageIds?.has(m.id) === true"
         @grant-permission="onGrantPermission"
         @deny-permission="onDenyPermission"
         @approve-plan="emit('approve-plan')"
@@ -107,7 +108,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, withDefaults } from "vue";
+import {
+  ref,
+  watch,
+  nextTick,
+  onMounted,
+  onBeforeUnmount,
+  withDefaults,
+} from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   AIChatPendingMessageView,
@@ -154,6 +162,8 @@ const props = withDefaults(
     steeringEnabled?: boolean;
     /** Message ids already reported this session (parent-owned after lift). */
     reportedMessageIds?: Set<string>;
+    /** Tool-call message ids still waiting for a result during a live turn. */
+    awaitingToolMessageIds?: ReadonlySet<string>;
   }>(),
   { steeringEnabled: true, reportedMessageIds: () => new Set<string>() }
 );
@@ -206,12 +216,56 @@ let pinnedToBottom = true;
 // the bottom. Kept in sync by onScroll and hidden on click/force-scroll.
 const showScrollButton = ref(false);
 
-const scrollToBottom = async (): Promise<void> => {
-  await nextTick();
+/**
+ * Apply the scroll-to-bottom write. Reads `scrollHeight` and writes
+ * `scrollTop` — both force a synchronous layout reflow over the ENTIRE message
+ * DOM. This is cheap for a few messages but catastrophic with 1000+: every
+ * streamed token used to trigger one. Callers must therefore go through
+ * {@link scheduleScrollToBottom} (rAF-coalesced) during streaming, not call
+ * this directly per token.
+ */
+const applyScrollToBottom = (): void => {
   if (scroller.value && pinnedToBottom) {
     scroller.value.scrollTop = scroller.value.scrollHeight;
     showScrollButton.value = false;
   }
+};
+
+/**
+ * rAF-coalesced scroll-to-bottom.
+ *
+ * During streaming the last message's `content.length` changes on every token
+ * (often 50–100/sec). The pre-throttle code awaited nextTick() then wrote
+ * scrollTop on each token, forcing a full-DOM layout reflow each time. This
+ * coalesces every token within a single animation frame into ONE reflow:
+ *   - If a frame is already scheduled, the new token is a no-op (the pending
+ *     frame will read the latest scrollHeight when it fires, so the token is
+ *     not lost — only the redundant reflows are dropped).
+ *   - If the user has scrolled away from the bottom (pinnedToBottom === false)
+ *     we don't fight them: skip scheduling entirely.
+ *   - On nextTick-then-rAF so the DOM has the appended text before we measure.
+ */
+let scrollRafId: number | null = null;
+const scheduleScrollToBottom = async (): Promise<void> => {
+  if (!pinnedToBottom) return;
+  if (scrollRafId !== null) return;
+  await nextTick();
+  if (!pinnedToBottom) return; // re-check after the await
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = null;
+    applyScrollToBottom();
+  });
+};
+
+/**
+ * Immediate (un-coalesced) scroll-to-bottom for non-streaming transitions:
+ * conversation load, history switch, typing/retry indicator toggle. These fire
+ * at most once per user action, so the reflow cost is fine and the response
+ * should be synchronous-feeling rather than delayed to the next frame.
+ */
+const scrollToBottom = async (): Promise<void> => {
+  await nextTick();
+  applyScrollToBottom();
 };
 
 const onScroll = (): void => {
@@ -238,6 +292,16 @@ const onScrollButtonClick = (): void => {
   void scrollToBottomForce();
 };
 
+// Cancel any pending coalesced scroll on unmount: a rAF scheduled by a late
+// streaming token would otherwise fire after the component (and its scroller
+// ref) is gone, writing to a detached element.
+onBeforeUnmount(() => {
+  if (scrollRafId !== null) {
+    cancelAnimationFrame(scrollRafId);
+    scrollRafId = null;
+  }
+});
+
 const onGrantPermission = (
   message: ChatV2MessageView,
   payload: { persistent: boolean }
@@ -263,11 +327,16 @@ watch(() => props.retryInfo, scrollToBottom);
 watch(
   () => {
     // Track only the last message's id + content length instead of joining
-    // all message contents (avoids O(n) string allocation per token).
+    // all message contents (avoids O(n) string allocation per token). This
+    // fires on EVERY streamed token (50–100/sec), so route it through the
+    // rAF-coalesced scheduleScrollToBottom instead of the immediate
+    // scrollToBottom — one layout reflow per frame, not per token.
     const last = props.messages[props.messages.length - 1];
     return last ? `${last.id}:${last.content.length}` : "";
   },
-  scrollToBottom
+  () => {
+    void scheduleScrollToBottom();
+  }
 );
 
 defineExpose({ scrollToBottomForce });

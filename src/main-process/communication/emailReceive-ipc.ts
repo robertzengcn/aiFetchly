@@ -3,6 +3,7 @@ import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { StructuredIpcError } from "@/main-process/communication/_shared/StructuredIpcError";
 import {
   EMAIL_RECEIVE_SYNC,
   EMAIL_RECEIVE_CONNECTION_TEST,
@@ -16,12 +17,14 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
 } from "@/config/channellist";
 import {
   emailReceiveSyncInputSchema,
@@ -38,19 +41,26 @@ import {
   emailReplyDraftUpdateInputSchema,
   emailReplySendInputSchema,
   emailReplyDraftApproveInputSchema,
+  emailReplyDraftResolveReviewInputSchema,
   emailReplySendAttemptDetailInputSchema,
   emailReplyDeliveryReconcileInputSchema,
   emailReplyKnowledgeScopeGetInputSchema,
   emailReplyKnowledgeScopeUpdateInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
+  emailReplyCheckRepliedInputSchema,
 } from "@/schemas/ipc/emailReply";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
-import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
+import {
+  EmailReplyDraftGenerationService,
+  createModelOutputCapResolver,
+  createModelContextResolver,
+} from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
@@ -58,6 +68,7 @@ import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogMo
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import {
   ReceivedMessageListDto,
   ReceivedMessageDetailDto,
@@ -182,6 +193,20 @@ export function registerEmailReceiveIpcHandlers(): void {
       log.reason = input.reason ?? input.status;
       await auditModule.create(log);
 
+      // G03-1c: mirror the decision into the auto-reply audit table the UI
+      // reads, so user/AI mark-processed outcomes are visible in the audit UI.
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: log.emailServiceId,
+        messageId: log.messageId,
+        draftId: log.draftId,
+        action: log.action,
+        reason: log.reason,
+        metadataJson: log.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await new EmailAutoReplyAuditLogModule().create(mirrorRow);
+      }
+
       return { messageId: input.messageId, status: input.status };
     }
   );
@@ -288,6 +313,32 @@ export function registerEmailReceiveIpcHandlers(): void {
     }
   );
 
+  // ---- Diagnostic reply check (FR-032) ----
+  // AI-gated at the boundary: `registerAiValidatedHandler` checks
+  // `user_ai_enabled` first and returns the existing `{ status: false, msg,
+  // data: null }` shape when disabled, before any handler work runs. The
+  // handler delegates to `EmailReplyDetectionModule.checkReply` (ordinary
+  // cache per §7.3, no forceRefresh) and returns the safe snake_case DTO.
+  // Read-only — no mailbox mutation, no SMTP, no audit row written here.
+  registerAiValidatedHandler(
+    EMAIL_REPLY_CHECK_REPLIED,
+    emailReplyCheckRepliedInputSchema,
+    async (input) => {
+      const detectionModule = new EmailReplyDetectionModule();
+      const outcome = await detectionModule.checkReply({
+        messageId: input.messageId,
+      });
+      if (!outcome.success || !outcome.result) {
+        // Persistence/detection failure — surface the bounded error string the
+        // service already produced. Throw so dispatchValidated's catch wraps it
+        // into the safe `{ status: false, msg, data: null }` envelope (no raw
+        // provider errors, no credentials).
+        throw new Error(outcome.error ?? "Reply detection failed");
+      }
+      return outcome.result;
+    }
+  );
+
   // ---- AI draft generation (AI-gated at the boundary) ----
   registerAiValidatedHandler(
     EMAIL_REPLY_DRAFT_CREATE,
@@ -301,11 +352,23 @@ export function registerEmailReceiveIpcHandlers(): void {
           "Reply drafting is temporarily disabled by the kill switch"
         );
       }
-      const genService = new EmailReplyDraftGenerationService();
+      const genService = new EmailReplyDraftGenerationService({
+        resolveModelOutputCap: createModelOutputCapResolver(),
+        resolveModelContextWindow: createModelContextResolver(),
+      });
       const result = await genService.createDraft(input);
       if (!result.success) {
-        // Surface the failure reason via the standard envelope.
-        throw new Error(result.error);
+        // B12: throw a structured error so the validated-IPC catch duck-types
+        // the typed fields (code / existing_draft_id / next_action /
+        // requestCorrelationId) into the failure envelope instead of losing
+        // them. The message stays human-readable for legacy consumers; the
+        // typed fields are pure additions the renderer / AI tool branches on.
+        throw new StructuredIpcError(result.error, {
+          code: result.code,
+          existing_draft_id: result.existing_draft_id,
+          next_action: result.next_action,
+          requestCorrelationId: result.requestCorrelationId,
+        });
       }
       // Strip the transport-only `success` flag before returning over IPC.
       const { success, ...dto } = result;
@@ -329,9 +392,27 @@ export function registerEmailReceiveIpcHandlers(): void {
         subject: draft.subject,
         bodyText: draft.bodyText,
         bodyHtml: draft.bodyHtml,
+        // R07: the reply envelope the review screen must show before
+        // acknowledgment (who the reply goes to).
+        recipientAddress: draft.recipientAddress,
         status: draft.status,
         generationSource: draft.generationSource,
         confidence: draft.confidence,
+        // R21: review metadata rides on the detail DTO as raw bounded JSON so
+        // the renderer can surface the flag without a schema migration.
+        // G02: the resolution stamp rides along so the UI can show
+        // resolved-for-this-revision vs still-awaiting-review.
+        // T02: the current revision id rides along so the review UI can
+        // bind its acknowledgment to the exact revision under review.
+        requiresHumanReview: draft.requiresHumanReview === 1,
+        reviewReasonsJson: draft.reviewReasonsJson,
+        unresolvedQuestionsJson: draft.unresolvedQuestionsJson,
+        currentRevisionId: draft.currentRevisionId,
+        humanReviewResolvedAt: draft.humanReviewResolvedAt
+          ? new Date(draft.humanReviewResolvedAt).toISOString()
+          : null,
+        humanReviewResolvedRevisionId:
+          draft.humanReviewResolvedRevisionId ?? null,
         knowledgeSourcesJson: draft.knowledgeSourcesJson,
         warningsJson: draft.warningsJson,
         sentAt: draft.sentAt ? new Date(draft.sentAt).toISOString() : null,
@@ -405,6 +486,12 @@ export function registerEmailReceiveIpcHandlers(): void {
   // The reliable send path is authoritative (P0.1): every send requires a valid
   // approval token and goes through the idempotent delivery service. There is no
   // legacy branch and no mailbox override. The kill switch refuses new claims.
+  //
+  // FR-033/B12: pre-send policy/binding refusals (SendPolicyRejection /
+  // SendBindingError) are thrown with a typed `code` property. The validated-IPC
+  // catch duck-types that property into the failure envelope so the renderer /
+  // AI tool branches on `code` instead of parsing the leading `[code]` bracket
+  // out of `msg`. The envelope's `data` stays null on failure.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
@@ -422,6 +509,11 @@ export function registerEmailReceiveIpcHandlers(): void {
       const { EmailReplyDeliveryService } = await import(
         "@/service/emailReply/EmailReplyDeliveryService"
       );
+      // B12: let typed errors (SendPolicyRejection / SendBindingError) propagate
+      // unchanged — dispatchValidated's catch duck-types their `code` property
+      // into the failure envelope. The previous handler re-formatted the message
+      // into `[code] message` AND stripped the typed code property, forcing
+      // callers to parse English to recover it.
       return await new EmailReplyDeliveryService().sendApprovedReply({
         draftId: input.draftId,
         approvalToken: input.approvalToken,
@@ -451,6 +543,39 @@ export function registerEmailReceiveIpcHandlers(): void {
         approvedByType: "user",
       });
       return result;
+    }
+  );
+
+  // ---- G02: resolve the model's human-review request (renderer user gesture
+  // only — this channel is never registered as an AI tool, so the model
+  // cannot acknowledge its own review flag). Revision-bound: the reviewed
+  // revision must equal the current revision.
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
+    emailReplyDraftResolveReviewInputSchema,
+    async (input) => {
+      const { EmailReplyDraftModule } = await import(
+        "@/modules/EmailReplyDraftModule"
+      );
+      const draftModule = new EmailReplyDraftModule();
+      // Resolve through the model transaction (provenance preserved, audit
+      // written, stale revision refused).
+      const model = (
+        draftModule as unknown as {
+          resolveHumanReview: (args: {
+            draftId: number;
+            revisionId: number;
+            resolvedBy: string;
+            note?: string | null;
+          }) => Promise<{ resolved: boolean; reason?: string }>;
+        }
+      );
+      return await model.resolveHumanReview({
+        draftId: input.draftId,
+        revisionId: input.revisionId,
+        resolvedBy: "user",
+        note: input.note ?? null,
+      });
     }
   );
 
@@ -569,7 +694,8 @@ export function registerEmailReceiveIpcHandlers(): void {
 
 // ---- DTO mappers (no secrets leak) ----
 
-function toMessageListDto(
+/** Exported for renderer-DTO contract tests (FR-030). */
+export function toMessageListDto(
   e: EmailReceivedMessageEntity
 ): ReceivedMessageListDto {
   return {
@@ -585,10 +711,16 @@ function toMessageListDto(
     classificationConfidence: e.classificationConfidence,
     replyStatus: e.replyStatus,
     processedAt: iso(e.processedAt),
+    // FR-030: renderer-safe observation fields (no matched-message-id or
+    // context-hash in the list DTO — those are diagnostic-only).
+    isAnswered: normalizeStoredBoolean(e.isAnswered),
+    answeredFlagCheckedAt: iso(e.answeredFlagCheckedAt),
+    replyDetectedAt: iso(e.replyDetectedAt),
   };
 }
 
-function toMessageDetailDto(
+/** Exported for renderer-DTO contract tests (FR-030). */
+export function toMessageDetailDto(
   e: EmailReceivedMessageEntity
 ): ReceivedMessageDetailDto {
   return {
@@ -600,6 +732,12 @@ function toMessageDetailDto(
     ccAddresses: decodeAddresses(e.ccAddressesJson),
     bodyText: e.bodyText,
     bodyHtmlSanitized: e.bodyHtmlSanitized,
+    // FR-030: full evidence set for the diagnostic detail view.
+    replyDetectionSource: e.replyDetectionSource,
+    replyMatchedMessageId: e.replyMatchedMessageId,
+    replyNegativeCheckAt: iso(e.replyNegativeCheckAt),
+    providerFolder: e.providerFolder,
+    providerUidValidity: e.providerUidValidity,
   };
 }
 
@@ -633,7 +771,11 @@ function toIdentityProfileDto(
   };
 }
 
-function toAutoReplyAuditDto(e: {
+/**
+ * R06: exported pure DTO mapper (no IPC/DB) so supplied-vs-retrieved
+ * counting is unit-testable at the boundary the UI reads.
+ */
+export function toAutoReplyAuditDto(e: {
   id: number;
   emailServiceId: number;
   messageId: number;
@@ -653,16 +795,56 @@ function toAutoReplyAuditDto(e: {
   requiresUserApproval: number;
   approvedByUser: number;
   errorMessage: string | null;
+  metadataJson?: string | null;
   createdAt?: Date | null;
 }): AutoReplyAuditDto {
+  // R06: supplied vs retrieved grounding. Entries explicitly marked
+  // `suppliedToPrompt: false` were retrieved but omitted from the prompt
+  // (input fitting); entries without the flag are legacy rows that predate
+  // supplied tracking and count as supplied (their surfaces always
+  // presented everything retrieved). Malformed JSON counts zero of zero.
   let knowledgeSourceCount = 0;
+  let retrievedKnowledgeSourceCount = 0;
   try {
-    const parsed = e.knowledgeSourcesJson
+    const parsed: unknown = e.knowledgeSourcesJson
       ? JSON.parse(e.knowledgeSourcesJson)
       : [];
-    if (Array.isArray(parsed)) knowledgeSourceCount = parsed.length;
+    if (Array.isArray(parsed)) {
+      retrievedKnowledgeSourceCount = parsed.length;
+      knowledgeSourceCount = (parsed as Array<Record<string, unknown>>).filter(
+        (entry) =>
+          typeof entry !== "object" ||
+          entry === null ||
+          (entry as Record<string, unknown>).suppliedToPrompt !== false
+      ).length;
+    }
   } catch {
     knowledgeSourceCount = 0;
+    retrievedKnowledgeSourceCount = 0;
+  }
+  // T10 (FR-033): extract the typed stage/code from the row's structured
+  // metadataJson (proper JSON fields written by the services). This is
+  // structured-data extraction, not English-text parsing (B12 allows deriving
+  // from the typed store; parsing `reason`'s [code] bracket is forbidden).
+  // Malformed/missing metadata → null fields, never a guessed code.
+  let metadataStage: string | null = null;
+  let metadataCode: string | null = null;
+  if (e.metadataJson) {
+    try {
+      const meta = JSON.parse(e.metadataJson) as unknown;
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        const stage = (meta as Record<string, unknown>).stage;
+        const code = (meta as Record<string, unknown>).code;
+        if (typeof stage === "string" && stage.length > 0) {
+          metadataStage = stage;
+        }
+        if (typeof code === "string" && code.length > 0) {
+          metadataCode = code;
+        }
+      }
+    } catch {
+      // Malformed metadata — leave both fields null.
+    }
   }
   return {
     id: e.id,
@@ -677,6 +859,7 @@ function toAutoReplyAuditDto(e: {
     reason: e.reason,
     knowledgeQuery: e.knowledgeQuery,
     knowledgeSourceCount,
+    retrievedKnowledgeSourceCount,
     generatedSubject: e.generatedSubject,
     generatedBodyPreview: e.generatedBodyPreview,
     sentSubject: e.sentSubject,
@@ -684,6 +867,8 @@ function toAutoReplyAuditDto(e: {
     requiresUserApproval: e.requiresUserApproval === 1,
     approvedByUser: e.approvedByUser === 1,
     errorMessage: e.errorMessage,
+    metadataStage,
+    metadataCode,
     createdAt: iso(e.createdAt),
   };
 }

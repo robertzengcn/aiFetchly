@@ -66,6 +66,32 @@ describe("normalizeOpenAIModelsResponse", () => {
     });
     expect(res.data.map((m) => m.id)).toEqual(["ok"]);
   });
+
+  it("G01: applies the configured size to the listed default model, never to others", () => {
+    const res = normalizeOpenAIModelsResponse(
+      {
+        data: [
+          { id: "mine" },
+          { id: "theirs", context_window: 200_000 },
+        ],
+      },
+      { defaultModel: "mine", contextSize: 4096 }
+    );
+    expect(res.data.find((m) => m.id === "mine")?.context_size).toBe(4096);
+    // A different model's reported window is untouched (canonicalized to
+    // context_size by normalization, never replaced by the configured one).
+    expect(res.data.find((m) => m.id === "theirs")?.context_size).toBe(
+      200_000
+    );
+  });
+
+  it("G01: never overwrites a server-reported window with the configured size", () => {
+    const res = normalizeOpenAIModelsResponse(
+      { data: [{ id: "mine", context_window: 32_000 }] },
+      { defaultModel: "mine", contextSize: 4096 }
+    );
+    expect(res.data[0].context_size).toBe(32_000);
+  });
 });
 
 describe("buildSyntheticModelList", () => {

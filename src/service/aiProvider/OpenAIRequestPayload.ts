@@ -54,5 +54,8 @@ function buildOpenAIPayload(
   if (request.user !== undefined) {
     payload.user = request.user;
   }
+  if (request.response_format !== undefined) {
+    payload.response_format = request.response_format;
+  }
   return payload;
 }

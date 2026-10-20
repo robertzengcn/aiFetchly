@@ -140,7 +140,11 @@ export class ScheduleManager {
      * @param schedule The schedule entity to add
      */
     async addSchedule(schedule: ScheduleTaskEntity): Promise<void> {
-        if (!schedule.is_active || schedule.trigger_type !== TriggerType.CRON) {
+        if (
+            !schedule.is_active ||
+            schedule.status !== ScheduleStatus.ACTIVE ||
+            schedule.trigger_type !== TriggerType.CRON
+        ) {
             return;
         }
 
@@ -186,7 +190,11 @@ export class ScheduleManager {
         await this.removeSchedule(schedule.id);
 
         // Add updated job if active
-        if (schedule.is_active && schedule.trigger_type === TriggerType.CRON) {
+        if (
+            schedule.is_active &&
+            schedule.status === ScheduleStatus.ACTIVE &&
+            schedule.trigger_type === TriggerType.CRON
+        ) {
             await this.addSchedule(schedule);
         }
     }
@@ -216,8 +224,10 @@ export class ScheduleManager {
                 throw new Error(`Schedule ${scheduleId} not found`);
             }
 
-            if (!schedule.is_active) {
-                log.info(`Schedule ${scheduleId} is not active, skipping execution`);
+            if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
+                log.info(
+                    `Schedule ${scheduleId} is not active (is_active=${String(schedule.is_active)}, status=${String(schedule.status)}), skipping execution`
+                );
                 return;
             }
 

@@ -3,6 +3,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import {
   clearToolProgressForToolResult,
+  collectAwaitingToolMessageIds,
   hasPendingToolExecution,
   markPermissionPromptExecuting,
 } from "@/views/components/aiChatV2/toolExecutionStateUtil";
@@ -41,6 +42,51 @@ describe("toolExecutionStateUtil", () => {
     ];
 
     expect(hasPendingToolExecution(messages)).toBe(false);
+  });
+
+  it("returns the tool-call message id until its result arrives", () => {
+    const pending = [
+      makeMessage("tool-call-1", MessageType.TOOL_CALL, "call-1"),
+      makeMessage("tool-call-2", MessageType.TOOL_CALL, "call-2"),
+    ];
+
+    expect(collectAwaitingToolMessageIds(pending)).toEqual(
+      new Set(["tool-call-1", "tool-call-2"])
+    );
+
+    const settled = [
+      ...pending,
+      makeMessage("tool-result-1", MessageType.TOOL_RESULT, "call-1"),
+    ];
+    expect(collectAwaitingToolMessageIds(settled)).toEqual(
+      new Set(["tool-call-2"])
+    );
+  });
+
+  it("ignores plan-mode tool calls that never emit a result", () => {
+    const planCall = makeMessage(
+      "tool-call-plan",
+      MessageType.TOOL_CALL,
+      "call-plan"
+    );
+    planCall.metadata = {
+      ...planCall.metadata,
+      source: "chat-v2",
+      toolName: "EnterPlanMode",
+    };
+
+    expect(collectAwaitingToolMessageIds([planCall]).size).toBe(0);
+    expect(hasPendingToolExecution([planCall])).toBe(false);
+  });
+
+  it("pairs tool calls that have no id with results in order", () => {
+    const first = makeMessage("tool-call-a", MessageType.TOOL_CALL);
+    const second = makeMessage("tool-call-b", MessageType.TOOL_CALL);
+    const result = makeMessage("tool-result-a", MessageType.TOOL_RESULT);
+
+    expect(
+      collectAwaitingToolMessageIds([first, second, result])
+    ).toEqual(new Set(["tool-call-b"]));
   });
 
   it("clears stale progress from a tool call when its result arrives", () => {

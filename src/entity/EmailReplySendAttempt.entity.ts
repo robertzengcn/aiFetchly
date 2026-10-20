@@ -24,6 +24,7 @@ import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliab
 @Entity("email_reply_send_attempt")
 @Index(["idempotencyKey"], { unique: true })
 @Index(["draftId", "revisionId"])
+@Index(["messageId"])
 @Index(["emailServiceId", "createdAt"])
 @Index(["status", "claimedAt"])
 export class EmailReplySendAttemptEntity extends AuditableEntity {

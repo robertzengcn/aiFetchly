@@ -168,6 +168,7 @@ export default {
     ai_auto_replies: "AI Auto Replies",
     ai_auto_reply_detail: "AI Auto Reply Detail",
     ai_chat_workspace: "AI Chat Workspace",
+    ai_reply_draft_detail: "Reply Draft Review",
     knowledge_library: "Knowledge Library",
     mcp_tools: "MCP Tools",
     skills: "Skills",
@@ -697,7 +698,7 @@ export default {
     login: "Login",
     login_out: "Login Out",
     system_setting: "System Setting",
-    platform_subtitle: "AI Marketing Agent",
+    platform_subtitle: "AI Agent",
     login_title: "AiFetchly Login",
     login_description: "Click the button below to login to your account",
     login_with_browser: "Login with Browser",
@@ -1203,6 +1204,23 @@ export default {
     send_confirm: "Send this reply now?",
     send_success: "Reply sent.",
     send_failed: "Reply send failed.",
+    // G02: explicit human-review resolution (revision-bound, user gesture).
+    human_review_required: "This draft needs human review before sending.",
+    human_review_resolve: "Mark reviewed",
+    human_review_resolve_note_placeholder: "What did you check? (optional)",
+    human_review_resolved: "Human review resolved for this revision.",
+    human_review_stale: "This review was for an older revision — please review again.",
+    human_review_resolve_failed: "Could not record your review. Please try again.",
+    // N09: unresolved reconciliation guidance (delivery remains unknown).
+    delivery_unresolved: "Delivery status unknown — human review required. This is not a confirmed failure.",
+    delivery_unresolved_hint: "Leave unresolved keeps the attempt ambiguous. Confirm sent/not-sent only with verified evidence.",
+    // T02: explicit review-resolution card.
+    human_review_reasons: "Why review was requested",
+    human_review_questions: "Open questions",
+    human_review_note_label: "Review note",
+    human_review_no_flag: "No human review requested for this draft.",
+    human_review_body: "Reply body",
+    human_review_recipient: "To",
     knowledge_sources: "Knowledge Sources",
     warnings: "Warnings",
     identity_profile: "Reply Identity Profile",
@@ -1214,6 +1232,49 @@ export default {
     style_notes: "Style Notes",
     forbidden_phrases: "Forbidden Phrases (comma-separated)",
     disclose_automation: "Disclose AI assistance",
+    // FR-033: machine-readable next-action labels (T10 surfaces these next to
+    // the reply-evidence chip in the audit detail view).
+    nextAction: {
+      approve_existing_draft: "Approve existing draft",
+      discard_and_retry: "Discard and retry",
+      await_human_review: "Await human review",
+      no_action: "No action needed",
+    },
+    // FR-033: stable refusal-code labels for the future UI (T10 surfaces these
+    // in the audit list / refusal banners). Model-facing tool descriptions stay
+    // English; these are the user-facing translations keyed by policy code.
+    policyCode: {
+      already_replied: "Already replied",
+      reply_in_progress: "Reply in progress",
+      generation_in_progress: "Generation in progress",
+      reply_state_conflict: "Reply state conflict",
+      reply_state_unknown: "Reply state unknown",
+      needs_human_review: "Needs human review",
+      delivery_unknown: "Delivery unknown",
+      unsupported_protocol: "Unsupported protocol (POP3)",
+      missing_message_id: "Missing message id",
+      receive_unavailable: "Receive unavailable",
+      sent_folder_unavailable: "Sent folder unavailable",
+      ambiguous_match: "Ambiguous match",
+      identity_conflict: "Identity conflict",
+      probe_timeout: "Probe timeout",
+      probe_limit_exceeded: "Probe limit exceeded",
+      probe_failed: "Probe failed",
+      no_reply_observed: "No reply observed",
+    },
+    // FR-032: check_email_replied tool UI labels (T10 surfaces the three-state
+    // detection result in the message detail / audit views).
+    replyDetection: {
+      state_replied: "Replied",
+      state_not_replied: "Not replied",
+      state_unknown: "Unknown",
+      checked_at: "Checked at",
+      from_cache: "From cache",
+      coverage_local_only: "Local only",
+      coverage_configured_imap: "Configured IMAP",
+      coverage_partial: "Partial",
+      check_button: "Check reply status",
+    },
   },
   emailAutoReplyAudit: {
     title: "AI Auto Replies",
@@ -1226,8 +1287,13 @@ export default {
     confidence: "Confidence",
     requires_approval: "Approval",
     reason: "Reason",
+    reply_evidence: "Reply Evidence",
+    stage: "Stage",
+    recheck_failed: "Reply check failed. Please try again.",
     knowledge_query: "Knowledge Query",
     knowledge_source_count: "Knowledge Sources",
+    knowledge_sources_supplied: "{supplied} of {retrieved} supplied as grounding",
+    view_related_draft: "View related draft",
     generated_subject: "Generated Subject",
     generated_body_preview: "Generated Body Preview",
     sent_subject: "Sent Subject",
@@ -2667,6 +2733,93 @@ export default {
         INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
         INVALID_LOOP_LIMIT: "The run count or lifetime limit is invalid.",
         PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
+      },
+    },
+    taskExecution: {
+      status_resolving: "resolving",
+      status_preparing: "preparing",
+      status_active: "working",
+      status_verifying: "checking",
+      status_continuing: "continuing",
+      status_waiting_permission: "awaiting permission",
+      status_waiting_input: "needs input",
+      status_waiting_approval: "awaiting approval",
+      status_waiting_external_job: "awaiting external job",
+      status_terminal: "completed",
+      // T14 (PRD FR-13/15/22, AC-16/21/27/32): honest terminal-outcome
+      // labels. Only verified_complete reuses the success label; the other
+      // six outcomes describe what actually happened at the terminal gate.
+      outcome_verified_complete: "completed",
+      outcome_incomplete: "incomplete",
+      outcome_needs_user_input: "needs your input",
+      outcome_blocked_by_policy: "blocked by policy",
+      outcome_failed: "failed",
+      outcome_cancelled: "cancelled",
+      outcome_timeout: "timed out",
+      actions: {
+        continue: "Continue",
+        retry: "Retry",
+        cancel: "Stop task",
+      },
+      successor_reused:
+        "This task is already running; no new attempt was started.",
+      successor_error: "Could not start the task follow-up.",
+      errors: {
+        CRITERIA_SATISFIED: "All completion criteria were satisfied.",
+        NO_PROGRESS: "The task made no further progress.",
+        CONTINUATION_LIMIT:
+          "The continuation limit was reached; the task stopped incomplete.",
+        MODEL_ATTEMPT_LIMIT:
+          "The model attempt limit was reached; the task stopped incomplete.",
+        TOOL_LIMIT: "The tool execution limit was reached.",
+        TOKEN_LIMIT: "The token limit was reached.",
+        ACTIVE_RUNTIME_LIMIT: "The active runtime limit was reached.",
+        WAIT_LIMIT: "The cumulative wait limit was reached.",
+        VERIFICATION_UNAVAILABLE:
+          "Completion could not be verified because no checker was available.",
+        INVALID_VERIFIER_RESPONSE:
+          "The verifier returned an invalid response; completion unverified.",
+        EVIDENCE_UNAVAILABLE:
+          "Required evidence was unavailable; completion unverified.",
+        UNKNOWN_ACTION_OUTCOME:
+          "A consequential action has an unknown outcome and needs reconciliation.",
+        INPUT_REQUIRED: "The task needs input before it can continue.",
+        PERMISSION_DENIED: "A required permission was denied.",
+        CONTENT_RESTRICTED: "The content was restricted by policy.",
+        AI_DISABLED: "AI functionality is disabled for this account.",
+        AUTH_QUOTA_ERROR: "An authentication or quota error stopped the task.",
+        AUTH_FAILURE: "Authentication failed; the task stopped.",
+        QUOTA_EXHAUSTED: "The usage quota was exhausted; the task stopped.",
+        NON_RECOVERABLE: "An unrecoverable error stopped the task.",
+        PROVIDER_ERROR: "The AI provider reported an error; the task stopped.",
+        REMOTE_AI_ERROR: "The AI service could not be reached; the task stopped.",
+        RUN_INTERRUPTED: "The run was interrupted before it completed.",
+        BLOCKED_BY_POLICY: "The task was blocked by policy.",
+        STREAM_INCOMPLETE: "The stream ended before the task completed.",
+        OUTPUT_TRUNCATED: "The output was truncated before completion.",
+        PERSISTENCE_FAILED: "Saving the task result failed.",
+        STATE_CONFLICT:
+          "The task state changed during the operation; no duplicate was written.",
+        MISSING_TASK_OUTCOME:
+          "No task outcome was recorded; the task stopped incomplete.",
+        SUBMISSION_CONFLICT:
+          "A submission conflict prevented the task from starting.",
+        ALREADY_FINALIZED:
+          "The task was already finalized; no duplicate outcome was written.",
+        OPERATION_NOT_FOUND: "The referenced operation could not be found.",
+        INTENT_CONFLICT:
+          "A conflicting intent is in flight; the task was not started.",
+        INTENT_UNRESOLVED: "The task intent could not be resolved.",
+        PREPARATION_REQUIRED:
+          "Preparation is required before the task can run.",
+        USER_CANCELLED: "The task was cancelled by the user.",
+        TASK_REPLACED:
+          "The task was replaced by new input before it completed.",
+        SCHEDULE_STOPPED: "The schedule was stopped; the task did not recur.",
+        RESPONSE_ENDED:
+          "The response ended before the task was verified complete.",
+        SHADOW_EVALUATION:
+          "Shadow evaluation only; no live behavior was applied.",
       },
     },
     voice: {

@@ -112,7 +112,7 @@ const emit = defineEmits<{
   (e: "imported"): void;
 }>();
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 type State = "idle" | "awaiting" | "done";
 const state = ref<State>("idle");

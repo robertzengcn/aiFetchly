@@ -30,7 +30,7 @@ import { SearchResult } from '@/views/api/types'
 import {SocialAccountListData} from '@/entityTypes/socialaccount-type'
 import {useI18n} from "vue-i18n";
 import {ItemSearchparam} from "@/entityTypes/commonType"
-const {t} = useI18n({inheritLocale: true});
+const {t} = useI18n();
 
 // Define props
 const props = defineProps({

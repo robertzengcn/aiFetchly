@@ -1,15 +1,25 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultModel } from "@/model/ToolResult.model";
+import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
 import { ToolResultRecoveryService } from "@/service/toolResult/ToolResultRecoveryService";
-import { artifactDirectory } from "@/service/toolResult/ToolResultPaths";
+import { artifactDirectory, pathSegmentFor } from "@/service/toolResult/ToolResultPaths";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultPreparationService } from "@/service/toolResult/ToolResultPreparationService";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { toolResultReceiptSchema } from "@/schemas/toolResult";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
+import {
+  retrievalSerializedFits,
+} from "@/service/toolResult/retrievalInlineBound";
+import {
+  decodeToolResultCursor,
+  encodeToolResultCursor,
+} from "@/service/toolResult/ToolResultCursorCodec";
 import type { TrustedToolOutputContext } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -280,8 +290,18 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
       deps()
     );
     const model = JSON.parse(prepared.modelContent);
-    expect(model.retrieval.read_tool).toBe("tool_result_read");
-    expect(model.retrieval.search_tool).toBe("tool_result_search");
+    expect(model.next.tool).toBe("tool_result_read");
+    expect(model.next.arguments.output_id).toBe(model.output.output_id);
+    const cursor = decodeToolResultCursor(model.next.arguments.cursor, {
+      outputId: model.output.output_id,
+      mode: "read",
+      revision: prepared.receipt?.outputs[0]?.revision,
+    });
+    expect(cursor.ok).toBe(true);
+    if (cursor.ok) expect(cursor.payload.position).toBe(0);
+    expect(model.next_cursor).toBe(model.next.arguments.cursor);
+    expect(prepared.receipt?.control.next_cursor).toBe(model.next.arguments.cursor);
+    expect(model.retrieval).toBeUndefined();
     // A small sample must never read as a complete review.
     expect(model.preview_complete).toBe(false);
     expect(model.output.output_id).toMatch(/^out_/);
@@ -295,6 +315,67 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
     expect(prepared.modelContent).not.toContain("tool_result_read");
     // The reference is still preserved locally for the user to inspect.
     expect(prepared.receipt?.outputs).toHaveLength(1);
+  });
+
+  it("keeps a tool_result_search page inline instead of saving another output", async () => {
+    const outputId = `out_${"ab".repeat(16)}`;
+    const matches = Array.from({ length: 40 }, (_, index) => ({
+      start_byte: index * 24,
+      end_byte: index * 24 + 3,
+      excerpt: `batch-${index}-` + "x".repeat(220),
+      read_cursor: encodeToolResultCursor({
+        outputId,
+        revision: 1,
+        mode: "read",
+        position: index * 24,
+      }),
+      match_count_in_window: 3,
+    }));
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: 20,
+        output: {
+          success: true,
+          output_id: outputId,
+          query: "csv",
+          matches,
+          scan_complete: true,
+          next_cursor: null,
+          source_completeness: "complete",
+        },
+      },
+      deps({ context: context({ toolName: "tool_result_search" }) })
+    );
+    expect(prepared.receipt).toBeUndefined();
+    expect(retrievalSerializedFits(prepared.modelContent)).toBe(true);
+    expect(prepared.modelContent).toContain(outputId);
+    expect(prepared.modelContent).not.toContain("RETRIEVAL_PAGE_TOO_LARGE");
+    const artifactsRoot = path.join(root, "tool-results");
+    expect(fs.existsSync(artifactsRoot) ? fs.readdirSync(artifactsRoot).length : 0).toBe(0);
+  });
+
+  it("keeps a small tool_result_read page inline with its text", async () => {
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: 4,
+        output: {
+          output_id: `out_${"cd".repeat(16)}`,
+          text: "batch150.csv",
+          start_byte: 0,
+          end_byte: 12,
+          total_bytes: 12,
+          complete: true,
+          next_cursor: null,
+          source_completeness: "complete",
+        },
+      },
+      deps({ context: context({ toolName: "tool_result_read" }) })
+    );
+    expect(prepared.receipt).toBeUndefined();
+    expect(prepared.modelContent).toContain("batch150.csv");
+    expect(prepared.modelContent).not.toContain("RETRIEVAL_PAGE_TOO_LARGE");
   });
 
   it("is idempotent for a repeated delivery of the same execution (AC-25)", async () => {
@@ -526,52 +607,75 @@ describe("ToolResultModule — output epoch fence", () => {
     // rotated so reads blocked, but grants never revoked, recovery sweep never
     // reclaimed, quotaUsage charged them forever). The fix paginates the loop
     // by id until a page returns fewer than the page size.
+    //
+    // SETUP NOTE: rows are seeded through the Model layer in bulk. Going
+    // through claimOutput/commitOutput per row costs ~12 awaited round trips
+    // each (~12k total for 1001 rows), which under full-suite parallel CI load
+    // crossed vitest's 5s per-test timeout (job #683). The unit under test is
+    // invalidateScope's pagination, not claim/commit; what the assertion needs
+    // is simply 1001 COMMITTED rows in the scope, which saveOutput produces.
+    //
+    // ASSERTION NOTE: the old assertion (authorizeAccess on sampled ids) could
+    // NOT see this bug — authorizeAccess checks scope.invalidated/epoch BEFORE
+    // row state has any effect (ToolResultModule.ts), so every read fails after
+    // invalidation whether or not pagination transitioned row 1001. A probe
+    // with the single-page bug reintroduced passed 49/49. The real leak
+    // signature is rows REMAINING committed: hasAnyCommittedOutput (LIMIT 1 on
+    // outputState='committed') and listPendingPublications (the recovery
+    // sweep's committed-row feed) both read that state directly.
     const mod = await makeModule();
     const scope = await mod.ensureScope("prof-1", "suite-conv-i6");
+    // A model on the SAME directory as the suite's module: `SqliteDb` returns
+    // the existing singleton for a known path (no second schema build), and
+    // constructing a model here does not go through the module's private
+    // `model` field.
+    const seedModel = new ToolResultModel(SUITE_DB_DIR);
+    await seedModel.ensureConnection();
     const total = 1001; // one beyond the old single-page limit
-    const outputIds: string[] = [];
+    const entities: AIToolOutputEntity[] = [];
     for (let i = 0; i < total; i += 1) {
-      const claim = await mod.claimOutput({
-        ...BASE_CLAIM,
-        executionId: `exec-i6-${i}`,
-        toolCallId: `call-i6-${i}`,
-        conversationId: "suite-conv-i6",
-        outputEpoch: scope.outputEpoch,
-      });
-      expect(claim.kind).toBe("claimed");
-      if (claim.kind === "claimed") {
-        await mod.commitOutput({
-          outputId: claim.outputId,
-          leaseFence: claim.leaseFence,
-          storageKey: `p/suite-conv-i6/out/payload-${i}.json`,
-          capturedBytes: 32,
-          sha256: "a".repeat(64),
-          preservation: "complete",
-          sourceCompleteness: "complete",
-          receiptJson: "{}",
-        });
-        outputIds.push(claim.outputId);
-      }
+      const output = new AIToolOutputEntity();
+      output.outputId = `out_i6_${i.toString().padStart(6, "0")}_${crypto.randomBytes(8).toString("hex")}`;
+      output.storageDirName = pathSegmentFor(output.outputId);
+      output.profileId = "prof-1";
+      output.conversationId = "suite-conv-i6";
+      output.outputEpoch = scope.outputEpoch;
+      output.turnId = "turn-i6";
+      output.executionId = `exec-i6-${i}`;
+      output.toolCallId = `call-i6-${i}`;
+      output.toolName = BASE_CLAIM.toolName;
+      output.streamKey = BASE_CLAIM.streamKey;
+      output.revision = 1;
+      output.outputState = "committed";
+      output.storageBackend = "file";
+      output.outputFormat = BASE_CLAIM.format;
+      output.mediaType = BASE_CLAIM.mediaType;
+      output.storageKey = `p/suite-conv-i6/out/payload-${i}.json`;
+      output.capturedBytes = 32;
+      output.sha256 = "a".repeat(64);
+      output.sourceCompleteness = BASE_CLAIM.sourceCompleteness;
+      output.preservation = "complete";
+      output.receiptJson = "{}";
+      entities.push(output);
     }
-    expect(outputIds).toHaveLength(total);
+    for (const entity of entities) {
+      await seedModel.saveOutput(entity);
+    }
 
     await mod.invalidateScope("prof-1", "suite-conv-i6");
 
-    // Sample outputs across the full range, including the 1001st (index 1000)
-    // which the old single-page limit would have left committed and readable.
-    const samples = [
-      outputIds[0],
-      outputIds[500],
-      outputIds[1000], // beyond the old 1000-row page
-    ];
-    for (const outputId of samples) {
-      const decision = await mod.authorizeAccess({
-        outputId,
-        profileId: "prof-1",
-        conversationId: "suite-conv-i6",
-      });
-      expect(decision.ok).toBe(false);
-    }
+    // The leak signature: after a paginated invalidation, NO row in this scope
+    // may remain committed. With the old single-page loop, row 1001 (and
+    // everything past the first page) would still be committed here.
+    expect(await mod.hasAnyCommittedOutput("prof-1", "suite-conv-i6")).toBe(
+      false
+    );
+    // The recovery sweep reads committed rows as pending publications; it must
+    // find none for this scope either.
+    const pending = await mod.listPendingPublications(total + 10);
+    expect(
+      pending.filter((row) => row.conversationId === "suite-conv-i6")
+    ).toHaveLength(0);
   });
 });
 
@@ -956,6 +1060,26 @@ describe("ToolResultModule — retrieval-work allowance", () => {
       await mod.reserveRetrievalCall(key);
     }
     expect((await mod.reserveRetrievalCall(key)).ok).toBe(false);
+  });
+
+  it("admits concurrent reads while the allowance still has room", async () => {
+    const mod = await makeModule();
+    const scope = await mod.ensureScope("prof-1", "suite-conv-40");
+    const key = {
+      profileId: "prof-1",
+      conversationId: "suite-conv-40",
+      outputEpoch: scope.outputEpoch,
+      agentId: "",
+      turnId: "turn-parallel",
+    };
+    // One model step can issue several tool_result_read calls together.
+    // A lost optimistic update must be retried, not reported as exhaustion.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => mod.reserveRetrievalCall(key))
+    );
+    expect(results.every((result) => result.ok)).toBe(true);
+    const usage = await mod.retrievalUsage(key);
+    expect(usage.calls).toBe(8);
   });
 
   it("tracks remaining returned-token allowance", async () => {

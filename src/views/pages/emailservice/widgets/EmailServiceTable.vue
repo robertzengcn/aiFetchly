@@ -128,7 +128,7 @@ import EmailServiceTagDialog from '@/views/pages/emailservice/widgets/EmailServi
 import { getEmailServiceTags } from '@/views/api/emailservice';
 import type { EmailServiceTagSummary } from '@/entityTypes/emailmarketingType';
 import { emailServiceTagErrorKey } from '@/views/utils/emailServiceTagError';
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const selected = ref<Array<EmailServiceListdata>>([]);
 const router = useRouter();
 const computedHeaders = computed(() => {

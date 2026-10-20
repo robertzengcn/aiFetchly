@@ -79,7 +79,7 @@
         density="compact"
         hide-details
         data-testid="viewer-search-input"
-        @keyup.enter="runSearch"
+        @keyup.enter="runSearch()"
       />
       <v-btn
         size="small"
@@ -87,7 +87,7 @@
         class="ml-2"
         :aria-label="t('aiChatV2.toolOutput.search') || 'Search'"
         data-testid="viewer-search-submit"
-        @click="runSearch"
+        @click="runSearch()"
       >
         {{ t("aiChatV2.toolOutput.search") || "Search" }}
       </v-btn>
@@ -468,11 +468,18 @@ async function runSearch(
       searchCursor.value = null;
       return;
     }
+    // A bare `@click="runSearch"` receives the DOM event as the first
+    // argument. That object is truthy, so it was sent as `cursor` and the
+    // main process rejected it. The viewer then showed the generic
+    // "saved output is not available" message for a perfectly valid search.
+    // Only an explicit continuation string is a cursor.
+    const continuation =
+      typeof cursor === "string" && cursor.length > 0 ? cursor : undefined;
     const result: ToolResultSearchPageView | null = await searchToolOutput({
       conversationId: props.conversationId,
       outputId: props.outputId,
       query,
-      ...(cursor ? { cursor } : {}),
+      ...(continuation !== undefined ? { cursor: continuation } : {}),
     });
     if (token !== requestToken) return;
     if (!result) {

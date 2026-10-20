@@ -263,12 +263,17 @@ export async function waitForMapsResultsReady(
 }
 
 /**
- * Card selectors used after readiness. Prefer feed-scoped cards, then anchors.
+ * Card selectors used after readiness.
+ *
+ * Place anchors (`a.hfpxzc`) come first. The results feed also contains
+ * `div[jsaction]` wrappers and spacers that have no layout box. Clicking
+ * those wrappers throws "Node is either not clickable or not an Element".
+ * The jsaction selector is only a fallback when no place link is present.
  */
 export const MAPS_RESULT_CARD_SELECTORS = [
-  'div[role="feed"] > div > div[jsaction]',
   'div[role="feed"] a.hfpxzc',
   "a.hfpxzc",
+  'div[role="feed"] > div > div[jsaction]',
 ] as const;
 
 /**
@@ -302,6 +307,242 @@ export async function queryMapsResultCards(
     }
   }
   return [];
+}
+
+export async function disposeElementHandles(
+  handles: ReadonlyArray<{ dispose: () => Promise<void> }>
+): Promise<void> {
+  await Promise.all(
+    handles.map((handle) => handle.dispose().catch(() => undefined))
+  );
+}
+
+/**
+ * True for the Puppeteer click failures caused by a virtualized Maps feed:
+ * the node has no viewport box, or Maps replaced it during scrollIntoView.
+ */
+export function isStaleMapsCardClickError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("not clickable") ||
+    message.includes("detached from document")
+  );
+}
+
+export interface RevealedMapsResultCard {
+  href: string | null;
+  found: boolean;
+}
+
+/**
+ * Scroll the feed so the card at `cardIndex` is laid out near the top of the
+ * results panel, and return that card's place URL.
+ *
+ * This function is passed to `page.evaluate`. It must stay self-contained:
+ * Puppeteer stringifies it and runs it in the page, so it cannot read module
+ * constants. Selectors are passed in as an argument.
+ *
+ * Padding is 48px so the card clears the sticky search header inside the feed.
+ */
+export function revealMapsResultCard(
+  cardIndex: number,
+  selectors: readonly string[]
+): RevealedMapsResultCard {
+  let nodes: Element[] = [];
+  for (const selector of selectors) {
+    const found = Array.from(document.querySelectorAll(selector));
+    if (found.length > 0) {
+      nodes = found;
+      break;
+    }
+  }
+
+  const card = nodes[cardIndex];
+  if (!(card instanceof HTMLElement)) {
+    return { href: null, found: false };
+  }
+
+  const feed = card.closest('[role="feed"]');
+  if (feed instanceof HTMLElement) {
+    const rect = card.getBoundingClientRect();
+    if (rect.width >= 1 && rect.height >= 1) {
+      const feedTop = feed.getBoundingClientRect().top;
+      feed.scrollTop += rect.top - feedTop - 48;
+    } else {
+      feed.scrollTop = Math.max(0, cardIndex * 132);
+    }
+  }
+
+  const anchor =
+    card instanceof HTMLAnchorElement ? card : card.querySelector("a.hfpxzc");
+  const href =
+    anchor instanceof HTMLAnchorElement && anchor.href.length > 0
+      ? anchor.href
+      : null;
+  return { href, found: true };
+}
+
+async function queryMapsResultCardAt(
+  page: Page,
+  index: number
+): Promise<ElementHandle<Element> | null> {
+  for (const selector of MAPS_RESULT_CARD_SELECTORS) {
+    let handles: ElementHandle<Element>[] = [];
+    try {
+      handles = await page.$$(selector);
+    } catch {
+      continue;
+    }
+    if (handles.length === 0) continue;
+
+    const selected =
+      index >= 0 && index < handles.length ? handles[index] : null;
+    await Promise.all(
+      handles.map((handle) => {
+        if (handle === selected) return Promise.resolve();
+        return handle.dispose().catch(() => undefined);
+      })
+    );
+    return selected;
+  }
+  return null;
+}
+
+/**
+ * Click using the element's current viewport box.
+ *
+ * `ElementHandle.click()` always calls `scrollIntoViewIfNeeded()` first.
+ * On a virtualized Maps feed that scroll destroys the node and Puppeteer
+ * then throws "Node is detached from document". A mouse click at an
+ * already-visible box does not scroll.
+ */
+async function clickMapsCardHandle(
+  page: Page,
+  handle: ElementHandle<Element>
+): Promise<void> {
+  const readBox =
+    "boundingBox" in handle && typeof handle.boundingBox === "function"
+      ? handle.boundingBox.bind(handle)
+      : null;
+  const box = readBox ? await readBox().catch(() => null) : null;
+  const viewport =
+    typeof page.viewport === "function" ? page.viewport() : null;
+  const viewportWidth = viewport?.width ?? 1280;
+  const viewportHeight = viewport?.height ?? 800;
+  const centerX = box ? box.x + box.width / 2 : 0;
+  const centerY = box ? box.y + box.height / 2 : 0;
+  const boxIsClickable =
+    box !== null &&
+    box.width >= 1 &&
+    box.height >= 1 &&
+    centerX >= 0 &&
+    centerY >= 0 &&
+    centerX <= viewportWidth &&
+    centerY <= viewportHeight;
+
+  if (boxIsClickable && box) {
+    const connected = await handle
+      .evaluate((element) => element.isConnected)
+      .catch((error: unknown) => {
+        if (isStaleMapsCardClickError(error)) return false;
+        throw error;
+      });
+    if (!connected) {
+      throw new Error("Node is detached from document");
+    }
+    await page.mouse.click(centerX, centerY);
+    return;
+  }
+  await handle.click();
+}
+
+export interface OpenMapsResultCardOptions {
+  sleep?: (ms: number) => Promise<void>;
+  /** Attempts before opening the place URL directly. Default 3. */
+  maxAttempts?: number;
+  log?: (message: string) => void;
+  /** Open the place URL when the feed node cannot be clicked. */
+  goto?: (url: string) => Promise<void>;
+}
+
+/**
+ * Open one results-list card.
+ *
+ * The scroll-to-load loop leaves the feed at the bottom, so early cards are
+ * outside the viewport and later cards are recycled when Puppeteer scrolls
+ * them into view. Scroll the target card into the feed, click a freshly
+ * queried node, and if Maps detaches it, open the place URL captured before
+ * the click.
+ */
+export async function openMapsResultCard(
+  page: Page,
+  index: number,
+  options: OpenMapsResultCardOptions = {}
+): Promise<"clicked" | "navigated"> {
+  const sleep = options.sleep ?? defaultSleep;
+  const maxAttempts = options.maxAttempts ?? 3;
+  const log = options.log ?? ((message: string) => console.log(message));
+  let stableHref: string | null = null;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const revealed = await page.evaluate(
+      revealMapsResultCard,
+      index,
+      [...MAPS_RESULT_CARD_SELECTORS]
+    );
+    if (!revealed.found) {
+      throw new Error(
+        `Google Maps result card ${index + 1} is not in the results list`
+      );
+    }
+    if (revealed.href && stableHref === null) {
+      stableHref = revealed.href;
+    }
+
+    await sleep(attempt === 0 ? 200 : 450);
+
+    const handle = await queryMapsResultCardAt(page, index);
+    if (!handle) {
+      lastError = new Error(
+        `Google Maps result card ${index + 1} disappeared after scroll`
+      );
+      log(
+        `[mapsResultsReady] card ${index + 1} missing after scroll; ` +
+          `retry ${attempt + 1}/${maxAttempts}`
+      );
+      continue;
+    }
+
+    try {
+      await clickMapsCardHandle(page, handle);
+      await handle.dispose().catch(() => undefined);
+      return "clicked";
+    } catch (error: unknown) {
+      await handle.dispose().catch(() => undefined);
+      lastError = error;
+      if (!isStaleMapsCardClickError(error)) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      log(
+        `[mapsResultsReady] card ${index + 1} click failed (${message}); ` +
+          `retry ${attempt + 1}/${maxAttempts}`
+      );
+    }
+  }
+
+  if (stableHref && options.goto) {
+    log(
+      `[mapsResultsReady] opening card ${index + 1} via place URL ` +
+        `after click failed`
+    );
+    await options.goto(stableHref);
+    return "navigated";
+  }
+
+  if (lastError instanceof Error) throw lastError;
+  throw new Error(`Failed to open Google Maps result card ${index + 1}`);
 }
 
 /**

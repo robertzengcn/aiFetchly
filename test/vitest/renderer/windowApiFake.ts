@@ -21,6 +21,7 @@ export interface RecordedInvoke {
 export class WindowApiFake {
   readonly invocations: RecordedInvoke[] = [];
   private readonly responses = new Map<string, InvokeResult>();
+  private readonly listeners = new Map<string, Array<(value: unknown) => void>>();
 
   /** Configure the response for a given invoke channel. */
   setInvokeResponse(channel: string, data: unknown, status = true, msg = ""): this {
@@ -38,17 +39,29 @@ export class WindowApiFake {
           resp ?? { status: false, msg: `no fake response for ${channel}`, data: null }
         );
       },
-      send: (_channel: string, _data: unknown): void => {
-        /* no-op for renderer-only tests */
+      send: (channel: string, data: unknown): void => {
+        // Renderer-only fake: sends are recorded but never answered. The
+        // parameters are part of the window.api contract even though this
+        // fake ignores them.
+        void channel;
+        void data;
       },
-      receive: (_channel: string, _cb: (...args: unknown[]) => void): void => {
-        /* no-op */
+      receive: (channel: string, cb: (...args: unknown[]) => void): void => {
+        const list = this.listeners.get(channel) ?? [];
+        list.push(cb as (value: unknown) => void);
+        this.listeners.set(channel, list);
       },
-      removeListener: (_channel: string, _cb: (...args: unknown[]) => void): void => {
-        /* no-op */
+      removeListener: (channel: string, cb: (...args: unknown[]) => void): void => {
+        const list = this.listeners.get(channel) ?? [];
+        this.listeners.set(
+          channel,
+          list.filter((fn) => fn !== (cb as (value: unknown) => void))
+        );
       },
-      removeAllListeners: (_channel: string): void => {
-        /* no-op */
+      removeAllListeners: (channel: string): void => {
+        // The removeAllListeners contract carries the channel; this fake
+        // tracks no global state to clear.
+        void channel;
       },
     };
     (
@@ -60,5 +73,16 @@ export class WindowApiFake {
   reset(): void {
     this.invocations.length = 0;
     this.responses.clear();
+    this.listeners.clear();
+  }
+
+  /**
+   * Emit a broadcast payload to every listener registered on `channel`
+   * (mirrors the main process pushing AI_CHAT_V2_STREAM_CHUNK/_COMPLETE).
+   */
+  emit(channel: string, data: unknown): void {
+    for (const cb of this.listeners.get(channel) ?? []) {
+      cb(data);
+    }
   }
 }

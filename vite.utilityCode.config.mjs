@@ -112,6 +112,14 @@ export default ({ mode }) => {
                 ],
                 exclude: ['**/*.test.ts', 'test/**', 'src/**/*.d.ts', '**/index.ts'],
             },
+            // Per-worker temp-dir isolation (V01 / re-audit checkbox 1).
+            // pluginImportService / pluginDiagnosticsService / pluginLoaderService
+            // tests fall back to the shared `os.tmpdir()/aifetchly-test` DB via
+            // BaseModule; under the default forks pool two workers collide on
+            // the shared file with SQLITE_BUSY. This setupFile assigns each
+            // worker a unique TMPDIR so the fallback is worker-unique.
+            // See test/vitest/_setup/isolatedTmpDir.ts.
+            setupFiles: ['./test/vitest/_setup/isolatedTmpDir.ts'],
         }
       
     })

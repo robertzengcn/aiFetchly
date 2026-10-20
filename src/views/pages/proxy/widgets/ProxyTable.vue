@@ -316,7 +316,7 @@ import {
 } from "@/views/utils/proxyImportParse";
 // import { json } from 'stream/consumers';
 let refreshInterval:ReturnType<typeof setInterval> | undefined;
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const options = reactive({
       page: 1, // Initial page
       itemsPerPage: 10, // Items per page

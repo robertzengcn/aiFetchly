@@ -4,12 +4,24 @@ import {
 } from "@/main-process/startup/GpuStartupPolicy";
 
 describe("GpuStartupPolicy", () => {
-  it("keeps GPU acceleration outside Linux", () => {
+  it("disables GPU in dev on every platform", () => {
+    expect(
+      resolveGpuStartupPolicy({}, "darwin", true)
+    ).toEqual({ disableGpu: true, reason: "dev" });
+    expect(
+      resolveGpuStartupPolicy({}, "win32", true)
+    ).toEqual({ disableGpu: true, reason: "dev" });
+    expect(
+      resolveGpuStartupPolicy({}, "linux", true)
+    ).toEqual({ disableGpu: true, reason: "dev" });
+  });
+
+  it("keeps GPU acceleration in packaged builds outside Linux", () => {
     expect(
       resolveGpuStartupPolicy(
         { WSL_DISTRO_NAME: "Ubuntu-22.04" },
         "darwin",
-        true
+        false
       )
     ).toEqual({ disableGpu: false, reason: "none" });
     expect(
@@ -72,6 +84,13 @@ describe("GpuStartupPolicy", () => {
         "linux",
         true
       ).disableGpu
+    ).toBe(true); // dev alone already disables; the flag value is irrelevant here
+    expect(
+      resolveGpuStartupPolicy(
+        { AIFETCHLY_DISABLE_GPU: "true" },
+        "linux",
+        false
+      ).disableGpu
     ).toBe(false);
   });
 
@@ -92,8 +111,8 @@ describe("GpuStartupPolicy", () => {
     ).toBe(false);
   });
 
-  it("does not disable GPU when no trigger applies", () => {
-    expect(resolveGpuStartupPolicy({}, "linux", true)).toEqual({
+  it("does not disable GPU when no trigger applies (packaged)", () => {
+    expect(resolveGpuStartupPolicy({}, "linux", false)).toEqual({
       disableGpu: false,
       reason: "none",
     });

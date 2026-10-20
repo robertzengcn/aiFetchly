@@ -134,7 +134,7 @@ import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist"
 import confirmDialog from '@/views/components/widgets/confirmDialog.vue';
 import ErrorDialog from '@/views/components/widgets/errorDialog.vue';
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const gstatus = ref<number>(0);
 const alert = ref(false);
 const alertTitle = ref("");
