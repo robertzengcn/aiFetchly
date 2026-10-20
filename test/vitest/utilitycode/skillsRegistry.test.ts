@@ -8,6 +8,10 @@ vi.mock("@/service/ToolExecutor", () => ({
   },
 }));
 
+vi.mock("@/service/agentTools/toolResultReadTool", () => ({
+  handleToolResultRead: vi.fn(),
+}));
+
 vi.mock("@/service/MCPToolService", () => ({
   MCPToolService: class {
     getEnabledMCPToolsAsFunctions = vi.fn().mockResolvedValue([]);
@@ -31,6 +35,10 @@ vi.mock("@/modules/token", () => ({
 }));
 
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { ToolExecutor } from "@/service/ToolExecutor";
+import { handleToolResultRead } from "@/service/agentTools/toolResultReadTool";
+
+const SAVED_OUTPUT_ID = "out_90e97252f118925b0f02d2abed1d885a";
 
 // Wipe the flag store between tests so each starts from the default (flags
 // on, no values) and no test's opt-out leaks into the next.
@@ -371,6 +379,73 @@ describe("SkillRegistry", () => {
       const hit = await SkillRegistry.findSkillForFileExtension(".pdf");
       expect(hit).not.toBeNull();
       expect(hit!.name).toBe(docSkillName);
+    });
+
+    test("read_attachment_content reads a saved tool-result id instead of rejecting it", async () => {
+      const skill = SkillRegistry.getSkill("read_attachment_content");
+      expect(skill).not.toBeNull();
+      expect(skill!.description).toContain("tool_result_read");
+      expect(skill!.description).toContain("out_");
+
+      vi.mocked(handleToolResultRead).mockResolvedValue({
+        success: true,
+        result: {
+          output_id: SAVED_OUTPUT_ID,
+          text: "company,email\nAcme,sales@acme.test",
+          complete: true,
+          next_cursor: null,
+        },
+      });
+      vi.mocked(ToolExecutor.execute).mockClear();
+
+      const outcome = await skill!.execute(
+        { attachment_ref: SAVED_OUTPUT_ID },
+        {
+          conversationId: "v2-cc97b77b-4ad8-4f04-8b11-96322a62885f",
+          toolCallId: "call_545b6225444d408f859db37b",
+        }
+      );
+
+      expect(handleToolResultRead).toHaveBeenCalledWith(
+        { output_id: SAVED_OUTPUT_ID },
+        expect.objectContaining({
+          conversationId: "v2-cc97b77b-4ad8-4f04-8b11-96322a62885f",
+        })
+      );
+      expect(ToolExecutor.execute).not.toHaveBeenCalled();
+      expect(outcome.success).toBe(true);
+      expect(outcome.result).toMatchObject({
+        success: true,
+        content: "company,email\nAcme,sales@acme.test",
+        output_id: SAVED_OUTPUT_ID,
+        complete: true,
+        truncated: false,
+      });
+    });
+
+    test("read_attachment_content reports staged-attachment failures as unsuccessful", async () => {
+      const skill = SkillRegistry.getSkill("read_attachment_content");
+      expect(skill).not.toBeNull();
+      vi.mocked(ToolExecutor.execute).mockResolvedValueOnce({
+        success: false,
+        error: "Attachment file not found",
+        telemetryMessage: "Attachment file not found",
+        stack: "Error: Attachment file not found\n    at secret/path.js:1:1",
+      });
+
+      const outcome = await skill!.execute(
+        { attachment_ref: "1710000000000-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" },
+        {
+          conversationId: "conv-1",
+          toolCallId: "call-1",
+        }
+      );
+
+      expect(outcome.success).toBe(false);
+      expect(outcome.result.success).toBe(false);
+      expect(outcome.result.error).toBe("Attachment file not found");
+      expect(outcome.result.stack).toBeUndefined();
+      expect(outcome.result.telemetryMessage).toBeUndefined();
     });
 
     test("returns null when user skill has no supportedFileTypes", async () => {
