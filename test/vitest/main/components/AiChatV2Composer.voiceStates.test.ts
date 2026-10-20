@@ -22,7 +22,13 @@ vi.mock("@/views/api/aiChatAtMentions", () => ({
 }));
 
 vi.mock("@/views/components/aiChatV2/voice/BrowserVoiceRecorder", () => ({
-  BrowserVoiceRecorder: vi.fn(),
+  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock() {
+    return {
+      start: vi.fn(),
+      stop: vi.fn(),
+      dispose: vi.fn(),
+    };
+  }),
 }));
 
 const i18n = createI18n({

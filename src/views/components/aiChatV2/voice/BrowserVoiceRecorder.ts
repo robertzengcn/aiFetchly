@@ -39,6 +39,13 @@ export interface BrowserVoiceRecorderDeps {
   clearTimeoutFn?: (handle: ReturnType<typeof setTimeout>) => void;
   now?: () => number;
   blobFactory?: (parts: BlobPart[], options: { type: string }) => Blob;
+  /**
+   * Audit R2 N05: invoked when the max-duration cap stops the recording by
+   * itself. Receives the captured audio so the owner (the composer) can
+   * transcribe it through the same release path as an explicit Stop — a
+   * discarded capture silently loses the user's speech (FR-VOI-006).
+   */
+  onAutoStop?: (result: RecordingResult) => void;
 }
 
 const CANDIDATE_MIME_TYPES = [
@@ -71,6 +78,8 @@ export class BrowserVoiceRecorder {
     parts: BlobPart[],
     options: { type: string }
   ) => Blob;
+  /** Max-duration completion sink (audit R2 N05); set at construction. */
+  private readonly autoStopListener: ((result: RecordingResult) => void) | null;
 
   private state: RecorderState = "idle";
   private stream: MediaStreamLike | null = null;
@@ -80,6 +89,8 @@ export class BrowserVoiceRecorder {
   private startedAt = 0;
   private maxTimer: ReturnType<typeof setTimeout> | null = null;
   private stopResolver: ((result: RecordingResult) => void) | null = null;
+  /** The pending in-flight stop was triggered by the max-duration cap. */
+  private autoStopPending = false;
 
   constructor(deps: BrowserVoiceRecorderDeps = {}) {
     this.getUserMedia =
@@ -101,6 +112,7 @@ export class BrowserVoiceRecorder {
     this.now = deps.now ?? (() => Date.now());
     this.blobFactory =
       deps.blobFactory ?? ((parts, options) => new Blob(parts, options));
+    this.autoStopListener = deps.onAutoStop ?? null;
   }
 
   get recordingState(): RecorderState {
@@ -124,14 +136,28 @@ export class BrowserVoiceRecorder {
     recorder.onstop = () => {
       const blob = this.blobFactory(this.chunks, { type: this.selectedMime });
       const durationMs = this.now() - this.startedAt;
+      const result: RecordingResult = {
+        blob,
+        mimeType: this.selectedMime,
+        durationMs,
+      };
       const resolver = this.stopResolver;
       this.stopResolver = null;
+      const autoStop = this.autoStopPending;
+      this.autoStopPending = false;
       this.cleanup();
-      resolver?.({ blob, mimeType: this.selectedMime, durationMs });
+      // The max-duration cap consumed this capture (audit R2 N05): hand it
+      // to the owner before resolving the (discarded) stop promise so the
+      // recording is transcribed, not thrown away.
+      if (autoStop) {
+        this.autoStopListener?.(result);
+      }
+      resolver?.(result);
     };
     this.startedAt = this.now();
     this.state = "recording";
     this.maxTimer = this.setTimeoutFn(() => {
+      this.autoStopPending = true;
       void this.stop().catch(() => {
         /* max-duration stop failed; leave state to next explicit stop */
       });
@@ -152,6 +178,21 @@ export class BrowserVoiceRecorder {
       this.stopResolver = resolve;
       this.recorder?.stop();
     });
+  }
+
+  /**
+   * Dispose the recorder (audit R2 N06 / FR-LIF-002): clear the max-duration
+   * timer, drop any in-flight resolver and release the microphone. Used when
+   * the owning composer unmounts so a live capture never outlives its owner.
+   */
+  dispose(): void {
+    if (this.maxTimer) {
+      this.clearTimeoutFn(this.maxTimer);
+      this.maxTimer = null;
+    }
+    this.autoStopPending = false;
+    this.stopResolver = null;
+    this.cleanup();
   }
 
   private pickMimeType(): string {

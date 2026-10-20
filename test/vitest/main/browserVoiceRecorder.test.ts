@@ -141,6 +141,86 @@ describe("BrowserVoiceRecorder", () => {
     expect(rec.recordingState).toBe("idle");
   });
 
+  it("hands the max-duration capture to onAutoStop instead of discarding it (audit R2 N05)", async () => {
+    const fx = makeFakeMedia();
+    const autoResults: unknown[] = [];
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: (m) => m === "audio/webm;codecs=opus",
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+      now: () => 1000,
+      blobFactory: (parts) => ({ size: parts.length }) as unknown as Blob,
+      onAutoStop: (result) => autoResults.push(result),
+    });
+
+    await rec.start(100);
+    fx.recorderRef()?.pushData({ size: 9 } as unknown as Blob);
+    fx.getMaxCallback()!();
+    await Promise.resolve();
+    expect(autoResults).toHaveLength(1);
+    const result = autoResults[0] as { mimeType: string; blob: { size: number } };
+    expect(result.mimeType).toBe("audio/webm;codecs=opus");
+    expect(result.blob.size).toBe(1);
+    expect(rec.recordingState).toBe("idle");
+    expect(fx.tracksStopped.length).toBe(1);
+  });
+
+  it("does not invoke onAutoStop for an explicit stop (audit R2 N05)", async () => {
+    const fx = makeFakeMedia();
+    const onAutoStop = vi.fn();
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+      now: () => 1000,
+      blobFactory: (parts) => ({ size: parts.length }) as unknown as Blob,
+      onAutoStop,
+    });
+
+    await rec.start(60_000);
+    const result = await rec.stop();
+    expect(result.blob.size).toBe(0);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    expect(rec.recordingState).toBe("idle");
+  });
+
+  it("dispose releases the mic, drops in-flight capture, and never resolves to a transcript (audit R2 N06)", async () => {
+    const fx = makeFakeMedia();
+    const onAutoStop = vi.fn();
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+      now: () => 1000,
+      blobFactory: (parts) => ({ size: parts.length }) as unknown as Blob,
+      onAutoStop,
+    });
+
+    await rec.start(60_000);
+    fx.recorderRef()?.pushData({ size: 3 } as unknown as Blob);
+    rec.dispose();
+    expect(rec.recordingState).toBe("idle");
+    expect(fx.tracksStopped.length).toBe(1);
+    // The max timer was cleared — dispose() removed it.
+    expect(fx.clearTimeoutFn).toHaveBeenCalled();
+    expect(fx.getMaxCallback()).toBeNull();
+    // Late onstop from the disposed recorder flags no auto completion and
+    // leaves no resolver behind.
+    fx.recorderRef()?.onstop?.();
+    await Promise.resolve();
+    expect(onAutoStop).not.toHaveBeenCalled();
+    // The disposed recorder can keep starting fresh sessions (no residue).
+    await rec.start(60_000);
+    expect(rec.recordingState).toBe("recording");
+    await rec.stop();
+  });
+
   it("throws if start is called while already recording", async () => {
     const fx = makeFakeMedia();
     const rec = new BrowserVoiceRecorder({

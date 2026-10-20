@@ -663,7 +663,26 @@ if (draftStore) {
 // The composer owns the recorder + transcribe call for the MVP: the transcript
 // is appended to the draft for review (no auto-send). Auto-send + spoken
 // responses move orchestration to AiChatV2.vue in later phases.
-const voiceRecorder = new BrowserVoiceRecorder();
+const voiceRecorder = new BrowserVoiceRecorder({
+  // Audit R2 N05: the max-duration cap stops the recording on its own —
+  // hand the captured audio to the same release chain as an explicit Stop
+  // instead of discarding it (FR-VOI-006). The guard re-enters only when a
+  // recording is still flagged live (one completion per session).
+  onAutoStop: (recording) => {
+    if (!isRecording.value) return;
+    const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
+    if (stillOwnsComposition()) {
+      voiceSessionOwnerFiles = [...selectedFiles.value];
+    }
+    const filesBeforeVoiceSend = voiceSessionOwnerFiles;
+    isRecording.value = false;
+    void processVoiceRecording(
+      recording,
+      voiceOwnerDraftKey,
+      filesBeforeVoiceSend
+    );
+  },
+});
 const isRecording = ref(false);
 const isTranscribing = ref(false);
 const showVoiceModelNotice = ref(false);
@@ -866,6 +885,159 @@ function recorderErrorNotice(err: unknown): string {
   return base;
 }
 
+/**
+ * Audit R2 N05: consume a finished recording (transcribe -> owner-gated
+ * append / park / acceptance). Both the explicit Stop release and the
+ * max-duration auto-stop share this chain so the auto-cap never throws the
+ * user's speech away (FR-VOI-006) and both paths keep the N01/N02/N03
+ * ownership semantics.
+ */
+async function processVoiceRecording(
+  recording: Awaited<ReturnType<BrowserVoiceRecorder["stop"]>>,
+  voiceOwnerDraftKey: string | null,
+  filesBeforeVoiceSend: File[]
+): Promise<void> {
+  isTranscribing.value = true;
+  try {
+    // Decode/resample (WebM -> WAV). Distinct failure kind from the worker
+    // transcription call below (TODO P2 error classification).
+    let audioBase64: string;
+    try {
+      audioBase64 = await blobToWavBase64(recording.blob);
+    } catch {
+      // A stale chain (conversation switched, audit 2026-10-20 B01) shows
+      // nothing in the newly selected conversation.
+      if (stillOwnsComposition()) {
+        showNotice(
+          t("aiChatV2.voice.conversion_failed") ||
+            "Could not convert the recording."
+        );
+      }
+      return;
+    }
+    // Transcribe via the worker IPC.
+    let result: Awaited<ReturnType<typeof transcribeVoice>>;
+    try {
+      result = await transcribeVoice({
+        audioBase64,
+        mimeType: "audio/wav",
+      });
+    } catch {
+      // Bounded public message only (PRD §14.5/§23): the worker's raw
+      // exception can carry filesystem paths or provider details and is
+      // never appended to renderer-visible text. Stale chains (audit
+      // 2026-10-20 B01) stay silent in the switched conversation.
+      if (stillOwnsComposition()) {
+        showNotice(
+          t("aiChatV2.voice.transcription_failed") ||
+            "Voice transcription failed."
+        );
+      }
+      return;
+    }
+    const transcript = result.transcript.trim();
+    // Ownership re-check (audit 2026-10-20 B01): if the conversation
+    // switched while stop/convert/transcribe were pending, this result
+    // belongs to the originating conversation, never to the newly
+    // selected one.
+    const resolvedInOwner = stillOwnsComposition();
+    if (transcript.length === 0) {
+      if (resolvedInOwner) {
+        showNotice(
+          t("aiChatV2.voice.empty_transcript") || "No speech was detected."
+        );
+      }
+    } else if (!resolvedInOwner) {
+      // Park the transcript in the originating conversation's draft (no
+      // auto-send, no append into the switched conversation); the user
+      // finds it when they return.
+      parkVoiceTranscript(voiceOwnerDraftKey, transcript);
+    } else if (props.voiceAutoSend) {
+      if (props.voiceChatReady === false) {
+        // Chat can't accept the message right now (no model / unavailable).
+        // Keep the transcript in the draft for the user and surface a
+        // concise error instead of losing it (PRD §7.13 / TODO P1-5).
+        appendTranscript(transcript);
+        showNotice(
+          t("aiChatV2.voice.chat_unavailable") ||
+            "Chat is unavailable. Your transcript was kept in the composer."
+        );
+        return;
+      }
+      // Auto-send: route the transcript through the existing send path,
+      // preserving the pre-voice attachments snapshot (PRD §7.4). Flag the
+      // send as voice-originated so `after_voice_input` TTS speaks the
+      // reply.
+      // Audit R2 N03: the restore baseline is the draft text immediately
+      // BEFORE the transcript insertion, never the pre-voice snapshot —
+      // edits typed during conversion/transcription belong to the user.
+      const preAppendDraftText = draft.value;
+      appendTranscript(transcript);
+      const submittedDraftText = draft.value;
+      emit("send", transcript, filesBeforeVoiceSend, {
+        fromVoice: true,
+        onAccepted: () => {
+          // Only the transcript and attachments belong to this voice
+          // request (audit 2026-10-20 B02; R2 N02/N03): the restore never
+          // targets the newly selected conversation, must not roll back
+          // edits made outside the submitted delta, and when the owner is
+          // no longer selected it still consumes the submitted delta from
+          // the originating conversation's STORED draft.
+          if (stillOwnsComposition()) {
+            if (draft.value === submittedDraftText) {
+              draft.value = preAppendDraftText;
+            }
+            if (sameFileList(selectedFiles.value, filesBeforeVoiceSend)) {
+              selectedFiles.value = [];
+            }
+          } else {
+            consumeVoiceSubmissionFromStore(
+              voiceOwnerDraftKey,
+              preAppendDraftText,
+              submittedDraftText,
+              filesBeforeVoiceSend
+            );
+          }
+        },
+      });
+    } else {
+      appendTranscript(transcript);
+    }
+  } finally {
+    isTranscribing.value = false;
+  }
+}
+
+/** Release an in-flight recording through the shared transcription chain. */
+async function releaseVoiceRecording(): Promise<void> {
+  if (!isRecording.value) return;
+  // Audit 2026-10-20 B01/R2: stop -> convert -> transcribe is a chain of
+  // awaits. The owner was already bound at Start (N01) — the stop click
+  // must not re-adopt whatever conversation is selected now. Snapshot the
+  // files at the composition moment, but only while the owner is selected;
+  // a session stopped in another conversation keeps the tray captured at
+  // Start and never inherits the foreign tray.
+  const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
+  if (stillOwnsComposition()) {
+    voiceSessionOwnerFiles = [...selectedFiles.value];
+  }
+  const filesBeforeVoiceSend = voiceSessionOwnerFiles;
+  isRecording.value = false;
+  try {
+    const recording = await voiceRecorder.stop();
+    await processVoiceRecording(
+      recording,
+      voiceOwnerDraftKey,
+      filesBeforeVoiceSend
+    );
+  } catch (err) {
+    // voiceRecorder.stop() failure (rare) — classify into a clear kind.
+    if (stillOwnsComposition()) {
+      showNotice(recorderErrorNotice(err));
+    }
+  }
+}
+
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
   // Policy-disabled builds keep the affordance as a SETUP entry point: the
@@ -884,133 +1056,9 @@ async function onMicClick(): Promise<void> {
     return;
   }
   if (isRecording.value) {
-    // Audit 2026-10-20 B01/R2: stop -> convert -> transcribe is a chain of
-    // awaits. The owner was already bound at Start (N01) — the stop click
-    // must not re-adopt whatever conversation is selected now. Snapshot the
-    // files at the composition moment, but only while the owner is selected;
-    // a session stopped in another conversation keeps the tray captured at
-    // Start and never inherits the foreign tray.
-    const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
-    if (stillOwnsComposition()) {
-      voiceSessionOwnerFiles = [...selectedFiles.value];
-    }
-    const filesBeforeVoiceSend = voiceSessionOwnerFiles;
-    isRecording.value = false;
-    isTranscribing.value = true;
-    try {
-      const recording = await voiceRecorder.stop();
-      // Decode/resample (WebM -> WAV). Distinct failure kind from the worker
-      // transcription call below (TODO P2 error classification).
-      let audioBase64: string;
-      try {
-        audioBase64 = await blobToWavBase64(recording.blob);
-      } catch {
-        // A stale chain (conversation switched, audit 2026-10-20 B01) shows
-        // nothing in the newly selected conversation.
-        if (stillOwnsComposition()) {
-          showNotice(
-            t("aiChatV2.voice.conversion_failed") ||
-              "Could not convert the recording.",
-          );
-        }
-        return;
-      }
-      // Transcribe via the worker IPC.
-      let result: Awaited<ReturnType<typeof transcribeVoice>>;
-      try {
-        result = await transcribeVoice({
-          audioBase64,
-          mimeType: "audio/wav",
-        });
-      } catch {
-        // Bounded public message only (PRD §14.5/§23): the worker's raw
-        // exception can carry filesystem paths or provider details and is
-        // never appended to renderer-visible text. Stale chains (audit
-        // 2026-10-20 B01) stay silent in the switched conversation.
-        if (stillOwnsComposition()) {
-          showNotice(
-            t("aiChatV2.voice.transcription_failed") ||
-              "Voice transcription failed.",
-          );
-        }
-        return;
-      }
-      const transcript = result.transcript.trim();
-      // Ownership re-check (audit 2026-10-20 B01): if the conversation
-      // switched while stop/convert/transcribe were pending, this result
-      // belongs to the originating conversation, never to the newly
-      // selected one.
-      const resolvedInOwner = stillOwnsComposition();
-      if (transcript.length === 0) {
-        if (resolvedInOwner) {
-          showNotice(
-            t("aiChatV2.voice.empty_transcript") || "No speech was detected.",
-          );
-        }
-      } else if (!resolvedInOwner) {
-        // Park the transcript in the originating conversation's draft (no
-        // auto-send, no append into the switched conversation); the user
-        // finds it when they return.
-        parkVoiceTranscript(voiceOwnerDraftKey, transcript);
-      } else if (props.voiceAutoSend) {
-        if (props.voiceChatReady === false) {
-          // Chat can't accept the message right now (no model / unavailable).
-          // Keep the transcript in the draft for the user and surface a
-          // concise error instead of losing it (PRD §7.13 / TODO P1-5).
-          appendTranscript(transcript);
-          showNotice(
-            t("aiChatV2.voice.chat_unavailable") ||
-              "Chat is unavailable. Your transcript was kept in the composer.",
-          );
-          return;
-        }
-        // Auto-send: route the transcript through the existing send path,
-        // preserving the pre-voice attachments snapshot (PRD §7.4). Flag the
-        // send as voice-originated so `after_voice_input` TTS speaks the
-        // reply.
-        // Audit R2 N03: the restore baseline is the draft text immediately
-        // BEFORE the transcript insertion, never the pre-voice snapshot —
-        // edits typed during conversion/transcription belong to the user.
-        const preAppendDraftText = draft.value;
-        appendTranscript(transcript);
-        const submittedDraftText = draft.value;
-        emit("send", transcript, filesBeforeVoiceSend, {
-          fromVoice: true,
-          onAccepted: () => {
-            // Only the transcript and attachments belong to this voice
-            // request (audit 2026-10-20 B02; R2 N02/N03): the restore never
-            // targets the newly selected conversation, must not roll back
-            // edits made outside the submitted delta, and when the owner is
-            // no longer selected it still consumes the submitted delta from
-            // the originating conversation's STORED draft.
-            if (stillOwnsComposition()) {
-              if (draft.value === submittedDraftText) {
-                draft.value = preAppendDraftText;
-              }
-              if (sameFileList(selectedFiles.value, filesBeforeVoiceSend)) {
-                selectedFiles.value = [];
-              }
-            } else {
-              consumeVoiceSubmissionFromStore(
-                voiceOwnerDraftKey,
-                preAppendDraftText,
-                submittedDraftText,
-                filesBeforeVoiceSend
-              );
-            }
-          },
-        });
-      } else {
-        appendTranscript(transcript);
-      }
-    } catch (err) {
-      // voiceRecorder.stop() failure (rare) — classify into a clear kind.
-      if (stillOwnsComposition()) {
-        showNotice(recorderErrorNotice(err));
-      }
-    } finally {
-      isTranscribing.value = false;
-    }
+    // Audit R2 N05: stop -> convert -> transcribe runs through the shared
+    // release chain (also driven by the max-duration auto-stop).
+    await releaseVoiceRecording();
     return;
   }
   // Start recording.
@@ -1150,6 +1198,13 @@ onBeforeUnmount(
     }
   })
 );
+
+// Audit R2 N06 (FR-LIF-002): a recording must not outlive its owner. When the
+// composer unmounts (route change / selection rebuild), release the microphone
+// and drop any in-flight capture — it can no longer be transcribed safely.
+onBeforeUnmount(() => {
+  voiceRecorder.dispose();
+});
 
 function closeSlash(): void {
   if (slashDebounce) {

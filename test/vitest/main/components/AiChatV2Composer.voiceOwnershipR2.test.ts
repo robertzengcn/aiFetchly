@@ -33,13 +33,20 @@ const { startMock, stopMock, transcribeVoiceMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/views/components/aiChatV2/voice/BrowserVoiceRecorder", () => ({
-  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock() {
+  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock(
+    deps?: { onAutoStop?: (result: unknown) => void }
+  ) {
+    capturedRecorderDeps = deps ?? {};
     return {
       start: startMock,
       stop: stopMock,
+      dispose: disposeMock,
     };
   }),
 }));
+
+let capturedRecorderDeps: { onAutoStop?: (result: unknown) => void } = {};
+const disposeMock = vi.fn();
 
 vi.mock("@/views/components/aiChatV2/voice/audioConversion", () => ({
   blobToWavBase64: vi.fn().mockResolvedValue("BASE64_WAV"),
@@ -388,5 +395,78 @@ describe("AiChatV2Composer voice ownership R2 (N01/N02/N03)", () => {
     // Only the exact submitted snapshot consumes the delta; a changed draft
     // keeps everything the user has (the transcript was already delivered).
     expect(draftText(wrapper)).toBe("A typed draft hello world plus");
+  });
+
+  // --- N05: max-duration auto-stop transcribes through the release chain -----
+
+  it("N05: the recorder's max-duration auto-stop transcribes and auto-sends like an explicit Stop", async () => {
+    transcribeVoiceMock.mockResolvedValue({ transcript: "cap recording" });
+    const wrapper = mountComposer(pinia, { voiceAutoSend: true });
+    await wrapper.find("textarea").setValue("A typed draft");
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Recording");
+
+    // Simulate the recorder hitting the max-duration cap: it stops itself
+    // and hands the capture to the composer's onAutoStop dependency.
+    expect(capturedRecorderDeps.onAutoStop).toBeTypeOf("function");
+    capturedRecorderDeps.onAutoStop!({
+      blob: new Blob(["x"], { type: "audio/webm" }),
+      mimeType: "audio/webm",
+      durationMs: 60_000,
+    });
+    resolveTranscription({ transcript: "cap recording" });
+    await flushPromises();
+
+    // Same release chain as Stop: send emitted with voice provenance, the
+    // tray snapshot from the owner, and the transcript rides the draft.
+    const events = wrapper.emitted("send");
+    expect(events).toHaveLength(1);
+    expect(events![0][0]).toBe("cap recording");
+    expect((events![0][2] as SendOptions).fromVoice).toBe(true);
+    expect(draftText(wrapper)).toBe("A typed draft cap recording");
+    // The recorder was NOT stopped again by the release chain (it already
+    // stopped itself at the cap).
+    expect(stopMock).not.toHaveBeenCalled();
+  });
+
+  it("N05: a max-duration auto-stop fired while the owner is deselected parks the transcript in the owner's draft", async () => {
+    transcribeVoiceMock.mockResolvedValue({ transcript: "A private speech" });
+    const wrapper = mountComposer(pinia, { voiceAutoSend: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    await wrapper.setProps({ draftKey: "convB" });
+    capturedRecorderDeps.onAutoStop!({
+      blob: new Blob(["x"], { type: "audio/webm" }),
+      mimeType: "audio/webm",
+      durationMs: 60_000,
+    });
+    resolveTranscription({ transcript: "A private speech" });
+    await flushPromises();
+    expect(wrapper.emitted("send")).toBeUndefined();
+    expect(draftText(wrapper)).toBe("");
+    expect(useComposerDraftStore(pinia).getDraft("convA")?.text).toBe(
+      "A private speech"
+    );
+    expect(useComposerDraftStore(pinia).getDraft("convB")).toBeNull();
+  });
+
+  // --- N06: recorder lifetime is bounded by the composer --------------------
+
+  it("N06: unmounting the composer disposes the recorder", async () => {
+    const wrapper = mountComposer(pinia, {});
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    expect(disposeMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("N06: unmount disposes the recorder even without an active session", async () => {
+    const wrapper = mountComposer(pinia, {});
+    await flushPromises();
+    expect(disposeMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+    expect(disposeMock).toHaveBeenCalledTimes(1);
   });
 });
