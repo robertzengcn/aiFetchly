@@ -91,6 +91,12 @@ export class BrowserVoiceRecorder {
   private stopResolver: ((result: RecordingResult) => void) | null = null;
   /** The pending in-flight stop was triggered by the max-duration cap. */
   private autoStopPending = false;
+  /**
+   * Monotonic acquisition generation (audit 2026-10-21 R02): bumped by every
+   * start() request and by dispose(), so a getUserMedia promise that resolves
+   * after its session was invalidated can never arm a live capture.
+   */
+  private acquisitionSeq = 0;
 
   constructor(deps: BrowserVoiceRecorderDeps = {}) {
     this.getUserMedia =
@@ -124,7 +130,18 @@ export class BrowserVoiceRecorder {
     if (this.state === "recording") {
       throw new Error("Already recording.");
     }
+    // Each start request invalidates any earlier in-flight acquisition; an
+    // unbalanced dispose() (below) does the same. The resolved stream is
+    // only adopted while its session is still the newest one.
+    const acquisition = ++this.acquisitionSeq;
     const stream = await this.getUserMedia({ audio: true });
+    if (acquisition !== this.acquisitionSeq) {
+      // Audit 2026-10-21 R02: the acquisition was disposed (or replaced by a
+      // newer start) while the permission prompt was pending — release the
+      // captured stream immediately and abort without arming a session.
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error("Recording was cancelled during acquisition.");
+    }
     this.stream = stream;
     this.selectedMime = this.pickMimeType();
     const recorder = this.mediaRecorderFactory(stream, this.selectedMime);
@@ -186,6 +203,10 @@ export class BrowserVoiceRecorder {
    * the owning composer unmounts so a live capture never outlives its owner.
    */
   dispose(): void {
+    // Invalidate any in-flight acquisition first (audit 2026-10-21 R02): a
+    // getUserMedia promise that resolves after disposal must not arm a live
+    // capture whose owner is gone.
+    this.acquisitionSeq += 1;
     if (this.maxTimer) {
       this.clearTimeoutFn(this.maxTimer);
       this.maxTimer = null;

@@ -237,4 +237,25 @@ describe("BrowserVoiceRecorder", () => {
     // cleanup so later tests/the timer don't dangle
     await rec.stop();
   });
+
+  it("AUDIT3 dispose during microphone acquisition prevents a late recorder start", async () => {
+    const fx = makeFakeMedia();
+    let giveStream: (stream: MediaStreamLike) => void = () => undefined;
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: () => new Promise(resolve => { giveStream = resolve; }),
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+    });
+    const stopped = vi.fn();
+    const started = rec.start();
+    rec.dispose();
+    giveStream({ getTracks: () => [{ stop: stopped }] });
+    await started.catch(() => undefined);
+    const stateAfterResolve = rec.recordingState;
+    rec.dispose();
+    expect(stateAfterResolve).toBe("idle");
+    expect(fx.mediaRecorderFactory).not.toHaveBeenCalled();
+  });
 });
