@@ -124,12 +124,16 @@ export class EmailReplyApprovalService {
 
     // Re-run the deterministic output validator against the trusted revision
     // content (do not trust persisted JSON alone) and refuse approval for any
-    // `block` finding (FR-012, P0.4). Block findings (AI/leakage disclosure,
-    // forbidden phrases) are never sendable. Advisory findings (commitments,
-    // payment instructions, recipients, attachment claims) are recorded
-    // as warnings on the revision and do NOT gate approval here — the send
-    // tool's `requiresConfirmation` confirmation gesture (or the renderer's
-    // explicit approve action) is the human gate for advisory content.
+    // `block` finding (FR-012, P0.4). Block findings (prompt/tool/retrieval
+    // leakage, forbidden phrases) are never sendable. AI-self-disclosure was
+    // removed from the block set on 2026-10-20 (over-broad regex deadlocked
+    // sends on product-name false positives); the prompt-time
+    // BANNED_AI_PHRASES list and the model's requiresHumanReview flag remain
+    // as softer gates. Advisory findings (commitments, payment instructions,
+    // recipients, attachment claims) are recorded as warnings on the revision
+    // and do NOT gate approval here — the send tool's `requiresConfirmation`
+    // confirmation gesture (or the renderer's explicit approve action) is the
+    // human gate for advisory content.
     const validation = validateReplyOutput(revision.subject, revision.bodyText);
     if (!validation.sendableAfterApproval) {
       const codes = validation.findings
