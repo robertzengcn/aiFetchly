@@ -2977,6 +2977,7 @@ export default {
       document_ready: "ドキュメント準備完了",
       document_failed: "ドキュメント処理に失敗しました",
       image_alt: "添付画像：{name}",
+      text_required: "添付ファイルと一緒に送るメッセージを入力してください。",
     },
     generatedImageRefs: {
       useAsReference: "参照として使用",

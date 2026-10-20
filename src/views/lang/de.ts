@@ -3046,6 +3046,7 @@ export default {
       document_ready: "Dokument bereit",
       document_failed: "Dokumentverarbeitung fehlgeschlagen",
       image_alt: "Angehängtes Bild: {name}",
+      text_required: "Fügen Sie eine Nachricht hinzu, um Ihre Anhänge zu senden.",
     },
     generatedImageRefs: {
       useAsReference: "Als Referenz verwenden",

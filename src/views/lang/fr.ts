@@ -3036,6 +3036,7 @@ export default {
       document_ready: "Document prêt",
       document_failed: "Échec du traitement du document",
       image_alt: "Image jointe : {name}",
+      text_required: "Ajoutez un message pour envoyer vos pièces jointes.",
     },
     generatedImageRefs: {
       useAsReference: "Utiliser comme référence",

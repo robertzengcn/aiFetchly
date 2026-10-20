@@ -3054,6 +3054,7 @@ export default {
       document_ready: "Documento listo",
       document_failed: "Error al procesar el documento",
       image_alt: "Imagen adjunta: {name}",
+      text_required: "Escribe un mensaje para enviar con tus archivos adjuntos.",
     },
     generatedImageRefs: {
       useAsReference: "Usar como referencia",

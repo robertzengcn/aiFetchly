@@ -2880,6 +2880,7 @@ export default {
       document_ready: "文档就绪",
       document_failed: "文档处理失败",
       image_alt: "附件图片：{name}",
+      text_required: "请为附件添加一句消息后再发送。",
     },
     generatedImageRefs: {
       useAsReference: "用作参考",

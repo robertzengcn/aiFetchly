@@ -1431,6 +1431,19 @@ const onSend = (): void => {
   ) {
     return;
   }
+  // Audit 2026-10-20 B05: an attachment-only message (files, no text) never
+  // reached a run — the store's empty-text guard silently returned false
+  // after successful attachment normalisation, leaving the user with no
+  // explanation. Reject it here with bounded localized copy; the files stay
+  // selected for the user to add their message. Generated-image references
+  // keep their separate fallback prompt supplied by the send path.
+  if (!text && selectedFiles.value.length > 0) {
+    showNotice(
+      t("aiChatV2.attachments.text_required") ||
+        "Add a message to send with your attachments."
+    );
+    return;
+  }
   closeAtMention();
   const missingPasteIds = parsePastedTextRefs(text)
     .filter(

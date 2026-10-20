@@ -3053,6 +3053,7 @@ export default {
       document_ready: "Document ready",
       document_failed: "Document processing failed",
       image_alt: "Attached image: {name}",
+      text_required: "Add a message to send with your attachments.",
     },
     generatedImageRefs: {
       useAsReference: "Use as reference",
