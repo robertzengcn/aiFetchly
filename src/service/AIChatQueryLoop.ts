@@ -90,6 +90,31 @@ import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget
 export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
 /** Outbound-email draft tool name (never send-gated; skipPermissionCheck). */
 export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
+
+/**
+ * Whether this tool call should skip SkillExecutor's generic permission card.
+ *
+ * Drafts never contact recipients, so they skip. An allowed outbound-email
+ * gate is the request-scoped authorization for `start_email_send_task`
+ * (design §14.2): that exact call must not also show the generic approval
+ * card. Chat Full access does not fabricate this authorization by itself;
+ * only an allowed gate does. An explicit user denial is not skipped, so the
+ * normal permission path can still refuse the call.
+ */
+export function shouldSkipGenericToolPermission(input: {
+  readonly toolName: string;
+  readonly outboundSendGateAllowed: boolean;
+  readonly explicitlyDenied: boolean;
+}): boolean {
+  if (input.toolName === OUTBOUND_EMAIL_DRAFT_TOOL) {
+    return true;
+  }
+  return (
+    input.toolName === OUTBOUND_EMAIL_SEND_TOOL &&
+    input.outboundSendGateAllowed &&
+    !input.explicitlyDenied
+  );
+}
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -452,6 +477,12 @@ interface PreparedToolCall {
     authorizationId: number;
     batchHash: string;
   };
+  /**
+   * True only when `start_email_send_task` passed the outbound gate for this
+   * exact call. That allowed decision is the request-scoped authorization, so
+   * the generic permission card must not be shown again (§14.2).
+   */
+  outboundSendGateAllowed?: boolean;
 }
 
 /**
@@ -3566,6 +3597,9 @@ export class AIChatQueryLoop {
                 batchHash: string;
               }
             | undefined;
+          // Set only after the gate allows this exact send. The generic
+          // permission card is then skipped; a blocked gate never reaches it.
+          let outboundSendGateAllowed = false;
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const gateDecision = await this.evaluateOutboundEmailGate(
               input,
@@ -3617,6 +3651,7 @@ export class AIChatQueryLoop {
                 batchHash: gateDecision.batchHash,
               };
             }
+            outboundSendGateAllowed = true;
           }
 
           // T23d (§10.2): durable operation fence for the consequential send.
@@ -3728,7 +3763,8 @@ export class AIChatQueryLoop {
           const preparedCall = await this.prepareToolCall(
             input,
             executableCall,
-            outboundAuthorization
+            outboundAuthorization,
+            outboundSendGateAllowed
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           await emitToolCall(effectiveArguments);
@@ -4380,7 +4416,8 @@ export class AIChatQueryLoop {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
+    },
+    outboundSendGateAllowed = false
   ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
@@ -4423,9 +4460,16 @@ export class AIChatQueryLoop {
               // Trusted gate-resolved authorization for an allowed send
               // (§15.1); threaded for uniformity with the foreground path.
               outboundAuthorization,
-              // Draft generation only persists reviewable local state; it
-              // does not contact recipients. The send tool remains gated.
-              skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+              // Drafts never contact recipients. An allowed send gate is the
+              // request-scoped authorization, so that exact call skips the
+              // generic permission card (§14.2). Explicit denial still prompts.
+              skipPermissionCheck: shouldSkipGenericToolPermission({
+                toolName: call.name,
+                outboundSendGateAllowed,
+                explicitlyDenied:
+                  SkillPermissionService.getPermissionStatus(call.name) ===
+                  "denied",
+              }),
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -4819,7 +4863,8 @@ export class AIChatQueryLoop {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
+    },
+    outboundSendGateAllowed = false
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
     const descriptor = this.resolveHookToolDescriptor(input, call);
@@ -4844,6 +4889,7 @@ export class AIChatQueryLoop {
           Date.now() - startedAt
         ),
         outboundAuthorization,
+        outboundSendGateAllowed,
       };
     }
 
@@ -4858,6 +4904,7 @@ export class AIChatQueryLoop {
       preAggregate,
       effectiveCall,
       outboundAuthorization,
+      outboundSendGateAllowed,
     };
   }
 
@@ -4871,6 +4918,7 @@ export class AIChatQueryLoop {
       preAggregate,
       startedAt,
       outboundAuthorization,
+      outboundSendGateAllowed,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
@@ -4890,7 +4938,8 @@ export class AIChatQueryLoop {
       const { jobId } = await this.executeAsyncTool(
         input,
         effectiveCall,
-        outboundAuthorization
+        outboundAuthorization,
+        outboundSendGateAllowed === true
       );
       toolResult = await this.pollAsyncJobToCompletion(
         input,
@@ -4904,7 +4953,8 @@ export class AIChatQueryLoop {
         skill,
         timeoutMs,
         startedAt,
-        outboundAuthorization
+        outboundAuthorization,
+        outboundSendGateAllowed === true
       );
     }
 
@@ -4949,7 +4999,8 @@ export class AIChatQueryLoop {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
+    },
+    outboundSendGateAllowed = false
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
@@ -4975,9 +5026,15 @@ export class AIChatQueryLoop {
         // (§14.2/§15.1). The send tool claims the batch via this; never
         // sourced from tool arguments (AD-003).
         outboundAuthorization,
-        // Preparing reviewable local drafts must not create a second user
-        // decision before the separately protected outbound send action.
-        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+        // Drafts never contact recipients. An allowed send gate is the
+        // request-scoped authorization, so that exact call skips the generic
+        // permission card (§14.2). Explicit denial still prompts.
+        skipPermissionCheck: shouldSkipGenericToolPermission({
+          toolName: call.name,
+          outboundSendGateAllowed,
+          explicitlyDenied:
+            SkillPermissionService.getPermissionStatus(call.name) === "denied",
+        }),
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

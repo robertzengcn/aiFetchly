@@ -194,11 +194,29 @@ export class AIChatQueryEngineFactory {
     approvalMode: ChatToolApprovalMode | null
   ): Promise<ToolExecutionResult> {
     const skill = SkillRegistry.getSkill(name) ?? null;
+    // Re-read Full access at the tool call. The mode is captured when the
+    // engine is created, which can be before the user switches this
+    // conversation to Full access. A later save must suppress the permission
+    // card for this occurrence, including start_email_send_task.
+    let mode = approvalMode;
+    if (mode != null && mode !== "full_access" && context.conversationId) {
+      try {
+        const live = new AIChatToolApprovalModule().getMode(
+          context.conversationId
+        );
+        if (live === "full_access") {
+          mode = live;
+        }
+      } catch {
+        // Keep the mode captured at engine creation if the token store
+        // cannot be read.
+      }
+    }
     const decision = canAutoApproveScheduledTool({
       skill,
       taskPolicy: policy,
       toolName: name,
-      approvalMode,
+      approvalMode: mode,
     });
 
     // Gated high-impact/automation tool not in the allowlist → pause for the
