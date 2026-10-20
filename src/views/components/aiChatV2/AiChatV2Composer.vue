@@ -667,6 +667,23 @@ const voiceRecorder = new BrowserVoiceRecorder();
 const isRecording = ref(false);
 const isTranscribing = ref(false);
 const showVoiceModelNotice = ref(false);
+
+/**
+ * Audit R2 N01: a voice session is bound to the conversation that owned the
+ * composition BEFORE microphone acquisition begins — the permission prompt,
+ * active capture and the stop→convert→transcribe chain can each suspend
+ * indefinitely, and the shared composer's `draftKey` tracks whatever
+ * conversation is selected at that moment. `null` means no active session.
+ * The Stop handler must never re-read `props.draftKey` as the owner: a
+ * switch during recording must not make the newly selected conversation the
+ * owner of another conversation's recording (FR-VOI-005/010, FR-LIF-002,
+ * PRD §14 privacy).
+ */
+let voiceSessionOwnerDraftKey: string | null = null;
+/** Attachment tray of the owning conversation at voice-session start (N01). */
+let voiceSessionOwnerFiles: File[] = [];
+const stillOwnsComposition = (): boolean =>
+  (props.draftKey ?? null) === voiceSessionOwnerDraftKey;
 const voiceAvailabilityNotice = computed(() =>
   props.voiceRuntimeUnavailable
     ? t("aiChatV2.voice.runtime_unavailable") ||
@@ -759,6 +776,49 @@ function parkVoiceTranscript(
   );
 }
 
+/** Order-independent File[] identity (audit R2 N02 helpers). */
+function sameFileList(a: readonly File[], b: readonly File[]): boolean {
+  return (
+    a.length === b.length && a.every((file, index) => file === b[index])
+  );
+}
+
+/**
+ * Audit R2 N02: a voice send accepted while the originating conversation is
+ * NO longer selected must still consume the submitted content from that
+ * conversation's persisted draft — the visible composer belongs to another
+ * conversation now. Only the exact submitted delta is removed: stored text
+ * and files are restored to their immediate pre-submission snapshots only
+ * while they still match exactly; anything newer in the store survives.
+ * A duplicate dispatch after a previous consumption matches nothing and is
+ * a no-op, so acceptance never double-consumes and never touches the
+ * currently selected conversation.
+ */
+function consumeVoiceSubmissionFromStore(
+  ownerKey: string | null,
+  preAppendText: string,
+  submittedText: string,
+  submittedFiles: readonly File[]
+): void {
+  if (!draftStore || !ownerKey) return;
+  const stored = draftStore.getDraft(ownerKey);
+  if (!stored) return;
+  const restoredText = stored.text === submittedText ? preAppendText : stored.text;
+  const restoredFiles = sameFileList(stored.files, submittedFiles)
+    ? []
+    : [...stored.files];
+  if (restoredText === stored.text && restoredFiles.length === stored.files.length) {
+    return;
+  }
+  draftStore.updateComposerState(
+    ownerKey,
+    restoredText,
+    restoredFiles,
+    stored.pastedContents,
+    stored.pastedChips
+  );
+}
+
 /**
  * Map a recorder error kind to a translated composer notice (TODO P2). Falls
  * back to English copy when the key is absent so the user always sees a clear
@@ -824,17 +884,17 @@ async function onMicClick(): Promise<void> {
     return;
   }
   if (isRecording.value) {
-    // Audit 2026-10-20 B01/B02: stop -> convert -> transcribe is a chain of
-    // awaits. Capture the conversation owner AND the pre-voice draft/files
-    // BEFORE the first await so every later mutation can stay with the
-    // originating conversation instead of whatever is selected when the
-    // chain resolves (the composer is reused across conversations via
-    // `draftKey`).
-    const voiceOwnerDraftKey = props.draftKey ?? null;
-    const draftBeforeVoiceSend = draft.value;
-    const filesBeforeVoiceSend: File[] = [...selectedFiles.value];
-    const stillOwnsComposition = (): boolean =>
-      (props.draftKey ?? null) === voiceOwnerDraftKey;
+    // Audit 2026-10-20 B01/R2: stop -> convert -> transcribe is a chain of
+    // awaits. The owner was already bound at Start (N01) — the stop click
+    // must not re-adopt whatever conversation is selected now. Snapshot the
+    // files at the composition moment, but only while the owner is selected;
+    // a session stopped in another conversation keeps the tray captured at
+    // Start and never inherits the foreign tray.
+    const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
+    if (stillOwnsComposition()) {
+      voiceSessionOwnerFiles = [...selectedFiles.value];
+    }
+    const filesBeforeVoiceSend = voiceSessionOwnerFiles;
     isRecording.value = false;
     isTranscribing.value = true;
     try {
@@ -908,27 +968,35 @@ async function onMicClick(): Promise<void> {
         // preserving the pre-voice attachments snapshot (PRD §7.4). Flag the
         // send as voice-originated so `after_voice_input` TTS speaks the
         // reply.
+        // Audit R2 N03: the restore baseline is the draft text immediately
+        // BEFORE the transcript insertion, never the pre-voice snapshot —
+        // edits typed during conversion/transcription belong to the user.
+        const preAppendDraftText = draft.value;
         appendTranscript(transcript);
         const submittedDraftText = draft.value;
         emit("send", transcript, filesBeforeVoiceSend, {
           fromVoice: true,
           onAccepted: () => {
             // Only the transcript and attachments belong to this voice
-            // request (audit 2026-10-20 B02): a stale acceptance callback
-            // must not touch the currently selected conversation, and the
-            // restore must not roll back edits the user made after the send.
-            if (!stillOwnsComposition()) return;
-            if (draft.value === submittedDraftText) {
-              draft.value = draftBeforeVoiceSend;
-            }
-            if (
-              selectedFiles.value.length === filesBeforeVoiceSend.length &&
-              selectedFiles.value.every(
-                (file: File, index: number) =>
-                  file === filesBeforeVoiceSend[index]
-              )
-            ) {
-              selectedFiles.value = [];
+            // request (audit 2026-10-20 B02; R2 N02/N03): the restore never
+            // targets the newly selected conversation, must not roll back
+            // edits made outside the submitted delta, and when the owner is
+            // no longer selected it still consumes the submitted delta from
+            // the originating conversation's STORED draft.
+            if (stillOwnsComposition()) {
+              if (draft.value === submittedDraftText) {
+                draft.value = preAppendDraftText;
+              }
+              if (sameFileList(selectedFiles.value, filesBeforeVoiceSend)) {
+                selectedFiles.value = [];
+              }
+            } else {
+              consumeVoiceSubmissionFromStore(
+                voiceOwnerDraftKey,
+                preAppendDraftText,
+                submittedDraftText,
+                filesBeforeVoiceSend
+              );
             }
           },
         });
@@ -946,6 +1014,15 @@ async function onMicClick(): Promise<void> {
     return;
   }
   // Start recording.
+  // Audit R2 N01: bind the session to the currently composed conversation
+  // BEFORE microphone acquisition starts — the permission prompt can suspend
+  // indefinitely and the composer's draftKey tracks selection meanwhile. The
+  // tray snapshot seeds with the current attachment set; a stop performed
+  // while the owner is still selected re-adopts the live tray so files added
+  // during recording ride along, and a stop in another conversation keeps
+  // this owner-scoped snapshot instead of inheriting the foreign tray.
+  voiceSessionOwnerDraftKey = props.draftKey ?? null;
+  voiceSessionOwnerFiles = [...selectedFiles.value];
   try {
     await voiceRecorder.start(props.voiceMaxRecordingMs ?? 60_000);
     isRecording.value = true;
@@ -953,6 +1030,10 @@ async function onMicClick(): Promise<void> {
     // (PRD §7.5). The parent owns the SpeechResponseController.
     emit("voice-recording-start");
   } catch (err) {
+    // A failed acquisition never owned the composition (audit R2 N01):
+    // release the session so a later Stop cannot act on stale ownership.
+    voiceSessionOwnerDraftKey = null;
+    voiceSessionOwnerFiles = [];
     // Distinguish permission denied / no microphone / unsupported type /
     // generic recording failure (TODO P2 error classification).
     showNotice(recorderErrorNotice(err));
