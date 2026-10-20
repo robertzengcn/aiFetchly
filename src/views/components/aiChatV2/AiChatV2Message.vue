@@ -1026,7 +1026,10 @@ const pluginArtifacts = computed<PluginArtifactView[]>(() => {
   const out: PluginArtifactView[] = [];
   for (const raw of rawList) {
     if (!raw || typeof raw !== "object") continue;
-    const rec = raw as Record<string, unknown>;
+    // Foreign shapes are dropped at runtime: traffic may be stale or hand-
+    // edited, so narrow through unknown instead of trusting the declared
+    // ChatV2PluginArtifactMetadata interface.
+    const rec = raw as unknown as Record<string, unknown>;
     if (typeof rec.id !== "string" || !rec.id.startsWith("pa_")) continue;
     if (rec.format !== "json" && rec.format !== "csv") continue;
     if (

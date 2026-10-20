@@ -105,7 +105,6 @@ const chartSeries = computed(() => {
       data: props.data.emailsExtracted
     },
     {
-    {
       name: translations.value.emailsSent,
       data: props.data.emailsSent
     }
