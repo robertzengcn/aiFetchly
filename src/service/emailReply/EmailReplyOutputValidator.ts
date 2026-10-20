@@ -176,7 +176,7 @@ function warn(codeStr: string, re: RegExp, message: string): CompiledPattern {
 export function normalizeForValidation(text: string): string {
   return (
     text
-    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width chars (ZWSP, ZWNJ, ZWJ, BOM)
+    .replace(/[-\u200B-\u200D\uFEFF]/g, "") // hyphens + zero-width chars (ZWSP, ZWNJ, ZWJ, BOM)
     .replace(/[4@]/g, "a")
     .replace(/[3]/g, "e")
     .replace(/[1!|]/g, "i")
@@ -190,8 +190,9 @@ export function normalizeForValidation(text: string): string {
 
 /**
  * Validate generated reply content. {@link subject} and {@link bodyText} are
- * checked as-is (evidence quotes come from the original); matching runs against
- * the normalized form so obfuscation cannot bypass it.
+ * checked as-is (evidence quotes come from the original). Pattern findings
+ * (leakage, commitments) match the RAW combined text; forbidden-PHRASE
+ * matching runs against the normalized form so obfuscation cannot bypass it.
  */
 export function validateReplyOutput(
   subject: string,

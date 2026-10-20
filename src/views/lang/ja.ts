@@ -1422,8 +1422,6 @@ export default {
       "承認後にSMTPユーザー名が変更されました。再確認して返信を再度承認してください。",
     reply_to_mismatch:
       "承認後に返信先アドレスが変更されました。再確認して返信を再度承認してください。",
-    legacy_reply_identity_requires_review:
-      "この承認の作成後にメールサービスの identity が変更されました。返信を再確認して再度承認してください。",
   },
   buckemailsend: {
     email_source: "メールソース",

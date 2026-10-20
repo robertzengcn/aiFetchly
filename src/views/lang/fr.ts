@@ -1437,8 +1437,6 @@ export default {
       "Le nom d'utilisateur SMTP a changé après approbation. Révisez et approuvez à nouveau la réponse.",
     reply_to_mismatch:
       "L'adresse de réponse a changé après approbation. Révisez et approuvez à nouveau la réponse.",
-    legacy_reply_identity_requires_review:
-      "L'identité du service de messagerie a changé après la création de cette approbation. Révisez et approuvez à nouveau la réponse.",
   },
   buckemailsend: {
     email_source: "Email Source",

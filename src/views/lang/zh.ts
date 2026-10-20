@@ -1375,8 +1375,6 @@ export default {
     recipient_mismatch: "收件人与原始发件人或其回复地址不再匹配。",
     smtp_username_mismatch: "审批后 SMTP 用户名已更改。请重新审核并审批。",
     reply_to_mismatch: "审批后回复地址已更改。请重新审核并审批。",
-    legacy_reply_identity_requires_review:
-      "创建此审批后邮件服务身份已更改。请重新审核并审批该回复。",
   },
   buckemailsend: {
     email_source: "邮件来源",

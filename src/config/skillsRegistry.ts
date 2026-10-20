@@ -2558,6 +2558,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
     tier: "main",
     requiresConfirmation: true,
+    // Request-scoped action, mirroring the outbound send tools: this sends
+    // REAL email to an external recipient, so a chat approval mode alone
+    // (approve_for_me / full_access) must never auto-approve it. The user's
+    // in-chat confirmation is the request-scoped authorization the tool gate
+    // resolves (§14.1) — without this policy the auto-approve path could send
+    // advisory-tier content (links, payment references) with no human review.
+    confirmationPolicy: "request_scoped_action",
     permissionCategory: "automation",
     source: "built-in",
     execute: async (args) => {

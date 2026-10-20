@@ -22,6 +22,7 @@ import {
 } from "@/service/emailReply/replyReliabilityVersions";
 import {
   classificationForConfirmedSend,
+  confirmedSendRuleRefusal,
   evaluateAutoReplyPolicy,
 } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
@@ -200,6 +201,14 @@ export class EmailReplyApprovalService {
     const confirmedClassification = classificationForConfirmedSend(
       message.classification
     );
+    // Confirmed-send rule guardrails: the allowlist an owner explicitly
+    // configured still applies to a stripped-unknown classification (the
+    // evaluator bypasses it for null because the pre-draft refinement path
+    // also feeds null).
+    const ruleRefusal = confirmedSendRuleRefusal(rule, message.classification);
+    if (ruleRefusal != null) {
+      throw new Error(`Cannot approve: ${ruleRefusal}`);
+    }
     const hardBlock = evaluateAutoReplyPolicy({
       message: message as never,
       classification: confirmedClassification as never,

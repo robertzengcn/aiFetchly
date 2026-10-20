@@ -57,6 +57,22 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  /**
+   * CAS-fenced approved→draft demotion for the confirmed-send re-approval
+   * path (model: EmailReplyDraftModel.demoteApprovedToDraft). Returns false
+   * when a concurrent writer moved the row — callers must refuse, never
+   * overwrite, on false.
+   */
+  async demoteApprovedToDraft(draftId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.demoteApprovedToDraft(draftId);
+    } catch (e) {
+      log.error("Error demoting approved draft:", e);
+      throw e;
+    }
+  }
+
   async updateBody(
     id: number,
     bodyText: string,

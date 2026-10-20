@@ -1465,8 +1465,6 @@ export default {
       "The SMTP username changed after approval. Review and approve the reply again.",
     reply_to_mismatch:
       "The Reply-To address changed after approval. Review and approve the reply again.",
-    legacy_reply_identity_requires_review:
-      "The email service identity changed after this approval was created. Review and approve the reply again.",
   },
   buckemailsend: {
     email_source: "Email Source",

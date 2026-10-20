@@ -15,7 +15,12 @@ vi.mock("@/service/MCPToolService", () => ({
 const draftGenStub = { createDraft: vi.fn() };
 const deliveryStub = { sendApprovedReply: vi.fn() };
 const approvalStub = { approveDraft: vi.fn() };
-const draftModuleStub = { ensureConnection: vi.fn(), read: vi.fn() };
+const draftModuleStub = {
+  ensureConnection: vi.fn(),
+  read: vi.fn(),
+  countActiveSendAttempts: vi.fn(),
+  demoteApprovedToDraft: vi.fn(),
+};
 
 // FR-032 check_email_replied stubs: the tool layer constructs these via
 // `new ModuleName()` before calling checkReply/read. Each is a function
@@ -30,6 +35,20 @@ const messageModuleStub = {
   listByEmailService: vi.fn(),
   markRead: vi.fn(),
 };
+// Approved-draft re-confirm path retires prior approvals in bulk before the
+// CAS demotion (D3/D4 review fixes).
+const approvalModuleStub = {
+  ensureConnection: vi.fn(),
+  findActiveByDraft: vi.fn(),
+  invalidate: vi.fn(),
+  invalidateAllForDraft: vi.fn(),
+};
+vi.mock("@/modules/EmailReplyApprovalModule", () => ({
+  EmailReplyApprovalModule: function () {
+    return approvalModuleStub;
+  },
+}));
+
 // AI-enable gate (FR-6.1): default true so happy-path tests proceed; the
 // disabled-AI test flips this to false.
 let aiEnabled = true;
@@ -1054,4 +1073,107 @@ describe("checkEmailReplied diagnostic DTO compatibility (G02)", () => {
     // No replyEvidence field leaked into the diagnostic DTO.
     expect(result).not.toHaveProperty("replyEvidence");
   });
+});
+
+describe("sendEmailReply — approved-draft re-confirmation (CAS-fenced)", () => {
+  function stubApprovedDraft(draftId: number): void {
+    draftModuleStub.read.mockResolvedValue({
+      id: draftId,
+      messageId: 1,
+      emailServiceId: 1,
+      subject: "Re: Hi",
+      bodyText: "Hello",
+      bodyHtml: null,
+      status: "approved",
+      currentRevisionId: 7,
+    });
+  }
+
+  beforeEach(() => {
+    // No file-global clearAllMocks: reset every stub this suite touches so
+    // call-history assertions see only the current test's calls.
+    draftModuleStub.read.mockReset();
+    approvalModuleStub.invalidateAllForDraft.mockReset();
+    approvalModuleStub.invalidateAllForDraft.mockResolvedValue(1);
+    draftModuleStub.demoteApprovedToDraft.mockReset();
+    draftModuleStub.countActiveSendAttempts.mockReset();
+    draftModuleStub.countActiveSendAttempts.mockResolvedValue(0);
+    approvalStub.approveDraft.mockReset();
+    approvalStub.approveDraft.mockResolvedValue({ token: "tok2" });
+    deliveryStub.sendApprovedReply.mockReset();
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "sent",
+      attemptId: 8,
+      sentAt: "2026-10-20T00:00:00.000Z",
+    });
+  });
+
+  it("retires approvals in bulk, CAS-demotes approved->draft, re-approves, delivers", async () => {
+    stubApprovedDraft(20);
+    draftModuleStub.demoteApprovedToDraft.mockResolvedValue(true);
+    const result = await sendEmailReply({ draft_id: 20, email_service_id: 1 });
+    expect(result.success).toBe(true);
+    expect(approvalModuleStub.invalidateAllForDraft).toHaveBeenCalledWith(
+      20,
+      expect.stringContaining("Re-confirmed send"),
+      expect.any(Date)
+    );
+    expect(draftModuleStub.demoteApprovedToDraft).toHaveBeenCalledWith(20);
+    expect(approvalStub.approveDraft).toHaveBeenCalledWith({
+      draftId: 20,
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
+    });
+  });
+
+  it("refuses when a send is already in flight, leaving the row untouched", async () => {
+    stubApprovedDraft(21);
+    draftModuleStub.countActiveSendAttempts.mockResolvedValue(1);
+    const result = await sendEmailReply({ draft_id: 21, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("already in flight");
+    }
+    expect(approvalModuleStub.invalidateAllForDraft).not.toHaveBeenCalled();
+    expect(draftModuleStub.demoteApprovedToDraft).not.toHaveBeenCalled();
+    expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+    expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the CAS demotion loses the race (row moved concurrently)", async () => {
+    stubApprovedDraft(22);
+    draftModuleStub.demoteApprovedToDraft.mockResolvedValue(false);
+    const result = await sendEmailReply({ draft_id: 22, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("state changed while re-confirming");
+    }
+    // The losing writer must NOT re-approve or deliver.
+    expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+    expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+  });
+
+  it.each(["sending", "sent", "discarded"] as const)(
+    "refuses confirm_send for a '%s' draft without touching the row",
+    async (status) => {
+      draftModuleStub.read.mockResolvedValue({
+        id: 30,
+        messageId: 1,
+        emailServiceId: 1,
+        subject: "Re: Hi",
+        bodyText: "Hello",
+        bodyHtml: null,
+        status,
+      });
+      const result = await sendEmailReply({ draft_id: 30, email_service_id: 1 });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain(`Cannot send a draft in state '${status}'`);
+      }
+      expect(draftModuleStub.countActiveSendAttempts).not.toHaveBeenCalled();
+      expect(draftModuleStub.demoteApprovedToDraft).not.toHaveBeenCalled();
+      expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+      expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+    }
+  );
 });

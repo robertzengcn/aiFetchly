@@ -1444,8 +1444,6 @@ export default {
       "Der SMTP-Benutzername wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
     reply_to_mismatch:
       "Die Antwort-An-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
-    legacy_reply_identity_requires_review:
-      "Die Identität des E-Mail-Dienstes hat sich seit dieser Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",

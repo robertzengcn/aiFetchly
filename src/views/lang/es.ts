@@ -1448,8 +1448,6 @@ export default {
       "El nombre de usuario SMTP cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
     reply_to_mismatch:
       "La dirección de respuesta cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
-    legacy_reply_identity_requires_review:
-      "La identidad del servicio de correo cambió tras crear esta aprobación. Revise y apruebe la respuesta de nuevo.",
   },
   buckemailsend: {
     email_source: "Fuente de correos",

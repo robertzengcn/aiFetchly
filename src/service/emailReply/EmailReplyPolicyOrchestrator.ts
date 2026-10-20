@@ -6,6 +6,7 @@ import type {
 import { REPLY_POLICY_VERSION } from "@/service/emailReply/replyReliabilityVersions";
 import {
   classificationForConfirmedSend,
+  confirmedSendRuleRefusal,
   evaluateAutoReplyPolicy,
 } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -433,6 +434,13 @@ export class EmailReplyPolicyOrchestrator {
     const confirmedClassification = classificationForConfirmedSend(
       message.classification
     );
+    // Confirmed-send rule guardrails: an owner-typed allowlist still applies
+    // to a stripped-unknown classification (the evaluator bypasses it for
+    // null because the pre-draft refinement path also feeds null).
+    const ruleRefusal = confirmedSendRuleRefusal(rule, message.classification);
+    if (ruleRefusal != null) {
+      return mapLegacyDecision("skipped", ruleRefusal, rule?.id ?? null);
+    }
     const legacy = evaluateAutoReplyPolicy({
       message: message as never,
       classification: confirmedClassification as never,
