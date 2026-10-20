@@ -1192,6 +1192,7 @@ Implementation is complete when:
 2. All ordinary submissions use the durable pending queue.
 3. Pending identity and run identity follow AD-002 and AD-003.
 4. Shared orchestration replaces capability logic copied from Chat V2.
+   - **Authority record (owner decision 2026-10-18; reconciled 2026-10-20):** delivered as the workspace-authoritative doctrine (PRD §10 item 5, §11.2): the workspace consumes the extracted shared seams — `AiChatV2Composer.vue`, the durable pending-message queue and dispatch bridge, the command composables, the shared voice orchestration, and the rollout adapter flags — while `AiChatV2.vue` retains its pre-existing submission, image-preflight, and plan-continuation paths, frozen as rollback behavior. No capability logic was copied wholesale into `AiChatCenterSurface.vue`; the remaining duplication lives only on the frozen V2 side. Characterization of the duplicated failure paths is pinned in `test/vitest/main/components/AiChatV2.acceptedSendContract.test.ts`, the `AiChatCenterSurface.test.ts` ownership suites (B04/B06/B07/B08), and the `workspaceRolloutDrill` Electron E2E. Completing the shared extraction wave is deferred until after the V03 soak gate and the separate cleanup decision (item 10), with §23's independently controlled flags unchanged.
 5. Workspace semantic results support every required actionable result.
 6. Main-process AI handlers gate first, validate strictly, and delegate database work through Modules and Models.
 7. All six language files contain every new key.
