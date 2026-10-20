@@ -151,6 +151,20 @@ export const startChatRunRequestSchema = z
           .max(50),
       })
       .optional(),
+    /**
+     * Audit R2 G01 trusted-channel association: declares that THIS run is a
+     * plan continuation so main can measure
+     * `plan_decision_to_continuation_ms` at the durable acceptance boundary.
+     * Identity only (bounded plan id/version + decision enum) — never plan
+     * content — and it never reaches the engine request payload.
+     */
+    planContinuation: z
+      .strictObject({
+        planId: z.string().min(1).max(100),
+        version: z.number().int().positive(),
+        action: z.enum(["approve-plan", "reject-plan", "request-plan-changes"]),
+      })
+      .optional(),
   })
   .strict();
 

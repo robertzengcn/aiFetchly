@@ -1,5 +1,8 @@
 import { ipcMain } from "electron";
 import {
+  consumePlanDecisionTiming,
+} from "@/main-process/communication/aiChatPlanDecisionTiming";
+import {
   AI_CHAT_WORKSPACE_BOOTSTRAP,
   AI_CHAT_WORKSPACE_GET_FLAG,
   AI_CHAT_WORKSPACE_SET_FLAG,
@@ -382,6 +385,10 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       }
 
       const conversationId = parsed.data.conversationId;
+      // Audit R2 G01: the default-route selection journey timing — request
+      // → reconstructed transcript snapshot. (The ai-history channel keeps
+      // its own complementary observation.)
+      const selectionRequestedAt = performance.now();
       const page = await loadHistoryPage({
         conversationId,
         limit: 50,
@@ -434,6 +441,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         activeRunId: snapshot.activeRunId,
         title: null,
       };
+      // Audit R2 G01: a page failure threw before this point, so success
+      // here means the reconstructed transcript is in hand.
+      aiChatQueueCounters.observeTiming(
+        "selection_request_to_transcript_ms",
+        performance.now() - selectionRequestedAt
+      );
       return ok(response);
     } catch (err) {
       return denied(userSafeError(err));
@@ -508,18 +521,24 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           ? [...validated.request.historySelectionIds]
           : undefined,
       };
+      // Audit R2 G01: the plan-continuation timing meta is a trusted-channel
+      // association only — it must never reach the engine request payload.
+      const { planContinuation, ...engineRequest } = request;
       try {
         const engineBusy =
           getQueryEngine().getConversationRuntimeStatus(
             request.conversationId
           ) !== "idle";
         // G01 (design §18.2): submit → durable acceptance timing around the
-        // queue submit that produces the acceptance receipt.
+        // queue submit that produces the acceptance receipt. The name is
+        // deliberately narrow (renamed per audit R2 G01): it starts here,
+        // excluding attachment encoding, prior validation and IPC latency —
+        // it does NOT measure the full submit-click journey.
         const submitStartedMs = performance.now();
         const receipt = await getQueueService().submit({
           forceQueue: engineBusy,
           clientRequestId: request.clientRequestId,
-          request,
+          request: engineRequest,
         });
         if (!receipt.pendingMessage) {
           aiChatQueueCounters.incrementLabeled(
@@ -531,9 +550,32 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           );
         }
         aiChatQueueCounters.observeTiming(
-          "submit_to_acceptance_ms",
+          "queue_submit_to_acceptance_ms",
           performance.now() - submitStartedMs
         );
+        // Audit R2 G01: the REAL plan decision → continuation acceptance
+        // boundary. A renderer-declared continuation identity whose decision
+        // was anchored by the v2 plan handler measures between the persisted
+        // decision and THIS queue acceptance; no ledger match (failed,
+        // repeated or foreign continuation) produces no sample at all.
+        if (planContinuation && request.clientRequestId.startsWith("plan-cont-")) {
+          const decidedAtMs = consumePlanDecisionTiming(
+            planContinuation.planId,
+            planContinuation.version,
+            planContinuation.action
+          );
+          if (decidedAtMs !== null) {
+            aiChatQueueCounters.observeTiming(
+              "plan_decision_to_continuation_ms",
+              performance.now() - decidedAtMs
+            );
+          }
+          aiChatQueueCounters.recordWorkspaceAction(
+            "plan",
+            "continuation",
+            "accepted"
+          );
+        }
         // G03 §18.1: durable acceptances by disposition (bounded labels).
         aiChatQueueCounters.incrementLabeled(
           "ai_chat_workspace_submission_accepted_total",

@@ -7,6 +7,7 @@ import type {
   ChatRunTerminalRecord,
   ConversationRuntimeStatus,
   ConversationSummaryEvent,
+  PlanContinuationIdentityMeta,
 } from "@/entityTypes/aiChatWorkspaceTypes";
 import {
   createWorkspaceStreamPresenter,
@@ -30,7 +31,16 @@ import {
 import { denyChatV2ToolPermission } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
-import { observeRendererProjectionTiming } from "@/views/store/aiChatRendererMetrics";
+import {
+  beginRendererProjectionWindow,
+  cancelRendererProjectionWindow,
+  endRendererProjectionWindow,
+  observeRendererProjectionTiming,
+} from "@/views/store/aiChatRendererMetrics";
+import {
+  flushRendererMetricsOnce,
+  startRendererMetricsBridge,
+} from "@/views/api/aiChatRendererMetricsBridge";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
 import {
   markPermissionPromptExecuting,
@@ -98,6 +108,12 @@ export interface SendOptions {
    */
   readonly clientRequestId?: string;
   /**
+   * Audit R2 G01: plan-continuation association so main observes the real
+   * decision → durable-acceptance interval at the queue boundary.
+   * Identity only — forwarded verbatim on the start-run request.
+   */
+  readonly planContinuation?: PlanContinuationIdentityMeta;
+  /**
    * B15: renderer error localizer (the surface's `t()` bound to the central
    * workspace error map). Applied to send rejections so typed queue errors
    * surface localized actionable copy; absent = raw backend message.
@@ -147,6 +163,23 @@ export const useSelectedConversationStore = defineStore(
           for (const listener of liveToolResultListeners) {
             listener(chunk);
           }
+        },
+        // Audit R2 G01: the buffered-delta projection window closes when the
+        // batched flush actually lands (receipt → projected UI state through
+        // the flush boundary), or is cancelled when the pending flush is
+        // discarded (presenter dispose on selection switch).
+        scheduleFlush: (fn, ms) => {
+          const timer = setTimeout(() => {
+            try {
+              fn();
+            } finally {
+              endRendererProjectionWindow();
+            }
+          }, ms);
+          return () => {
+            cancelRendererProjectionWindow();
+            clearTimeout(timer);
+          };
         },
       })
     );
@@ -460,6 +493,11 @@ export const useSelectedConversationStore = defineStore(
       summaryUnsubscribe = subscribeSummaryEvents((event) => {
         handleSummaryFact(event);
       });
+      // Audit R2 G01: the diagnostics export consumer — first workspace
+      // session starts the bounded renderer→main metrics bridge (idempotent,
+      // telemetry-only) so projection aggregates join the structured soak
+      // telemetry instead of dying unread with the renderer process.
+      startRendererMetricsBridge();
     }
 
     /** Ensure exactly one detail subscription exists for this renderer. */
@@ -477,11 +515,25 @@ export const useSelectedConversationStore = defineStore(
 
     function applyDetailEvent(event: ChatRunDetailEvent): void {
       // G01 (design §18.2): event receipt → projected UI state timing
-      // (durations only — never event content).
+      // (durations only — never event content). Buffered deltas complete
+      // their projection at the DEFERRED flush window, not here — those
+      // open a projection window that closes inside the store's
+      // scheduleFlush wrapper (see the presenter options above); every
+      // other event type projects synchronously through the presenter's
+      // onMutate hook, so the observation below covers its application
+      // loop through the reactive sync.
       const receivedAt = performance.now();
+      const isBufferedDelta =
+        event.eventType === "token" || event.eventType === "reasoning_delta";
+      if (isBufferedDelta) beginRendererProjectionWindow();
       const consumed = presenter.applyEvent(event);
-      observeRendererProjectionTiming(performance.now() - receivedAt);
-      if (!consumed) return;
+      if (!isBufferedDelta) {
+        observeRendererProjectionTiming(performance.now() - receivedAt);
+      }
+      if (!consumed) {
+        if (isBufferedDelta) cancelRendererProjectionWindow();
+        return;
+      }
       // Reactive sync happens through the presenter's onMutate hook — one
       // update per flush window, not one per token chunk.
       // FR-026: an openImmediately artifact opens the inspector preview for
@@ -700,6 +752,7 @@ export const useSelectedConversationStore = defineStore(
             ? [...options.historySelectionIds]
             : undefined,
           submissionId: options?.submissionId,
+          planContinuation: options?.planContinuation,
         });
         // B14: confirmed acceptance rotates the logical-draft identity — an
         // intentional repeat of the same text afterwards mints a FRESH id
@@ -1011,6 +1064,9 @@ export const useSelectedConversationStore = defineStore(
       }
       presenter.dispose();
       syncFromPresenter();
+      // Audit R2 G01: flush the session's projection aggregates into main's
+      // telemetry before the renderer tears the store down (best-effort).
+      void flushRendererMetricsOnce();
     }
 
     /**

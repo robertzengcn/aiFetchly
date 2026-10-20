@@ -205,6 +205,7 @@ import {
   AI_CHAT_V2_GOAL_CREATE,
   AI_CHAT_V2_GOAL_GET,
   AI_CHAT_V2_GOAL_LOOP_START,
+  AI_CHAT_V2_GOAL_LOOP_STOP,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   PROMPT_SKILL_INVOKE,
   SLASH_COMMAND_DISPATCH,
@@ -5249,6 +5250,160 @@ describe("AiChatCenterSurface late-error ownership (B08)", () => {
     chatWorkspace.setSelected("conv-a");
     await flushPromises();
     expect(wrapper.text()).toContain("Could not clear this chat");
+
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Audit R2 G02: the shared-orchestration rollout adapter gets a documented,
+ * SAFE rollback effect. Disabled it hides the shared command orchestration
+ * state (goal objective + scheduled-loop status) from the run strip — a
+ * presentation rollback only: command interception, the stop precedence
+ * (goal → loop → run, unchanged durable behavior), and every durable
+ * identity stay intact. Raw slash-command fallback is NOT restored.
+ */
+describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () => {
+  const ROLLBACK_FLAGS = {
+    enabled: true,
+    explicit: true,
+    adapters: {
+      sharedOrchestration: false,
+      specializedResults: true,
+      voiceMemory: true,
+    },
+  };
+
+  it.each([[undefined], [{ enabled: true, adapters: undefined }]])(
+    "renders goal/loop orchestration state in the strip by default (%#)",
+    async (flags) => {
+      vi.mocked(fetchWorkspaceRolloutFlags).mockResolvedValue(
+        flags as never
+      );
+      resetWorkspaceRolloutAdaptersForTest();
+      const wrapper = mountSurface();
+      await flushPromises();
+      useChatWorkspaceStore().setSelected("conv-g02");
+      await flushPromises();
+      useSelectedConversationStore().seedGoal({
+        goalId: "goal-1",
+        objective: "Ship the parity suite",
+        status: "running",
+        iterationCount: 2,
+      });
+      await flushPromises();
+      const strip = wrapper.findComponent({ name: "AiChatRunStrip" });
+      expect(strip.props("goalObjective")).toBe("Ship the parity suite");
+
+      wrapper.unmount();
+    }
+  );
+
+  it("adapter off hides the goal/loop state while runtime status remains", async () => {
+    vi.mocked(fetchWorkspaceRolloutFlags).mockResolvedValue(
+      ROLLBACK_FLAGS as never
+    );
+    resetWorkspaceRolloutAdaptersForTest();
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-g02");
+    await flushPromises();
+    useSelectedConversationStore().seedGoal({
+      goalId: "goal-1",
+      objective: "Ship the parity suite",
+      status: "running",
+      iterationCount: 2,
+    });
+    await flushPromises();
+
+    const strip = wrapper.findComponent({ name: "AiChatRunStrip" });
+    // Presentation rollback: the shared orchestration surfaces dim out.
+    expect(strip.props("goalObjective")).toBeNull();
+    expect(strip.props("loopStatus")).toBeNull();
+    // The strip keeps its runtime status + stop affordance.
+    expect(strip.props("runtimeStatus")).toBe("idle");
+    expect(strip.find("button").exists() || strip.emitted()).toBeTruthy();
+    // Removing the goal (live events still reconcile the store) keeps a
+    // rollback-free view in sync for adapter-on surfaces.
+    useSelectedConversationStore().seedGoal(null);
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "AiChatRunStrip" }).props("goalObjective")
+    ).toBeNull();
+
+    wrapper.unmount();
+  });
+
+  it("rollback keeps command interception + durable stop precedence intact", async () => {
+    vi.mocked(fetchWorkspaceRolloutFlags).mockResolvedValue(
+      ROLLBACK_FLAGS as never
+    );
+    resetWorkspaceRolloutAdaptersForTest();
+    const invoke = window.api.invoke as unknown as ReturnType<typeof vi.fn>;
+    invoke.mockReset();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === SLASH_COMMAND_DISPATCH) {
+        return Promise.resolve({
+          status: true,
+          data: {
+            status: true,
+            action: "show_result",
+            content: "",
+            commandId: "built-in:command:clear",
+          },
+        });
+      }
+      if (channel === AI_CHAT_V2_GOAL_LOOP_STOP) {
+        return Promise.resolve({
+          status: true,
+          data: { cancelled: true },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    vi.mocked(clearChatV2Conversation).mockResolvedValue({ deleted: 3 });
+
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-g02");
+    await flushPromises();
+    // A live goal exists even though the adapter hides its state.
+    useSelectedConversationStore().seedGoal({
+      goalId: "goal-1",
+      objective: "Ship the parity suite",
+      status: "running",
+      iterationCount: 2,
+    });
+    await flushPromises();
+
+    // 1) Stop precedence unchanged (run BEFORE /clear: clearing resets the
+    //    selection): the strip stop still targets the (hidden) goal first —
+    //    durable orchestration behavior spared.
+    wrapper
+      .findComponent({ name: "AiChatRunStrip" })
+      .vm.$emit("stop");
+    await flushPromises();
+    const goalStopCall = invoke.mock.calls.find(
+      (call: unknown[]) => call[0] === AI_CHAT_V2_GOAL_LOOP_STOP
+    );
+    expect(goalStopCall).toBeDefined();
+    // Preload serializes invoke payloads — parse before identity asserting.
+    expect(JSON.parse(goalStopCall![1] as string)).toEqual({
+      conversationId: "conv-g02",
+    });
+
+    // 2) Command interception unchanged: /clear still routes through the
+    //    shared dispatcher and runs the SAME command (no raw fallback).
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/clear", []);
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith(
+      SLASH_COMMAND_DISPATCH,
+      expect.anything()
+    );
+    expect(clearChatV2Conversation).toHaveBeenCalledWith("conv-g02");
 
     wrapper.unmount();
   });

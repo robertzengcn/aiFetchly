@@ -27,6 +27,7 @@ import {
 import type { ZodType } from "zod/v4";
 // G01 (design §18): bounded observability counters for capability actions.
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
+import { recordPlanDecisionTiming } from "@/main-process/communication/aiChatPlanDecisionTiming";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageView,
@@ -1937,6 +1938,14 @@ async function handleApprovePlan(
       planId: parsed.value.planId,
       version: parsed.value.version,
     });
+    // Audit R2 G01: anchor the decision moment so the workspace start-run
+    // acceptance of the follow-up continuation measures the real
+    // decision → durable-acceptance interval (bounded identity ledger).
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "approve-plan"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1962,6 +1971,12 @@ async function handleRejectPlan(
       version: parsed.value.version,
       feedback: parsed.value.feedback,
     });
+    // Audit R2 G01: reject-path continuations carry the same timing anchor.
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "reject-plan"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1987,6 +2002,12 @@ async function handleRequestPlanChanges(
       version: parsed.value.version,
       feedback: parsed.value.feedback,
     });
+    // Audit R2 G01: request-changes continuations carry the same anchor.
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "request-plan-changes"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -2863,16 +2884,12 @@ export function registerAiChatV2IpcHandlers(): void {
     handleAnswerQuestion((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) => {
-    // G01 (design §18): plan decision → continuation acceptance timing with
-    // bounded action counters (plan-id only — never plan content).
-    const decidedAt = performance.now();
+    // Audit R2 G01: the misleading decision-persistence-only timing was
+    // removed — `plan_decision_to_continuation_ms` is now observed at the
+    // durable continuation acceptance boundary in the workspace start-run
+    // handler (plan continuation → queue submission receipt). The valid
+    // capability action counters stay.
     const result = await handleApprovePlan((data as string) ?? "");
-    if (result.status) {
-      aiChatQueueCounters.observeTiming(
-        "plan_decision_to_continuation_ms",
-        performance.now() - decidedAt
-      );
-    }
     aiChatQueueCounters.recordWorkspaceAction(
       "plan",
       "approve",

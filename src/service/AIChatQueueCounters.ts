@@ -77,9 +77,14 @@ export type AIChatQueueTimingKey =
   // Audit 2026-10-20 G01 (design §18.2): the remaining stage timings across
   // the capability lifecycle. The first four are main-process seams; the
   // renderer projection timing lives in the renderer's own counters
-  // instance (per-process in-memory by design — design §18.3), structured
-  // through the same logSnapshot channel.
-  | "submit_to_acceptance_ms"
+  // instance (per-process in-memory by design — design §18.3) and joins the
+  // same structured telemetry through the renderer metrics push handler.
+  //
+  // Audit R2 G01 rename: `submit_to_acceptance_ms` became
+  // `queue_submit_to_acceptance_ms` so the name states its actual boundary —
+  // it starts at the queue submit call only (attachment encoding, request
+  // validation and earlier IPC latency are upstream of it and NOT included).
+  | "queue_submit_to_acceptance_ms"
   | "permission_decision_to_resume_ms"
   | "plan_decision_to_continuation_ms"
   | "selection_request_to_transcript_ms"
@@ -93,7 +98,7 @@ const TIMING_KEYS: readonly AIChatQueueTimingKey[] = [
   "accept_to_claim_ms",
   "claim_to_admit_ms",
   "admit_to_provider_ms",
-  "submit_to_acceptance_ms",
+  "queue_submit_to_acceptance_ms",
   "permission_decision_to_resume_ms",
   "plan_decision_to_continuation_ms",
   "selection_request_to_transcript_ms",
@@ -206,6 +211,62 @@ class AIChatQueueCountersImpl {
       minMs: Math.min(current.minMs, durationMs),
       maxMs: Math.max(current.maxMs, durationMs),
     });
+  }
+
+  /**
+   * Audit R2 G01 (diagnostics export): merge one renderer-pushed timing
+   * aggregate (count/total/min/max) into the main-side counters so the
+   * `logSnapshot()` soak line exposes the renderer projection data through
+   * the same structured channel. Arithmetic merge, bounded to known keys
+   * (validated upstream by the push handler's schema).
+   */
+  observeTimingAggregate(
+    key: AIChatQueueTimingKey,
+    aggregate: { count: number; totalMs: number; minMs: number; maxMs: number }
+  ): void {
+    const { count, totalMs, minMs, maxMs } = aggregate;
+    if (
+      !Number.isFinite(count) ||
+      count < 1 ||
+      !Number.isFinite(totalMs) ||
+      totalMs < 0 ||
+      !Number.isFinite(minMs) ||
+      minMs < 0 ||
+      !Number.isFinite(maxMs) ||
+      maxMs < 0
+    ) {
+      return;
+    }
+    const current = this.timings.get(key);
+    if (!current) {
+      this.timings.set(key, { count, totalMs, minMs, maxMs });
+      return;
+    }
+    this.timings.set(key, {
+      count: current.count + count,
+      totalMs: current.totalMs + totalMs,
+      minMs: Math.min(current.minMs, minMs),
+      maxMs: Math.max(current.maxMs, maxMs),
+    });
+  }
+
+  /** Bounded-labeled count merge for sanitized renderer counters. */
+  mergeLabeledCount(key: string, amount: number): void {
+    if (
+      !/^[a-z0-9_{},=".:-]{1,160}$/.test(key) ||
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      return;
+    }
+    this.counts.set(key, (this.counts.get(key) ?? 0) + amount);
+  }
+
+  /** Whitelist guard for renderer-pushed timing keys (telemetry-only merge). */
+  knownTimingKey(key: string): AIChatQueueTimingKey | null {
+    return (TIMING_KEYS as readonly string[]).includes(key)
+      ? (key as AIChatQueueTimingKey)
+      : null;
   }
 
   snapshot(): AIChatQueueCounterSnapshot {

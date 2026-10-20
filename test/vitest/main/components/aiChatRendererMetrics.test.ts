@@ -1,5 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  beginRendererProjectionWindow,
+  cancelRendererProjectionWindow,
+  endRendererProjectionWindow,
   observeRendererProjectionTiming,
   incrementRendererMetric,
   aiChatRendererMetricsSnapshot,
@@ -37,5 +40,36 @@ describe("aiChatRendererMetrics", () => {
     expect(snapshot.timings.renderer_event_to_projection_ms).toBeUndefined();
     expect(snapshot.counts.stream_chunk_projected).toBe(1);
     expect(snapshot.counts.label_invalid).toBe(1);
+  });
+
+  // Audit R2 G01: the projection completion boundary — a buffered delta's
+  // projection lands when the deferred flush runs, so its sample closes at
+  // that boundary, not at schedule time.
+  it("projection window end observes the full receipt-to-projection span", () => {
+    beginRendererProjectionWindow();
+    observeRendererProjectionTiming(1); // unrelated sync sample
+    endRendererProjectionWindow();
+    const snapshot = aiChatRendererMetricsSnapshot();
+    const aggregate = snapshot.timings.renderer_event_to_projection_ms;
+    expect(aggregate).toBeDefined();
+    // sync sample (1ms) + window sample (>=0) — the window must have added
+    // exactly one extra observation.
+    expect(aggregate?.count).toBe(2);
+  });
+
+  it("projection window cancel drops the sample without recording", () => {
+    beginRendererProjectionWindow();
+    cancelRendererProjectionWindow();
+    endRendererProjectionWindow(); // no open window — no-op
+    const snapshot = aiChatRendererMetricsSnapshot();
+    expect(snapshot.timings.renderer_event_to_projection_ms).toBeUndefined();
+  });
+
+  it("a second begin during an open window does not overwrite the start", () => {
+    beginRendererProjectionWindow();
+    beginRendererProjectionWindow(); // ignored — first start wins
+    endRendererProjectionWindow();
+    const snapshot = aiChatRendererMetricsSnapshot();
+    expect(snapshot.timings.renderer_event_to_projection_ms?.count).toBe(1);
   });
 });

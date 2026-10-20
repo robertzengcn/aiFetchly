@@ -192,6 +192,21 @@ export interface StartChatRunRequest {
   readonly resourceClass?: "general";
 }
 
+/**
+ * Audit R2 G01 trusted-channel association: declares that a start-run
+ * request is the durable continuation of a plan decision so main can
+ * observe the real decision → durable-acceptance interval. Identity only —
+ * never plan content — and stripped before reaching the engine payload.
+ * `action` mirrors the renderer's canonical plan-continuation decision
+ * vocabulary (`planContinuationStore.ts`) — the same tokens seed the
+ * deterministic continuation requestId hash.
+ */
+export interface PlanContinuationIdentityMeta {
+  readonly planId: string;
+  readonly version: number;
+  readonly action: "approve-plan" | "reject-plan" | "request-plan-changes";
+}
+
 export interface StartChatRunResponse {
   readonly conversationId: string;
   readonly runId: string;

@@ -29,6 +29,7 @@ import type {
   ConversationSummaryEvent,
   HistoryCursor,
   MarkConversationReadRequest,
+  PlanContinuationIdentityMeta,
   RenameConversationRequest,
   SelectConversationResponse,
   StartChatRunResponse,
@@ -96,6 +97,8 @@ export interface StartWorkspaceRunRequest {
   /** Retry-stable submission identity resolved at engine start ack. */
   readonly submissionId?: string;
   readonly resourceClass?: "general";
+  /** Audit R2 G01: plan-continuation timing association (identity only). */
+  readonly planContinuation?: PlanContinuationIdentityMeta;
 }
 
 /** Create a fresh Chat V2 conversation id (renderer-side, main validates). */

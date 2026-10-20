@@ -43,6 +43,34 @@ export function observeRendererProjectionTiming(durationMs: number): void {
   });
 }
 
+/**
+ * Audit R2 G01 (projection completion boundary): buffered delta events do
+ * not complete their projection when the presenter schedules the flush —
+ * the projection lands when the batched flush runs (or aborts with the
+ * buffer discarded). The window API brackets that boundary:
+ * `begin` opens one pending window at event receipt, `end` closes it after
+ * the flush and records the full receipt → projected-UI duration, and
+ * `cancel` drops it without a sample (unconsumed event / selection switch
+ * discarding the buffer).
+ */
+let projectionWindowStartMs: number | null = null;
+
+export function beginRendererProjectionWindow(): void {
+  if (projectionWindowStartMs !== null) return;
+  projectionWindowStartMs = performance.now();
+}
+
+export function endRendererProjectionWindow(): void {
+  if (projectionWindowStartMs === null) return;
+  const startedAt = projectionWindowStartMs;
+  projectionWindowStartMs = null;
+  observeRendererProjectionTiming(performance.now() - startedAt);
+}
+
+export function cancelRendererProjectionWindow(): void {
+  projectionWindowStartMs = null;
+}
+
 /** Increment a bounded label counter (never report content). */
 export function incrementRendererMetric(label: string, amount = 1): void {
   if (!/^[a-z0-9_:.-]{1,80}$/.test(label)) {
@@ -81,4 +109,5 @@ export function aiChatRendererMetricsSnapshot(): {
 export function resetRendererMetricsForTest(): void {
   timingAggregates.clear();
   counts.clear();
+  projectionWindowStartMs = null;
 }

@@ -20,8 +20,10 @@
     <AiChatRunStrip
       :runtime-status="selectedStore.runtimeStatus"
       :recovering="recovering"
-      :goal-objective="activeGoalObjective"
-      :loop-status="activeLoopStatus"
+      :goal-objective="
+        sharedOrchestrationEnabled ? activeGoalObjective : null
+      "
+      :loop-status="sharedOrchestrationEnabled ? activeLoopStatus : null"
       @stop="onStopFromStrip"
       @open-details="workspaceStore.openInspector('activity')"
     />
@@ -803,6 +805,14 @@ const inspector = useAppInspectorStore();
 const rolloutAdapters = useWorkspaceRolloutAdapters();
 const specializedResultsEnabled = rolloutAdapters.specializedResults;
 const voiceMemoryEnabled = rolloutAdapters.voiceMemory;
+// Audit R2 G02: a meaningful, SAFE rollback effect for the shared-
+// orchestration adapter — it hides the shared command orchestration state
+// (goal objective + scheduled-loop status) from the run strip. It never
+// touches command interception (the router always runs), durable rows,
+// acceptance identity, or the stop precedence (goal → loop → run stays
+// first internally). Under rollback the engine keeps running goals/loops;
+// only the shared-orchestration presentation surface dims out.
+const sharedOrchestrationEnabled = rolloutAdapters.sharedOrchestration;
 
 /**
  * Center-surface chat route (design §8): conversation presentation only —
@@ -2121,6 +2131,12 @@ async function performOrdinarySend(
     confirmedBatchReferences?: readonly ChatV2GeneratedImageReference[];
     /** T2: deterministic request identity (plan continuations). */
     clientRequestId?: string;
+    /** Audit R2 G01: plan-continuation timing association (identity only). */
+    planContinuation?: {
+      planId: string;
+      version: number;
+      action: PlanContinuationAction;
+    };
   },
   /**
    * T7/D3: the conversation this send was issued in (captured before the
@@ -2229,6 +2245,9 @@ async function performOrdinarySend(
       : undefined;
   const accepted = await selectedStore.sendMessage(messageText, {
     clientRequestId: options?.clientRequestId,
+    // Audit R2 G01: continuation timing association rides to main on the
+    // same request (identity only — never plan content).
+    planContinuation: options?.planContinuation,
     // B15: typed queue denials (e.g. full queue) surface localized
     // actionable copy; the draft stays for retry either way.
     localizeError: (raw) => localizeWorkspaceError(raw, (key) => t(key)).text,
@@ -3277,6 +3296,12 @@ async function onLegacyPlanAction(
     const sendOptions = {
       modeOverride: "chat" as const,
       clientRequestId: continuationRequestId,
+      // Audit R2 G01: measure decision → durable continuation acceptance.
+      planContinuation: {
+        planId: plan.planId,
+        version,
+        action: action as PlanContinuationAction,
+      },
     };
     let continued = false;
     if (action === "approve-plan") {
@@ -3382,7 +3407,18 @@ async function onRetryPlanContinuation(): Promise<void> {
     const continued = await performOrdinarySend(
       text,
       [],
-      { modeOverride: "chat", clientRequestId: continuationRequestId },
+      {
+        modeOverride: "chat",
+        clientRequestId: continuationRequestId,
+        // Audit R2 G01: the retry is the same continuation decision —
+        // keep its timing anchor identity so main can still observe the
+        // decision → durable-acceptance interval at acceptance.
+        planContinuation: {
+          planId: intent.planId,
+          version: intent.version,
+          action: intent.action,
+        },
+      },
       { targetConversationId: intent.conversationId }
     );
     if (continued && conversationId.value === intent.conversationId) {

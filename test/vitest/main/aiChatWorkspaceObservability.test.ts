@@ -129,13 +129,13 @@ describe("workspace observability + rollout (G03)", () => {
   });
 
   it("aggregates the five stage timings across the capability lifecycle (§18.2, G01)", () => {
-    aiChatQueueCounters.observeTiming("submit_to_acceptance_ms", 12);
+    aiChatQueueCounters.observeTiming("queue_submit_to_acceptance_ms", 12);
     aiChatQueueCounters.observeTiming("permission_decision_to_resume_ms", 20);
     aiChatQueueCounters.observeTiming("plan_decision_to_continuation_ms", 33);
     aiChatQueueCounters.observeTiming("selection_request_to_transcript_ms", 44);
     aiChatQueueCounters.observeTiming("renderer_event_to_projection_ms", 5);
     const timings = aiChatQueueCounters.timingSnapshot();
-    expect(timings.submit_to_acceptance_ms?.count).toBe(1);
+    expect(timings.queue_submit_to_acceptance_ms?.count).toBe(1);
     expect(timings.permission_decision_to_resume_ms?.meanMs).toBe(20);
     expect(timings.plan_decision_to_continuation_ms?.count).toBe(1);
     expect(timings.selection_request_to_transcript_ms?.maxMs).toBe(44);

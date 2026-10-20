@@ -23,6 +23,7 @@ import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-cha
 import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
 import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
 import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
+import { registerAiChatRendererMetricsIpcHandlers } from "@/main-process/communication/aiChatRendererMetricsIpc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerToolResultIpcHandlers } from "@/main-process/communication/tool-result-ipc";
@@ -130,6 +131,8 @@ export function registerCommunicationIpcHandlers(
     registerGeneratedImageExportIpcHandlers();
     registerAiFileOpenIpcHandlers();
     registerAiChatWorkspaceIpcHandlers();
+    // Audit R2 G01: renderer projection aggregates → main telemetry merge.
+    registerAiChatRendererMetricsIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
     registerToolResultIpcHandlers();
