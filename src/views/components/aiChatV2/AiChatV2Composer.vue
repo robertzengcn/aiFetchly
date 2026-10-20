@@ -671,7 +671,7 @@ const voiceRecorder = new BrowserVoiceRecorder({
   onAutoStop: (recording) => {
     if (!isRecording.value) return;
     const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
-    if (stillOwnsComposition()) {
+    if (stillOwnsComposition(voiceOwnerDraftKey)) {
       voiceSessionOwnerFiles = [...selectedFiles.value];
     }
     const filesBeforeVoiceSend = voiceSessionOwnerFiles;
@@ -701,8 +701,8 @@ const showVoiceModelNotice = ref(false);
 let voiceSessionOwnerDraftKey: string | null = null;
 /** Attachment tray of the owning conversation at voice-session start (N01). */
 let voiceSessionOwnerFiles: File[] = [];
-const stillOwnsComposition = (): boolean =>
-  (props.draftKey ?? null) === voiceSessionOwnerDraftKey;
+const stillOwnsComposition = (owner: string | null): boolean =>
+  (props.draftKey ?? null) === owner;
 const voiceAvailabilityNotice = computed(() =>
   props.voiceRuntimeUnavailable
     ? t("aiChatV2.voice.runtime_unavailable") ||
@@ -907,7 +907,7 @@ async function processVoiceRecording(
     } catch {
       // A stale chain (conversation switched, audit 2026-10-20 B01) shows
       // nothing in the newly selected conversation.
-      if (stillOwnsComposition()) {
+      if (stillOwnsComposition(voiceOwnerDraftKey)) {
         showNotice(
           t("aiChatV2.voice.conversion_failed") ||
             "Could not convert the recording."
@@ -927,7 +927,7 @@ async function processVoiceRecording(
       // exception can carry filesystem paths or provider details and is
       // never appended to renderer-visible text. Stale chains (audit
       // 2026-10-20 B01) stay silent in the switched conversation.
-      if (stillOwnsComposition()) {
+      if (stillOwnsComposition(voiceOwnerDraftKey)) {
         showNotice(
           t("aiChatV2.voice.transcription_failed") ||
             "Voice transcription failed."
@@ -940,7 +940,7 @@ async function processVoiceRecording(
     // switched while stop/convert/transcribe were pending, this result
     // belongs to the originating conversation, never to the newly
     // selected one.
-    const resolvedInOwner = stillOwnsComposition();
+    const resolvedInOwner = stillOwnsComposition(voiceOwnerDraftKey);
     if (transcript.length === 0) {
       if (resolvedInOwner) {
         showNotice(
@@ -983,7 +983,7 @@ async function processVoiceRecording(
           // edits made outside the submitted delta, and when the owner is
           // no longer selected it still consumes the submitted delta from
           // the originating conversation's STORED draft.
-          if (stillOwnsComposition()) {
+          if (stillOwnsComposition(voiceOwnerDraftKey)) {
             if (draft.value === submittedDraftText) {
               draft.value = preAppendDraftText;
             }
@@ -1018,7 +1018,7 @@ async function releaseVoiceRecording(): Promise<void> {
   // a session stopped in another conversation keeps the tray captured at
   // Start and never inherits the foreign tray.
   const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
-  if (stillOwnsComposition()) {
+  if (stillOwnsComposition(voiceOwnerDraftKey)) {
     voiceSessionOwnerFiles = [...selectedFiles.value];
   }
   const filesBeforeVoiceSend = voiceSessionOwnerFiles;
@@ -1032,7 +1032,7 @@ async function releaseVoiceRecording(): Promise<void> {
     );
   } catch (err) {
     // voiceRecorder.stop() failure (rare) — classify into a clear kind.
-    if (stillOwnsComposition()) {
+    if (stillOwnsComposition(voiceOwnerDraftKey)) {
       showNotice(recorderErrorNotice(err));
     }
   }

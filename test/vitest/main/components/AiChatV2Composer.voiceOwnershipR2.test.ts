@@ -193,6 +193,21 @@ describe("AiChatV2Composer voice ownership R2 (N01/N02/N03)", () => {
     );
   });
 
+  it("AUDIT3 a newer voice session must not retarget an older acceptance", async () => {
+    transcribeVoiceMock.mockResolvedValue({ transcript: "same words" });
+    const wrapper = mountComposer(pinia, { voiceAutoSend: true });
+    await startAndStopRecording(wrapper);
+    const accept = (wrapper.emitted("send")![0][2] as SendOptions).onAccepted;
+    await wrapper.setProps({ draftKey: "convB" });
+    await wrapper.find("textarea").setValue("same words");
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    accept?.();
+    await flushPromises();
+    expect(draftText(wrapper)).toBe("same words");
+    wrapper.unmount();
+  });
+
   // --- N01: ownership captured at Start, never at Stop ---------------------
 
   it("N01 REAUDIT: recording started in A must not become B's send when stopped in B", async () => {
