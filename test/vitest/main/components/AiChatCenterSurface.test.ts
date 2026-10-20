@@ -4630,6 +4630,26 @@ describe("AiChatCenterSurface speech cancellation (R07)", () => {
     wrapper.unmount();
   });
 
+  it("cancels the voice job when the COMPOSER Stop fires (audit B06)", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+    const beforeStop = vi.mocked(cancelVoiceJob).mock.calls.length;
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("stop");
+    await flushPromises();
+    // Single-primary-stop (PRD §13): the composer Stop is the same primary
+    // stop affordance as the run strip — stopping the turn also stops the
+    // spoken output (queued synthesis jobs cancelled, playing speech stopped).
+    expect(vi.mocked(cancelVoiceJob).mock.calls.length).toBe(beforeStop + 1);
+
+    wrapper.unmount();
+  });
+
   it("cancels the voice job when the run strip Stop fires", async () => {
     const wrapper = mountSurface();
     await flushPromises();

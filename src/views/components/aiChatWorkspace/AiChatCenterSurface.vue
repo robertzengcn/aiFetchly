@@ -285,7 +285,7 @@
       :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
       :generated-image-focus-signal="composerFocusSignal"
       @send="onComposerSend"
-      @stop="selectedStore.stopActiveRun()"
+      @stop="stopActiveRunWithSpeech"
       @request-workspace="onRequestWorkspaceSetup"
       @remove-generated-image="onRemoveGeneratedImage"
       @clear-generated-images="onClearGeneratedImages"
@@ -983,6 +983,19 @@ const recoveryDetailText = computed<string | null>(() => {
     `Recovering via ${info.layer}: ${info.reason}`
   );
 });
+
+/**
+ * Shared text-run stop with speech cancellation (R07 / audit 2026-10-20 B06):
+ * EVERY user Stop affordance that kills a text response cancels its spoken
+ * output too — queued/playing utterances must not outlive the stopped run.
+ * The run strip's handler keeps the goal/loop precedence below; the composer
+ * Stop and the batch Stop use this directly (PRD §13: single-primary-stop).
+ */
+async function stopActiveRunWithSpeech(): Promise<void> {
+  resetSpeechFeed();
+  void voice.stopSpeaking();
+  await selectedStore.stopActiveRun();
+}
 
 /** One primary stop action (PRD §13.3): goal → loop → active run. */
 async function onStopFromStrip(): Promise<void> {
@@ -1741,7 +1754,9 @@ async function onSaveGeneratedImage(
 
 /** FR-IMG-012: stop preserves completed outputs; the run cancel owns the rest. */
 function onStopBatch(): void {
-  void selectedStore.stopActiveRun();
+  // Audit 2026-10-20 B06: the batch Stop cancels spoken output too — same
+  // stop contract as the composer and run-strip affordances.
+  void stopActiveRunWithSpeech();
 }
 
 /**
