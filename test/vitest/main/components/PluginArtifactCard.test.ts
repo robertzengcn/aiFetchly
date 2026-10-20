@@ -75,13 +75,14 @@ function artifact(
 
 function mountCard(
   artifacts: PluginArtifactView[] = [artifact()],
-  props: { disabled?: boolean } = {}
+  props: { disabled?: boolean; onDeleted?: (id: string) => void } = {}
 ) {
   return mount(PluginArtifactCard, {
     props: {
       conversationId: "conv-1",
       artifacts,
       disabled: props.disabled ?? false,
+      ...(props.onDeleted ? { onDeleted: props.onDeleted } : {}),
     },
     global: {
       plugins: [i18n],
@@ -200,6 +201,67 @@ describe("PluginArtifactCard", () => {
     expect(
       w.find('[data-testid="plugin-artifact-preview-truncated"]').exists()
     ).toBe(false);
+  });
+
+  it("keeps a cancelled native save dialog error-free (G04)", async () => {
+    exportPluginArtifact.mockResolvedValue({ cancelled: true });
+    const w = mountCard();
+    await w.find('[data-testid="plugin-artifact-save"]').trigger("click");
+    await flushPromises();
+    expect(exportPluginArtifact).toHaveBeenCalledWith("conv-1", "pa_artifact_1");
+    expect(w.find('[data-testid="plugin-artifact-error"]').exists()).toBe(false);
+  });
+
+  it("surfaces a save error from the host (e.g. ownership denial) (G04)", async () => {
+    exportPluginArtifact.mockRejectedValue(
+      new Error("artifact not found for this conversation")
+    );
+    const w = mountCard();
+    await w.find('[data-testid="plugin-artifact-save"]').trigger("click");
+    await flushPromises();
+    const err = w.find('[data-testid="plugin-artifact-error"]');
+    expect(err.exists()).toBe(true);
+    expect(err.text()).toContain("artifact not found for this conversation");
+  });
+
+  it("requires a two-step delete confirmation, then hides the row (G04)", async () => {
+    deletePluginArtifact.mockResolvedValue({ deleted: true });
+    const deletedIds: string[] = [];
+    const w = mountCard([artifact()], {
+      onDeleted: (id: string) => deletedIds.push(id),
+    });
+    const del = w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]');
+    // First click only introduces the confirm-state button label.
+    await del.trigger("click");
+    expect(w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]').text()).toContain(
+      "Confirm delete"
+    );
+    expect(deletePluginArtifact).not.toHaveBeenCalled();
+    // Second click deletes: row hidden + deleted event + last-file notice.
+    await w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]').trigger("click");
+    await flushPromises();
+    expect(deletePluginArtifact).toHaveBeenCalledWith("conv-1", "pa_artifact_1");
+    expect(deletedIds).toEqual(["pa_artifact_1"]);
+    expect(w.find('[data-testid="plugin-artifact-row"]').exists()).toBe(false);
+    expect(
+      w.find('[data-testid="plugin-artifact-deleted-notice"]').text()
+    ).toContain("Files deleted");
+  });
+
+  it("surfaces a delete failure and resets the confirm state (G04)", async () => {
+    deletePluginArtifact.mockRejectedValue(new Error("denied: foreign conversation"));
+    const w = mountCard();
+    await w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]').trigger("click");
+    await w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]').trigger("click");
+    await flushPromises();
+    const err = w.find('[data-testid="plugin-artifact-error"]');
+    expect(err.exists()).toBe(true);
+    expect(err.text()).toContain("denied: foreign conversation");
+    // Confirm state reset: the button label is back to plain "Delete".
+    expect(
+      w.find('[data-testid="plugin-artifact-delete-pa_artifact_1"]').text()
+    ).not.toContain("Confirm delete");
+    expect(w.find('[data-testid="plugin-artifact-row"]').exists()).toBe(true);
   });
 
   it("shows an error row when the preview request fails", async () => {
