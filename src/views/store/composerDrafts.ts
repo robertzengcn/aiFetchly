@@ -1,7 +1,8 @@
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { defineStore } from "pinia";
 import type { ChatV2GeneratedImageReference } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2PastedBlockKind } from "@/entityTypes/pastedTextTypes";
+import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 
 /**
  * Bounded per-conversation composer drafts (FR-COMP-011 / acceptance
@@ -20,6 +21,14 @@ export const COMPOSER_DRAFT_PENDING_KEY = "__pending_conversation__";
 
 /** Bounded memory: drafts for at most this many conversations are kept. */
 export const COMPOSER_DRAFT_CAP = 50;
+
+/** Identity-level equality of two generated-image references. */
+export function sameGeneratedImageRef(
+  a: ChatV2GeneratedImageReference,
+  b: ChatV2GeneratedImageReference
+): boolean {
+  return a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+}
 
 export interface ComposerPastedChipDraft {
   readonly id: number;
@@ -168,6 +177,40 @@ export const useComposerDraftStore = defineStore("composerDrafts", () => {
   function clearDraft(key: string): void {
     commit(key, EMPTY_DRAFT);
   }
+
+  /**
+   * Audit R04: the run-resolution consumer is APP-SCOPED, not surface-scoped.
+   * It previously lived in the mounted chat center, so a run settling while
+   * no surface instance was mounted (route round trip) left its queued
+   * reference-clear armed forever and remounting restored the stale tray.
+   * This store is created once per pinia (app lifetime); a watcher inside
+   * this setup runs for the app and consumes every resolution the moment it
+   * is published, mounted or not.
+   */
+  const selectedStore = useSelectedConversationStore();
+  watch(
+    () => selectedStore.lastResolvedReferenceRun,
+    (resolution) => {
+      if (!resolution) return;
+      const draftKey = composerDraftKeyFor(resolution.conversationId);
+      const submitted = consumeReferenceClear(draftKey, resolution.ordinal);
+      if (!submitted || resolution.kind !== "complete") return;
+      // Remove the EXACT snapshotted references from the stored draft so
+      // references added after the submission survive (legacy retry parity:
+      // error/cancelled resolutions dequeue but keep the tray).
+      const current = getDraft(draftKey)?.generatedImageReferences ?? [];
+      if (current.length === 0) return;
+      setGeneratedImageReferences(
+        draftKey,
+        current.filter(
+          (reference) =>
+            !submitted.references.some((sent) =>
+              sameGeneratedImageRef(reference, sent)
+            )
+        )
+      );
+    }
+  );
 
   return {
     drafts,

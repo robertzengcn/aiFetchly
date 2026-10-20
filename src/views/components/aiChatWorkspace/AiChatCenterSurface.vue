@@ -758,6 +758,7 @@ import {
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import {
   composerDraftKeyFor,
+  sameGeneratedImageRef,
   useComposerDraftStore,
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
@@ -1143,11 +1144,6 @@ const composerDraftKey = computed(() => composerDraftKeyFor(conversationId.value
 
 const composerFocusSignal = ref(0);
 const generatedImageNotice = ref<string | null>(null);
-
-const sameGeneratedImageRef = (
-  a: ChatV2GeneratedImageReference,
-  b: ChatV2GeneratedImageReference
-): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
 
 const pendingRows = computed(() =>
   pendingMessages.rowsFor(conversationId.value)
@@ -1539,42 +1535,18 @@ function onReorderGeneratedImages(
 
 /**
  * Consume one accepted submission's snapshot when ITS resolved terminal is
- * reported by the store (audit R05, R2 N04). The trigger is
+ * reported by the store (audit R05, R2 N04). The consumer watcher itself is
+ * APP-SCOPED in the composerDrafts store (audit R04): it must run while no
+ * surface instance is mounted (route round trip), so a completion reconciles
+ * the stored image draft even when the center is unmounted. The trigger is
  * `lastResolvedReferenceRun` — identity-resolved records whose ordinal is
  * the accept ledger's index, covering detail terminals (selected) and
  * redacted summary terminal facts (any conversation) — never a view-state
  * shape: after an A→B→A re-selection the handshake leaves the view idle
  * while the run streams on, and a resumed mid-run chunk (which re-arms the
  * presenter's liveness instead of clearing) must never be mistaken for a
- * completion (FR-LIF-002). The entry matching the resolution's accepted-run
- * ordinal is consumed exactly once; on `complete` its snapshot is removed
- * from the CURRENT draft, so references added after the submission survive
- * (legacy retry parity: `error`/`cancelled` dequeue but keep the tray).
+ * completion (FR-LIF-002).
  */
-watch(
-  () => selectedStore.lastResolvedReferenceRun,
-  (resolution) => {
-    if (!resolution) return;
-    const draftKey = composerDraftKeyFor(resolution.conversationId);
-    const submitted = composerDrafts.consumeReferenceClear(
-      draftKey,
-      resolution.ordinal
-    );
-    if (!submitted || resolution.kind !== "complete") return;
-    const current =
-      composerDrafts.getDraft(draftKey)?.generatedImageReferences ?? [];
-    if (current.length === 0) return;
-    composerDrafts.setGeneratedImageReferences(
-      draftKey,
-      current.filter(
-        (reference) =>
-          !submitted.references.some((sent) =>
-            sameGeneratedImageRef(reference, sent)
-          ),
-      ),
-    );
-  }
-);
 
 // --- Per-output reporting + generated-image batch actions (FR-RPT/FR-IMG) ---
 /** FR-RPT-009: session-only reported ids (never persisted). */

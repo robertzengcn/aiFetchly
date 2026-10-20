@@ -4773,6 +4773,29 @@ describe("AiChatCenterSurface image-reference identity resolution (audit R2 N04)
     summaryHandler = null;
   });
 
+  it("AUDIT3 completion while center is unmounted reconciles the stored image draft", async () => {
+    summaryCaptureMock();
+    mockSelectionSnapshot();
+    acceptRun("conv-1", "run-1");
+    const pinia = createPinia();
+    const wrapper = mountSurface(pinia);
+    await selectN04Conversation("conv-1");
+    wrapper.findComponent({ name: "AiChatWorkspaceTranscript" }).vm.$emit("use-generated-image", { messageId: "m1", imageIndex: 0 });
+    await flushPromises();
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("send", "edit", []);
+    await flushPromises();
+    expect(trayN04References(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    wrapper.unmount();
+    emitSummary({ reason: "run_completed", runId: "run-1" });
+    await flushPromises();
+    expect(useSelectedConversationStore().lastResolvedReferenceRun?.runId).toBe("run-1");
+    const restored = mountSurface(pinia);
+    await flushPromises();
+    const refs = trayN04References(restored);
+    restored.unmount();
+    expect(refs).toEqual([]);
+  });
+
   it("survives a route remount: the registry rides the app-scoped store and is consumed by a later terminal", async () => {
     mockSelectionSnapshot();
     acceptRun("conv-1", "run-1");
