@@ -158,6 +158,11 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   createClientRequestId: vi.fn().mockReturnValue("req-1"),
 }));
 
+import {
+  resetWorkspaceRolloutAdaptersForTest,
+} from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
+import { fetchWorkspaceRolloutFlags } from "@/views/api/aiChatWorkspace";
+
 import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenterSurface.vue";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
@@ -4822,6 +4827,69 @@ describe("AiChatCenterSurface expanded-command acceptance single-fire (B04)", ()
 
     expect(startChatRunMock).toHaveBeenCalledTimes(1);
     expect(onAccepted).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Audit 2026-10-20 B07: with the shared-orchestration adapter rolled back,
+ * slash-shaped input must STILL be intercepted by the command router — PRD
+ * §97 precludes raw command text reaching the model on any path, and a
+ * stop/control command must not appear accepted without performing its
+ * control action. Presentation flags choose dispatch adapters, never the
+ * interception contract (design §23.1).
+ */
+describe("AiChatCenterSurface rollback keeps command interception (B07)", () => {
+  beforeEach(() => {
+    // The REAL dispatchSlashCommand runs; the registry resolves /clear.
+    const invoke = window.api.invoke as unknown as ReturnType<typeof vi.fn>;
+    invoke.mockReset();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === SLASH_COMMAND_DISPATCH) {
+        return Promise.resolve({
+          status: true,
+          data: {
+            status: true,
+            action: "show_result",
+            content: "",
+            commandId: "built-in:command:clear",
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    vi.mocked(clearChatV2Conversation).mockReset();
+    vi.mocked(clearChatV2Conversation).mockResolvedValue({ deleted: 1 });
+    // ROLLBACK: shared orchestration explicitly off (operator action).
+    vi.mocked(fetchWorkspaceRolloutFlags).mockResolvedValue({
+      adapters: { sharedOrchestration: false, specializedResults: true, voiceMemory: true },
+    } as never);
+  });
+
+  it("runs /clear through the command router instead of submitting it as raw model text", async () => {
+    resetWorkspaceRolloutAdaptersForTest();
+    startChatRunMock.mockReset();
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "/clear", []);
+    await flushPromises();
+
+    // The command dispatched and the control action ran...
+    expect(vi.mocked(clearChatV2Conversation)).toHaveBeenCalledWith("conv-1");
+    // ...and the raw command text never reached the model.
+    expect(startChatRunMock).not.toHaveBeenCalled();
 
     wrapper.unmount();
   });

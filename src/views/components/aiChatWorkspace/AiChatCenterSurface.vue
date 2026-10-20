@@ -802,7 +802,6 @@ const inspector = useAppInspectorStore();
 // toggles one optional surface or dispatch adapter without touching durable
 // rows, run identities, or authorization gates.
 const rolloutAdapters = useWorkspaceRolloutAdapters();
-const sharedOrchestrationEnabled = rolloutAdapters.sharedOrchestration;
 const specializedResultsEnabled = rolloutAdapters.specializedResults;
 const voiceMemoryEnabled = rolloutAdapters.voiceMemory;
 
@@ -1986,21 +1985,20 @@ async function onComposerSend(
   // router BEFORE ordinary AI submission — the raw command text never
   // reaches the model.
   //
-  // A02 (§23.1/§23.2): with the shared-orchestration adapter rolled back,
-  // sends degrade to the plain durable path (no slash/loop/skill commands):
-  // the pending queue, run identities, and permission gates are
-  // main-process owned and stay untouched.
+  // B07 (audit 2026-10-20, PRD §97 anti-pattern 5): command interception is
+  // the P0 dispatch contract, NOT a shared-orchestration presentation
+  // feature (design §23.1 — rollout flags choose presentation/dispatch
+  // adapters, they never change authorization or interception rules). A
+  // rolled-back adapter still routes /command input; otherwise a stop or
+  // control command would be submitted as raw model text and appear
+  // accepted without performing its control action. The ordinary path
+  // below (durable queue, run identities, permission gates) is
+  // main-process owned and identical for both adapter states (§23.2).
   commandErrorNotice.value = null;
   // T7/D3 + Codex P1: capture the conversation the user pressed Send in
   // BEFORE the first await (command routing / file encoding both suspend).
   // A later selection change can never attach this submission to chat B.
   const commandConversationId = conversationId.value;
-  if (!sharedOrchestrationEnabled.value) {
-    await performOrdinarySend(text, files, options, {
-      targetConversationId: commandConversationId,
-    });
-    return;
-  }
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,
