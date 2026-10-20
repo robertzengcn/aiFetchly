@@ -868,8 +868,12 @@ export class AIChatContextAssembler {
       }
     }
     const fallbackRows = await this.loadRecentRowFallback(input);
+    // T14 substitution applies to ANY loaded rows, not only the turn-backed
+    // path: the recent-row fallback also gets bounded projections and counts
+    // its specialized-result misses (audit 2026-10-20 G01).
+    const substituted = await this.substituteProjections(fallbackRows);
     return {
-      rows: fallbackRows,
+      rows: substituted,
       turnBacked: false,
       receipts: [],
     };
@@ -938,11 +942,25 @@ export class AIChatContextAssembler {
       );
       return rows;
     }
-    if (byKey.size === 0) return rows;
+    if (byKey.size === 0) {
+      // Audit G01: an empty lookup (no projections exist at all) still
+      // counts the specialized-result per-row fallbacks by tool label.
+      for (const row of rows) {
+        this.countProjectionFallbackForTool(row);
+      }
+      return rows;
+    }
     let touched = false;
     const out: AIChatMessageEntity[] = rows.map((row) => {
       const proj = byKey.get(row.messageId);
-      if (!proj) return row;
+      if (!proj) {
+        // Audit 2026-10-20 G01 / design §18.1: a specialized tool result
+        // without a projection falls back to raw content — label the fallback
+        // by tool name (stable tool identifier straight from execution
+        // metadata, bounded to a safe label charset; unknown stays anonymous).
+        this.countProjectionFallbackForTool(row);
+        return row;
+      }
       touched = true;
       // Immutable copy with the bounded content swapped in. `Object.assign`
       // onto a fresh instance sharing the original's prototype preserves the
@@ -959,6 +977,48 @@ export class AIChatContextAssembler {
       return copy;
     });
     return touched ? out : rows;
+  }
+
+  /**
+   * Bounded tool-name label for a projection fallback (audit G01 / §18.1).
+   * Counts only tool-result rows; the label is a stable, sanitized tool
+   * identifier extracted from execution metadata (never tool arguments,
+   * file names, or result content).
+   */
+  private countProjectionFallbackForTool(row: AIChatMessageEntity): void {
+    if (row.messageType !== MessageType.TOOL_RESULT) {
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_workspace_projection_fallback_total",
+        "non_tool_row"
+      );
+      return;
+    }
+    let toolLabel = "tool_unknown";
+    if (row.metadata) {
+      try {
+        const parsedUnknown: unknown = JSON.parse(row.metadata);
+        if (
+          parsedUnknown &&
+          typeof parsedUnknown === "object" &&
+          "toolName" in parsedUnknown &&
+          typeof (parsedUnknown as { toolName?: unknown }).toolName === "string"
+        ) {
+          const raw = (parsedUnknown as { toolName: string }).toolName;
+          // Bounded label charset/length — tool names are stable machine
+          // identifiers; anything unexpected collapses to a safe prefix.
+          toolLabel = raw
+            .replace(/[^a-zA-Z0-9_.:-]/g, "_")
+            .slice(0, 80);
+          if (toolLabel.length === 0) toolLabel = "tool_unknown";
+        }
+      } catch {
+        // Corrupt metadata — anonymous fallback label, never content.
+      }
+    }
+    aiChatQueueCounters.incrementLabeled(
+      "ai_chat_workspace_projection_fallback_total",
+      `tool:${toolLabel}`
+    );
   }
 
   /**

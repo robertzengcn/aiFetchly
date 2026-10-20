@@ -73,8 +73,55 @@ export type AIChatQueueTimingKey =
   | "pending_db_transaction_ms"
   | "accept_to_claim_ms"
   | "claim_to_admit_ms"
-  | "admit_to_provider_ms";
+  | "admit_to_provider_ms"
+  // Audit 2026-10-20 G01 (design §18.2): the remaining stage timings across
+  // the capability lifecycle. The first four are main-process seams; the
+  // renderer projection timing lives in the renderer's own counters
+  // instance (per-process in-memory by design — design §18.3), structured
+  // through the same logSnapshot channel.
+  | "submit_to_acceptance_ms"
+  | "permission_decision_to_resume_ms"
+  | "plan_decision_to_continuation_ms"
+  | "selection_request_to_transcript_ms"
+  | "renderer_event_to_projection_ms";
 
+const TIMING_KEYS: readonly AIChatQueueTimingKey[] = [
+  "enqueue_to_dispatch_ms",
+  "steer_click_to_boundary_ms",
+  "drain_duration_ms",
+  "pending_db_transaction_ms",
+  "accept_to_claim_ms",
+  "claim_to_admit_ms",
+  "admit_to_provider_ms",
+  "submit_to_acceptance_ms",
+  "permission_decision_to_resume_ms",
+  "plan_decision_to_continuation_ms",
+  "selection_request_to_transcript_ms",
+  "renderer_event_to_projection_ms",
+];
+
+/**
+ * Audit 2026-10-20 G01 (design §18.1): bounded capability vocabulary for
+ * `ai_chat_workspace_action_total{capability,action,outcome}`. Values are
+ * stable enum-like strings — PRD §20 allows counts only, never prompts,
+ * tool arguments, filenames, paths, payloads, or credentials.
+ */
+export type AIChatWorkspaceActionCapability =
+  | "workspace"
+  | "permission"
+  | "plan"
+  | "voice"
+  | "image"
+  | "report"
+  | "outbound";
+
+/**
+ * SOAK / DIAGNOSTIC CONSUMPTION (audit 2026-10-20 G01): observability tests
+ * (test/vitest/main/aiChatWorkspaceObservability.test.ts) assert the labels
+ * and timing bounds; soak/burn-in runs consume the same data through
+ * {@link logSnapshot}, which emits one structured log line with every
+ * counter and timing aggregate (telemetry-only, never message content).
+ */
 class AIChatQueueCountersImpl {
   private readonly counts = new Map<string, number>();
   private readonly timings = new Map<AIChatQueueTimingKey, TimingAggregate>();
@@ -110,6 +157,25 @@ class AIChatQueueCountersImpl {
       .join(",");
     const composite = `${key}{${rendered}}`;
     this.counts.set(composite, (this.counts.get(composite) ?? 0) + amount);
+  }
+
+  /**
+   * Audit 2026-10-20 G01 (§18.1): bounded capability action counter.
+   * Capability values come from the {@link AIChatWorkspaceActionCapability}
+   * enum; action/outcome labels must be stable short enum-like strings
+   * ("ok" | "error" | "retry" | ...). Never pass prompts, tool arguments,
+   * file names, paths, tokens, or payloads into any label.
+   */
+  recordWorkspaceAction(
+    capability: AIChatWorkspaceActionCapability,
+    action: string,
+    outcome: string
+  ): void {
+    this.incrementWorkspace("ai_chat_workspace_action_total", {
+      capability,
+      action,
+      outcome,
+    });
   }
 
   /** G03 (§18.1): cross-conversation/stale event rejection (no labels). */
@@ -164,15 +230,7 @@ class AIChatQueueCountersImpl {
       { count: number; meanMs: number; minMs: number; maxMs: number }
       | undefined
     >;
-    for (const key of [
-      "enqueue_to_dispatch_ms",
-      "steer_click_to_boundary_ms",
-      "drain_duration_ms",
-      "pending_db_transaction_ms",
-      "accept_to_claim_ms",
-      "claim_to_admit_ms",
-      "admit_to_provider_ms",
-    ] as const) {
+    for (const key of TIMING_KEYS) {
       const aggregate = this.timings.get(key);
       out[key] = aggregate
         ? {

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { ai_custom_context_directive } from "@/config/settinggroupInit";
@@ -1500,5 +1501,87 @@ describe("AIChatContextAssembler — adversarial history framing (AC-22 storage 
     expect(userMsg).toContain("[Retained earlier turns — originals not loaded]");
     // The receipt references the turn for retrieval but quotes nothing.
     expect(userMsg).not.toContain(ADVERSARIAL);
+  });
+});
+
+/**
+ * Audit 2026-10-20 G01 (design §18.1): specialized-result projection fallbacks
+ * count per bounded tool label; a TOOL_RESULT row without a projection counts
+ * under `tool:<name>` while a missing projection for a non-tool row stays
+ * anonymous and a lookup failure keeps its `lookup_error` label.
+ */
+describe("AIChatContextAssembler specialized projection fallback counters (G01)", () => {
+  it("labels a tool-result fallback by the tool name from execution metadata", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetRecentMessages.mockResolvedValue([
+      row({
+        messageId: "tool-result-t1",
+        role: "assistant",
+        content: "raw oversized tool result body",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: JSON.stringify({ toolName: "browser_navigate" }),
+      }),
+    ]);
+    const assembler = new AIChatContextAssembler({
+      projectionLookup: {
+        lookup: vi.fn().mockResolvedValue(new Map()),
+      },
+    });
+    await assembler.assemble({
+      conversationId: "v2-fb1",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="tool:browser_navigate"}'
+      ]
+    ).toBe(1);
+  });
+
+  it("keeps non-tool fallbacks and corrupt metadata anonymous", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetRecentMessages.mockResolvedValue([
+      row({
+        messageId: "tool-result-t2",
+        role: "assistant",
+        content: "raw tool result",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: "{corrupt-json",
+      }),
+      row({
+        messageId: "plain-m",
+        role: "user",
+        content: "plain row without projection",
+        messageType: MessageType.MESSAGE,
+        metadata: undefined,
+      }),
+    ]);
+    const assembler = new AIChatContextAssembler({
+      projectionLookup: {
+        lookup: vi.fn().mockResolvedValue(new Map()),
+      },
+    });
+    await assembler.assemble({
+      conversationId: "v2-fb2",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="tool:tool_unknown"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="non_tool_row"}'
+      ]
+    ).toBe(1);
   });
 });

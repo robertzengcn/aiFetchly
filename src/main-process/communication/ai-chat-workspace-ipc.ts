@@ -513,6 +513,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           getQueryEngine().getConversationRuntimeStatus(
             request.conversationId
           ) !== "idle";
+        // G01 (design §18.2): submit → durable acceptance timing around the
+        // queue submit that produces the acceptance receipt.
+        const submitStartedMs = performance.now();
         const receipt = await getQueueService().submit({
           forceQueue: engineBusy,
           clientRequestId: request.clientRequestId,
@@ -527,6 +530,10 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
             "A run is already active for this conversation. Wait for it to finish or stop it first."
           );
         }
+        aiChatQueueCounters.observeTiming(
+          "submit_to_acceptance_ms",
+          performance.now() - submitStartedMs
+        );
         // G03 §18.1: durable acceptances by disposition (bounded labels).
         aiChatQueueCounters.incrementLabeled(
           "ai_chat_workspace_submission_accepted_total",

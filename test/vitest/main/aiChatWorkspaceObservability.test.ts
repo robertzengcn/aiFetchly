@@ -128,6 +128,104 @@ describe("workspace observability + rollout (G03)", () => {
     ).toBe(1);
   });
 
+  it("aggregates the five stage timings across the capability lifecycle (§18.2, G01)", () => {
+    aiChatQueueCounters.observeTiming("submit_to_acceptance_ms", 12);
+    aiChatQueueCounters.observeTiming("permission_decision_to_resume_ms", 20);
+    aiChatQueueCounters.observeTiming("plan_decision_to_continuation_ms", 33);
+    aiChatQueueCounters.observeTiming("selection_request_to_transcript_ms", 44);
+    aiChatQueueCounters.observeTiming("renderer_event_to_projection_ms", 5);
+    const timings = aiChatQueueCounters.timingSnapshot();
+    expect(timings.submit_to_acceptance_ms?.count).toBe(1);
+    expect(timings.permission_decision_to_resume_ms?.meanMs).toBe(20);
+    expect(timings.plan_decision_to_continuation_ms?.count).toBe(1);
+    expect(timings.selection_request_to_transcript_ms?.maxMs).toBe(44);
+    expect(timings.renderer_event_to_projection_ms?.count).toBe(1);
+  });
+
+  it("records capability actions with bounded success/failure/retry outcomes (G01)", () => {
+    // permission decision → resumed execution: success, failure, retry.
+    aiChatQueueCounters.recordWorkspaceAction(
+      "permission",
+      "resume",
+      "ok"
+    );
+    aiChatQueueCounters.recordWorkspaceAction(
+      "permission",
+      "resume",
+      "error"
+    );
+    aiChatQueueCounters.recordWorkspaceAction(
+      "permission",
+      "resume",
+      "retry"
+    );
+    aiChatQueueCounters.recordWorkspaceAction("plan", "approve", "ok");
+    aiChatQueueCounters.recordWorkspaceAction("plan", "recover", "error");
+    aiChatQueueCounters.recordWorkspaceAction("voice", "transcribe", "ok");
+    aiChatQueueCounters.recordWorkspaceAction("voice", "tts", "error");
+    aiChatQueueCounters.recordWorkspaceAction("image", "export", "ok");
+    aiChatQueueCounters.recordWorkspaceAction("report", "submit", "ok");
+    aiChatQueueCounters.recordWorkspaceAction("report", "submit", "error");
+    aiChatQueueCounters.recordWorkspaceAction("outbound", "approve", "ok");
+
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="resume",capability="permission",outcome="ok"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="resume",capability="permission",outcome="error"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="resume",capability="permission",outcome="retry"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="approve",capability="plan",outcome="ok"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="recover",capability="plan",outcome="error"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="transcribe",capability="voice",outcome="ok"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="tts",capability="voice",outcome="error"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="export",capability="image",outcome="ok"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="submit",capability="report",outcome="ok"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="submit",capability="report",outcome="error"}'
+      ]
+    ).toBe(1);
+    expect(
+      snapshot[
+        'ai_chat_workspace_action_total{action="approve",capability="outbound",outcome="ok"}'
+      ]
+    ).toBe(1);
+  });
+
   it("aggregates the dispatch pipeline timings", () => {
     aiChatQueueCounters.observeTiming("accept_to_claim_ms", 40);
     aiChatQueueCounters.observeTiming("claim_to_admit_ms", 5);

@@ -27,6 +27,8 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { denyChatV2ToolPermission } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
+// G01 (design §18.2): renderer event-receipt → projected-UI timing.
+import { observeRendererProjectionTiming } from "@/views/store/aiChatRendererMetrics";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
 import {
   markPermissionPromptExecuting,
@@ -310,7 +312,11 @@ export const useSelectedConversationStore = defineStore(
     }
 
     function applyDetailEvent(event: ChatRunDetailEvent): void {
+      // G01 (design §18.2): event receipt → projected UI state timing
+      // (durations only — never event content).
+      const receivedAt = performance.now();
       const consumed = presenter.applyEvent(event);
+      observeRendererProjectionTiming(performance.now() - receivedAt);
       if (!consumed) return;
       // Reactive sync happens through the presenter's onMutate hook — one
       // update per flush window, not one per token chunk.

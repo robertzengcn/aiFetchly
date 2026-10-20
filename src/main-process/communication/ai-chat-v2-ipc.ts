@@ -25,6 +25,8 @@ import {
   AI_CHAT_V2_PENDING_RESUME,
 } from "@/config/channellist";
 import type { ZodType } from "zod/v4";
+// G01 (design §18): bounded observability counters for capability actions.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageView,
@@ -2838,18 +2840,50 @@ async function handleTaskRetry(
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
+    async (_e, data: unknown) => {
+      // G01 (design §18): permission decision → resumed execution timing
+      // and bounded action counters (labels only, never tool arguments).
+      const resumedAt = performance.now();
+      const result = await handleResumeToolAfterPermission(data ?? "");
+      if (result.status) {
+        aiChatQueueCounters.observeTiming(
+          "permission_decision_to_resume_ms",
+          performance.now() - resumedAt
+        );
+      }
+      aiChatQueueCounters.recordWorkspaceAction(
+        "permission",
+        "resume",
+        result.status ? "ok" : "error"
+      );
+      return result;
+    }
   );
-  ipcMain.handle(AI_CHAT_V2_DENY_TOOL_PERMISSION, async (_e, data: unknown) =>
-    handleDenyToolPermission(data ?? "")
-  );
+  ipcMain.handle(AI_CHAT_V2_DENY_TOOL_PERMISSION, async (_e, data: unknown) => {
+    const result = await handleDenyToolPermission(data ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "permission",
+      "deny",
+      result.status ? "handled" : "error"
+    );
+    return result;
+  });
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
     handleConversations(data as string)
   );
-  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
-    handleHistory(_e as IpcEventLike, data)
-  );
+  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) => {
+    // G01 (design §18): selection request → reconstructed transcript.
+    const requestedAt = performance.now();
+    const result = await handleHistory(_e as IpcEventLike, data);
+    if (result.status) {
+      aiChatQueueCounters.observeTiming(
+        "selection_request_to_transcript_ms",
+        performance.now() - requestedAt
+      );
+    }
+    return result;
+  });
   ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
     handleClearConversation(_e as IpcEventLike, data as string)
   );
@@ -2860,22 +2894,64 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
     handleAnswerQuestion((data as string) ?? "")
   );
-  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
-    handleApprovePlan((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
-    handleRejectPlan((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
-    handleRequestPlanChanges((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
-    handlePlanVersions((data as string) ?? "")
-  );
+  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) => {
+    // G01 (design §18): plan decision → continuation acceptance timing with
+    // bounded action counters (plan-id only — never plan content).
+    const decidedAt = performance.now();
+    const result = await handleApprovePlan((data as string) ?? "");
+    if (result.status) {
+      aiChatQueueCounters.observeTiming(
+        "plan_decision_to_continuation_ms",
+        performance.now() - decidedAt
+      );
+    }
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "approve",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) => {
+    const result = await handleRejectPlan((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "reject",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) => {
+    const result = await handleRequestPlanChanges((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "request_changes",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) => {
+    const result = await handlePlanVersions((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "versions",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
   ipcMain.handle(
     AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
-    async (_e, data: unknown) =>
-      handlePlanContinuationRecover((data as string) ?? "")
+    async (_e, data: unknown) => {
+      const result = await handlePlanContinuationRecover(
+        (data as string) ?? ""
+      );
+      aiChatQueueCounters.recordWorkspaceAction(
+        "plan",
+        "continuation_recover",
+        result.status ? "ok" : "error"
+      );
+      return result;
+    }
   );
   ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleGetToolApprovalMode((data as string) ?? "")

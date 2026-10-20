@@ -1,4 +1,6 @@
 import { ipcMain } from "electron";
+// G01 (design §18): bounded image capability action counters.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AI_CHAT_V2_EXPORT_GENERATED_IMAGE } from "@/config/channellist";
 import { canUseChat } from "@/main-process/communication/ai-chat-v2-ipc";
 import { log } from "@/modules/Logger";
@@ -254,7 +256,14 @@ async function handleExportGeneratedImage(
  * the renderer can surface its request-workspace flow without throwing.
  */
 export function registerGeneratedImageExportIpcHandlers(): void {
-  ipcMain.handle(AI_CHAT_V2_EXPORT_GENERATED_IMAGE, async (_e, data: unknown) =>
-    handleExportGeneratedImage(data)
-  );
+  ipcMain.handle(AI_CHAT_V2_EXPORT_GENERATED_IMAGE, async (_e, data: unknown) => {
+    // G01 (design §18): generated-image export action counter (PRD §20).
+    const result = await handleExportGeneratedImage(data);
+    aiChatQueueCounters.recordWorkspaceAction(
+      "image",
+      "export",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
 }

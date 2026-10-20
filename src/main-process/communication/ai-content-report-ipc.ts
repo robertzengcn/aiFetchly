@@ -1,4 +1,6 @@
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   createAnyAIContentReportSchema,
   getAIContentReportCapabilitiesSchema,
@@ -8,6 +10,8 @@ import {
   AI_CONTENT_REPORT_CAPABILITIES,
   AI_CONTENT_REPORT_CREATE,
 } from "@/config/channellist";
+// G01 (design §18): bounded report capability action counters.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 
 /**
  * Register the AI-content-report IPC handlers (design §13).
@@ -34,12 +38,30 @@ import {
  * never expose raw auth tokens to the renderer (PRD FR-4.6).
  */
 export function registerAIContentReportIpcHandlers(): void {
+  // G01 (design §18 / PRD §20): reporting dialog opened, submitted, failed,
+  // and capability-unavailable counts. Bounded labels only — the payloads
+  // are already redacted upstream and never enter counters.
+
   registerValidatedHandler(
     AI_CONTENT_REPORT_CREATE,
     createAnyAIContentReportSchema,
     async (input) => {
       const service = new AIContentReportService();
-      return service.submitReport(input);
+      try {
+        // G01 (design §18 / PRD §20): report submitted / duplicate counts —
+        // the typed response only has enum outcome fields; counters never
+        // see report payloads.
+        const result = await service.submitReport(input);
+        aiChatQueueCounters.recordWorkspaceAction(
+          "report",
+          "submit",
+          result.duplicate ? "duplicate" : "ok"
+        );
+        return result;
+      } catch (err) {
+        aiChatQueueCounters.recordWorkspaceAction("report", "submit", "error");
+        throw err;
+      }
     }
   );
 
@@ -48,7 +70,15 @@ export function registerAIContentReportIpcHandlers(): void {
     getAIContentReportCapabilitiesSchema,
     async () => {
       const service = new AIContentReportService();
-      return service.getCapabilities();
+      // G01 (design §18 / PRD §20): capability-available vs fail-closed
+      // counts (enabled flag only — no payload surfaces into counters).
+      const result = await service.getCapabilities();
+      aiChatQueueCounters.recordWorkspaceAction(
+        "report",
+        "capabilities",
+        result.conversationReporting.enabled ? "available" : "unavailable"
+      );
+      return result;
     }
   );
 }
