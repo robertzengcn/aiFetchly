@@ -277,6 +277,12 @@ describe("MCPToolService host-runtime ownership gate (B13)", () => {
     });
     mcpClientMock.disconnectImpl = async () => undefined;
     mcpClientMock.instances.length = 0;
+    // T01 per-worker test isolation gives every worker a FRESH Token store
+    // (ELECTRON_USER_DATA_PATH under the worker tempdir), so the stdio trust
+    // gate below can no longer rely on a pre-trusted `MCP_TRUST_2` living in
+    // a shared machine-wide config. Grant the trust the suite depends on
+    // hermetically — the gate still runs first (see MCPToolService.ts:451).
+    new MCPToolService().setTrust(2, true);
   });
 
   afterEach(() => {
