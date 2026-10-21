@@ -159,8 +159,17 @@ export function createWorkspaceStreamPresenter(
   ): boolean;
   /** Consume a pending openImmediately artifact auto-open request. */
   consumePendingArtifactOpen(): { artifactId: string } | null;
-  /** Evict oldest rows beyond a bounded window without resetting streaming. */
-  trimToWindow(maxRows: number): void;
+  /**
+   * Evict rows beyond a bounded window without resetting streaming.
+   * Audit R4-04: the eviction END is direction-aware — ordinary
+   * (streaming) growth keeps the NEWEST rows, while backward history
+   * paging must keep the OLDEST rows so the just-requested range survives
+   * a full window. The bound itself is never removed.
+   */
+  trimToWindow(
+    maxRows: number,
+    options?: { retain?: "oldest" | "newest" }
+  ): void;
   /** Immediately flush buffered deltas (terminal path / selection change). */
   flush(): void;
   /** Drop buffers and reset streaming presentation (selection change). */
@@ -848,13 +857,23 @@ export function createWorkspaceStreamPresenter(
       return exists;
     },
     /**
-     * Evict the oldest rows beyond the bounded window WITHOUT resetting
-     * streaming presentation (design §12.2). Evicted rows are reloadable
-     * through the history cursor.
+     * Evict rows beyond the bounded window WITHOUT resetting streaming
+     * presentation (design §12.2). Evicted rows are reloadable: forward
+     * eviction keeps the newest rows (live direction), while backward
+     * history paging keeps the OLDEST rows so the just-requested page
+     * survives — the newest end is recoverable through the live stream and
+     * the selection snapshot (audit R4-04). The row bound is never removed.
      */
-    trimToWindow(maxRows: number): void {
+    trimToWindow(
+      maxRows: number,
+      options?: { retain?: "oldest" | "newest" }
+    ): void {
+      const retain = options?.retain ?? "newest";
       if (messages.length <= maxRows) return;
-      messages = messages.slice(messages.length - maxRows);
+      messages =
+        retain === "newest"
+          ? messages.slice(messages.length - maxRows)
+          : messages.slice(0, maxRows);
     },
     flush(): void {
       flushNow();

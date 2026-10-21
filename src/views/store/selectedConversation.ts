@@ -1107,10 +1107,15 @@ export const useSelectedConversationStore = defineStore(
     }
 
     function evictBeyondWindow(): void {
-      // Evict from the TOP (oldest) — they are reloadable via cursor.
-      // (Direction-aware trimming so a backward page survives a full
-      // window is audit R4-04 and is exercised separately.)
-      presenter.trimToWindow(MAX_MOUNTED_MESSAGES);
+      // Design §12.2 / audit R4-04: the loadOlder path just PREPENDED the
+      // requested older range — trimming must therefore retain the OLDEST
+      // rows and evict from the newest end, so a full window can no longer
+      // discard the page the user just fetched. The newest rows remain
+      // reachable (live stream catch-up and the selection snapshot's
+      // reseed are the way back to the live tail). The 200-row bound is
+      // preserved and `hasOlder` keeps the server's own verdict (set above
+      // from `page.hasOlder` — never forced true by this eviction).
+      presenter.trimToWindow(MAX_MOUNTED_MESSAGES, { retain: "oldest" });
     }
 
     /**

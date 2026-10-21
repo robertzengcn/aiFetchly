@@ -334,3 +334,169 @@ describe("selectedConversation history paging isolation (audit R4-01)", () => {
     expect(store.hasOlder).toBe(false);
   });
 });
+
+describe("selectedConversation history window eviction (audit R4-04)", () => {
+  it("keeps newly requested older rows when the window is full and honors exhausted history", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 200 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: rows[0].id },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async () =>
+        ({
+          messages: [historyRow("conv-1", "oldest", -30)],
+          nextBefore: null,
+          hasOlder: false,
+        }) as HistoryPage as never
+    );
+    await store.loadOlder();
+
+    // The requested older message is RETAINED even though the window was
+    // full and trimmed (backward paging evicts the opposite end)…
+    expect(store.messages.some((m) => m.id === "oldest")).toBe(true);
+    // …the bound still holds…
+    expect(store.messages.length).toBeLessThanOrEqual(200);
+    // …and the server's exhausted-history state survives (no forced true).
+    expect(store.hasOlder).toBe(false);
+  });
+
+  it("pages backward across more than 200 messages without cursor gaps and returns to the live tail", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: rows[0].id },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    let cursorForSecond: string | null = null;
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async () =>
+        ({
+          messages: Array.from({ length: 50 }, (_i, index) =>
+            historyRow("conv-1", `older-a-${index}`, 180 - index)
+          ),
+          nextBefore: { timestamp: "2026-10-19T01:00:00.000Z", messageId: "cursor-2" },
+          hasOlder: true,
+        }) as HistoryPage as never
+    );
+    await store.loadOlder();
+    // Still bounded, first fetched page retained.
+    expect(store.messages.length).toBe(200);
+    expect(store.messages.some((m) => m.id === "older-a-0")).toBe(true);
+    expect(store.hasOlder).toBe(true);
+
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (_conversationId: string, _limit: number, cursor: unknown) => {
+        cursorForSecond = (cursor as { messageId: string }).messageId;
+        return {
+          messages: Array.from({ length: 50 }, (_i, index) =>
+            historyRow("conv-1", `older-b-${index}`, 130 - index)
+          ),
+          nextBefore: null,
+          hasOlder: false,
+        } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
+    // No cursor gaps: the second page requested the cursor of the first.
+    expect(cursorForSecond).toBe("cursor-2");
+    // Newly fetched content stays navigable and exhaustion is honored.
+    expect(store.messages.some((m) => m.id === "older-b-49")).toBe(true);
+    expect(store.messages.length).toBe(200);
+    expect(store.hasOlder).toBe(false);
+
+    // "Return to the live tail": the selection handshake reseeds the full
+    // authoritative snapshot (seedHistory)—the trimmed newest rows return.
+    await selectSnapshot("conv-2", {});
+    await selectSnapshot("conv-1", { messages: rows });
+    expect(store.messages.some((m) => m.id === "recent-199")).toBe(true);
+    expect(store.messages.some((m) => m.id === "recent-0")).toBe(true);
+  });
+
+  it("empty and duplicate pages keep the window stable while cursor and hasOlder stay honored", async () => {
+    const rows = [
+      historyRow("conv-1", "keep-1", 30),
+      historyRow("conv-1", "keep-2", 29),
+      historyRow("conv-1", "keep-3", 28),
+    ];
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: "keep-1" },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async () =>
+        ({
+          messages: [
+            historyRow("conv-1", "keep-2", 29),
+            historyRow("conv-1", "keep-3", 28),
+          ],
+          nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-dup" },
+          hasOlder: true,
+        }) as HistoryPage as never
+    );
+    await store.loadOlder();
+    // Dedup: duplicates add nothing.
+    expect(store.messages.length).toBe(3);
+
+    let requestedCursor: string | null = null;
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (_conversationId: string, _limit: number, cursor: unknown) => {
+        requestedCursor = (cursor as { messageId: string }).messageId;
+        return { messages: [], nextBefore: null, hasOlder: false } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
+    expect(requestedCursor).toBe("cursor-dup");
+    expect(store.messages.length).toBe(3);
+    expect(store.hasOlder).toBe(false);
+  });
+
+  it("new streamed rows arriving while history is loaded stay appended and navigable", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    const store = useSelectedConversationStore();
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: rows[0].id },
+      hasOlder: true,
+    });
+
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async () =>
+        ({
+          messages: [historyRow("conv-1", "oldest-kept", -30)],
+          nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-2" },
+          hasOlder: true,
+        }) as HistoryPage as never
+    );
+    await store.loadOlder();
+    expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(true);
+
+    // A live run starts while the user is paged back: its streamed row is
+    // appended at the tail and does not disturb the retained older range.
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-live",
+      sequence: 1,
+      emittedAt: "2026-10-20T10:00:00.000Z",
+      eventType: "start",
+      payload: { eventType: "start", messageId: "live-row" },
+    });
+    await flushPromises();
+    expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(true);
+    expect(store.messages[store.messages.length - 1]?.id).toBe("live-row");
+  });
+});
