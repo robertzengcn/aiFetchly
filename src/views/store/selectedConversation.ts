@@ -235,9 +235,12 @@ export const useSelectedConversationStore = defineStore(
     >();
 
     /**
-     * Stable payload hash (metadata only — never attachment bytes). Any
-     * intentional content/attachment/reference/mode change yields a new
-     * hash and therefore a new request identity.
+     * Stable payload hash. Any intentional content/attachment/reference/mode
+     * change yields a new hash and therefore a new request identity. Audit
+     * R05: attachment BYTES participate — under transport ambiguity, an
+     * edited file with different bytes is a DIFFERENT submission and must
+     * mint a fresh identity for the model instead of collapsing into the
+     * accepted row (metadata-only hashes collapsed content edits).
      */
     function hashSendPayload(text: string, options?: SendOptions): string {
       const stable = {
@@ -251,6 +254,7 @@ export const useSelectedConversationStore = defineStore(
           mimeType: a.mimeType,
           sizeBytes: a.sizeBytes,
           kind: a.kind,
+          contentBase64: a.contentBase64 ?? null,
         })),
         generatedImageReferences: options?.generatedImageReferences ?? null,
         pastedContents: options?.pastedContents ?? null,
@@ -869,6 +873,9 @@ export const useSelectedConversationStore = defineStore(
       // error banner or draft (including A→B→A generation changes: the id
       // check passes on return and durable reload reconciles the view).
       const originConversationId = conversationId;
+      // G01: the submit click boundary — the earliest point of this send;
+      // main closes the click→acceptance sample at the queue receipt.
+      const clickAtEpochMs = Date.now();
 
       // Optimistic user message; history reload replaces it durably.
       const optimisticId = `local-user-${Date.now()}`;
@@ -914,6 +921,7 @@ export const useSelectedConversationStore = defineStore(
             : undefined,
           submissionId: options?.submissionId,
           planContinuation: options?.planContinuation,
+          journeyStart: { clickAtEpochMs },
         });
         // B14: confirmed acceptance rotates the logical-draft identity — an
         // intentional repeat of the same text afterwards mints a FRESH id

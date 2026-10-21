@@ -165,6 +165,18 @@ export const startChatRunRequestSchema = z
         action: z.enum(["approve-plan", "reject-plan", "request-plan-changes"]),
       })
       .optional(),
+    /**
+     * Audit G01 (design §18.2 "submit click to durable acceptance"):
+     * renderer-origin click epoch stamp for the full submission journey.
+     * Timing association only (bounded integer) — main closes the sample
+     * at the queue acceptance receipt and the stamp never reaches the
+     * engine request payload.
+     */
+    journeyStart: z
+      .strictObject({
+        clickAtEpochMs: z.number().int().min(0).max(9_000_000_000_000),
+      })
+      .optional(),
   })
   .strict();
 

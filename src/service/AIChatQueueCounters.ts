@@ -85,6 +85,7 @@ export type AIChatQueueTimingKey =
   // it starts at the queue submit call only (attachment encoding, request
   // validation and earlier IPC latency are upstream of it and NOT included).
   | "queue_submit_to_acceptance_ms"
+  | "submit_click_to_acceptance_ms"
   | "permission_decision_to_resume_ms"
   | "plan_decision_to_continuation_ms"
   | "selection_request_to_transcript_ms"
@@ -99,6 +100,7 @@ const TIMING_KEYS: readonly AIChatQueueTimingKey[] = [
   "claim_to_admit_ms",
   "admit_to_provider_ms",
   "queue_submit_to_acceptance_ms",
+  "submit_click_to_acceptance_ms",
   "permission_decision_to_resume_ms",
   "plan_decision_to_continuation_ms",
   "selection_request_to_transcript_ms",

@@ -89,6 +89,10 @@ function ok<T>(data: T): CommonMessage<T> {
 // ---------------------------------------------------------------------------
 
 const eventRouter = sharedWorkspaceEventRouter;
+
+/** G01: plausible submit-click journey window (@see design §18.2). */
+const MAX_SUBMIT_CLICK_JOURNEY_MS = 600_000;
+
 // B02: the coordinator and the durable queue admit through the SAME global
 // scheduler instance (see aiChatSharedScheduler) — ordinary interactive work
 // cannot bypass resource limits/fairness relative to other owners.
@@ -523,7 +527,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       };
       // Audit R2 G01: the plan-continuation timing meta is a trusted-channel
       // association only — it must never reach the engine request payload.
-      const { planContinuation, ...engineRequest } = request;
+      // G01 (audit 2026-10-21): same rule for the renderer-origin submit
+      // click stamp feeding the full click→acceptance journey measure.
+      const { planContinuation, journeyStart, ...engineRequest } = request;
       try {
         const engineBusy =
           getQueryEngine().getConversationRuntimeStatus(
@@ -553,6 +559,22 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           "queue_submit_to_acceptance_ms",
           performance.now() - submitStartedMs
         );
+        // G01 (design §18.2): the FULL submit-click → durable acceptance
+        // journey. The renderer stamps the click boundary; everything
+        // between (attachment encode, IPC transport, validation, image
+        // normalization) is included by construction since the sample
+        // closes here at the acceptance receipt. Implausible stamps (too
+        // far in the future/past — bad clocks, replays) silently produce
+        // no sample; the queue-only metric above stays untouched.
+        if (journeyStart) {
+          const elapsed = Date.now() - journeyStart.clickAtEpochMs;
+          if (elapsed >= -15_000 && elapsed <= MAX_SUBMIT_CLICK_JOURNEY_MS) {
+            aiChatQueueCounters.observeTiming(
+              "submit_click_to_acceptance_ms",
+              Math.min(Math.max(elapsed, 0), MAX_SUBMIT_CLICK_JOURNEY_MS)
+            );
+          }
+        }
         // Audit R2 G01: the REAL plan decision → continuation acceptance
         // boundary. A renderer-declared continuation identity whose decision
         // was anchored by the v2 plan handler measures between the persisted

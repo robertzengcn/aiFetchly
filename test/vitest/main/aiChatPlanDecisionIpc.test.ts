@@ -430,3 +430,97 @@ describe("plan decision → durable continuation acceptance (audit R2 G01)", () 
     expect(timing?.meanMs).toBeGreaterThanOrEqual(5);
   });
 });
+
+/**
+ * Audit 2026-10-21 G01: the design §18.2 "submit click to durable
+ * acceptance" measure. The renderer stamps the click boundary; main closes
+ * the sample at the queue acceptance receipt — so attachment encoding, IPC
+ * transport and request validation are INCLUDED, unlike the deliberately
+ * narrow `queue_submit_to_acceptance_ms` window that starts at the queue
+ * submission call.
+ */
+describe("submit click → durable acceptance journey (audit G01)", () => {
+  function journeyRequest(
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    return {
+      conversationId: "v2-g01",
+      clientRequestId: "journey-0123456789abcdef0123456789abcdef0123456",
+      message: "click me",
+      ...overrides,
+    };
+  }
+
+  function journeyTiming():
+    | { count: number; meanMs: number }
+    | undefined {
+    return aiChatQueueCounters.timingSnapshot()
+      .submit_click_to_acceptance_ms as
+      | { count: number; meanMs: number }
+      | undefined;
+  }
+
+  it("AUDIT3 pre-queue stages are part of the click-to-acceptance measure", async () => {
+    // 900 ms simulate click → attachment encode → IPC → validation before
+    // the handler even begins; the queue adds another 30 ms. The queue-only
+    // metric measures just the latter; the journey covers everything.
+    const clickAt = Date.now() - 900;
+    queueSpies.submit.mockImplementation(async () => {
+      await sleep(30);
+      return {
+        pendingMessage: { pendingMessageId: 61 },
+        disposition: "dispatch_scheduled",
+      };
+    });
+    const result = await callStartRun(
+      journeyRequest({ journeyStart: { clickAtEpochMs: clickAt } })
+    );
+    expect(result.status).toBe(true);
+    const journey = journeyTiming();
+    expect(journey?.count).toBe(1);
+    expect(journey?.meanMs).toBeGreaterThanOrEqual(890);
+    const queueOnly = aiChatQueueCounters.timingSnapshot()
+      .queue_submit_to_acceptance_ms;
+    expect(queueOnly?.count).toBe(1);
+    expect(queueOnly?.meanMs).toBeLessThan(890);
+  });
+
+  it("AUDIT3 a missing or implausible click stamp produces no sample", async () => {
+    queueSpies.submit.mockImplementation(async () => {
+      await sleep(30);
+      return {
+        pendingMessage: { pendingMessageId: 62 },
+        disposition: "dispatch_scheduled",
+      };
+    });
+    // Missing stamp.
+    await callStartRun(journeyRequest());
+    // Future stamp (clock skew beyond tolerance).
+    await callStartRun(
+      journeyRequest({
+        journeyStart: { clickAtEpochMs: Date.now() + 120_000 },
+      })
+    );
+    // Ancient stamp (beyond the 10-minute window).
+    await callStartRun(
+      journeyRequest({
+        journeyStart: { clickAtEpochMs: Date.now() - 700_000 },
+      })
+    );
+    expect(journeyTiming()).toBeUndefined();
+  });
+
+  it("AUDIT3 the journey stamp is stripped before the engine request", async () => {
+    queueSpies.submit.mockResolvedValue({
+      pendingMessage: { pendingMessageId: 63 },
+      disposition: "dispatch_scheduled",
+    });
+    await callStartRun(
+      journeyRequest({ journeyStart: { clickAtEpochMs: Date.now() } })
+    );
+    const submitted = queueSpies.submit.mock.calls[
+      queueSpies.submit.mock.calls.length - 1
+    ][0] as { request: { journeyStart?: unknown } };
+    expect(submitted.request.journeyStart).toBeUndefined();
+  });
+});

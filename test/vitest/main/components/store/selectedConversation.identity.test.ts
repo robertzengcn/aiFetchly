@@ -336,5 +336,27 @@ describe("selectedConversation durable run identity (audit R2 N04)", () => {
       summaryEvent({ conversationId: "conv-1", runId: "real-1", reason: "run_completed" });
       expect(lastResolution()?.ordinal).toBe(1);
     });
+    it("AUDIT3 changed attachment bytes receive a new request identity after transport ambiguity", async () => {
+      const api = await import("@/views/api/aiChatWorkspace");
+      vi.mocked(api.createClientRequestId).mockReturnValueOnce("req-original").mockReturnValueOnce("req-new");
+      await selectId("conv-1");
+      const store = useSelectedConversationStore();
+      const attachment = { fileName: "note.txt", mimeType: "text/plain", sizeBytes: 3, kind: "document" as const, contentBase64: "QUFB" };
+      startChatRunMock.mockRejectedValueOnce(new Error("reply lost"));
+      await store.sendMessage("read this", { attachments: [attachment] });
+      acceptRun("conv-1", "pending-p2", "queued");
+      await store.sendMessage("read this", { attachments: [{ ...attachment, contentBase64: "QkJC" }] });
+      expect(startChatRunMock.mock.calls[1][0].clientRequestId).not.toBe(startChatRunMock.mock.calls[0][0].clientRequestId);
+    });
+    it("G01 stamps the submit-click journey boundary on every send", async () => {
+      await selectId("conv-1");
+      const store = useSelectedConversationStore();
+      await store.sendMessage("hello journey");
+      const payload = startChatRunMock.mock.calls[0][0] as {
+        journeyStart: { clickAtEpochMs: number };
+      };
+      expect(payload.journeyStart.clickAtEpochMs).toBeLessThanOrEqual(Date.now());
+      expect(payload.journeyStart.clickAtEpochMs).toBeGreaterThan(Date.now() - 60_000);
+    });
   });
 });

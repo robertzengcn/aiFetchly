@@ -99,6 +99,12 @@ export interface StartWorkspaceRunRequest {
   readonly resourceClass?: "general";
   /** Audit R2 G01: plan-continuation timing association (identity only). */
   readonly planContinuation?: PlanContinuationIdentityMeta;
+  /**
+   * Audit G01: renderer-origin submit click epoch stamp for the full
+   * click → durable acceptance journey. Main closes the sample at the
+   * queue acceptance receipt; the stamp never reaches the engine request.
+   */
+  readonly journeyStart?: { clickAtEpochMs: number };
 }
 
 /** Create a fresh Chat V2 conversation id (renderer-side, main validates). */
