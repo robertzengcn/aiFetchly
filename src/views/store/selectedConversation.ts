@@ -229,6 +229,14 @@ export const useSelectedConversationStore = defineStore(
     let appliedGeneration = -1;
     let nextBeforeCursor: { timestamp: string; messageId: string } | null =
       null;
+    /**
+     * Audit R4-01: monotonic id of the in-flight `loadOlder` operation.
+     * The selection handshake advances it, so a page resolved after a
+     * selection change belongs to a superseded attempt and is discarded
+     * wholesale — messages, cursor, availability and the loading flag are
+     * all owned by the newest attempt of the CURRENT generation.
+     */
+    let olderLoadSeq = 0;
 
     /**
      * B14: durable submission identity per logical draft + conversation.
@@ -894,6 +902,12 @@ export const useSelectedConversationStore = defineStore(
     async function loadSelection(conversationId: string | null): Promise<void> {
       const generation = workspaceStore.nextGeneration();
       appliedGeneration = generation;
+      // Audit R4-01: the handshake owns a fresh paging state — any in-flight
+      // older-page attempt of the previous selection is superseded (its
+      // eventual `finally` must not clear THIS generation's flag) and the
+      // new selection can page immediately.
+      olderLoadSeq += 1;
+      loadingOlder.value = false;
       workspaceStore.setSelected(conversationId);
       loading.value = conversationId !== null;
       loadError.value = null;
@@ -980,10 +994,21 @@ export const useSelectedConversationStore = defineStore(
       }
     }
 
-    /** Load the next older page and prepend it (design §12.2). */
+    /**
+     * Load the next older page and prepend it (design §12.2).
+     * Audit R4-01: the request carries an immutable snapshot of the selection
+     * generation and the attempt id. After the transport await, every shared
+     * mutation — messages, cursor, availability, eviction — only applies
+     * while this attempt is still the newest one of the CURRENT generation.
+     * A stale page (selection changed, deselected, or superseded by a newer
+     * attempt) is discarded without touching the newer owner's state, and
+     * its `finally` only clears the loading flag when it still owns it.
+     */
     async function loadOlder(): Promise<void> {
       const conversationId = workspaceStore.selectedConversationId;
       if (!conversationId || !nextBeforeCursor || loadingOlder.value) return;
+      const selectionToken = appliedGeneration;
+      const loadToken = ++olderLoadSeq;
       loadingOlder.value = true;
       try {
         const page = await loadHistoryPage(
@@ -991,6 +1016,14 @@ export const useSelectedConversationStore = defineStore(
           50,
           nextBeforeCursor
         );
+        if (
+          appliedGeneration !== selectionToken ||
+          loadToken !== olderLoadSeq
+        ) {
+          return;
+        }
+        // Bounded-history availability always reflects what the server
+        // returned — an exhausted cursor is authoritative (audit R4-04).
         nextBeforeCursor = page.nextBefore;
         hasOlder.value = page.hasOlder;
         presenter.prependHistory([...page.messages]);
@@ -1000,14 +1033,17 @@ export const useSelectedConversationStore = defineStore(
       } catch {
         // Keep the current window; user can retry via the affordance.
       } finally {
-        loadingOlder.value = false;
+        if (loadToken === olderLoadSeq) {
+          loadingOlder.value = false;
+        }
       }
     }
 
     function evictBeyondWindow(): void {
       // Evict from the TOP (oldest) — they are reloadable via cursor.
+      // (Direction-aware trimming so a backward page survives a full
+      // window is audit R4-04 and is exercised separately.)
       presenter.trimToWindow(MAX_MOUNTED_MESSAGES);
-      hasOlder.value = true;
     }
 
     /**
