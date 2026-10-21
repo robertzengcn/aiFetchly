@@ -420,6 +420,10 @@ The audit found proposals/defaults, not a complete approved release decision rec
 - [ ] Minimum desktop version and tested OS/architecture/Electron/browser matrix.
 - [ ] Record quantitative acceptance results: at least 95% supported happy-path artifact success, at least 95% cancellation under five seconds, no orphan processes, no duplicate live requests, bounded recovery and unchanged unrelated MCP/browser behavior.
 
+**Engineering-defaults record 2026-10-21 (proposals, NOT approved product decisions).** The implemented v1 uses: 30-day artifact retention, 100 MiB per-file cap, JSON + CSV artifact formats (`capabilities.fileArtifacts`), conversation-scoped duplicate suppression with max four concurrent jobs, `maxConcurrentPerConversation` default 1, and retention that shrinks `expiresAt` on uninstall while preserving exported copies. These numbers are traceable in `PluginFileArtifactService`/`PluginRecoveryLedger`/`ToolJobRegistry` and were engineered per design §13/§11; items 1–3 and 15 above still require explicit product sign-off before being called "shipped defaults".
+
+**Measurement plan 2026-10-21.** Deterministic timing is covered by unit evidence (bounded shutdown proves `< 2 s` under a hung spawn in `ToolJobRegistry.settled.test.ts`; H5 cancel/deadline chains in `ToolJobRegistry.signal.test.ts`/`AIChatQueryLoopTimeout.test.ts`). The 95% rates, orphan-process and duplicate-live-request metrics require instrumented runs over the REAL packaged delivery — they are measured at the R01 operator gate (which also carries the G04 execution-flow legs that generate the scrape/cancel/export sequences). Do not cite unit tests as the release metric.
+
 Do not silently convert proposed engineering defaults (30-day retention, 100 MiB files, etc.) into approved product decisions.
 
 ### D01 — Deferred — In-session AI recovery and policy alignment
