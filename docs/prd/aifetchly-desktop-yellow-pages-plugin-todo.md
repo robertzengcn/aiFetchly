@@ -52,12 +52,12 @@ yarn test:components
 | HOST-10 duplicate suppression | Partial | Canonical object-key hashing and active fingerprint lookup exist; field-order/string normalization and per-plugin lease missing: G01. |
 | HOST-11 terminal cleanup | Partial | Supervised close/shutdown hooks exist; false settlement, temporary-state retention and lifecycle race: B04, B05, B12, B13. |
 | HOST-12 in-session broker | Deferred | Optional Phase 5; not a v1 blocker. See D01. |
-| HOST-13 docs correction | Partial | `skillTypes.ts` now describes managed async; PRD current-state tables and implementation plan still describe superseded gaps: G05. |
+| HOST-13 docs correction | Resolved | `skillTypes.ts` and all async skill descriptions/comments now describe managed async with anti-fabrication guidance; PRD §21 reconciled with a dated post-audit block and design §2 carries the reconciliation table: G05. |
 | HOST-14 embedded runtime | Partial | Runtime/entry, confinement, trusted Node-mode injection implemented and unit tested; launch authority and packaged proof: B13, R01. |
 | HOST-15 browser capability | Partial | Wrapper exists; production configuration/cache inputs, health/recovery and compatibility checks incomplete: B11. |
 | HOST-16 retry ledger | Partial | Cross-process memory, budgets and reservations exist; forged reference/new-user/cancelled reservation handling: B08. |
-| HOST-17 artifacts | Partial | Store, Module, IPC, card and six translations exist; B01/B03/B09/B10/B12 and G03/G04 remain. |
-| HOST-18 Hub compatibility | Partial / Unverified | Existing direct installation path; diagnostics issue and conditional ZIP/managed work: R01/R02. |
+| HOST-17 artifacts | Implemented (local evidence) | Store, Module, IPC, card, six translations and the G04 probe suites exist; packaged-flow acceptance metrics: R01. |
+| HOST-18 Hub compatibility | Partial / Unverified | Direct installation path plus corrected non-direct diagnostics (R02, `979d03449`); conditional ZIP/managed work and packaged proof: R01/R02. |
 | HUB-01 publication | Unverified, external owner | Require exact catalog/version/source and packaged installation evidence: R01. |
 | HUB-02 contract validation | Unverified, external owner | Require Hub validation/packaging tests for selected route: R01/R02. |
 
@@ -71,7 +71,7 @@ yarn test:components
 | AC-04 long jobs | Partial | Deadline-aware execution exists; B07 and actual four-minute-plus packaged scenario. |
 | AC-05 progress | Partial | Bridges exist; G02 and E2E display/correlation. |
 | AC-06 cancellation | Partial | B04/B05/B07; real browser-descendant matrix R01. |
-| AC-07 structured recovery | Partial | B02/B08; model-round and permitted retry integration test G04. |
+| AC-07 structured recovery | Implemented (unit/integration) | B02/B08 fixes plus model-round and permitted-retry integration tests landed in G04; packaged-loop proof rides R01. |
 | AC-08 correct failure semantics | Partial | B02/B03. |
 | AC-09 bounded retry | Partial | B08/G01. |
 | AC-10 bounded output | Partial | Artifacts exist; preview/result caps and validation B01/B02/B10/G03. |
@@ -96,20 +96,20 @@ yarn test:components
 | TD-05 progress/results; §§9–10.4 | Partial: B02/B03/G02. |
 | TD-06 browser; §6.3 | Partial: B11. |
 | TD-07 recovery; §12.2 | Partial: B08; local ledger tests pass but omit reproduced case. |
-| TD-08 artifacts; §13 | Partial: B01/B03/B09/B10/B12/G03/G04. |
+| TD-08 artifacts; §13 | Implemented for the store/promotion/validation/retention chain: B01/B03/B09/B10/B12/G03/G04 suites in place; packaged metrics R01. |
 | TD-09 activation/lifecycle; §14 | Partial: B05/B06/B11/B13/G01. |
 | TD-10 distribution; §16 and linked plugin §15 | Unverified/conditional: R01/R02. |
 | TD-11 migration; §17 | Partial: R03. |
 | PRD §§2–7 goals/non-goals/architecture; design §§1–3 | Host/plugin split exists; genericity and repository boundaries G01/B13, independent delivery R01, optionality/migration R03. |
 | PRD §9 and §§11, 14 | Runtime policies, async lifecycle and normalization covered by HOST matrix and B02–B08/G01/G02. |
 | PRD §§15, 30 later-phase alternatives | D01; do not add detached/resumable jobs, direct plugin AI credentials or arbitrary recovery code to v1. |
-| PRD §§17–20 security/artifacts/install/UX | B01/B09–B13/G02/G03/G04/R01/R02; existing translations present in all six files. |
-| PRD §§21–22 existing assessment/required host changes | HOST matrix and G05; historical implementation descriptions are not completion evidence. |
-| PRD §24 reliability/performance/compatibility/observability; design §20 | B02/B04/B07/B09/B13/G01/G02/G03/G04; all functions/types/diagnostics also need final implementation checks. |
-| PRD §25 tests, §26 acceptance; design §19 | Local results above; G04/R01/R03 remain. |
+| PRD §§17–20 security/artifacts/install/UX | Implemented: B01/B09–B13/G02/G03/G04 with tests; packaged/delivery evidence R01/R02; translations present in all six files. |
+| PRD §§21–22 existing assessment/required host changes | HOST matrix implemented per G04 evidence; G05 added the reconciliation blocks (PRD §0/§21, design §2) — historical audit text remains documented but is not completion evidence. |
+| PRD §24 reliability/performance/compatibility/observability; design §20 | Implemented: B02/B04/B07/B09/B13/G01/G02/G03/G04 in the converged suites; packaged metrics R01. |
+| PRD §25 tests, §26 acceptance; design §19 | Local results above; G04 complete, R01/R03 remain. |
 | PRD §§27–28 rollout/migration and §29 risks; design §21 | R01/R03 and the prioritized defects below. |
-| PRD §31 open decisions and §32 success metrics | R04; 95% artifact success and 95% cancellation within five seconds have not been measured. |
-| Source references/terminology (PRD §§33–34; design §22) | Reference material; G05 keeps links/current-state statements accurate. |
+| PRD §31 open decisions and §32 success metrics | R04: defaults recorded as proposals (2026-10-21), 95% artifact success and 95% cancellation within five seconds remain unmeasured pending R01 instrumented runs; product sign-off open. |
+| Source references/terminology (PRD §§33–34; design §22) | Reference material; G05 updated the cross-repo references and reconciliation blocks. |
 
 ## Confirmed defects and corrective tasks
 
