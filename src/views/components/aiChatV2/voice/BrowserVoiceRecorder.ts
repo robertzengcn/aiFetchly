@@ -143,43 +143,83 @@ export class BrowserVoiceRecorder {
       throw new Error("Recording was cancelled during acquisition.");
     }
     this.stream = stream;
-    this.selectedMime = this.pickMimeType();
-    const recorder = this.mediaRecorderFactory(stream, this.selectedMime);
-    this.recorder = recorder;
-    this.chunks = [];
-    recorder.ondataavailable = (event) => {
-      this.chunks.push(event.data);
-    };
-    recorder.onstop = () => {
-      const blob = this.blobFactory(this.chunks, { type: this.selectedMime });
-      const durationMs = this.now() - this.startedAt;
-      const result: RecordingResult = {
-        blob,
-        mimeType: this.selectedMime,
-        durationMs,
+    // Audit R4-02: transactional post-acquisition setup. Every stage below
+    // (MIME probing, recorder construction, callback wiring, state arming,
+    // recorder.start()) can fail; any failure rolls the whole session back
+    // — the acquired stream's tracks are released, callbacks are detached,
+    // the armed max-duration timer is cleared, and state resets — so a
+    // failed start never leaves the microphone acquired or half-armed.
+    try {
+      this.selectedMime = this.pickMimeType();
+      const recorder = this.mediaRecorderFactory(stream, this.selectedMime);
+      this.recorder = recorder;
+      this.chunks = [];
+      recorder.ondataavailable = (event) => {
+        this.chunks.push(event.data);
       };
-      const resolver = this.stopResolver;
-      this.stopResolver = null;
-      const autoStop = this.autoStopPending;
-      this.autoStopPending = false;
-      this.cleanup();
-      // The max-duration cap consumed this capture (audit R2 N05): hand it
-      // to the owner before resolving the (discarded) stop promise so the
-      // recording is transcribed, not thrown away.
-      if (autoStop) {
-        this.autoStopListener?.(result);
-      }
-      resolver?.(result);
-    };
-    this.startedAt = this.now();
-    this.state = "recording";
-    this.maxTimer = this.setTimeoutFn(() => {
-      this.autoStopPending = true;
-      void this.stop().catch(() => {
-        /* max-duration stop failed; leave state to next explicit stop */
-      });
-    }, maxDurationMs);
-    recorder.start();
+      recorder.onstop = () => {
+        const blob = this.blobFactory(this.chunks, { type: this.selectedMime });
+        const durationMs = this.now() - this.startedAt;
+        const result: RecordingResult = {
+          blob,
+          mimeType: this.selectedMime,
+          durationMs,
+        };
+        const resolver = this.stopResolver;
+        this.stopResolver = null;
+        const autoStop = this.autoStopPending;
+        this.autoStopPending = false;
+        this.cleanup();
+        // The max-duration cap consumed this capture (audit R2 N05): hand it
+        // to the owner before resolving the (discarded) stop promise so the
+        // recording is transcribed, not thrown away.
+        if (autoStop) {
+          this.autoStopListener?.(result);
+        }
+        resolver?.(result);
+      };
+      this.startedAt = this.now();
+      this.state = "recording";
+      this.maxTimer = this.setTimeoutFn(() => {
+        this.autoStopPending = true;
+        void this.stop().catch(() => {
+          /* max-duration stop failed; leave state to next explicit stop */
+        });
+      }, maxDurationMs);
+      recorder.start();
+    } catch (err) {
+      this.rollbackFailedStart(acquisition);
+      throw err;
+    }
+  }
+
+  /**
+   * Audit R4-02: undo everything a failed start() attempt adopted or armed.
+   * The generation guard keeps a superseded failure from tearing down a
+   * NEWER session (dispose() and a newer start own the state then) — within
+   * one session it is exception-safe on each stage individually.
+   */
+  private rollbackFailedStart(acquisition: number): void {
+    if (acquisition !== this.acquisitionSeq) {
+      return;
+    }
+    if (this.maxTimer) {
+      this.clearTimeoutFn(this.maxTimer);
+      this.maxTimer = null;
+    }
+    // Detach callbacks of a half-constructed recorder so a late onstop can
+    // never run the capture/resolution path of a session that failed to
+    // initialize.
+    const aborted = this.recorder;
+    if (aborted) {
+      aborted.ondataavailable = null;
+      aborted.onstop = null;
+      aborted.onerror = null;
+    }
+    this.autoStopPending = false;
+    this.stopResolver = null;
+    this.selectedMime = "";
+    this.cleanup();
   }
 
   /** Stop recording and resolve the captured audio. */

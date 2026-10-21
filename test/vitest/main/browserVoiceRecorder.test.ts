@@ -259,3 +259,108 @@ describe("BrowserVoiceRecorder", () => {
     expect(fx.mediaRecorderFactory).not.toHaveBeenCalled();
   });
 });
+
+
+describe("BrowserVoiceRecorder failed initialization rollback (audit R4-02)", () => {
+  it("releases the acquired stream and stops its tracks if the MediaRecorder constructor fails", async () => {
+    const fx = makeFakeMedia();
+    fx.mediaRecorderFactory.mockImplementationOnce(() => {
+      throw new Error("unsupported recording device");
+    });
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+    });
+    await expect(rec.start()).rejects.toThrow("unsupported recording device");
+    // The rollback ran immediately: the microphone is released BEFORE any
+    // external dispose and no max-duration timer was ever armed.
+    expect(fx.tracksStopped.length).toBe(1);
+    expect(fx.setTimeoutFn).not.toHaveBeenCalled();
+    expect(fx.getMaxCallback()).toBeNull();
+    expect(rec.recordingState).toBe("idle");
+    // ambient dispose is a no-op — never a second stop.
+    rec.dispose();
+    expect(fx.tracksStopped.length).toBe(1);
+    // A retry acquires a fresh stream and records normally (the throwing
+    // once-entry was consumed; the base factory works).
+    await rec.start();
+    expect(rec.recordingState).toBe("recording");
+    await rec.stop();
+    expect(fx.tracksStopped.length).toBe(2);
+  });
+
+  it("rolls back and releases the stream when MIME probing throws", async () => {
+    const fx = makeFakeMedia();
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => {
+        throw new Error("probe exploded");
+      },
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+    });
+    await expect(rec.start()).rejects.toThrow("probe exploded");
+    expect(fx.tracksStopped.length).toBe(1);
+    expect(fx.mediaRecorderFactory).not.toHaveBeenCalled();
+    expect(fx.setTimeoutFn).not.toHaveBeenCalled();
+    expect(rec.recordingState).toBe("idle");
+  });
+
+  it("rolls back the armed timer and state when recorder.start() throws", async () => {
+    const fx = makeFakeMedia();
+    let broken: FakeRecorder | null = null;
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: fx.mediaRecorderFactory,
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+      clearTimeoutFn: fx.clearTimeoutFn,
+    });
+    void fx.mediaRecorderFactory.mockImplementationOnce(
+      ((_stream: unknown, mime: string) => {
+        const r = makeFakeRecorder(mime);
+        r.start = vi.fn(() => {
+          throw new Error("recorder refused to start");
+        });
+        broken = r;
+        return r as unknown as MediaRecorderLike;
+      }) as unknown as Mock
+    );
+    await expect(rec.start()).rejects.toThrow("recorder refused to start");
+    // The timer was armed before start() — the rollback released it.
+    expect(fx.clearTimeoutFn).toHaveBeenCalled();
+    expect(fx.getMaxCallback()).toBeNull();
+    // Tracks stopped exactly once for the failed session.
+    expect(fx.tracksStopped.length).toBe(1);
+    expect(rec.recordingState).toBe("idle");
+    // No half-constructed session can be stopped and no detached callback
+    // fires the resolution path of a dead session.
+    await expect(rec.stop()).rejects.toThrow(/not recording/i);
+    const brokenRef = broken as FakeRecorder | null;
+    expect(brokenRef?.onstop).toBeNull();
+    expect(brokenRef?.ondataavailable).toBeNull();
+    // A retry starts a normal session (the once-entry was consumed).
+    await rec.start();
+    expect(rec.recordingState).toBe("recording");
+    await rec.stop();
+  });
+
+  it("a failed start propagates the original error, not a classified substitute", async () => {
+    const fx = makeFakeMedia();
+    const boom = { code: -1, message: "constraint failure" };
+    const rec = new BrowserVoiceRecorder({
+      getUserMedia: fx.getUserMedia,
+      mediaRecorderFactory: () => {
+        throw boom;
+      },
+      isTypeSupported: () => true,
+      setTimeoutFn: fx.setTimeoutFn,
+    });
+    await expect(rec.start()).rejects.toBe(boom);
+    expect(fx.tracksStopped.length).toBe(1);
+  });
+});
