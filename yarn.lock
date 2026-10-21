@@ -13288,7 +13288,7 @@ roboto-fontface@*:
   resolved "https://registry.npmmirror.com/roboto-fontface/-/roboto-fontface-0.10.0.tgz"
   integrity sha512-OlwfYEgA2RdboZohpldlvJ1xngOins5d7ejqnIBWr9KaMxsnBqotpptRXTyfNRLnFpqzX6sTDt+X+a+6udnU8g==
 
-rolldown@~1.2.14:
+rolldown@~1.2.14, rolldown@~1.2.4:
   version "1.2.15"
   resolved "https://registry.yarnpkg.com/rolldown/-/rolldown-1.2.15.tgz#d232b8201e1be3471d636375fe10af1dfc4eac35"
   integrity sha512-6odND+fel5zVw3I4Yc2e69gvguDnX0CAAGiNDZSq4ik5WUcaLrkD2GLuog0XcODbor31hZ5ayEMgVDno+KPV5g==
@@ -15277,7 +15277,20 @@ vite-plugin-vuetify@^2.0.1:
     debug "^4.3.3"
     upath "^2.0.1"
 
-"vite@^6.0.0 || ^7.0.0 || ^8.0.0", vite@^8.2.4:
+vite@8.2.4, "vite@^6.0.0 || ^7.0.0 || ^8.0.0":
+  version "8.2.4"
+  resolved "https://registry.yarnpkg.com/vite/-/vite-8.2.4.tgz#228041a755db4667c5a5d93735c8f61da993ccc5"
+  integrity sha512-lfauXnrf2x0p+UoA+wXh0dgFWnUjCyG6Js95KBkgaCwUU9k0DAHI4W6Q0WCx+h+5g+Alce1y4Zi2QjjK0UvGBw==
+  dependencies:
+    lightningcss "^1.33.0"
+    picomatch "^4.0.5"
+    postcss "^8.5.26"
+    rolldown "~1.2.4"
+    tinyglobby "^0.2.17"
+  optionalDependencies:
+    fsevents "~2.3.3"
+
+vite@^8.2.4:
   version "8.3.5"
   resolved "https://registry.yarnpkg.com/vite/-/vite-8.3.5.tgz#9614f66026cb92fe486cb9d3c90780b2a69fc85d"
   integrity sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==
