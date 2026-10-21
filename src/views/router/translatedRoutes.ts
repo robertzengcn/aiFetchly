@@ -5,7 +5,7 @@ import Layout from "@/views/layout/layout.vue";
 
 // Function to create routes with computed translations
 export const createTranslatedRoutes = (): RouteRecordRaw[] => {
-  const { t } = useI18n({ inheritLocale: true });
+  const { t } = useI18n();
 
   return [
     {

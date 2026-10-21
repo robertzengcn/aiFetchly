@@ -9,24 +9,77 @@
  * producer that truncated upstream leaves `source_completeness: "partial"`,
  * which is reported separately so absence is never overclaimed.
  */
+import { TOOL_RESULT_DEFAULTS } from "@/config/toolResultConfig";
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import {
+  TOOL_RESULT_DENIAL_RECOVERY,
+  TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY,
+  toolResultReadFailure,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
+
+const SEARCH_MAX_MATCHES = TOOL_RESULT_DEFAULTS.searchMaxMatches;
+
+/**
+ * Models often ask for more matches than one page allows (30, 50). The schema
+ * rejects those with INVALID_OUTPUT_ARGUMENTS. Cap the count first so the
+ * search runs and returns next_cursor for the rest.
+ */
+export function clampToolResultSearchArgs(
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(args, "max_matches")) {
+    return args;
+  }
+  const raw = args.max_matches;
+  if (raw === undefined || raw === null) {
+    const next: Record<string, unknown> = { ...args };
+    delete next.max_matches;
+    return next;
+  }
+  let value: number | null = null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    value = Math.trunc(raw);
+  } else if (typeof raw === "string" && /^-?\d+$/.test(raw.trim())) {
+    value = Number.parseInt(raw.trim(), 10);
+  }
+  if (value === null) return args;
+  return {
+    ...args,
+    max_matches: Math.min(SEARCH_MAX_MATCHES, Math.max(1, value)),
+  };
+}
 
 export async function handleToolResultSearch(
   args: Record<string, unknown>,
   context: SkillExecutionContext
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
-  const parsed = toolResultSearchInputSchema.safeParse(args);
+  const parsed = toolResultSearchInputSchema.safeParse(
+    clampToolResultSearchArgs(args)
+  );
   if (!parsed.success) {
-    return { success: false, result: { error: "INVALID_OUTPUT_ARGUMENTS" } };
+    return {
+      success: false,
+      result: {
+        error: "INVALID_OUTPUT_ARGUMENTS",
+        recovery: TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY,
+      },
+    };
   }
 
   const trusted = getToolResultContext(context);
   if (!trusted) {
-    return { success: false, result: { error: "OUTPUT_NOT_AVAILABLE" } };
+    return {
+      success: false,
+      result: {
+        error: "OUTPUT_NOT_AVAILABLE",
+        recovery: TOOL_RESULT_DENIAL_RECOVERY,
+      },
+    };
   }
 
   // Resolve and authorize BEFORE charging the allowance.
@@ -38,7 +91,14 @@ export async function handleToolResultSearch(
   // it never used.
   const target = await trusted.resolveTarget(parsed.data.output_id);
   if (!target.ok) {
-    return { success: false, result: { error: target.code } };
+    // A bare `{ error }` stub invites the model to retry and to fabricate
+    // further ids. Pair every denial with a recovery instruction so the model
+    // re-uses an existing receipt's output_id verbatim instead of inventing
+    // one (same class as the `check_tool_job_status` fix 6a25f7b56).
+    return {
+      success: false,
+      result: { error: target.code, recovery: TOOL_RESULT_DENIAL_RECOVERY },
+    };
   }
 
   // Charge the shared per-turn allowance BEFORE doing the work, so concurrent
@@ -78,24 +138,36 @@ export async function handleToolResultSearch(
     // `reservedCalls`, an unsettled reservation permanently consumes one of the
     // turn's 32 calls.
     await trusted.settleWork(0);
-    return { success: false, result: { error: outcome.code } };
+    return { success: false, result: toolResultReadFailure(outcome.code) };
   }
 
   const page = outcome.page;
-  const envelope = {
+  const fitted = fitWrappedRetrievalResult({
     success: true,
     output_id: page.outputId,
+    revision: target.target.revision,
     query: parsed.data.query,
+    // Cursor before the match list so a tail truncation cannot drop it.
+    next_cursor: page.nextCursor,
+    scan_complete: page.scanComplete,
+    source_completeness: page.sourceCompleteness,
     matches: page.matches.map((m) => ({
       start_byte: m.startByte,
       end_byte: m.endByte,
       excerpt: m.excerpt,
       read_cursor: m.readCursor,
+      match_count_in_window: m.matchCountInWindow,
     })),
-    scan_complete: page.scanComplete,
-    next_cursor: page.nextCursor,
-    source_completeness: page.sourceCompleteness,
-  };
+  });
+  const envelope =
+    fitted !== null && typeof fitted === "object"
+      ? (fitted as Record<string, unknown>)
+      : {
+          success: false,
+          error: "RETRIEVAL_PAGE_TOO_LARGE",
+          analysis_complete: false,
+          output_id: page.outputId,
+        };
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
   toolResultMetrics.record("retrieval.search");
   return { success: true, result: envelope };

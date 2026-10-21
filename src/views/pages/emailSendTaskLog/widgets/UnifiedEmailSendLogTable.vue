@@ -43,7 +43,7 @@ import { CapitalizeFirstLetter, formatRecordTime } from "@/views/utils/function"
 import { UnifiedSendLogEntry } from "@/entityTypes/buckemailType"
 import { Header } from "@/entityTypes/commonType"
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const router = useRouter();
 const selected = ref<Array<UnifiedSendLogEntry>>([]);
 

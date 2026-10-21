@@ -2,21 +2,28 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as path from "node:path";
 import * as os from "node:os";
 import { resolveTestDbPath } from "@/config/testDbPath";
+import { getSqliteTestFallbackDir } from "@/config/SqliteDb";
 
 /**
- * Root-cause regression guard for the SQLITE_BUSY_SNAPSHOT CI flake.
+ * Root-cause regression guards for the DB fallback directory.
  *
- * The flake: under vitest's default `forks` pool, DB-touching test files that
- * don't stand up their own isolated DB all opened the SAME on-disk file
- * (`os.tmpdir()/aifetchly-test/scraper.db`) via the BaseModule/Basedb fallback.
- * Concurrent `DataSource.synchronize` DDL across workers on that one file hit
- * `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` cannot retry. ~1-in-4000 under
- * load; a fresh CI `/tmp` raised the rate enough to fail the run.
+ * History: the SQLITE_BUSY_SNAPSHOT CI flake (concurrent `synchronize` DDL on
+ * one shared fallback file) was first fixed by suffixing the dir with
+ * `VITEST_POOL_ID`. That created a SECOND directory beside
+ * `getSqliteTestFallbackDir()` (`<tmpdir>/aifetchly-test`, which tests seed
+ * and assert through), so the SqliteDb singleton ping-ponged between the two
+ * paths — every switch destroyed the live DataSource mid-test and left
+ * eagerly-bound repositories on an uninitialized connection
+ * (EntityMetadataNotFoundError).
  *
- * The fix: namespace the fallback dir per vitest worker (`VITEST_POOL_ID`) so
- * each fork gets its own file. These tests pin that contract.
+ * The merged contract: worker isolation comes from the per-worker TMPDIR that
+ * `test/vitest/_setup/isolatedTmpDir.ts` assigns (os.tmpdir() re-reads TMPDIR
+ * per call on Node 22), and `resolveTestDbPath()` returns EXACTLY
+ * `getSqliteTestFallbackDir()` so there is only ever one fallback path per
+ * process. These tests pin that contract.
  */
 describe("resolveTestDbPath — per-worker DB fallback", () => {
+  const originalTmpdir = process.env.TMPDIR;
   beforeEach(() => {
     // Each test controls the env explicitly.
     delete process.env.VITEST_POOL_ID;
@@ -25,20 +32,27 @@ describe("resolveTestDbPath — per-worker DB fallback", () => {
   afterEach(() => {
     delete process.env.VITEST_POOL_ID;
     delete process.env.VITEST_WORKER_ID;
+    if (originalTmpdir === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = originalTmpdir;
+    }
   });
 
-  it("namespaces the dir by VITEST_POOL_ID so concurrent workers don't share a file", () => {
-    process.env.VITEST_POOL_ID = "7";
-    const dir = resolveTestDbPath();
-    expect(dir).toBe(path.join(os.tmpdir(), "aifetchly-test-7"));
+  it("matches getSqliteTestFallbackDir exactly (one fallback path, no singleton ping-pong)", () => {
+    expect(resolveTestDbPath()).toBe(getSqliteTestFallbackDir());
   });
 
-  it("two different pool ids yield two different dirs", () => {
-    process.env.VITEST_POOL_ID = "3";
+  it("isolates workers through the per-worker TMPDIR setup, not a pool-id suffix", () => {
+    // Simulate two isolatedTmpDir workers: os.tmpdir() re-reads TMPDIR, so
+    // each worker's fallback dir nests under its own unique tmp root.
+    process.env.TMPDIR = path.join(os.tmpdir(), "worker-a");
     const a = resolveTestDbPath();
-    process.env.VITEST_POOL_ID = "4";
+    process.env.TMPDIR = path.join(os.tmpdir(), "worker-b");
     const b = resolveTestDbPath();
     expect(a).not.toBe(b);
+    expect(a.endsWith("aifetchly-test")).toBe(true);
+    expect(b.endsWith("aifetchly-test")).toBe(true);
   });
 
   it("falls back to the legacy shared dir when not running under vitest (prod/dev)", () => {

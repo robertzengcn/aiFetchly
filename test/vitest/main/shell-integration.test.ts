@@ -30,9 +30,12 @@ vi.mock("@/modules/WorkspaceModule", () => {
     approvalState: "approved",
   });
   return {
-    WorkspaceModule: vi.fn().mockImplementation(() => ({
-      getActiveWorkspace,
-    })),
+    // Class form: WorkspaceResolver constructs the module with `new`, and a
+    // vi.fn().mockImplementation(<arrow>) is not a valid constructor target
+    // under the installed vitest — the arrow throws "is not a constructor".
+    WorkspaceModule: class {
+      getActiveWorkspace = getActiveWorkspace;
+    },
   };
 });
 

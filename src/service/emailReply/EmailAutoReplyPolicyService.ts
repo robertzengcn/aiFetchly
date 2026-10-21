@@ -4,7 +4,10 @@ import type {
   EmailMessageClassification,
   EmailAutoReplyDecisionStatus,
 } from "@/entityTypes/emailReceiveTypes";
-import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import {
+  isAutomatedSender,
+  replyRecipientAddress,
+} from "@/service/emailReceive/EmailMessageParser";
 
 /** Inputs to the policy evaluator. */
 export interface EmailAutoReplyPolicyInput {
@@ -29,7 +32,15 @@ export interface EmailAutoReplyPolicyDecision {
   readonly canSendAutomatically: boolean;
 }
 
-/** Classifications that must never receive a normal sales/auto reply. */
+/**
+ * Classifications that must never receive an unattended auto reply.
+ *
+ * `unknown` stays in this set so a direct evaluator call cannot treat an
+ * inconclusive verdict as permission to auto-send. A human-confirmed send
+ * strips it first via {@link classificationForConfirmedSend}: the user
+ * already reviewed the draft, and `unknown` only means the deterministic
+ * rules were inconclusive.
+ */
 const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set([
   "bounce",
   "auto_reply",
@@ -37,6 +48,21 @@ const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set
   "needs_human_review",
   "unknown",
 ]);
+
+/**
+ * Classification passed into {@link evaluateAutoReplyPolicy} for a
+ * human-confirmed send (draft approval or pre-send).
+ *
+ * A stored `unknown` is not evidence of a bounce, list, or unsubscribe.
+ * Returning null lets the confirmed send proceed. Bounce, auto-reply,
+ * unsubscribe, and needs_human_review are returned unchanged and still block.
+ */
+export function classificationForConfirmedSend(
+  classification: string | null | undefined
+): string | null {
+  if (classification == null || classification === "unknown") return null;
+  return classification;
+}
 
 /** Body keywords that signal a sensitive request requiring human review. */
 const SENSITIVE_KEYWORDS: readonly string[] = [
@@ -53,6 +79,42 @@ const SENSITIVE_KEYWORDS: readonly string[] = [
 ];
 
 /**
+ * Rule guardrails a CONFIRMED send (draft approval / pre-send) must still
+ * honor after {@link classificationForConfirmedSend} strips a stored
+ * `unknown` to null.
+ *
+ * The evaluator itself bypasses the allowlist for null classification
+ * because the PRE-DRAFT gate also feeds null while classification
+ * refinement is pending — enforcing it there would deadlock refinement.
+ * This helper closes the confirmed-send side only: an owner-typed
+ * allowlist is an explicit restriction, so an unclassified message must be
+ * LISTED (allow "unknown" explicitly) to pass.
+ *
+ * The rule's confidence threshold is deliberately NOT enforced here: it
+ * defaults to 0.7 on every row, so enforcing it for stripped-unknown would
+ * refuse every unclassified confirmed send on rule-bearing mailboxes and
+ * recreate the send deadlock the unknown exemption fixed.
+ *
+ * Returns a refusal reason, or null when the rule permits the send.
+ */
+export function confirmedSendRuleRefusal(
+  rule: EmailAutoReplyRuleEntity | null | undefined,
+  storedClassification: string | null | undefined
+): string | null {
+  if (!rule || rule.enabled !== 1) return null;
+  const allowed = parseStringArray(rule.allowedClassificationsJson);
+  if (allowed.length === 0) return null;
+  const effective =
+    storedClassification == null || storedClassification === "unknown"
+      ? "unknown"
+      : storedClassification;
+  if (!allowed.includes(effective)) {
+    return `Classification '${effective}' is not allowed by rule '${rule.name}'`;
+  }
+  return null;
+}
+
+/**
  * Evaluates whether an inbound message may be auto-replied to. Pure function —
  * no DB writes; the caller writes the {@link EmailAutoReplyAuditLog} row.
  *
@@ -65,9 +127,18 @@ export function evaluateAutoReplyPolicy(
 ): EmailAutoReplyPolicyDecision {
   const { message, classification, confidence, rule, sendCounts } = input;
 
-  // 1. Loop prevention: never reply to automated senders.
-  if (isAutomatedSender({ fromAddress: message.fromAddress })) {
-    return blocked("Sender is an automated/no-reply address");
+  // 1. Loop prevention: never reply to an automated mailbox. The address
+  // that would receive the reply is Reply-To when present, otherwise From.
+  // This is the inbound message, not the mailbox's configured send address.
+  const recipient = replyRecipientAddress(
+    message.fromAddress,
+    message.replyToAddress
+  );
+  if (isAutomatedSender({ fromAddress: recipient })) {
+    return blocked(
+      `Reply recipient "${recipient}" is an automated/no-reply address. ` +
+        "This check uses the inbound message From or Reply-To, not the mailbox's configured send address."
+    );
   }
 
   // 2. Classification hard block.
@@ -86,21 +157,45 @@ export function evaluateAutoReplyPolicy(
   }
 
   // 4. Rule-driven checks (only when a rule exists).
+  // NOTE: a null classification legitimately bypasses the allowlist and the
+  // confidence threshold here — the pre-draft gate feeds null while
+  // classification refinement is pending (a hard block would deadlock the
+  // refinement flow), and confirmed-send callers enforce their own rule
+  // guardrails via confirmedSendRuleRefusal instead.
   if (rule && rule.enabled === 1) {
     const allowed = parseStringArray(rule.allowedClassificationsJson);
     if (classification && allowed.length > 0 && !allowed.includes(classification)) {
       return skipped(`Classification '${classification}' is not allowed by rule '${rule.name}'`);
     }
 
+    // Blocked patterns test BOTH the From address and the address the reply
+    // would actually go to (Reply-To when present) — a blocked sender can
+    // otherwise redirect replies past the blocklist via Reply-To.
     const blockedSenders = parseStringArray(rule.blockedSenderPatternsJson);
-    if (blockedSenders.some((p) => matchesPattern(message.fromAddress, p))) {
-      return blocked(`Sender matches a blocked pattern in rule '${rule.name}'`);
+    const fromAddress = message.fromAddress ?? "";
+    if (
+      blockedSenders.some(
+        (p) => matchesPattern(fromAddress, p) || matchesPattern(recipient, p)
+      )
+    ) {
+      return blocked(
+        `Sender or reply recipient matches a blocked pattern in rule '${rule.name}'`
+      );
     }
 
     const blockedDomains = parseStringArray(rule.blockedDomainPatternsJson);
-    const domain = (message.fromAddress.split("@")[1] ?? "").toLowerCase();
-    if (domain && blockedDomains.some((p) => matchesPattern(domain, p))) {
-      return blocked(`Domain '${domain}' is blocked by rule '${rule.name}'`);
+    if (blockedDomains.length > 0) {
+      const domains = [fromAddress, recipient]
+        .map((addr) => (addr.split("@")[1] ?? "").toLowerCase())
+        .filter((d) => d.length > 0);
+      const hit = domains.find((d) =>
+        blockedDomains.some((p) => matchesPattern(d, p))
+      );
+      if (hit) {
+        return blocked(
+          `Domain '${hit}' is blocked by rule '${rule.name}'`
+        );
+      }
     }
 
     // 5. Limits.

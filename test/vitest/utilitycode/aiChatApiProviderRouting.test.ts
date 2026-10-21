@@ -413,4 +413,132 @@ describe("AiChatApi provider routing", () => {
       globalThis.fetch = original;
     }
   });
+
+  // T04 (NFR-02/04, AC-24): the caller's abort signal — the checker's
+  // per-dispatch controller linked to the turn/run Stop + a deadline — must
+  // reach the transport in BOTH the local and hosted paths so a Stop or a
+  // hanging provider stall cannot hold the verification gate. A signal that
+  // stops at the API boundary would let an in-flight checker fetch outlive
+  // the run.
+
+  it("openAIChatCompletion forwards the caller signal to the local fetch (T04, AC-24)", async () => {
+    // The local client wraps the caller signal in a derived AbortController
+    // (linked via an abort listener + a response-timeout timer), so the
+    // fetch's signal is NOT the caller's by identity. The regression that
+    // matters: aborting the caller signal propagates to the fetch's signal
+    // (a Stop / checker deadline cancels the in-flight local fetch). We hold
+    // the fetch in-flight, capture its derived signal, abort the caller, and
+    // assert the derived signal flips. Mirrors real fetch: an abort listener
+    // on the fetch's signal rejects the in-flight request.
+    enableLocalProvider();
+    let observedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url, init) => {
+      const signal = (init as RequestInit | undefined)?.signal ?? undefined;
+      observedSignal = signal;
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal?.aborted) {
+          const e = new Error("aborted");
+          e.name = "AbortError";
+          reject(e);
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const e = new Error("aborted");
+            e.name = "AbortError";
+            reject(e);
+          },
+          { once: true }
+        );
+      });
+    }) as unknown as typeof fetch;
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    const controller = new AbortController();
+    const inFlight = api
+      .openAIChatCompletion(
+        { messages: [{ role: "user", content: "ping" }] },
+        { signal: controller.signal }
+      )
+      .catch(() => null);
+    // The local path does async provider resolution before issuing fetch.
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
+    controller.abort();
+    // The caller-abort listener (registered in fetchWithResponseTimeout)
+    // fires synchronously; the derived signal the fetch was issued with
+    // flips to aborted. This is the propagation that cancels an in-flight
+    // local fetch on Stop / checker deadline.
+    expect(observedSignal?.aborted).toBe(true);
+    await inFlight;
+    globalThis.fetch = original;
+  });
+
+  it("openAIChatCompletion forwards the caller signal to the hosted postJson (T04, AC-24)", async () => {
+    enableHosted();
+    mockPostJson.mockResolvedValue({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "gpt-x",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "hello" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const controller = new AbortController();
+    await api.openAIChatCompletion(
+      { messages: [{ role: "user", content: "hi" }] },
+      { signal: controller.signal }
+    );
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    const opts = mockPostJson.mock.calls[0]?.[2] as
+      | { signal?: AbortSignal }
+      | undefined;
+    expect(opts?.signal).toBe(controller.signal);
+  });
+
+  it("openAIChatCompletion forwards the caller signal to the hosted 404-retry postJson (T04, AC-24)", async () => {
+    // The small-model 404 retry path must also carry the signal — a Stop
+    // during the retry window cancels the retry, not just the first attempt.
+    enableHosted();
+    mockPostJson
+      .mockRejectedValueOnce(new MockHttpResponseError(404, "Not Found"))
+      .mockResolvedValueOnce({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "deepseek-v4-flash",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "recovered" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    const controller = new AbortController();
+    await api.openAIChatCompletion(
+      {
+        messages: [{ role: "user", content: "hi" }],
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      },
+      { signal: controller.signal }
+    );
+    expect(mockPostJson).toHaveBeenCalledTimes(2);
+    const retryOpts = mockPostJson.mock.calls[1]?.[2] as
+      | { signal?: AbortSignal }
+      | undefined;
+    expect(retryOpts?.signal).toBe(controller.signal);
+  });
 });

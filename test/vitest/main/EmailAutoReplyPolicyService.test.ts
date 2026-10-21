@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
+import {
+  classificationForConfirmedSend,
+  confirmedSendRuleRefusal,
+  evaluateAutoReplyPolicy,
+} from "@/service/emailReply/EmailAutoReplyPolicyService";
 import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import type { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 
@@ -79,7 +83,66 @@ describe("evaluateAutoReplyPolicy (Phase 1 — auto-send disabled)", () => {
       sendCounts: emptyCounts,
     });
     expect(d.status).toBe("blocked");
+    expect(d.reason).toContain("no-reply@example.com");
     expect(d.reason).toMatch(/automated/i);
+    expect(d.reason).toMatch(/configured send address/i);
+  });
+
+  it("allows ordinary human From addresses, including domain or local-part lookalikes", () => {
+    for (const fromAddress of [
+      "estewaycom@gmail.com",
+      "david@aiagentlnc.com",
+      "person@noreply.example.com",
+      "techno-reply@example.com",
+    ]) {
+      const d = evaluateAutoReplyPolicy({
+        message: fakeMessage({ fromAddress }),
+        classification: "interested",
+        confidence: 0.9,
+        rule: fakeRule(),
+        sendCounts: emptyCounts,
+      });
+      expect(d.status, fromAddress).toBe("draft_created");
+    }
+  });
+
+  it("replies to a human Reply-To when From is a no-reply mailbox", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage({
+        fromAddress: "no-reply@forms.example.com",
+        replyToAddress: "estewaycom@gmail.com",
+      }),
+      classification: "interested",
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).toBe("draft_created");
+  });
+
+  it("lets a confirmed send proceed when classification is unknown", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("unknown") as never,
+      confidence: null,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).not.toBe("blocked");
+    expect(d.status).not.toBe("skipped");
+    expect(d.reason).not.toMatch(/unknown/);
+  });
+
+  it("still blocks bounce after the confirmed-send classification mapping", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: classificationForConfirmedSend("bounce") as never,
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(d.status).toBe("blocked");
+    expect(d.reason).toMatch(/bounce/);
   });
 
   it("blocks bounce / unsubscribe / auto_reply classifications", () => {
@@ -166,5 +229,101 @@ describe("evaluateAutoReplyPolicy (Phase 1 — auto-send disabled)", () => {
       sendCounts: emptyCounts,
     });
     expect(d.status).toBe("draft_created");
+  });
+});
+
+describe("rule guardrails vs the reply RECIPIENT (D2 review fix)", () => {
+  it("blocks a blocked SENDER pattern arriving via Reply-To (From stays clean)", () => {
+    const decision = evaluateAutoReplyPolicy({
+      message: fakeMessage({
+        fromAddress: "innocent@corp.com",
+        replyToAddress: "spam-bulk@spam.test",
+      }),
+      classification: "interested",
+      confidence: 0.9,
+      rule: fakeRule({
+        blockedSenderPatternsJson: JSON.stringify(["spam-bulk"]),
+        blockedDomainPatternsJson: null,
+      }),
+      sendCounts: emptyCounts,
+    });
+    expect(decision.status).toBe("blocked");
+    expect(decision.reason).toContain("blocked pattern");
+  });
+
+  it("blocks a blocked DOMAIN on the Reply-To recipient (redirection bypass)", () => {
+    const decision = evaluateAutoReplyPolicy({
+      message: fakeMessage({
+        fromAddress: "person@friendly.org",
+        replyToAddress: "deals@spam.test",
+      }),
+      classification: "interested",
+      confidence: 0.9,
+      rule: fakeRule(),
+      sendCounts: emptyCounts,
+    });
+    expect(decision.status).toBe("blocked");
+    expect(decision.reason).toContain("spam.test");
+  });
+
+  it("still blocks a blocked From when Reply-To is absent", () => {
+    const decision = evaluateAutoReplyPolicy({
+      message: fakeMessage({ fromAddress: "spam-bulk@friendly.org" }),
+      classification: "interested",
+      confidence: 0.9,
+      rule: fakeRule({
+        blockedSenderPatternsJson: JSON.stringify(["spam-bulk"]),
+        blockedDomainPatternsJson: null,
+      }),
+      sendCounts: emptyCounts,
+    });
+    expect(decision.status).toBe("blocked");
+  });
+});
+
+describe("confirmedSendRuleRefusal (D2 review fix — allowlist vs unknown)", () => {
+  it("refuses a stripped-unknown classification not listed in the allowlist", () => {
+    const refusal = confirmedSendRuleRefusal(
+      fakeRule(),
+      classificationForConfirmedSend("unknown")
+    );
+    expect(refusal).toContain("not allowed by rule 'default'");
+  });
+
+  it("allows unknown when the owner explicitly listed it", () => {
+    const refusal = confirmedSendRuleRefusal(
+      fakeRule({
+        allowedClassificationsJson: JSON.stringify([
+          "interested",
+          "unknown",
+        ]),
+      }),
+      classificationForConfirmedSend("unknown")
+    );
+    expect(refusal).toBeNull();
+  });
+
+  it("allows a listed concrete classification", () => {
+    const refusal = confirmedSendRuleRefusal(
+      fakeRule(),
+      classificationForConfirmedSend("interested")
+    );
+    expect(refusal).toBeNull();
+  });
+
+  it("does not enforce an allowlist when the rule has none", () => {
+    const refusal = confirmedSendRuleRefusal(
+      fakeRule({ allowedClassificationsJson: undefined }),
+      classificationForConfirmedSend("unknown")
+    );
+    expect(refusal).toBeNull();
+  });
+
+  it("does not enforce anything when the rule is disabled", () => {
+    const refusal = confirmedSendRuleRefusal(
+      fakeRule({ enabled: 0 }),
+      classificationForConfirmedSend("unknown")
+    );
+    expect(refusal).toBeNull();
   });
 });

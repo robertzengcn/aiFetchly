@@ -94,6 +94,47 @@ function assistantOwnerFor(
   return null;
 }
 
+const FAILURE_REASON_MAX_CHARS = 500;
+
+function boundedFailureText(value: string): string | undefined {
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > FAILURE_REASON_MAX_CHARS
+    ? `${trimmed.slice(0, FAILURE_REASON_MAX_CHARS)}…`
+    : trimmed;
+}
+
+function readFailureField(body: Record<string, unknown>): string | undefined {
+  for (const key of ["error", "errorMessage", "message"] as const) {
+    const value = body[key];
+    if (typeof value === "string") {
+      const bounded = boundedFailureText(value);
+      if (bounded) return bounded;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Failure text carried on a tool-result payload.
+ *
+ * Producers put the reason on `error` (run_subagent, thrown skills) and
+ * sometimes only on a nested `result.error`. The Execution row reads this
+ * when message metadata did not lift the field to the top level.
+ */
+export function toolFailureReason(
+  toolResult: Record<string, unknown> | undefined
+): string | undefined {
+  if (!toolResult) return undefined;
+  const direct = readFailureField(toolResult);
+  if (direct) return direct;
+  const nested = toolResult.result;
+  if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+    return readFailureField(nested as Record<string, unknown>);
+  }
+  return undefined;
+}
+
 /** Terminal statuses derived from a persisted TOOL_RESULT row. */
 function statusFromResult(message: ChatV2MessageView): ToolExecutionStatus {
   const metadata = message.metadata;
@@ -101,7 +142,9 @@ function statusFromResult(message: ChatV2MessageView): ToolExecutionStatus {
   if (metadata?.toolResult?.needsPermissionPrompt === true) {
     return "awaiting_permission";
   }
-  if (metadata?.toolResultStatus === "error") return "failed";
+  if (metadata?.toolResultStatus === "error" || metadata?.success === false) {
+    return "failed";
+  }
   return "completed";
 }
 
@@ -132,10 +175,18 @@ function classifyOutput(message: ChatV2MessageView): {
     const art = metadata.artifact as { id?: string } | undefined;
     return { kind: "artifact" as const, artifactId: art?.id };
   }
-  if (metadata?.toolResultStatus === "error") {
+  if (metadata?.toolResultStatus === "error" || metadata?.success === false) {
+    const summary =
+      (typeof metadata.error === "string"
+        ? boundedFailureText(metadata.error)
+        : undefined) ??
+      toolFailureReason(metadata.toolResult) ??
+      (typeof metadata.toolResultSummary === "string"
+        ? boundedFailureText(metadata.toolResultSummary)
+        : undefined);
     return {
       kind: "error",
-      summary: metadata.error ?? metadata.toolResultSummary,
+      summary,
     };
   }
   if (metadata?.generatedImages && metadata.generatedImages.length > 0) {

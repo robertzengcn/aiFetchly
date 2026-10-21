@@ -39,7 +39,6 @@ import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 //import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { SearchAccountModel } from "@/model/SearchAccount.model";
 import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
-import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType";
 import { AccountCookiesModule } from "./accountCookiesModule";
 import {
@@ -318,6 +317,9 @@ export class SearchModule extends BaseModule {
       );
     }
     const { port1, port2 } = new MessageChannelMain();
+    // Only port1 is transferred to the child; close the unused local end so
+    // the channel does not keep the parent process alive after the transfer.
+    port2.close();
     // const tokenService=new Token()
     let twoCaptchaTokenvalue = "";
     const twoCaptchaToken =
@@ -827,8 +829,6 @@ export class SearchModule extends BaseModule {
     // If search is provided, get all tasks first, then filter and paginate
     // Otherwise, use normal pagination
     let tasklist;
-    const allTasks: Array<SearchtaskItem> = [];
-
     if (search && search.trim().length > 0) {
       // Get all tasks for filtering
       const totalCount = await this.taskdbModel.getTaskTotal();
@@ -964,6 +964,79 @@ export class SearchModule extends BaseModule {
   public async countSearchResult(taskId: number): Promise<number> {
     const keyarr = await this.getKeywrodsbyTask(taskId);
     return await this.serResultModel.countSearchResult(keyarr);
+  }
+
+  /**
+   * Count search results for a task created at/after `startedAt` (execution-
+   * scoped freshness bound, AC-03). Unrelated old results for the same task
+   * cannot satisfy execution-local work.
+   */
+  public async countSearchResultSince(
+    taskId: number,
+    startedAt: Date
+  ): Promise<number> {
+    const keyarr = await this.getKeywrodsbyTask(taskId);
+    return await this.serResultModel.countByKeywordsSince(keyarr, startedAt);
+  }
+
+  /**
+   * Find the freshest search result for a task created at/after `startedAt`,
+   * returning its `record_time` and row id. Used by the observation provider so
+   * `observedAt` is the real row time, not `now()` (AC-04), and the reference
+   * cites the actual row (B03 — never a generic task slug). Null when no
+   * in-window row exists (fail-closed → unknown).
+   */
+  public async findLatestSearchResultSince(
+    taskId: number,
+    startedAt: Date
+  ): Promise<{ recordTime: Date; id: number } | null> {
+    const keyarr = await this.getKeywrodsbyTask(taskId);
+    return await this.serResultModel.findLatestByKeywordsSince(keyarr, startedAt);
+  }
+
+  /**
+   * B03 (FR-02/03/10/24): keyword id + text for one task — the universe the
+   * evidence factory matches a criterion target against for target
+   * attribution.
+   */
+  public async getKeywordTextsByTask(
+    taskId: number
+  ): Promise<Array<{ id: number; keyword: string }>> {
+    const entities = await this.serKeywordModel.getKeywordsEntityByTask(taskId);
+    return entities.map((item) => ({ id: item.id, keyword: item.keyword }));
+  }
+
+  /**
+   * B03: every keyword id + text (bounded) — the attribution universe for
+   * executions without a task linkage.
+   */
+  public async getAllKeywordTexts(): Promise<Array<{ id: number; keyword: string }>> {
+    return await this.serKeywordModel.getAllKeywordTexts();
+  }
+
+  /**
+   * B03: count in-window search results attributed to EXPLICIT keyword ids
+   * (already target-matched by the caller) — unlike
+   * {@link countSearchResultSince}, this never counts a task's unattributed
+   * keywords, so a concurrent extraction for another target cannot satisfy
+   * this request's count.
+   */
+  public async countSearchResultSinceForKeywords(
+    keywordIds: readonly number[],
+    startedAt: Date
+  ): Promise<number> {
+    return await this.serResultModel.countByKeywordsSince([...keywordIds], startedAt);
+  }
+
+  /**
+   * B03: freshest in-window search result attributed to EXPLICIT keyword
+   * ids, with its row id for a row-bound observation reference.
+   */
+  public async findLatestSearchResultSinceForKeywords(
+    keywordIds: readonly number[],
+    startedAt: Date
+  ): Promise<{ recordTime: Date; id: number } | null> {
+    return await this.serResultModel.findLatestByKeywordsSince([...keywordIds], startedAt);
   }
 
   //get keywords id by task id

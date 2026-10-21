@@ -14,6 +14,12 @@
  *  - "accept" (default): complete the SMTP dance, record the envelope + headers.
  *  - "reject_mail_from": respond 5xx to the first MAIL FROM so the production
  *    classifier maps the failure to `smtp_from_rejected` (scenario 5).
+ *  - "drop_after_greeting": destroy the socket right after the 220 greeting so
+ *    the production classifier sees an ambiguous mid-transfer failure
+ *    (ESOCKET / connection closed) and the delivery ends in
+ *    `delivery_unknown` (G04 unknown-delivery reconciliation). Unlike a
+ *    refused port (definite pre-acceptance rejection → `failed`), a drop
+ *    after connect may have begun submission — genuinely ambiguous.
  *
  * The server is deliberately minimal: no TLS upgrade, no pipelining, no
  * DSN. It is NOT a general-purpose MTA — it exists to make the identity-
@@ -42,12 +48,14 @@ export interface FakeSmtpServer {
   readonly recordedMessages: RecordedSmtpMessage[];
   /** Set the rejection mode for the next connection. */
   setRejectMailFrom(enabled: boolean): void;
+  /** Drop the next connection(s) right after the greeting (ambiguous). */
+  setDropAfterGreeting(enabled: boolean): void;
   /** Reset recordings + mode between scenarios sharing one server. */
   reset(): void;
   close(): Promise<void>;
 }
 
-type Mode = "accept" | "reject_mail_from";
+type Mode = "accept" | "reject_mail_from" | "drop_after_greeting";
 
 interface InFlight {
   authUser: string | null;
@@ -131,6 +139,14 @@ export function startFakeSmtpServer(): Promise<FakeSmtpServer> {
     };
 
     write("220 e2e-fake-smtp ready");
+    if (mode === "drop_after_greeting") {
+      // Ambiguous transport failure: the client connected, so submission may
+      // have begun — the production classifier must NOT treat this as a
+      // definite pre-acceptance rejection.
+      socket.end();
+      socket.destroy();
+      return;
+    }
 
     socket.setEncoding("utf8");
     let buffer = "";
@@ -295,6 +311,9 @@ export function startFakeSmtpServer(): Promise<FakeSmtpServer> {
         },
         setRejectMailFrom(enabled: boolean): void {
           mode = enabled ? "reject_mail_from" : "accept";
+        },
+        setDropAfterGreeting(enabled: boolean): void {
+          mode = enabled ? "drop_after_greeting" : "accept";
         },
         reset(): void {
           recordedMessages.length = 0;

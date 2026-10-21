@@ -8,6 +8,50 @@ import type { Iresponse } from "@/views/api/types";
 // (ipcTransport.ts) is fully typed and avoids `any`.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/**
+ * B12: typed IPC failure error. Thrown by windowInvoke / windowInvokeBinary
+ * when the IPC envelope reports `status:false`. Carries the structured
+ * failure fields (code / existing_draft_id / next_action / requestCorrelationId)
+ * the validated-IPC catch copied off a typed service error, so the renderer
+ * can branch on `code` instead of parsing the leading `[code]` bracket out of
+ * `message`.
+ *
+ * Extends Error so the hundreds of existing catch sites that read `e.message`
+ * continue to work unchanged. The structured fields are pure additions.
+ */
+export class IpcRequestError extends Error {
+  readonly code?: string;
+  readonly existing_draft_id?: number;
+  readonly next_action?: string;
+  readonly requestCorrelationId?: string;
+
+  constructor(
+    message: string,
+    fields: {
+      readonly code?: string;
+      readonly existing_draft_id?: number;
+      readonly next_action?: string;
+      readonly requestCorrelationId?: string;
+    } = {}
+  ) {
+    super(message);
+    this.name = "IpcRequestError";
+    this.code = fields.code;
+    this.existing_draft_id = fields.existing_draft_id;
+    this.next_action = fields.next_action;
+    this.requestCorrelationId = fields.requestCorrelationId;
+  }
+}
+
+function toIpcRequestError(result: Iresponse): IpcRequestError {
+  return new IpcRequestError(result.msg, {
+    code: result.code,
+    existing_draft_id: result.existing_draft_id,
+    next_action: result.next_action,
+    requestCorrelationId: result.requestCorrelationId,
+  });
+}
+
 export const windowInvoke = async (channel: string, data?: object) => {
   // console.log(data)
   // campaign:list
@@ -19,7 +63,10 @@ export const windowInvoke = async (channel: string, data?: object) => {
   }
   // console.log(result)
   if (!result.status) {
-    throw new Error(result.msg);
+    // B12: throw a typed IpcRequestError so callers can read structured
+    // fields (code / existing_draft_id / next_action / requestCorrelationId)
+    // instead of parsing the leading [code] bracket out of msg.
+    throw toIpcRequestError(result);
   }
   return result.data;
 };
@@ -33,7 +80,8 @@ export const windowInvokeBinary = async (channel: string, data?: any) => {
     throw new Error("unknow error");
   }
   if (!result.status) {
-    throw new Error(result.msg);
+    // B12: same typed-error path as windowInvoke.
+    throw toIpcRequestError(result);
   }
   return result.data;
 };

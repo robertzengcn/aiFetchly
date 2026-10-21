@@ -12,8 +12,25 @@ export const emailReplyDraftWriteSchema = lazySchema(() =>
     status: z.string().optional(),
     generationSource: z.string().optional(),
     modelName: z.string().nullable().optional(),
+    // T09/FR-027 completion telemetry: the winning completion's
+    // finish_reason and token usage, or null when the provider omitted them.
+    finishReason: z.string().nullable().optional(),
+    promptTokens: z.number().int().nullable().optional(),
+    completionTokens: z.number().int().nullable().optional(),
+    totalTokens: z.number().int().nullable().optional(),
     promptVersion: z.string().nullable().optional(),
     confidence: z.number().nullable().optional(),
+    // B07: model intent suggestion, metadata only — never overwrites the
+    // authoritative message classification.
+    intentSuggestion: z.string().nullable().optional(),
+    intentSuggestionConfidence: z.number().nullable().optional(),
+    // R21: optional generated review metadata, review metadata only —
+    // persisted so a model-flagged draft stays flagged on reload/reuse and
+    // approval refuses while the flag is set. Never relaxes the
+    // deterministic validator or the authoritative classification.
+    requiresHumanReview: z.number().int().nullable().optional(),
+    reviewReasonsJson: z.string().nullable().optional(),
+    unresolvedQuestionsJson: z.string().nullable().optional(),
     knowledgeSourcesJson: z.string().nullable().optional(),
     ownerStyleProfileJson: z.string().nullable().optional(),
     warningsJson: z.string().nullable().optional(),

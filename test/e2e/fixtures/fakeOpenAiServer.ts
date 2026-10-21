@@ -54,6 +54,12 @@ export interface RedactedRequest {
    * images were attached and in which order without logging payloads.
    */
   readonly imagePartHashes: readonly string[];
+  /**
+   * The `response_format.type` the client requested (`json_object` when the
+   * caller passed the FR-026 JSON hint), if any. Format name only — never
+   * prompts, schemas, or bodies (design §9.6).
+   */
+  readonly responseFormat: string | undefined;
   readonly clientDisconnected: boolean;
   readonly timestamp: number;
 }
@@ -99,6 +105,13 @@ export interface FakeOpenAiController {
    * an `imageB64` payload override) instead of a tool call.
    */
   setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void>;
+  /**
+   * Queue canned bodies for the next non-streaming chat completions, in
+   * order (G03 local-provider compatibility: reply-draft generation needs a
+   * valid reply JSON where compaction needs SectionSummaryV1). When the
+   * queue is empty the server falls back to its default content selection.
+   */
+  queueNonStreamingContents(contents: string[]): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
   reset(): Promise<void>;
   stop(): Promise<void>;
@@ -127,6 +140,7 @@ function redactChatRequest(
     messages?: unknown[];
     stream?: boolean;
     tools?: unknown[];
+    response_format?: unknown;
   } = {};
   try {
     parsed = JSON.parse(rawBody) as typeof parsed;
@@ -162,6 +176,11 @@ function redactChatRequest(
       }
     }
   }
+  const responseFormat =
+    typeof (parsed.response_format as { type?: unknown } | undefined)?.type ===
+    "string"
+      ? ((parsed.response_format as { type: string }).type.slice(0, 64) ?? "")
+      : undefined;
   return {
     method: req.method ?? "GET",
     path: req.url ?? "/",
@@ -171,6 +190,7 @@ function redactChatRequest(
     stream: parsed.stream === true,
     toolNames,
     imagePartHashes,
+    responseFormat: responseFormat !== "" ? responseFormat : undefined,
     clientDisconnected,
     timestamp: Date.now(),
   };
@@ -194,6 +214,8 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let toolCallQueue: ScriptedToolCall[] = [];
   /** Monotonic id for scripted tool calls (unique across rounds). */
   let scriptedCallCounter = 0;
+  /** Canned non-streaming completion bodies, popped in order (G03). */
+  let nonStreamingQueue: string[] = [];
   const requestLog: RedactedRequest[] = [];
 
   /** True when a chat request carries a tool-result message (the continuation
@@ -240,6 +262,22 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         toolCallsConfig = null;
         toolCallQueue = [];
         scriptedCallCounter = 0;
+        nonStreamingQueue = [];
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/non-streaming-queue") {
+        try {
+          const parsed = JSON.parse(body) as { contents?: unknown };
+          nonStreamingQueue = Array.isArray(parsed.contents)
+            ? (parsed.contents as unknown[])
+                .filter((c): c is string => typeof c === "string")
+                .map((c) => c.slice(0, 20000))
+            : [];
+        } catch {
+          nonStreamingQueue = [];
+        }
         res.writeHead(204);
         res.end();
         return;
@@ -349,14 +387,16 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       const parsedBody = parseChatRequestBody(rawBody);
       if (!parsedBody.stream) {
         requestLog.push(redactChatRequest(req, rawBody, false));
+        // G03: a queued canned body wins (reply-draft generation needs valid
+        // reply JSON); otherwise the pre-existing default selection applies.
+        const queued = nonStreamingQueue.shift();
+        const content =
+          queued !== undefined
+            ? queued
+            : nonStreamingContent(parsedBody.messages);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
-          JSON.stringify(
-            completionResponse(
-              nonStreamingContent(parsedBody.messages),
-              parsedBody.model
-            )
-          )
+          JSON.stringify(completionResponse(content, parsedBody.model))
         );
         return;
       }
@@ -616,6 +656,13 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ calls }),
+      });
+    },
+    async queueNonStreamingContents(contents: string[]): Promise<void> {
+      await controlFetch("/__e2e/non-streaming-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents }),
       });
     },
     async getRequests(): Promise<readonly RedactedRequest[]> {

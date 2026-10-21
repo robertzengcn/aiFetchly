@@ -45,16 +45,16 @@ export class AgentDefinitionEntity extends AuditableEntity {
   mode!: string;
 
   @Order(9)
-  @Column("int", { nullable: false, default: 8 })
-  maxToolCalls!: number;
+  @Column("int", { nullable: true })
+  maxToolCalls!: number | null;
 
   @Order(10)
   @Column("int", { nullable: false, default: 300000 })
   maxRuntimeMs!: number;
 
   @Order(11)
-  @Column("int", { nullable: false, default: 8 })
-  maxContinueCalls!: number;
+  @Column("int", { nullable: true })
+  maxContinueCalls!: number | null;
 
   @Order(12)
   @Column("simple-json", { nullable: false })

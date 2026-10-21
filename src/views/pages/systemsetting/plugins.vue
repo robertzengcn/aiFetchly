@@ -2,7 +2,7 @@
   <AppPageShell
     page-id="settings-plugins"
     title-key="route.plugins"
-    content-width="wide"
+    content-width="full"
   >
     <PluginManager />
   </AppPageShell>

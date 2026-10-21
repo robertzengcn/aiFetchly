@@ -330,7 +330,7 @@ import { emailServiceTagErrorKey } from "@/views/utils/emailServiceTagError";
 const showDialog = ref<boolean>(false);
 const alertdiatext = ref<string>("")
 const alertdiatitle = ref<string>("")
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const Id = ref<number>(0);
 const showtestdialog = ref<boolean>(false);
 const validForm = ref<boolean>(true);

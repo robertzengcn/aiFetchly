@@ -65,7 +65,7 @@ import { CapitalizeFirstLetter } from "@/views/utils/function"
 
 import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType"
 import { Header } from "@/entityTypes/commonType"
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const alert = ref<boolean>(false);
 const alertContent = ref("");
 const alertcolor = ref("");

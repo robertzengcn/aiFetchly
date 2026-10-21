@@ -1352,51 +1352,43 @@ export class PluginImportService {
       // PluginRuntimeCache not yet registered; safe to ignore.
     }
 
-    // 11b. Record needs_configuration notice for Python skills (Design §15.5).
+    // 11b/11c. Persist load diagnostics together. A missing browser or a
+    // bundled Python skill needs configuration; agent-field warnings stay
+    // visible and do not by themselves mark the plugin partial_load.
     // HOST-04: skipped for a blocked activation — the policy-gate errors are
     // the authoritative diagnostic and must not be overwritten (or demoted
-    // from `invalid` to `partial_load`).
-    if (browserMissing && !policyGateBlocked) {
+    // from `invalid` to `partial_load`). Writing them in ONE call keeps the
+    // dependency notice together with the warnings when both are present
+    // (one call replaces the whole list, so two calls would let the later
+    // overwrite the earlier).
+    const loadErrors: PluginError[] = [];
+    if (!policyGateBlocked) {
+      if (browserMissing) {
+        loadErrors.push({
+          code: "dependency-unsatisfied",
+          componentType: "skill",
+          pluginName: p.manifest.name,
+          message:
+            "The plugin requires an approved browser executable. Resolve the browser dependency, then reload or re-run discovery to enable its tools.",
+          recoverable: true,
+        });
+      } else if (hasPythonSkill) {
+        loadErrors.push({
+          code: "dependency-unsatisfied",
+          componentType: "skill",
+          pluginName: p.manifest.name,
+          message:
+            "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
+          recoverable: true,
+        });
+      }
+      loadErrors.push(...agentParse.warnings);
+    }
+    if (loadErrors.length > 0) {
       try {
-        await p.pluginModule.setLoadErrors(p.manifest.name, [
-          {
-            code: "dependency-unsatisfied",
-            componentType: "skill",
-            pluginName: p.manifest.name,
-            message:
-              "The plugin requires an approved browser executable. Resolve the browser dependency, then reload or re-run discovery to enable its tools.",
-            recoverable: true,
-          },
-        ]);
+        await p.pluginModule.setLoadErrors(p.manifest.name, loadErrors);
       } catch {
         // best-effort — health is already set on the row
-      }
-    }
-    if (hasPythonSkill && !policyGateBlocked && !browserMissing) {
-      try {
-        await p.pluginModule.setLoadErrors(p.manifest.name, [
-          {
-            code: "dependency-unsatisfied",
-            componentType: "skill",
-            pluginName: p.manifest.name,
-            message:
-              "Plugin bundles a Python skill. Run the skill once to trigger venv setup, or prepare the environment manually before first use.",
-            recoverable: true,
-          },
-        ]);
-      } catch {
-        // best-effort — health is already set on the row
-      }
-    }
-
-    // 11c. Surface agent parser warnings (forbidden/unknown fields) as
-    // non-fatal load errors so they show in diagnostics. Plugin health stays
-    // healthy — warnings never block the runtime (design §12.5).
-    if (agentParse.warnings.length > 0 && !policyGateBlocked) {
-      try {
-        await p.pluginModule.setLoadErrors(p.manifest.name, agentParse.warnings);
-      } catch {
-        // best-effort
       }
     }
 

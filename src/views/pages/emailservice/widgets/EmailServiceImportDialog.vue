@@ -54,7 +54,7 @@ import { downloadEmailServiceCsvTemplate } from "@/views/utils/emailServiceImpor
 import { CapitalizeFirstLetter } from "@/views/utils/function";
 import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 const props = defineProps({
   modelValue: {

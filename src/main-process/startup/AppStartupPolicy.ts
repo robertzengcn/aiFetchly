@@ -37,6 +37,14 @@ export interface AppStartupPolicy {
   readonly startDevBrowserBridge: boolean;
   /** Scan the global ~/.aifetchly config / plugin / skill tree on boot. */
   readonly scanGlobalExtensions: boolean;
+  /**
+   * Run the post-synchronize email-reply upgrade validation and, on failure,
+   * disable guarded reply work via the kill switch (§5.3 rollout contract).
+   * Read-only; never repairs. Defaults ON in production AND E2E — the seeded
+   * E2E DB has a valid reply schema so validation passes; a misfire disables
+   * drafting exactly as in production.
+   */
+  readonly validateReplyUpgradeOnStartup: boolean;
 }
 
 /** Production / normal-development policy: every side effect enabled. */
@@ -50,6 +58,7 @@ const PRODUCTION_POLICY: AppStartupPolicy = {
   startTokenRefresh: true,
   startDevBrowserBridge: true,
   scanGlobalExtensions: true,
+  validateReplyUpgradeOnStartup: true,
 };
 
 /** E2E policy: every external side effect disabled (design §7.2). */
@@ -63,6 +72,11 @@ const E2E_POLICY: AppStartupPolicy = {
   startTokenRefresh: false,
   startDevBrowserBridge: false,
   scanGlobalExtensions: false,
+  // ON in E2E: the validation is a read-only safety check, not an external
+  // side effect. The seeded E2E DB has a valid reply schema so validation
+  // passes; a misfire would disable drafting exactly as in production,
+  // surfacing a real regression rather than hiding it.
+  validateReplyUpgradeOnStartup: true,
 };
 
 /**

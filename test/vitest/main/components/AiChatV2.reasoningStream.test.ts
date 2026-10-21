@@ -3,9 +3,10 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
-import { streamChatV2Message } from "@/views/api/aiChatV2";
 import { installQueueSendBridge } from "./helpers/queueSendBridge";
+import { getChatV2History, streamChatV2Message } from "@/views/api/aiChatV2";
 import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
+import { MessageType } from "@/entityTypes/commonType";
 import { AI_CHAT_REASONING_VISIBLE_STORAGE_KEY } from "@/views/utils/aiChatReasoningPreference";
 
 vi.mock("@/views/api/aiChatV2", () => ({
@@ -52,7 +53,6 @@ vi.mock("@/views/api/aiChatV2", () => ({
   ),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -223,6 +223,10 @@ function mountChat() {
               :data-role="m.role"
             >
               <span data-testid="content">{{ m.content }}</span>
+              <span
+                v-if="m.metadata?.toolName"
+                data-testid="saved-tool-name"
+              >{{ m.metadata.toolName }}</span>
               <span
                 v-if="showReasoning && m.metadata?.reasoning?.content"
                 data-testid="reasoning"
@@ -418,5 +422,86 @@ describe("AiChatV2 live reasoning panel", () => {
     await wrapper.find('[data-testid="toggle-reasoning"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(false);
+  });
+
+  it("shows a saved tool row the live stream missed without dropping the answer", async () => {
+    vi.mocked(getChatV2History).mockResolvedValue({
+      conversationId: "v2-test",
+      totalMessages: 2,
+      runtimeStatus: "idle",
+      messages: [
+        {
+          id: "tool-call-missed",
+          conversationId: "v2-test",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-10-17T00:00:00.000Z",
+          messageType: MessageType.TOOL_CALL,
+          metadata: {
+            source: "chat-v2",
+            toolCallId: "call-missed",
+            toolName: "knowledge_library_list_documents",
+          },
+        },
+        {
+          id: "tool-result-missed",
+          conversationId: "v2-test",
+          role: "tool",
+          content: '{"documents":[]}',
+          timestamp: "2026-10-17T00:00:01.000Z",
+          messageType: MessageType.TOOL_RESULT,
+          metadata: {
+            source: "chat-v2",
+            toolCallId: "call-missed",
+            toolName: "knowledge_library_list_documents",
+          },
+        },
+      ],
+    });
+    vi.mocked(streamChatV2Message).mockImplementation(
+      async (request, onChunk, onComplete) => {
+        const conversationId = request.conversationId ?? "v2-test";
+        onChunk({
+          eventType: "start",
+          conversationId,
+          messageId: "asst-missed-tool",
+        });
+        onChunk({
+          eventType: "token",
+          conversationId,
+          messageId: "asst-missed-tool",
+          contentDelta: "Listed the documents.",
+        });
+        onComplete({
+          eventType: "complete",
+          conversationId,
+          messageId: "asst-missed-tool",
+          fullContent: "Listed the documents.",
+        });
+      }
+    );
+
+    const wrapper = mountChat();
+    await flushPromises();
+    try {
+      await wrapper.find('[data-testid="send-first"]').trigger("click");
+      await flushPromises();
+
+      const toolNames = wrapper
+        .findAll('[data-testid="saved-tool-name"]')
+        .map((node) => node.text());
+      expect(toolNames).toContain("knowledge_library_list_documents");
+      const contents = wrapper
+        .findAll('[data-testid="content"]')
+        .map((node) => node.text());
+      expect(contents).toContain("Listed the documents.");
+    } finally {
+      vi.mocked(getChatV2History).mockResolvedValue({
+        conversationId: "v2-test",
+        messages: [],
+        totalMessages: 0,
+        runtimeStatus: "idle",
+      });
+    }
   });
 });

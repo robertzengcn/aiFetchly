@@ -321,7 +321,7 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     expect(manifest.plugins[0].owner).toBe("owner-handle");
   });
 
-  test("tolerates catalog-only zip sources without invalidating the catalog", async () => {
+  test("normalizes zip sources to installable url sources", async () => {
     getFirstParty.mockResolvedValueOnce({
       plugins: [
         {
@@ -339,7 +339,45 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     if (!result.success) throw new Error("unreachable");
     const manifest = JSON.parse(result.marketplace.manifestJson);
     expect(manifest.plugins[0].slug).toBe("zip-only");
-    expect(manifest.plugins[0].source).toBeUndefined();
+    expect(manifest.plugins[0].source).toEqual({
+      source: "url",
+      url: "https://cdn.example.com/p.zip",
+    });
+  });
+
+  test("normalizes live-hub zip release assets (hyperframes shape) to url sources", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          id: "01a06660-699c-7dac-b777-71ab303eeaf8",
+          currentVersionId: "01a06660-ec23-71ec-a6c3-656f10600794",
+          name: "hyperframes",
+          displayName: "HeyGen HyperFrames",
+          category: "video",
+          source: {
+            source: "zip",
+            url: "https://github.com/heygen-com/hyperframes/releases/download/v0.8.156/hyperframes-agent-plugin.zip",
+            sha256:
+              "35e885da317d8383bb61e06914192ad7111a3c9e6039cdda87c7e81bd83a8619",
+          },
+          access: { status: "allowed" },
+          installMode: "direct",
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].slug).toBe("hyperframes");
+    // Checksum is dropped (not a git ref); the url flows into the existing
+    // url/github-release-asset install pipeline.
+    expect(manifest.plugins[0].source).toEqual({
+      source: "url",
+      url: "https://github.com/heygen-com/hyperframes/releases/download/v0.8.156/hyperframes-agent-plugin.zip",
+    });
   });
 
   test("rejects entries missing both slug and name", async () => {

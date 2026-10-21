@@ -25,7 +25,7 @@ import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useAppShellStore } from "@/views/store/appShell";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
-import { compactChatV2Conversation } from "@/views/api/aiChatV2";
+import { startCompaction } from "@/views/api/aiChatV2";
 
 const inspector = useAppInspectorStore();
 const shell = useAppShellStore();
@@ -41,7 +41,12 @@ const conversationId = computed<string | null>(() => {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    await compactChatV2Conversation(conversationId.value);
+    // Repair: the legacy ai-chat-v2:compact-conversation channel has NO
+    // main-process handler (removed by the §13.1 "START-only" contract) —
+    // it rejected and the inspector Compact action silently no-oped. Route
+    // the action through the bounded incremental coordinator
+    // (compaction-start, §13.1).
+    await startCompaction(conversationId.value);
   } catch {
     // Non-fatal — the activity tab still shows run progress.
   }

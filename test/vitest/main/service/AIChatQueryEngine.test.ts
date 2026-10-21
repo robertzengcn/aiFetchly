@@ -149,7 +149,17 @@ vi.mock("@/service/SkillExecutor", () => ({
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(function () {
     return {
-      getValue: vi.fn().mockReturnValue("true"),
+      // Return "false" for the completion-policy flag key
+      // (AI_TASK_COMPLETION_POLICY_V1_FLAG in @/config/featureFlags, kept
+      // inline here because importing featureFlags inside this factory would
+      // cycle back through this mocked Token module). This file pins LEGACY
+      // engine behavior, so it runs flag-OFF: the policy enrollment seam
+      // never fires and goalAutoContinue keeps its legacy goal-lookup
+      // semantics. Other keys keep the pre-existing "true" default so the
+      // AI-enable gates in mocked handlers stay open.
+      getValue: vi.fn().mockImplementation((key: string) =>
+        key === "ai_task_completion_policy_v1_enabled" ? "false" : "true"
+      ),
     };
   }),
 }));

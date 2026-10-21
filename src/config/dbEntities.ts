@@ -107,6 +107,10 @@ import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
+import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 
 import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
 import { AIChatRunEntity } from "@/entity/AIChatRun.entity";
@@ -203,6 +207,11 @@ export const DB_ENTITIES = [
   EmailReplySendAttemptEntity,
   EmailConversationEntity,
   EmailReplyKnowledgeScopeEntity,
+  EmailReplyGuardEntity,
+  // Task-completion-policy V1 (Slice 1): execution/ledger/operation tables.
+  AiTaskExecutionEntity,
+  AiTaskExecutionLedgerEntity,
+  AiTaskOperationEntity,
   AIChatPlanEntity,
   AIChatPlanVersionEntity,
   AIChatPlanQuestionEntity,

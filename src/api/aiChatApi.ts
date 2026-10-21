@@ -501,6 +501,13 @@ export interface OpenAIChatMessage {
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
   images?: OpenAIChatImage[];
+  /**
+   * Provider refusal text (OpenAI-compatible `message.refusal`). When non-empty
+   * the model declined to answer; the content must NOT be accepted as a draft
+   * regardless of `finish_reason` (FR-027/B05). Some providers return a refusal
+   * with `finish_reason: "stop"` or no finish reason at all.
+   */
+  refusal?: string | null;
 }
 
 /** Safely convert OpenAIMessageContent to a display string. */
@@ -546,6 +553,19 @@ export interface OpenAIChatCompletionRequest {
    * or with no model (server default) when absent.
    */
   fallbackModel?: string;
+  /**
+   * Desktop-internal per-call deadline budget in milliseconds (FR-035 /
+   * B13). Never serialized on the wire: every payload builder copies
+   * explicit fields only. When set, the local and hosted completion
+   * clients bound both the response-headers phase AND the response-body
+   * phase against this budget (one AbortController spans both so a
+   * provider that sends headers then stalls mid-body still aborts). A
+   * missing value leaves the default per-phase timeouts in effect. The
+   * generation service passes `min(remainingInvocationBudget,
+   * MODEL_CALL_CAP_MS)` so each model call is bounded to 120 s or the
+   * smaller remaining aggregate budget, whichever is less.
+   */
+  callBudgetMs?: number;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
@@ -555,6 +575,14 @@ export interface OpenAIChatCompletionRequest {
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
   user?: string;
+  /**
+   * Optional response-format hint (FR-026). When set to `{ type: "json_object" }`
+   * the provider is asked to emit valid JSON only — used by the strict-reply
+   * generation path so the model is less likely to wrap JSON in prose. Servers
+   * that ignore `response_format` simply disregard it; local strict parsing
+   * remains authoritative regardless of this hint.
+   */
+  response_format?: { readonly type: "json_object" | "text" };
 }
 
 /** OpenAI-compatible model object */
@@ -2205,12 +2233,22 @@ export class AiChatApi {
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
+   * T04 (NFR-02/04, AC-24): `options.signal` is the caller's abort handle.
+   * The checker dispatch (QualitativeEvaluator) threads a per-dispatch
+   * AbortController linked to the turn/run signal + a checker deadline
+   * through this param so a Stop or a hanging provider stall cannot hold the
+   * verification gate. The signal propagates to the local provider's
+   * `fetchWithResponseTimeout` (caller-abort preserved) and to the hosted
+   * `postJson` fetch. Entitlement is re-checked at the start of every call
+   * (including retries) via `resolveForChat()` / `ensureAIEnabled()` (NFR-04).
+   *
    * @param request - Chat completion request with messages and optional parameters
+   * @param options - Optional abort signal for cancellation/deadline propagation
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
     request: OpenAIChatCompletionRequest,
-    signal?: AbortSignal
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2219,13 +2257,14 @@ export class AiChatApi {
       }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).complete(
-          request
+          request,
+          { signal: options?.signal }
         );
       }
-      return this.openAIChatCompletionHosted(request, signal);
+      return this.openAIChatCompletionHosted(request, options);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request, signal);
+    return this.openAIChatCompletionHosted(request, options);
   }
 
   /**
@@ -2247,10 +2286,14 @@ export class AiChatApi {
     };
   }
 
-  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  /**
+   * Hosted aiFetchly non-streaming completion. T04: `options.signal`
+   * propagates to both `postJson` calls (initial + small-model 404 retry)
+   * so a caller abort (Stop / checker deadline) cancels the in-flight fetch.
+   */
   private async openAIChatCompletionHosted(
     request: OpenAIChatCompletionRequest,
-    signal?: AbortSignal
+    options?: { signal?: AbortSignal }
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2277,22 +2320,84 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    if (request.response_format !== undefined) {
+      data.response_format = request.response_format;
+    }
     this.copyEnabledReasoningOption(request, data);
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
+    // B13: when the caller supplied a per-call budget, bound both the
+    // response-headers phase AND the response-body phase by passing an
+    // AbortSignal to postJson. postJson spreads options into _fetchJSON →
+    // fetch(baseUrl + endpoint, {...options, headers}); per the fetch spec an
+    // AbortSignal aborts body reads too, and _fetchJSON awaits res.json() —
+    // so a hosted provider that sends headers then stalls mid-body still
+    // aborts within the budget. The timer fires once after callBudgetMs; the
+    // resulting AbortError propagates as a thrown error the generation
+    // service wraps into LlmTransportError (same envelope as the local path).
+    // The small-model 404 retry shares the same signal so the aggregate
+    // budget spans both attempts. Streaming is NOT altered here —
+    // openAIChatCompletionStreamHosted honors the caller signal separately
+    // and must not get a short body timeout.
+    if (request.callBudgetMs !== undefined) {
+      const controller = new AbortController();
+      // T04: link the caller's signal into the B13 budget controller so an
+      // external abort (Stop / checker deadline) cancels the budgeted fetch
+      // immediately instead of waiting out the remaining budget. The listener
+      // lives only for this call (detached in the finally below).
+      const callerSignal = options?.signal;
+      const abortFromCaller = (): void => controller.abort();
+      if (callerSignal !== undefined) {
+        if (callerSignal.aborted) {
+          controller.abort();
+        } else {
+          callerSignal.addEventListener("abort", abortFromCaller, {
+            once: true,
+          });
+        }
+      }
+      const timer = setTimeout(() => controller.abort(), request.callBudgetMs);
+      try {
+        return await this.postHostedCompletionWithSmallModelRetry(
+          request,
+          data,
+          controller.signal
+        );
+      } finally {
+        clearTimeout(timer);
+        if (callerSignal !== undefined) {
+          callerSignal.removeEventListener("abort", abortFromCaller);
+        }
+      }
+    }
+    // No per-call budget: the caller signal threads through to postJson
+    // directly so an external abort still cancels the in-flight fetch (T04).
+    return await this.postHostedCompletionWithSmallModelRetry(
+      request,
+      data,
+      options?.signal
+    );
+  }
+
+  /**
+   * POST the hosted completion, applying the small-model-alias 404 fallback
+   * (retry once with `fallbackModel` or no model). When `signal` is supplied
+   * the SAME signal threads through both the initial attempt and the retry so
+   * a B13 aggregate budget spans both. Any other error — including a 404 for
+   * a literal model id — propagates unchanged.
+   */
+  private async postHostedCompletionWithSmallModelRetry(
+    request: OpenAIChatCompletionRequest,
+    data: OpenAIChatCompletionRequest,
+    signal: AbortSignal | undefined
+  ): Promise<OpenAIChatCompletionResponse> {
+    const options = signal ? { signal } : undefined;
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
         data,
-        signal ? { signal } : {}
+        options
       );
     } catch (err) {
-      // The hosted server resolves the virtual "small" alias only when a
-      // small row is flagged (otherwise HTTP 404 `small_model_unavailable`;
-      // `postJson` surfaces it as `HttpResponseError` with status 404 and no
-      // body). Retry exactly once with the caller-supplied fallback model, or
-      // with no model (server default) when absent, so background
-      // consolidation still runs on backends without a small row. Any other
-      // error — including a 404 for a literal model id — propagates unchanged.
       if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
         throw err;
       }
@@ -2312,7 +2417,7 @@ export class AiChatApi {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
         retry,
-        signal ? { signal } : {}
+        options
       );
     }
   }
@@ -2430,6 +2535,9 @@ export class AiChatApi {
     }
     if (request.user !== undefined) {
       data.user = request.user;
+    }
+    if (request.response_format !== undefined) {
+      data.response_format = request.response_format;
     }
     this.copyEnabledReasoningOption(request, data);
     // Ask the server to include token usage in the final stream chunk so we

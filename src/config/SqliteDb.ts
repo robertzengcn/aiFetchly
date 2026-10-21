@@ -96,6 +96,9 @@ import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.en
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
+import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
 import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
 import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
 import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
@@ -115,7 +118,7 @@ import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
-
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";

@@ -91,6 +91,11 @@ import {
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
+import {
+  consultLoopEndCandidate,
+  type ConsultOutcome,
+} from "@/service/aiTaskExecution/TaskLoopConsult";
+import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget";
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
 export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
@@ -176,6 +181,15 @@ import {
   type HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
 import { log } from "@/modules/Logger";
+import {
+  TaskOperationGuard,
+  stableEffectIdentity,
+  type OperationGuardDescriptor,
+  type OperationGuardDeps,
+} from "@/service/aiTaskExecution/TaskOperationGuard";
+import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConflictMetrics";
 
 /**
  * Max model→tool→model rounds per cycle inside one user turn. Must be high
@@ -277,11 +291,21 @@ export class AIChatSteeringRoundLimitError extends Error {
 }
 
 /**
- * Polling interval for async tool jobs. The loop sleeps this long between
- * ToolJobRegistry.getStatus() calls. Must be >= the registry's
- * pollMinIntervalMs (5s) to avoid rate_limited snapshots.
+ * §10.3 — bounded job polling backoff. The loop polls async tool jobs with a
+ * growing interval instead of a fixed one: "Approved read-only polling
+ * consumes budgets/time with backoff and a minimum one-second interval. No
+ * unbounded internal polling."
+ *
+ * The first poll tick waits `startMs` (the registry's pollMinIntervalMs, 5s by
+ * default — never faster than the registry allows, avoiding rate_limited
+ * snapshots). Each subsequent tick grows by ×1.5, capped at `MAX_MS`. The 1s
+ * floor is the absolute minimum interval regardless of decay or a tiny
+ * registry pollMinIntervalMs.
  */
-const ASYNC_POLL_INTERVAL_MS = 15_000;
+const ASYNC_POLL_BACKOFF_START_MS = 5_000;
+const ASYNC_POLL_BACKOFF_GROWTH = 1.5;
+const ASYNC_POLL_BACKOFF_MAX_MS = 15_000;
+const ASYNC_POLL_BACKOFF_FLOOR_MS = 1_000;
 
 /**
  * Hard cap on async tool job polling. Jobs that exceed this are almost
@@ -1292,6 +1316,20 @@ export class AIChatQueryLoop {
    */
   private readonly conversationEpochs = new Map<string, string>();
 
+  /**
+   * B13b (FR-08/23): monotonic provider-attempt sequence, per loop instance,
+   * never reset. Reservation IDs embed it (`prov:<executionId>:<round>:<seq>`)
+   * so every actual wire attempt is unique across run() retries (which
+   * re-run the same rounds), round-cap resets (`round = -1`), and repeated
+   * runOnce/resume calls on this instance. New instances (and post-restart
+   * mirrors, whose dedup sets rebuild empty) also count every mint — the
+   * failure mode is always fail-safe over-counting, never dedup-swallowed
+   * under-counting. A bare number: unbounded growth is harmless (no per-ID
+   * retained state; the budget mirror only stores reserved IDs per
+   * execution, bounded by the attempt caps).
+   */
+  private providerAttemptSeq = 0;
+
   /** Build (or reuse) the pipeline for a conversation. */
   private getToolResultPipeline(
     conversationId: string
@@ -1672,6 +1710,344 @@ export class AIChatQueryLoop {
     messages.splice(insertAt, 0, { role: "system", content: announcement });
   }
 
+  // ----- Slice 2 Unit 4: completion-policy consult helpers (§7, FR-05/07) -----
+  // These wrap `consultLoopEndCandidate` so the four consult sites stay
+  // surgical. The flag+binding guard lives here so each site is a single
+  // call; flag-off returns null and the site runs its legacy nudge/break
+  // logic byte-identical.
+
+  /**
+   * Build the candidate content string from loop state. Mirrors the
+   * authoritative `fullContent` assembly on the completed path (line ~3130):
+   * the recovery prefix (recovered text from prior truncated rounds) + the
+   * current accumulator's full content. Falls back to "" when no
+   * accumulator has run yet (e.g. a round-cap on the very first round).
+   */
+  private policyConsultContent(
+    recoveryState: { recoveredContentPrefix: string },
+    accumulator: OpenAIStreamAccumulator | null
+  ): string {
+    const roundContent = accumulator?.state.fullContent ?? "";
+    return recoveryState.recoveredContentPrefix + roundContent;
+  }
+
+  /**
+   * Consult the completion controller at a loop terminal-stop site when
+   * the policy flag is on AND the turn is enrolled (a binding was passed).
+   * Returns the mapped {@link ConsultOutcome}, or null when the policy is
+   * off / no binding / the consult threw (fail-closed: a thrown consult is
+   * treated as "no consult" so the legacy site logic runs — never crash the
+   * turn because of a policy consult).
+   */
+  private async maybeConsultPolicy(params: {
+    input: AIChatQueryGeneratorInput;
+    boundary: "round_cap" | "response_end";
+    content: string;
+    finishReason: string | null;
+  }): Promise<ConsultOutcome | null> {
+    const binding = params.input.taskExecutionBinding;
+    if (!binding) return null;
+    // T16: check the FROZEN flag-at-enrollment value on the binding, not the
+    // live runtime flag. An execution enrolled while the flag was on stays
+    // accepted for consult even if the flag was turned off midstream —
+    // otherwise the loop's consult sites would no-op and legacy site logic
+    // could convert accepted unfinished work to unchecked success
+    // (NFR-12, AC-12/32).
+    if (!binding.policyAccepted) return null;
+    // G01-313 (FR-13/14; AC-16): badge the actual verifying phase. The
+    // checker dispatch is the turn's real verification work — emit
+    // `verifying` for THIS execution while it runs, then restore `active`.
+    // Same-execution ordering keeps the renderer badge truthful (B09 rules
+    // apply); a missed emit only dims the badge, never verification.
+    // Both emits are gated on isActiveTurn: a superseded turn's late
+    // consult must not resurrect its badge over the newer run (B09).
+    const emitPhase = (status: "verifying" | "active"): void => {
+      if (!params.input.isActiveTurn()) return;
+      params.input.emitAuxiliary?.({
+        type: "task_execution_state",
+        conversationId: params.input.conversationId,
+        executionId: binding.executionId,
+        status,
+      });
+    };
+    emitPhase("verifying");
+    try {
+      return await consultLoopEndCandidate({
+        binding,
+        boundary: params.boundary,
+        content: params.content,
+        finishReason: params.finishReason,
+        pendingPermission: false,
+        pendingQuestion: false,
+        pendingPlanApproval: false,
+        safetyRestriction: false,
+      });
+    } catch (err) {
+      // Fail-closed: a thrown consult (e.g. evidence service error) must
+      // not crash the turn. The legacy site logic runs instead, and the
+      // Unit 5 engine gate will surface the unfinalized execution.
+      console.error(
+        `[ai-chat-v2] task-completion policy consult failed at ${params.boundary}:`,
+        err
+      );
+      return null;
+    } finally {
+      emitPhase("active");
+    }
+  }
+
+  /**
+   * T05 (FR-08/10/23, AC-27) + B13a: gate a tool execution against the
+   * execution budget BEFORE the actual `deps.executeTool` call, then persist
+   * the consumption to the durable ledger. Fail-closed on every failure
+   * mode: `Exhausted` throws (no remaining allowance — dispatching would
+   * run unfunded work); `Reserved` triggers `persistBudget({toolExecutions:1})`
+   * and a false return (lease lost) or a persist throw also throws. The
+   * stable ID `tool:<call.id>` dedups a retried same-call execution
+   * (AlreadyReserved — proceeds without re-persisting, since the same
+   * logical call was already counted). Skipped entirely when no binding or
+   * not-accepted (byte-identical legacy).
+   *
+   * B13a deliberately reverses the old D4 record-but-no-gate behavior for
+   * this pre-dispatch gate: both call sites invoke it BEFORE executeTool
+   * runs, so no tool has claimed resources or produced side effects yet and
+   * there is no "already in flight" limbo to protect. Refusing here cannot
+   * strand tool state; proceeding past exhaustion could. Throws
+   * RecoverableHistoryError so runOnce's outer catch surfaces a failed turn
+   * (the message avoids content-transient patterns, so run() never retries
+   * a budget refusal).
+   */
+  private async reserveToolExecutionBudget(
+    input: AIChatQueryGeneratorInput,
+    call: { id: string }
+  ): Promise<void> {
+    const binding = input.taskExecutionBinding;
+    if (!binding?.policyAccepted || !binding.reserveToolExecution) return;
+    // B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance barrier —
+    // same floors as the provider gate. A turn out of tokens, active time,
+    // or waits cannot use a tool result, so the dispatch is refused before
+    // reserving (no attempt burned).
+    if (binding.getRemainingBudgets) {
+      const remaining = binding.getRemainingBudgets();
+      if (remaining.tokens <= 0) {
+        throw new RecoverableHistoryError(
+          "TOKEN_BUDGET_EXHAUSTED",
+          "no token allowance remains for another tool dispatch"
+        );
+      }
+      if (remaining.activeRuntimeMs <= 0) {
+        throw new RecoverableHistoryError(
+          "ACTIVE_RUNTIME_EXHAUSTED",
+          "no active-runtime allowance remains for another tool dispatch"
+        );
+      }
+      if (remaining.waitMs <= 0) {
+        throw new RecoverableHistoryError(
+          "WAIT_BUDGET_EXHAUSTED",
+          "no cumulative-wait allowance remains for another tool dispatch"
+        );
+      }
+    }
+    const toolRequestId = `tool:${call.id}`;
+    const reservation = binding.reserveToolExecution(toolRequestId);
+    if (reservation === BudgetReservationResult.Exhausted) {
+      throw new RecoverableHistoryError(
+        "TOOL_BUDGET_EXHAUSTED",
+        "tool execution budget exhausted before dispatch"
+      );
+    }
+    if (reservation === BudgetReservationResult.Reserved && binding.persistBudget) {
+      let ok: boolean;
+      try {
+        ok = await binding.persistBudget({ toolExecutions: 1 });
+      } catch (err) {
+        throw new RecoverableHistoryError(
+          "TOOL_BUDGET_EXHAUSTED",
+          "tool budget persistence threw before dispatch",
+          { cause: err }
+        );
+      }
+      if (!ok) {
+        throw new RecoverableHistoryError(
+          "TOOL_BUDGET_EXHAUSTED",
+          "tool budget persistence failed (lease released or superseded)"
+        );
+      }
+    }
+  }
+
+  /**
+   * T23d (§10.2): build the durable operation guard for the send tool's
+   * dispatch. Returns null when the turn is not policy-enrolled (T16 frozen
+   * binding flag) or the executionId is missing — legacy behavior is
+   * byte-identical in that case. The AiTaskOperationModule is constructed
+   * lazily inside this flag-gated path (BaseModule TDZ rule: never at module
+   * top level).
+   */
+  private buildOperationGuardForSend(
+    input: AIChatQueryGeneratorInput
+  ): TaskOperationGuard | null {
+    const binding = input.taskExecutionBinding;
+    if (!binding?.policyAccepted || !binding.executionId) return null;
+    const operationModule = new AiTaskOperationModule();
+    const deps: OperationGuardDeps = {
+      recordOperation: (record) => operationModule.recordOperation(record),
+      getOperation: (key) => operationModule.getOperation(key),
+      findUnresolvedByIntent: (query) =>
+        operationModule.findUnresolvedByIntent(query),
+      countOccurrencesByIntent: (query) =>
+        operationModule.countOccurrencesByIntent(query),
+      updateState: (update) => operationModule.updateState(update),
+      setReceiptReference: async (input) =>
+        operationModule.setReceipt({
+          operationKey: input.operationKey,
+          expectedClaimGeneration: input.expectedClaimGeneration,
+          receiptReference: input.receiptReference,
+          failureCode: input.failureCode,
+        }),
+      // T26a (§17 "finalization conflicts" monitor): the guard emits one
+      // structured line per CAS loss at this dispatch surface. The origin
+      // comes from the binding's enrollment kind; the route is read from
+      // the execution row LAZILY on the conflict path only (the happy path
+      // must not pay an extra round-trip), falling back to best_effort if
+      // the row cannot be read.
+      notifyConflict: (conflict) => {
+        void (async () => {
+          const execRow = await new AiTaskExecutionModule()
+            .getExecution(binding.executionId)
+            .catch(() => null);
+          logFinalizationConflict({
+            surface: conflict.surface,
+            executionId: binding.executionId,
+            origin: binding.executionKind === "scheduled" ? "scheduled" : "manual",
+            route: execRow?.route ?? "task_best_effort",
+            reasonCode: conflict.reasonCode,
+            attempt: conflict.stage === "prepare" ? 0 : 1,
+          });
+        })();
+      },
+    };
+    return new TaskOperationGuard(deps, binding.executionId);
+  }
+
+  /**
+   * T23d (§10.1): the send descriptor — trusted tool identity, a trusted
+   * domain target (never model text), and the stable intent allowlist from
+   * bulkEmailTaskInputSchema. Recipients, subject, and body are NEVER hashed
+   * (sensitive-data rule §10.1).
+   *
+   * Two trusted-target shapes:
+   *  - batched send: the gate's authorization batchId → `outbound_batch:N`.
+   *  - skip_review direct send (D4 review fix): no batch exists, so the
+   *    target derives from the trusted loop input's source user message id
+   *    (`outbound_direct:<sourceUserMessageId>`) — the same binding the
+   *    outbound authorization itself uses (AD-001/AD-005). Falls back to
+   *    null (the guard hashes the intent without a target) when even the
+   *    source message id is absent.
+   */
+  private static buildSendDescriptor(
+    batchId: number | undefined,
+    input: AIChatQueryGeneratorInput,
+    toolArguments: Readonly<Record<string, unknown>>
+  ): OperationGuardDescriptor {
+    // B18 (FR-11/24, AC-10/28): the fence identity is the STABLE authorized
+    // effect (tool + allowlisted stable fields) while the operation key
+    // keeps the volatile authorization provenance (batch/message IDs). An
+    // uncertain send therefore stays fenced across a new batch, message, or
+    // conversation; the native batch claim remains the authority for
+    // distinguishing genuinely recurring sends once earlier outcomes settle.
+    const intentFields = [
+      "service_ids",
+      "template_ids",
+      "filter_ids",
+      "not_duplicate",
+      "email_search_task_id",
+    ];
+    return {
+      toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
+      domainTarget:
+        batchId !== undefined
+          ? `outbound_batch:${batchId}`
+          : input.sourceUserMessageId
+            ? `outbound_direct:${input.sourceUserMessageId}`
+            : null,
+      intentFields,
+      intentArguments: toolArguments,
+      stableEffectId: stableEffectIdentity({
+        toolIdentity: OUTBOUND_EMAIL_SEND_TOOL,
+        intentFields,
+        intentArguments: toolArguments,
+      }),
+    };
+  }
+
+  /**
+   * T23d (§10.2): classify a completed send dispatch into the guard's
+   * outcome taxonomy. success + claimed/already_processed → confirmed
+   * (the batch claim produced a native receipt); success:false with a
+   * definitive claim failure → no_effect (nothing left the process);
+   * timeout or any uncertain shape → unknown (§10.2: never terminal,
+   * reconcilable via native status lookup).
+   *
+   * §10.3 start-vs-completion is NOT enforced here. `start_email_send_task`
+   * calls `OutboundEmailDeliveryService.claim()`, which is synchronous and
+   * returns at job-START — the envelope only ever carries `claimed`/
+   * `already_processed` (success) or `claim_failed`/`mixed_version_batch`/
+   * `worker_start_failed`/`legacy_identity_requires_review`/
+   * `sender_identity_changed` (failure). `completed`/`partially_completed`
+   * (terminal delivery outcomes) and `sent` (a recipient-outcome status, not
+   * a send-attempt status) can never reach this classifier through the
+   * authorization path.
+   *
+   * The start-vs-completion distinction lives at the criterion-threshold
+   * layer: `TaskCriteriaResolver` compiles sends to `operation_receipt`
+   * with `requiredState: "accepted"` for explicit start requests and
+   * `"completed"` otherwise (B19), and `meetsOperationThreshold` ranks
+   * `pending < claimed < dispatched < accepted < completed`. A claimed send
+   * lands `accepted` (§10.2 confirmed) — it satisfies a start-only criterion
+   * (`accepted ≥ accepted`) but FAILS the completion criterion
+   * (`accepted < completed`), exactly as §10.3 prescribes ("Accepted receipt
+   * satisfies a start-only criterion; completion requires actual confirmed
+   * completion"). Resolving `accepted` → `completed` happens in the evidence
+   * provider's bounded native reconciliation (B19): an `accepted` row with
+   * an `attempt:<id>` receipt is upgraded on terminal-completion evidence
+   * from the send-attempt store — never by assertion.
+   */
+  private static classifySendOutcome(toolResult: ToolExecutionResult): {
+    readonly outcome: "confirmed" | "no_effect" | "unknown";
+    readonly receiptReference?: string;
+    readonly failureCode?: string;
+  } {
+    if (toolResult.timedOutAfterMs !== undefined) {
+      return { outcome: "unknown" };
+    }
+    const result = toolResult.result as Record<string, unknown> | undefined;
+    const status =
+      result && typeof result.status === "string" ? result.status : undefined;
+    const attemptId =
+      result && typeof result.send_attempt_id === "string"
+        ? result.send_attempt_id
+        : undefined;
+    if (toolResult.success) {
+      const receiptReference = attemptId ? `attempt:${attemptId}` : undefined;
+      if (status === "claimed" || status === "already_processed") {
+        return { outcome: "confirmed", receiptReference };
+      }
+      // A success envelope with an unrecognized status: the claim path may
+      // have taken an unexpected native branch (e.g. legacy identity
+      // review). Treat as unknown rather than guessing a terminal state.
+      return { outcome: "unknown", receiptReference };
+    }
+    if (status === "claim_failed" || status === "mixed_version_batch") {
+      // Definitive before-effect failures: nothing left the process.
+      return {
+        outcome: "no_effect",
+        failureCode: status.toUpperCase(),
+      };
+    }
+    return { outcome: "unknown" };
+  }
+
   /**
    * Public entry point. Runs the turn, auto-retrying if a content-level
    * transient AI-server failure (empty response, finish_reason=error) ends
@@ -1789,13 +2165,40 @@ export class AIChatQueryLoop {
   }
 
   /**
+   * Compat surface for the pre-generator per-attempt entry point (budget-gate
+   * specs call this directly). The generator architecture folded the per-
+   * attempt logic into `iterate()`; budget reservations, retry identities,
+   * and round reconciliation keep the same uniqueness guarantees there, so
+   * this drains one full run through the callback facade. The tracker is
+   * accepted for signature compatibility and ignored — `iterate()` owns
+   * delivery tracking internally.
+   */
+  async runOnce(
+    input: AIChatQueryLoopInput,
+    _tracker?: RoundContentTracker
+  ): Promise<AIChatQueryLoopResult> {
+    void _tracker;
+    return await this.run(input);
+  }
+
+  /**
    * Stage B §5.2 (generator-streaming PRD FR-001): the callback entry is a
    * thin FACADE — it drains the single `iterate()` implementation into the
    * legacy sink, awaiting the sink's flush barrier after each tool_call
    * yield so persist-before-execute ordering is preserved exactly.
    */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
-    const { eventSink, ...generatorInput } = input;
+    const { eventSink, ...restInput } = input;
+    // Same auxiliary channel runLoopSegment wires for the engine: closure-
+    // scope emits inside awaited helpers (G01-313 badge) push through the
+    // caller's real sink while the generator is suspended in an await.
+    const generatorInput: import("@/service/AIChatQueryEvents").AIChatQueryGeneratorInput =
+      {
+        ...restInput,
+        emitAuxiliary: (event) => {
+          eventSink.emit(event);
+        },
+      };
     const generator = this.iterate(generatorInput);
     try {
       for (;;) {
@@ -1914,7 +2317,36 @@ export class AIChatQueryLoop {
         retryMaxAttempts: maxAttempts,
         retryDelayMs: delayMs,
       };
+      // B13c (FR-08/23, AC-29): accumulate the ACTUAL slept backoff against
+      // the wait budget (measured wall-clock, so an aborted sleep counts
+      // only what was waited) and persist it. Backoff storms are the
+      // unbounded in-loop wait source; the 1-hour cumulative wait cap is
+      // enforced at dispatch gates from these totals. Fire-and-forget
+      // persist (warn-only failure, flush barrier covers durability).
+      // Permission/plan pause durations are not yet measurable (pending
+      // entries carry no timestamps) and remain a follow-up.
+      const waitStartedAt = Date.now();
       await abortableDelay(delayMs, input.abortController.signal);
+      const waitedMs = Date.now() - waitStartedAt;
+      const waitBinding = input.taskExecutionBinding;
+      if (waitBinding?.policyAccepted && waitedMs > 0) {
+        waitBinding.addWaitMs?.(waitedMs);
+        waitBinding.persistBudget?.({ waitMs: waitedMs })?.then(
+          (ok) => {
+            if (!ok) {
+              console.warn(
+                `[ai-chat-v2] T05 wait persist failed (lease released or superseded) for ${input.conversationId}`
+              );
+            }
+          },
+          (err) => {
+            console.warn(
+              `[ai-chat-v2] T05 wait persist error for ${input.conversationId}:`,
+              err
+            );
+          }
+        );
+      }
     }
 
     // Unreachable: the loop always returns on the final attempt. Returned
@@ -2076,6 +2508,43 @@ export class AIChatQueryLoop {
 
       for (let round = input.startRound; ; round += 1) {
         if (round >= maxToolRounds) {
+          // Slice 2 Unit 4 (FR-05/07, §7.1): when the completion policy is
+          // on and this turn is enrolled, consult the controller before the
+          // legacy round-cap nudge. A `continue` outcome (controller
+          // authorized + budget reserved) emits the §7.3 targeted prompt
+          // INSTEAD of the generic round-cap nudge and re-enters the loop.
+          // Any other outcome (finish/wait/budget-overridden) breaks the
+          // loop without the legacy nudge. Flag-off or no binding → the
+          // existing nudge/break logic runs byte-identical.
+          const policyRoundCapOutcome = await this.maybeConsultPolicy({
+            input,
+            boundary: "round_cap",
+            content: this.policyConsultContent(recoveryState, finalAccumulator),
+            finishReason: finalAccumulator?.state.finishReason ?? null,
+          });
+          if (policyRoundCapOutcome) {
+            if (policyRoundCapOutcome.type === "continue") {
+              roundCapContinuations += 1;
+              emptyStopContinuations = 0;
+              messages.push({
+                role: "user",
+                content: policyRoundCapOutcome.prompt,
+              });
+              yield {
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: roundCapContinuations,
+                maxAttempts: maxRoundCapContinuations,
+                message: "Continuing after tool-round cap (policy-authorized)",
+              };
+              round = -1;
+              continue;
+            }
+            break;
+          }
           const canKeepGoing =
             executedToolRound &&
             !input.abortController.signal.aborted &&
@@ -2084,7 +2553,15 @@ export class AIChatQueryLoop {
           if (canKeepGoing) {
             roundCapContinuations += 1;
             emptyStopContinuations = 0;
-            const continuationPrompt = input.goalAutoContinue
+            // B12 (FR-20, NFR-01/07): goal-flavored round-cap prompts run
+            // exclusively on goal-owned turns. An explicitly standalone
+            // binding (unrelated task beside an active goal) gets the
+            // neutral prompt — no stacked goal nudges. Bindings without an
+            // owner predate this field and keep legacy behavior.
+            const useGoalPrompts =
+              input.goalAutoContinue === true &&
+              input.taskExecutionBinding?.completionOwner !== "standalone";
+            const continuationPrompt = useGoalPrompts
               ? GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
               : TOOL_ROUND_CAP_CONTINUATION_PROMPT;
             messages.push({
@@ -2350,6 +2827,94 @@ export class AIChatQueryLoop {
           currentMaxTokens = outputReserve;
         }
 
+        // T05 (FR-08/10/23, AC-06/08/22/27/29) + B13b: gate the provider
+        // dispatch against the execution budget BEFORE the actual stream
+        // call, then persist the consumption to the durable ledger. The ID
+        // `prov:<executionId>:<round>:<seq>` is unique per actual wire
+        // attempt (instance-monotonic seq, never reset): run() retries that
+        // re-run the same rounds, round-cap resets, and repeated
+        // runOnce/resume calls each mint a fresh identity, so re-dispatched
+        // work is counted, never dedup-swallowed. The same string is reused
+        // for this round's token reconciliation below, so each attempt's
+        // tokens count exactly once.
+        // Exhausted → fail-closed throw; the controller's incomplete route
+        // owns the finish (D4). Reserved → persist; false (lease lost) →
+        // fail-closed throw. Skipped entirely when no binding or not-accepted
+        // (byte-identical legacy). Throws RecoverableHistoryError so the
+        // outer retry layer treats this as a terminal-for-this-attempt
+        // failure, not a transport retry.
+        const binding = input.taskExecutionBinding;
+        // B13c (FR-08/10/23, AC-06/08/22/27/29): remaining-allowance barrier.
+        // Attempt counters gate their own lane, but tokens/active
+        // runtime/waits would otherwise spend without bound — refuse new
+        // dispatches when any is spent, before reserving (a refusal burns no
+        // attempt). The conservative token preflight refuses rounds that
+        // cannot possibly fit (estimate > remaining); actuals still count
+        // post-hoc, so this never double-counts.
+        if (binding?.policyAccepted && binding.getRemainingBudgets) {
+          const remaining = binding.getRemainingBudgets();
+          if (remaining.tokens <= 0) {
+            throw new RecoverableHistoryError(
+              "TOKEN_BUDGET_EXHAUSTED",
+              "no token allowance remains for another provider dispatch"
+            );
+          }
+          if (remaining.activeRuntimeMs <= 0) {
+            throw new RecoverableHistoryError(
+              "ACTIVE_RUNTIME_EXHAUSTED",
+              "no active-runtime allowance remains for another provider dispatch"
+            );
+          }
+          if (remaining.waitMs <= 0) {
+            throw new RecoverableHistoryError(
+              "WAIT_BUDGET_EXHAUSTED",
+              "no cumulative-wait allowance remains for another provider dispatch"
+            );
+          }
+          const preflight = estimateTokenUsage(messages, "");
+          if (preflight.totalTokens > remaining.tokens) {
+            throw new RecoverableHistoryError(
+              "TOKEN_BUDGET_EXHAUSTED",
+              "next round cannot fit in remaining token allowance"
+            );
+          }
+        }
+        // B13b: this round's reservation identity, minted once and shared by
+        // the gate, the retry-event handling below, and the token
+        // reconciliation below so one actual attempt counts exactly once
+        // across all three.
+        let providerRequestId: string | undefined;
+        if (binding?.policyAccepted && binding.reserveProviderAttempt) {
+          providerRequestId = `prov:${binding.executionId}:${round}:${this.providerAttemptSeq++}`;
+          const reservation =
+            binding.reserveProviderAttempt(providerRequestId);
+          if (reservation === BudgetReservationResult.Exhausted) {
+            throw new RecoverableHistoryError(
+              "MODEL_ATTEMPT_LIMIT",
+              "provider attempt budget exhausted before dispatch"
+            );
+          }
+          if (reservation === BudgetReservationResult.Reserved) {
+            const persisted = binding.persistBudget
+              ? await binding.persistBudget({ providerAttempts: 1 })
+              : true;
+            if (!persisted) {
+              throw new RecoverableHistoryError(
+                "MODEL_ATTEMPT_LIMIT",
+                "budget persistence failed (lease released or superseded)"
+              );
+            }
+          }
+        }
+
+        // T05 (FR-08/10/23, AC-29): capture the provider-stream wall-clock
+        // start so the per-round active-runtime delta can be accumulated
+        // after the stream completes. Measured here (after the budget gate,
+        // before the await) so the delta reflects the actual stream duration
+        // only — not the preflight/budget work, which is amortized into the
+        // round but is not "active runtime" in the §9 sense.
+        const streamStartedAt = Date.now();
+
         // Stage B §5.1: consume the provider as an async iterable — chunks,
         // retry, and recovery notifications arrive in causal order and are
         // yielded directly (no callback-into-generator bridge on this path).
@@ -2415,6 +2980,38 @@ export class AIChatQueryLoop {
               retryMaxAttempts: providerEvent.info.maxAttempts,
               retryDelayMs: providerEvent.info.delayMs,
             };
+            // B13b (FR-08/23): count the actual wire retry against the
+            // execution budget. Transport retries inside the stream call
+            // are invisible to the per-round gate above — without this a
+            // 60-attempt cap would admit 60 ROUNDS × N retries. Unique ID
+            // per retry (attempt number is per-layer and may repeat, so the
+            // instance seq disambiguates). Mirror reserve is synchronous
+            // (caps enforced now); the durable persist is fire-and-forget
+            // with warn-only failure, flushed before owner release by the
+            // B13c barrier.
+            if (binding?.policyAccepted && binding.reserveProviderAttempt) {
+              const retryRequestId = `${providerRequestId}:retry:${providerEvent.info.attempt}:${this.providerAttemptSeq++}`;
+              if (
+                binding.reserveProviderAttempt(retryRequestId) ===
+                BudgetReservationResult.Reserved
+              ) {
+                binding.persistBudget?.({ providerAttempts: 1 }).then(
+                  (ok) => {
+                    if (!ok) {
+                      log.warn(
+                        `[ai-chat-v2] T05 retry-attempt persistence failed (lease released or superseded) for ${retryRequestId}`
+                      );
+                    }
+                  },
+                  (err) => {
+                    log.warn(
+                      `[ai-chat-v2] T05 retry-attempt persistence error for ${retryRequestId}:`,
+                      err
+                    );
+                  }
+                );
+              }
+            }
             continue;
           }
           const rawChunk = providerEvent.chunk;
@@ -2472,6 +3069,59 @@ export class AIChatQueryLoop {
             }
           : estimateTokenUsage(messages, accumulator.state.fullContent);
         lastReportedUsage = resolvedUsage;
+        // T05 (FR-08/10/23, AC-22/29): reconcile actual token usage AND active
+        // runtime against the execution budget after each round, then persist
+        // the deltas to the durable ledger. Reuses this round's gated
+        // `providerRequestId` (B13b-unique per actual attempt) so the
+        // attempt's tokens count exactly once — never double-counted,
+        // never dedup-swallowed. The in-memory `reconcileTokens` is the
+        // mirror (returns false on dedup); `persistBudget({tokens,
+        // activeRuntimeMs})` is the authoritative path. Skipped when no
+        // binding or not-accepted (byte-identical legacy). Persistence failure
+        // is logged, not thrown: token/runtime accounting is advisory for the
+        // budget's caps, not a dispatch gate (the reservation gates already
+        // threw fail-closed before the stream).
+        if (
+          binding?.policyAccepted &&
+          binding.reconcileTokens &&
+          providerRequestId !== undefined
+        ) {
+          // Reuses the gated round identity minted above (B13b): the same
+          // actual attempt reconciles exactly once (the gate ran under the
+          // identical binding condition, so the ID is always minted here).
+          const counted = binding.reconcileTokens(
+            providerRequestId,
+            resolvedUsage.totalTokens
+          );
+          // AC-29: accumulate the per-round active runtime into the mirror.
+          // The delta is bounded by the stream duration (the await above);
+          // negative/NaN is clamped to 0 by `addActiveRuntime`'s
+          // asFiniteNonNegative guard.
+          const activeRuntimeDelta = Date.now() - streamStartedAt;
+          if (binding.addActiveRuntime) {
+            binding.addActiveRuntime(activeRuntimeDelta);
+          }
+          if (counted && binding.persistBudget) {
+            binding
+              .persistBudget({
+                tokens: resolvedUsage.totalTokens,
+                activeRuntimeMs: activeRuntimeDelta,
+              })
+              .then((ok) => {
+                if (!ok) {
+                  log.warn(
+                    `[ai-chat-v2] T05 token/runtime persistence failed (lease released or superseded) for ${providerRequestId}`
+                  );
+                }
+              })
+              .catch((err) => {
+                log.warn(
+                  `[ai-chat-v2] T05 token/runtime persistence error for ${providerRequestId}:`,
+                  err
+                );
+              });
+          }
+        }
         yield {
           type: "usage_update",
           conversationId: input.conversationId,
@@ -2850,6 +3500,41 @@ export class AIChatQueryLoop {
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length === 0;
           if (emptyAfterTools) {
+            // Slice 2 Unit 4: policy consult supersedes the legacy empty-stop
+            // nudges when enrolled. The candidate content is the recovered
+            // prefix + this round's (empty) content — the controller sees the
+            // turn made tool progress but produced no terminal text, and
+            // decides continue (§7.3 prompt) vs finish(incomplete) vs wait.
+            // Boundary is response_end: the stream did terminate (finish_reason
+            // =stop), just with no text. Flag-off/no binding → legacy nudges.
+            const policyEmptyStopOutcome = await this.maybeConsultPolicy({
+              input,
+              boundary: "response_end",
+              content: this.policyConsultContent(recoveryState, accumulator),
+              finishReason: accumulator.state.finishReason ?? null,
+            });
+            if (policyEmptyStopOutcome) {
+              if (policyEmptyStopOutcome.type === "continue") {
+                emptyStopContinuations += 1;
+                roundCapContinuations = 0;
+                messages.push({
+                  role: "user",
+                  content: policyEmptyStopOutcome.prompt,
+                });
+                yield {
+                  type: "recovery_status",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  layer: "persistent_retry",
+                  reason: "server_error",
+                  attempt: emptyStopContinuations,
+                  maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+                  message: "Continuing after empty model stop (policy-authorized)",
+                };
+                continue;
+              }
+              break;
+            }
             if (
               emptyStopContinuations < MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
             ) {
@@ -2917,6 +3602,56 @@ export class AIChatQueryLoop {
             executedToolRound &&
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length > 0;
+          // Slice 2 Unit 4: policy consult supersedes the legacy goal-text
+          // nudge when enrolled. The controller sees the partial text as
+          // verified progress and decides whether the unmet goal criteria
+          // warrant a §7.3 continuation or a finish(incomplete). On continue,
+          // the partial is preserved (prefix + assistant message) exactly as
+          // the legacy branch does, so the persisted message keeps the text.
+          // Flag-off/no binding → legacy goal-text nudge.
+          if (goalTextStop) {
+            // T20b: the goalTextStop consult carries no committed tool
+            // round, so text-only work must feed the tracker here.
+            // Repeated identical text (a repeated promise) counts as
+            // no-progress; changed text resets the streak.
+            input.taskExecutionBinding?.recordAssistantTextProgress?.(
+              accumulator.state.fullContent || ""
+            );
+            const policyGoalTextOutcome = await this.maybeConsultPolicy({
+              input,
+              boundary: "response_end",
+              content: this.policyConsultContent(recoveryState, accumulator),
+              finishReason: accumulator.state.finishReason ?? null,
+            });
+            if (policyGoalTextOutcome) {
+              if (policyGoalTextOutcome.type === "continue") {
+                goalTextStopContinuations += 1;
+                const partial = accumulator.state.fullContent || "";
+                recoveryState = {
+                  ...recoveryState,
+                  recoveredContentPrefix:
+                    recoveryState.recoveredContentPrefix + partial,
+                };
+                messages.push({ role: "assistant", content: partial });
+                messages.push({
+                  role: "user",
+                  content: policyGoalTextOutcome.prompt,
+                });
+                yield {
+                  type: "recovery_status",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  layer: "persistent_retry",
+                  reason: "server_error",
+                  attempt: goalTextStopContinuations,
+                  maxAttempts: MAX_GOAL_TEXT_STOP_CONTINUATIONS,
+                  message: "Continuing goal after premature text-only stop (policy-authorized)",
+                };
+                continue;
+              }
+              break;
+            }
+          }
           // The nudge budget is per-runOnce; a separate run() (permission/
           // plan resume, or the outer goal-turn driver) gets a fresh budget
           // (see the declaration above). This is intentional and bounded by
@@ -2957,6 +3692,42 @@ export class AIChatQueryLoop {
             continue;
           }
 
+          // Slice 2 Unit 4: the loop-exit consult. The stream terminated
+          // (finish_reason=stop) without hitting a round-cap, empty-stop, or
+          // goal-text branch — a natural response_end. When the policy is on
+          // and the turn is enrolled, consult the controller before breaking.
+          // A continue outcome re-enters with the §7.3 prompt (this is the
+          // primary recovery path for an enrolled task that stops prematurely
+          // with content but unmet criteria). Any other outcome breaks. The
+          // Unit 5 engine finalization gate reads the recorded decision; if no
+          // consult ran here (flag off / no binding), the gate does its own
+          // fallback consult. Flag-off → unconditional break, byte-identical.
+          const policyLoopExitOutcome = await this.maybeConsultPolicy({
+            input,
+            boundary: "response_end",
+            content: this.policyConsultContent(recoveryState, accumulator),
+            finishReason: accumulator.state.finishReason ?? null,
+          });
+          if (policyLoopExitOutcome) {
+            if (policyLoopExitOutcome.type === "continue") {
+              messages.push({
+                role: "user",
+                content: policyLoopExitOutcome.prompt,
+              });
+              yield {
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: 1,
+                maxAttempts: 1,
+                message: "Continuing after premature stop (policy-authorized)",
+              };
+              continue;
+            }
+            break;
+          }
           break;
         }
 
@@ -3549,14 +4320,115 @@ export class AIChatQueryLoop {
               continue;
             }
             // skip_review with no draft: send this call's content via the
-            // legacy path. Otherwise thread the trusted authorization triple
-            // so the send tool claims the batch (§15.1).
+            // legacy path (no batch to claim). Otherwise thread the trusted
+            // authorization triple so the send tool claims the batch (§15.1).
             if (!gateDecision.skipReviewDirectSend) {
               outboundAuthorization = {
                 batchId: gateDecision.batchId,
                 authorizationId: gateDecision.authorizationId,
                 batchHash: gateDecision.batchHash,
               };
+            }
+          }
+
+          // T23d (§10.2): durable operation fence for the consequential send.
+          // Runs for EVERY allowed gate decision on policy-enrolled turns
+          // (T16 frozen binding flag) — including skip_review direct sends.
+          // D4 review fix: a skip_review send previously left the fence
+          // unset (no operation row, no double-send CAS) on an unattended
+          // path. The fence descriptor keeps §10.1 trusted-identity rules in
+          // BOTH shapes: the batch claim uses the gate's authorizationId as
+          // the domain target; a skip_review direct send has no batch, so it
+          // derives a stable target from trusted loop input (source user
+          // message id) — never from model text. Blocked → the same blocked
+          // tool_result shape the intent gate emits above; allowed → thread
+          // the claim into the settle after dispatch.
+          let operationClaim: {
+            readonly descriptor: OperationGuardDescriptor;
+            readonly claimGeneration: number;
+            readonly intentHash: string;
+            readonly occurrenceOrdinal: number;
+          } | null = null;
+          if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
+            const guard = this.buildOperationGuardForSend(input);
+            if (guard) {
+              const descriptor = AIChatQueryLoop.buildSendDescriptor(
+                outboundAuthorization?.batchId,
+                input,
+                call.arguments ?? {}
+              );
+              try {
+                const decision = await guard.prepareDispatch(descriptor);
+                if (!decision.allowed) {
+                  yield buildToolCallEvent(call.arguments ?? {});
+                  const blockedContent = serializeToolResultContent({
+                    success: false,
+                    operationGuardBlocked: true,
+                    code: decision.reasonCode,
+                    reason: decision.reason,
+                  });
+                  yield {
+                    type: "tool_result",
+                    conversationId: input.conversationId,
+                    messageId: input.assistantMessageId,
+                    toolCallId: call.id,
+                    toolName: call.name,
+                    fullContent: blockedContent,
+                    toolResult: {
+                      success: false,
+                      operationGuardBlocked: true,
+                      code: decision.reasonCode,
+                    },
+                  };
+                  messages.push({
+                    role: "tool",
+                    tool_call_id: call.id,
+                    content: blockedContent,
+                  });
+                  continue;
+                }
+                operationClaim = {
+                  descriptor,
+                  claimGeneration: decision.claimGeneration ?? 0,
+                  intentHash: decision.intentHash ?? "",
+                  occurrenceOrdinal: decision.occurrenceOrdinal ?? 0,
+                };
+              } catch (err) {
+                // Fail-closed on the fence: a broken guard must not wave the
+                // send through (that would replay an operation whose outcome
+                // was never observed). Mirrors the consult fail-closed path.
+                console.error(
+                  "[ai-chat-v2] T23 operation guard prepareDispatch failed:",
+                  err
+                );
+                yield buildToolCallEvent(call.arguments ?? {});
+                const blockedContent = serializeToolResultContent({
+                  success: false,
+                  operationGuardBlocked: true,
+                  code: "OPERATION_UNKNOWN_OUTCOME",
+                  reason:
+                    "The operation guard could not be consulted. Dispatch is blocked until reconciliation.",
+                });
+                yield {
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: blockedContent,
+                  toolResult: {
+                    success: false,
+                    operationGuardBlocked: true,
+                    code: "OPERATION_UNKNOWN_OUTCOME",
+                  },
+                };
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: blockedContent,
+                });
+                continue;
+              }
             }
           }
 
@@ -3767,6 +4639,37 @@ export class AIChatQueryLoop {
             };
           }
 
+          // T23d (§10.2): settle the claimed operation from the actual send
+          // outcome — confirmed (native receipt), no_effect (definitive
+          // before-effect failure), or unknown (lost response). Never crashes
+          // the turn: a settle error leaves the row claimed (reconcilable).
+          if (operationClaim) {
+            const guardForSettle = this.buildOperationGuardForSend(input);
+            if (guardForSettle) {
+              const classification = AIChatQueryLoop.classifySendOutcome(
+                toolResult
+              );
+              try {
+                await guardForSettle.settleDispatch({
+                  descriptor: operationClaim.descriptor,
+                  claimGeneration: operationClaim.claimGeneration,
+                  intentHash: operationClaim.intentHash,
+                  occurrenceOrdinal: operationClaim.occurrenceOrdinal,
+                  outcome: classification.outcome,
+                  receiptReference: classification.receiptReference,
+                  failureCode: classification.failureCode,
+                });
+              } catch (err) {
+                // The row stays claimed (§10.2 reconcilable) — the next
+                // occurrence of this intent will be fenced by the guard.
+                console.error(
+                  "[ai-chat-v2] T23 operation guard settleDispatch failed:",
+                  err
+                );
+              }
+            }
+          }
+
           let toolPayload = normalizeToolResult(toolResult);
           let toolContent = serializeToolResultContent(toolPayload);
           // FR-13: a (fresh or repeated) skill invocation may change the
@@ -3937,10 +4840,15 @@ export class AIChatQueryLoop {
               error: extractToolError(toolPayload),
             };
           }
+          const failureDetail = toolResult.success
+            ? ""
+            : ` error=${JSON.stringify(
+                extractToolError(toolPayload).slice(0, 240)
+              )}`;
           log.info(
             `[ai-chat-v2] tool ${call.name} ok=${
               toolResult.success
-            } needsPermission=${isPermissionPromptResult(toolResult)}`
+            } needsPermission=${isPermissionPromptResult(toolResult)}${failureDetail}`
           );
 
           yield {
@@ -3997,6 +4905,16 @@ export class AIChatQueryLoop {
                 ...(input.ownerNotifiesTerminal !== undefined
                   ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
                   : {}),
+                // Slice 2: carry the completion-policy binding through the
+                // permission pause so the resumed loop still consults the
+                // same controller/budget (budget persists across pause).
+                // Undefined when the flag is off — byte-identical legacy.
+                taskExecutionBinding: input.taskExecutionBinding,
+                // T15: carry the route through the permission pause so the
+                // resumed loop's goalAutoContinue consult still gates goal
+                // takeover on the actual route (response_only resumes are
+                // not goal-scoped work).
+                taskRoute: input.taskRoute,
               },
             };
           }
@@ -4020,6 +4938,20 @@ export class AIChatQueryLoop {
               buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
             );
           }
+          // FR-09 / §7.2 step 7 (GAP-S2 #2): observe the committed tool
+          // round for stall detection. This runs AFTER the permission-prompt
+          // early return above, so only rounds that actually committed a
+          // result feed the no-progress streak. The closure is a no-op when
+          // the binding is absent (flag off / shadow / scheduled sink path)
+          // — byte-identical legacy behavior. `effectiveArguments` is the
+          // post-hook-rewrite request; `toolPayload` is the normalized
+          // result. Discovery traffic (tool_catalog_search) is skipped
+          // inside the tracker, so it never seeds or compares a fingerprint.
+          input.taskExecutionBinding?.recordToolRoundProgress?.({
+            toolName: call.name,
+            arguments: effectiveArguments,
+            resultPayload: toolPayload,
+          });
           // Transient image handoff: if the tool returned prepared images
           // (attach_local_images), append a model-only role:user multimodal
           // message carrying them as image_url parts. This is NOT persisted as
@@ -4487,6 +5419,14 @@ export class AIChatQueryLoop {
           ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
           : {}),
         turnId: input.turnId,
+        // Slice 2: carry the completion-policy binding through the plan
+        // pause so the resumed loop still consults the same
+        // controller/budget. Undefined when the flag is off.
+        taskExecutionBinding: input.taskExecutionBinding,
+        // T15: carry the route through the plan-question pause so the
+        // resumed loop's goalAutoContinue consult still gates goal takeover
+        // on the actual route.
+        taskRoute: input.taskRoute,
       },
     };
   }
@@ -4546,6 +5486,9 @@ export class AIChatQueryLoop {
     const deadlineEpochMs = Date.now() + deadlineBudgetMs;
     const deadlinePerfMs = performance.now() + deadlineBudgetMs;
 
+    // T05 (FR-08/10/23, AC-27): record this tool execution against the
+    // execution budget before dispatching (fail-closed gate per B13a).
+    await this.reserveToolExecutionBudget(input, call);
     const registry = getDefaultToolJobRegistry();
 
     // ---- HOST-10 / HOST-16 admission (plugin async MCP tools only) ----
@@ -5396,7 +6339,7 @@ export class AIChatQueryLoop {
 
     emitProgress(
       "running",
-      `Background job started (job_id: ${shortId})`,
+      `Background job started (job_id: ${jobId})`,
       null,
       null,
       null
@@ -5431,14 +6374,33 @@ export class AIChatQueryLoop {
         });
       });
 
+    /**
+     * §10.3 backoff state. The first poll waits `currentIntervalMs`, which
+     * starts at the registry's pollMinIntervalMs (the §10.3 start interval —
+     * never faster than the registry allows). Each subsequent tick grows by
+     * ×1.5, capped at 15s, with a 1s floor. The registry's rate_limited
+     * snapshot's `retryAfterMs` overrides the next interval when present
+     * (polling too fast; back off to what the registry asks for).
+     */
+    const registryMinInterval =
+      typeof registry.pollMinIntervalMs === "number"
+        ? registry.pollMinIntervalMs
+        : ASYNC_POLL_BACKOFF_START_MS;
+    let currentIntervalMs = Math.max(
+      ASYNC_POLL_BACKOFF_FLOOR_MS,
+      registryMinInterval
+    );
+
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
     while (true) {
       // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
       // the poll interval is only a backstop; the absolute deadline governs
-      // the longest wait between wakes.
+      // the longest wait between wakes. The §10.3 backoff interval
+      // (currentIntervalMs) is capped by the remaining deadline so an
+      // adaptive interval can never overshoot the authoritative expiry.
       const msUntilDeadline = deadlinePerfAt - performance.now();
       await sleepUntilAbortOrTimeout(
-        Math.min(ASYNC_POLL_INTERVAL_MS, Math.max(0, msUntilDeadline))
+        Math.min(currentIntervalMs, Math.max(0, msUntilDeadline))
       );
 
       if (input.abortController.signal.aborted) {
@@ -5566,6 +6528,29 @@ export class AIChatQueryLoop {
         };
       }
       // status === "running" | "queued" | "rate_limited" -> keep polling.
+      //
+      // §10.3 backoff: grow the next interval by ×1.5, capped at 15s, with a
+      // 1s floor. If the registry returned a rate_limited snapshot with
+      // retryAfterMs, honor that as the next interval (it tells us exactly
+      // how long until the registry will accept another poll without
+      // rate-limiting) — but still respect the 1s floor and 15s cap so a
+      // misbehaving registry cannot cause a hot loop or a stall.
+      if (
+        snap.status === "rate_limited" &&
+        typeof snap.retryAfterMs === "number" &&
+        snap.retryAfterMs > 0
+      ) {
+        currentIntervalMs = Math.min(
+          ASYNC_POLL_BACKOFF_MAX_MS,
+          Math.max(ASYNC_POLL_BACKOFF_FLOOR_MS, snap.retryAfterMs)
+        );
+      } else {
+        const grown = Math.round(currentIntervalMs * ASYNC_POLL_BACKOFF_GROWTH);
+        currentIntervalMs = Math.min(
+          ASYNC_POLL_BACKOFF_MAX_MS,
+          Math.max(ASYNC_POLL_BACKOFF_FLOOR_MS, grown)
+        );
+      }
     }
   }
 
@@ -5884,6 +6869,10 @@ export class AIChatQueryLoop {
 ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
+
+    // T05 (FR-08/10/23, AC-27): record this tool execution against the
+    // execution budget before dispatching (fail-closed gate per B13a).
+    await this.reserveToolExecutionBudget(input, call);
 
     const executePromise = this.deps.executeTool(
       call.name,

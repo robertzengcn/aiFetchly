@@ -4,16 +4,34 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
-import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
-import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
-import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
-import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
-import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import {
+  EmailReplyDraftGenerationService,
+  createModelOutputCapResolver,
+  createModelContextResolver,
+} from "@/service/emailReply/EmailReplyDraftGenerationService";
+import { EmailReplyDetectionModule } from "@/modules/EmailReplyDetectionModule";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
+import {
+  decodeAddresses,
+  isAutomatedSender,
+  replyRecipientAddress,
+} from "@/service/emailReceive/EmailMessageParser";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
+import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
+import {
+  SendBindingError,
+  SendPolicyRejection,
+} from "@/service/emailReply/EmailReplySendBinding";
+import {
+  nextActionForCode,
+  type EmailReplyNextAction,
+} from "@/service/emailReply/EmailReplyNextAction";
 import {
   listEmailInboxesSchema,
   fetchUnreadEmailsSchema,
@@ -21,6 +39,7 @@ import {
   markEmailProcessedSchema,
   createEmailReplyDraftSchema,
   sendEmailReplySchema,
+  checkEmailRepliedSchema,
 } from "@/entityTypes/emailReceiveAiTypes";
 import type {
   EmailReceiveAiToolResult,
@@ -28,7 +47,9 @@ import type {
   AiEmailMessageSummary,
   AiEmailMessageDetail,
   AiEmailReplyDraftResult,
+  AiEmailReplyEvidence,
 } from "@/entityTypes/emailReceiveAiTypes";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 import type {
   EmailMessageClassification,
   EmailReplyStatus,
@@ -50,6 +71,83 @@ function validationFailure(error: ZodError) {
 
 function failure(error: unknown) {
   return { success: false as const, error: formatError(error) };
+}
+
+/**
+ * Default AI feature gate for the diagnostic reply-check tool (FR-032).
+ * Lazy-reconciles once when currently disabled (PRD FR-6.1), then re-reads the
+ * flag. GET failures keep the cache, so a Community user is never falsely
+ * unlocked. Mirrors {@link KnowledgeLibraryAiTools.defaultIsAiEnabled}.
+ */
+async function defaultIsAiEnabled(): Promise<boolean> {
+  try {
+    return await ensureHostedAiEnabled();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build a stable failure envelope (FR-033, B12) from a typed refusal result.
+ *
+ * B12: the generation service's failure side is now a typed union carrying
+ * `code` / `existing_draft_id` / `next_action` / `requestCorrelationId`
+ * additively alongside the legacy `error` string. This composer consumes
+ * those typed fields directly -- it does NOT parse the leading `[code]`
+ * bracket out of `error` to recover a machine-readable reason. The previous
+ * implementation (`extractStableCode` + `POLICY_CODES`) regex-parsed English
+ * error text, which is exactly what B12 forbids.
+ *
+ * The typed `code` field is set only when the result carries a genuine
+ * {@link EmailReplyPolicyCode}; non-policy failures (provider_error, AI-disabled,
+ * message-not-found, audit-persistence) leave `code` undefined and the
+ * envelope's `error` still carries the human-readable text. `next_action` is
+ * derived from the typed code via {@link nextActionForCode} (typed-code→action
+ * derivation, not English parsing); when the result already carries a
+ * `next_action` (e.g. transport failures where the service knows the action
+ * without a policy code), that value is preserved.
+ */
+function policyFailure(result: {
+  success: false;
+  error: string;
+  code?: EmailReplyPolicyCode;
+  existing_draft_id?: number;
+  next_action?: EmailReplyNextAction;
+  requestCorrelationId?: string;
+}): {
+  success: false;
+  error: string;
+  code?: EmailReplyPolicyCode;
+  existing_draft_id?: number;
+  next_action?: EmailReplyNextAction;
+  requestCorrelationId?: string;
+} {
+  const envelope: {
+    success: false;
+    error: string;
+    code?: EmailReplyPolicyCode;
+    existing_draft_id?: number;
+    next_action?: EmailReplyNextAction;
+    requestCorrelationId?: string;
+  } = { success: false, error: result.error };
+  // The generation service already narrowed `code` to EmailReplyPolicyCode;
+  // pass it through verbatim. Absent on provider_error / AI-disabled /
+  // message-not-found / audit-persistence failures.
+  if (result.code) envelope.code = result.code;
+  if (result.existing_draft_id) {
+    envelope.existing_draft_id = result.existing_draft_id;
+  }
+  // Prefer the service-derived next_action when present (transport / empty-
+  // output failures derive it directly without a policy code); otherwise
+  // derive from the typed code.
+  envelope.next_action =
+    result.next_action ?? nextActionForCode(result.code);
+  // R19: propagate the service's request correlation id so tool/IPC consumers
+  // can correlate the refusal with lifecycle audits.
+  if (result.requestCorrelationId) {
+    envelope.requestCorrelationId = result.requestCorrelationId;
+  }
+  return envelope;
 }
 
 // ---- list_email_inboxes ----
@@ -169,7 +267,12 @@ export async function getEmailMessage(
       snippet: msg.snippet,
       bodyText: input.include_body ? msg.bodyText : null,
       bodyHtmlSanitized: input.include_body ? msg.bodyHtmlSanitized : null,
-      isAutomatedSender: isAutomatedSender({ fromAddress: msg.fromAddress }),
+      isAutomatedSender: isAutomatedSender({
+        fromAddress: replyRecipientAddress(
+          msg.fromAddress,
+          msg.replyToAddress
+        ),
+      }),
     };
 
     await writeReadAudit(msg.emailServiceId, msg.id, "AI read message body");
@@ -218,6 +321,20 @@ export async function markEmailProcessed(
     log.reason = input.reason ?? input.status;
     await auditModule.create(log);
 
+    // G03-1c: mirror the decision into the auto-reply audit table the UI
+    // reads, so AI-tool mark-processed outcomes are visible in the audit UI.
+    const mirrorRow = buildAutoReplyAuditMirrorRow({
+      emailServiceId: log.emailServiceId,
+      messageId: log.messageId,
+      draftId: log.draftId,
+      action: log.action,
+      reason: log.reason,
+      metadataJson: log.metadataJson,
+    });
+    if (mirrorRow !== null) {
+      await new EmailAutoReplyAuditLogModule().create(mirrorRow);
+    }
+
     return {
       success: true,
       message_id: input.message_id,
@@ -236,8 +353,29 @@ export async function createEmailReplyDraft(
   args: unknown
 ): Promise<EmailReceiveAiToolResult<AiEmailReplyDraftResult>> {
   try {
+    // N08: kill-switch + readiness BEFORE any reservation/retrieval/model
+    // work. With the switch on (or validation pending/failed), do nothing —
+    // no guard reservation, no message read, no model call.
+    if (isEmailReplyKillSwitchOn()) {
+      return {
+        success: false,
+        error: "Reply drafting is temporarily disabled by the kill switch",
+      };
+    }
+    {
+      const { checkNewGuardedWorkReady } = await import(
+        "@/service/emailReply/EmailReplyReadiness"
+      );
+      const readiness = checkNewGuardedWorkReady();
+      if (!readiness.ready) {
+        return { success: false, error: readiness.reason };
+      }
+    }
     const input = createEmailReplyDraftSchema.parse(args);
-    const genService = new EmailReplyDraftGenerationService();
+    const genService = new EmailReplyDraftGenerationService({
+      resolveModelOutputCap: createModelOutputCapResolver(),
+      resolveModelContextWindow: createModelContextResolver(),
+    });
     const result = await genService.createDraft({
       messageId: input.message_id,
       tone: input.tone,
@@ -246,9 +384,15 @@ export async function createEmailReplyDraft(
       useKnowledgeLibrary: input.use_knowledge_library,
     });
     if (!result.success) {
-      return { success: false, error: result.error };
+      // B12: surface the typed code + next_action + existing_draft_id directly
+      // from the widened failure union. The generation service already narrowed
+      // `code` to EmailReplyPolicyCode; policyFailure passes it through without
+      // parsing English. The reuse path returns success, so a failure here is
+      // always a refusal or a transport/validation/audit-persistence failure.
+      return policyFailure(result);
     }
-    const { success: _ignored, ...dto } = result;
+    const { success, ...dto } = result;
+    void success;
     return { success: true, ...dto };
   } catch (error) {
     return error instanceof ZodError
@@ -264,6 +408,12 @@ export async function sendEmailReply(args: unknown): Promise<
     draft_id: number;
     message_id: number;
     sent_at: string;
+    /**
+     * Per-invocation request correlation id (R20). Joins this send result to
+     * the lifecycle audits (send_claimed / reply_sent / send_failed /
+     * delivery_unknown) the delivery service wrote under the same id.
+     */
+    requestCorrelationId: string;
   }>
 > {
   try {
@@ -289,10 +439,48 @@ export async function sendEmailReply(args: unknown): Promise<
     if (!draft) {
       return { success: false, error: "Draft not found" };
     }
-    if (draft.status !== "draft") {
+    // R13: a `failed` draft (definite SMTP rejection) reaches the fenced
+    // reopen inside `approveDraft`; the reopen refuses when retry is unsafe
+    // (cluster positive / unknown / sent / in-flight sibling). An `approved`
+    // draft whose previous send stopped before SMTP is returned to `draft`
+    // so this confirmation can approve and deliver it. Other non-`draft`
+    // states stay refused at this gate.
+    if (draft.status === "approved") {
+      // A previous confirmed send approved this draft and then stopped before
+      // SMTP. The one-time token from that attempt is gone, so retire the
+      // unused approval, return the draft to `draft`, and approve again.
+      const inFlight = await draftModule.countActiveSendAttempts(draft.id);
+      if (inFlight > 0) {
+        return {
+          success: false,
+          error: "A send for this draft is already in flight",
+        };
+      }
+      // Bulk-retire every active approval for this draft in one UPDATE — the
+      // hand-rolled bounded loop could exit with rows still active (CAS loss,
+      // >N rows) and silently proceed with stale approvals live.
+      const approvalModule = new EmailReplyApprovalModule();
+      await approvalModule.invalidateAllForDraft(
+        draft.id,
+        "Re-confirmed send: retiring the previous confirmation before re-approval",
+        new Date()
+      );
+      // CAS fence: the status write only lands on a row still `approved`.
+      // A concurrent renderer approve+send or a late finalization moved the
+      // row → refuse instead of overwriting (an unfenced write here could
+      // resurrect a sending/sent draft as sendable and double-send).
+      const demoted = await draftModule.demoteApprovedToDraft(draft.id);
+      if (!demoted) {
+        return {
+          success: false,
+          error:
+            "Draft state changed while re-confirming (concurrent approve or send); retry the request",
+        };
+      }
+    } else if (draft.status !== "draft" && draft.status !== "failed") {
       return {
         success: false,
-        error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' may be sent (the AI tool approves on confirmed execution)`,
+        error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' (or a definitely-failed draft the approval service reopens) may be sent`,
       };
     }
     const approval = await new EmailReplyApprovalService().approveDraft({
@@ -310,29 +498,250 @@ export async function sendEmailReply(args: unknown): Promise<
         draft_id: draft.id,
         message_id: draft.messageId,
         sent_at: outcome.sentAt,
+        requestCorrelationId: outcome.requestCorrelationId,
       };
     }
     if (outcome.status === "already_processed") {
+      // Stable code (FR-033): distinguish a duplicate submission from a fresh send.
+      // R-5: derive next_action canonically via nextActionForCode — an
+      // already_replied here has no reusable draft id surfaced (the outcome
+      // carries only the attempt, not a fresh draft), so it routes to
+      // await_human_review, consistent with the SendPolicyRejection path.
+      // R20: surface the invocation id so this result joins the claim/outcome
+      // audits the delivery service wrote under it.
       return {
         success: false,
         error: "A send was already submitted for this approved revision",
+        code: "already_replied",
+        next_action: nextActionForCode("already_replied"),
+        requestCorrelationId: outcome.requestCorrelationId,
       };
     }
+    // failed: the delivery service surfaces a sanitized transport error string
+    // but no typed policy code (a failed SMTP submission is a provider-level
+    // failure, not a policy refusal). B12: build the typed envelope from the
+    // outcome's own fields -- no English parsing. next_action routes to retry
+    // since a transport failure is typically transient.
+    if (outcome.status === "failed") {
+      return {
+        success: false,
+        error: outcome.error,
+        next_action: "discard_and_retry",
+        existing_draft_id: draft.id,
+        requestCorrelationId: outcome.requestCorrelationId,
+      };
+    }
+    // delivery_unknown: ambiguous outcome after possible provider acceptance.
+    // Stable policy code so the model surfaces human review, never auto-retry.
+    // This is the final outcome status (sent / already_processed / failed are
+    // handled above); the fallthrough return satisfies exhaustiveness.
     return {
       success: false,
-      error:
-        outcome.status === "delivery_unknown"
-          ? "Delivery unknown: verify the Sent folder manually"
-          : outcome.error,
+      error: "Delivery unknown: verify the Sent folder manually",
+      code: "delivery_unknown",
+      next_action: "await_human_review",
+      existing_draft_id: draft.id,
+      requestCorrelationId: outcome.requestCorrelationId,
     };
   } catch (error) {
+    if (error instanceof SendPolicyRejection) {
+      // Pre-send policy refusal (FR-029): already_replied / reply_in_progress /
+      // reply_state_conflict / delivery_unknown / etc. Carries the stable code.
+      // R20: surface the invocation id the delivery service attached so this
+      // refusal joins the lifecycle audits written under it.
+      return {
+        success: false,
+        error: error.message,
+        code: error.code,
+        next_action: nextActionForCode(error.code),
+        requestCorrelationId: error.requestCorrelationId,
+      };
+    }
+    if (error instanceof SendBindingError) {
+      // Binding failures carry their own stable code vocabulary; map to a hint.
+      // R20: surface the invocation id (re-thrown with it at the validateSendBinding
+      // boundary / set on the service_missing throw).
+      return {
+        success: false,
+        error: error.message,
+        code: bindingCodeToPolicyCode(error.code),
+        next_action: "discard_and_retry",
+        requestCorrelationId: error.requestCorrelationId,
+      };
+    }
     return error instanceof ZodError
       ? validationFailure(error)
       : failure(error);
   }
 }
 
+// ---- check_email_replied ----
+
+/**
+ * FR-032: diagnostic reply-check tool. Runs the shared §7.1 detection
+ * algorithm (ordinary cache, no forceRefresh) and returns the three-state
+ * typed result as a snake_case DTO. Read-only — does not mutate the mailbox
+ * and needs no confirmation; local cache/read audit may update.
+ *
+ * AI-enable is checked at the tool boundary BEFORE input parsing or Module
+ * creation (FR-6.1). Disabled → `{ success: false, error: "AI feature is not
+ * enabled" }` with no detection work performed.
+ *
+ * Never leaks credentials, raw provider errors, bodies, or internal exception
+ * details — the DTO carries only low-cardinality codes, booleans, timestamps,
+ * and the matched message id (FR-039).
+ */
+export async function checkEmailReplied(args: unknown): Promise<
+  EmailReceiveAiToolResult<{
+    message_id: number;
+    state: "replied" | "not_replied" | "unknown";
+    replied: boolean | null;
+    source: string;
+    reason_code: string;
+    matched_message_id: string | null;
+    checked_at: string | null;
+    from_cache: boolean;
+    coverage: string;
+  }>
+> {
+  // AI-enable check at the boundary (FR-6.1): before parsing request data or
+  // constructing any Module. A disabled-AI caller gets no detection work.
+  if (!(await defaultIsAiEnabled())) {
+    return { success: false, error: "AI feature is not enabled" };
+  }
+  let messageId: number;
+  try {
+    const input = checkEmailRepliedSchema.parse(args);
+    messageId = input.message_id;
+  } catch (error) {
+    return error instanceof ZodError
+      ? validationFailure(error)
+      : failure(error);
+  }
+  // Verify the seed message exists BEFORE detection (the detector needs the
+  // row to resolve the account + identity). Missing → typed failure, no
+  // detection probe.
+  const messageModule = new EmailReceivedMessageModule();
+  await messageModule.ensureConnection();
+  const msg = await messageModule.read(messageId);
+  if (!msg) {
+    return { success: false, error: "Message not found" };
+  }
+  try {
+    const detectionModule = new EmailReplyDetectionModule();
+    const outcome = await detectionModule.checkReply({ messageId });
+    if (!outcome.success || !outcome.result) {
+      // Persistence/detection failure — sanitize via the bounded error string
+      // the service already produced (no raw provider errors, no credentials).
+      return { success: false, error: outcome.error ?? "Reply detection failed" };
+    }
+    // Carry the safe DTO fields through the tool envelope. The detection
+    // service already mapped the result to snake_case; pass it through verbatim
+    // (no English parsing, no code recovery).
+    const dto = outcome.result;
+    return {
+      success: true,
+      message_id: dto.message_id,
+      state: dto.state,
+      replied: dto.replied,
+      source: dto.source,
+      reason_code: dto.reason_code,
+      matched_message_id: dto.matched_message_id,
+      checked_at: dto.checked_at,
+      from_cache: dto.from_cache,
+      coverage: dto.coverage,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Map a {@link SendBindingError} code onto the policy code surface so the AI
+ * tool envelope presents a single coherent code vocabulary (FR-033). Binding
+ * failures are pre-send refusals, so they share the `draft_not_approved` family
+ * when not a more specific match.
+ */
+function bindingCodeToPolicyCode(
+  code: string
+): EmailReplyPolicyCode | undefined {
+  if (code === "approval_stale") return "approval_stale";
+  if (code === "mailbox_mismatch") return "mailbox_mismatch";
+  if (code === "service_missing" || code === "service_inactive") {
+    return "invalid_recipient";
+  }
+  if (code === "recipient_mismatch") return "invalid_recipient";
+  return "draft_not_approved";
+}
+
 // ---- DTO mappers ----
+
+/**
+ * Pure derivation of three-state reply evidence from persisted columns
+ * (G02/FR-030/FR-033). Read-only — no DB, no I/O, no detection call. Lets the
+ * AI explain why a `not_started` row is blocked (an externally-observed
+ * `\Answered` flag is sticky positive evidence after R11, never projected into
+ * `replyStatus`) without forcing a separate `check_email_replied` round trip.
+ *
+ * Semantics (technical design §4.2/§5.1, mirrors the detection vocabulary):
+ * - A set `replyDetectedAt` is a STICKY POSITIVE → `replied: true`. The source
+ *   is the stored provenance (`mailbox_flag` / `sent_search`). It is never
+ *   cleared by a later negative/empty observation, so a stale negative does
+ *   not weaken it.
+ * - With no positive, a stored `replyNegativeCheckAt` is a COMPLETE NEGATIVE →
+ *   `replied: false`.
+ * - Otherwise (no positive, no stored negative — legacy row, never-checked, or
+ *   a freshly-synced message) → `replied: null`. An unknown is NEVER a false
+ *   negative.
+ *
+ * The raw `isAnswered` flag is surfaced as a boolean observation alongside its
+ * check time, so the AI can distinguish "flag observed but no sticky positive
+ * recorded yet" from "no flag check ever ran". Never exposes credentials, raw
+ * mailbox exceptions, matched body content, or the negative context hash
+ * (FR-039 — only low-cardinality codes/booleans/timestamps).
+ *
+ * `replyStatus` is accepted only so a `sent` lifecycle (app-delivery proof)
+ * can strengthen an evidence-less row to `replied: true` — a reply the app
+ * itself delivered is the strongest possible positive. This is the one place
+ * the projection and evidence cross, and it only ever STRENGTHENS (never
+ * weakens a stored positive/negative).
+ */
+export function deriveReplyEvidence(input: {
+  replyDetectedAt: Date | null | undefined;
+  replyDetectionSource: string | null | undefined;
+  replyNegativeCheckAt: Date | null | undefined;
+  isAnswered: number | null | undefined;
+  answeredFlagCheckedAt: Date | null | undefined;
+  replyStatus?: EmailReplyStatus;
+}): AiEmailReplyEvidence {
+  const hasPositive = input.replyDetectedAt != null;
+  const hasNegative = input.replyNegativeCheckAt != null;
+  const appSent = input.replyStatus === "sent";
+
+  // Sticky positive wins; app-delivery proof strengthens an evidence-less row.
+  const replied: boolean | null = hasPositive
+    ? true
+    : appSent
+      ? true
+      : hasNegative
+        ? false
+        : null;
+
+  return {
+    replied,
+    replyDetectedAt: toIsoOrNull(input.replyDetectedAt),
+    replyDetectionSource: input.replyDetectionSource ?? null,
+    replyNegativeCheckAt: toIsoOrNull(input.replyNegativeCheckAt),
+    answeredFlagObserved: (input.isAnswered ?? 0) === 1,
+    answeredFlagCheckedAt: toIsoOrNull(input.answeredFlagCheckedAt),
+  };
+}
+
+/** ISO string for a persisted Date, "" for an absent timestamp on a required
+ * field, or null when the source is genuinely absent. */
+function toIsoOrNull(d: Date | null | undefined): string | null {
+  return d ? new Date(d).toISOString() : null;
+}
 
 function toInboxSummary(s: {
   id: number;
@@ -375,6 +784,13 @@ function toMessageSummary(e: {
   isUnread: number;
   classification: EmailMessageClassification | null;
   replyStatus: EmailReplyStatus;
+  // Persisted reply evidence columns (FR-030, technical design §5.1). May be
+  // absent on legacy rows; deriveReplyEvidence tolerates null/undefined.
+  replyDetectedAt?: Date | null;
+  replyDetectionSource?: string | null;
+  replyNegativeCheckAt?: Date | null;
+  isAnswered?: number | null;
+  answeredFlagCheckedAt?: Date | null;
 }): AiEmailMessageSummary {
   return {
     id: e.id,
@@ -389,6 +805,14 @@ function toMessageSummary(e: {
     isUnread: e.isUnread === 1,
     classification: e.classification,
     replyStatus: e.replyStatus,
+    replyEvidence: deriveReplyEvidence({
+      replyDetectedAt: e.replyDetectedAt,
+      replyDetectionSource: e.replyDetectionSource,
+      replyNegativeCheckAt: e.replyNegativeCheckAt,
+      isAnswered: e.isAnswered,
+      answeredFlagCheckedAt: e.answeredFlagCheckedAt,
+      replyStatus: e.replyStatus,
+    }),
   };
 }
 

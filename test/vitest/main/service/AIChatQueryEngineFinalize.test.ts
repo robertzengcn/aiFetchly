@@ -1,0 +1,1502 @@
+// test/vitest/main/service/AIChatQueryEngineFinalize.test.ts
+//
+// Slice 2 Unit 5 — Engine acceptance + atomic finalization (GAP-S2 #5/#9,
+// FR-10/15, AC-11/15).
+//
+// The engine's handleLoopResult completed-case is the HARD finalization gate:
+// when the completion-policy flag is on and the turn was enrolled (a
+// taskDecisionSlot exists for the executionId), the engine consults the
+// controller as a fallback when the loop recorded no decision (natural
+// response_end — no consult site hit), finalizes via
+// coordinator.finalizeManual, and only THEN emits `complete`. Flag-off emits
+// `complete` without any finalization (byte-identical legacy behavior).
+//
+// These tests lock:
+//   - flag-off → complete emitted, finalizeManual never called
+//   - flag-on + loop-recorded finish decision → finalizeManual called BEFORE
+//     the complete emit, with the decision's outcome/reasonCode/evidenceIds
+//   - flag-on + no recorded decision → fallback consult runs, finalizeManual
+//     called before complete with the consult's fields
+//   - continue decision post-exit (defensive) → finalized as incomplete
+//   - finalizeManual ALREADY_FINALIZED → complete still emitted (no-op
+//     tolerance; the UI must not hang)
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import type {
+  AIChatQueryEventSink,
+  AIChatQueryLoopInput,
+  AIChatQueryLoopResult,
+} from "@/service/AIChatQueryEvents";
+import type { TaskCompletionDecision } from "@/entityTypes/aiTaskExecutionTypes";
+import type {
+  FinalizeInput,
+  FinalizeResult,
+} from "@/model/AiTaskExecution.model";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
+
+// vi.mock factories are hoisted above top-level vars, so declare the mock
+// fns inside vi.hoisted() to make them visible to the factories.
+const {
+  flagMock,
+  classifyMock,
+  startManualMock,
+  freezeContractMock,
+  finalizeManualMock,
+  flushOrder,
+  skillExecuteMock,
+} = vi.hoisted(() => ({
+  flagMock: vi.fn<() => boolean>(),
+  classifyMock: vi.fn(),
+  startManualMock: vi.fn(),
+  freezeContractMock: vi.fn(),
+  finalizeManualMock: vi.fn<
+    (input: Omit<FinalizeInput, "expectedVersion">) => Promise<FinalizeResult>
+  >(),
+  flushOrder: [] as string[],
+  skillExecuteMock: vi.fn(),
+}));
+
+// --- Feature flag mock: each test sets the flag by configuring flagMock --
+vi.mock("@/config/featureFlags", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/config/featureFlags")>();
+  return {
+    ...actual,
+    isAiTaskCompletionPolicyV1Enabled: flagMock,
+  };
+});
+
+// --- TaskRequestResolver mock: classify returns a configurable route ----
+// B12: isGoalLinkedMessage is NOT mocked — the enrollment ownership gate
+// must exercise the real linkage rule (mocking it would make ownership
+// assertions vacuous and fail-closed masking would hide linkage).
+vi.mock("@/service/aiTaskExecution/TaskRequestResolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskRequestResolver")>();
+  return {
+    ...actual,
+    TaskRequestResolver: vi.fn().mockImplementation(function () {
+      return { classify: classifyMock };
+    }),
+  };
+});
+
+// --- TaskLoopConsult mock: record flush-before-finalize ordering -------
+// B13c: the engine builds its tracked persist wrapper via
+// makeTrackedPersistBudget. Wrap it to record flush invocations so the
+// ordering test below can prove durable accounting precedes owner release.
+vi.mock("@/service/aiTaskExecution/TaskLoopConsult", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskLoopConsult")>();
+  return {
+    ...actual,
+    makeTrackedPersistBudget: (
+      persist: Parameters<typeof actual.makeTrackedPersistBudget>[0]
+    ) => {
+      const tracked = actual.makeTrackedPersistBudget(persist);
+      return {
+        persistBudget: tracked.persistBudget,
+        flushPersistedBudget: async () => {
+          flushOrder.push("flush");
+          await tracked.flushPersistedBudget();
+        },
+      };
+    },
+  };
+});
+
+vi.mock("@/config/skillsRegistry", () => ({
+  SkillRegistry: {
+    getAllToolFunctions: vi.fn().mockResolvedValue([]),
+    getSkill: vi.fn().mockReturnValue(undefined),
+  },
+}));
+// T15b: re-export the real `assertOwnership` + `readCurrentLeaseGeneration`
+// standalones (the engine imports them directly); only the class is mocked.
+vi.mock("@/service/aiTaskExecution/TaskExecutionCoordinator", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/service/aiTaskExecution/TaskExecutionCoordinator")>();
+  return {
+    ...actual,
+    TaskExecutionCoordinator: vi.fn().mockImplementation(function () {
+      return {
+        startManual: startManualMock,
+        freezeContract: freezeContractMock,
+        finalizeManual: finalizeManualMock,
+      };
+    }),
+  };
+});
+
+// --- TaskEvidenceService + makeModuleBackedStore: no-op store -----------
+vi.mock("@/service/aiTaskExecution/TaskEvidenceService", () => ({
+  TaskEvidenceService: vi.fn().mockImplementation(function () {
+    return { checkCandidate: vi.fn().mockResolvedValue({}) };
+  }),
+  makeModuleBackedStore: vi.fn().mockReturnValue({
+    getExecutionState: vi.fn().mockResolvedValue(null),
+    mergeEvidenceCas: vi.fn().mockResolvedValue(false),
+  }),
+}));
+
+// --- AiTaskExecutionModule mock (engine constructs it for the store) ----
+// T15b: getLedgerById is configurable per-test (default null = no ledger).
+const mockGetLedgerById = vi.fn().mockResolvedValue(null);
+const mockGetExecutionForModule = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AiTaskExecutionModule", () => ({
+  AiTaskExecutionModule: vi.fn().mockImplementation(function () {
+    return {
+      getExecution: mockGetExecutionForModule,
+      getLedgerById: mockGetLedgerById,
+      applyShadowDecisionCas: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
+}));
+
+// --- OutboundEmailIntentModule mock (enrollment sits after it) ----------
+vi.mock("@/modules/OutboundEmailIntentModule", () => ({
+  OutboundEmailIntentModule: vi.fn().mockImplementation(function () {
+    return {
+      findBySource: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 1 }),
+      updateDecision: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
+}));
+
+// --- AIChatV2Module mock ------------------------------------------------
+const mockSaveUserMessage = vi
+  .fn()
+  .mockResolvedValue({ messageId: "user-1" });
+const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
+const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
+const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
+const mockCreateConversationIfNeeded = vi.fn().mockReturnValue("v2-test-conv");
+const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
+
+vi.mock("@/modules/AIChatV2Module", () => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
+      saveUserMessage: mockSaveUserMessage,
+      getConversationMessages: mockGetConversationMessages,
+      getRecentMessages: mockGetRecentMessages,
+      saveAssistantMessage: mockSaveAssistantMessage,
+      saveToolCallMessage: mockSaveToolCallMessage,
+      saveToolResultMessage: mockSaveToolResultMessage,
+      createConversationIfNeeded: mockCreateConversationIfNeeded,
+      getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
+    };
+  }),
+}));
+
+vi.mock("@/modules/AIChatAttachmentModule", () => ({
+  AIChatAttachmentModule: vi.fn().mockImplementation(function () {
+    return { saveUploadedFiles: vi.fn().mockResolvedValue(undefined) };
+  }),
+}));
+
+const mockGetPlanState = vi.fn().mockResolvedValue(null);
+const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AIChatPlanModule", () => ({
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
+      getPlanState: mockGetPlanState,
+      ensurePlanForConversation: mockEnsurePlanForConversation,
+    };
+  }),
+}));
+
+const mockGetActiveGoal = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AIChatGoalModule", () => ({
+  AIChatGoalModule: vi.fn().mockImplementation(function () {
+    return { getActiveGoal: mockGetActiveGoal };
+  }),
+}));
+
+vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return { getByConversation: vi.fn().mockResolvedValue(null) };
+  }),
+}));
+vi.mock("@/modules/AIChatCompactModule", () => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return { getActiveSummary: vi.fn().mockResolvedValue(null) };
+  }),
+}));
+vi.mock("@/modules/AIChatArchiveModule", () => ({
+  AIChatArchiveModule: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+}));
+vi.mock("@/modules/AIChatCompactionModule", () => ({
+  AIChatCompactionModule: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+}));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return { listActiveForRuntime: vi.fn().mockResolvedValue([]) };
+  }),
+}));
+
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({ show: vi.fn().mockResolvedValue(false) }),
+  },
+}));
+
+vi.mock("@/config/skillsRegistry", () => ({
+  SkillRegistry: {
+    getAllToolFunctions: vi.fn().mockResolvedValue([]),
+    getSkill: vi.fn().mockReturnValue(undefined),
+  },
+}));
+// SkillExecutor mock (shared): the engine's permission-resume path
+// re-executes the approved tool through it. skillExecuteMock carries the
+// resolved tool result (G01-315 resume tests); other tests never call it.
+vi.mock("@/service/SkillExecutor", () => ({
+  SkillExecutor: { execute: skillExecuteMock },
+}));
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn().mockReturnValue("true") };
+  }),
+}));
+vi.mock("@/config/usersetting", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
+  return { ...actual };
+});
+
+const EXEC_ID = "exec-finalize-1";
+
+/** Controller decide mock used by startManualMock's created branch. */
+type DecideFn = (
+  candidate: unknown
+) => Promise<TaskCompletionDecision>;
+
+/** Binding returned by startManualMock's created branch. */
+function makeCreatedBinding(overrides?: {
+  decide?: DecideFn;
+  ledgerId?: string;
+  leaseGeneration?: number;
+}): {
+  executionId: string;
+  controller: { decide: DecideFn };
+  budget: { reserveContinuation: () => string };
+  route: "task_best_effort";
+  contract: null;
+  contractHash: null;
+  ledgerId?: string;
+  leaseGeneration?: number;
+} {
+  const binding: {
+    executionId: string;
+    controller: { decide: DecideFn };
+    budget: { reserveContinuation: () => string };
+    route: "task_best_effort";
+    contract: null;
+    contractHash: null;
+    ledgerId?: string;
+    leaseGeneration?: number;
+  } = {
+    executionId: EXEC_ID,
+    controller: { decide: overrides?.decide ?? vi.fn() },
+    budget: { reserveContinuation: vi.fn().mockReturnValue("reserved") },
+    route: "task_best_effort",
+    contract: null,
+    contractHash: null,
+  };
+  if (overrides?.ledgerId !== undefined) {
+    binding.ledgerId = overrides.ledgerId;
+  }
+  if (overrides?.leaseGeneration !== undefined) {
+    binding.leaseGeneration = overrides.leaseGeneration;
+  }
+  return binding;
+}
+
+interface EmitRecord {
+  type: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Build an engine whose loop.run() resolves with the given result, with the
+ * capturing event sink ALSO passed into submitMessage (the engine emits
+ * terminal events on the caller's sink, not an internal one). The loop mock
+ * can optionally invoke the binding's recordDecision closure (simulating a
+ * Unit-4 consult that recorded a decision before the loop returned).
+ */
+function createEngineReturning(
+  result: AIChatQueryLoopResult,
+  onLoopInput?: (input: AIChatQueryLoopInput) => void
+): {
+  engine: AIChatQueryEngine;
+  emits: EmitRecord[];
+  eventSink: AIChatQueryEventSink;
+  emitSpy: ReturnType<typeof vi.fn>;
+} {
+  const emits: EmitRecord[] = [];
+  const emitSpy = vi.fn((event: { type: string }) => {
+    emits.push(event as EmitRecord);
+  });
+  const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+  const fakeLoop = {
+    run: vi.fn(async (input: AIChatQueryLoopInput) => {
+      onLoopInput?.(input);
+      return result;
+    }),
+  } as unknown as AIChatQueryLoop;
+  return {
+    engine: new AIChatQueryEngine(fakeLoop),
+    emits,
+    eventSink,
+    emitSpy,
+  };
+}
+
+/** Minimal request the engine accepts for a non-plan interactive turn. */
+function makeRequest(message = "Extract contacts from the uploaded CSV."): {
+  conversationId?: string;
+  message: string;
+  submissionId?: string;
+  model: string;
+} {
+  return { conversationId: "v2-test-conv", message, model: "gpt-4o" };
+}
+
+/** Completed loop result with real content (the natural response_end case). */
+function makeCompletedResult(fullContent = "Extracted 12 contacts."): {
+  type: "completed";
+  conversationId: string;
+  assistantMessageId: string;
+  fullContent: string;
+  finishReason: string;
+} {
+  return {
+    type: "completed",
+    conversationId: "v2-test-conv",
+    assistantMessageId: "a1",
+    fullContent,
+    finishReason: "stop",
+  };
+}
+
+/** Enroll the turn: flag on + task route + startManual resolves created. */
+function enrollCreated(decide?: DecideFn): void {
+  flagMock.mockReturnValue(true);
+  classifyMock.mockReturnValue("task_best_effort");
+  startManualMock.mockResolvedValue({
+    status: "created",
+    binding: makeCreatedBinding({ decide }),
+  });
+}
+
+describe("AIChatQueryEngine.handleLoopResult — completion policy finalize gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    flagMock.mockReturnValue(false);
+    classifyMock.mockReturnValue("response_only");
+    startManualMock.mockReset();
+    freezeContractMock.mockReset();
+    finalizeManualMock.mockReset();
+    finalizeManualMock.mockResolvedValue({ ok: true });
+    mockGetLedgerById.mockReset();
+    mockGetLedgerById.mockResolvedValue(null);
+    mockGetExecutionForModule.mockReset();
+    mockGetExecutionForModule.mockResolvedValue(null);
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
+    skillExecuteMock.mockReset();
+    skillExecuteMock.mockResolvedValue({
+      success: true,
+      execution_time_ms: 5,
+      result: { output: "approved tool output" },
+    });
+    HookRegistry.unregisterSource("plugin:test-hooks");
+  });
+
+  it("flag-off: emits complete without calling finalizeManual", async () => {
+    flagMock.mockReturnValue(false);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).not.toHaveBeenCalled();
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+    expect(complete!.fullContent).toBe("Extracted 12 contacts.");
+  });
+
+  it("flag-on + loop-recorded finish decision: finalizeManual called before complete emit", async () => {
+    const finishDecision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: ["ev-1", "ev-2"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: ["verify_email_column"],
+    };
+    enrollCreated();
+    // Simulate Unit 4: the loop consulted at a terminal-stop site and the
+    // binding's recordDecision closure persisted the decision BEFORE the
+    // loop returned.
+    const { engine, emits, eventSink, emitSpy } = createEngineReturning(
+      makeCompletedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(finishDecision);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    // The gate must finalize with the recorded decision's fields.
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const call = finalizeManualMock.mock.calls[0][0];
+    expect(call).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: ["ev-1", "ev-2"],
+      remainingWork: ["verify_email_column"],
+    });
+    // Finalization must precede the complete emit (the gate ordering).
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    const completeEmitIdx = emitSpy.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "complete"
+    );
+    expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
+      emitSpy.mock.invocationCallOrder[completeEmitIdx]
+    );
+  });
+
+  it("B13c: flushPersistedBudget runs before finalizeManual (durable accounting precedes owner release)", async () => {
+    flushOrder.length = 0;
+    finalizeManualMock.mockImplementation(async () => {
+      flushOrder.push("finalize");
+      return { ok: true };
+    });
+    const finishDecision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    };
+    enrollCreated();
+    const { engine, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(finishDecision);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // The engine must await the tracked persists BEFORE releasing the owner.
+    expect(flushOrder).toEqual(["flush", "finalize"]);
+  });
+
+  it("flag-on + no recorded decision: fallback consult runs and finalizes before complete", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-9"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink, emitSpy } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    // The loop recorded no decision (natural response_end — no consult site
+    // hit). The gate must fall back to a consult.
+    expect(consultDecide).toHaveBeenCalledTimes(1);
+    const candidate = consultDecide.mock.calls[0][0] as {
+      content: string;
+      provenance: string;
+      streamTerminalSeen: boolean;
+      boundary: string;
+    };
+    expect(candidate.content).toBe("Extracted 12 contacts.");
+    expect(candidate.provenance).toBe("provider");
+    expect(candidate.streamTerminalSeen).toBe(true);
+    expect(candidate.boundary).toBe("response_end");
+    // Finalized with the consult's fields.
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-9"],
+    });
+    // Finalization must precede the complete emit.
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    const completeEmitIdx = emitSpy.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "complete"
+    );
+    expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
+      emitSpy.mock.invocationCallOrder[completeEmitIdx]
+    );
+    // G01-313: the fallback consult badges the actual verifying phase for
+    // this execution before finalization (terminal follows).
+    const states = emits
+      .filter((e) => (e as { type: string }).type === "task_execution_state")
+      .map((e) => e as unknown as { executionId: string; status: string });
+    expect(
+      states.some((s) => s.executionId === EXEC_ID && s.status === "verifying")
+    ).toBe(true);
+  });
+
+  it("flag-on + continue decision post-exit (defensive): finalized as incomplete", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "continue",
+      continuationId: "cont:x",
+      prompt: "continue",
+      unmetCriterionIds: ["c1"],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+    });
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
+
+  it("flag-on + finalizeManual ALREADY_FINALIZED: complete still emitted (no-op tolerance)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: [],
+      summary: "done",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      alreadyFinalized: true,
+      reasonCode: "ALREADY_FINALIZED",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
+
+  it("G01-313: pause_for_permission badges waiting_permission; approval resume restores active", async () => {    // The enrolled turn parks on a permission gate mid-stream: the badge
+    // must show the actual owned waiting phase (not a stale active), and
+    // return to active when approval resumes the turn.
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    let calls = 0;
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        calls += 1;
+        if (calls > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
+            toolArguments: {},
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    const states = () =>
+      emits
+        .filter((e) => (e as { type: string }).type === "task_execution_state")
+        .map((e) => e as unknown as { executionId: string; status: string });
+    const waitingIdx = states().findIndex(
+      (s) => s.executionId === EXEC_ID && s.status === "waiting_permission"
+    );
+    expect(waitingIdx).toBeGreaterThanOrEqual(0);
+
+    await engine.resumeToolAfterPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+    const after = states();
+    const activeIdx = after.findIndex(
+      (s, i) => i > waitingIdx && s.executionId === EXEC_ID && s.status === "active"
+    );
+    // The badge returns to the owned running phase after the wait.
+    expect(activeIdx).toBeGreaterThan(waitingIdx);
+  });
+
+  it("G01-315: approval resume stays in the same execution (no re-enrollment, frozen scope)", async () => {
+    // Approval/denial/answer bind to the pending turn by (conversation,
+    // tool/question id) and resume under the SAME execution binding — the
+    // request carries only lookup keys, so approved scope (tool + args)
+    // cannot be re-authored, and resume never mints a new execution.
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    const loopInputs: AIChatQueryLoopInput[] = [];
+    let calls = 0;
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        loopInputs.push(input);
+        calls += 1;
+        if (calls > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
+            toolArguments: { url: "https://example.com" },
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    await engine.resumeToolAfterPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+
+    // The approved tool re-executes and the turn re-enters the loop in the
+    // background (fire-and-forget) — wait for the re-entry.
+    await vi.waitFor(() => {
+      expect(loopInputs.length).toBe(2);
+    });
+    // The resumed turn re-enters the loop under the SAME execution binding
+    // (Stop/finalization stay keyed to it) and never re-enrolls.
+    expect(loopInputs[1].taskExecutionBinding?.executionId).toBe(EXEC_ID);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    // The re-executed tool is the pending turn's frozen scope, not
+    // request-supplied content (the request carries no args to smuggle).
+    expect(skillExecuteMock).toHaveBeenCalledTimes(1);
+    const [toolName, toolArgs] = skillExecuteMock.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(toolName).toBe("scrape");
+    expect(toolArgs).toMatchObject({ url: "https://example.com" });
+  });
+
+  it("G01-315: denial persists a denied tool result and resumes under the same execution", async () => {
+    enrollCreated();
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    const loopInputs: AIChatQueryLoopInput[] = [];
+    const fakeLoop = {
+      run: vi.fn(async (input: AIChatQueryLoopInput) => {
+        loopInputs.push(input);
+        if (loopInputs.length > 1) {
+          return makeCompletedResult();
+        }
+        return {
+          type: "paused_for_permission" as const,
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [],
+            abortController: input.abortController,
+            request: input.request,
+            openAITools: input.openAITools,
+            nextRound: 1,
+            toolCallId: "call-1",
+            toolName: "scrape",
+            taskExecutionBinding: input.taskExecutionBinding,
+            toolArguments: {},
+            eventSink: input.eventSink,
+          },
+        };
+      }),
+    } as unknown as AIChatQueryLoop;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    const denied = await engine.denyToolPermission({
+      conversationId: "v2-test-conv",
+      toolId: "call-1",
+    });
+    expect(denied.ok).toBe(true);
+    // The denial is durable: a denied tool_result is emitted through the
+    // persisting sink (transcript row) instead of vanishing in memory.
+    const denials = emits
+      .filter(
+        (e) =>
+          (e as { type: string }).type === "tool_result" &&
+          (e as { toolCallId?: string }).toolCallId === "call-1"
+      )
+      .map(
+        (e) =>
+          e as unknown as { toolResult: { success: boolean; error: string } }
+      );
+    expect(denials.length).toBeGreaterThanOrEqual(1);
+    expect(denials[0].toolResult.success).toBe(false);
+    // The denied turn still re-enters the loop (background) under the same
+    // execution (no new row).
+    await vi.waitFor(() => {
+      expect(loopInputs.length).toBe(2);
+    });
+    // The denied turn still resumes under the same execution (no new row).
+    expect(loopInputs.length).toBe(2);
+    expect(loopInputs[1].taskExecutionBinding?.executionId).toBe(EXEC_ID);
+    expect(startManualMock).toHaveBeenCalledTimes(1);
+    // Nothing re-executed on denial.
+    expect(skillExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("B06a: finalize failure on verified path emits error, never verified success (FR-12, AC-15)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      reasonCode: "STATE_CONFLICT",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // No success delivery: no complete carries verified_complete.
+    const verifiedComplete = emits.find(
+      (e) => e.type === "complete" && e.taskOutcome === "verified_complete"
+    );
+    expect(verifiedComplete).toBeUndefined();
+    // Visible recoverable failure instead.
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/FINALIZE|STATE_CONFLICT/);
+    expect(errorEvent!.taskExecutionId).toBe(EXEC_ID);
+    // No terminal verified state.
+    const verifiedTerminal = emits.find(
+      (e) =>
+        e.type === "task_execution_state" && e.outcome === "verified_complete"
+    );
+    expect(verifiedTerminal).toBeUndefined();
+    // Recovery control retained: binding NOT deleted.
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("B06b: finalize throw on verified path emits error, never verified success (FR-12, AC-15)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockRejectedValue(new Error("db locked"));
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const verifiedComplete = emits.find(
+      (e) => e.type === "complete" && e.taskOutcome === "verified_complete"
+    );
+    expect(verifiedComplete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/FINALIZE_THREW/);
+    const verifiedTerminal = emits.find(
+      (e) =>
+        e.type === "task_execution_state" && e.outcome === "verified_complete"
+    );
+    expect(verifiedTerminal).toBeUndefined();
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("B06c: ALREADY_FINALIZED publishes the stored winner, not the intended outcome (FR-12, NFR-10)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "Extracted 12 contacts.",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      alreadyFinalized: true,
+      reasonCode: "ALREADY_FINALIZED",
+    });
+    // Stop already finalized cancelled: stored winner is cancelled.
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_id: EXEC_ID,
+      finalized: true,
+      task_outcome: "cancelled",
+      outcome_reason_code: "USER_CANCELLED",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    // Stored winner wins: cancelled, never intended verified_complete.
+    expect(completeEvent!.taskOutcome).toBe("cancelled");
+    expect(completeEvent!.taskReasonCode).toBe("USER_CANCELLED");
+    const terminal = emits.find(
+      (e) => e.type === "task_execution_state" && e.status === "terminal"
+    );
+    expect(terminal).toBeDefined();
+    expect(terminal!.outcome).toBe("cancelled");
+    expect(terminal!.reasonCode).toBe("USER_CANCELLED");
+  });
+
+  // T16 — Freeze accepted policy across flag rollback (NFR-12, AC-12/32).
+  // The flag value is FROZEN at enrollment: a turn enrolled while the flag
+  // was on stays accepted for finalization even if the flag is turned off
+  // midstream. The runtime flag controls only NEW enrollment; accepted
+  // in-flight handling never falls back to the legacy blind-complete path.
+  it("T16: flag-off midstream (after flag-on enrollment) still finalizes via the policy gate", async () => {
+    const finishDecision: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: [],
+      summary: "partial",
+      remainingWork: ["verify_email_column"],
+    };
+    enrollCreated();
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(finishDecision);
+        // Flip the live flag OFF midstream — the turn was already enrolled
+        // (policyAccepted frozen true on the binding). The gate must still
+        // finalize; it must NOT fall back to the legacy blind complete→
+        // success path.
+        flagMock.mockReturnValue(false);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+    });
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
+
+  it("T16: flag-off midstream + no loop-recorded decision → fallback consult still runs (frozen accepted)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "RESPONSE_ENDED",
+      evidenceIds: [],
+      summary: "ended",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult(),
+      () => {
+        // No recordDecision call — the loop ended naturally. Flip the flag
+        // off midstream. The gate's fallback consult must still run because
+        // the binding carries policyAccepted=true from enrollment.
+        flagMock.mockReturnValue(false);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(consultDecide).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+    });
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+  });
+
+  // ------ T12 — durable finalization as terminal-delivery gate ------
+  // (FR-05/10/12/14/24, NFR-10/11, AC-15/24/25/30/32)
+  // The completed-case gate above locks the happy path. The cases below
+  // lock the FAILURE / CANCEL / THROW paths: an enrolled execution whose
+  // loop ends failed/cancelled (or throws) must still leave an honest
+  // durable record BEFORE the terminal emit, and the terminal event must
+  // carry the outcome + executionId + reasonCode so the renderer badges
+  // honestly and dedups repeated delivery.
+  //
+  // Per audit T12: "assistant/execution/ledger save failure produces no
+  // success publication; loop failure finalizes failed/interrupted;
+  // Stop/replacement write failures are recoverable; late success cannot
+  // overwrite cancellation/new task; repeated delivery has stable
+  // identity and consumer dedup."
+
+  /** Cancelled loop result — the loop resolved `cancelled` (window close,
+   * controller abort) rather than the user hitting Stop. The enrolled
+   * execution still needs a `cancelled`/`USER_CANCELLED` row. */
+  function makeCancelledResult(
+    partialContent = "partial work"
+  ): {
+    type: "cancelled";
+    conversationId: string;
+    assistantMessageId: string;
+    partialContent: string;
+  } {
+    return {
+      type: "cancelled",
+      conversationId: "v2-test-conv",
+      assistantMessageId: "a1",
+      partialContent,
+    };
+  }
+
+  /** Failed loop result — the loop resolved `failed` (model error). The
+   * enrolled execution needs a `failed`/`MODEL_FAILURE` row. */
+  function makeFailedResult(
+    partialContent = "partial before failure"
+  ): {
+    type: "failed";
+    conversationId: string;
+    assistantMessageId: string;
+    error: unknown;
+    partialContent: string;
+  } {
+    return {
+      type: "failed",
+      conversationId: "v2-test-conv",
+      assistantMessageId: "a1",
+      error: new Error("model returned 500"),
+      partialContent,
+    };
+  }
+
+  it("T12: failed loop finalizes failed/MODEL_FAILURE before error emit (FR-10/12/14, AC-15/24/25)", async () => {
+    enrollCreated();
+    const { engine, emits, eventSink, emitSpy } = createEngineReturning(
+      makeFailedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    // The failed gate must finalize failed/MODEL_FAILURE on the bound exec.
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "failed",
+      reasonCode: "MODEL_FAILURE",
+    });
+    // Finalization must precede the error emit (the gate ordering).
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    const errorEmitIdx = emitSpy.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "error"
+    );
+    expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
+      emitSpy.mock.invocationCallOrder[errorEmitIdx]
+    );
+    // The error event carries the outcome + executionId + reasonCode so the
+    // renderer badges honestly and dedups repeated delivery (FR-14/24).
+    expect(errorEvent).toMatchObject({
+      taskOutcome: "failed",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "MODEL_FAILURE",
+    });
+  });
+
+  it("T12: cancelled loop finalizes cancelled/USER_CANCELLED before cancelled emit (FR-10/12/14, AC-24/25)", async () => {
+    enrollCreated();
+    const { engine, emits, eventSink, emitSpy } = createEngineReturning(
+      makeCancelledResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "cancelled",
+      reasonCode: "USER_CANCELLED",
+    });
+    const cancelledEvent = emits.find((e) => e.type === "cancelled");
+    expect(cancelledEvent).toBeDefined();
+    const cancelledEmitIdx = emitSpy.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "cancelled"
+    );
+    expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
+      emitSpy.mock.invocationCallOrder[cancelledEmitIdx]
+    );
+    expect(cancelledEvent).toMatchObject({
+      taskOutcome: "cancelled",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "USER_CANCELLED",
+    });
+  });
+
+  it("T12: loop throws → handleFailure finalizes failed/MODEL_FAILURE before error emit (FR-10/12/14, AC-15/24/25)", async () => {
+    enrollCreated();
+    // Loop throws — handleFailure is the catch path, not handleLoopResult.
+    const thrown = new Error("stream exploded");
+    const fakeLoop = {
+      run: vi.fn(async () => {
+        throw thrown;
+      }),
+    } as unknown as AIChatQueryLoop;
+    const emits: EmitRecord[] = [];
+    const emitSpy = vi.fn((event: { type: string }) => {
+      emits.push(event as EmitRecord);
+    });
+    const eventSink = { emit: emitSpy } as unknown as AIChatQueryEventSink;
+    const engine = new AIChatQueryEngine(fakeLoop);
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    // The catch path must still finalize failed/MODEL_FAILURE so the row
+    // does not stay `running` after a throw (AC-24/25 restart repair).
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "failed",
+      reasonCode: "MODEL_FAILURE",
+    });
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    const errorEmitIdx = emitSpy.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "error"
+    );
+    expect(finalizeManualMock.mock.invocationCallOrder[0]).toBeLessThan(
+      emitSpy.mock.invocationCallOrder[errorEmitIdx]
+    );
+    expect(errorEvent).toMatchObject({
+      taskOutcome: "failed",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "MODEL_FAILURE",
+    });
+  });
+
+  it("T12: complete event carries taskOutcome for verified_complete (FR-14/24, AC-30/32)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "verified_complete",
+      reasonCode: "CRITERIA_SATISFIED",
+      evidenceIds: ["ev-1"],
+      summary: "verified",
+      remainingWork: [],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    // verified_complete outcome carried into terminal delivery.
+    expect(completeEvent).toMatchObject({
+      taskOutcome: "verified_complete",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "CRITERIA_SATISFIED",
+    });
+  });
+
+  it("T12: complete event carries taskOutcome for incomplete (FR-14/24, AC-30/32)", async () => {
+    const consultDecide = vi.fn<DecideFn>().mockResolvedValue({
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "CONTINUATION_LIMIT",
+      evidenceIds: [],
+      summary: "ran out of budget",
+      remainingWork: ["verify_email_column"],
+    });
+    enrollCreated(consultDecide);
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("partial extraction")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    const completeEvent = emits.find((e) => e.type === "complete");
+    expect(completeEvent).toBeDefined();
+    expect(completeEvent).toMatchObject({
+      taskOutcome: "incomplete",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "CONTINUATION_LIMIT",
+    });
+  });
+
+  it("T12: ALREADY_FINALIZED on failed path is no-op tolerance (Stop already cancelled)", async () => {
+    enrollCreated();
+    // Stop already cancelled the row; the failed gate hits ALREADY_FINALIZED
+    // and must treat it as success (no double-finalize, no error hang).
+    finalizeManualMock.mockResolvedValue({
+      ok: false,
+      alreadyFinalized: true,
+      reasonCode: "ALREADY_FINALIZED",
+    });
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeFailedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // The error event still emits — the loop failed — but with the
+    // ALREADY_FINALIZED reasonCode carried (no FINALIZE_THREW).
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent).toMatchObject({
+      taskOutcome: "failed",
+      taskExecutionId: EXEC_ID,
+    });
+  });
+
+  it("T12: recorded finish decision honored on failed path (consult site decided finish before throw)", async () => {
+    // The loop consulted at a terminal-stop site and recorded a finish
+    // decision, then the loop subsequently failed. The failed gate must
+    // honor the recorded finish outcome, not overwrite it with
+    // failed/MODEL_FAILURE (FR-10/14 — the controller's decision wins).
+    const recordedFinish: TaskCompletionDecision = {
+      type: "finish",
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      evidenceIds: ["ev-1"],
+      summary: "no progress detected",
+      remainingWork: ["retry_extraction"],
+    };
+    enrollCreated();
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeFailedResult(),
+      (input) => {
+        input.taskExecutionBinding?.recordDecision?.(recordedFinish);
+      }
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // The recorded finish outcome/reason wins over the failed/MODEL_FAILURE
+    // default.
+    expect(finalizeManualMock.mock.calls[0][0]).toMatchObject({
+      executionId: EXEC_ID,
+      outcome: "incomplete",
+      reasonCode: "NO_PROGRESS",
+      remainingWork: ["retry_extraction"],
+    });
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent).toMatchObject({
+      taskOutcome: "incomplete",
+      taskReasonCode: "NO_PROGRESS",
+    });
+  });
+
+  it("T12: finalize throws on failed path → error event still emits with FINALIZE_THREW reason (recoverable)", async () => {
+    enrollCreated();
+    finalizeManualMock.mockRejectedValue(new Error("db connection lost"));
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeFailedResult()
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    // The throw is caught inside the helper; the error event still emits
+    // with FINALIZE_THREW so the renderer knows the row is suspect and
+    // restart-time repair is required (AC-24/25).
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent).toMatchObject({
+      taskOutcome: "failed",
+      taskExecutionId: EXEC_ID,
+      taskReasonCode: "FINALIZE_THREW",
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // T15b — Single-owner lease guard at the finalization gate (FR-20,
+  // NFR-01/07, AC-22/31). A Continue successor has bumped
+  // `owner_generation` on the shared lineage ledger; the parent binding
+  // still carries the OLD frozen `leaseGeneration`. The finalize gate must
+  // skip `finalizeManual` (the model releases the ledger unconditionally,
+  // so a stale ancestor finalizing would free the successor's lease).
+  // B06: a stale lease is an explicit durability failure — NO success
+  // delivery (no `complete` with intended outcome, no terminal state, no
+  // notify). An explicit recoverable error emits and the binding is
+  // retained for recovery control; the successor owns the durable write.
+  // ------------------------------------------------------------------------
+  it("T15b: stale lease (successor bumped owner_generation) → finalizeManual skipped, error emitted, no success delivery (B06)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2, // parent's frozen generation
+      }),
+    });
+    // Ledger is now at generation 3 (successor claimed it).
+    mockGetLedgerById.mockResolvedValue({ ownerGeneration: 3 });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("stale ancestor finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    // The guard rejected → finalizeManual must NOT have been called (no
+    // unconditional ledger release on a stale ancestor).
+    expect(finalizeManualMock).not.toHaveBeenCalled();
+    // B06: no success delivery — no complete, no terminal verified state.
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/STALE_LEASE/);
+    expect(errorEvent!.taskExecutionId).toBe(EXEC_ID);
+    // Recovery control retained.
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("T15b: matching lease (no successor) → finalizeManual called (normal path)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2,
+      }),
+    });
+    // Ledger is still at generation 2 — this binding is the current owner.
+    mockGetLedgerById.mockResolvedValue({ ownerGeneration: 2 });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("fresh finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+  });
+
+  it("T15b: missing ledger (null) → fail-closed skip, error emitted, no success delivery (B06)", async () => {
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding({
+        ledgerId: "led-1",
+        leaseGeneration: 2,
+      }),
+    });
+    // Ledger vanished — readCurrentLeaseGeneration returns null →
+    // expected -1 → STATE_CONFLICT → skip finalize.
+    mockGetLedgerById.mockResolvedValue(null);
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("missing ledger finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).not.toHaveBeenCalled();
+    // B06: no success delivery on a fail-closed skip.
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeUndefined();
+    const errorEvent = emits.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent!.errorMessage)).toMatch(/STALE_LEASE/);
+    const bindings = (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+      .taskExecutionBindings;
+    expect(bindings.has("v2-test-conv")).toBe(true);
+  });
+
+  it("T15b: binding with no lease (legacy shape) → guard skipped, finalize proceeds", async () => {
+    // A binding carrying no ledgerId/leaseGeneration (the legacy/test
+    // shape, e.g. makeCreatedBinding with no lease overrides) must skip
+    // the guard entirely — nothing to check, no false rejection.
+    flagMock.mockReturnValue(true);
+    classifyMock.mockReturnValue("task_best_effort");
+    startManualMock.mockResolvedValue({
+      status: "created",
+      binding: makeCreatedBinding(), // no ledgerId / leaseGeneration
+    });
+    mockGetExecutionForModule.mockResolvedValue({
+      execution_state_version: 1,
+    });
+
+    const { engine, emits, eventSink } = createEngineReturning(
+      makeCompletedResult("legacy binding finalize")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    const complete = emits.find((e) => e.type === "complete");
+    expect(complete).toBeDefined();
+  });
+
+  it("clears the task decision slot when the turn finalizes (no slot leak)", async () => {
+    // The decision slot is keyed by executionId and must live exactly as
+    // long as the conversation binding. The complete gate deletes the
+    // binding but historically leaked the slot, retaining the captured
+    // TaskCompletionDecision forever on the long-lived engine singleton.
+    enrollCreated();
+    const { engine, eventSink } = createEngineReturning(
+      makeCompletedResult("Extracted 12 contacts.")
+    );
+    await engine.submitMessage({
+      request: makeRequest(),
+      eventSink,
+    } as never);
+    // Terminal complete emitted and finalized.
+    expect(finalizeManualMock).toHaveBeenCalledTimes(1);
+    expect(
+      (engine as unknown as { taskExecutionBindings: Map<string, unknown> })
+        .taskExecutionBindings.has("v2-test-conv")
+    ).toBe(false);
+    const slots = (
+      engine as unknown as { taskDecisionSlots: Map<string, unknown> }
+    ).taskDecisionSlots;
+    expect(slots.has(EXEC_ID)).toBe(false);
+  });
+});

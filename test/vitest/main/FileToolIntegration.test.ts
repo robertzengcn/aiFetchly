@@ -32,9 +32,12 @@ vi.mock("@/modules/WorkspaceModule", () => {
         : null
     );
   return {
-    WorkspaceModule: vi.fn().mockImplementation(() => ({
-      getActiveWorkspace,
-    })),
+    // Class form: the file-tool scope resolver constructs the module with
+    // `new`; an arrow mockImplementation is not a valid constructor target
+    // under the installed vitest.
+    WorkspaceModule: class {
+      getActiveWorkspace = getActiveWorkspace;
+    },
   };
 });
 

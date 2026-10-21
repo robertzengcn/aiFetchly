@@ -112,6 +112,26 @@ export function normalizeOpenAIModelsResponse(
       data.unshift(fallback);
     }
   }
+  // G01: the operator-verified context size applies to the OPERATOR'S
+  // default model when the server omits its window — this is the verified
+  // configured limit the catalog reports as confirmed (R04). Other listed
+  // models keep exactly what the server reported (unknown stays unknown);
+  // attributing one model's verified window to different models would
+  // fabricate provenance.
+  if (
+    typeof options.contextSize === "number" &&
+    options.contextSize > 0 &&
+    options.defaultModel &&
+    options.defaultModel.length > 0
+  ) {
+    // Normalized entries carry the canonical context_size (variants are
+    // canonicalized in toModel), so its absence means the server reported
+    // no window at all.
+    const configured = data.find((m) => m.id === options.defaultModel);
+    if (configured && typeof configured.context_size !== "number") {
+      configured.context_size = options.contextSize;
+    }
+  }
 
   const result: OpenAIModelsResponse = {
     object: "list",

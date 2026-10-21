@@ -61,7 +61,6 @@ vi.mock("@/views/api/aiChatV2", () => ({
   requestChatV2PlanChanges: vi.fn(),
   answerChatV2Question: vi.fn(),
   clearChatV2Conversation: vi.fn(),
-  compactChatV2Conversation: vi.fn(),
   // Pending-message queue store contract (message-queue §7)
   listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
@@ -186,7 +185,11 @@ const ComposerStub = defineComponent({
 const HeaderStub = defineComponent({
   name: "AiChatConversationHeader",
   props: ["title", "hasConversation", "inspectorOpen"],
-  template: '<header data-testid="conversation-header-stub"><slot /></header>',
+  emits: ["compact"],
+  template:
+    '<header data-testid="conversation-header-stub">' +
+    '<button data-testid="header-compact-stub" @click="$emit(\'compact\')" />' +
+    "<slot /></header>",
 });
 
 function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
@@ -311,6 +314,26 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       wrapper.find('[data-testid="workspace-sidebar-toggle"]').exists()
     ).toBe(false);
+  });
+
+  // Repair pin: the header "Compact conversation" action must route through
+  // the bounded incremental coordinator (compaction-start, §13.1) — the
+  // legacy ai-chat-v2:compact-conversation channel had no main-process
+  // handler, so the action silently no-oped.
+  it("routes the header compact action to the compaction coordinator", async () => {
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    await wrapper
+      .get('[data-testid="header-compact-stub"]')
+      .trigger("click");
+    await flushPromises();
+
+    const { startCompaction } = await import("@/views/api/aiChatV2");
+    expect(vi.mocked(startCompaction)).toHaveBeenCalledWith("conv-1");
+    expect(vi.mocked(startCompaction)).toHaveBeenCalledTimes(1);
   });
 
   it("places the workspace strip above the composer and below the transcript", async () => {

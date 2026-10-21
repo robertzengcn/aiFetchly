@@ -71,6 +71,7 @@ import { ToolResultModule } from "@/modules/ToolResultModule";
 import {
   isHistoryUiEnabled,
   isNewCompactionEnabled,
+  isAiTaskCompletionPolicyV1Enabled,
 } from "@/config/featureFlags";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
@@ -110,6 +111,9 @@ import {
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
   AI_CHAT_V2_COMPACTION_START,
+  AI_CHAT_V2_TASK_CONTINUE,
+  AI_CHAT_V2_TASK_RETRY,
+  AI_CHAT_V2_TASK_STATE_GET,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -156,6 +160,16 @@ import type {
   ArchiveReadPage,
   RecoverableHistoryErrorCode,
 } from "@/entityTypes/aiChatArchiveTypes";
+import { z } from "zod/v4";
+import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
+import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
+import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
+import {
+  taskExecutionRouteSchema,
+  taskCompletionContractSchema,
+  type TaskCompletionContract,
+} from "@/entityTypes/aiTaskExecutionTypes";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -428,6 +442,12 @@ function getCompactionCoordinator(): AIChatCompactionCoordinator {
   if (!compactionCoordinator) {
     compactionCoordinator = new AIChatCompactionCoordinator({
       summarize: providerSummarize,
+      // Wire the live model catalog resolver so section capacity allocation
+      // (§8.3) sizes against the real model window, matching the dispatch
+      // preflight. Without this, allocateSectionCapacity falls back to
+      // UNKNOWN_MODEL_FALLBACK_LIMITS (8,192/1,024) and small-context models
+      // get oversized sections rejected by the dispatch preflight.
+      modelLimitResolver: (model) => getCompactModelCatalog().resolveLimits(model),
     });
   }
   return compactionCoordinator;
@@ -2347,6 +2367,320 @@ async function handleCompactionCancel(
   }
 }
 
+// -------------------------------------------------------------------------
+// Unit 7 (PRD FR-21/22, AC-27/28): continueTask / retryTask IPC handlers.
+//
+// The renderer sends ONLY opaque tokens (parentExecutionId + a fresh
+// submissionId) — never ledger ids, contracts, or routes. The main process
+// loads the parent row and derives everything trusted itself: the lineage
+// ledger id (Continue shares it, Retry mints a new one), the route, and the
+// re-attached contract snapshot.
+//
+// Contract handling: the successor reuses the parent's stored
+// `contract_snapshot_json` (already Zod-validated when the parent enrolled).
+// Re-freezing from a bare renderer `message` would either throw (verified
+// mode with zero criteria — `TaskCompletionContractService.freeze` blocks
+// that at FR-04) or mint a different hash, defeating Continue's "unchanged
+// contract" comparability (§5.1). When the renderer's message differs from
+// the parent's objective, Retry is the correct flow — the renderer opts in
+// by calling retryTask, not continueTask.
+//
+// AI-feature IPC rule: check AI enable FIRST (before parsing request data).
+// Flag rule: the completion policy is DEFAULT OFF — when off, these handlers
+// deny with a clear message (no work, no rows).
+// -------------------------------------------------------------------------
+
+/** Zod schema for the renderer's continue/retry payload (boundary validation). */
+const taskSuccessorRequestSchema = z.object({
+  parentExecutionId: z.string().min(1).max(200),
+  submissionId: aiChatHistorySubmissionIdSchema,
+  message: z.string().max(20000).optional(),
+});
+
+type TaskSuccessorRequest = z.infer<typeof taskSuccessorRequestSchema>;
+
+/**
+ * Parse + validate the successor request payload. Returns null on any
+ * malformed field (the caller denies with a clear message).
+ */
+function parseTaskSuccessorRequest(data: string): TaskSuccessorRequest | null {
+  try {
+    const parsed: unknown = JSON.parse(data);
+    const result = taskSuccessorRequestSchema.safeParse(parsed);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the parent's frozen contract snapshot (Zod-validated on load). null
+ * when the parent ran without a contract (best_effort routes). Throws on a
+ * corrupt snapshot so the catch-all in the handler surfaces a clear error
+ * rather than silently enrolling a successor with no contract.
+ */
+function loadParentContract(parent: AiTaskExecutionEntity): TaskCompletionContract | null {
+  if (!parent.contract_snapshot_json) return null;
+  const parsed: unknown = JSON.parse(parent.contract_snapshot_json);
+  return taskCompletionContractSchema.parse(parsed);
+}
+
+/**
+ * Load the parent execution row. Returns null when the parent is unknown
+ * (the caller denies with "Unknown parentExecutionId").
+ */
+async function loadParentExecution(
+  parentExecutionId: string
+): Promise<AiTaskExecutionEntity | null> {
+  const module = new AiTaskExecutionModule();
+  return module.getExecution(parentExecutionId);
+}
+
+/**
+ * T13 (PRD FR-13/14, AC-16/24/25/27/32): read the latest execution row for a
+ * conversation so history reload can restore the badge honestly. Mirrors
+ * `handleGoalGet`: AI-gate first, parse payload, delegate to the module, never
+ * touches a repository. Returns the row projection the renderer needs to badge
+ * (or null for response-only answers that never enrolled — no badge shown).
+ */
+async function handleTaskStateGet(
+  data: unknown
+): Promise<CommonMessage<unknown>> {
+  // AI-feature IPC rule: check AI enable FIRST.
+  if (!(await ensureHostedAiEnabled())) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  try {
+    const p = parseObjectPayload(data);
+    if (!p) return denied("Invalid request payload");
+    const conversationId =
+      typeof p.conversationId === "string" ? p.conversationId : "";
+    if (!conversationId) return denied("conversationId is required");
+    const module = new AiTaskExecutionModule();
+    // G01-314: the enriched reload-restore projection (badge + progress +
+    // remaining limits + safe actions) comes from the module — the handler
+    // stays a thin AI-gate + parse + delegate shell. Null when the
+    // conversation never enrolled (response-only answers show no badge).
+    const projection = await module.getExecutionStateProjection(conversationId);
+    if (!projection) return ok(null);
+    return ok({
+      executionId: projection.executionId,
+      conversationId: projection.conversationId,
+      status: projection.status,
+      reasonCode: projection.reasonCode,
+      outcome: projection.outcome,
+      // G02: durable delivery identity for reload reconstruction dedup.
+      finalEventIdentity: projection.finalEventIdentity,
+      progress: projection.progress,
+      remainingLimits: projection.remainingLimits,
+      safeActions: [...projection.safeActions],
+    });
+  } catch (err) {
+    // Malformed JSON payload or module failure — never leak the raw error
+    // to the renderer, never throw out of the IPC handler (the renderer
+    // would see a hung invoke). userSafeError sanitizes internals.
+    return denied(userSafeError(err));
+  }
+}
+
+/**
+ * Shared successor handler body: gates, parent load, coordinator call.
+ * `mode` selects Continue (shared lineage ledger) vs Retry (new ledger).
+ */
+async function handleTaskSuccessor(
+  data: string,
+  mode: "continue" | "retry",
+  event: IpcEventLike
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  // AI-feature IPC rule: check AI enable FIRST.
+  if (!(await ensureHostedAiEnabled())) {
+    return denied("AI functionality is only available to subscribers.");
+  }
+  const parsed = parseTaskSuccessorRequest(data);
+  if (!parsed) {
+    return denied(
+      "Invalid request payload: parentExecutionId and submissionId are required"
+    );
+  }
+  // Flag rule: the completion policy is DEFAULT OFF; the successor flows
+  // only exist under it.
+  if (!isAiTaskCompletionPolicyV1Enabled()) {
+    return denied(
+      "Task recovery is unavailable: the completion policy is not enabled."
+    );
+  }
+  const parent = await loadParentExecution(parsed.parentExecutionId);
+  if (!parent) {
+    return denied("Unknown parentExecutionId");
+  }
+  const route = taskExecutionRouteSchema.parse(parent.route);
+  const lineageLedgerId = parent.lineage_ledger_id || null;
+  // T08 (FR-20/21/23/24, AC-25/27/29/32): validate parent eligibility at the
+  // trusted IPC boundary. The model layer's generation-checked claim is the
+  // last line of defense, but failing there leaves no user-facing message
+  // (the create transaction rolls back to a denied result). Surface the
+  // eligibility rules here so the user gets a clear denial.
+  //
+  // Continue REQUIRES:
+  //  - a finalized parent with a continuable outcome (`incomplete`,
+  //    `needs_user_input`, `blocked_by_policy`, `timeout`, or `failed`) —
+  //    work that stopped short of verified completion and can carry its
+  //    remaining counters forward.
+  //  - a lineage ledger (shared budget).
+  // An ACTIVE (non-finalized) parent cannot be continued — the turn is still
+  // running; use Stop first. A `verified_complete` parent is immutable — use
+  // Retry for a fresh request. A `cancelled` parent requires an explicit new
+  // request (Retry), not a continuation of the cancelled lineage.
+  if (mode === "continue") {
+    if (!lineageLedgerId) {
+      return denied(
+        "Parent execution has no lineage ledger to continue; use Retry instead."
+      );
+    }
+    if (!parent.finalized) {
+      return denied(
+        "Parent execution is still active; stop it before continuing."
+      );
+    }
+    const outcome = parent.task_outcome;
+    const continuable =
+      outcome === "incomplete" ||
+      outcome === "needs_user_input" ||
+      outcome === "blocked_by_policy" ||
+      outcome === "timeout" ||
+      outcome === "failed";
+    if (!continuable) {
+      return denied(
+        outcome === "verified_complete"
+          ? "Parent execution already completed; use Retry for a fresh request."
+          : outcome === "cancelled"
+          ? "Parent execution was cancelled; use Retry to start a new request."
+          : `Parent execution outcome (${outcome ?? "unknown"}) is not continuable.`
+      );
+    }
+  } else {
+    // Retry: a fresh attempt with a new ledger + fresh budget. Allowed on
+    // any finalized parent (cancelled, failed, incomplete) OR an active
+    // parent the user wants to abandon. An active parent that is retried
+    // must first be stopped — but we do not enforce that here because a
+    // Retry mints a brand-new lineage (no shared ledger), so the active
+    // parent's lease is untouched. The renderer's Stop button handles
+    // abandonment; the IPC trusts the explicit user action.
+    if (!parent.finalized && parent.task_outcome !== null) {
+      return denied(
+        "Parent execution is in an inconsistent state; refresh and try again."
+      );
+    }
+  }
+  // Reuse the parent's frozen contract snapshot (see block docstring). The
+  // renderer's optional `message` is for the next user turn, not for
+  // re-authoring the contract — re-authoring happens via retryTask with a
+  // fresh submissionId + the renderer's own freeze step (Slice 3+).
+  let contract: TaskCompletionContract | null = null;
+  try {
+    contract = loadParentContract(parent);
+  } catch (err) {
+    console.error(
+      `[ai-chat-v2] task ${mode} parent contract load failed:`,
+      err
+    );
+    return denied("Parent execution has a corrupt contract snapshot");
+  }
+  const message = parsed.message ?? "";
+  const requestHash = hashUserAuthoredText(message);
+  const submissionId = parsed.submissionId;
+  const sourceUserMessageId = parent.source_user_message_id ?? "";
+  const conversationId = parent.conversation_id ?? "";
+  try {
+    const coordinator = new TaskExecutionCoordinator();
+    const baseInput = {
+      parentExecutionId: parsed.parentExecutionId,
+      conversationId,
+      sourceUserMessageId,
+      submissionId,
+      requestHash,
+      route,
+      completionOwner: parent.completion_owner,
+      contract,
+    };
+    const result =
+      mode === "continue"
+        ? await coordinator.continueExecution({
+            ...baseInput,
+            lineageLedgerId: lineageLedgerId as string,
+          })
+        : await coordinator.retryExecution(baseInput);
+    if (result.status === "created") {
+      // T09 (FR-14/21/22, AC-16/27/28): the created successor must actually
+      // RUN. Dispatch a real engine turn carrying the trusted
+      // `successorContext` (the coordinator's binding + the parent's parsed
+      // route) through the singleton engine, with an event sink bound to THIS
+      // renderer so the successor's chunks stream. Fire-and-forget: the
+      // invoke resolves with the successor identity immediately (the
+      // renderer attaches its successor-stream listeners before the
+      // engine's first chunk); a dispatch failure sends a terminal error
+      // completion so the renderer's badge never hangs on "continuing".
+      const successorExecutionId = result.binding.executionId;
+      const dispatchMessage = parsed.message || contract?.objective || "";
+      void getQueryEngine()
+        .submitMessage({
+          request: {
+            conversationId,
+            message: dispatchMessage,
+            submissionId,
+          },
+          eventSink: createEventSink(event),
+          successorContext: {
+            binding: result.binding,
+            route,
+          },
+        })
+        .catch((dispatchErr: unknown) => {
+          console.error(
+            `[ai-chat-v2] successor dispatch failed (executionId=${successorExecutionId}):`,
+            dispatchErr
+          );
+          sendComplete(event, {
+            eventType: "error",
+            conversationId,
+            errorMessage: userSafeError(dispatchErr),
+          });
+        });
+      return ok({
+        executionId: successorExecutionId,
+        status: "created",
+      });
+    }
+    if (result.status === "reused") {
+      return ok({ executionId: null, status: "reused" });
+    }
+    if (result.status === "denied") {
+      // T08: the lineage-ledger claim failed at the model layer. Surface the
+      // specific reason so the user knows whether to Retry (missing/released
+      // parent) or refresh (concurrent Continue already superseded the lease).
+      return denied(`Task ${mode} denied: ${result.reasonCode}`);
+    }
+    return denied(`Task ${mode} conflict: SUBMISSION_CONFLICT`);
+  } catch (err) {
+    console.error(`[ai-chat-v2] task ${mode} failed:`, err);
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleTaskContinue(
+  data: string,
+  event: IpcEventLike
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  return handleTaskSuccessor(data, "continue", event);
+}
+
+async function handleTaskRetry(
+  data: string,
+  event: IpcEventLike
+): Promise<CommonMessage<{ executionId: string | null; status: string }>> {
+  return handleTaskSuccessor(data, "retry", event);
+}
+
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -2419,6 +2753,22 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_COMPACTION_START, async (_e, data: unknown) =>
     handleCompactionStart((data as string) ?? "")
+  );
+  // Unit 7 (FR-21/22, AC-27/28): Continue shares the parent's lineage
+  // ledger; Retry mints a new one. Both are AI-gated + flag-gated inside
+  // the handler — registered before STREAM so they exist when the renderer
+  // probes them.
+  ipcMain.handle(AI_CHAT_V2_TASK_CONTINUE, async (_e, data: unknown) =>
+    handleTaskContinue((data as string) ?? "", _e as IpcEventLike)
+  );
+  ipcMain.handle(AI_CHAT_V2_TASK_RETRY, async (_e, data: unknown) =>
+    handleTaskRetry((data as string) ?? "", _e as IpcEventLike)
+  );
+  // T13 (FR-13/14, AC-16/24/25/27/32): read-only latest-execution query for
+  // history reload. AI-gated inside the handler. No DB access in the handler —
+  // delegates to AiTaskExecutionModule.
+  ipcMain.handle(AI_CHAT_V2_TASK_STATE_GET, async (_e, data: unknown) =>
+    handleTaskStateGet(data)
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

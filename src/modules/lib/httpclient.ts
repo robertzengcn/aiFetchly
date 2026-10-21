@@ -17,6 +17,9 @@ import {
   MAX_RESPONSE_BODY_BYTES,
   MAX_RETRY_AFTER_MS,
 } from "@/modules/lib/httpResponseError";
+// Re-export for callers (and tests) that still import the error type from
+// this module's pre-extraction location.
+export { HttpResponseError } from "@/modules/lib/httpResponseError";
 
 /**
  * Decide whether a refresh failure is auth-shaped versus a transient/network

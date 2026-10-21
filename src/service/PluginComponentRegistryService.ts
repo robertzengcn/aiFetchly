@@ -12,6 +12,7 @@ import { PluginCommandSourceReader } from "@/service/pluginCompat/PluginCommandS
 import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginAgentImportService } from "@/service/PluginAgentImportService";
+import { syncPersistedPluginAgents } from "@/service/pluginCompat/syncPersistedPluginAgents";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import {
   buildPluginPolicyTargetUniverse,
@@ -209,6 +210,7 @@ export class PluginComponentRegistryService {
       manager.getAgentRegistry(),
       [...gatePromotable, ...loaded.disabled]
     );
+    await syncPersistedPluginAgents(loaded.enabled);
   }
 
   /**

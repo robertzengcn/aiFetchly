@@ -15,7 +15,14 @@ import {
 } from "@/schemas/toolResult";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import {
+  TOOL_RESULT_CURSOR_RECOVERY,
+  TOOL_RESULT_DENIAL_RECOVERY,
+  toolResultReadFailure,
+} from "@/service/agentTools/toolResultDenialRecovery";
+import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { StoredToolOutputRef } from "@/entityTypes/toolResultTypes";
@@ -26,17 +33,49 @@ export async function handleToolResultRead(
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
   const parsed = toolResultReadInputSchema.safeParse(args);
   if (!parsed.success) {
-    return { success: false, result: { error: "INVALID_OUTPUT_ARGUMENTS" } };
+    return {
+      success: false,
+      result: {
+        error: "INVALID_OUTPUT_ARGUMENTS",
+        // A bare code makes the model retry the same illegal arguments. Tell
+        // it exactly which fields read accepts so the retry is well-formed.
+        recovery:
+          "INVALID_OUTPUT_ARGUMENTS means a read field was invalid. " +
+          "output_id must be copied verbatim from a receipt (out_...). " +
+          "cursor, when present, must be the previous result's next_cursor " +
+          "copied character-for-character. max_tokens must be a positive " +
+          "integer or omitted.",
+      },
+    };
   }
 
   const trusted = getToolResultContext(context);
   if (!trusted) {
-    return { success: false, result: { error: "OUTPUT_NOT_AVAILABLE" } };
+    return {
+      success: false,
+      result: {
+        error: "OUTPUT_NOT_AVAILABLE",
+        recovery: TOOL_RESULT_DENIAL_RECOVERY,
+      },
+    };
   }
 
   const target = await trusted.resolveTarget(parsed.data.output_id);
   if (!target.ok) {
-    return { success: false, result: { error: target.code } };
+    // A bare `{ error }` stub invites the model to retry and to fabricate
+    // further ids. Pair every denial with a recovery instruction so the model
+    // re-uses an existing receipt's output_id verbatim instead of inventing
+    // one (same class as the `check_tool_job_status` fix 6a25f7b56).
+    return {
+      success: false,
+      result: {
+        error: target.code,
+        recovery:
+          target.code === "INVALID_OUTPUT_CURSOR"
+            ? TOOL_RESULT_CURSOR_RECOVERY
+            : TOOL_RESULT_DENIAL_RECOVERY,
+      },
+    };
   }
 
   // Charge the SHARED per-turn allowance before doing the work. Read and search
@@ -66,7 +105,9 @@ export async function handleToolResultRead(
   const outcome = await service.read({
     target: target.target,
     cursor: parsed.data.cursor,
-    maxTokens: parsed.data.max_tokens,
+    // Always take the model page budget. Omitting max_tokens used to select
+    // the 32 KiB UI page, which then got saved as another output.
+    maxTokens: parsed.data.max_tokens ?? TOOL_RESULT_CONFIG.readMaxTokens,
   });
   toolResultMetrics.recordLatency(
     "retrieval.latency_ms",
@@ -77,20 +118,31 @@ export async function handleToolResultRead(
   if (!outcome.ok) {
     await trusted.settleWork(0);
     // An exhausted allowance is reported, never silently treated as empty.
-    return { success: false, result: { error: outcome.code } };
+    return { success: false, result: toolResultReadFailure(outcome.code) };
   }
 
   const page = outcome.page;
-  const envelope = {
+  const fitted = fitWrappedRetrievalResult({
     output_id: page.outputId,
-    text: page.text,
+    revision: target.target.revision,
+    // Cursor before the page text so a tail truncation cannot drop it.
+    next_cursor: page.nextCursor,
+    complete: page.complete,
     start_byte: page.startByte,
     end_byte: page.endByte,
     total_bytes: page.totalBytes,
-    complete: page.complete,
-    next_cursor: page.nextCursor,
+    text: page.text,
     source_completeness: target.target.sourceCompleteness,
-  };
+  });
+  const envelope =
+    fitted !== null && typeof fitted === "object"
+      ? (fitted as Record<string, unknown>)
+      : {
+          success: false,
+          error: "RETRIEVAL_PAGE_TOO_LARGE",
+          analysis_complete: false,
+          output_id: page.outputId,
+        };
   // Settle the tokens actually returned, so a caller asking for a smaller page
   // spends proportionally less of the turn's allowance.
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));

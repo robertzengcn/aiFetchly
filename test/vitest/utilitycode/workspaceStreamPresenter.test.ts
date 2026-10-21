@@ -261,6 +261,39 @@ describe("workspaceStreamPresenter", () => {
     expect(result?.metadata?.toolResultStatus).toBe("error");
   });
 
+  it("copies a failed tool error onto the execution row metadata", () => {
+    const presenter = createWorkspaceStreamPresenter({
+      scheduleFlush: () => () => undefined,
+    });
+    const reason =
+      "Agent claude-blog:blog-researcher exceeded max tool calls (8).";
+    presenter.applyEvent(
+      event("v2-c", "run-1", { eventType: "start", messageId: "a1" })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "tool_result",
+        messageId: "a1",
+        toolCallId: "tc-sub",
+        toolName: "run_subagent",
+        toolResult: {
+          success: false,
+          executionTimeMs: 287566,
+          status: "failed",
+          error: reason,
+        },
+      })
+    );
+
+    const result = presenter
+      .getState()
+      .messages.find((m) => m.id === "tool-result-tc-sub");
+    expect(result?.metadata?.toolResultStatus).toBe("error");
+    expect(result?.metadata?.error).toBe(reason);
+    expect(result?.metadata?.toolResultSummary).toBe(reason);
+    expect(result?.metadata?.success).toBe(false);
+  });
+
   it("seeds history, prepends older pages, and trims the window", () => {
     const presenter = createWorkspaceStreamPresenter();
     presenter.seedHistory([

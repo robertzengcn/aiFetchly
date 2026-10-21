@@ -9,7 +9,13 @@
       @request-changes="(fb) => emit('request-plan-changes', fb)"
     />
   </div>
-  <div v-else class="v2-message" :class="`v2-message--${message.role}`">
+  <div
+    v-else
+    class="v2-message"
+    :class="messageShellClass"
+    :data-message-id="message.id"
+    :data-message-type="message.messageType"
+  >
     <div class="v2-message__bubble">
       <div class="v2-message__meta">
         <span class="v2-message__role">{{ roleLabel }}</span>
@@ -32,31 +38,25 @@
           >
             {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
           </button>
+          <span
+            v-if="showToolRunningBadge"
+            class="tool-progress-badge"
+            data-testid="tool-running-badge"
+            role="status"
+            :aria-label="toolRunningLabel"
+          >
+            <v-icon size="small" color="primary" class="mdi-spin">
+              mdi-loading
+            </v-icon>
+            <span class="text-caption">{{ toolRunningLabel }}</span>
+            <span v-if="toolProgressHasCounts" class="text-caption">
+              ({{ toolProgress?.partialCount }}/{{ toolProgress?.expectedCount }})
+            </span>
+          </span>
         </div>
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
           <span>{{ message.metadata.toolName }}</span>
-          <span
-            v-if="toolProgress"
-            class="tool-progress-badge"
-            style="margin-left: 8px; display: inline-flex; align-items: center; gap: 4px;"
-          >
-            <v-icon size="small" class="mdi-spin">mdi-loading</v-icon>
-            <span class="text-caption">{{
-              toolProgress.message ||
-              t("aiChatV2.tool_running") ||
-              "Running..."
-            }}</span>
-            <span
-              v-if="
-                typeof toolProgress.partialCount === 'number' &&
-                typeof toolProgress.expectedCount === 'number'
-              "
-              class="text-caption"
-            >
-              ({{ toolProgress.partialCount }}/{{ toolProgress.expectedCount }})
-            </span>
-          </span>
         </div>
         <v-progress-linear
           v-if="toolProgress && typeof toolProgress.progress === 'number'"
@@ -609,6 +609,11 @@ const props = defineProps<{
   showReasoning?: boolean;
   /** True when this output was reported this session (parent-owned). */
   reported?: boolean;
+  /**
+   * True while this tool call has no matching result and the turn is still
+   * running. A long tool otherwise looks idle until the result arrives.
+   */
+  toolAwaitingResult?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -730,6 +735,16 @@ onBeforeUnmount(() => {
     clearTimeout(copyResetTimer);
     copyResetTimer = null;
   }
+});
+
+const messageShellClass = computed((): string[] => {
+  const classes = [`v2-message--${props.message.role}`];
+  if (props.message.messageType === MessageType.TOOL_CALL) {
+    classes.push("v2-message--tool-call");
+  } else if (props.message.messageType === MessageType.TOOL_RESULT) {
+    classes.push("v2-message--tool-result");
+  }
+  return classes;
 });
 
 const roleLabel = computed(() => {
@@ -1176,6 +1191,28 @@ const toolProgress = computed<ToolProgressView | null>(() => {
     | { toolProgress?: ToolProgressView }
     | undefined;
   return meta?.toolProgress ?? null;
+});
+
+const showToolRunningBadge = computed(
+  (): boolean =>
+    props.toolAwaitingResult === true || toolProgress.value !== null
+);
+
+const toolRunningLabel = computed((): string => {
+  const message = toolProgress.value?.message;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message;
+  }
+  return t("aiChatV2.tool_running") || "Running...";
+});
+
+const toolProgressHasCounts = computed((): boolean => {
+  const progress = toolProgress.value;
+  if (!progress) return false;
+  return (
+    typeof progress.partialCount === "number" &&
+    typeof progress.expectedCount === "number"
+  );
 });
 
 const needsPermissionPrompt = computed(
@@ -1754,6 +1791,26 @@ const pastedChips = computed<PastedChip[]>(() => {
 .v2-message {
   display: flex;
   margin: 8px 0;
+  /* Poor-man's virtualization (no new dependency): the browser skips layout
+     and paint for any message currently off-screen. With 1000+ messages this
+     keeps initial render and memory bounded to what is visible instead of the
+     whole history. `contain-intrinsic-size` supplies a placeholder height so
+     the scrollbar is sized correctly before a message is scrolled into view;
+     the browser corrects the real height the moment it renders the message.
+     The streaming message (last child) is always on-screen, so this never
+     delays token paint.
+     Do not use the `auto` keyword here. It remembers the last laid-out size,
+     and a row skipped before it has height is remembered as 0px. Those rows
+     then take no space, never intersect the scrollport, and stay blank.
+     Tool calls and results sit between the user prompt and the assistant
+     reply, so they were the rows that disappeared. */
+  content-visibility: auto;
+  contain-intrinsic-size: 120px;
+}
+.v2-message--tool-call,
+.v2-message--tool-result {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 .v2-message--plan {
   justify-content: stretch;
@@ -1917,6 +1974,12 @@ const pastedChips = computed<PastedChip[]>(() => {
   display: flex;
   align-items: center;
   margin-bottom: 6px;
+}
+.tool-progress-badge {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .v2-message__tool-field {
   display: flex;

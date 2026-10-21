@@ -46,6 +46,25 @@ export class EmailReplyApprovalModule extends BaseModule {
     }
   }
 
+  /**
+   * Approval record for a one-time token hash regardless of consumption state
+   * (R14). The delivery preflight resolves consumed approvals through this so
+   * an exact replay of a finalized attempt can reach the idempotency lookup;
+   * NEW work must still be gated on the returned record's invalidatedAt/
+   * expiresAt.
+   */
+  async findByTokenHash(
+    tokenHash: string
+  ): Promise<EmailReplyApprovalEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.approvalModel.findByTokenHash(tokenHash);
+    } catch (error) {
+      console.error("Error finding reply approval by token:", error);
+      throw error;
+    }
+  }
+
   async findActiveByDraft(
     draftId: number,
     revisionId: number
@@ -65,6 +84,31 @@ export class EmailReplyApprovalModule extends BaseModule {
       await this.approvalModel.invalidate(id, reason, at);
     } catch (error) {
       console.error("Error invalidating reply approval:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Retire EVERY active approval for the draft in one UPDATE (model:
+   * EmailReplyApprovalModel.invalidateAllForDraft). Returns the number of
+   * approvals retired. Preferred over looping findActiveByDraft + invalidate —
+   * a bounded loop can exit with rows still active (CAS loss, >N rows) and
+   * silently proceed with stale approvals live.
+   */
+  async invalidateAllForDraft(
+    draftId: number,
+    reason: string,
+    at: Date
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.approvalModel.invalidateAllForDraft(
+        draftId,
+        reason,
+        at
+      );
+    } catch (error) {
+      console.error("Error bulk-invalidating reply approvals:", error);
       throw error;
     }
   }

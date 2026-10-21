@@ -78,7 +78,9 @@ const testDbDir = vi.hoisted(() => () => {
   // Pool-namespaced test DB (resolveTestDbPath pattern): a fixed
   // /tmp/test-db made two workers' DataSource.synchronize collide
   // on the same SQLite file ("database is locked") in shared runs.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const os = require("os") as typeof import("os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const path = require("path") as typeof import("path");
   const poolId = process.env.VITEST_POOL_ID ?? "0";
   return path.join(os.tmpdir(), "aifetchly-test", poolId, "scraper.db");
@@ -365,6 +367,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
 
     // Wait until the pause branch has run: submitMessage resolved, the
@@ -418,6 +421,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>
@@ -457,6 +461,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>
@@ -540,6 +545,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       occurrence: 1,
       catchUp: false,
       scheduledFor: new Date(),
+      idempotencyKey: "scheduled-loop:2:1",
     });
     await vi.waitFor(
       () =>

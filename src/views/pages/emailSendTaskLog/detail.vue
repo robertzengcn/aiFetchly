@@ -154,7 +154,7 @@ import { getUnifiedEmailSendLogDetail } from "@/views/api/buckemail";
 import { formatRecordTime } from "@/views/utils/function";
 import type { UnifiedSendLogDetailEntry } from "@/entityTypes/buckemailType";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
