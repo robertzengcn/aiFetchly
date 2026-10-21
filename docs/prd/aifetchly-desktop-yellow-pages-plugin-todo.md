@@ -389,7 +389,7 @@ Owners: plugin repository (build, adapters, release artifact), Hub (publication/
 ### R02 — P2 / conditional P1 — Choose and finish the distribution mode
 
 - [ ] Record public/direct versus protected/managed access policy. Public direct with a pinned prebuilt GitHub commit is the proposed v1 route, not a verified shipped decision.
-- [ ] Correct `PluginMarketplaceService.installCommunityPlugin()` diagnostics: every non-direct mode currently produces “subscription required,” even when the issue is unsupported installer capability.
+- [x] Correct `PluginMarketplaceService.installCommunityPlugin()` diagnostics: non-direct modes now distinguish the genuine subscription path (`ticket` → subscription/Upgrade wording) from unsupported installer capability (`managed`/unrecognized mode → "not supported in this desktop release"), with a differentiated suite (`PluginMarketplaceService.community.test.ts` R02 test; commit `979d03449`).
 - [ ] **Only if managed/ticket delivery is selected:** implement/test install-plan, opaque plan digest, prepare-install/grants, target resources, expiry/revocation/denied-access and no alternate-source fallback. Verify deployed Hub support rather than inferring readiness from route source.
 - [ ] **Only if ZIP/release-asset delivery is selected:** map catalog ZIP sources into an installable request; add expected-SHA256 propagation and verification before extraction with mismatch tests. Current `PluginSourceRequest`/`UrlPluginFetcher` do not provide that end-to-end contract.
 - [ ] **Only if managed Node/browser resources are selected:** add the matching resource schema/target provisioning; do not encode JavaScript as Python/uv.
