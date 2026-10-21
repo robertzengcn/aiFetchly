@@ -244,10 +244,31 @@ export const useSelectedConversationStore = defineStore(
      */
     let deferDetailEventsDuringSelection = false;
     let deferredDetailEvents: ChatRunDetailEvent[] = [];
+    /**
+     * Audit R7-01: the deferral buffer belongs to exactly ONE selection
+     * handshake — the latest one to take ownership. Every cleanup,
+     * enable/disable and replay operation of an older request must be
+     * identity-guarded by this token: a superseded snapshot resolution (or
+     * rejection) must never clear or disable the current selection's
+     * buffer, or the current selection loses the terminal facts buffered
+     * while its snapshot was in flight.
+     */
+    let deferredDetailEventsOwner = -1;
 
     function clearDeferredDetailEvents(): void {
       deferDetailEventsDuringSelection = false;
       deferredDetailEvents = [];
+      deferredDetailEventsOwner = -1;
+    }
+
+    /**
+     * Guarded cleanup: only the handshake that owns the current buffer may
+     * end the deferral (stale success and stale rejection behave identically
+     * — both are no-ops against a newer owner's buffer).
+     */
+    function clearDeferredDetailEventsOwned(generation: number): void {
+      if (generation !== deferredDetailEventsOwner) return;
+      clearDeferredDetailEvents();
     }
     /**
      * Audit R4-01: monotonic id of the in-flight `loadOlder` operation.
@@ -1036,7 +1057,11 @@ export const useSelectedConversationStore = defineStore(
       syncFromPresenter();
       // Audit R6-01: hold the new selection's first detail events until
       // the authoritative snapshot lands, then replay them over the seed.
-      clearDeferredDetailEvents();
+      // Audit R7-01: the incoming handshake takes OWNERSHIP of the buffer
+      // here; a still-pending older request can no longer clear or disable
+      // it at its (later) resolution, whichever way that resolves.
+      deferredDetailEvents = [];
+      deferredDetailEventsOwner = generation;
       deferDetailEventsDuringSelection = true;
 
       if (conversationId === null) {
@@ -1044,7 +1069,7 @@ export const useSelectedConversationStore = defineStore(
         hasOlder.value = false;
         selectedTitle.value = null;
         loading.value = false;
-        clearDeferredDetailEvents();
+        clearDeferredDetailEventsOwned(generation);
         return;
       }
 
@@ -1060,7 +1085,11 @@ export const useSelectedConversationStore = defineStore(
           appliedGeneration !== generation ||
           snapshot.acceptedGeneration === -1
         ) {
-          clearDeferredDetailEvents();
+          // Audit R7-01: guarded — when a newer handshake owns the buffer,
+          // this stale resolution must NOT disable deferral or drop its
+          // buffered events; an invalid snapshot for the current generation
+          // legitimately ends its own buffer.
+          clearDeferredDetailEventsOwned(generation);
           emitShellDiagnostic({
             type: "chat.selection_loaded",
             conversationHash: hashConversationId(conversationId),
@@ -1107,8 +1136,10 @@ export const useSelectedConversationStore = defineStore(
         });
         await markReadAfterLoad(conversationId);
       } catch (err) {
-        deferDetailEventsDuringSelection = false;
-        deferredDetailEvents = [];
+        // Audit R7-01: a rejected stale request must behave like a
+        // superseded success — it does not own the current buffer, so the
+        // guarded cleanup is a no-op for a newer selection's deferral.
+        clearDeferredDetailEventsOwned(generation);
         if (appliedGeneration === generation) {
           loadError.value =
             err instanceof Error ? err.message : "Failed to load conversation";
