@@ -81,14 +81,32 @@ const hooksPath = spawnSync('git', ['config', 'core.hooksPath'], {
   cwd: repoRoot,
   encoding: 'utf8',
 });
+// With hooksPath=.husky/_ (husky 9's shim layout), the user hook lives in
+// .husky/pre-commit and the shim must exist to fire it. Worktrees do not
+// inherit the generated shims — flag a missing shim directory explicitly.
+const shimDir = path.join(repoRoot, '.husky', '_');
 const hooksValue = (hooksPath.stdout || '').trim();
 check(
   'husky:core.hooksPath',
-  hooksValue === '.husky',
-  `core.hooksPath=${hooksValue || '(unset)'}`,
-  'Run `yarn prepare` (husky) to install the hook directory'
+  hooksValue === '.husky' || hooksValue === '.husky/_',
+  `core.hooksPath=${hooksValue || '(unset)'}${
+    hooksValue === '.husky/_' ? ' (husky 9 shim dir — the standard layout)' : ''
+  }`,
+  hooksValue
+    ? 'Ensure the shim directory exists (.husky/_ for husky 9; run `yarn prepare`)'
+    : 'Run `yarn prepare` (husky) to install the hook directory'
 );
 const hookFile = path.join(repoRoot, '.husky', 'pre-commit');
+if (hooksValue === '.husky/_' && !existsSync(shimDir)) {
+  check(
+    'husky:shims',
+    false,
+    '.husky/_ is configured but the generated shim directory is missing (common in git worktrees)',
+    'Run `yarn prepare` in this checkout, or copy .husky/_ from the main checkout'
+  );
+} else if (hooksValue === '.husky/_' && existsSync(shimDir)) {
+  check('husky:shims', true, '.husky/_ shim directory present');
+}
 if (existsSync(hookFile)) {
   const content = readFileSync(hookFile, 'utf8');
   check(
