@@ -47,6 +47,13 @@ export interface LaunchOptions {
    * manifest loader rejects out-of-root paths fail-closed.
    */
   readonly dialogResponses?: E2EStateManifestInput["dialogResponses"];
+  /**
+   * Voice-journey specs (audit TODO V01): swap the real microphone for
+   * Chromium's synthetic fake media device so getUserMedia + MediaRecorder
+   * run deterministically under headless/xvfb. No product flag — Chromium
+   * launch args only, mirroring Chrome's own test mode.
+   */
+  readonly voiceFakeMediaStream?: boolean;
 }
 
 export interface NetworkViolation {
@@ -273,6 +280,12 @@ export async function launchAiFetchly(
       // Specs assert translated UI text (e.g. "Delivery Unknown"), so the
       // manifest contract must hold deterministically from first paint.
       "--lang=en",
+      // Voice journeys (V01): fake-device mode makes the recorder produce a
+      // deterministic synthetic tone without any OS audio hardware; fake-ui
+      // auto-grants getUserMedia permission prompts (FR-VOICE capture).
+      ...(options.voiceFakeMediaStream
+        ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+        : []),
     ],
     cwd: process.cwd(),
     env,
