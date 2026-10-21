@@ -8,6 +8,22 @@ Authorities: [PRD](./ai-chat-workspace-v2-capability-parity-prd.md), [technical 
 
 No application code was changed. Only this new report is intended for commit. The pre-existing untracked `...audit-todo-2026-10-20.md` was preserved.
 
+## Fix round 2026-10-21 (same day) — R6-01/02/03 repaired, V04 harness repaired; V01–V03 untouched
+
+Agent-completable findings from this audit were fixed and committed on this branch same-day:
+
+| Audit item | Outcome | Commit |
+| --- | --- | --- |
+| R6-01 authoritative runtime hydration | Fixed: presenter `hydrateRuntime()` + store defer/replay during selection | `f00671596` |
+| R6-02 resumed answer pinning/observation | Fixed: ensure/append adopt existing rows, register accumulator, pin restored actionable rows | `f00671596` |
+| R6-03 live-direction pin-aware bound | Fixed: multi-pass trim (none → pinned → protected → any) preserved by a turn-level accumulator | `f00671596` |
+| Permanent regressions for R6-01/02/03 | Added: 15 tests in `test/vitest/main/components/store/selectedConversation.r6ActiveAnswer.test.ts` + updated audit-R05 reselection test to corrected behavior (test-only change) | `f00671596` + `f4286d6f9` |
+| V04 E2E network guard / dev-server / assertions | Fixed: guard trusts exactly `aifetchly-generated-image://local/`; `assertImagesDecoded` (polling) + `assertIconFontsServed` wired into all generated-image specs; scoped `server.fs.allow` for the resolved `@mdi/font/fonts` | `57e6dc3e8` |
+| V04 full-suite rerun blocker (NEW, discovered while closing V04) | Fixed: the persistent-shell startup specs hardcoded 1280-wide normal bounds; `computeInitialBounds` is adaptive by design (`min(1280, workArea − 96)`, design §14.3). Expectations now derive from the observed work area | `8ef7091bf` |
+| V01–V03 release/certification evidence | **Still open — not agent-completable** (journey recording, manual accessibility/at checks, authenticated live-browser cycle, 14-day soak + production/safety/desktop/QA sign-offs) | — |
+
+Gates on the final revision (post-fix): `yarn test:components` **162 files / 1,352 tests passed** (includes the 15 new regressions); targeted main suite **17 files / 160 tests passed**; `yarn typecheck` and `yarn vue-typecheck` passed; full Electron E2E under canonical CI geometry `xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test` **176 passed / 0 failed / 3 skipped** (the 3 skips are the `AIFETCHLY_E2E_LIVE_AI=1`-gated run-preservation scenarios) in 25.7 minutes; all 14 `ai-chat-generated-image-*` specs pass isolated with the new decode/font assertions active. Full-suite logs: `/tmp/parity-v04-{run,full,full2,geo}.log` + `/tmp/parity-v04-full2/console.log`.
+
 ## Verification on this revision
 
 | Check | Result |
@@ -52,7 +68,8 @@ The focused tests use actual store/presenter logic with controlled transport res
 
 ### R6-01 — P1: selection hydration immediately overwrites the authoritative runtime state
 
-- [ ] Hydrate the presenter and selected store from one authoritative runtime snapshot, preserving status and active run identity across subsequent synchronizations.
+- [x] Hydrate the presenter and selected store from one authoritative runtime snapshot, preserving status and active run identity across subsequent synchronizations. *(Fixed commit `f00671596`.)*
+- **Fix and verification (2026-10-21):** The presenter gained the explicit runtime hydration surface `hydrateRuntime({ runtimeStatus, activeRunId })` (protobuf-mapped statuses only; `streamStatus` returns to `streaming` only for `running`). `loadSelection()` no longer assigns the refs beside `syncFromPresenter()`: it hydrates from the SAME authoritative snapshot; detail events that arrive during the snapshot await are deferred and replayed after seed + hydration + sync, so an older snapshot can never overwrite newer terminal/live facts (superseded/error/deselection paths discard the buffer). Permanent coverage: runtime/waiting snapshot mapping, no-anchor hydration events, history paging without reset, token-during-load survival, snapshot terminal beats replayed events, A→B→A re-selection (`selectedConversation.r6ActiveAnswer.test.ts`), plus the updated reselection assertions in `AiChatCenterSurface.test.ts`. All gates pass on the final revision (counts in the fix-round table above).
 - **Requirements:** FR-LIF-004, FR-REC-001/008, FR-LIF-005 presentation guards; technical design §9.3 selected state reconstruction.
 - **Location:** `src/views/store/selectedConversation.ts:1038–1044` seeds history, assigns `snapshot.runtimeStatus` and `snapshot.activeRunId`, then calls `syncFromPresenter()`. That function at :338–341 overwrites those assignments from presenter state. `src/views/utils/workspaceStreamPresenter.ts:851–866` seeds history as idle; the presenter was disposed at selection start and its active run is null.
 - **Reproduce:** Resolve the selected-conversation snapshot with a persisted row, `runtimeStatus: 'running'` and `activeRunId: 'live-run'`. Await `loadSelection()` without emitting any new stream event.
@@ -63,7 +80,8 @@ The focused tests use actual store/presenter logic with controlled transport res
 
 ### R6-02 — P2: a resumed answer loaded from history is never pinned and still loses its prefix on paging
 
-- [ ] Register existing hydrated active rows as protected when they resume, independently of whether a new row is appended.
+- [x] Register existing hydrated active rows as protected when they resume, independently of whether a new row is appended. *(Fixed commit `f00671596`.)*
+- **Fix and verification (2026-10-21):** Runtime ownership and pin registration now have paths disjoint from append/dedup: `ensureAssistantView()` ADOPTS an existing hydrated row (pins while streaming, registers the row as the active-turn accumulator baseline when identity is deduplicated/owned), `appendDelta` accumulates observed content at event time, `flushNow` treats the accumulator as the source of truth, and error/cancel/complete terminals re-materialize evicted accumulated content before clearing. Restored actionable rows (permission prompts, plan/question rows) are pinned during hydration independently of live status. Permanent coverage: after-selection + after-paging resume ("saved prefix suffix"), adopted reasoning metadata, error/cancel/complete retention, restored permission-prompt pinning, quiet-page + mid-run token ordering.
 - **Requirements:** FR-HIS-001/005, FR-LIF-004, FR-REC-008; PRD §19 and design §17 bounded paging without destroying active projection.
 - **Location:** `workspaceStreamPresenter.ts:851–866` clears pins on history seed. `ensureAssistantView()` at :308–324 routes an existing message through `appendMessage()`, but its duplicate-row guard at :260 returns **before** pin registration at :265–266. Subsequent calls can also return from `ensureAssistantView()` early. Thus resuming tokens does not protect that hydrated row.
 - **Reproduce:** Seed 199 ordinary rows plus the assistant `live-answer` with content `saved `. Resume a token `prefix ` and flush; verify content is `saved prefix `. Fetch one older row, then receive token `suffix` and flush.
@@ -74,7 +92,8 @@ The focused tests use actual store/presenter logic with controlled transport res
 
 ### R6-03 — P2: live-direction trimming ignores pins and can destroy an active answer during a long turn
 
-- [ ] Preserve active answer accumulation separately from evictable rendered rows, with a bounded presentation strategy when one turn itself exceeds the window.
+- [x] Preserve active answer accumulation separately from evictable rendered rows, with a bounded presentation strategy when one turn itself exceeds the window. *(Fixed commit `f00671596`.)*
+- **Fix and verification (2026-10-21):** `trimToWindow(200, { retain })` is now direction-aware and multi-pass, classifying every row (unprotected → pinned non-critical receipts → pinned actionable → answer/content-bearing accumulator rows), evicting in working order per direction, and always honoring the 200-row bound; over-pinning is harmless because the compaction pass still evicts non-critical pinned rows, and the accumulator preserves the logical turn content independent of the mounted rows. Permanent coverage: 100 tool pairs + 398-row live growth with the bound asserted throughout, permission prompt reachability in either direction, paging during the long turn, cancellation with ≥99-row recovery, and content re-materialization from the accumulator on terminals.
 - **Requirements:** FR-HIS-001/005; PRD §19 and design §17; correct active response presentation under tool-heavy execution.
 - **Location:** `selectedConversation.ts:328–329` calls `trimToWindow(200, { retain: 'newest' })` on overflow. `workspaceStreamPresenter.ts:922–927` implements that branch with a plain tail slice and does not consult `pinnedRowIds`. Pin-aware trimming exists only in the backward-history branch.
 - **Reproduce:** Start an answer and emit `prefix `. Emit 100 distinct tool-call/tool-result pairs in that same run, creating 200 additional rows. Confirm the window is still at most 200. Resume the assistant with token `suffix` and flush.
@@ -109,12 +128,15 @@ The focused tests use actual store/presenter logic with controlled transport res
 
 ### V04 — Intermittent Electron gate failure and worktree dev-server errors
 
-- [ ] Correct the Electron test network guard's classification of trusted generated-image requests, add decoded-image assertions, and rerun the generated-image specs and full suite.
+- [x] Correct the Electron test network guard's classification of trusted generated-image requests, add decoded-image assertions, and rerun the generated-image specs and full suite. *(Fixed commit `57e6dc3e8`; new blocker found during the rerun fixed in `8ef7091bf`.)*
+- **Fix and verification (2026-10-21):** The renderer route guard now recognizes exactly the trusted local scheme/authority prefix `aifetchly-generated-image://local/` (the app's own `protocol.handle` handler serves only existence- and path-validated files under the redirected userData root) — no blanket `origin === null` allowance; every other non-loopback origin is still aborted and recorded. `test/e2e/support/assertions.ts` gained `assertImagesDecoded` (polls every `<img>` in scope to finish decoding — counts alone kept passing against empty tiles; images that merely have not started their lazy load settle rather than fail) and `assertIconFontsServed` (reads the @font-face srcs the renderer document actually references and fetches them through the page path; each must return 200). Both are wired into all three generated-image specs at every tile-assertion site. `vite.render.config.mjs` now resolves the realpath of `@mdi/font/fonts` (the worktree's node_modules is a symlink into the primary checkout) and allows exactly that directory plus the project root, so materialdesignicons-webfont requests succeed instead of being blocked with "outside of Vite serving allow list" and rendering tofu.
+- **New blocker found while rerunning the full suite (and fixed, `8ef7091bf`):** the persistent-shell startup specs (`workspace-shell.test.ts:31`, `workspace-shell-gaps.test.ts:233`) hardcoded 1280-wide expected normal bounds. `computeInitialBounds` is adaptive by design (design §14.3: `min(1280, workArea.width − 2×48)`, floored at the 960x640 practical minimum), so on any 1280-wide X server the deterministic first-launch rectangle is 1184 wide and the tests always failed. The geometry feature and these specs exist only on this unmerged branch — they never ran on GitHub CI, so the incompatibility was never caught there. The specs now derive the expected bounds from the observed work area in the same evaluate call, keeping a deterministic contract on every display size.
+- **Reruns:** all 14 `ai-chat-generated-image-*` specs pass with fresh renderer servers (4.1m); the full Electron suite passes under the canonical CI geometry (`xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test`, 176 passed / 0 failed / 3 skipped, 25.7m; zero unexpected violations recorded by either network guard). The earlier bare `xvfb-run -a` run (non-canonical geometry) is superseded by the 1280x960x24 run; its only failures were the two geometry specs above. Logs under `/tmp/parity-v04-*/`.
 - **Observed gate failure:** The broad run's first case, `ai-chat-generated-image-batch-live.test.ts:172` (R-1: no-workspace four-image batch), failed teardown with `renderer attempted disallowed external requests`. The recorded URLs use **`aifetchly-generated-image://local/...`**, with URL origin `null`; they are the application's local image protocol, not evidence of a real external-network leak.
 - **Observed harness path:** `test/e2e/fixtures/electronApp.ts:312–330` permits only loopback hostnames, classifies intercepted requests with protocol host `local` as external, and aborts them. `test/e2e/support/assertions.ts:65–73` fails on the recorded requests. The generated-image spec currently counts tile wrappers, which does not establish that their images decoded successfully.
 - **Isolated check:** `xvfb-run -a yarn playwright test test/e2e/specs/ai-chat-generated-image-batch-live.test.ts --grep 'R-1:' --output /tmp/parity-r6-isolated-fresh-results` **passed: 1 test, 27.9 seconds** with a fresh server. The immediate first retry had `ERR_CONNECTION_REFUSED` during the interrupted server's shutdown and is not counted as a product defect. The original teardown failure is therefore **intermittent**, not a consistently reproduced application failure. Investigate why the protocol requests reach the route guard in the failing run; do not dismiss the trace solely because the retry passed.
 - **Fix constraints:** Recognize only the intended trusted local scheme/authority, leaving arbitrary external traffic blocked. Do not blanket-allow `origin === 'null'`, since unrelated opaque origins share that string. Assert image loading/decoding as well as card counts. The broad run passed R-2 through R-5 before interruption; these passes do not override the R-1 gate failure or certify the rest of the suite.
-- [ ] Resolve the worktree dev-server's blocked icon-font paths and verify icon rendering in the Electron test environment.
+- [ ] Resolve the worktree dev-server's blocked icon-font paths and verify icon rendering in the Electron test environment. *(Fixed commit `57e6dc3e8` — scoped `server.fs.allow` for the resolved `@mdi/font/fonts` realpath; `assertIconFontsServed` verifies the actual font requests return 200 rather than suppressing a warning.)*
 - **Observed warning:** Vite repeatedly reports `materialdesignicons-webfont.woff2`, `.woff` and `.ttf` under the primary checkout's `node_modules/@mdi/font/fonts/` as outside its serving allow list. `vite.render.config.mjs:26–29` sets port/strictPort but has no explicit filesystem allow configuration for that resolved dependency location.
 - **Scope:** This warning is environment/dev-serving evidence, not a confirmed packaged-app defect. Ensure dependency resolution and narrowly scoped serving permissions agree; verify actual font requests succeed rather than suppressing the warning. No separate visual font certification was performed.
 - **Artifacts:** Broad-run trace and error context are under `test-results/playwright/specs-ai-chat-generated-im-22732-nd-durable-re-homed-outputs/`; the first isolated attempt's artifacts are under `/tmp/parity-r6-isolated-results/`; the fresh passing run used `/tmp/parity-r6-isolated-fresh-results/`. Preserve relevant traces with the fix/re-run. PRD §22/28 requires a passing E2E gate.
@@ -125,21 +147,21 @@ All functional families remain mapped below. “Retained” identifies the previ
 
 | Requirement family | Current assessment / remaining work |
 | --- | --- |
-| FR-SUB-001–009 | Payload/acceptance/retry identity retained; normal tests pass. Preserve runtime/busy presentation under R6-01. |
+| FR-SUB-001–009 | Payload/acceptance/retry identity retained; normal tests pass. Runtime/busy presentation under R6-01 fixed (`f00671596`, hydrateRuntime + defer/replay). |
 | FR-CMD-001–009 | Shared command, goal, loop and skill routing retained; final-state integration certification pending. |
-| FR-QUE-001–014 | Durable queue/source identity retained; targeted tests pass. Hydrated queued/running presentation needs R6-01 coverage. |
+| FR-QUE-001–014 | Durable queue/source identity retained; targeted tests pass. Hydrated queued/running presentation covered by R6-01 fixtures (`f00671596`). |
 | FR-PLN-001–009 | Strict decision/continuation path retained; preserve waiting/runtime and actionable projection in R6 fixes. |
 | FR-PER-001–008 | Permission/parked continuation surfaces retained; restored waiting-state correctness and V02 remain. |
 | FR-OUT-001–010 | Frozen authorization/dedicated review retained; final safety/runtime evidence pending. |
 | FR-IMG-001–015 | Synchronous app-scoped reference resolution retained; normal component tests pass. |
 | FR-RPT-001–009 | Per-output/conversation reporting retained; no new reporting defect reproduced. |
 | FR-VOI-001–010 | Prior ownership/acquisition rollback fixes retained; normal tests pass; V01 remains. |
-| FR-WSP-001–010 | Workspace/trust/watcher/memory paths retained; runtime/busy affordances affected by R6-01; platform certification pending. |
-| FR-REC-001–008 | Recovery/retry/compaction surfaces retained; runtime hydration and resumed answer preservation incomplete (R6-01/02). |
-| FR-LIF-001–006 | Cursor isolation fixed; authoritative runtime hydration still fails (R6-01). |
+| FR-WSP-001–010 | Workspace/trust/watcher/memory paths retained; runtime/busy affordances restored by R6-01 (`f00671596`); platform certification pending. |
+| FR-REC-001–008 | Recovery/retry/compaction surfaces retained; runtime hydration and resumed answer preservation fixed (R6-01/02, `f00671596`). |
+| FR-LIF-001–006 | Cursor isolation fixed; authoritative runtime hydration fixed (`f00671596`). |
 | FR-SKL-001–006 | Installation/approval/invocation retained; final integration and accessibility evidence pending. |
 | FR-BRW-001–006 | Managed-browser surfaces retained; V02 authenticated lifecycle pending. |
-| FR-HIS-001–005 | Backward retention/cursor guards/count bound present; hydrated and long-turn active content still fails (R6-02/03). |
+| FR-HIS-001–005 | Backward retention/cursor guards/count bound present; hydrated and long-turn active content fixed (R6-02/03, `f00671596`). |
 | FR-INT-001–005 | Shared integrations retained; final cross-feature certification pending. |
 | PRD §14/18/19 security/failure/resources | No full security certification performed. The new findings concern runtime state and renderer content, not a demonstrated authorization bypass or durable DB loss. |
 | A11Y-001–010 / localization | Automated baseline passes; V02 manual and final locale evidence remain. |
@@ -148,7 +170,7 @@ All functional families remain mapped below. “Retained” identifies the previ
 
 ## Suggested order
 
-1. Fix R6-01 authoritative runtime hydration.
-2. Address R6-02/R6-03 together: active logical content must survive row deduplication and both eviction directions while rendering stays bounded.
-3. Add permanent regressions for all three reproductions, repair V04, and complete V01/V02 against the final revision.
+1. ~~Fix R6-01 authoritative runtime hydration.~~ Done, `f00671596`.
+2. ~~Address R6-02/R6-03 together...~~ Done, `f00671596`.
+3. ~~Add permanent regressions for all three reproductions, repair V04...~~ Done (regressions + V04 `57e6dc3e8`/`8ef7091bf`); V01/V02 remain open.
 4. Collect V03 before declaring parity complete or removing rollback.
