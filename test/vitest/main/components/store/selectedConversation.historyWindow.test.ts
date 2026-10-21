@@ -3,6 +3,7 @@ import { flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
 
 const startChatRunMock = vi.fn();
 
@@ -498,5 +499,97 @@ describe("selectedConversation history window eviction (audit R4-04)", () => {
     await flushPromises();
     expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(true);
     expect(store.messages[store.messages.length - 1]?.id).toBe("live-row");
+  });
+});
+
+describe("active answer survives history-window eviction (audit R5-01)", () => {
+  /** Live detail event helper mirroring the detail-event shape. */
+  function detailEvent(
+    sequence: number,
+    eventType: "start" | "token" | "complete",
+    extra: Record<string, unknown> = {}
+  ): ChatRunDetailEvent {
+    return {
+      conversationId: "conv-1",
+      runId: "run-live",
+      sequence,
+      emittedAt: "2026-10-20T10:00:00.000Z",
+      eventType,
+      payload: { eventType, messageId: "live-answer", ...extra },
+    } as ChatRunDetailEvent;
+  }
+
+  async function flushBatchedDelta(): Promise<void> {
+    // The presenter batches deltas for 50 ms; wait past the window.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+
+  it("does not lose the response prefix when history paging evicts the active row", async () => {
+    const rows = Array.from({ length: 199 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: rows[0].id },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+    store.applyDetailEvent(detailEvent(1, "start"));
+    store.applyDetailEvent(detailEvent(2, "token", { contentDelta: "prefix " }));
+    await flushBatchedDelta();
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("prefix ");
+
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce({
+      messages: [historyRow("conv-1", "old-row", -1)],
+      nextBefore: null,
+      hasOlder: false,
+    } as never);
+    await store.loadOlder();
+
+    // The requested older page is retained, the bound holds…
+    expect(store.messages.some((m) => m.id === "old-row")).toBe(true);
+    expect(store.messages.length).toBeLessThanOrEqual(200);
+    // …and the streamed row keeps its accumulated prefix.
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("prefix ");
+
+    store.applyDetailEvent(detailEvent(3, "token", { contentDelta: "suffix" }));
+    await flushBatchedDelta();
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("prefix suffix");
+  });
+
+  it("retains a completed answer evicted during history paging", async () => {
+    const rows = Array.from({ length: 199 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: { timestamp: rows[0].timestamp, messageId: rows[0].id },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+    store.applyDetailEvent(detailEvent(1, "start"));
+
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce({
+      messages: [historyRow("conv-1", "old-row", -1)],
+      nextBefore: null,
+      hasOlder: false,
+    } as never);
+    await store.loadOlder();
+
+    store.applyDetailEvent(
+      detailEvent(2, "complete", {
+        fullContent: "complete authoritative answer",
+      })
+    );
+    await flushPromises();
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("complete authoritative answer");
   });
 });

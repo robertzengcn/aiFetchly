@@ -198,6 +198,15 @@ export function createWorkspaceStreamPresenter(
   const highestSequence = new Map<string, number>();
   const buffer: BufferedDelta[] = [];
   let cancelFlush: (() => void) | null = null;
+  /**
+   * Rows of the ACTIVE streaming turn (audit R5-01): the assistant answer
+   * row plus the tool/plan rows appended while the run streams. History
+   * window eviction must not destroy an in-flight response — later deltas
+   * would recreate the row with empty content and lose the streamed
+   * prefix. Cleared when the run reaches a terminal state, on seed, and on
+   * dispose, so completed rows become ordinary evictable history again.
+   */
+  const pinnedRowIds = new Set<string>();
 
   const state: WorkspaceStreamState = {
     get messages() {
@@ -243,9 +252,19 @@ export function createWorkspaceStreamPresenter(
     notifyMutate?.();
   }
 
-  function appendMessage(view: ChatV2MessageView): void {
+  function appendMessage(
+    view: ChatV2MessageView,
+    options?: { pin?: boolean }
+  ): void {
     // Idempotent append keyed by message id (duplicate terminal events).
     if (messages.some((m) => m.id === view.id)) return;
+    // Active-turn rows (assistant answer, tool/plan cards) survive window
+    // eviction while their run streams (audit R5-01). The optimistic user
+    // row pins nothing — it is replaced or removed once the send is
+    // accepted and must never block eviction of settled history.
+    if (options?.pin ?? streamStatus === "streaming") {
+      pinnedRowIds.add(view.id);
+    }
     messages = [...messages, view];
     notifyMutate?.();
   }
@@ -636,6 +655,27 @@ export function createWorkspaceStreamPresenter(
           ? chunk.images
           : undefined;
         if (messageId) {
+          // Audit R5-01: final content is authoritative even when the row
+          // is not (currently) mounted — a completion that arrives as the
+          // first chunk after a re-selection must materialize the answer
+          // instead of silently dropping it.
+          if (
+            fullContent !== undefined &&
+            !messages.some((m) => m.id === messageId)
+          ) {
+            appendMessage({
+              id: messageId,
+              conversationId: conversationId ?? "",
+              role: "assistant",
+              content: fullContent,
+              timestamp: new Date().toISOString(),
+              messageType: MessageType.MESSAGE,
+              metadata: {
+                ...m0Metadata(),
+                ...(images ? { generatedImages: images } : {}),
+              },
+            });
+          }
           updateMessage(messageId, (m) => ({
             ...m,
             content: fullContent ?? m.content,
@@ -661,6 +701,8 @@ export function createWorkspaceStreamPresenter(
         errorMessage = null;
         retry = null;
         recovery = null;
+        // The turn's rows become ordinary evictable history again.
+        pinnedRowIds.clear();
         break;
       }
       case "error": {
@@ -689,6 +731,7 @@ export function createWorkspaceStreamPresenter(
           }));
         }
         retry = null;
+        pinnedRowIds.clear();
         break;
       }
       case "cancelled": {
@@ -697,6 +740,7 @@ export function createWorkspaceStreamPresenter(
         streamStatus = "cancelled";
         runtimeStatus = "idle";
         retry = null;
+        pinnedRowIds.clear();
         break;
       }
       default:
@@ -817,6 +861,9 @@ export function createWorkspaceStreamPresenter(
       // from the previous live stream must not survive it (review C8).
       retry = null;
       recovery = null;
+      // A fresh snapshot re-mounts authoritative rows — the previous (or
+      // stale) active-turn pins never apply to it.
+      pinnedRowIds.clear();
     },
     prependHistory(older: ChatV2MessageView[]): void {
       flushNow();
@@ -826,7 +873,9 @@ export function createWorkspaceStreamPresenter(
     },
     /** Optimistic user message shown while the run request is in flight. */
     appendLocalUserMessage(view: ChatV2MessageView): void {
-      appendMessage(view);
+      // The prompt row never pins (it is removed/replaced on acceptance and
+      // must never block eviction of settled history — audit R5-01 scope).
+      appendMessage(view, { pin: false });
     },
     /**
      * Remove one row by id (a send accepted into the durable pending queue:
@@ -870,10 +919,29 @@ export function createWorkspaceStreamPresenter(
     ): void {
       const retain = options?.retain ?? "newest";
       if (messages.length <= maxRows) return;
-      messages =
-        retain === "newest"
-          ? messages.slice(messages.length - maxRows)
-          : messages.slice(0, maxRows);
+      if (retain === "newest") {
+        // Live direction: the oldest rows leave (the mount bound stays;
+        // the store re-arms cursor/availability so evicted rows stay
+        // reachable — audit R5-02).
+        messages = messages.slice(messages.length - maxRows);
+        return;
+      }
+      // Backward paging direction: evict from the newest end but NEVER the
+      // active turn's rows (audit R5-01) — a mid-run streamed answer must
+      // not be destroyed by the older page the user requested. The nearest
+      // unpinned rows leave instead; the bound still holds for the
+      // unpinned population.
+      const keep: ChatV2MessageView[] = [];
+      let removable = messages.length - maxRows;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const row = messages[index] as ChatV2MessageView;
+        if (removable > 0 && !pinnedRowIds.has(row.id)) {
+          removable -= 1;
+          continue;
+        }
+        keep.unshift(row);
+      }
+      messages = keep;
     },
     flush(): void {
       flushNow();
@@ -897,6 +965,7 @@ export function createWorkspaceStreamPresenter(
       conversationId = null;
       activeRunId = null;
       activeAssistantMessageId = null;
+      pinnedRowIds.clear();
       // Review C8: transient retry/recovery banners never outlive their run.
       retry = null;
       recovery = null;
