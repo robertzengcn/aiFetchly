@@ -43,7 +43,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R01 — P1: a new voice session changes the owner used by an older acceptance callback
 
-- [ ] Capture immutable session identity in every voice callback; compare selection against that callback's owner, not the latest session's global owner.
+- [x] Capture immutable session identity in every voice callback; compare selection against that callback's owner, not the latest session's global owner.
 - **Requirements:** FR-SUB-002/007, FR-VOI-010, FR-LIF-002; PRD §14 conversation privacy.
 - **Evidence:** `src/views/components/aiChatV2/AiChatV2Composer.vue:708–712` defines `stillOwnsComposition()` against mutable `voiceSessionOwnerDraftKey`. `onMicClick` changes it for every Start at :1068. The acceptance closure at :978–1001 calls that global predicate even though it has a captured `voiceOwnerDraftKey` available.
 - **Reproduce:** Auto-send voice text `same words` in A; defer acceptance. Switch to B, type `same words`, and start another recording. Resolve A's acceptance while B's session is current.
@@ -53,7 +53,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R02 — P1: a disposed recorder can acquire the microphone and start recording later
 
-- [ ] Invalidate pending acquisition on dispose and stop any stream returned to a stale/disposed session before creating or starting a recorder.
+- [x] Invalidate pending acquisition on dispose and stop any stream returned to a stale/disposed session before creating or starting a recorder.
 - **Requirements:** FR-VOI-003/010, FR-LIF-002; PRD §14 privacy and §19 resource ownership; prior R2 N06.
 - **Evidence:** `src/views/components/aiChatV2/voice/BrowserVoiceRecorder.ts:123–132` awaits `getUserMedia`, then unconditionally assigns its stream and constructs a recorder. `dispose()` at :190–198 clears only currently assigned resources; there is no disposed/acquisition-generation check after the await. Composer unmount calls `dispose()` at `AiChatV2Composer.vue:1205–1207`, but that cannot stop a stream that has not arrived yet.
 - **Reproduce:** Start with deferred `getUserMedia`; dispose the recorder; resolve acquisition with an injected media stream.
@@ -63,7 +63,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R03 — P2: the “durable identity” image ledger still binds runs by FIFO guesses and drops early events
 
-- [ ] Carry the authoritative pending/source identity into the run fact or reconcile it from main; buffer early facts and make binding/resolution idempotent by actual identity.
+- [x] Carry the authoritative pending/source identity into the run fact or reconcile it from main; buffer early facts and make binding/resolution idempotent by actual identity.
 - **Requirements:** FR-SUB-006, FR-QUE-006/012/013, FR-IMG-002/015, FR-LIF-004; AD-002/003/005.
 - **Evidence:** `src/views/store/selectedConversation.ts:404–417` binds `run_started` to the first unresolved/unbound entry, without checking whether that run ID is already bound. `registerAcceptedRun` is called only after `await startChatRun` at :767. `handleSummaryFact` has no early-event buffer. Every ordinary workspace receipt is a pending marker, so matching the pending identity to the real run matters on idle as well as busy sends.
 - **Reproduction A — ordering:** Hold the submission reply, deliver `run_started(real-1)`, then resolve the reply as `pending-p1` and deliver `run_completed(real-1)`. **Actual:** no resolution is published; expected ordinal 1 is undefined. The queue's `scheduleDrain()` is asynchronous and does not define a renderer receipt-before-event ordering contract.
@@ -73,7 +73,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R04 — P2: image cleanup is still lost when completion occurs while the center is unmounted
 
-- [ ] Move reference-clear consumption to app-scoped orchestration, or durably queue every resolution and drain it safely when the center returns.
+- [x] Move reference-clear consumption to app-scoped orchestration, or durably queue every resolution and drain it safely when the center returns.
 - **Requirements:** FR-IMG-002/015, FR-LIF-001/004; AD-005 and design §10 lifecycle ownership.
 - **Evidence:** The registry now survives remount in `src/views/store/composerDrafts.ts`, but consumption remains in the component watcher at `AiChatCenterSurface.vue:1552–1578`. That watcher is destroyed on unmount and is not immediate on remount. The selected store exposes only `lastResolvedReferenceRun`, so merely making the watcher immediate would still lose multiple resolutions while away.
 - **Reproduce:** With the same Pinia instance, submit image m1, unmount the center, deliver its successful summary terminal, then remount. Assert the store resolved the correct run before remount.
@@ -82,7 +82,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R05 — P2: attachment bytes are excluded from retry identity
 
-- [ ] Use a digest of normalized attachment content as part of the logical submission identity; keep bytes out of logs, but do not omit them from equality.
+- [x] Use a digest of normalized attachment content as part of the logical submission identity; keep bytes out of logs, but do not omit them from equality.
 - **Requirements:** FR-SUB-001/003/005/006; stable submission/retry identity in design §6/§10/§25.
 - **Evidence:** `selectedConversation.ts:234–255` fingerprints file name, MIME, size and kind, but omits `contentBase64`. A failed/ambiguous attempt retains that fingerprint and request ID. Main pending model deduplication at `src/model/AIChatPendingMessage.model.ts:80–94` compares conversation and displayed content, not a complete attachment/request digest despite its comment mentioning content/options.
 - **Reproduce:** Send a document containing `AAA`; simulate a lost reply. Replace it with `BBB`, keeping name/type/length and prompt identical, then retry. The mock ID generator can return two different IDs.
@@ -92,7 +92,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### R06 — P2: periodic renderer snapshots count the same telemetry repeatedly
 
-- [ ] Choose a consistent cumulative-snapshot or delta protocol with renderer/session identity, ordering and retry semantics; do not add full lifetime aggregates on every push.
+- [x] Choose a consistent cumulative-snapshot or delta protocol with renderer/session identity, ordering and retry semantics; do not add full lifetime aggregates on every push.
 - **Requirements:** PRD §20/24; design §18 observability and reliable soak evidence.
 - **Evidence:** `src/views/api/aiChatRendererMetricsBridge.ts:23–29` pushes `aiChatRendererMetricsSnapshot()` every 30 seconds without resetting it or recording an acknowledgement watermark. `src/main-process/communication/aiChatRendererMetricsIpc.ts:78–95` adds each received aggregate/count into main. The renderer snapshot is cumulative for the life of its realm.
 - **Reproduce:** Push the same legitimate snapshot twice: 4 timing samples, mean 12 ms, plus 9 projected-chunk counts.
@@ -104,7 +104,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 
 ### G01 — Observability contract: retain a real click-to-acceptance measure or revise the authority
 
-- [ ] Implement the design's full submit-click → durable acceptance observation, or explicitly amend the authoritative measurement requirement to the narrower supported scope.
+- [x] Implement the design's full submit-click → durable acceptance observation (implemented, not amended), or explicitly amend the authoritative measurement requirement to the narrower supported scope.
 - **Evidence:** The latest code honestly renamed `submit_to_acceptance_ms` to `queue_submit_to_acceptance_ms` (`ai-chat-workspace-ipc.ts:535–555`), measured immediately around queue submission. Technical design §18.2 still requires “submit click to durable acceptance.” Attachment encoding, IPC and validation before that call are excluded, and no renderer-origin start measurement was found for the full journey.
 - **Assessment:** The misleading name is fixed. This is a remaining scope mismatch, not a request to rename the narrower metric back. Preserve the useful queue metric and the new continuation/selection measurements.
 - **Done when:** A delayed-attachment/IPC test proves the full measure includes those stages, or the PRD/design and soak dashboards agree explicitly on the reduced scope.
@@ -112,7 +112,7 @@ Reproduction fixtures were removed from the worktree and retained as `/tmp/audit
 ### V01 — Successful voice journey and newly identified failure boundaries
 
 - [ ] Run the default-route record → successful transcription → auto-send → spoken-response journey with deterministic controlled audio/runtime services, plus a separately configured real-runtime check.
-- [ ] Add permanent regression tests for R01/R02 and the image, retry and telemetry cases R03–R06 alongside the fixes; use actual integration boundaries where mocks previously hid sequencing.
+- [x] Add permanent regression tests for R01/R02 and the image, retry and telemetry cases R03–R06 alongside the fixes; use actual integration boundaries where mocks previously hid sequencing.
 - **Evidence:** `test/e2e/specs/aiChatVoiceParity.test.ts` still covers missing runtime/model and failure handling. The updated R2 outcome record explicitly leaves successful voice evidence open. This is not closed by general Electron suite pass counts.
 - **Requirements:** FR-VOI-001–010; PRD §22/23; design §21.4 item 8.
 
