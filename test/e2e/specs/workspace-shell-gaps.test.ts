@@ -266,12 +266,29 @@ test.describe("window restoration (FR-WIN-007, criterion 35)", () => {
           () => process.env.AIFETCHLY_E2E_INITIAL_MAXIMIZED ?? "(unset)"
         );
         expect(envApplied).toBe("1");
-        const geometry = await app.electronApp.evaluate(({ BrowserWindow }) => {
+        const geometry = await app.electronApp.evaluate(({ BrowserWindow, screen }) => {
           const win = BrowserWindow.getAllWindows()[0];
-          return win.getNormalBounds();
+          return {
+            normalBounds: win.getNormalBounds(),
+            workArea: screen.getPrimaryDisplay().workArea,
+          };
         });
-        expect(geometry.width).toBe(1280);
-        expect(geometry.height).toBe(800);
+        // Design §14.3: normal (restore-down) bounds stay the deterministic
+        // preferred 1280x800 whenever the work area admits it (width/height
+        // minus the 48px margins on every side, floored at the 960x640
+        // practical minimum). Small headless X servers (e.g. 1280x960x24)
+        // legitimately restore to the margin-shrunk size, so the expectation
+        // is derived from the observed work area.
+        const expectedWidth = Math.max(
+          960,
+          Math.min(1280, geometry.workArea.width - 96)
+        );
+        const expectedHeight = Math.max(
+          640,
+          Math.min(800, geometry.workArea.height - 96)
+        );
+        expect(geometry.normalBounds.width).toBe(expectedWidth);
+        expect(geometry.normalBounds.height).toBe(expectedHeight);
       } finally {
         await closeApp(app);
       }

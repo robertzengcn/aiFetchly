@@ -32,16 +32,30 @@ test.describe("persistent shell startup (design §14, §25.6)", () => {
     shellApp: app,
   }) => {
     await openWorkspace(app.mainWindow);
-    const geometry = await app.electronApp.evaluate(({ BrowserWindow }) => {
+    const geometry = await app.electronApp.evaluate(({ BrowserWindow, screen }) => {
       const win = BrowserWindow.getAllWindows()[0];
       return {
         bounds: win.getNormalBounds(),
         maximized: win.isMaximized(),
+        workArea: screen.getPrimaryDisplay().workArea,
       };
     });
+    // Design §14.3: first launch prefers 1280x800 INSIDE the work area with
+    // 48px margins on every side — a display whose work area is narrower than
+    // 1376 shrinks the rectangle (min(1280, area.width - 2*48), floored at the
+    // 960x640 practical minimum). Derive the expected size from the actual
+    // work area so the deterministic contract holds on small X servers too.
+    const expectedWidth = Math.max(
+      960,
+      Math.min(1280, geometry.workArea.width - 96)
+    );
+    const expectedHeight = Math.max(
+      640,
+      Math.min(800, geometry.workArea.height - 96)
+    );
     expect(geometry.maximized).toBe(false);
-    expect(geometry.bounds.width).toBe(1280);
-    expect(geometry.bounds.height).toBe(800);
+    expect(geometry.bounds.width).toBe(expectedWidth);
+    expect(geometry.bounds.height).toBe(expectedHeight);
   });
 
   test("lands in the chat center inside the persistent shell", async ({
