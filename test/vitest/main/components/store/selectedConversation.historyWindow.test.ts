@@ -667,3 +667,82 @@ describe("live growth obeys the row bound and keeps evicted rows reachable (audi
     expect(store.hasOlder).toBe(false);
   });
 });
+
+describe("paging state stays owned by the newest selection (audit R5-03)", () => {
+  it("loadOlder refuses to page with the previous selection's cursor while a snapshot is pending", async () => {
+    await selectSnapshot("conv-a", {
+      nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-a" },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    let finish: (value: unknown) => void = () => undefined;
+    vi.mocked(selectConversation).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }) as never
+    );
+    const selection = store.loadSelection("conv-b");
+    await flushPromises();
+    expect(store.loading).toBe(true);
+    // The NEW selection owns the paging state from the start: the previous
+    // cursor must not be usable (and must not announce stale availability).
+    expect(store.hasOlder).toBe(false);
+
+    // While B's snapshot is pending there must be NO history request at
+    // all — never a request mixing A's cursor into B beyond its snapshot.
+    await store.loadOlder();
+    const callsDuringLoad = [...vi.mocked(loadHistoryPage).mock.calls];
+    expect(callsDuringLoad).toEqual([]);
+
+    finish({
+      acceptedGeneration: 2,
+      messages: [],
+      nextBefore: { timestamp: "2026-10-19T01:00:00.000Z", messageId: "cursor-b" },
+      hasOlder: true,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "B",
+    } as never);
+    await selection;
+    await flushPromises();
+
+    // Once B's snapshot owns its own cursor, paging resumes for B with B's
+    // cursor.
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (conversationId: string, _limit: number, cursor: unknown) => {
+        expect(conversationId).toBe("conv-b");
+        expect((cursor as { messageId: string }).messageId).toBe("cursor-b");
+        return {
+          messages: [historyRow("conv-b", "older-b", -30)],
+          nextBefore: null,
+          hasOlder: false,
+        } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
+    expect(store.messages.some((m) => m.id === "older-b")).toBe(true);
+    expect(store.hasOlder).toBe(false);
+  });
+
+  it("a failed selection leaves no usable cursor behind", async () => {
+    await selectSnapshot("conv-a", {
+      nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-a" },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    vi.mocked(selectConversation).mockRejectedValueOnce(
+      new Error("snapshot failed")
+    );
+    await store.loadSelection("conv-b");
+    await flushPromises();
+    expect(store.loadError).toBe("snapshot failed");
+
+    const callsBefore = vi.mocked(loadHistoryPage).mock.calls.length;
+    await store.loadOlder();
+    expect(vi.mocked(loadHistoryPage).mock.calls.length).toBe(callsBefore);
+    expect(store.hasOlder).toBe(false);
+  });
+});

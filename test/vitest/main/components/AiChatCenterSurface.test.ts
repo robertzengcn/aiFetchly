@@ -168,7 +168,10 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
 import {
   resetWorkspaceRolloutAdaptersForTest,
 } from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
-import { fetchWorkspaceRolloutFlags } from "@/views/api/aiChatWorkspace";
+import {
+  fetchWorkspaceRolloutFlags,
+  loadHistoryPage,
+} from "@/views/api/aiChatWorkspace";
 import {
   selectConversation,
   subscribeSummaryEvents,
@@ -5752,6 +5755,84 @@ describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () 
       expect.anything()
     );
     expect(clearChatV2Conversation).toHaveBeenCalledWith("conv-g02");
+
+    wrapper.unmount();
+  });
+});
+
+describe("load-older visible states (audit R5-03)", () => {
+  it("hides the load-older control while a snapshot is pending and re-enables it from each conversation's own paging state", async () => {
+    // Conversation A: its snapshot carries historical paging state.
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: {
+        timestamp: "2026-10-19T00:00:00.000Z",
+        messageId: "cursor-a",
+      },
+      hasOlder: true,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "A",
+    } as never);
+    const wrapper = mountSurface();
+    await useSelectedConversationStore().loadSelection("conv-a");
+    await flushPromises();
+    let loadOlder = wrapper.find('[data-testid="workspace-load-older"]');
+    expect(loadOlder.exists()).toBe(true);
+    expect((loadOlder.element as HTMLButtonElement).disabled).toBe(false);
+
+    // Switching to B: while B's snapshot is pending the control must be
+    // GONE — never a stale proposal to page B with A's cursor.
+    let finish: (value: unknown) => void = () => undefined;
+    vi.mocked(selectConversation).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }) as never
+    );
+    const selection = useSelectedConversationStore().loadSelection("conv-b");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="workspace-load-older"]').exists()).toBe(
+      false
+    );
+
+    finish({
+      acceptedGeneration: 2,
+      messages: [],
+      nextBefore: {
+        timestamp: "2026-10-19T01:00:00.000Z",
+        messageId: "cursor-b",
+      },
+      hasOlder: true,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "B",
+    } as never);
+    await selection;
+    await flushPromises();
+    // B's own snapshot re-establishes the control with availability.
+    loadOlder = wrapper.find('[data-testid="workspace-load-older"]');
+    expect(loadOlder.exists()).toBe(true);
+
+    // While an older page loads the control is disabled; afterwards the
+    // next round-trip decides its availability again.
+    let finishPage: (value: unknown) => void = () => undefined;
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPage = resolve;
+        }) as never
+    );
+    const pageLoad = useSelectedConversationStore().loadOlder();
+    await flushPromises();
+    expect((loadOlder.element as HTMLButtonElement).disabled).toBe(true);
+
+    finishPage({ messages: [], nextBefore: null, hasOlder: false });
+    await Promise.all([pageLoad, flushPromises()]);
+    expect(wrapper.find('[data-testid="workspace-load-older"]').exists()).toBe(
+      false
+    );
 
     wrapper.unmount();
   });

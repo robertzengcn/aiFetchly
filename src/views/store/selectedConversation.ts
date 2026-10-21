@@ -994,6 +994,13 @@ export const useSelectedConversationStore = defineStore(
       workspaceStore.setSelected(conversationId);
       loading.value = conversationId !== null;
       loadError.value = null;
+      // Audit R5-03: the incoming selection owns fresh paging state from
+      // the very start. The previous conversation's cursor must never be
+      // usable (Load older cannot fire with it while the new snapshot is
+      // pending) and stale availability must not leak across selections;
+      // the snapshot re-establishes both on a successful load.
+      nextBeforeCursor = null;
+      hasOlder.value = false;
 
       // Clear only presentation buffers — the previous run keeps executing.
       presenter.dispose();
@@ -1089,7 +1096,18 @@ export const useSelectedConversationStore = defineStore(
      */
     async function loadOlder(): Promise<void> {
       const conversationId = workspaceStore.selectedConversationId;
-      if (!conversationId || !nextBeforeCursor || loadingOlder.value) return;
+      // Audit R5-03: refuse while the selection's snapshot is still in
+      // flight — until it lands there is no owned cursor for this
+      // selection, and paging with the previous selection's cursor would
+      // request the wrong range (or corrupt a selection boundary).
+      if (
+        !conversationId ||
+        loading.value ||
+        !nextBeforeCursor ||
+        loadingOlder.value
+      ) {
+        return;
+      }
       const selectionToken = appliedGeneration;
       const loadToken = ++olderLoadSeq;
       loadingOlder.value = true;
