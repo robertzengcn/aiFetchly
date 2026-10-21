@@ -118,6 +118,27 @@ beforeEach(() => {
   } as never);
 });
 
+/** Live detail event helper mirroring the detail-event shape. */
+function detailEvent(
+  sequence: number,
+  eventType: "start" | "token" | "complete",
+  extra: Record<string, unknown> = {}
+): ChatRunDetailEvent {
+  return {
+    conversationId: "conv-1",
+    runId: "run-live",
+    sequence,
+    emittedAt: "2026-10-20T10:00:00.000Z",
+    eventType,
+    payload: { eventType, messageId: "live-answer", ...extra },
+  } as ChatRunDetailEvent;
+}
+
+async function flushBatchedDelta(): Promise<void> {
+  // The presenter batches deltas for 50 ms; wait past the window.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+}
+
 describe("selectedConversation history paging isolation (audit R4-01)", () => {
   it("a resolved A history page never enters conversation B", async () => {
     await selectSnapshot("conv-a", {
@@ -487,7 +508,10 @@ describe("selectedConversation history window eviction (audit R4-04)", () => {
     expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(true);
 
     // A live run starts while the user is paged back: its streamed row is
-    // appended at the tail and does not disturb the retained older range.
+    // appended at the tail. A full window overflows at the FIRST live row,
+    // so the front row (the deepest fetched page) is evicted — audit
+    // R5-02 refines R4-04: the eviction is recoverable, because the store
+    // re-arms the cursor/availability at the retained top row's boundary.
     store.applyDetailEvent({
       conversationId: "conv-1",
       runId: "run-live",
@@ -497,33 +521,29 @@ describe("selectedConversation history window eviction (audit R4-04)", () => {
       payload: { eventType: "start", messageId: "live-row" },
     });
     await flushPromises();
+    expect(store.messages[store.messages.length - 1]?.id).toBe("live-row");
+    expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(false);
+    expect(store.hasOlder).toBe(true);
+    // Recovery: the next Load older request addresses the retained top
+    // row's boundary and refetches the evicted page content.
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (_conversationId: string, _limit: number, cursor: unknown) => {
+        expect((cursor as { messageId: string }).messageId).toBe("recent-0");
+        return {
+          messages: [historyRow("conv-1", "oldest-kept", -30)],
+          nextBefore: null,
+          hasOlder: false,
+        } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
     expect(store.messages.some((m) => m.id === "oldest-kept")).toBe(true);
+    expect(store.messages.length).toBeLessThanOrEqual(200);
     expect(store.messages[store.messages.length - 1]?.id).toBe("live-row");
   });
 });
 
 describe("active answer survives history-window eviction (audit R5-01)", () => {
-  /** Live detail event helper mirroring the detail-event shape. */
-  function detailEvent(
-    sequence: number,
-    eventType: "start" | "token" | "complete",
-    extra: Record<string, unknown> = {}
-  ): ChatRunDetailEvent {
-    return {
-      conversationId: "conv-1",
-      runId: "run-live",
-      sequence,
-      emittedAt: "2026-10-20T10:00:00.000Z",
-      eventType,
-      payload: { eventType, messageId: "live-answer", ...extra },
-    } as ChatRunDetailEvent;
-  }
-
-  async function flushBatchedDelta(): Promise<void> {
-    // The presenter batches deltas for 50 ms; wait past the window.
-    await new Promise((resolve) => setTimeout(resolve, 80));
-  }
-
   it("does not lose the response prefix when history paging evicts the active row", async () => {
     const rows = Array.from({ length: 199 }, (_unused, index) =>
       historyRow("conv-1", `recent-${index}`, 400 - index)
@@ -591,5 +611,59 @@ describe("active answer survives history-window eviction (audit R5-01)", () => {
     expect(
       store.messages.find((m) => m.id === "live-answer")?.content
     ).toBe("complete authoritative answer");
+  });
+});
+
+describe("live growth obeys the row bound and keeps evicted rows reachable (audit R5-02)", () => {
+  it("a live response start enforces the 200-row bound synchronously", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: null,
+      hasOlder: false,
+    });
+    const store = useSelectedConversationStore();
+    store.applyDetailEvent(detailEvent(1, "start"));
+    await flushPromises();
+    expect(store.messages.length).toBe(200);
+  });
+
+  it("rows evicted by live growth stay reachable through a re-armed cursor and availability", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    // The exhausted snapshot below (hasOlder false + null cursor) asserts
+    // that a live eviction re-opens availability for the evicted rows.
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: null,
+      hasOlder: false,
+    });
+    const store = useSelectedConversationStore();
+    store.applyDetailEvent(detailEvent(1, "start"));
+    await flushPromises();
+    // The window trimmed its OLDEST row and re-armed the paging state:
+    // the cursor covers the evicted row and the control re-appears.
+    expect(store.hasOlder).toBe(true);
+
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (_conversationId: string, _limit: number, cursor: unknown) => {
+        // The cursor must address the boundary of the retained top row —
+        // never the evicted one.
+        expect((cursor as { messageId: string }).messageId).toBe("recent-1");
+        return {
+          messages: [historyRow("conv-1", "recent-0", 400)],
+          nextBefore: null,
+          hasOlder: false,
+        } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
+    expect(store.messages.some((m) => m.id === "recent-0")).toBe(true);
+    expect(store.messages.length).toBe(200);
+    // The retry hit exhaustion through the server's own verdict.
+    expect(store.hasOlder).toBe(false);
   });
 });

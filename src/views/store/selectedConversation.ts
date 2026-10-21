@@ -317,6 +317,22 @@ export const useSelectedConversationStore = defineStore(
 
     function syncFromPresenter(): void {
       const state = presenter.getState();
+      // Audit R5-02: this is the single choke point for the mount bound.
+      // Live growth (start/tool/plan cards, optimistic sends) previously
+      // bypassed the 200-row bound — only the explicit loadOlder eviction
+      // enforced it. When the projection overflows here, the OLDEST rows
+      // are evicted (the live tail stays), and the store re-arms the
+      // paging state: the cursor moves to the boundary of the retained
+      // top row and availability re-opens, because the evicted rows are
+      // older than that top row and stay loadable through "Load older".
+      if (state.messages.length > MAX_MOUNTED_MESSAGES) {
+        presenter.trimToWindow(MAX_MOUNTED_MESSAGES, { retain: "newest" });
+        const top = state.messages[0];
+        if (top) {
+          nextBeforeCursor = { timestamp: top.timestamp, messageId: top.id };
+          hasOlder.value = true;
+        }
+      }
       messages.value = [...state.messages];
       activeAssistantMessageId.value = state.activeAssistantMessageId;
       streamStatus.value = state.streamStatus;
