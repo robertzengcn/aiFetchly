@@ -320,21 +320,6 @@
   "overrides": {
     "canvas": "npm:@napi-rs/canvas"
   },
-  "eslintConfig": {
-    "root": true,
-    "env": {
-      "node": true
-    },
-    "extends": [
-      "eslint:recommended",
-      "@vue/typescript",
-      "plugin:vue/vue3-essential"
-    ],
-    "parserOptions": {
-      "parser": "@typescript-eslint/parser"
-    },
-    "rules": {}
-  },
   "browserslist": [
     ">0.2%",
     "not dead",
@@ -352,11 +337,6 @@
     "bing",
     "web-scraping"
   ],
-  "lint-staged": {
-    "*.{js,ts,vue}": [
-      "sh scripts/lint-staged-eslint.sh"
-    ]
-  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

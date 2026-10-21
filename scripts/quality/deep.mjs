@@ -39,8 +39,7 @@ process.stdout.write(
 // 1. Typed ESLint over the source tree (deep profile). The deep profile
 //    extends the fast profile and adds parser services; the ESLint CLI with
 //    --no-eslintrc keeps discovery explicit.
-runStep('typed lint', 'node', [
-  require.resolve('eslint/bin/eslint.js', { paths: [repoRoot] }),
+runStep('typed lint', path.join(repoRoot, 'node_modules', '.bin', 'eslint'), [
   '--no-eslintrc',
   '--config',
   path.join(repoRoot, 'scripts', 'quality', 'eslint-deep.cjs'),

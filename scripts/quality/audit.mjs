@@ -22,12 +22,12 @@ const { loadManifest } = await import('./check-exceptions.mjs');
 
 process.stdout.write('quality audit: full-source read-only inventory (fast profile)\n');
 
-// 1. Engine pass over the source tree.
-const eslintBin = require.resolve('eslint/bin/eslint.js', { paths: [repoRoot] });
+// 1. Engine pass over the source tree. eslint 8's package exports do not
+// expose ./bin/eslint.js to ESM resolvers — drive the .bin shim directly.
+const eslintBin = path.join(repoRoot, 'node_modules', '.bin', 'eslint');
 const run = spawnSync(
-  process.execPath,
+  eslintBin,
   [
-    eslintBin,
     '--no-eslintrc',
     '--config',
     path.join(repoRoot, 'scripts', 'quality', 'eslint-fast.cjs'),
@@ -40,7 +40,7 @@ const run = spawnSync(
     'test',
     'scripts',
   ],
-  { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }
+  { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, shell: false }
 );
 
 if (run.error || (run.status !== 0 && run.status !== 1)) {

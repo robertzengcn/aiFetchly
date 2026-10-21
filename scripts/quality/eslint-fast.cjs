@@ -29,13 +29,24 @@ module.exports = {
   rules: {
     ...coreBlockingRules,
     ...sonarRules,
-    ...typescriptBlockingRules,
-    ...typescriptAdvisoryRules,
+    // TypeScript-scoped rules live in the TS/TSX/Vue overrides below so
+    // they never run against plain JS with espree (the TS-only rule
+    // explicit-function-return-type crashes on espree ASTs).
+    ...typescriptBlockingRules.javascriptSafe,
     // Architecture rules (aifetchly/*) run as a dedicated AST pass in
     // architecture-check.mjs — ESLint 8 legacy config cannot package an
     // in-repo plugin. See this file's header and the runner.
   },
   overrides: [
+    {
+      // TypeScript files (incl. Vue script via the base vue parser chain):
+      // the full TS blocking + advisory set.
+      files: ['**/*.ts', '**/*.tsx', '**/*.vue'],
+      rules: {
+        ...typescriptBlockingRules.rules,
+        ...typescriptAdvisoryRules,
+      },
+    },
     {
       // CommonJS tooling scripts (this directory): node source type.
       files: ['scripts/**/*.cjs'],

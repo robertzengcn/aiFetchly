@@ -16,20 +16,33 @@ const sonarRules = {
   'sonarjs/no-all-duplicated-branches': 'error',
 };
 
-/** Blocking TypeScript rules for the fast profile. */
-const typescriptBlockingRules = {
+/**
+ * Blocking TypeScript rules for the fast profile. Split because two of them
+ * require the TypeScript AST: running them against plain .js files (parsed
+ * with espree) crashes @typescript-eslint/eslint-plugin 7 — see
+ * explicit-function-return-type's getFunctionHeadLoc. The TS-only subset
+ * applies to .ts/.tsx/.vue files; `javascriptSafe` (no-unused-vars)
+ * applies everywhere.
+ */
+const TS_AST_REQUIRED_RULES = {
   '@typescript-eslint/no-explicit-any': 'error',
-  '@typescript-eslint/no-unused-vars': [
-    'error',
-    {
-      // Documented repo convention: a leading underscore marks intentionally
-      // unused parameters/variables (see .eslintrc.json history and the
-      // argsIgnorePattern fix from 2026-08-20).
-      argsIgnorePattern: '^_',
-      varsIgnorePattern: '^_',
-      caughtErrorsIgnorePattern: '^_',
-    },
-  ],
+};
+
+const typescriptBlockingRules = {
+  rules: TS_AST_REQUIRED_RULES,
+  javascriptSafe: {
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      {
+        // Documented repo convention: a leading underscore marks intentionally
+        // unused parameters/variables (see .eslintrc.json history and the
+        // argsIgnorePattern fix from 2026-08-20).
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      },
+    ],
+  },
 };
 
 /**
