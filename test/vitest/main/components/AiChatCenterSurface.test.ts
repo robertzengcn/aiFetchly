@@ -185,6 +185,8 @@ import {
   approveChatV2Plan,
   isHistoryUiEnabled,
   clearChatV2Conversation,
+  steerChatV2PendingMessage,
+  subscribeChatV2PendingEvents,
 } from "@/views/api/aiChatV2";
 import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
@@ -4869,6 +4871,273 @@ describe("AiChatCenterSurface image-reference identity resolution (audit R2 N04)
  * playback AND the pending synthesis job; a stale terminal projection of
  * the old conversation must not flush speech into the new one.
  */
+/**
+ * Audit 2026-10-21-r3 D01 — queued generated-image sends that never own a
+ * run (steered, or cancelled before the scheduling claim) must not leave an
+ * unresolved ledger row: the next run's terminal would publish the orphan's
+ * ordinal and the reference watcher would clear the tray's images. The
+ * retirement publishes a non-clearing resolution; a later ordinary run
+ * resolves its own ordinal.
+ */
+describe("AiChatCenterSurface queued image sends survive steer and cancel (audit D01)", () => {
+  // Every subscriber sees the pending broadcast (production behavior):
+  // the surface's delivered-row swap, the pending-rows store, and the
+  // selected-conversation ledger all register — dispatch to ALL of them.
+  let pendingHandlers: Array<(event: unknown) => void> = [];
+  let summaryHandler: ((event: ConversationSummaryEvent) => void) | null = null;
+
+  function trayReferences(wrapper: ReturnType<typeof mountSurface>): unknown[] {
+    return [
+      ...(useComposerDraftStore()
+        .getDraft("conv-1")
+        ?.generatedImageReferences ?? []),
+    ];
+  }
+
+  function mockSelectionSnapshot(): void {
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "Selected chat",
+    } as never);
+  }
+
+  async function selectConv1(): Promise<void> {
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    await useSelectedConversationStore().loadSelection("conv-1");
+    await flushPromises();
+  }
+
+  async function acceptImageSend(wrapper: ReturnType<typeof mountSurface>): Promise<void> {
+    useComposerDraftStore().setGeneratedImageReferences("conv-1", [
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit(
+      "send",
+      "edit this",
+      []
+    );
+    await flushPromises();
+    // The tray snapshot is armed against THIS send's ordinal and stays
+    // visible until its own run completes.
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(startChatRunMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+    });
+  }
+
+  function emitPending(event: {
+    conversationId: string;
+    pendingMessageId: string;
+    status: string;
+  }): void {
+    if (pendingHandlers.length === 0)
+      throw new Error("no pending handler captured");
+    [...pendingHandlers].forEach((handler) => {
+      handler({
+        conversationId: event.conversationId,
+        pendingMessageId: event.pendingMessageId,
+        status: event.status,
+        occurredAt: "2026-10-20T10:00:00.000Z",
+      });
+    });
+  }
+
+  function emitSummary(event: ConversationSummaryEvent["reason"], runId: string): void {
+    if (!summaryHandler) throw new Error("no summary handler captured");
+    summaryHandler({
+      conversationId: "conv-1",
+      workspaceKey: null,
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-10-20T10:00:00.000Z",
+      reason: event,
+      runId,
+    });
+  }
+
+  function emitDetail(
+    conversationId: string,
+    runId: string,
+    eventType: "start" | "complete",
+    sequence: number,
+    sourceRunId?: string | null
+  ): void {
+    useSelectedConversationStore().applyDetailEvent({
+      conversationId,
+      runId,
+      sequence,
+      emittedAt: "2026-10-20T10:00:00.000Z",
+      eventType,
+      payload: { eventType },
+      ...(sourceRunId !== undefined ? { sourceRunId } : {}),
+    });
+  }
+
+  beforeEach(() => {
+    mockSelectionSnapshot();
+    startChatRunMock.mockReset();
+    pendingHandlers = [];
+    vi.mocked(subscribeChatV2PendingEvents).mockImplementation((callback) => {
+      const handler = callback as unknown as (event: unknown) => void;
+      pendingHandlers = [...pendingHandlers, handler];
+      return () => {
+        pendingHandlers = pendingHandlers.filter((h) => h !== handler);
+      };
+    });
+    vi.mocked(subscribeSummaryEvents).mockImplementation((callback) => {
+      summaryHandler = callback;
+      return () => {
+        summaryHandler = null;
+      };
+    });
+  });
+
+  /** Each send resolves its own durable acceptance in call order. */
+  function enqueueRun(
+    conversationId: string,
+    runId: string,
+    status: "running" | "queued"
+  ): void {
+    startChatRunMock.mockResolvedValueOnce({
+      conversationId,
+      runId,
+      status,
+      acceptedAt: "",
+    });
+  }
+
+  it("cancel of a queued image send keeps the tray, and the next run's terminal resolves its own ordinal", async () => {
+    enqueueRun("conv-1", "pending-p1", "queued");
+    enqueueRun("conv-1", "run-c", "running");
+    const wrapper = mountSurface();
+    await selectConv1();
+    await acceptImageSend(wrapper);
+
+    // Cancel the queued row before it is ever claimed (no run envelope).
+    emitPending({
+      conversationId: "conv-1",
+      pendingMessageId: "p1",
+      status: "cancelled",
+    });
+    await flushPromises();
+    // B's selected images SURVIVE (retirement publishes a non-clearing
+    // resolution; only kind === "complete" removes tray references).
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+
+    // A later ordinary send C starts and completes (no reference tray).
+    useComposerDraftStore().setGeneratedImageReferences("conv-1", []);
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "later ordinary send", []);
+    await flushPromises();
+    // detail-before-summary: C carries its own durable source identity.
+    emitDetail("conv-1", "run-c", "start", 1, "run-c");
+    emitDetail("conv-1", "run-c", "complete", 2, "run-c");
+    await flushPromises();
+    // C's terminal resolves C's ordinal — never the retired B row (1).
+    expect(
+      useSelectedConversationStore().lastResolvedReferenceRun
+    ).toMatchObject({ runId: "run-c", ordinal: 2, kind: "complete" });
+    // C had no submitted reference snapshot: its completion removed nothing
+    // (the tray refs were released before C; no re-consumption of B's row).
+    expect(trayReferences(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it("a steer attempt of a trusted-reference queued row is rejected and retires nothing", async () => {
+    enqueueRun("conv-1", "pending-p1", "queued");
+    vi.mocked(steerChatV2PendingMessage).mockRejectedValueOnce(
+      new Error("ATTACHMENTS_NOT_STEERABLE: cannot steer reference rows")
+    );
+    const wrapper = mountSurface();
+    await selectConv1();
+    await acceptImageSend(wrapper);
+
+    // The steer click hits the module guard (no claimation happens).
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("steer-pending", "p1");
+    await flushPromises();
+    expect(steerChatV2PendingMessage).toHaveBeenCalledWith(
+      "conv-1",
+      "p1"
+    );
+    // Nothing was retired: the queued row keeps the ledger alive until its
+    // own normal dispatch (duration box — steering does not clear the tray).
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    expect(useSelectedConversationStore().lastResolvedReferenceRun).toBeNull();
+
+    // The row still dispatches normally later: its start/terminal resolve
+    // ordinal 1 (the retirement never fired, the terminal claims ordinal 1).
+    emitDetail("conv-1", "real-1", "start", 1, "pending-p1");
+    emitDetail("conv-1", "real-1", "complete", 2, "pending-p1");
+    await flushPromises();
+    expect(
+      useSelectedConversationStore().lastResolvedReferenceRun
+    ).toMatchObject({ runId: "real-1", ordinal: 1, kind: "complete" });
+    expect(trayReferences(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it("summary-before-detail: buffered summary facts resolve C's own ordinal once its acceptance lands", async () => {
+    enqueueRun("conv-1", "pending-p1", "queued");
+    const wrapper = mountSurface();
+    await selectConv1();
+    await acceptImageSend(wrapper);
+
+    // Cancel B, then start C with a DEFERRED acceptance reply so the
+    // redacted summary channel produces C's facts first (summary-before-
+    // detail) while the acceptance is still in flight.
+    emitPending({
+      conversationId: "conv-1",
+      pendingMessageId: "p1",
+      status: "cancelled",
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+    let replyC: (value: unknown) => void = () => undefined;
+    startChatRunMock.mockImplementationOnce(
+      () => new Promise((resolve) => { replyC = resolve; })
+    );
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit(
+      "send",
+      "later ordinary send",
+      []
+    );
+    await flushPromises();
+    emitSummary("run_started", "run-c");
+    emitSummary("run_completed", "run-c");
+    replyC({ conversationId: "conv-1", runId: "run-c", status: "running", acceptedAt: "" });
+    await flushPromises();
+    // The buffered facts replayed on the acceptance and resolved C's row —
+    // ordinal 2, never the retired B row (1).
+    expect(
+      useSelectedConversationStore().lastResolvedReferenceRun
+    ).toMatchObject({ runId: "run-c", ordinal: 2, kind: "complete" });
+    // C carried its own snapshot (the tray refs were still armed, B never
+    // completed): C's terminal removed them (B's row stays retired).
+    expect(trayReferences(wrapper)).toEqual([]);
+    // C's own detail facts arrive later — duplicates of an already-resolved
+    // row must not publish a second resolution or double-clear anything.
+    emitDetail("conv-1", "run-c", "start", 3, "run-c");
+    emitDetail("conv-1", "run-c", "complete", 4, "run-c");
+    await flushPromises();
+    expect(
+      useSelectedConversationStore().lastResolvedReferenceRun
+    ).toMatchObject({ runId: "run-c", ordinal: 2, kind: "complete" });
+    expect(trayReferences(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+});
+
 describe("AiChatCenterSurface speech cancellation (R07)", () => {
   beforeEach(() => {
     vi.mocked(cancelVoiceJob).mockClear();

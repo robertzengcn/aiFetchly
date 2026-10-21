@@ -358,11 +358,18 @@ export const useSelectedConversationStore = defineStore(
       readonly runIdAtAccept: string;
       boundRunId: string | null;
       resolved: boolean;
+      /** Terminal kind that resolved the row (completion bookkeeping). */
+      resolvedKind?: "complete" | "error" | "cancelled";
     }
     const ACCEPTED_RUN_LEDGER_CAP = 64;
     const acceptedRunLedgerByConversation = new Map<
       string,
       AcceptedRunLedgerEntry[]
+    >();
+    /** Latest resolution per resolved ("conv|ord") entry (audit D01). */
+    const resolvedResolutionByConversation = new Map<
+      string,
+      { runId: string; kind: "complete" | "error" | "cancelled"; ordinal: number }
     >();
     const lastResolvedReferenceRun = ref<{
       conversationId: string;
@@ -548,9 +555,18 @@ export const useSelectedConversationStore = defineStore(
         );
       if (!entry) return false;
       entry.resolved = true;
+      entry.resolvedKind = kind;
       while (ledger.length > 0 && ledger[0].resolved) {
         ledger.shift();
       }
+      resolvedResolutionByConversation.set(
+        `${conversationId}|${entry.acceptOrdinal}`,
+        {
+          runId,
+          kind,
+          ordinal: entry.acceptOrdinal,
+        }
+      );
       lastResolvedReferenceRun.value = {
         conversationId,
         runId,
@@ -681,14 +697,49 @@ export const useSelectedConversationStore = defineStore(
       );
       if (!entry) return;
       entry.resolved = true;
+      entry.resolvedKind = "cancelled";
       while (ledger.length > 0 && ledger[0].resolved) {
         ledger.shift();
       }
+      resolvedResolutionByConversation.set(
+        `${conversationId}|${entry.acceptOrdinal}`,
+        {
+          runId: `pending-${pendingMessageId}`,
+          kind: "cancelled",
+          ordinal: entry.acceptOrdinal,
+        }
+      );
       lastResolvedReferenceRun.value = {
         conversationId,
         runId: `pending-${pendingMessageId}`,
         kind: "cancelled",
         ordinal: entry.acceptOrdinal,
+      };
+    }
+
+    /**
+     * Re-publish an already-resolved accepted entry's resolution (audit D01).
+     * Buffered summary terminal facts replay synchronously inside
+     * `registerAcceptedRun` — their resolution can be consumed by the
+     * composerDrafts watcher BEFORE the surface's accepted-send branch has
+     * registered the submission's reference-clear snapshot, so the removal
+     * never happened. The surface re-publishes after storing its snapshot;
+     * the watcher will then find the record and consume it. Resolved rows
+     * are trimmed from the ledger by design, so the historical resolution
+     * is read back instead of the ledger row. Idempotent: an unknown
+     * ordinal (unresolved trim) is a no-op and the normal flow's later
+     * terminal re-publishes on its own.
+     */
+    function republishResolvedRun(conversationId: string, ordinal: number): void {
+      const record = resolvedResolutionByConversation.get(
+        `${conversationId}|${ordinal}`
+      );
+      if (!record) return;
+      lastResolvedReferenceRun.value = {
+        conversationId,
+        runId: record.runId,
+        kind: record.kind,
+        ordinal: record.ordinal,
       };
     }
 
@@ -1401,6 +1452,7 @@ export const useSelectedConversationStore = defineStore(
       lastTerminalRun,
       lastResolvedReferenceRun,
       acceptedRunOrdinalFor,
+      republishResolvedRun,
       loading,
       loadError,
       hasOlder,

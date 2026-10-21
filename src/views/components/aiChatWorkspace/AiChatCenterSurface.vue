@@ -2266,6 +2266,13 @@ async function performOrdinarySend(
         runOrdinal: runOrdinal ?? -1,
         references: submittedRefs,
       });
+      // Audit D01: a buffered summary terminal can replay its resolution
+      // during the acceptance registration — the watcher ran before this
+      // snapshot was stored and consumed nothing. Re-publish the resolved
+      // entry (no-op for unresolved rows) so the watcher finds the record.
+      if (runOrdinal !== null && runOrdinal !== undefined) {
+        selectedStore.republishResolvedRun(sendConversationId, runOrdinal);
+      }
     }
     options?.onAccepted?.();
   }
