@@ -183,13 +183,13 @@ process.stdout.write(
   `quality: checking ${stagedSource.length} staged source file(s)\n`
 );
 
-const lintStagedBin = require.resolve('lint-staged/bin/lint-staged.mjs', {
-  paths: [repoRoot],
-});
+// lint-staged's package exports hide its bin subpath from ESM resolvers —
+// drive the node_modules/.bin shim (an executable JS entry with a node
+// shebang) directly, exactly like audit.mjs/deep.mjs drive eslint's.
+const lintStagedBin = path.join(repoRoot, 'node_modules', '.bin', 'lint-staged');
 const run = spawnSync(
-  process.execPath,
+  lintStagedBin,
   [
-    lintStagedBin,
     '--config',
     path.join(repoRoot, 'scripts', 'quality', 'lint-staged.config.mjs'),
     '--concurrent',

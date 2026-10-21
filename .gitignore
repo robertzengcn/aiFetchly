@@ -167,3 +167,4 @@ debug/*
 
 # Local worktree: node_modules is symlinked to the primary checkout.
 node_modules
+.husky/_/
