@@ -61,7 +61,8 @@ The four failures are assertions about production state, not compilation or setu
 
 ### R4-01 — P1: an in-flight history request inserts conversation A's content into conversation B
 
-- [ ] Guard history-page application with captured conversation **and selection generation**, including cursor, `hasOlder`, and loading-state mutations.
+- [x] Guard history-page application with captured conversation **and selection generation**, including cursor, `hasOlder`, and loading-state mutations.
+  Fixed with permanent regression suites in `test/vitest/main/components/store/selectedConversation.historyWindow.test.ts` (A→B, A→B→A, route deselection, delayed rejection while a newer page is in flight, valid same-generation paging). `loadOlder` now snapshots the immutable selection generation plus a monotonic attempt id; every post-await mutation (messages, cursor, `hasOlder`, eviction) applies only while the attempt is still current, the selection handshake invalidates in-flight attempts and owns a fresh `loadingOlder` state (including `loadSelection(null)`), and a stale `finally` never clears a newer attempt's flag.
 - **Requirements:** FR-LIF-002/004, FR-HIS-001/004; selected-conversation isolation and technical design §17 bounded paging.
 - **Location:** `src/views/store/selectedConversation.ts:984–1004`. `loadOlder()` captures A for the request but, after awaiting `loadHistoryPage`, writes to the shared presenter/cursor without rechecking selection. In contrast, `loadSelection()` at :894 uses a generation guard.
 - **Reproduce:** Select A with an older-page cursor. Start Load older and hold its IPC reply. Switch to B and complete B's snapshot. Resolve A's page with message `private-a`.
@@ -72,7 +73,8 @@ The four failures are assertions about production state, not compilation or setu
 
 ### R4-02 — P1: recorder initialization failure leaves an acquired microphone stream open
 
-- [ ] Make post-acquisition recorder setup exception-safe and release tracks/timers/state on every failed initialization stage.
+- [x] Make post-acquisition recorder setup exception-safe and release tracks/timers/state on every failed initialization stage.
+  Fixed in `src/views/components/aiChatV2/voice/BrowserVoiceRecorder.ts`: the whole post-acquisition setup (MIME probing, recorder construction, callback wiring, state arming, `recorder.start()`) now runs as a guarded transaction — any failure releases the stream's tracks, detaches the half-constructed recorder's callbacks, clears the armed timer, resets state/chunks/selection and re-propagates the ORIGINAL error; a generation guard keeps a superseded failure from tearing down a newer session. Permanent coverage added to `test/vitest/main/browserVoiceRecorder.test.ts` (probe throw, constructor throw, start throw with armed timer, retry after failure, ambient dispose is a no-op, original error propagation); the existing late-acquisition regression (audit R02) is retained. The composer catch (`AiChatV2Composer.vue`) needs no extra dispose: after rollback the recorder holds no resources.
 - **Requirements:** FR-VOI-003/010, PRD §18 failure handling and §19 resource lifetime.
 - **Location:** `src/views/components/aiChatV2/voice/BrowserVoiceRecorder.ts:145–182`: `this.stream` is adopted before MIME probing, recorder construction and `recorder.start()`, with no rollback catch. `AiChatV2Composer.vue:1078–1098` catches `start()` failure and shows a notice but does not dispose the recorder.
 - **Reproduce:** Let `getUserMedia` return a stream with a track; inject a recorder factory that throws `unsupported recording device`. Await rejected `start()` and inspect track-stop count before explicitly disposing the test recorder.
@@ -83,7 +85,8 @@ The four failures are assertions about production state, not compilation or setu
 
 ### R4-03 — P2: the app-scoped image cleanup watcher loses intermediate run resolutions
 
-- [ ] Consume every resolution using an explicit queue or immediate idempotent dispatch; do not treat one asynchronously watched “last event” ref as an event queue.
+- [x] Consume every resolution using an explicit queue or immediate idempotent dispatch; do not treat one asynchronously watched “last event” ref as an event queue.
+  Fixed with the immediate synchronous dispatch option: the selection store now publishes each resolution through a registry (`subscribeResolvedReferenceRuns`) in publish order, synchronously at the publish site, in addition to updating the ref (kept for readers/assertions). The composerDrafts cleaner attaches through that registry instead of the batched watcher, so a burst is consumed one resolution at a time; unregistered/unknown ordinals remain no-ops and the D01 acceptance-replay re-publish (`republishResolvedRun`) keeps converging after the snapshot is stored. The resolved-resolution history map is bounded (256, FIFO). Permanent coverage in `test/vitest/main/components/store/composerDrafts.resolutions.test.ts`: two-run burst, complete+failed+cancelled mixed burst, cross-conversation burst, replay-before-registration, duplicate detail/summary terminals consuming once.
 - **Requirements:** FR-IMG-002/015, FR-LIF-004, AD-005; exact accepted-reference lifetime.
 - **Location:** `src/views/store/composerDrafts.ts:190–213` watches `lastResolvedReferenceRun` with Vue's default batched flush. `selectedConversation.ts:578` replaces that single ref for each resolution. Synchronous early-fact replay and `republishResolvedRun()` are also supported paths in the same store.
 - **Reproduce:** Accept run-one with image-one and run-two with image-two. Register their distinct clear snapshots. Deliver their successful summary terminals synchronously, then flush Vue updates.
@@ -95,7 +98,8 @@ The four failures are assertions about production state, not compilation or setu
 
 ### R4-04 — P2: “Load older” discards the requested page once the transcript reaches 200 rows
 
-- [ ] Make transcript window eviction aware of paging direction and preserve the server's exhausted-history state.
+- [x] Make transcript window eviction aware of paging direction and preserve the server's exhausted-history state.
+  Fixed: `workspaceStreamPresenter.trimToWindow` is direction-aware (`retain: "newest"` keeps streaming semantics; the loadOlder eviction uses `retain: "oldest"` so the just-requested older range survives a full window — the 200-row bound is preserved and the newest end stays recoverable through the live stream and the selection snapshot reseed, the way back to the live tail). `hasOlder` always reflects the server's page verdict (the unconditional `= true` after eviction was removed — completed together with R4-01's guard commit). Permanent coverage in `test/vitest/main/components/store/selectedConversation.historyWindow.test.ts`: full-window retention with `nextBefore: null`/`hasOlder: false`, backward paging across more than 200 rows with cursor-continuity assertions and reseeded tail return, empty/duplicate pages with cursor advancement, and streamed rows arriving during history view staying appended and navigable.
 - **Requirements:** FR-HIS-001/005, PRD §19 bounded transcript, technical design §17.
 - **Location:** `selectedConversation.ts:994–1010` prepends older rows, calls `evictBeyondWindow()`, then unconditionally sets `hasOlder = true`. `src/views/utils/workspaceStreamPresenter.ts:812–816` prepends correctly, but :855–857 retains only the **last** 200 rows. The center's Load older control is at `AiChatCenterSurface.vue:115–122`.
 - **Reproduce:** Seed a full 200-row current window and a valid older cursor. Return a page containing one previously unseen older message, with `nextBefore: null` and `hasOlder: false`.
