@@ -274,6 +274,7 @@
     "electron-devtools-installer": "^3.2.0",
     "eslint": "^8.52.0",
     "eslint-plugin-prettier": "^5.0.1",
+    "eslint-plugin-sonarjs": "1.0.4",
     "eslint-plugin-vue": "^9.17.0",
     "express": "^4.17.1",
     "happy-dom": "^20.10.6",
