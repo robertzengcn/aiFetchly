@@ -122,3 +122,4 @@ Revert the hook/config/dependency commits as one change (git revert of the QG co
 restores the previous multi-pass hook). A rollback must not leave hooks silently
 disabled — `.husky/pre-commit` returning to its previous multi-line content IS the
 rollback signal.
+
