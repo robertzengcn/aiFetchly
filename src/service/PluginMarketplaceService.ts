@@ -632,8 +632,20 @@ export class PluginMarketplaceService {
       );
     }
     if (entry.access.installMode !== "direct") {
+      // R02 diagnostics: say WHY the mode is non-direct. A `ticket` entry is
+      // the genuine subscription path (Upgrade CTA); any other non-direct
+      // mode (`managed` or a defensive fallback for unrecognizable payload
+      // shapes) is an unsupported installer capability of this desktop
+      // release, NOT a subscription problem. The previous blanket
+      // "subscription required" wording made the latter indistinguishable.
       throw new Error(
-        "This plugin is not installable in this release (subscription required)."
+        entry.access.installMode === "ticket"
+          ? "This plugin is not installable in this release (subscription required). Use the Upgrade button to see plans."
+          : entry.access.installMode === "managed"
+          ? "Managed plugin installs are not supported in this desktop release yet."
+          : `This plugin cannot be installed via the \"${
+              String(entry.access.installMode)
+            }\" installer in this desktop release.`
       );
     }
     if (!entry.source || typeof entry.source === "string") {
