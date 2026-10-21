@@ -455,6 +455,18 @@ describe("AIChatPendingMessageModule cancel/clear/steer-claim", () => {
     expect(claim.ok && claim.row.pendingMessageId).toBe(
       created.pendingMessageId
     );
+    // The trusted reference channel survives on the normal dispatch: the
+    // promoted user row carries the references the engine resolves later.
+    const promoted = await module.promoteDispatchToUserMessage({
+      pendingMessageId: created.pendingMessageId,
+      claimToken: claim.ok ? claim.row.claimToken ?? "" : "",
+    });
+    const metadata = JSON.parse(promoted.metadata as string) as {
+      generatedImageReferences?: unknown[];
+    };
+    expect(metadata.generatedImageReferences).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
   });
 
   it("clearConversation deletes rows and staged bytes", async () => {
