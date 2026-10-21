@@ -8,6 +8,8 @@ const startChatRunMock = vi.fn();
 
 vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: vi.fn(),
+  windowReceive: vi.fn().mockReturnValue(() => undefined),
+  windowRemoveListener: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({

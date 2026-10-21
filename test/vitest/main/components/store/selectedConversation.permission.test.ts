@@ -11,6 +11,8 @@ const cancelChatRunMock = vi.fn();
 
 vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: (...args: unknown[]) => windowInvokeMock(...args),
+  windowReceive: vi.fn().mockReturnValue(() => undefined),
+  windowRemoveListener: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
