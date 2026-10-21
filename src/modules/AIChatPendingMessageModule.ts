@@ -478,6 +478,16 @@ export class AIChatPendingMessageModule extends BaseModule {
         "Messages with attachments will send after the current response."
       );
     }
+    const meta = this.parseMessageMetadata(row);
+    if (
+      meta?.generatedImageReferences &&
+      meta.generatedImageReferences.length > 0
+    ) {
+      throw new AIChatPendingMessageModuleError(
+        "ATTACHMENTS_NOT_STEERABLE",
+        "Messages with attachments will send after the current response."
+      );
+    }
     return await this.pendingModel.claimForSteering(
       input.pendingMessageId,
       input.targetAssistantMessageId
@@ -625,6 +635,12 @@ export class AIChatPendingMessageModule extends BaseModule {
     runtimeStatus: ChatV2RuntimeStatus = "idle"
   ): AIChatPendingMessageView {
     const attachments = this.parseAttachmentMetadata(row);
+    // D01 (audit 2026-10-21-r3): trusted generated-image reference rows ship
+    // the reference channel only on a normal dispatch — steering would drop
+    // it, so they are exactly as unsteerable as attachment rows.
+    const hasGeneratedImageReferences =
+      (this.parseMessageMetadata(row)?.generatedImageReferences?.length ??
+        0) > 0;
     return {
       pendingMessageId: row.pendingMessageId,
       conversationId: row.conversationId,
@@ -638,6 +654,7 @@ export class AIChatPendingMessageModule extends BaseModule {
       canSteer:
         row.status === "queued" &&
         attachments.length === 0 &&
+        !hasGeneratedImageReferences &&
         runtimeStatus === "running",
       steeringBoundary: row.steeringBoundary,
       activeAssistantMessageId: row.targetAssistantMessageId,

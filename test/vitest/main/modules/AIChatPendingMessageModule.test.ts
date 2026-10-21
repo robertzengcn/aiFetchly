@@ -416,6 +416,47 @@ describe("AIChatPendingMessageModule cancel/clear/steer-claim", () => {
     ).rejects.toMatchObject({ code: "ATTACHMENTS_NOT_STEERABLE" });
   });
 
+  it("claimForSteering rejects generated-image-reference rows like attachments", async () => {
+    const module = makeModule({
+      messageMetadata: {
+        source: "chat-v2",
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+      },
+    });
+    const created = await module.createPendingMessage({
+      clientRequestId: "cr-steer-ref",
+      request: { message: "hi", conversationId: "v2-sr" },
+    });
+    await expect(
+      module.claimForSteering({
+        conversationId: "v2-sr",
+        pendingMessageId: created.pendingMessageId,
+        targetAssistantMessageId: "assistant-1",
+      })
+    ).rejects.toMatchObject({ code: "ATTACHMENTS_NOT_STEERABLE" });
+    // The steering control stops offering steer for trusted reference rows.
+    const views = await module.listViews("v2-sr");
+    expect(views[0].canSteer).toBe(false);
+  });
+
+  it("image-reference rows still dispatch normally after a steer rejection", async () => {
+    const module = makeModule({
+      messageMetadata: {
+        source: "chat-v2",
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+      },
+    });
+    const created = await module.createPendingMessage({
+      clientRequestId: "cr-dispatch-ref",
+      request: { message: "hi", conversationId: "v2-dr" },
+    });
+    const claim = await module.claimOldestForDispatch("v2-dr");
+    expect(claim.ok).toBe(true);
+    expect(claim.ok && claim.row.pendingMessageId).toBe(
+      created.pendingMessageId
+    );
+  });
+
   it("clearConversation deletes rows and staged bytes", async () => {
     const module = makeModule();
     await module.createPendingMessage({
