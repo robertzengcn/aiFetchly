@@ -11,6 +11,11 @@ vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: vi.fn(),
 }));
 
+vi.mock("@/views/api/aiChatV2", () => ({
+  denyChatV2ToolPermission: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+}));
+
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),

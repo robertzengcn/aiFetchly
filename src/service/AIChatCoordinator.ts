@@ -265,7 +265,13 @@ export class AIChatCoordinator {
       terminalChunk: null,
       dispatchSettled: false,
       unclassifiedExitSummary: null,
-      adapter: new AIChatRunEventAdapter(run.runId, request.conversationId),
+      // D01 (audit 2026-10-21-r3): the accepted-send identity is the real
+      // run id itself — detail envelopes bind the accepted entry exactly.
+      adapter: new AIChatRunEventAdapter(
+        run.runId,
+        request.conversationId,
+        run.runId
+      ),
     });
     this.runIndex.set(run.runId, request.conversationId);
     this.startRequests.set(run.runId, {
@@ -367,7 +373,13 @@ export class AIChatCoordinator {
       terminalChunk: null,
       dispatchSettled: false,
       unclassifiedExitSummary: null,
-      adapter: new AIChatRunEventAdapter(run.runId, input.conversationId),
+      // D01 (audit 2026-10-21-r3): a queue-drained turn carries its pending
+      // source id so renderer ledger binds are never FIFO-based.
+      adapter: new AIChatRunEventAdapter(
+        run.runId,
+        input.conversationId,
+        `pending-${input.pendingMessageId}`
+      ),
       queueDispatch: input,
       completion,
     });

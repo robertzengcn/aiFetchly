@@ -2,6 +2,7 @@ import { computed, markRaw, ref } from "vue";
 import { defineStore } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatRunDetailEvent,
   ChatRunOwner,
@@ -29,7 +30,10 @@ import {
   subscribeSummaryEvents,
   unsubscribeDetail,
 } from "@/views/api/aiChatWorkspace";
-import { denyChatV2ToolPermission } from "@/views/api/aiChatV2";
+import {
+  denyChatV2ToolPermission,
+  subscribeChatV2PendingEvents,
+} from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
 import {
@@ -408,6 +412,10 @@ export const useSelectedConversationStore = defineStore(
      *            accepted run id): only the entry registered for THAT
      *            send may bind, so a duplicate or reordered start fact can
      *            never consume the next pending acceptance.
+     * leg fix (audit 2026-10-21-r3 D01): the exact match is evaluated BEFORE
+     *            the duplicate-start guard so a legacy wrong FIFO bind can
+     *            be corrected by the later source-bearing fact, and a
+     *            source mismatch is never consumed as a duplicate.
      * legacy   — pre-parity facts carry the real run id only: fall back to
      *            accept-ordered FIFO, but ONLY while no entry is already
      *            bound to that run id (duplicate starts would otherwise
@@ -423,23 +431,37 @@ export const useSelectedConversationStore = defineStore(
       sourceRunId?: string | null
     ): boolean {
       const ledger = acceptedRunLedgerByConversation.get(conversationId) ?? [];
+      if (sourceRunId) {
+        const exactIndex = ledger.findIndex(
+          (candidate) =>
+            !candidate.resolved && candidate.runIdAtAccept === sourceRunId
+        );
+        if (exactIndex >= 0) {
+          const entry = ledger[exactIndex];
+          if (entry.boundRunId !== realRunId) {
+            for (const other of ledger) {
+              if (
+                other !== entry &&
+                other.boundRunId === realRunId
+              ) {
+                // A source-bearing fact is authoritative — release the
+                // stale legacy FIFO bind a preceding fact put somewhere.
+                other.boundRunId = null;
+              }
+            }
+            entry.boundRunId = realRunId;
+          }
+          return true;
+        }
+        // No exact candidate: a row already bound to this real run id with
+        // a DIFFERENT accepted identity is a source mismatch — never
+        // consume it as a duplicate start (audit D01).
+        return false;
+      }
       // Duplicate start guard (audit R03): an entry already bound to this
       // real run consumes the fact — never rebind onto the next acceptance.
       if (ledger.some((entry) => entry.boundRunId === realRunId)) {
         return true;
-      }
-      if (sourceRunId) {
-        const entry = ledger.find(
-          (candidate) =>
-            !candidate.resolved &&
-            candidate.boundRunId === null &&
-            candidate.runIdAtAccept === sourceRunId
-        );
-        if (entry) {
-          entry.boundRunId = realRunId;
-          return true;
-        }
-        return false;
       }
       const entry = ledger.find(
         (candidate) => !candidate.resolved && candidate.boundRunId === null
@@ -630,10 +652,69 @@ export const useSelectedConversationStore = defineStore(
       return acceptedRunOrdinalByConversation.get(conversationId) ?? null;
     }
 
+    /**
+     * Audit D01 (2026-10-21-r3): a queued acceptance that will NEVER own a
+     * real run (steered into the running turn, or cancelled before its
+     * scheduling claim) must leave the ledger immediately — otherwise the
+     * next run's legacy FIFO start binds onto that orphaned row and the
+     * orphan's ordinal is published as a complete resolution, clearing the
+     * wrong reference snapshot from the tray.
+     *
+     * The retirement publishes a `cancelled` resolution: composerDrafts
+     * dequeues the submitted snapshot (no double consumption later) but
+     * deliberately keeps the references (kind !== "complete") — cancel
+     * leaves the selected images in the tray; a steered row was either
+     * rejected (module rule: trusted reference rows are unsteerable) or had
+     * no reference set, so no reference lifetime is consumed here.
+     */
+    function retirePendingLedgerRow(
+      conversationId: string,
+      pendingMessageId: string
+    ): void {
+      const ledger = acceptedRunLedgerByConversation.get(conversationId);
+      if (!ledger) return;
+      const entry = ledger.find(
+        (candidate) =>
+          !candidate.resolved &&
+          candidate.boundRunId === null &&
+          candidate.runIdAtAccept === `pending-${pendingMessageId}`
+      );
+      if (!entry) return;
+      entry.resolved = true;
+      while (ledger.length > 0 && ledger[0].resolved) {
+        ledger.shift();
+      }
+      lastResolvedReferenceRun.value = {
+        conversationId,
+        runId: `pending-${pendingMessageId}`,
+        kind: "cancelled",
+        ordinal: entry.acceptOrdinal,
+      };
+    }
+
+    /**
+     * App-scoped pending lifecycle handler (audit D01). Fires for every
+     * conversation — the accept ledger is OUTSIDE the selection scope.
+     */
+    function handlePendingLedgerEvent(event: AIChatPendingMessageEvent): void {
+      if (event.status !== "applied" && event.status !== "cancelled") return;
+      retirePendingLedgerRow(event.conversationId, event.pendingMessageId);
+    }
+
+    /** Ensure exactly one pending-event subscription exists per renderer. */
+    let pendingEventsUnsubscribe: (() => void) | null = null;
+    function ensurePendingEventSubscription(): void {
+      if (pendingEventsUnsubscribe) return;
+      pendingEventsUnsubscribe = subscribeChatV2PendingEvents((event) => {
+        handlePendingLedgerEvent(event);
+      });
+    }
+
     function recordTerminalRun(
       conversationId: string,
       runId: string,
-      kind: ChatRunTerminalRecord["kind"]
+      kind: ChatRunTerminalRecord["kind"],
+      sourceRunId?: string | null
     ): void {
       const ordinal =
         (consumedTerminalOrdinalByConversation.get(conversationId) ?? 0) + 1;
@@ -642,8 +723,10 @@ export const useSelectedConversationStore = defineStore(
       // Audit R2 N04: resolve the durable accept-ledger entry by identity —
       // the paired-counters ordinals above are kept only for legacy
       // consumers; the ledger ordinal is what accepted-submission
-      // bookkeeping now verifies against.
-      resolveTerminalFact(conversationId, runId, kind);
+      // bookkeeping now verifies against. Audit D01: the source identity
+      // from the detail envelope decides which row — never `boundRunId`
+      // when the source matches a row.
+      resolveTerminalFact(conversationId, runId, kind, sourceRunId);
     }
 
     /** Ensure exactly one summary subscription exists for this renderer. */
@@ -701,13 +784,21 @@ export const useSelectedConversationStore = defineStore(
       // Audit R2 N04 / R03: a drained queued send's bridge run starts here —
       // bind the accepted send it serves exactly (source identity) or, for
       // legacy envelopes, in accept order guarded against duplicates, so the
-      // queued identity resolves against this run's terminal.
+      // queued identity resolves against this run's terminal. Audit D01: an
+      // unmatched start is buffered for its acceptance, not dropped.
       if (event.eventType === "start") {
-        reconcileRunStartedIdentity(
+        const consumed = reconcileRunStartedIdentity(
           event.conversationId,
           event.runId,
           event.sourceRunId
         );
+        if (!consumed) {
+          recordEarlySummaryFact(event.conversationId, {
+            runId: event.runId,
+            reason: "run_started",
+            sourceRunId: event.sourceRunId,
+          });
+        }
       }
       if (event.eventType === "tool_result") {
         const pending = presenter.consumePendingArtifactOpen();
@@ -726,10 +817,14 @@ export const useSelectedConversationStore = defineStore(
         event.eventType === "cancelled"
       ) {
         workspaceStore.markConversationReadLocally(event.conversationId);
+        // Audit D01: the envelope's source identity selects the accepted
+        // row exactly — a bound-by-legacy row must never publish another
+        // send's terminal.
         recordTerminalRun(
           event.conversationId,
           event.runId,
-          event.eventType
+          event.eventType,
+          event.sourceRunId
         );
       }
     }
@@ -759,6 +854,9 @@ export const useSelectedConversationStore = defineStore(
 
       const startedAt = Date.now();
       ensureDetailSubscription();
+      // Audit D01: the pending lifecycle retirement rides the same app-
+      // scoped lifetime as the ledger it protects.
+      ensurePendingEventSubscription();
       try {
         const snapshot = await selectConversation(conversationId, generation);
         // Apply only if this handshake is still the latest selection.

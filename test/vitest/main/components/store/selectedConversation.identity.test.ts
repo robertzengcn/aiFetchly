@@ -20,9 +20,36 @@ const startChatRunMock = vi.fn();
  */
 type SummaryCallback = (event: ConversationSummaryEvent) => void;
 let summaryHandler: SummaryCallback | null = null;
+type PendingCallback = (event: AIChatPendingMessageEvent) => void;
+let pendingHandler: PendingCallback | null = null;
+
+function emitPendingEvent(event: {
+  conversationId: string;
+  pendingMessageId: string;
+  status: AIChatPendingMessageEvent["status"];
+}): void {
+  const handler = pendingHandler;
+  if (!handler) throw new Error("pending subscription not established");
+  handler({
+    conversationId: event.conversationId,
+    pendingMessageId: event.pendingMessageId,
+    status: event.status,
+    occurredAt: "2026-10-20T10:00:00.000Z",
+  });
+}
 
 vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: vi.fn(),
+}));
+
+vi.mock("@/views/api/aiChatV2", () => ({
+  denyChatV2ToolPermission: vi.fn(),
+  subscribeChatV2PendingEvents: (callback: PendingCallback) => {
+    pendingHandler = callback;
+    return () => {
+      if (pendingHandler === callback) pendingHandler = null;
+    };
+  },
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
@@ -48,6 +75,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { selectConversation } from "@/views/api/aiChatWorkspace";
+import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
 
 async function selectId(conversationId: string): Promise<void> {
   vi.mocked(selectConversation).mockResolvedValue({
@@ -102,7 +130,8 @@ function detailEvent(
   conversationId: string,
   runId: string,
   eventType: ChatRunDetailEvent["eventType"],
-  sequence = 1
+  sequence = 1,
+  sourceRunId?: string | null
 ): void {
   useSelectedConversationStore().applyDetailEvent({
     conversationId,
@@ -111,6 +140,7 @@ function detailEvent(
     emittedAt: "2026-10-20T10:00:00.000Z",
     eventType,
     payload: { eventType },
+    ...(sourceRunId !== undefined ? { sourceRunId } : {}),
   });
 }
 
@@ -119,6 +149,7 @@ function summaryEvent(event: {
   runId?: string;
   reason: ConversationSummaryEvent["reason"];
   runtimeStatus?: ConversationSummaryEvent["runtimeStatus"];
+  sourceRunId?: string | null;
 }): void {
   const handler = summaryHandler;
   if (!handler) throw new Error("summary subscription not established");
@@ -131,6 +162,9 @@ function summaryEvent(event: {
     lastActivityAt: "2026-10-20T10:00:00.000Z",
     reason: event.reason,
     runId: event.runId,
+    ...(event.sourceRunId !== undefined
+      ? { sourceRunId: event.sourceRunId }
+      : {}),
   });
 }
 
@@ -147,6 +181,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   startChatRunMock.mockReset();
   summaryHandler = null;
+  pendingHandler = null;
 });
 
 describe("selectedConversation durable run identity (audit R2 N04)", () => {
@@ -357,6 +392,184 @@ describe("selectedConversation durable run identity (audit R2 N04)", () => {
       };
       expect(payload.journeyStart.clickAtEpochMs).toBeLessThanOrEqual(Date.now());
       expect(payload.journeyStart.clickAtEpochMs).toBeGreaterThan(Date.now() - 60_000);
+    });
+  });
+
+  describe("AUDIT3 detail-envelope source identity (audit 2026-10-21-r3 D01)", () => {
+    it("a later ordinary run binds to its own acceptance, not the orphaned queued row, when detail carries the source", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "queued image edit");
+      // Audit D01: the queued row never gets a run (steered or cancelled —
+      // the retirement path is covered below). A later ordinary send runs:
+      acceptRun("conv-1", "run-c");
+      await submitText("conv-1", "later ordinary send");
+      // Detail start of run-c carries its accepted source identity now.
+      detailEvent("conv-1", "run-c", "start", 1, "run-c");
+      detailEvent("conv-1", "run-c", "complete", 2, "run-c");
+      // C's terminal resolves C's ordinal (2), never the orphaned row (1).
+      expect(lastResolution()).toEqual({
+        conversationId: "conv-1",
+        runId: "run-c",
+        kind: "complete",
+        ordinal: 2,
+      });
+    });
+
+    it("a summary-section source mismatch cannot hide behind the already-bound guard (reordered exact-first)", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "first");
+      acceptRun("conv-1", "pending-p2", "queued");
+      await submitText("conv-1", "second");
+      // A sourceless (legacy) start fact binds FIFO onto p1's row…
+      summaryEvent(
+        {
+          conversationId: "conv-1",
+          runId: "real-1",
+          reason: "run_started",
+        },
+      );
+      // …then the source-bearing fact for the SAME real run arrives and must
+      // bind p1's row idempotently instead of failing on the bound guard.
+      summaryEvent({
+        conversationId: "conv-1",
+        runId: "real-1",
+        reason: "run_started",
+        sourceRunId: "pending-p1",
+      });
+      summaryEvent({
+        conversationId: "conv-1",
+        runId: "real-1",
+        reason: "run_completed",
+        sourceRunId: "pending-p1",
+      });
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+
+    it("source-bearing facts bind their own row when a stale wrong FIFO bind exists", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "first");
+      acceptRun("conv-1", "pending-p2", "queued");
+      await submitText("conv-1", "second");
+      // Legacy start for real-1 wrongly binds p1 (p2 is the real source).
+      summaryEvent(
+        {
+          conversationId: "conv-1",
+          runId: "real-1",
+          reason: "run_started",
+        },
+      );
+      // The source-bearing fact corrects to p2's row.
+      summaryEvent({
+        conversationId: "conv-1",
+        runId: "real-1",
+        reason: "run_started",
+        sourceRunId: "pending-p2",
+      });
+      detailEvent("conv-1", "real-1", "complete", 1, "pending-p2");
+      expect(lastResolution()?.ordinal).toBe(2);
+    });
+
+    it("a detail start whose acceptance is still in flight buffers and replays exactly", async () => {
+      await selectId("conv-1");
+      let reply: (value: unknown) => void = () => undefined;
+      startChatRunMock.mockImplementationOnce(() => new Promise(resolve => { reply = resolve; }));
+      const sent = submitText("conv-1", "first");
+      await flushPromises();
+      // Detail start arrives before the acceptance reply — buffered.
+      detailEvent("conv-1", "real-1", "start", 1, "pending-p1");
+      reply({ conversationId: "conv-1", runId: "pending-p1", status: "queued" });
+      await sent;
+      detailEvent("conv-1", "real-1", "complete", 2, "pending-p1");
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+
+    it("a source-bearing terminal resolves its row even after an unmatched early start", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "first");
+      detailEvent("conv-1", "real-1", "start", 1, "pending-p1");
+      detailEvent("conv-1", "real-1", "complete", 2, "pending-p1");
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+
+    it("a cancelled queued acceptance is retired immediately (before any run facts)", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "queued image edit");
+      emitPendingEvent({
+        conversationId: "conv-1",
+        pendingMessageId: "p1",
+        status: "cancelled",
+      });
+      // Retirement publishes a non-clearing resolution for the queued row.
+      expect(lastResolution()).toMatchObject({
+        conversationId: "conv-1",
+        runId: "pending-p1",
+        kind: "cancelled",
+        ordinal: 1,
+      });
+      // A later ordinary run binds and resolves on its OWN ordinal.
+      acceptRun("conv-1", "run-c");
+      await submitText("conv-1", "later ordinary");
+      detailEvent("conv-1", "run-c", "start", 1, "run-c");
+      detailEvent("conv-1", "run-c", "complete", 2, "run-c");
+      expect(lastResolution()).toEqual({
+        conversationId: "conv-1",
+        runId: "run-c",
+        kind: "complete",
+        ordinal: 2,
+      });
+    });
+
+    it("a steered queued acceptance is retired, and its summary facts can no longer bind the next row", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "queued text");
+      emitPendingEvent({
+        conversationId: "conv-1",
+        pendingMessageId: "p1",
+        status: "applied",
+      });
+      expect(lastResolution()).toMatchObject({
+        runId: "pending-p1",
+        kind: "cancelled",
+        ordinal: 1,
+      });
+      // Facts that arrive later for that retired identity resolve nothing.
+      summaryEvent({
+        conversationId: "conv-1",
+        runId: "ghost-1",
+        reason: "run_started",
+        sourceRunId: "pending-p1",
+      });
+      expect(lastResolution()?.ordinal).toBe(1);
+    });
+
+    it("pending retirement only retires unresolved unbound rows", async () => {
+      await selectId("conv-1");
+      acceptRun("conv-1", "pending-p1", "queued");
+      await submitText("conv-1", "queued");
+      // The row already started and bound its real run — a late cancel
+      // event must not retire that row anymore.
+      detailEvent("conv-1", "real-1", "start", 1, "pending-p1");
+      emitPendingEvent({
+        conversationId: "conv-1",
+        pendingMessageId: "p1",
+        status: "cancelled",
+      });
+      // No retirement was published: a bound row is a run-owning row.
+      expect(lastResolution()).toBeNull();
+      // The bound row still resolves through its own run's terminal.
+      detailEvent("conv-1", "real-1", "complete", 2, "pending-p1");
+      expect(lastResolution()).toEqual({
+        conversationId: "conv-1",
+        runId: "real-1",
+        kind: "complete",
+        ordinal: 1,
+      });
     });
   });
 });
