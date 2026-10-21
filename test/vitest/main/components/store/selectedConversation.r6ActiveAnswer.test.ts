@@ -67,12 +67,6 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { loadHistoryPage, selectConversation } from "@/views/api/aiChatWorkspace";
 
-interface HistoryPage {
-  messages: ChatV2MessageView[];
-  nextBefore: { timestamp: string; messageId: string } | null;
-  hasOlder: boolean;
-}
-
 function historyRow(
   conversationId: string,
   id: string,
