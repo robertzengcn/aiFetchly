@@ -392,6 +392,63 @@ export const useSelectedConversationStore = defineStore(
       kind: "complete" | "error" | "cancelled";
       ordinal: number;
     } | null>(null);
+    /** App-scoped consumers notified for EVERY published resolution. */
+    type ResolvedReferenceRunListener = (resolution: {
+      conversationId: string;
+      runId: string;
+      kind: "complete" | "error" | "cancelled";
+      ordinal: number;
+    }) => void;
+    const resolvedReferenceRunListeners = new Set<ResolvedReferenceRunListener>();
+
+    /**
+     * Resolution history bound (audit R4-03): records only serve the D01
+     * acceptance-replay re-publish, so retaining the newest slice is enough.
+     */
+    const RESOLVED_RESOLUTION_CAP = 256;
+
+    function bindResolvedResolutionHistory(
+      key: string,
+      record: {
+        runId: string;
+        kind: "complete" | "error" | "cancelled";
+        ordinal: number;
+      }
+    ): void {
+      resolvedResolutionByConversation.set(key, record);
+      while (resolvedResolutionByConversation.size > RESOLVED_RESOLUTION_CAP) {
+        const oldestKey = resolvedResolutionByConversation
+          .keys()
+          .next().value;
+        if (oldestKey === undefined) break;
+        resolvedResolutionByConversation.delete(oldestKey);
+      }
+    }
+
+    /**
+     * Audit R4-03: publishing a resolution REPLACES the shared ref — a
+     * consumer reading that ref through a batched Vue watcher receives only
+     * the last resolution of a synchronous burst and everything before it
+     * is lost. The publish therefore ALSO dispatches synchronously to every
+     * registered consumer, in publish order, so each resolution is consumed
+     * exactly once no matter how tightly facts arrive. Listener failures
+     * never interrupt the resolution bookkeeping.
+     */
+    function publishResolvedReferenceRun(resolution: {
+      conversationId: string;
+      runId: string;
+      kind: "complete" | "error" | "cancelled";
+      ordinal: number;
+    }): void {
+      lastResolvedReferenceRun.value = resolution;
+      for (const listener of resolvedReferenceRunListeners) {
+        try {
+          listener(resolution);
+        } catch {
+          // Isolate consumer failures from ledger bookkeeping.
+        }
+      }
+    }
 
     function ledgerFor(conversationId: string): AcceptedRunLedgerEntry[] {
       let ledger = acceptedRunLedgerByConversation.get(conversationId);
@@ -574,20 +631,17 @@ export const useSelectedConversationStore = defineStore(
       while (ledger.length > 0 && ledger[0].resolved) {
         ledger.shift();
       }
-      resolvedResolutionByConversation.set(
-        `${conversationId}|${entry.acceptOrdinal}`,
-        {
-          runId,
-          kind,
-          ordinal: entry.acceptOrdinal,
-        }
-      );
-      lastResolvedReferenceRun.value = {
+      bindResolvedResolutionHistory(`${conversationId}|${entry.acceptOrdinal}`, {
+        runId,
+        kind,
+        ordinal: entry.acceptOrdinal,
+      });
+      publishResolvedReferenceRun({
         conversationId,
         runId,
         kind,
         ordinal: entry.acceptOrdinal,
-      };
+      });
       return true;
     }
 
@@ -716,20 +770,17 @@ export const useSelectedConversationStore = defineStore(
       while (ledger.length > 0 && ledger[0].resolved) {
         ledger.shift();
       }
-      resolvedResolutionByConversation.set(
-        `${conversationId}|${entry.acceptOrdinal}`,
-        {
-          runId: `pending-${pendingMessageId}`,
-          kind: "cancelled",
-          ordinal: entry.acceptOrdinal,
-        }
-      );
-      lastResolvedReferenceRun.value = {
+      bindResolvedResolutionHistory(`${conversationId}|${entry.acceptOrdinal}`, {
+        runId: `pending-${pendingMessageId}`,
+        kind: "cancelled",
+        ordinal: entry.acceptOrdinal,
+      });
+      publishResolvedReferenceRun({
         conversationId,
         runId: `pending-${pendingMessageId}`,
         kind: "cancelled",
         ordinal: entry.acceptOrdinal,
-      };
+      });
     }
 
     /**
@@ -750,11 +801,27 @@ export const useSelectedConversationStore = defineStore(
         `${conversationId}|${ordinal}`
       );
       if (!record) return;
-      lastResolvedReferenceRun.value = {
+      publishResolvedReferenceRun({
         conversationId,
         runId: record.runId,
         kind: record.kind,
         ordinal: record.ordinal,
+      });
+    }
+
+    /**
+     * Register an app-scoped consumer for every published run resolution
+     * (audit R4-03). Resolutions are dispatched synchronously, in publish
+     * order — the composerDrafts cleaner attaches through this registry so
+     * a synchronous burst of terminal facts cannot collapse into one
+     * batched watcher invocation.
+     */
+    function subscribeResolvedReferenceRuns(
+      listener: ResolvedReferenceRunListener
+    ): () => void {
+      resolvedReferenceRunListeners.add(listener);
+      return () => {
+        resolvedReferenceRunListeners.delete(listener);
       };
     }
 
@@ -1499,6 +1566,7 @@ export const useSelectedConversationStore = defineStore(
       lastResolvedReferenceRun,
       acceptedRunOrdinalFor,
       republishResolvedRun,
+      subscribeResolvedReferenceRuns,
       loading,
       loadError,
       hasOlder,
