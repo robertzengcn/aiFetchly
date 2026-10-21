@@ -1977,6 +1977,11 @@ async function onComposerSend(
   // BEFORE the first await (command routing / file encoding both suspend).
   // A later selection change can never attach this submission to chat B.
   const commandConversationId = conversationId.value;
+  // Audit r3 D02: the G01 journey stamp anchors at THE CLICK, before any
+  // await — command expansion (goal/skill IPC) and attachment encoding run
+  // BEFORE the ordinary send, so a stamp taken later would hide those
+  // stages. Thread the epoch into the ordinary send via the send context.
+  const clickEpochMs = Date.now();
   const disposition = await commandRouter.routeCommand(text, {
     pastedContents: options?.pastedContents,
     hasFiles: files.length > 0,
@@ -1988,7 +1993,7 @@ async function onComposerSend(
     text,
     files,
     options,
-    { commandConversationId }
+    { commandConversationId, clickEpochMs }
   );
 }
 
@@ -2001,11 +2006,12 @@ async function applyCommandDisposition(
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
   },
-  context?: { commandConversationId?: string | null }
+  context?: { commandConversationId?: string | null; clickEpochMs?: number }
 ): Promise<void> {
   if (disposition.kind === "not_command") {
-      await performOrdinarySend(text, files, options, {
+    await performOrdinarySend(text, files, options, {
       targetConversationId: context?.commandConversationId,
+      journeyStartClickAtEpochMs: context?.clickEpochMs,
     });
     return;
   }
@@ -2043,7 +2049,10 @@ async function applyCommandDisposition(
         modeOverride: disposition.mode,
         onAccepted: options?.onAccepted,
       },
-      { targetConversationId: context?.commandConversationId }
+      {
+        targetConversationId: context?.commandConversationId,
+        journeyStartClickAtEpochMs: context?.clickEpochMs,
+      }
     );
     return;
   }
@@ -2114,8 +2123,14 @@ async function performOrdinarySend(
    * T7/D3: the conversation this send was issued in (captured before the
    * first await by the caller). When provided, a selection change during
    * any later await aborts the send instead of retargeting it.
+   * D02: `journeyStartClickAtEpochMs` threads the composer click stamp so
+   * the G01 journey includes command routing and attachment encoding;
+   * callers without one keep the store's send-entry fallback stamp.
    */
-  sendTarget?: { readonly targetConversationId?: string | null }
+  sendTarget?: {
+    readonly targetConversationId?: string | null;
+    readonly journeyStartClickAtEpochMs?: number;
+  }
 ): Promise<boolean> {
   // FR-SUB-004 (capability parity): paste bodies travel as their own bounded
   // map so the engine expands the same content the Chat V2 stream edge
@@ -2237,6 +2252,7 @@ async function performOrdinarySend(
     confirmedBatchReferences: confirmedBatch,
     historySelectionIds,
     submissionId: historySubmissionId,
+    journeyStartClickAtEpochMs: sendTarget?.journeyStartClickAtEpochMs,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
   // clears only when THIS send was accepted — keying on shared run state

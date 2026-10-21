@@ -124,6 +124,13 @@ export interface SendOptions {
    * surface localized actionable copy; absent = raw backend message.
    */
   readonly localizeError?: (message: string) => string;
+  /**
+   * Audit r3 D02: the submit-click boundary (composer click epoch ms) —
+   * stamped by the surface BEFORE command routing/file encoding so the G01
+   * click→acceptance journey includes those stages by construction.
+   * Absent (programmatic sends) falls back to the sendMessage entry stamp.
+   */
+  readonly journeyStartClickAtEpochMs?: number;
 }
 
 /**
@@ -1070,7 +1077,10 @@ export const useSelectedConversationStore = defineStore(
             : undefined,
           submissionId: options?.submissionId,
           planContinuation: options?.planContinuation,
-          journeyStart: { clickAtEpochMs },
+          journeyStart: {
+            clickAtEpochMs:
+              options?.journeyStartClickAtEpochMs ?? clickAtEpochMs,
+          },
         });
         // B14: confirmed acceptance rotates the logical-draft identity — an
         // intentional repeat of the same text afterwards mints a FRESH id

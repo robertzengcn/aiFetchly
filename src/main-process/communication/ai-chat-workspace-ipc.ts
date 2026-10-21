@@ -560,12 +560,13 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
           performance.now() - submitStartedMs
         );
         // G01 (design §18.2): the FULL submit-click → durable acceptance
-        // journey. The renderer stamps the click boundary; everything
-        // between (attachment encode, IPC transport, validation, image
-        // normalization) is included by construction since the sample
-        // closes here at the acceptance receipt. Implausible stamps (too
-        // far in the future/past — bad clocks, replays) silently produce
-        // no sample; the queue-only metric above stays untouched.
+        // journey. The renderer stamps the click boundary at the composer
+        // click (audit r3 D02: BEFORE command routing and attachment
+        // encoding), so everything between those stages and here at the
+        // acceptance receipt is included by construction — no stage hides
+        // inside the truncated tail anymore. Implausible stamps (too far
+        // in the future/past — bad clocks, replays) silently produce no
+        // sample; the queue-only metric above stays untouched.
         if (journeyStart) {
           const elapsed = Date.now() - journeyStart.clickAtEpochMs;
           if (elapsed >= -15_000 && elapsed <= MAX_SUBMIT_CLICK_JOURNEY_MS) {

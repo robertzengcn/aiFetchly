@@ -5138,6 +5138,62 @@ describe("AiChatCenterSurface queued image sends survive steer and cancel (audit
   });
 });
 
+/**
+ * Audit 2026-10-21-r3 D02: the G01 journey's click stamp must anchor at the
+ * composer click, NOT inside the store's sendMessage — attachment encoding
+ * and command expansion both run BEFORE that point and would truncate (or
+ * hide) long click→acceptance journeys.
+ */
+describe("AiChatCenterSurface submit click journey anchor (D02)", () => {
+  beforeEach(() => {
+    buildUploadedAttachmentsMock.mockReset();
+    startChatRunMock.mockReset();
+  });
+
+  it("stamps the click boundary before attachment encoding finishes", async () => {
+    const beforeClick = Date.now();
+    let encodeFinishedAt = 0;
+    buildUploadedAttachmentsMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      encodeFinishedAt = Date.now();
+      return [];
+    });
+    startChatRunMock.mockReset();
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "explain this", [new File(["x"], "a.txt")]);
+    // Encoding takes ~60 ms; give the pipeline the chance to finish.
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    await flushPromises();
+
+    const request = startChatRunMock.mock.calls.at(-1)?.[0] as
+      | { journeyStart?: { clickAtEpochMs?: number } }
+      | undefined;
+    expect(request?.journeyStart?.clickAtEpochMs).toBeTruthy();
+    // The click anchor is OLDER than the encoding completion point: the
+    // journey includes the encode stage by construction.
+    expect(request?.journeyStart?.clickAtEpochMs ?? 0).toBeLessThan(
+      encodeFinishedAt
+    );
+    // And still anchored to THIS session (a plausible clock, no far past).
+    expect(request?.journeyStart?.clickAtEpochMs ?? 0).toBeGreaterThan(
+      beforeClick - 1_000
+    );
+    wrapper.unmount();
+  });
+});
+
 describe("AiChatCenterSurface speech cancellation (R07)", () => {
   beforeEach(() => {
     vi.mocked(cancelVoiceJob).mockClear();
