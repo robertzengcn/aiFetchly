@@ -87,19 +87,58 @@ export function aiChatRendererMetricsSnapshot(): {
 } {
   return {
     timings: {
-      renderer_event_to_projection_ms: (() => {
-        const aggregate = timingAggregates.get(
-          "renderer_event_to_projection_ms"
-        );
-        return aggregate
-          ? {
-              count: aggregate.count,
-              meanMs: Math.round(aggregate.totalMs / aggregate.count),
-              minMs: aggregate.minMs,
-              maxMs: aggregate.maxMs,
-            }
-          : undefined;
-      })(),
+      renderer_event_to_projection_ms: rendererTimingSnapshotEntry(),
+    },
+    counts: Object.fromEntries(counts),
+  };
+}
+
+function rendererTimingSnapshotEntry():
+  | RendererTimingSnapshot
+  | undefined {
+  const aggregate = timingAggregates.get("renderer_event_to_projection_ms");
+  return aggregate
+    ? {
+        count: aggregate.count,
+        meanMs: Math.round(aggregate.totalMs / aggregate.count),
+        minMs: aggregate.minMs,
+        maxMs: aggregate.maxMs,
+      }
+    : undefined;
+}
+
+/**
+ * Audit R06: push payload for the metrics bridge. Unlike the soak snapshot
+ * it carries the EXACT unrounded `totalMs` — the main-side delta protocol
+ * turns cumulative aggregates into per-realm deltas, and a rounded mean
+ * would drift the merged totals with every push.
+ */
+export function aiChatRendererMetricsPushPayload(): {
+  timings: Record<
+    string,
+    | {
+        count: number;
+        meanMs: number;
+        totalMs: number;
+        minMs: number;
+        maxMs: number;
+      }
+    | undefined
+  >;
+  counts: Record<string, number>;
+} {
+  const aggregate = timingAggregates.get("renderer_event_to_projection_ms");
+  return {
+    timings: {
+      renderer_event_to_projection_ms: aggregate
+        ? {
+            count: aggregate.count,
+            meanMs: Math.round(aggregate.totalMs / aggregate.count),
+            totalMs: aggregate.totalMs,
+            minMs: aggregate.minMs,
+            maxMs: aggregate.maxMs,
+          }
+        : undefined,
     },
     counts: Object.fromEntries(counts),
   };

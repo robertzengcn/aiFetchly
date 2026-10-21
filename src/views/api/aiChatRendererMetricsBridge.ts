@@ -11,18 +11,41 @@
  */
 import { windowInvoke } from "@/views/utils/apirequest";
 import { AI_CHAT_RENDERER_METRICS_PUSH } from "@/config/channellist";
-import { aiChatRendererMetricsSnapshot } from "@/views/store/aiChatRendererMetrics";
+import { aiChatRendererMetricsPushPayload } from "@/views/store/aiChatRendererMetrics";
 
 const FLUSH_INTERVAL_MS = 30_000;
 
+/**
+ * Audit R06: the renderer process owns a stable realm identity plus a
+ * monotonic push sequence. Main keeps the previous RAW cumulative state per
+ * realm and converts each push into deltas, so a periodic cumulative
+ * snapshot (or a replayed push after transport ambiguity) can no longer
+ * multiply samples. A renderer restart mints a NEW realm id, which main
+ * treats as a fresh baseline.
+ */
+const REALM_ID: string = (() => {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `realm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+})();
+
+let pushSeq = 0;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
 /** Push one bounded snapshot into main (fire-and-forget, fail-soft). */
 export async function flushRendererMetricsOnce(): Promise<void> {
   try {
+    pushSeq += 1;
+    const payload = aiChatRendererMetricsPushPayload();
     await windowInvoke(AI_CHAT_RENDERER_METRICS_PUSH, {
-      ...aiChatRendererMetricsSnapshot(),
+      realm: { realmId: REALM_ID, seq: pushSeq },
+      timings: payload.timings,
+      counts: payload.counts,
     });
   } catch {
     // Telemetry is best-effort — a bridge failure must never affect chat.
@@ -55,4 +78,10 @@ export function stopRendererMetricsBridge(): void {
     window.removeEventListener("beforeunload", beforeUnloadHandler);
     beforeUnloadHandler = null;
   }
+}
+
+/** Test isolation: restarts sequence numbering (and identity reset scope). */
+export function resetRendererMetricsBridgeForTest(): void {
+  stopRendererMetricsBridge();
+  pushSeq = 0;
 }

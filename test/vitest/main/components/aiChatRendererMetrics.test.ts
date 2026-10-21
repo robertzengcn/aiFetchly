@@ -6,6 +6,7 @@ import {
   observeRendererProjectionTiming,
   incrementRendererMetric,
   aiChatRendererMetricsSnapshot,
+  aiChatRendererMetricsPushPayload,
   resetRendererMetricsForTest,
 } from "@/views/store/aiChatRendererMetrics";
 
@@ -71,5 +72,29 @@ describe("aiChatRendererMetrics", () => {
     endRendererProjectionWindow();
     const snapshot = aiChatRendererMetricsSnapshot();
     expect(snapshot.timings.renderer_event_to_projection_ms?.count).toBe(1);
+  });
+
+  // Audit R06: the push payload preserves the EXACT total ms (the soak
+  // snapshot keeps its rounded meanMs for dashboards; the delta protocol
+  // needs unrounded totals plus counts).
+  it("AUDIT3 push payload exposes exact totals for the delta protocol", () => {
+    observeRendererProjectionTiming(4);
+    observeRendererProjectionTiming(9);
+    incrementRendererMetric("stream_chunk_projected", 5);
+    const payload = aiChatRendererMetricsPushPayload();
+    expect(payload.timings.renderer_event_to_projection_ms).toEqual({
+      count: 2,
+      meanMs: 7,
+      totalMs: 13,
+      minMs: 4,
+      maxMs: 9,
+    });
+    expect(payload.counts.stream_chunk_projected).toBe(5);
+  });
+
+  it("AUDIT3 push payload stays empty before any observation", () => {
+    const payload = aiChatRendererMetricsPushPayload();
+    expect(payload.timings.renderer_event_to_projection_ms).toBeUndefined();
+    expect(payload.counts).toEqual({});
   });
 });
