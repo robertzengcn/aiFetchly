@@ -17,17 +17,21 @@ function makeRow(params: {
   pendingMessageId: string;
   clientRequestId: string;
   conversationId?: string;
-  content?: string;
-  status?: "queued" | "paused";
-}) {
+    content?: string;
+    modelContent?: string;
+    status?: "queued" | "paused";
+    requestDigestSha256?: string;
+  }) {
   return {
     pendingMessageId: params.pendingMessageId,
     clientRequestId: params.clientRequestId,
     conversationId: params.conversationId ?? "v2-conv-1",
     userMessageId: `user-pending-${params.pendingMessageId}`,
     content: params.content ?? `hello ${params.pendingMessageId}`,
-    modelContent: params.content ?? `hello ${params.pendingMessageId}`,
+    modelContent:
+      params.modelContent ?? params.content ?? `hello ${params.pendingMessageId}`,
     status: params.status ?? ("queued" as const),
+    requestDigestSha256: params.requestDigestSha256,
   };
 }
 
@@ -85,6 +89,58 @@ describe("AIChatPendingMessageModel", () => {
         })
       )
     ).rejects.toBeInstanceOf(AIChatPendingModelError);
+  });
+
+  it("AUDIT3 R05 dedupes same-byte retries on requestDigestSha256 despite re-staged refIds", async () => {
+    const model = new AIChatPendingMessageModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const digest = "d".repeat(64);
+
+    const first = await model.create(
+      makeRow({
+        pendingMessageId: "pm-dg-a",
+        clientRequestId: "cr-dg",
+        requestDigestSha256: digest,
+      })
+    );
+    expect(first.requestDigestSha256).toBe(digest);
+
+    // Ambiguous transport retry: same id + same digest, but the re-run of
+    // the preparation stage produced nondeterministic staged refIds in the
+    // display/model content.
+    const again = await model.create(
+      makeRow({
+        pendingMessageId: "pm-dg-b",
+        clientRequestId: "cr-dg",
+        content: "read this\n\n1. file_name=\"doc.pdf\" attachment_ref=\"new-ref\"",
+        modelContent: "read this\n\n1. file_name=\"doc.pdf\" attachment_ref=\"new-ref\"",
+        requestDigestSha256: digest,
+      })
+    );
+    expect(again.id).toBe(first.id);
+    expect(again.pendingMessageId).toBe("pm-dg-a");
+    expect(await model.listByConversation("v2-conv-1")).toHaveLength(1);
+  });
+
+  it("AUDIT3 R05 throws IDEMPOTENCY_CONFLICT when the request digest differs", async () => {
+    const model = new AIChatPendingMessageModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    await model.create(
+      makeRow({
+        pendingMessageId: "pm-dg-c",
+        clientRequestId: "cr-dg-x",
+        requestDigestSha256: "a".repeat(64),
+      })
+    );
+    await expect(
+      model.create(
+        makeRow({
+          pendingMessageId: "pm-dg-d",
+          clientRequestId: "cr-dg-x",
+          requestDigestSha256: "b".repeat(64),
+        })
+      )
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
   });
 
   it("lists rows FIFO by primary key", async () => {

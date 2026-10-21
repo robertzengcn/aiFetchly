@@ -37,6 +37,14 @@ export interface AIChatPendingCreateRowInput {
   readonly attachmentMetadataJson?: string;
   readonly messageMetadataJson?: string;
   readonly recoveryReason?: string;
+  /**
+   * Audit R05: digest of the full request identity (message + options +
+   * attachment bytes). When both the stored and incoming row carry one,
+   * idempotent reuse is validated on it — re-staged documents change the
+   * display/model content strings (nondeterministic refIds) but are the
+   * SAME submission and must dedupe.
+   */
+  readonly requestDigestSha256?: string;
 }
 
 /** Result of a conditional (expected-status) claim. */
@@ -82,9 +90,12 @@ export class AIChatPendingMessageModel extends BaseDb {
     });
     if (existing) {
       const digestSame =
-        this.contentDigest(existing.content) ===
-          this.contentDigest(input.content) &&
-        existing.conversationId === input.conversationId;
+        existing.conversationId === input.conversationId &&
+        (existing.requestDigestSha256 != null &&
+        input.requestDigestSha256 != null
+          ? existing.requestDigestSha256 === input.requestDigestSha256
+          : this.contentDigest(existing.content) ===
+            this.contentDigest(input.content));
       if (!digestSame) {
         throw new AIChatPendingModelError(
           "IDEMPOTENCY_CONFLICT",
@@ -105,6 +116,7 @@ export class AIChatPendingMessageModel extends BaseDb {
     entity.attachmentMetadataJson = input.attachmentMetadataJson;
     entity.messageMetadataJson = input.messageMetadataJson;
     entity.recoveryReason = input.recoveryReason;
+    entity.requestDigestSha256 = input.requestDigestSha256;
     entity.attemptCount = 0;
     return await this.repository.save(entity);
   }

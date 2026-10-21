@@ -71,6 +71,7 @@ function fakePrep(): AIChatPendingMessagePreparationService {
           attachmentMetadata: undefined,
           messageMetadata: { source: "chat-v2" },
           imageAttachments: [],
+          stagedRefs: [],
         }) as AIChatPendingPreparedContent
     ),
   } as unknown as AIChatPendingMessagePreparationService;

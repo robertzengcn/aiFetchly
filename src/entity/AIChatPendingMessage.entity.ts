@@ -131,4 +131,15 @@ export class AIChatPendingMessageEntity extends AuditableEntity {
   @Order(20)
   @Column("datetime", { nullable: true })
   terminalAt?: Date;
+
+  /**
+   * Audit R05: SHA-256 over the full request identity — normalized message
+   * text, request options, generated references and ordered attachment
+   * bytes (BY CONTENT, not by nondeterministic staged refIds). Present for
+   * rows created since the audit; legacy rows leave it null and fall back
+   * to the legacy content digest comparison.
+   */
+  @Order(21)
+  @Column("varchar", { length: 64, nullable: true })
+  requestDigestSha256?: string;
 }

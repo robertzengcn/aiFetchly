@@ -6,7 +6,7 @@ import {
 } from "@/model/AIChatPendingMessage.model";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
-import { AIChatPendingMessagePreparationService } from "@/service/AIChatPendingMessagePreparationService";
+import { AIChatPendingMessagePreparationService, normalizeChatV2UploadedFiles } from "@/service/AIChatPendingMessagePreparationService";
 import type {
   AIChatPendingMessageView,
   AIChatPendingMessageStatus,
@@ -95,6 +95,82 @@ function newId(prefix: string): string {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Audit R05: SHA-256 over the full request identity — normalized message
+ * text, turn options, reference sets, and the validated attachment list
+ * ordered as submitted, hashed BY CONTENT BYTES. Deliberately excludes the
+ * preparation outputs (display/model content): staged documents carry
+ * nondeterministic refIds, so byte-identical retries of an ambiguous
+ * transport must produce the SAME digest even though their content strings
+ * differ. Two submissions share a digest iff they are the same logical
+ * submission; an attachment byte edit rotates the digest.
+ */
+export function computeRequestDigestSha256(
+  request: ChatV2StreamRequest
+): string {
+  const hash = crypto.createHash("sha256");
+  const feed = (part: string | Buffer): void => {
+    hash.update(part);
+    hash.update(Buffer.from([0]));
+  };
+
+  feed((request.message ?? "").trim().replace(/\r\n/g, "\n"));
+  feed(request.model ?? "");
+  feed(request.mode ?? "");
+  feed(request.toolApprovalMode ?? "");
+  feed(request.showReasoning === true ? "1" : "0");
+  feed(request.temperature == null ? "" : String(request.temperature));
+  feed(request.maxTokens == null ? "" : String(request.maxTokens));
+  feed(request.systemPrompt ?? "");
+
+  const files = normalizeChatV2UploadedFiles(request.uploadedFiles ?? []);
+  feed(String(files.length));
+  for (const file of files) {
+    feed(file.fileName);
+    feed(file.mimeType);
+    feed(String(file.sizeBytes));
+    feed(file.kind);
+    feed(
+      crypto
+        .createHash("sha256")
+        .update(Buffer.from(file.contentBase64, "base64"))
+        .digest()
+    );
+  }
+
+  const refSets: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[][] = [
+    request.generatedImageReferences ?? [],
+    request.confirmedGeneratedImageBatch?.references ?? [],
+  ];
+  for (const refs of refSets) {
+    feed(String(refs.length));
+    for (const ref of refs) {
+      feed(ref.messageId);
+      feed(String(ref.imageIndex));
+    }
+  }
+
+  const historyIds = [...(request.historySelectionIds ?? [])].sort(
+    (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  );
+  feed(String(historyIds.length));
+  for (const id of historyIds) feed(id);
+
+  const pastes = Object.entries(request.pastedContents ?? {}).sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)
+  );
+  feed(String(pastes.length));
+  for (const [key, value] of pastes) {
+    feed(key);
+    feed(value);
+  }
+
+  return hash.digest("hex");
 }
 
 /** Input for a durable pending create. */
@@ -243,7 +319,22 @@ export class AIChatPendingMessageModule extends BaseModule {
           : undefined,
         messageMetadataJson: JSON.stringify(prepared.messageMetadata),
         recoveryReason: input.recoveryReason,
+        requestDigestSha256: computeRequestDigestSha256(input.request),
       });
+      if (row.pendingMessageId !== pendingMessageId) {
+        // The idempotency gate resolved to an ALREADY-ACCEPTED attempt
+        // (same clientRequestId + same request digest). Drop the bytes and
+        // staged files written for this attempt — the existing row owns
+        // the accepted ones (audit R05).
+        if (bytesWritten) {
+          await this.attachmentModule
+            .deleteByMessageId(userMessageId)
+            .catch(() => undefined);
+        }
+        await this.preparation
+          .cleanupStagedReferences(prepared.stagedRefs)
+          .catch(() => undefined);
+      }
       return {
         pendingMessageId: row.pendingMessageId,
         conversationId: row.conversationId,
@@ -255,6 +346,9 @@ export class AIChatPendingMessageModule extends BaseModule {
           .deleteByMessageId(userMessageId)
           .catch(() => undefined);
       }
+      await this.preparation
+        .cleanupStagedReferences(prepared.stagedRefs)
+        .catch(() => undefined);
       if (err instanceof AIChatPendingModelError) {
         throw new AIChatPendingMessageModuleError(
           err.code as AIChatPendingModuleErrorCode,

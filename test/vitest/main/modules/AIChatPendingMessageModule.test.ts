@@ -30,10 +30,12 @@ vi.mock("@/modules/AIChatAttachmentModule", () => ({
 }));
 
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatPendingMessageModel } from "@/model/AIChatPendingMessage.model";
 import {
   AIChatPendingMessagePreparationService,
   type AIChatPendingPreparedContent,
 } from "@/service/AIChatPendingMessagePreparationService";
+import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import { SqliteDb } from "@/config/SqliteDb";
 import { resolveTestDbPath } from "@/config/testDbPath";
 import fs from "node:fs";
@@ -52,9 +54,11 @@ function fakePrep(
           attachmentMetadata: undefined,
           messageMetadata: { source: "chat-v2" },
           imageAttachments: [],
+          stagedRefs: [],
           ...fixed,
         } as AIChatPendingPreparedContent)
     ),
+    cleanupStagedReferences: vi.fn(async () => undefined),
   } as unknown as AIChatPendingMessagePreparationService;
 }
 
@@ -194,6 +198,102 @@ describe("AIChatPendingMessageModule.createPendingMessage", () => {
 
     expect(attachmentSave).toHaveBeenCalled();
     expect(attachmentDeleteByMessageId).toHaveBeenCalled();
+  });
+});
+
+describe("AIChatPendingMessageModule request digest (AUDIT3 R05)", () => {
+  function docRequest(contentBase64: string, sizeBytes: number): ChatV2StreamRequest {
+    return {
+      message: "read this",
+      conversationId: "v2-dg",
+      uploadedFiles: [
+        {
+          fileName: "doc.pdf",
+          mimeType: "application/pdf",
+          sizeBytes,
+          kind: "document",
+          contentBase64,
+        },
+      ],
+    };
+  }
+
+  it("AUDIT3 R05 dedupes a same-byte ambiguous retry despite nondeterministic refIds", async () => {
+    const first = await makeModule().createPendingMessage({
+      clientRequestId: "cr-dg-retry",
+      request: docRequest("QUJD", 3),
+    });
+
+    // Re-run of the preparation stage produces fresh refIds in the content.
+    const retryModule = makeModule({
+      displayContent: 'read this\n\n1. file_name="doc.pdf" attachment_ref="fresh-ref-98765-uuid"',
+      modelContent: 'read this\n\n1. file_name="doc.pdf" attachment_ref="fresh-ref-98765-uuid"',
+    });
+    const retry = await retryModule.createPendingMessage({
+      clientRequestId: "cr-dg-retry",
+      request: docRequest("QUJD", 3),
+    });
+
+    expect(retry.pendingMessageId).toBe(first.pendingMessageId);
+    const views = await retryModule.listViews("v2-dg");
+    expect(views).toHaveLength(1);
+  });
+
+  it("AUDIT3 R05 stores a request digest that rotates when attachment bytes change", async () => {
+    await makeModule().createPendingMessage({
+      clientRequestId: "cr-dg-a",
+      request: docRequest("QUJD", 3),
+    });
+    await makeModule().createPendingMessage({
+      clientRequestId: "cr-dg-b",
+      request: docRequest("REVG", 4),
+    });
+
+    const rows = await new AIChatPendingMessageModel(resolveTestDbPath())
+      .listByConversation("v2-dg");
+    expect(rows).toHaveLength(2);
+    const digests = rows.map((r) => r.requestDigestSha256 ?? "");
+    expect(digests[0]).toHaveLength(64);
+    expect(digests[1]).toHaveLength(64);
+    expect(digests[1]).not.toBe(digests[0]);
+  });
+
+  it("AUDIT3 R05 removes staged document files when the row insert fails", async () => {
+    await makeModule().createPendingMessage({
+      clientRequestId: "cr-dg-fail",
+      request: { message: "first", conversationId: "v2-dg-fail" },
+    });
+
+    const stagedRef = {
+      refId: "ref-1",
+      fileName: "doc.pdf",
+      filePath: "/tmp/aifetchly-pending-module-test/ref-1.pdf",
+    };
+    const failingModule = makeModule({
+      attachmentMetadata: [
+        {
+          fileName: "doc.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 3,
+          kind: "document",
+        },
+      ],
+      stagedRefs: [stagedRef],
+    });
+
+    await expect(
+      failingModule.createPendingMessage({
+        clientRequestId: "cr-dg-fail",
+        request: { message: "different", conversationId: "v2-dg-fail" },
+      })
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+
+    const prep = (
+      failingModule as unknown as {
+        preparation: { cleanupStagedReferences: (refs: unknown[]) => Promise<void> };
+      }
+    ).preparation;
+    expect(prep.cleanupStagedReferences).toHaveBeenCalledWith([stagedRef]);
   });
 });
 

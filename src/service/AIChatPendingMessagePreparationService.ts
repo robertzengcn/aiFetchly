@@ -10,6 +10,8 @@ import { GeneratedImageReferenceService } from "@/service/GeneratedImageReferenc
 import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
+import fs from "node:fs";
+import path from "node:path";
 import type {
   ChatV2StreamRequest,
   ChatV2AttachmentMetadata,
@@ -192,6 +194,20 @@ export interface AIChatPendingPreparedContent {
    * rebuilds the multimodal content parts from these trusted BLOBs.
    */
   readonly imageAttachments: readonly UploadedFileForPersistence[];
+  /**
+   * Audit R05: document markdowns staged on disk during preparation. The
+   * caller must dispose of them when the pending row does NOT persist
+   * (insert failure or idempotent reuse of an already-accepted attempt) so
+   * no orphan staged files survive a rejected or duplicated create.
+   */
+  readonly stagedRefs: readonly StagedAttachmentReference[];
+}
+
+/** Prep-service-owned disposal for staged document files (md + original). */
+export interface AIChatPendingStagedReferenceCleanup {
+  cleanupStagedReferences(
+    refs: readonly StagedAttachmentReference[]
+  ): Promise<void>;
 }
 
 export class AIChatPendingMessagePreparationService {
@@ -368,7 +384,40 @@ export class AIChatPendingMessagePreparationService {
         attachmentMetadata.length > 0 ? attachmentMetadata : undefined,
       messageMetadata,
       imageAttachments,
+      stagedRefs,
     };
+  }
+
+  /**
+   * Remove the staged document files (markdown, metadata, original bytes)
+   * for the given references, best-effort. Used when the pending row does
+   * not persist: an insert failure or an idempotent reuse of an already
+   * accepted attempt (audit R05) would otherwise orphan staged files.
+   */
+  async cleanupStagedReferences(
+    refs: readonly StagedAttachmentReference[]
+  ): Promise<void> {
+    for (const ref of refs) {
+      try {
+        const dir = path.dirname(ref.filePath);
+        const ext = path.extname(ref.filePath);
+        const candidates = new Set<string>([
+          ref.filePath,
+          path.join(dir, `${ref.refId}.md`),
+          path.join(dir, `${ref.refId}.meta.json`),
+          path.join(dir, `${ref.refId}${ext}`),
+        ]);
+        for (const candidate of candidates) {
+          try {
+            await fs.promises.unlink(candidate);
+          } catch {
+            // Best effort: the file may already be gone.
+          }
+        }
+      } catch {
+        // Malformed reference path: skip this entry.
+      }
+    }
   }
 
   /** Convert small documents to markdown and stage them on disk. */
