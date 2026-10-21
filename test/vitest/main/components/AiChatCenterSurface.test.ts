@@ -5837,3 +5837,95 @@ describe("load-older visible states (audit R5-03)", () => {
     wrapper.unmount();
   });
 });
+
+describe("streaming answer survives paging (audit R5-01)", () => {
+  /** Mirrors the store suite's row factory for the component flow. */
+  function surfaceHistoryRow(id: string, offsetMinutes: number): ChatV2MessageView {
+    return {
+      id,
+      conversationId: "conv-1",
+      role: "user",
+      content: `row ${id}`,
+      timestamp: new Date(2026, 9, 20, 8, offsetMinutes).toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+  }
+
+  it("pages while a response streams and keeps the active answer's full text to its final completion", async () => {
+    const rows = Array.from({ length: 199 }, (_unused, index) =>
+      surfaceHistoryRow(`recent-${index}`, 400 - index)
+    );
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: rows,
+      nextBefore: {
+        timestamp: rows[0].timestamp,
+        messageId: rows[0].id,
+      },
+      hasOlder: true,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "conv-1",
+    } as never);
+    const wrapper = mountSurface();
+    await useSelectedConversationStore().loadSelection("conv-1");
+    await flushPromises();
+    const store = useSelectedConversationStore();
+
+    const detailEvent = (
+      sequence: number,
+      eventType: "start" | "token" | "complete",
+      extra: Record<string, unknown> = {}
+    ): void => {
+      store.applyDetailEvent({
+        conversationId: "conv-1",
+        runId: "run-live",
+        sequence,
+        emittedAt: "2026-10-20T10:00:00.000Z",
+        eventType,
+        payload: {
+          eventType,
+          messageId: "live-answer",
+          ...extra,
+        },
+      } as never);
+    };
+
+    detailEvent(1, "start");
+    detailEvent(2, "token", { contentDelta: "prefix " });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("prefix ");
+
+    // Page through the REAL control while the response streams. The full
+    // window overflows → the prepend pushes the streamed row past the
+    // bound, and the pinned active row must survive it.
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce({
+      messages: [surfaceHistoryRow("old-row", -1)],
+      nextBefore: null,
+      hasOlder: false,
+    } as never);
+    await wrapper
+      .find('[data-testid="workspace-load-older"]')
+      .trigger("click");
+    await flushPromises();
+    expect(store.messages.some((m) => m.id === "old-row")).toBe(true);
+
+    detailEvent(3, "token", { contentDelta: "suffix" });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("prefix suffix");
+
+    // The authoritative completion is the mounted final answer.
+    detailEvent(4, "complete", { fullContent: "full final answer" });
+    await flushPromises();
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("full final answer");
+
+    wrapper.unmount();
+  });
+});

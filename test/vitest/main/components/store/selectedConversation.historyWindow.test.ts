@@ -121,7 +121,12 @@ beforeEach(() => {
 /** Live detail event helper mirroring the detail-event shape. */
 function detailEvent(
   sequence: number,
-  eventType: "start" | "token" | "complete",
+  eventType:
+    | "start"
+    | "token"
+    | "complete"
+    | "tool_call"
+    | "tool_result",
   extra: Record<string, unknown> = {}
 ): ChatRunDetailEvent {
   return {
@@ -666,6 +671,50 @@ describe("live growth obeys the row bound and keeps evicted rows reachable (audi
     // The retry hit exhaustion through the server's own verdict.
     expect(store.hasOlder).toBe(false);
   });
+
+  it("tool-heavy live output stays bounded while the active response and final answer survive", async () => {
+    const rows = Array.from({ length: 200 }, (_unused, index) =>
+      historyRow("conv-1", `recent-${index}`, 400 - index)
+    );
+    await selectSnapshot("conv-1", {
+      messages: rows,
+      nextBefore: null,
+      hasOlder: false,
+    });
+    const store = useSelectedConversationStore();
+    store.applyDetailEvent(detailEvent(1, "start"));
+    // A full seeded window: the first live row already overflows the bound
+    // (front eviction), so EVERY further live row is also bouund-checked.
+    store.applyDetailEvent(
+      detailEvent(2, "tool_call", { toolCallId: "tool-1", toolName: "search" })
+    );
+    store.applyDetailEvent(
+      detailEvent(3, "tool_result", {
+        toolCallId: "tool-1",
+        fullContent: "tool output",
+        toolResult: { success: true },
+      })
+    );
+    await flushPromises();
+    expect(store.messages.length).toBe(200);
+    // The active turn's rendered rows are retained (audit R5-01 pinning):
+    expect(store.messages.some((m) => m.id === "live-answer")).toBe(true);
+    expect(store.messages.some((m) => m.id === "tool-call-tool-1")).toBe(true);
+    expect(store.messages.some((m) => m.id === "tool-result-tool-1")).toBe(
+      true
+    );
+
+    // The final response content lands on the retained answer row.
+    store.applyDetailEvent(
+      detailEvent(4, "complete", {
+        fullContent: "final answer with tools done",
+      })
+    );
+    await flushPromises();
+    expect(
+      store.messages.find((m) => m.id === "live-answer")?.content
+    ).toBe("final answer with tools done");
+  });
 });
 
 describe("paging state stays owned by the newest selection (audit R5-03)", () => {
@@ -743,6 +792,78 @@ describe("paging state stays owned by the newest selection (audit R5-03)", () =>
     const callsBefore = vi.mocked(loadHistoryPage).mock.calls.length;
     await store.loadOlder();
     expect(vi.mocked(loadHistoryPage).mock.calls.length).toBe(callsBefore);
+    expect(store.hasOlder).toBe(false);
+  });
+
+  it("deselection immediately invalidates paging and nothing can fire afterwards", async () => {
+    await selectSnapshot("conv-a", {
+      nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-a" },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+    await store.loadSelection(null);
+    await flushPromises();
+    expect(store.hasOlder).toBe(false);
+    const callsBefore = vi.mocked(loadHistoryPage).mock.calls.length;
+    await store.loadOlder();
+    expect(vi.mocked(loadHistoryPage).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("A→B→A recovers each switch against the live selection's own paging state", async () => {
+    await selectSnapshot("conv-a", {
+      nextBefore: { timestamp: "2026-10-19T00:00:00.000Z", messageId: "cursor-a" },
+      hasOlder: true,
+    });
+    const store = useSelectedConversationStore();
+
+    let finishB: (value: unknown) => void = () => undefined;
+    vi.mocked(selectConversation).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishB = resolve;
+        }) as never
+    );
+    const selectionB = store.loadSelection("conv-b");
+    await flushPromises();
+    // While B is pending — no page may fire; availability is cleared.
+    await store.loadOlder();
+    expect(vi.mocked(loadHistoryPage).mock.calls).toEqual([]);
+    expect(store.hasOlder).toBe(false);
+
+    finishB({
+      acceptedGeneration: 2,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "idle",
+      activeRunId: null,
+      title: "B",
+    } as never);
+    await selectionB;
+    await flushPromises();
+    // B's settled snapshot says "nothing older" — nothing pages for B.
+    const callsInB = vi.mocked(loadHistoryPage).mock.calls.length;
+    await store.loadOlder();
+    expect(vi.mocked(loadHistoryPage).mock.calls.length).toBe(callsInB);
+
+    // Back to A: A's snapshot re-arms ITS OWN cursor and paging resumes.
+    await selectSnapshot("conv-a", {
+      nextBefore: { timestamp: "2026-10-19T06:00:00.000Z", messageId: "cursor-a2" },
+      hasOlder: true,
+    });
+    vi.mocked(loadHistoryPage).mockImplementationOnce(
+      async (conversationId: string, _limit: number, cursor: unknown) => {
+        expect(conversationId).toBe("conv-a");
+        expect((cursor as { messageId: string }).messageId).toBe("cursor-a2");
+        return {
+          messages: [historyRow("conv-a", "older-a2", -60)],
+          nextBefore: null,
+          hasOlder: false,
+        } as HistoryPage as never;
+      }
+    );
+    await store.loadOlder();
+    expect(store.messages.some((m) => m.id === "older-a2")).toBe(true);
     expect(store.hasOlder).toBe(false);
   });
 });
