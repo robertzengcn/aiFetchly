@@ -97,6 +97,8 @@ No implementation may assume that the illustrative manifest in the PRD already w
 | Legacy scraper | Two worker targets, built-in tools, startup tasks, IPC, UI, entities | Remove complete feature dependency graph after Hub acceptance |
 
 The installed SDK exposes `onprogress`, `signal`, `timeout`, `resetTimeoutOnProgress`, and `maxTotalTimeout` in `shared/protocol.d.ts`. Its request implementation allocates the progress token when `onprogress` is supplied. Use that implementation instead of inventing a second JSON-RPC request correlator. Pin and test the resolved SDK version during implementation.
+
+**Reconciliation 2026-10-21 (post-implementation).** Of the rows above: typed host declarations, runtime/policy/capability contract, plugin ownership and admission, deadline-aware MCP execution, context carry, normalization, progress/partial bridges, artifact infrastructure, and the query-loop deadline cleanup are implemented against sections 5–9/12–13 of this design (see `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md` status table and G04 evidence). STILL OPEN, unchanged: prebuilt GitHub-route release verification and packaged parity (R01); Hub ZIP checksum plumbing and managed install flow (R02, only if selected); legacy-scraper removal is code-complete on the branch but is NOT acceptance until R01/AC-16 (R03). The legacy foreground 240-second behavior stays preserved as stated in the "MCP service" row.
 ## 3. Architecture and ownership
 
 ```mermaid

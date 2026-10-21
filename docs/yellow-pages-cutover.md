@@ -11,7 +11,11 @@ Status: Date: 2026-10-19 (legacy graph removal executed on branch
    the AiFetchly application.
 2. **Stage 2 — plugin delivery (parallel track).** Yellow Pages scraping
    capability moves to the independent plugin repository
-   `yellow-pages-scraper-plugin` (see `/home/robertzeng/project/yellow-pages-scraper-plugin/docs/yellow-pages-scraper-plugin-prd.md`).
+   `yellow-pages-scraper-plugin` (separate checkout, own git history/node_modules;
+   its PRD lives at `docs/yellow-pages-scraper-plugin-prd.md` inside that repo;
+   machine-local absolute paths are intentionally absent — the release identity
+   and pinned versions are recorded at the release gate, §R01/R04 of
+   `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md`).
    The plugin ships the `yellowpages-com` adapter as its v1 release
    (`dist/yellow-pages-mcp.cjs`.
 
@@ -52,10 +56,16 @@ Status: Date: 2026-10-19 (legacy graph removal executed on branch
   this change set.
 - **In-session AI recovery broker (Phase 5):** the new-scrape AI support
   restart broker stays out until the plugin's session model lands.
-- **Release acceptance gate:** before shipping, staging must complete the
-  packaged-app flow —
-  Hub (or side-load) install of the plugin → scrape run → export + stop/cancel
-  (`AC-16`..`AC-18`). The cutover docs themselves are not an acceptance pass.
+- **Release acceptance gate:** before shipping, the staged build must complete the
+  REAL Hub-delivery flow — Hub publication of the plugin release → install
+  through the in-app Plugin Manager on a clean packaged target (no system
+  Node/git/npm) → scrape run → export + stop/cancel → parent/descendant
+  termination per advertised OS/arch (`AC-14`..`AC-18`). AC-16 requires ACTUAL
+  Hub delivery: a folder/side-load install is a developer-only convenience and
+  is NOT part of this acceptance. Hold release until the R01 gate passes
+  (operator evidence accrues in
+  `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md` §R01). Legacy
+  removal on this branch is not, by itself, an acceptance pass.
 
 ## Verification Evidence (per commit)
 

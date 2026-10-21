@@ -103,6 +103,8 @@ This revision was checked against desktop `70037427` and the Hub working tree ba
 | A browser dependency service was assumed to be entirely new. | Reuse existing managed-browser resolution and dependency infrastructure through a generic plugin boundary; no plugin imports from host worker internals. | `src/childprocess/managed-browser/BrowserExecutableResolver.ts` |
 
 The prior AI-chat-only surface and artifact-based result design are retained. This revision specifies extraction and distribution; it does not create the new repository, implement the plugin, publish a Hub version, or delete existing user data.
+
+**Reconciliation 2026-10-21 (post-implementation of the audit TODO — read with the row table, which stays a historical audit record).** Since this review, the audit items moved: managed asynchronous execution is implemented end-to-end (registry-owned jobs, loop-internal wait via `pollAsyncJobToCompletion` with adaptive backoff, deadline-anchored MCP calls with `resetTimeoutOnProgress: false`, progress/partial bridges `PluginPartialGate`, normalization via `McpResultNormalizer`, ledger-backed recovery `PluginRecoveryLedger`); generic file artifacts, export and retention are implemented (`PluginFileArtifactService`, `PluginArtifactCard`, B01/B03/B09/B10/B12); the MCP stdio trust/ownership, cross-call recovery ledger, and context-carrying executor/service are implemented (B04/B11/B13, H1/H5 chains); the legacy scraper feature graph is removed on this branch (R03) pending the release gate. STILL OPEN (do not treat the superseded rows above as closed by implementation): Hub canonicalization verification and prebuilt-route provenance (R01), packaged parent/descendant termination per advertised OS+arch (R01), installation of the plugin through a REAL Hub publication (AC-16 — dev loopback fixtures are not acceptance), ZIP delivery checksum plumbing (R02-conditional), managed install flow (R02-conditional), and legacy-scheduler UX for denied `yellow_pages` tasks (R03). Evidence ledger: `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md` §G04.
 ## 2. Product Problem
 
 ### 2.1 Current packaging problem
@@ -244,7 +246,9 @@ A persistent MCP daemon is not required for the first release. It becomes necess
 
 The current `PluginManifest` accepts unknown top-level fields for diagnostics, but the host does not yet consume tool execution policies. The product needs a typed, validated policy surface rather than relying on an ignored custom field.
 
-### 9.2 Proposed manifest extension
+**Reconciled 2026-10-21:** the typed, validated surface now exists and is authoritative — `pluginExecutionTypes.ts` (zod) validates `toolPolicies` (`contractVersion: 1`, bounds, optional `aifetchly.plugin-result.v1` `resultContract`), `hostRequirements` (`contractVersion: 1` + capability map), and `capabilities` (`browserExecutable`, `fileArtifacts: ["json","csv"]`, `minBrowserMajorVersion`); the registry (`PluginToolPolicyRegistry`) loads validated policies from enabled plugins. The example below matches the validated schema; the previous illustrative `plugin-storage` permission name was superseded by the concrete `filesystem` permission + `fileArtifacts` capability contract.
+
+### 9.2 Validated manifest extension (contract version 1)
 
 ```json
 {
@@ -254,21 +258,36 @@ The current `PluginManifest` accepts unknown top-level fields for diagnostics, b
   "description": "Find and export business listings from supported Yellow Pages platforms.",
   "skills": ["skills/yellow-pages-scraper"],
   "mcpServers": [".mcp.json"],
-  "permissions": ["network", "automation", "plugin-storage"],
+  "permissions": ["network", "automation", "filesystem"],
+  "hostRequirements": {
+    "contractVersion": 1,
+    "capabilities": {
+      "mcp-host-node": 1,
+      "mcp-managed-async": 1,
+      "browser-executable": 1,
+      "plugin-file-artifacts": 1
+    }
+  },
+  "capabilities": {
+    "browserExecutable": true,
+    "fileArtifacts": ["json", "csv"]
+  },
   "toolPolicies": {
     "scraper/scrape_yellow_pages": {
+      "contractVersion": 1,
       "timeoutClass": "async",
       "maxRunMs": 1800000,
       "supportsProgress": true,
       "supportsPartialResult": true,
       "cancellable": true,
-      "maxConcurrentPerConversation": 1
+      "maxConcurrentPerConversation": 1,
+      "resultContract": "aifetchly.plugin-result.v1"
     }
   }
 }
 ```
 
-This is a proposed extension, not a manifest that the current host can execute as specified. Permission strings are illustrative until mapped to validated host capabilities; declaring a string does not grant access. `ai-recovery` is deferred to the optional broker phase. Validate these fields in both desktop and Hub, and gate installation/activation by a compatible desktop version. The exact field names may change during technical design, but the behavior is required.
+This contract is versioned and validated on both desktop (`pluginExecutionTypes.ts`) and plugin/Hub sides (plugin technical design §5/§13; shared fixtures in the plugin repository). Permission strings remain non-granting requests; grant evaluation stays host-owned. `ai-recovery` is deferred to the optional broker phase. Validate these fields in both desktop and Hub, and gate installation/activation by a compatible desktop version. Unknown fields inside the typed extension blocks are rejected; unrelated manifest extras keep existing compatibility behavior, and an unknown required host capability prevents activation with a typed unsupported-host diagnostic.
 
 ### 9.3 Policy identity
 
@@ -768,6 +787,8 @@ The AI does not expose raw diagnostic payloads unless they help the user. It tra
 - Asking for authentication or CAPTCHA intervention.
 - Reporting a missing dependency or plugin failure.
 ## 21. Existing Implementation Assessment
+
+**Post-audit reconciliation 2026-10-21.** The subsections below record the audit-time state and stay as history; status since then: §21.2 resolved (HOST-13 descriptions/comments corrected; the loop no longer expects the model to poll — `run_subagent`, `extract_contact_info` async registration and skill types describe managed async and forbid fabricated job ids), §21.3 resolved (policy registry consulted before name inference; `resolveTimeoutClass` wins), §21.4 resolved (H1 context carry: execution id, deadline, authorized recovery delivered through the trusted launch contract), §21.5 resolved (HOST-07/H5: deadline recomputed before every awaited step, monotonic anchoring, cleanup reserve; no unconditional 240 s race on the async path), §21.6 resolved (HOST-04/05: progress and validated partial snapshots ride the registry record via `PluginPartialGate` with rate limiting and B03 termination), §21.7 resolved (HOST-09: normalization precedence preserves plugin failure semantics and failure hooks fire from validated data), §21.8 largely resolved (registry-owned abort signal forwarded through executor/service/client with bounded cleanup `shutdownAndAwaitCleanup`/`abortAndAwaitJobs`; REAL descendant termination on packaged targets remains open at R01). §21.9 stays future-phase (broker under D01). Artifact infrastructure (absent at audit time) now exists per §13 with implementation notes in G04.
 
 ### 21.1 Reusable host capability
 
@@ -1287,6 +1308,12 @@ Release-blocking decisions added by this review:
 16. Per-adapter parity matrix, including proxy support, external business-site crawling, and deferred authentication.
 
 The proposed AI-chat-only replacement remains the product scope; a new plugin-rendered Yellow Pages management UI would be a separate requirement.
+
+**Scope decisions recorded 2026-10-21** (resolve the residual polarity in the list above, not these proposals):
+
+- **Retained directory adapters (R03 boundary).** `JapaneseYellowPagesAdapter` (abstract base), `ITownPageAdapter`, and `USonarYellowPageAdapter` are intentionally retained: they are consumed by `src/modules/platforms/PlatformAdapterFactory.ts` and `src/config/platforms/index.ts` (factory + lazy loader map + catalog for `itownpage-jp`, `usonar-yellowpage-jp`) which continue to serve the generic directory-scrape features (local business finder/map-class scraping on this product). Their factory rows, catalog entries, URL allowlist rules, and tests are untouched (`a6003854`, `test/vitest/main/yellowPagesLegacyRemoval.test.ts` asserts two of them remain). The literal "no bundled Yellow Pages adapters" requirement applies to the deleted legacy Yellow Pages feature's own adapters (`yellowpages-com`, `yellowpages-com-sg`, `yellowpages-ca`) — none of those remain in the app; the `yellowpages-com` implementation moved to the independent plugin repository. Do not delete the retained shared adapters without re-tracing these consumers.
+- **Provider-aware AI policy (D01, recorded).** The product gates AI by provider availability: `AiChatV2` availability is provider-aware (per-provider chat resolvers decide readiness); in addition, async plugin-tool admission double-checks the hosted-token gate (`Token`/`USER_AI_ENABLED`) before spawn. The literal PRD wording (§D01) and the provider-aware implementation are both valid scopes for their layers; the host broker reconciliation in D01 must not loosen either gate. AI-assisted recovery (opt-out, §31.7) and the broker permission experience (§31.8) stay open per R04/D01.
+- **Repository references.** Machine-local absolute paths in cross-repository documents are transitional notation until release identity is decided (R04 item 11); the cutover and plan documents now use repository-relative references, and the pinned release commit/version will be recorded at the R01 gate.
 ## 32. Success Metrics
 
 ### 32.1 Product metrics
