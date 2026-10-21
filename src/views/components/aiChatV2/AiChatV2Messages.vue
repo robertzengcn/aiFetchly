@@ -23,6 +23,7 @@
         :workspace-root="workspaceRoot"
         :show-reasoning="showReasoning"
         :reported="props.reportedMessageIds.has(m.id)"
+        :tool-awaiting-result="awaitingToolMessageIds?.has(m.id) === true"
         @grant-permission="onGrantPermission"
         @deny-permission="onDenyPermission"
         @approve-plan="emit('approve-plan')"
@@ -115,6 +116,8 @@ const props = defineProps<{
   showReasoning?: boolean;
   /** Message ids already reported this session (parent-owned after lift). */
   reportedMessageIds: Set<string>;
+  /** Tool-call message ids still waiting for a result during a live turn. */
+  awaitingToolMessageIds?: ReadonlySet<string>;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;

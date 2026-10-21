@@ -33,7 +33,7 @@ const props = defineProps({
   },
 });
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 const options = reactive({
   page: 1,

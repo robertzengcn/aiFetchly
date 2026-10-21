@@ -41,11 +41,68 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   @Column("varchar", { length: 100, nullable: true })
   modelName: string | null;
 
+  // ---- Completion telemetry (T09/FR-027): the actual model, completion
+  // reason, and token usage of the winning generation, or an honest null
+  // when the provider omitted them. Replaces the pre-T09 hardcoded
+  // "openai-compatible" literal so consumers can tell WHICH model produced
+  // the draft and audit token spend.
+
+  /** `finish_reason` of the winning completion (`stop`, `length`, ...). */
+  @Column("varchar", { length: 50, nullable: true })
+  finishReason: string | null;
+
+  /** Prompt token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  promptTokens: number | null;
+
+  /** Completion token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  completionTokens: number | null;
+
+  /** Total token count reported by the provider, when available. */
+  @Column("integer", { nullable: true })
+  totalTokens: number | null;
+
   @Column("varchar", { length: 50, nullable: true })
   promptVersion: string | null;
 
   @Column("real", { nullable: true })
   confidence: number | null;
+
+  /**
+   * The model's draft-time intent suggestion (FR-007/B07), persisted as
+   * METADATA ONLY. This NEVER overwrites the message's authoritative
+   * classification (the deterministic + provenance-tracked value stored on the
+   * message row). Consumers may surface it as a non-authoritative hint; later
+   * policy decisions must read the message classification, not this field.
+   */
+  @Column("varchar", { length: 50, nullable: true })
+  intentSuggestion: string | null;
+
+  /** Confidence the model reported for {@code intentSuggestion}, in [0,1]. */
+  @Column("real", { nullable: true })
+  intentSuggestionConfidence: number | null;
+
+  // ---- Optional generated review metadata (R21) ----
+  // The strict generation schema accepts three OPTIONAL review signals from
+  // the model (`requiresHumanReview`, `reviewReasons`, `unresolvedQuestions`).
+  // They are persisted as REVIEW METADATA ONLY so a model-flagged draft stays
+  // flagged on reload/reuse and the approval service can refuse a clean-slate
+  // approval. They NEVER alter the authoritative message classification and
+  // never relax the deterministic validator — a persisted flag can only make
+  // review STRICTER (block approval), never lighter.
+
+  /** The model asked for human review before sending (schema-bounded boolean). */
+  @Column("integer", { nullable: true })
+  requiresHumanReview: number | null;
+
+  /** Schema-bounded reasons the model gave for the review request (≤20×500). */
+  @Column("text", { nullable: true })
+  reviewReasonsJson: string | null;
+
+  /** Schema-bounded unresolved questions the model listed (≤10×500). */
+  @Column("text", { nullable: true })
+  unresolvedQuestionsJson: string | null;
 
   /** Serialized {@code EmailReplyKnowledgeSourceAudit[]}. */
   @Column("text", { nullable: true })
@@ -111,4 +168,29 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   /** Timestamp of the most recent approval invalidation (edit / scope change). */
   @Column("datetime", { nullable: true })
   approvalInvalidatedAt: Date | null;
+
+  // ---- G02: explicit human-review resolution (FR-025) ----
+  // The model's `requiresHumanReview` flag + `reviewReasonsJson` /
+  // `unresolvedQuestionsJson` are IMMUTABLE provenance (never cleared). A
+  // human resolves the flag via `resolveHumanReview`, which stamps these
+  // columns bound to the exact revision reviewed. Any later edit (new
+  // revision) invalidates the resolution (columns cleared) so a stale
+  // acknowledgment can never authorize a changed draft. Approval requires
+  // either requiresHumanReview != 1, or a resolution bound to the CURRENT
+  // revision. There is no AI-accessible path to write these columns.
+  /** When a human resolved the model's review request (null = unresolved). */
+  @Column("datetime", { nullable: true })
+  humanReviewResolvedAt: Date | null;
+
+  /** Who resolved (approvedByType:approvedById, bounded, audit only). */
+  @Column("varchar", { length: 200, nullable: true })
+  humanReviewResolvedBy: string | null;
+
+  /** Revision id the human reviewed (must equal currentRevisionId to count). */
+  @Column("integer", { nullable: true })
+  humanReviewResolvedRevisionId: number | null;
+
+  /** Human's resolution note (≤2000 chars, audit only, never AI-written). */
+  @Column("text", { nullable: true })
+  humanReviewResolutionNote: string | null;
 }

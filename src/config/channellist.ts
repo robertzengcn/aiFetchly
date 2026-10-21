@@ -95,6 +95,10 @@ export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
 // Thread-aware reply reliability (Milestone 1): approval + send-safety.
 export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+// G02: explicit human-review resolution (renderer user gesture only — never
+// exposed to AI tools).
+export const EMAIL_REPLY_DRAFT_RESOLVE_REVIEW =
+  "email:reply:draft:resolve-review";
 export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
   "email:reply:send:attempt:detail";
 export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
@@ -104,6 +108,7 @@ export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
   "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
+export const EMAIL_REPLY_CHECK_REPLIED = "email:reply:check:replied";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
 export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
 export const SOCIALACCOUNTSAVE = "socialaccount:save";
@@ -773,6 +778,9 @@ export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
 // test harness needs a direct, gated seeding path. They never exist in a
 // production or development run.
 export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
+export const E2E_SEED_RECEIVED_MESSAGE = "e2e:seed-received-message";
+export const E2E_SEED_AUTO_REPLY_AUDIT = "e2e:seed-auto-reply-audit";
+export const E2E_SEED_REPLY_DRAFT = "e2e:seed-reply-draft";
 
 // ---------------------------------------------------------------------------
 // Recoverable large tool results (AI Chat V2).

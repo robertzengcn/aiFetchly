@@ -70,6 +70,16 @@ export default ({ mode }) => {
             // transpile-only mode silently passes files with type errors
             // (this exact issue bit us during the zod schema rollout).
             globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
+            // Per-worker temp-dir isolation (V01 / re-audit checkbox 1).
+            // BaseDb/BaseModule fall back to `os.tmpdir()/aifetchly-test` when
+            // constructed without a filepath; under the default forks pool two
+            // workers running TypeORM `synchronize()` DDL against the SAME
+            // shared file throw SQLITE_BUSY. This setupFile assigns each worker
+            // process a unique TMPDIR (os.tmpdir() re-reads TMPDIR per call on
+            // Node 22) so the fallback resolves to a per-worker-unique dir,
+            // fixing every empty-dbpath user at once. Runs before test modules
+            // import. See test/vitest/_setup/isolatedTmpDir.ts.
+            setupFiles: ['./test/vitest/_setup/isolatedTmpDir.ts'],
         }
     })
 }

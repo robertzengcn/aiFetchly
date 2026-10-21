@@ -7,10 +7,7 @@ import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
-import {
-  MANUAL_BUDGET_DEFAULTS,
-  buildScheduledBudgetLimits,
-} from "@/service/aiTaskExecution/budgetDefaults";
+import { buildScheduledBudgetLimits } from "@/service/aiTaskExecution/budgetDefaults";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";

@@ -14,6 +14,7 @@ import {
   startCompaction,
   streamChatV2Message,
 } from "@/views/api/aiChatV2";
+import { IpcRequestError } from "@/views/utils/apirequest";
 
 type ReceiveHandler = (raw: string) => void;
 
@@ -457,8 +458,15 @@ describe("aiChatV2 renderer API", () => {
     await expect(promise).rejects.toThrow(
       "Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED"
     );
-    expect(onError).toHaveBeenCalledWith(
-      new Error("Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED")
+    // B12 (merged): windowInvoke throws the typed IpcRequestError for a
+    // status:false envelope, and the attach path surfaces it through onError
+    // unchanged so callers can read the structured fields (code /
+    // requestCorrelationId). Assert the typed contract, not a plain Error.
+    expect(onError).toHaveBeenCalledTimes(1);
+    const surfaced = onError.mock.calls[0][0] as IpcRequestError;
+    expect(surfaced).toBeInstanceOf(IpcRequestError);
+    expect(surfaced.message).toBe(
+      "Task continue denied: LINEAGE_LEDGER_ALREADY_SUPERSEDED"
     );
     expect(onState).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();

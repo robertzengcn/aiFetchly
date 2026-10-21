@@ -5,6 +5,7 @@ import {
   encodeAddresses,
   decodeAddresses,
   isAutomatedSender,
+  replyRecipientAddress,
 } from "@/service/emailReceive/EmailMessageParser";
 
 describe("extractThreadKey", () => {
@@ -69,6 +70,32 @@ describe("isAutomatedSender", () => {
 
   it("does not flag ordinary addresses", () => {
     expect(isAutomatedSender({ fromAddress: "prospect@example.com" })).toBe(false);
+    expect(isAutomatedSender({ fromAddress: "estewaycom@gmail.com" })).toBe(false);
+    expect(isAutomatedSender({ fromAddress: "david@aiagentlnc.com" })).toBe(false);
+  });
+
+  it("ignores no-reply tokens in the display name, a comment, or the domain", () => {
+    expect(
+      isAutomatedSender({ fromAddress: "Zeng Robert <estewaycom@gmail.com>" })
+    ).toBe(false);
+    expect(
+      isAutomatedSender({ fromAddress: "estewaycom@gmail.com (no-reply)" })
+    ).toBe(false);
+    expect(
+      isAutomatedSender({ fromAddress: "person@noreply.example.com" })
+    ).toBe(false);
+    expect(
+      isAutomatedSender({ fromAddress: "techno-reply@example.com" })
+    ).toBe(false);
+  });
+
+  it("flags automated mailbox local-parts, including role segments", () => {
+    expect(isAutomatedSender({ fromAddress: "noreply@example.com" })).toBe(true);
+    expect(isAutomatedSender({ fromAddress: "do-not-reply@example.com" })).toBe(true);
+    expect(
+      isAutomatedSender({ fromAddress: "forms-receipts-noreply@google.com" })
+    ).toBe(true);
+    expect(isAutomatedSender({ fromAddress: "autoresponder@example.com" })).toBe(true);
   });
 
   it("respects Auto-Submitted header (not 'no')", () => {
@@ -81,6 +108,18 @@ describe("isAutomatedSender", () => {
     expect(
       isAutomatedSender({ fromAddress: "prospect@example.com", autoSubmitted: "no" })
     ).toBe(false);
+  });
+
+  it("uses Reply-To as the reply recipient when present", () => {
+    expect(
+      replyRecipientAddress("no-reply@forms.example.com", "estewaycom@gmail.com")
+    ).toBe("estewaycom@gmail.com");
+    expect(replyRecipientAddress("david@aiagentlnc.com", "  ")).toBe(
+      "david@aiagentlnc.com"
+    );
+    expect(replyRecipientAddress("david@aiagentlnc.com", null)).toBe(
+      "david@aiagentlnc.com"
+    );
   });
 
   it("respects Precedence bulk/junk/list", () => {

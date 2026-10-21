@@ -36,7 +36,6 @@ import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 //import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { SearchAccountModel } from "@/model/SearchAccount.model";
 import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
-import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType";
 import { AccountCookiesModule } from "./accountCookiesModule";
 import {
@@ -316,6 +315,9 @@ export class SearchModule extends BaseModule {
       );
     }
     const { port1, port2 } = new MessageChannelMain();
+    // Only port1 is transferred to the child; close the unused local end so
+    // the channel does not keep the parent process alive after the transfer.
+    port2.close();
     // const tokenService=new Token()
     let twoCaptchaTokenvalue = "";
     const twoCaptchaToken =
@@ -821,8 +823,6 @@ export class SearchModule extends BaseModule {
     // If search is provided, get all tasks first, then filter and paginate
     // Otherwise, use normal pagination
     let tasklist;
-    const allTasks: Array<SearchtaskItem> = [];
-
     if (search && search.trim().length > 0) {
       // Get all tasks for filtering
       const totalCount = await this.taskdbModel.getTaskTotal();

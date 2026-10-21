@@ -13,6 +13,7 @@ import type {
 } from "@/entityTypes/aiProviderTypes";
 import { AIProviderSecretService } from "./AIProviderSecretService";
 import { validateLocalProviderConfig } from "./AIProviderConfigValidator";
+import { bumpProviderConfigVersion } from "./AIProviderConfigVersion";
 
 /**
  * Main-process service that owns provider settings persistence and the
@@ -42,6 +43,8 @@ export class AIProviderSettingsService {
 
   setMode(mode: AIProviderMode): void {
     this.token.setValue(USER_AI_PROVIDER_MODE, mode);
+    // N05: mode switches change provider identity — version capability caches.
+    bumpProviderConfigVersion();
   }
 
   /** Hosted subscription entitlement flag (`USER_AI_ENABLED === "true"`). */
@@ -147,6 +150,8 @@ export class AIProviderSettingsService {
     };
     this.token.setValue(USER_LOCAL_AI_PROVIDER_CONFIG, JSON.stringify(stored));
     this.token.setValue(USER_LOCAL_AI_ENABLED, "true");
+    // N05: new local config changes provider identity — version caches.
+    bumpProviderConfigVersion();
 
     return {
       ...stored,
@@ -162,10 +167,14 @@ export class AIProviderSettingsService {
     this.token.deleteValue(USER_LOCAL_AI_PROVIDER_CONFIG);
     this.secrets.clearApiKey();
     this.token.setValue(USER_LOCAL_AI_ENABLED, "false");
+    // N05: provider removal changes identity — version caches.
+    bumpProviderConfigVersion();
   }
 
   /** Delete only the API key (config retained). */
   clearApiKey(): void {
     this.secrets.clearApiKey();
+    // N05: credentials changed — version caches.
+    bumpProviderConfigVersion();
   }
 }

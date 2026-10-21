@@ -101,6 +101,13 @@ export function encodeToolResultCursor(input: {
  * numeric ranges, version, and the caller's expected output/mode. A rejected
  * cursor leaves the caller free to restart from the beginning using a valid
  * output id, which is always permitted.
+ *
+ * Whitespace around the token is trimmed before authentication: the cursor is
+ * an opaque string the MODEL transcribes between turns, and copy artifacts
+ * (a wrapping newline, a leading space from quoting) are not part of the
+ * signature. Trimming recovers an otherwise-valid cursor that a bare HMAC
+ * comparison would reject (2026-10-21 incident: a cursor minted moments
+ * earlier by the same process failed with INVALID_OUTPUT_CURSOR).
  */
 export function decodeToolResultCursor(
   raw: unknown,
@@ -111,13 +118,15 @@ export function decodeToolResultCursor(
     readonly queryDigest?: string;
   }
 ): ToolResultCursorDecodeResult {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > 4096) {
+  const candidate =
+    typeof raw === "string" ? raw.trim() : null;
+  if (candidate === null || candidate.length === 0 || candidate.length > 4096) {
     return { ok: false, code: "INVALID_OUTPUT_CURSOR" };
   }
-  const dot = raw.lastIndexOf(".");
+  const dot = candidate.lastIndexOf(".");
   if (dot <= 0) return { ok: false, code: "INVALID_OUTPUT_CURSOR" };
-  const body = raw.slice(0, dot);
-  const signature = raw.slice(dot + 1);
+  const body = candidate.slice(0, dot);
+  const signature = candidate.slice(dot + 1);
 
   // Constant-time comparison; a timing oracle here would leak the MAC.
   const expectedSignature = sign(body);
@@ -136,6 +145,13 @@ export function decodeToolResultCursor(
   const result = cursorPayloadSchema.safeParse(parsed);
   if (!result.success) return { ok: false, code: "INVALID_OUTPUT_CURSOR" };
   const payload = result.data;
+
+  // The schema only proves policyVersion is PRESENT; comparing it to the
+  // current policy is what actually invalidates cursors minted under an older
+  // policy after a rotation. Without this the version field was decoration.
+  if (payload.policyVersion !== TOOL_RESULT_POLICY_VERSION) {
+    return { ok: false, code: "INVALID_OUTPUT_CURSOR" };
+  }
 
   if (payload.outputId !== expected.outputId) {
     return { ok: false, code: "INVALID_OUTPUT_CURSOR" };

@@ -311,6 +311,7 @@ export class RecordCountAdapter implements CriterionEvaluator {
 
   async evaluate(
     criterion: TaskCriterion,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- required by the adapter interface; this adapter needs no context
     context: AdapterContext
   ): Promise<CriterionEvalResult> {
     if (criterion.kind !== "record_count") {

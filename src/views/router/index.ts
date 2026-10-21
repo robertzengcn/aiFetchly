@@ -870,6 +870,19 @@ export const constantRoutes: RouteRecordRaw[] = [
             /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditdetail.vue"
           ),
       },
+      {
+        path: "emailreply/draft/detail/:id(\\d+)",
+        name: "AI_Reply_Draft_Detail",
+        meta: {
+          visible: false,
+          title: "route.ai_reply_draft_detail",
+          icon: "mdi-robot-outline",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/draftdetail.vue"
+          ),
+      },
     ],
   },
   {

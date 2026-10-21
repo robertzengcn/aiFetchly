@@ -97,7 +97,7 @@ const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   changed: [];
 }>();
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const tags = ref<EmailServiceTagSummary[]>([]);
 const draftName = ref("");
 const editingId = ref<number | null>(null);

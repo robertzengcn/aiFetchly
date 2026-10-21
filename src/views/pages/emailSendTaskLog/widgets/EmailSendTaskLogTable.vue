@@ -34,7 +34,7 @@ const taskId = ref(0);
 import { Header } from "@/entityTypes/commonType"
 // import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
 import { useRoute } from "vue-router";
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const selected = ref<Array<EmailMarketingSendLogListDisplay>>([]);
 const computedHeaders = computed(() => {
     if (props.isSelectedtable) {

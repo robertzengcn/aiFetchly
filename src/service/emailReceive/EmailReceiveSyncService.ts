@@ -10,7 +10,10 @@ import {
   EmailReceiveProtocol,
 } from "@/entityTypes/emailReceiveTypes";
 import { EmailReceiveClientFactory } from "@/service/emailReceive/EmailReceiveClientFactory";
-import { ParsedInboundEmail } from "@/service/emailReceive/EmailReceiveClient";
+import {
+  ParsedInboundEmail,
+  EmailReceiveClient,
+} from "@/service/emailReceive/EmailReceiveClient";
 import {
   buildSnippet,
   encodeAddresses,
@@ -21,6 +24,12 @@ import {
 } from "@/service/emailReceive/EmailThreadResolver";
 import { normalizeEmailBody } from "@/service/emailReceive/EmailBodyNormalizationService";
 import { classifyDeterministic } from "@/service/emailReply/EmailMessageClassificationService";
+import {
+  isNamespacedProviderUid,
+  parseNamespacedProviderUid,
+  normalizeStoredMessageId,
+  normalizedIdsMatch,
+} from "@/service/emailReceive/EmailReplyIdentity";
 
 /** Result of a manual or AI-triggered sync. */
 export interface EmailReceiveSyncResult {
@@ -47,12 +56,22 @@ export class EmailReceiveSyncService {
   private messageModule: EmailReceivedMessageModule;
   private auditModule: EmailReplyAuditLogModule;
   private conversationModule: EmailConversationModule;
+  private readonly clientFactory: (
+    protocol: EmailReceiveProtocol
+  ) => EmailReceiveClient;
 
-  constructor() {
+  constructor(options?: {
+    /** Test seam: inject a fake receive client per protocol. */
+    clientFactory?: (protocol: EmailReceiveProtocol) => EmailReceiveClient;
+  }) {
     this.serviceModule = new EmailServiceModule();
     this.messageModule = new EmailReceivedMessageModule();
     this.conversationModule = new EmailConversationModule();
     this.auditModule = new EmailReplyAuditLogModule();
+    this.clientFactory =
+      options?.clientFactory ??
+      ((protocol: EmailReceiveProtocol) =>
+        EmailReceiveClientFactory.createClient(protocol));
   }
 
   /**
@@ -118,9 +137,7 @@ export class EmailReceiveSyncService {
       if (validationError) {
         return { success: false, error: validationError };
       }
-      const client = EmailReceiveClientFactory.createClient(
-        normalizedConfig.protocol
-      );
+      const client = this.clientFactory(normalizedConfig.protocol);
       await client.testConnection(normalizedConfig);
       return { success: true, error: null };
     } catch (error) {
@@ -155,9 +172,7 @@ export class EmailReceiveSyncService {
     if (validationError) {
       throw new Error(validationError);
     }
-    const client = EmailReceiveClientFactory.createClient(
-      normalizedConfig.protocol
-    );
+    const client = this.clientFactory(normalizedConfig.protocol);
     let parsed: ParsedInboundEmail[];
     try {
       parsed = await client.fetchMessages(normalizedConfig, fetchOptions);
@@ -180,8 +195,7 @@ export class EmailReceiveSyncService {
 
     const messageIds: number[] = [];
     for (const p of parsed) {
-      const entity = this.toEntity(emailServiceId, p);
-      const saved = await this.messageModule.upsertByProviderUid(entity);
+      const saved = await this.storeFetchedMessage(emailServiceId, p);
       messageIds.push(saved.id);
       await this.normalizeAndAssociate(emailServiceId, p, saved.id);
       await this.writeAudit(
@@ -205,6 +219,77 @@ export class EmailReceiveSyncService {
       stored: messageIds.length,
       messageIds,
     };
+  }
+
+  /**
+   * Store one fetched message, adopting a legacy bare-UID row when this sync
+   * can prove it is the same message (FR-030, technical design §5.1).
+   *
+   * A namespaced providerUid (`imap:<folderHash>:<uidValidity>:<uid>`) will
+   * normally upsert its own row. When it does NOT match an existing row, a
+   * legacy row from pre-namespace syncs may exist under the bare UID. The
+   * legacy row is adopted — rebased onto the namespaced key via a targeted
+   * provenance-only update that preserves ALL local state (replyStatus,
+   * classification, evidence) — ONLY when the fetched message's RFC Message-ID
+   * matches the legacy row's stored/normalized ID. Any mismatch (or a missing
+   * ID) means the UID was reused for a different message after a folder
+   * rename / UIDVALIDITY bump: insert a fresh row and leave the legacy row
+   * untouched (its canonical reply keys keep guarding against duplicates).
+   */
+  private async storeFetchedMessage(
+    emailServiceId: number,
+    p: ParsedInboundEmail
+  ): Promise<EmailReceivedMessageEntity> {
+    const entity = this.toEntity(emailServiceId, p);
+
+    if (isNamespacedProviderUid(p.providerUid)) {
+      const namespaced = parseNamespacedProviderUid(p.providerUid);
+      if (namespaced) {
+        const bareUid = namespaced.uid;
+        const legacyRow = await this.messageModule.findLegacyBareUidRow({
+          emailServiceId,
+          bareUid,
+        });
+        if (
+          legacyRow &&
+          this.legacyRowMatchesFetchedMessage(legacyRow, p.messageId)
+        ) {
+          const adopted = await this.messageModule.updateProviderUidNamespacing({
+            id: legacyRow.id,
+            emailServiceId,
+            providerUid: p.providerUid,
+            providerFolder: p.providerFolder,
+            providerUidValidity: p.providerUidValidity,
+          });
+          if (adopted) {
+            // Refresh provider fields + answered provenance on the adopted
+            // row through the normal targeted upsert path.
+            return await this.messageModule.upsertByProviderUid(entity);
+          }
+        }
+      }
+    }
+
+    return await this.messageModule.upsertByProviderUid(entity);
+  }
+
+  /**
+   * Source-identity validation before adoption (§5.1): the fetched message's
+   * RFC Message-ID must be equivalent (normalized token equality) to the
+   * legacy row's stored ID. A legacy row with no usable ID can never be
+   * proven the same message, so it is never adopted.
+   */
+  private legacyRowMatchesFetchedMessage(
+    legacyRow: EmailReceivedMessageEntity,
+    fetchedMessageId: string | null
+  ): boolean {
+    if (!fetchedMessageId) return false;
+    const fetchedNormalized = normalizeStoredMessageId(fetchedMessageId);
+    if (!fetchedNormalized) return false;
+    const legacyNormalized =
+      legacyRow.normalizedMessageId ??
+      normalizeStoredMessageId(legacyRow.messageId);
+    return normalizedIdsMatch(fetchedNormalized, legacyNormalized);
   }
 
   private toEntity(
@@ -231,7 +316,17 @@ export class EmailReceiveSyncService {
     entity.snippet = buildSnippet(p.bodyText);
     entity.receivedAt = p.receivedAt;
     entity.isUnread = p.isUnread ? 1 : 0;
-    entity.replyStatus = p.isAnswered ? "sent" : "not_started";
+    // Raw provider flag observation + provenance (FR-030 §5.1). The
+    // replyStatus projection is NOT derived from the flag here (R11: that
+    // promotion erased the FR-030 distinction between app delivery and
+    // mailbox-positive evidence). Sync writes only the raw flag + provenance;
+    // a freshly-observed \Answered is recorded as sticky external positive
+    // evidence (replyDetectedAt + replyDetectionSource "mailbox_flag") inside
+    // the model's upsert — never as a replyStatus/processedAt promotion.
+    entity.isAnswered = p.isAnswered ? 1 : 0;
+    entity.answeredFlagCheckedAt = new Date();
+    entity.providerFolder = p.providerFolder;
+    entity.providerUidValidity = p.providerUidValidity;
     return entity;
   }
 

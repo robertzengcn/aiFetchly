@@ -1213,8 +1213,11 @@ function initialize() {
       // already-migrated DB. Fire-and-forget so it never blocks startup,
       // but awaited in tests via migrateEmailServiceTagsToManyToMany.
       try {
-        const { replayLegacyServiceTags, dropLegacyServiceTagColumn } =
-          await import("@/modules/migrations/emailServiceTagMigration");
+        const {
+          replayLegacyServiceTags,
+          dropLegacyServiceTagColumn,
+          repairEmailServicePrimaryKey,
+        } = await import("@/modules/migrations/emailServiceTagMigration");
         const backfilled = await replayLegacyServiceTags(
           appDataSource.connection,
           legacyTagSnapshot
@@ -1222,9 +1225,12 @@ function initialize() {
         const columnDropped = await dropLegacyServiceTagColumn(
           appDataSource.connection
         );
-        if (backfilled > 0 || columnDropped) {
+        const primaryKeyRepaired = await repairEmailServicePrimaryKey(
+          appDataSource.connection
+        );
+        if (backfilled > 0 || columnDropped || primaryKeyRepaired) {
           log.info(
-            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}`
+            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}, primary key repaired=${primaryKeyRepaired}`
           );
         }
       } catch (err) {
@@ -1232,6 +1238,91 @@ function initialize() {
           "[email-service-tag-migration] replay/drop failed:",
           err instanceof Error ? err.message : String(err)
         );
+      }
+
+      // Post-synchronize email-reply upgrade validation (R23, technical design
+      // §5.3). Runs AFTER ensureInitialized() has applied TypeORM synchronize
+      // over the POPULATED database. Read-only: never repairs, drops, or
+      // backfills. On a non-empty failure list (or a validator exception) it
+      // DISABLES guarded reply work (draft generation + new send claims) via
+      // the emergency kill-switch Token flag so the refusal is visible to
+      // operators, and PRESERVES the database — the §5.3 rollout contract.
+      // The mandatory local duplicate protection (sent/unknown/conflict
+      // clusters blocking acquireReservation) has no feature-flag dependency
+      // and runs unconditionally, so this disable cannot remove it.
+      // Fire-and-forget so a slow or stuck validation never blocks startup;
+      // the kill switch takes effect on the next draft/send IPC call.
+      // N08: shared admission barrier — new guarded work refuses while
+      // validation is pending/failed (EmailReplyReadiness). Audit/recovery
+      // paths never consult the gate and stay available (§5.3).
+      if (startupPolicy.validateReplyUpgradeOnStartup) {
+        try {
+          const {
+            markUpgradeValidationPending,
+            markUpgradeValidationPassed,
+            markUpgradeValidationFailed,
+          } = await import("@/service/emailReply/EmailReplyReadiness");
+          // N08: hold new guarded work synchronously at startup (before the
+          // async validation settles). Audit/recovery stay open.
+          markUpgradeValidationPending();
+          const { runReplyUpgradeValidationOnStartup } = await import(
+            "@/service/emailReply/EmailReplyUpgradeValidation"
+          );
+          void runReplyUpgradeValidationOnStartup(
+            appDataSource.connection,
+            "startup-upgrade-validation"
+          ).then(
+            (report) => {
+              if (!report.ok) {
+                markUpgradeValidationFailed();
+                log.error(
+                  "[email-reply-upgrade-validation] FAILED — guarded reply work disabled via kill switch. Failures:",
+                  JSON.stringify(report.failures)
+                );
+              } else {
+                markUpgradeValidationPassed();
+                log.info(
+                  "[email-reply-upgrade-validation] passed — reply schema invariants verified"
+                );
+              }
+            },
+            (error) => {
+              // N08: promise rejection (not just a failure report) fails
+              // closed explicitly — guarded work stays held.
+              markUpgradeValidationFailed();
+              log.error(
+                "[email-reply-upgrade-validation] startup validation rejected:",
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          );
+        } catch (err) {
+          // N08: wiring/import failure fails closed explicitly instead of
+          // only logging. Guarded work is held; audit/recovery stay open.
+          try {
+            const { markUpgradeValidationFailed } = await import(
+              "@/service/emailReply/EmailReplyReadiness"
+            );
+            markUpgradeValidationFailed();
+          } catch {
+            /* readiness import itself failed — gate defaults to pending (held) */
+          }
+          log.error(
+            "[email-reply-upgrade-validation] startup wiring failed to launch:",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      } else {
+        // Validation disabled by policy — treat as passed so the gate does
+        // not hold guarded work forever. The kill switch still applies.
+        try {
+          const { markUpgradeValidationPassed } = await import(
+            "@/service/emailReply/EmailReplyReadiness"
+          );
+          markUpgradeValidationPassed();
+        } catch {
+          /* best-effort */
+        }
       }
 
       // Best-effort cache cleanup so stale paste expansions do not grow

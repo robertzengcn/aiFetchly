@@ -76,11 +76,6 @@ async function invokeTaskChannel(
   );
 }
 
-interface RecoveryFixture {
-  readonly root: E2ETestRoot;
-  readonly app: LaunchedApp;
-}
-
 /** Launch with the policy flag forced to `flagValue` via tokenOverrides. */
 async function launchWithPolicyFlag(
   fakeAiBaseUrl: string,
@@ -98,12 +93,12 @@ async function launchWithPolicyFlag(
 }
 
 test.describe("scheduled-incomplete recovery IPC", () => {
-  test("policy flag OFF denies Continue/Retry before any coordinator work", async ({}, testInfo) => {
+  test("policy flag OFF denies Continue/Retry before any coordinator work", async () => {
     test.setTimeout(180_000);
     const fakeAi = await startFakeOpenAiServer();
     const root = createTemporaryRoot({
-      testId: testInfo.titlePath.join(" "),
-      workerIndex: testInfo.workerIndex,
+      testId: test.info().titlePath.join(" "),
+      workerIndex: test.info().workerIndex,
     });
     try {
       const app = await launchWithPolicyFlag(
@@ -138,12 +133,12 @@ test.describe("scheduled-incomplete recovery IPC", () => {
     }
   });
 
-  test("policy flag ON: unknown parent is denied, malformed payload rejected", async ({}, testInfo) => {
+  test("policy flag ON: unknown parent is denied, malformed payload rejected", async () => {
     test.setTimeout(180_000);
     const fakeAi = await startFakeOpenAiServer();
     const root = createTemporaryRoot({
-      testId: testInfo.titlePath.join(" "),
-      workerIndex: testInfo.workerIndex,
+      testId: test.info().titlePath.join(" "),
+      workerIndex: test.info().workerIndex,
     });
     try {
       const app = await launchWithPolicyFlag(

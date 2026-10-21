@@ -15,6 +15,10 @@ import {
 } from "@/schemas/toolResult";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import {
+  TOOL_RESULT_DENIAL_RECOVERY,
+  toolResultReadFailure,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
 import { fitWrappedRetrievalResult } from "@/service/toolResult/retrievalInlineBound";
@@ -33,12 +37,25 @@ export async function handleToolResultRead(
 
   const trusted = getToolResultContext(context);
   if (!trusted) {
-    return { success: false, result: { error: "OUTPUT_NOT_AVAILABLE" } };
+    return {
+      success: false,
+      result: {
+        error: "OUTPUT_NOT_AVAILABLE",
+        recovery: TOOL_RESULT_DENIAL_RECOVERY,
+      },
+    };
   }
 
   const target = await trusted.resolveTarget(parsed.data.output_id);
   if (!target.ok) {
-    return { success: false, result: { error: target.code } };
+    // A bare `{ error }` stub invites the model to retry and to fabricate
+    // further ids. Pair every denial with a recovery instruction so the model
+    // re-uses an existing receipt's output_id verbatim instead of inventing
+    // one (same class as the `check_tool_job_status` fix 6a25f7b56).
+    return {
+      success: false,
+      result: { error: target.code, recovery: TOOL_RESULT_DENIAL_RECOVERY },
+    };
   }
 
   // Charge the SHARED per-turn allowance before doing the work. Read and search
@@ -81,19 +98,20 @@ export async function handleToolResultRead(
   if (!outcome.ok) {
     await trusted.settleWork(0);
     // An exhausted allowance is reported, never silently treated as empty.
-    return { success: false, result: { error: outcome.code } };
+    return { success: false, result: toolResultReadFailure(outcome.code) };
   }
 
   const page = outcome.page;
   const fitted = fitWrappedRetrievalResult({
     output_id: page.outputId,
     revision: target.target.revision,
-    text: page.text,
+    // Cursor before the page text so a tail truncation cannot drop it.
+    next_cursor: page.nextCursor,
+    complete: page.complete,
     start_byte: page.startByte,
     end_byte: page.endByte,
     total_bytes: page.totalBytes,
-    complete: page.complete,
-    next_cursor: page.nextCursor,
+    text: page.text,
     source_completeness: target.target.sourceCompleteness,
   });
   const envelope =

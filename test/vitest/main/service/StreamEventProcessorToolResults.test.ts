@@ -173,6 +173,9 @@ describe("StreamEventProcessor — tool result pipeline wiring (T15a)", () => {
     // The handler defers to an async IIFE; let it resolve. B22: 30s budget
     // (was the ~1s default) — externalization does real filesystem writes
     // that starve under full-suite parallel load; the bound is environmental.
+    // (T01 rationale preserved: cold TypeORM synchronize + FS externalization
+    // can stall the polling loop under a full parallel-suite run; the asserted
+    // predicate is unchanged.)
     await vi.waitFor(
       () => {
         expect(savedMessages.length).toBeGreaterThanOrEqual(1);

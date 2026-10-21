@@ -548,6 +548,10 @@ export function buildEvidenceService(deps: {
     try {
       // Lazy require so this module is importable in unit tests that stub
       // Electron. The factory runs in the main process where `app` exists.
+      // The require must stay lazy (not a static import) for that stub
+      // behavior, and the resolver is synchronous, so a dynamic import
+      // cannot be used here either.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { app } = require("electron") as {
         app: { getPath: (name: string) => string };
       };

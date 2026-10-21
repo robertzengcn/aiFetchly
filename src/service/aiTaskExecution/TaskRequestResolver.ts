@@ -437,7 +437,13 @@ export class TaskRequestResolver {
    * ("<N> <things>"), or enough words to imply a described target. Without
    * one, the request needs clarification (AC-21).
    */
-  private looksLikeAmbiguousAction(message: string, _verb: string): boolean {
+  private looksLikeAmbiguousAction(
+    message: string,
+    // Intentionally unused: ambiguity is decided from the message text alone;
+    // the verb is kept in the signature so call sites read naturally.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _verb: string
+  ): boolean {
     const lower = message.toLowerCase();
     // A recipient phrase "to <someone>" or "into <place>" indicates a target.
     if (/\b(?:to|into|onto|at|for)\s+\S/.test(lower)) {

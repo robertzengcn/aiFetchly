@@ -460,7 +460,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
     const originalGate = new Promise<AIChatQueryLoopResult>((resolve) => {
       resolveOriginal = resolve;
     });
-    const runMock = vi.fn(async (input: AIChatQueryLoopInput) => {
+    const runMock = vi.fn(async () => {
       // Only the original dispatches; the retry must never reach loop.run.
       return originalGate;
     });
@@ -811,10 +811,7 @@ describe("AIChatQueryEngine.submitMessage — completion policy enrollment", () 
         leaseGeneration: 0,
       } as never,
     });
-    let captured: AIChatQueryLoopInput | undefined;
-    const { engine } = createEngineCapturingInput((input) => {
-      captured = input;
-    });
+    const { engine } = createEngineCapturingInput(() => undefined);
     await engine.submitMessage({
       request: makeRequest("Find 20 leads, save them, and draft an email"),
       eventSink: { emit: vi.fn() } as never,

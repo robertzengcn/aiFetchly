@@ -1,5 +1,4 @@
 import { ipcMain } from "electron";
-import { z } from "zod/v4";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AI_TASK_ROLLOUT_METRICS_GET } from "@/config/channellist";
 import { rolloutMetricsQuerySchema } from "@/entityTypes/aiTaskRolloutMetricsTypes";

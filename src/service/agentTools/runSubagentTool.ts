@@ -33,8 +33,10 @@ import type {
  *      fires first and orphans the still-running inner work.
  *
  * Routing unconditionally to "async" eliminates both:
- *   - The outer loop returns { async: true, job_id } within ~2s and the
- *     model polls check_tool_job_status every 15-30s.
+ *   - The outer loop registers a ToolJobRegistry job and blocks on
+ *     pollAsyncJobToCompletion until it reaches a terminal status, so the
+ *     model sees the real subagent result in one turn (no envelope, no
+ *     polling contract in the description).
  *   - The inner agent's own maxRuntimeMs (via abortController at
  *     AgentRuntime.ts:221) becomes the real upper bound on subagent
  *     work. The outer race is unreachable.
@@ -43,7 +45,8 @@ import type {
  *   Unlike URLs or max_results, nothing in the run_subagent args
  *   (agentId, prompt, taskPacket) reliably predicts runtime. Even
  *   trivial subagent tasks take 30-60s. Always-async makes the contract
- *   uniform — the model always polls, no conditional description logic.
+ *   uniform — the loop always blocks internally, no conditional
+ *   description logic.
  */
 
 const PARAMETERS = {
@@ -129,9 +132,8 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   description:
     "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
     "For multiple files with one operation, use process_artifact_batch instead; it coordinates bounded concurrent per-item provider requests and preserves input/output mappings. run_subagent remains available for a single specialized file task via agent-batch-worker. " +
-    "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-    "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
-    "Use cancel_tool_job(job_id) if the user wants to stop a specialist early.",
+    "This tool ALWAYS runs as a background job: the call blocks until the specialist finishes, then returns the real result directly (a subagent typically takes 30-180 seconds). " +
+    "You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found.",
   parameters: PARAMETERS,
   tier: "main",
   requiresConfirmation: false,

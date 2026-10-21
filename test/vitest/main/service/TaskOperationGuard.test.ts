@@ -357,10 +357,6 @@ describe("TaskOperationGuard (T23 fault matrix)", () => {
     const guard = guardFor(store, "exec-A");
     const first = await guard.prepareDispatch(SEND_DESCRIPTOR);
     expect(first.allowed).to.equal(true);
-    const changed: OperationGuardDescriptor = {
-      ...SEND_DESCRIPTOR,
-      domainTarget: "outbound_batch:99",
-    };
     // Different target → different key → a fresh operation is allowed; but
     // reusing the ORIGINAL key with a changed intent (the model-invented
     // ordinal case) must fail closed.

@@ -80,7 +80,7 @@ import { EmailFilterdata, EmailFilterDetialdata } from "@/entityTypes/emailmarke
 import { CommonIdrequest } from "@/entityTypes/commonType"
 import router from "@/views/router";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const filterId = ref<number>(0);
 
 

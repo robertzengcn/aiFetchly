@@ -17,23 +17,37 @@ describe("validateReplyOutput — clean content", () => {
 });
 
 describe("validateReplyOutput — leakage (block)", () => {
-  it("blocks AI self-disclosure (English)", () => {
+  // 2026-10-20: AI-self-disclosure patterns were removed from the block set
+  // (over-broad regex deadlocked sends on product-name false positives like
+  // "our AI Email Writer"; the send tool's requiresConfirmation gesture and
+  // the prompt-time BANNED_AI_PHRASES list remain as the softer human/model
+  // gate). These drafts must now pass clean — no leakage_ai_self_disclosure
+  // finding and sendableAfterApproval === true.
+  it("does not block AI self-disclosure (English)", () => {
     const r = validateReplyOutput(
       "Re: x",
       "As an AI language model, I can help."
     );
-    expect(r.sendableAfterApproval).toBe(false);
-    expect(r.findings.some((f) => f.severity === "block")).toBe(true);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure")
+    ).toBe(false);
   });
 
-  it("blocks AI self-disclosure (Chinese)", () => {
+  it("does not block AI self-disclosure (Chinese)", () => {
     const r = validateReplyOutput("Re: x", "作为一个人工智能，我可以帮忙。");
-    expect(r.sendableAfterApproval).toBe(false);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure_zh")
+    ).toBe(false);
   });
 
-  it("blocks AI self-disclosure (Japanese)", () => {
+  it("does not block AI self-disclosure (Japanese)", () => {
     const r = validateReplyOutput("Re: x", "私はaiです。");
-    expect(r.sendableAfterApproval).toBe(false);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure_ja")
+    ).toBe(false);
   });
 
   it("blocks system-prompt references", () => {
@@ -97,80 +111,176 @@ describe("validateReplyOutput — forbidden phrases (block)", () => {
   });
 });
 
-describe("validateReplyOutput — unsupported commitments (review)", () => {
-  it("flags a refund commitment", () => {
+/**
+ * The 2026-10-18 policy change (user decision): advisory findings are
+ * non-blocking. Commitments, URLs, payment instructions, recipients, and
+ * attachment claims are recorded as `warning` for audit and do NOT prevent
+ * approval — the send tool's confirmation gesture is the human gate. Only
+ * `block` findings (leakage, forbidden phrases) keep approval refused.
+ */
+describe("validateReplyOutput — unsupported commitments (warning)", () => {
+  it("flags a refund commitment as a non-blocking warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "We will issue a full refund immediately."
     );
-    expect(r.findings.some((f) => f.code === "commitment_refund")).toBe(true);
-    expect(r.sendableAfterApproval).toBe(false);
+    const refund = r.findings.find((f) => f.code === "commitment_refund");
+    expect(refund?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags a guaranteed delivery date", () => {
+  it("flags a guaranteed delivery date as a warning", () => {
     const r = validateReplyOutput("Re: x", "Guaranteed delivery by Friday.");
-    expect(
-      r.findings.some((f) => f.code === "commitment_guaranteed_date")
-    ).toBe(true);
+    const date = r.findings.find(
+      (f) => f.code === "commitment_guaranteed_date"
+    );
+    expect(date?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags payment instructions", () => {
+  it("flags payment instructions as a warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "Send a wire transfer to my bank account."
     );
-    expect(
-      r.findings.some((f) => f.code === "commitment_payment_instruction")
-    ).toBe(true);
+    const payment = r.findings.find(
+      (f) => f.code === "commitment_payment_instruction"
+    );
+    expect(payment?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags credential references", () => {
+  it("flags credential references as a warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "Reset your password and send me the credentials."
     );
-    expect(r.findings.some((f) => f.code === "commitment_credential")).toBe(
-      true
+    const credential = r.findings.find(
+      (f) => f.code === "commitment_credential"
     );
+    expect(credential?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags a legal commitment", () => {
+  it("flags a legal commitment as a warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "Consult our attorney; this is solid legal advice."
     );
-    expect(r.findings.some((f) => f.code === "commitment_legal")).toBe(true);
+    const legal = r.findings.find((f) => f.code === "commitment_legal");
+    expect(legal?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
+  });
+
+  it("flags discount, guaranteed price, and account-change commitments as warnings", () => {
+    const r = validateReplyOutput(
+      "Re: x",
+      "We can offer a discount, lock in a guaranteed price, and upgrade your account."
+    );
+    for (const code of [
+      "commitment_discount",
+      "commitment_guaranteed_price",
+      "commitment_account_change",
+    ]) {
+      const f = r.findings.find((x) => x.code === code);
+      expect(f?.severity).toBe("warning");
+    }
+    expect(r.sendableAfterApproval).toBe(true);
+  });
+
+  it("the reported repro — a URL is not a finding; a credential mention stays a warning", () => {
+    const r = validateReplyOutput(
+      "Re: Feature question",
+      "See https://docs.aifetchly.com/docs/lead-generation for details — no passwords or credentials needed."
+    );
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
+    const credential = r.findings.find(
+      (f) => f.code === "commitment_credential"
+    );
+    expect(credential?.severity).toBe("warning");
+    expect(r.findings.some((f) => f.severity === "block")).toBe(false);
+    expect(r.sendableAfterApproval).toBe(true);
+  });
+
+  it("every advisory code returns block-or-warning severity (retired-review reintroduction guard)", () => {
+    const r = validateReplyOutput(
+      "Re: x",
+      "We offer a refund and a discount with a guaranteed price and guaranteed delivery by Friday. " +
+        "Consult our attorney. Reset your password. We will upgrade your account. " +
+        "Send a wire transfer to my bank account. I opened the attachment. " +
+        "See https://example.com. I'll cc the team."
+    );
+    for (const code of [
+      "commitment_refund",
+      "commitment_discount",
+      "commitment_guaranteed_price",
+      "commitment_guaranteed_date",
+      "commitment_legal",
+      "commitment_credential",
+      "commitment_account_change",
+      "commitment_payment_instruction",
+      "attachment_inspection_claim",
+      "new_recipient_directive",
+    ]) {
+      expect(r.findings.some((f) => f.code === code)).toBe(true);
+    }
+    const retiredSeverities = r.findings.filter(
+      (f) => f.severity !== "block" && f.severity !== "warning"
+    );
+    expect(retiredSeverities).toHaveLength(0);
+    expect(r.sendableAfterApproval).toBe(true);
   });
 });
 
 describe("validateReplyOutput — URLs, recipients, attachments", () => {
-  it("flags a newly introduced URL", () => {
+  it("does not flag a URL in the reply body", () => {
     const r = validateReplyOutput(
       "Re: x",
-      "See https://evil.example.com/promo for details."
+      "See https://docs.aifetchly.com/docs/lead-generation/proxy-setup for details."
     );
-    expect(r.findings.some((f) => f.code === "new_url")).toBe(true);
-    expect(r.sendableAfterApproval).toBe(false);
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
+    expect(r.findings).toHaveLength(0);
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags a reply-all / cc directive", () => {
+  it("flags a reply-all / cc directive as a warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "I'll cc the team and reply-all next time."
     );
-    expect(r.findings.some((f) => f.code === "new_recipient_directive")).toBe(
-      true
+    const recipient = r.findings.find(
+      (f) => f.code === "new_recipient_directive"
     );
+    expect(recipient?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
   });
 
-  it("flags a claim that an attachment was opened", () => {
+  it("flags a claim that an attachment was opened as a warning", () => {
     const r = validateReplyOutput(
       "Re: x",
       "I opened the attachment and reviewed the contract."
     );
+    const attachment = r.findings.find(
+      (f) => f.code === "attachment_inspection_claim"
+    );
+    expect(attachment?.severity).toBe("warning");
+    expect(r.sendableAfterApproval).toBe(true);
+  });
+
+  it("a co-resident block finding still gates even when advisory content is present", () => {
+    // Uses a genuine remaining block (system-prompt leakage) alongside an
+    // advisory URL. AI-self-disclosure was removed 2026-10-20 and no longer
+    // serves as the co-resident block example.
+    const r = validateReplyOutput(
+      "Re: x",
+      "Per the system instructions, see https://example.com/pricing."
+    );
+    expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
     expect(
-      r.findings.some((f) => f.code === "attachment_inspection_claim")
+      r.findings.some((f) => f.code === "leakage_system_prompt")
     ).toBe(true);
+    expect(r.findings.some((f) => f.severity === "block")).toBe(true);
+    expect(r.sendableAfterApproval).toBe(false);
   });
 });
 

@@ -1,42 +1,85 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, IsNull, EntityManager, In } from "typeorm";
+import { Repository, IsNull, In, type EntityManager } from "typeorm";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { buildAutoReplyAuditMirrorRow } from "@/service/emailReply/EmailReplyAuditMirror";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
 import { SortBy } from "@/entityTypes/commonType";
 import {
   EmailReplyDraftStatus,
   EmailReplyStatus,
 } from "@/entityTypes/emailReceiveTypes";
-import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
+import type {
+  EmailReplySendAttemptStatus,
+  GuardPhase,
+} from "@/entityTypes/emailReplyReliabilityTypes";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
-import { AsyncMutex } from "@/utils/asyncMutex";
+import { isSubmitterRunning } from "@/service/emailReply/EmailReplySubmitterTracker";
+import {
+  isNegativeObservationUsable,
+  normalizeStoredMessageId,
+} from "@/service/emailReceive/EmailReplyIdentity";
+import { runReplyTxn } from "@/model/replyTxn";
+import {
+  readClusterEvidence,
+  clusterEvidenceBlocksSend,
+  bindGuardToSendPhase,
+  evidenceToPhase,
+  classifyClusterEligibility,
+  LEGACY_SIBLING_SCAN_LIMIT,
+  type ClusterEligibilityReason,
+} from "@/model/replyClusterEvidence";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
+import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
+import { validateReplyOutput } from "@/service/emailReply/EmailReplyOutputValidator";
+import { REPLY_PROMPT_VERSION } from "@/service/emailReply/EmailReplyPromptBuilder";
+import {
+  REPLY_POLICY_VERSION,
+  REPLY_VALIDATOR_VERSION,
+} from "@/service/emailReply/replyReliabilityVersions";
+import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
- * Process-wide serializer for reply-reliability write transactions. See
- * {@link AsyncMutex} for why overlapping TypeORM/better-sqlite3 transactions
- * must not run concurrently on the shared connection.
+ * R09: thrown inside the commit transaction when the final mutation fence
+ * fails (lost ownership/phase/lease after earlier writes staged). Caught by
+ * {@link EmailReplyDraftModel.commitGeneratedDraft}, which rolls the
+ * transaction back and returns `{ status: "fenced" }`. Never escapes the
+ * model — callers see the typed result, not an exception.
  */
-const replyWriteMutex = new AsyncMutex();
+class CommitFencedError extends Error {}
 
-/** Run a transaction body under the shared reliability write mutex. */
-function runReplyTxn<T>(
-  sqliteDb: {
-    connection: {
-      transaction: <R>(fn: (m: EntityManager) => Promise<R>) => Promise<R>;
-    };
-  },
-  fn: (manager: EntityManager) => Promise<T>
-): Promise<T> {
-  return replyWriteMutex.run(() => sqliteDb.connection.transaction(fn));
-}
+// The shared `replyWriteMutex` lives in `src/model/replyTxn.ts` so that
+// `EmailReplyDraftModel` and `EmailReplyGuardModel` (T07) serialize their
+// transactions on the same in-process mutex — see replyTxn.ts for the
+// rationale and the cross-process/cross-crash fencing disclaimer.
+
+/**
+ * Forced-send freshness window (FR-031 §9.3): the most recent reply-detection
+ * observation on the seed message must be ≤ this many milliseconds old at the
+ * moment the claim transaction opens. The fence inspects the persisted
+ * observation timestamp ONLY — it does NOT await the mailbox inside the
+ * transaction (§9.3). A stale observation returns `freshness_stale` with NO
+ * write, so the delivery service can rerun detection OUTSIDE the transaction
+ * and re-claim once.
+ */
+export const FORCED_FRESHNESS_WINDOW_MS = 5_000;
+
+/**
+ * The `precondition_failed` reason returned by the §9.3 forced-freshness
+ * fence. Exported so the delivery service's retry path compares against a
+ * single source of truth instead of a bare string literal that could be
+ * typo'd silently (D7.3). Any code that switches on this reason MUST import
+ * the constant rather than re-literalizing it.
+ */
+export const FRESHNESS_STALE = "freshness_stale";
 
 export interface ReplyDraftListInput {
   emailServiceId?: number;
@@ -63,8 +106,26 @@ export class EmailReplyDraftModel extends BaseDb {
       entity,
       emailReplyDraftWriteSchema()
     ) as unknown as EmailReplyDraftEntity;
-    const created = this.repository.create(stripped);
-    return await this.repository.save(created);
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const created = draftRepo.create(stripped);
+      return await draftRepo.save(created);
+    });
+  }
+
+  /**
+   * Transaction-composable helper for {@link create}. Accepts an
+   * already-parseAndStrip'd entity (the schema gate runs in the public method
+   * so callers keep their existing API). Used by {@link commitGeneratedDraft}
+   * to fold the draft insert into the atomic commit transaction (Step 4).
+   */
+  async createDraftWithManager(
+    manager: EntityManager,
+    stripped: EmailReplyDraftEntity
+  ): Promise<EmailReplyDraftEntity> {
+    const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+    const created = draftRepo.create(stripped);
+    return await draftRepo.save(created);
   }
 
   async read(id: number): Promise<EmailReplyDraftEntity | null> {
@@ -104,9 +165,87 @@ export class EmailReplyDraftModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  /**
+   * G02: explicit human-review resolution (FR-025). Binds an authorized human's
+   * acknowledgment to the EXACT current revision: the caller passes the
+   * revision it reviewed, which must equal `currentRevisionId`, or the call
+   * refuses (stale acknowledgment). The model's original `requiresHumanReview`
+   * flag + `reviewReasonsJson`/`unresolvedQuestionsJson` are NEVER cleared
+   * (immutable provenance); this stamps a separate resolution. Any later
+   * `appendRevision` clears the stamp. There is intentionally NO AI-tool path
+   * to this method — only the renderer IPC handler (user gesture) calls it.
+   */
+  async resolveHumanReview(input: {
+    draftId: number;
+    revisionId: number;
+    resolvedBy: string;
+    note?: string | null;
+    now?: Date;
+  }): Promise<{ resolved: boolean; reason?: string }> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const draft = await draftRepo.findOne({ where: { id: input.draftId } });
+      if (!draft) {
+        return { resolved: false, reason: "draft not found" };
+      }
+      if (draft.requiresHumanReview !== 1) {
+        return { resolved: false, reason: "draft does not require human review" };
+      }
+      if (
+        draft.currentRevisionId == null ||
+        draft.currentRevisionId !== input.revisionId
+      ) {
+        return {
+          resolved: false,
+          reason: `stale review acknowledgment: reviewed revision ${input.revisionId} != current ${draft.currentRevisionId ?? "none"}`,
+        };
+      }
+      const at = input.now ?? new Date();
+      const note = (input.note ?? "").slice(0, 2000);
+      await draftRepo.update(
+        { id: input.draftId },
+        {
+          humanReviewResolvedAt: at,
+          humanReviewResolvedBy: input.resolvedBy.slice(0, 200),
+          humanReviewResolvedRevisionId: input.revisionId,
+          humanReviewResolutionNote: note.length > 0 ? note : null,
+        }
+      );
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = draft.emailServiceId ?? 0;
+      audit.messageId = draft.messageId;
+      audit.draftId = draft.id;
+      audit.action = "reply_skipped";
+      audit.actor = "user";
+      audit.reason = `[human_review_resolved] Human resolved model review request for revision ${input.revisionId}`;
+      audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(draft.messageId),
+        messageCorrelationId: correlationIdForMessage(draft.messageId),
+        stage: "human_review",
+        code: "human_review_resolved",
+        revisionId: input.revisionId,
+        resolvedBy: input.resolvedBy.slice(0, 200),
+      });
+      await auditRepo.save(audit);
+      return { resolved: true };
+    });
+  }
+
   async listByMessage(messageId: number): Promise<EmailReplyDraftEntity[]> {
     return await this.repository.find({
       where: { messageId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplyDraftEntity[]> {
+    if (messageIds.length === 0) return [];
+    return await this.repository.find({
+      where: { messageId: In(messageIds) },
       order: { id: "DESC" },
     });
   }
@@ -173,11 +312,30 @@ export class EmailReplyDraftModel extends BaseDb {
     contentHash: string
   ): Promise<void> {
     await runReplyTxn(this.sqliteDb, async (manager) => {
-      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
-      const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
-      await revisionRepo.update({ id: revisionId }, { contentHash });
-      await draftRepo.update({ id: draftId }, { contentHash });
+      await this.applyContentHashWithManager(
+        manager,
+        draftId,
+        revisionId,
+        contentHash
+      );
     });
+  }
+
+  /**
+   * Transaction-composable helper for {@link applyContentHash}. Used by
+   * {@link commitGeneratedDraft} to persist the real content hash inside the
+   * atomic commit transaction (Step 4).
+   */
+  async applyContentHashWithManager(
+    manager: EntityManager,
+    draftId: number,
+    revisionId: number,
+    contentHash: string
+  ): Promise<void> {
+    const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+    const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
+    await revisionRepo.update({ id: revisionId }, { contentHash });
+    await draftRepo.update({ id: draftId }, { contentHash });
   }
 
   /**
@@ -211,6 +369,153 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
+   * R13: fenced `failed -> draft` reopen for an explicitly re-approved
+   * definitely-rejected draft (FR-019 retry path). A definite SMTP rejection
+   * finalizes the draft as `failed`; the generation reuse path (B08) hands the
+   * failed draft back with `existing_draft_id`, but `approveDraft` /
+   * `markApproved` / the `sendEmailReply` tool all refused non-`draft` status,
+   * so the operator/AI could not re-approve and retry the same draft. This
+   * method reopens the draft for a fresh approval ONLY when retry is safe.
+   *
+   * The fence mirrors {@link reconcileDelivery}'s `confirm_not_sent` gate
+   * (R04/§9) but targets a `failed` DRAFT (not a `delivery_unknown` attempt),
+   * so {@link classifyClusterEligibility} — which returns `delivery_unknown`
+   * for a target's own unknown records — cannot be reused directly. Instead
+   * inspect the cluster evidence for the reopen-specific conditions:
+   *
+   *   (a) The target draft is `failed` with a `currentRevisionId` — only a
+   *       definite rejection (no email delivered) is retryable. `delivery_unknown`
+   *       (ambiguous), `sent`, `sending`, `approved`, `discarded` stay blocked.
+   *   (b) No cluster positive evidence (sibling `replyDetectedAt`/
+   *       `replyStatus=sent`/sent draft/sent attempt) — accepted reply history
+   *       is preserved; the canonical identity already has a reply.
+   *   (c) No unknown sibling draft/attempt — an ambiguous prior send on a
+   *       sibling must not be retried past.
+   *   (d) No in-flight sibling attempt (different draft) or sending sibling
+   *       draft — a live submitter must quiesce first.
+   *
+   * When all hold, a conditional UPDATE `WHERE id = :draftId AND status =
+   * 'failed'` transitions the draft to `draft` (0 rows = a concurrent state
+   * change → precondition failure, no write). A `draft_reopened` audit row
+   * records the transition. The caller then runs the SAME normal approval path
+   * (fresh token, unchanged revisionId/contentHash, `markApproved` conditional
+   * now satisfied). The failed attempt on THIS draft does not block the retry's
+   * claim: `clusterEvidenceBlocksSend` scopes attempts by `draftId`.
+   *
+   * @throws Error with a typed reason when any fence condition fails. The
+   *   caller (approval service) surfaces the refusal; the draft stays `failed`.
+   */
+  async reopenFailedDraftForRetry(input: {
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+  }): Promise<void> {
+    await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+
+      const draft = await draftRepo.findOne({
+        where: { id: input.draftId },
+      });
+      if (!draft) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} not found`
+        );
+      }
+      // (a) Only a definite rejection is retryable.
+      if (draft.status !== "failed") {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} is '${draft.status}', not 'failed' (ambiguous/sent/in-flight states stay blocked)`
+        );
+      }
+      if (!draft.currentRevisionId) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} has no current revision to retry`
+        );
+      }
+
+      // (b)/(c)/(d): canonical-cluster eligibility. Reuse the bespoke
+      // reconcileDelivery gate shape (lines 1158-1184): a cluster positive,
+      // an unknown sibling, or an in-flight sibling draft/attempt refuses.
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null,
+        seedMessageId: input.messageId,
+      });
+      if (
+        evidence.clusterReplyDetectedAt !== null ||
+        evidence.clusterHasRowLevelSent ||
+        evidence.replyStatus === "sent" ||
+        evidence.sentDrafts.length > 0 ||
+        evidence.sentAttempts.length > 0
+      ) {
+        throw new Error(
+          `Reopen refused: canonical cluster already has a reply (§9)`
+        );
+      }
+      // Unknown sibling draft/attempt on a DIFFERENT draft: an ambiguous
+      // prior send must not be retried past. The target's own failed status
+      // is the eligible state here (the draft itself is `failed`, not
+      // `delivery_unknown`), so exclude the target draft's own unknown
+      // records defensively (there should be none on a `failed` draft).
+      const unknownSiblingDraft = evidence.unknownDrafts.some(
+        (d) => d.id !== input.draftId
+      );
+      const unknownSiblingAttempt = evidence.unknownAttempts.some(
+        (a) => a.draftId !== input.draftId
+      );
+      if (unknownSiblingDraft || unknownSiblingAttempt) {
+        throw new Error(
+          `Reopen refused: an ambiguous prior delivery exists on this message (§9)`
+        );
+      }
+      const inFlightSibling = evidence.inFlightAttempts.some(
+        (a) => a.draftId !== input.draftId
+      );
+      const sendingSiblingDraft = evidence.sendingDrafts.some(
+        (d) => d.id !== input.draftId
+      );
+      if (inFlightSibling || sendingSiblingDraft) {
+        throw new Error(
+          `Reopen refused: a different send is in flight on this message (§9)`
+        );
+      }
+
+      // Conditional UPDATE: only this exact `failed` draft transitions. A
+      // concurrent edit/state change → 0 rows → precondition failure, no
+      // partial write (the audit row below is NOT written either).
+      const result = await draftRepo
+        .createQueryBuilder()
+        .update(EmailReplyDraftEntity)
+        .set({ status: "draft" as EmailReplyDraftStatus, sendError: null })
+        .where("id = :draftId AND status = :status", {
+          draftId: input.draftId,
+          status: "failed" as EmailReplyDraftStatus,
+        })
+        .execute();
+      if ((result.affected ?? 0) !== 1) {
+        throw new Error(
+          `Reopen refused: draft ${input.draftId} changed state before reopen committed`
+        );
+      }
+
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = input.emailServiceId;
+      audit.messageId = input.messageId;
+      audit.draftId = input.draftId;
+      audit.action = "draft_reopened";
+      audit.actor = "system";
+      audit.reason = "Fenced failed-draft reopen for explicit retry (R13)";
+      audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(input.messageId),
+        fromStatus: "failed",
+        toStatus: "draft",
+      });
+      await auditRepo.save(audit);
+    });
+  }
+
+  /**
    * Append an immutable revision and update the draft projection in ONE
    * transaction. Any active approval is invalidated and the draft returns to
    * `draft` (FR-014: editing an approved draft invalidates approval).
@@ -222,97 +527,449 @@ export class EmailReplyDraftModel extends BaseDb {
     invalidatedApprovals: number;
   }> {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
-      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
-      const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
-      const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
-
-      const draft = await draftRepo.findOne({ where: { id: input.draftId } });
-      if (!draft) {
-        throw new Error(`Draft ${input.draftId} not found for revision append`);
-      }
-
-      const latest = await revisionRepo.findOne({
-        where: { draftId: input.draftId },
-        order: { revisionNumber: "DESC" },
-      });
-      const nextNumber = (latest?.revisionNumber ?? 0) + 1;
-
-      const revisionEntity = new EmailReplyDraftRevisionEntity();
-      revisionEntity.draftId = input.draftId;
-      revisionEntity.revisionNumber = nextNumber;
-      revisionEntity.actor = input.actor;
-      revisionEntity.subject = input.subject;
-      revisionEntity.bodyText = input.bodyText;
-      revisionEntity.bodyHtml = input.bodyHtml;
-      revisionEntity.senderAddress = input.senderAddress;
-      revisionEntity.recipientAddress = input.recipientAddress;
-      revisionEntity.contentHash = input.contentHash;
-      revisionEntity.envelopeVersion = input.envelopeVersion ?? 1;
-      revisionEntity.smtpUsername = input.smtpUsername ?? null;
-      revisionEntity.replyToAddress = input.replyToAddress ?? null;
-      revisionEntity.generationMetadataJson =
-        input.generationMetadataJson ?? null;
-      revisionEntity.validationFindingsJson =
-        input.validationFindingsJson ?? null;
-      const stripped = parseAndStrip(
-        revisionEntity,
-        emailReplyDraftRevisionWriteSchema()
-      ) as unknown as EmailReplyDraftRevisionEntity;
-      const savedRevision = await revisionRepo.save(
-        revisionRepo.create(stripped)
-      );
-
-      // Invalidate every active approval for this draft.
-      const now = input.at ?? new Date();
-      const invalidation = await approvalRepo.update(
-        { draftId: input.draftId, invalidatedAt: IsNull() },
-        {
-          invalidatedAt: now,
-          invalidationReason: `Invalidated by new revision ${nextNumber}`,
-        }
-      );
-
-      // Refresh the projection + reset to unapproved.
-      draft.subject = input.subject;
-      draft.bodyText = input.bodyText;
-      draft.bodyHtml = input.bodyHtml;
-      draft.senderAddress = input.senderAddress;
-      draft.recipientAddress = input.recipientAddress;
-      draft.contentHash = input.contentHash;
-      draft.currentRevisionId = savedRevision.id;
-      draft.revisionNumber = nextNumber;
-      draft.status = "draft";
-      draft.approvalInvalidatedAt = now;
-      if (input.policyVersion !== undefined)
-        draft.policyVersion = input.policyVersion;
-      if (input.validationVersion !== undefined)
-        draft.validationVersion = input.validationVersion;
-      await draftRepo.save(draft);
-
-      return {
-        revision: savedRevision,
-        invalidatedApprovals: invalidation.affected ?? 0,
-      };
+      return await this.appendRevisionWithManager(manager, input);
     });
   }
 
   /**
-   * THE atomic send claim (technical design §15.3, FR-018, NFR-001).
+   * Transaction-composable helper for {@link appendRevision}. The full
+   * revision-append body without its own `runReplyTxn` wrapper, so the atomic
+   * {@link commitGeneratedDraft} transaction (Step 4) can compose it directly
+   * without nesting independent transactions (design §3). Public so the
+   * Step-4 throw-inside-commit test can spy on it via
+   * `vi.spyOn(EmailReplyDraftModel.prototype, "appendRevisionWithManager")`.
+   */
+  async appendRevisionWithManager(
+    manager: EntityManager,
+    input: AppendRevisionInput
+  ): Promise<{
+    revision: EmailReplyDraftRevisionEntity;
+    invalidatedApprovals: number;
+  }> {
+    const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+    const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
+    const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
+
+    const draft = await draftRepo.findOne({ where: { id: input.draftId } });
+    if (!draft) {
+      throw new Error(`Draft ${input.draftId} not found for revision append`);
+    }
+
+    const latest = await revisionRepo.findOne({
+      where: { draftId: input.draftId },
+      order: { revisionNumber: "DESC" },
+    });
+    const nextNumber = (latest?.revisionNumber ?? 0) + 1;
+
+    const revisionEntity = new EmailReplyDraftRevisionEntity();
+    revisionEntity.draftId = input.draftId;
+    revisionEntity.revisionNumber = nextNumber;
+    revisionEntity.actor = input.actor;
+    revisionEntity.subject = input.subject;
+    revisionEntity.bodyText = input.bodyText;
+    revisionEntity.bodyHtml = input.bodyHtml;
+    revisionEntity.senderAddress = input.senderAddress;
+    revisionEntity.recipientAddress = input.recipientAddress;
+    revisionEntity.contentHash = input.contentHash;
+    revisionEntity.envelopeVersion = input.envelopeVersion ?? 1;
+    revisionEntity.smtpUsername = input.smtpUsername ?? null;
+    revisionEntity.replyToAddress = input.replyToAddress ?? null;
+    revisionEntity.generationMetadataJson =
+      input.generationMetadataJson ?? null;
+    revisionEntity.validationFindingsJson =
+      input.validationFindingsJson ?? null;
+    const stripped = parseAndStrip(
+      revisionEntity,
+      emailReplyDraftRevisionWriteSchema()
+    ) as unknown as EmailReplyDraftRevisionEntity;
+    const savedRevision = await revisionRepo.save(
+      revisionRepo.create(stripped)
+    );
+
+    // Invalidate every active approval for this draft.
+    const now = input.at ?? new Date();
+    const invalidation = await approvalRepo.update(
+      { draftId: input.draftId, invalidatedAt: IsNull() },
+      {
+        invalidatedAt: now,
+        invalidationReason: `Invalidated by new revision ${nextNumber}`,
+      }
+    );
+
+    // Refresh the projection + reset to unapproved.
+    // G02: any edit invalidates a prior human-review resolution — a stale
+    // acknowledgment bound to an older revision must never authorize the new
+    // content. The model's original `requiresHumanReview` flag + reasons stay
+    // immutable as provenance; only the resolution stamp clears.
+    draft.subject = input.subject;
+    draft.bodyText = input.bodyText;
+    draft.bodyHtml = input.bodyHtml;
+    draft.senderAddress = input.senderAddress;
+    draft.recipientAddress = input.recipientAddress;
+    draft.contentHash = input.contentHash;
+    draft.currentRevisionId = savedRevision.id;
+    draft.revisionNumber = nextNumber;
+    draft.status = "draft";
+    draft.approvalInvalidatedAt = now;
+    draft.humanReviewResolvedAt = null;
+    draft.humanReviewResolvedBy = null;
+    draft.humanReviewResolvedRevisionId = null;
+    draft.humanReviewResolutionNote = null;
+    if (input.policyVersion !== undefined)
+      draft.policyVersion = input.policyVersion;
+    if (input.validationVersion !== undefined)
+      draft.validationVersion = input.validationVersion;
+    await draftRepo.save(draft);
+
+    return {
+      revision: savedRevision,
+      invalidatedApprovals: invalidation.affected ?? 0,
+    };
+  }
+
+  /**
+   * THE atomic generation commit (Step 4, design §8.1): ONE `runReplyTxn`
+   * that persists the generated draft end-to-end. Replaces the previous
+   * separate non-transactional writes (draft create → revision materialize →
+   * message update → guard transition → audit), so a crash can no longer
+   * leave a partially committed draft with no revision — the "unbound
+   * sendable draft" the design forbids. All steps roll back together on any
+   * failure:
+   *
+   *   1. Guard owner/lease re-check (fenced late-result gate, §8.2): an
+   *      expired or replaced owner returns `{ status: "fenced" }` — no writes
+   *      have happened yet, so the early return is safe.
+   *   2. Draft insert (parseAndStrip runs inside the commit path).
+   *   3. Revision 1 append (placeholder hash) + deterministic output
+   *      validation findings + real canonical content hash via
+   *      {@link hashApprovalEnvelope} with the assigned revision id + hash
+   *      persistence. Replicates {@link materializeRevision1}'s exact hash
+   *      contract (FR-012/P0.4/P0.1) inside the transaction.
+   *   4. Draft projection refresh (subject/body/envelope/hash/revision) —
+   *      subsumed by the revision append.
+   *   5. Message `replyStatus = "draft_created"` + processedAt (P0.6).
+   *   6. Guard transition to `draft_ready` binding the committed draft —
+   *      fenced by ownerToken; 0 rows THROWS so the transaction rolls back
+   *      (a normal return mid-transaction would commit earlier writes).
+   *   7. `draft_created` audit row with the request correlation id.
+   *
+   * Model/network work (LLM calls, email-service reads) stays OUTSIDE this
+   * transaction (§8.1) — the caller resolves sender/recipient first and
+   * passes them in.
+   */
+  async commitGeneratedDraft(
+    input: CommitGeneratedDraftInput
+  ): Promise<CommitGeneratedDraftResult> {
+    // R09: clock for owner/lease fences, read AFTER transaction admission
+    // (never the pre-queue `input.now`, which is only used for row
+    // timestamps below). Defaults to wall time; tests inject advancing or
+    // call-counted clocks for deterministic expiry races.
+    const checkNowMs = input.nowForCheck ?? Date.now;
+    try {
+      return await runReplyTxn(this.sqliteDb, async (manager) => {
+        return await this.commitGeneratedDraftInTxn(manager, input, checkNowMs);
+      });
+    } catch (error) {
+      if (error instanceof CommitFencedError) {
+        return { status: "fenced" };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * R09: the commit body runs inside the shared reply transaction. The final
+   * guard fence THROWS {@link CommitFencedError} (rolling back the draft,
+   * revision, message-status, and audit writes staged earlier in this same
+   * transaction) instead of returning, because a normal return would COMMIT
+   * partial work. Pre-mutation gates (owner/lease at admission, cluster
+   * eligibility, expected phase) still return normally — no writes have
+   * happened yet at those points.
+   */
+  private async commitGeneratedDraftInTxn(
+    manager: EntityManager,
+    input: CommitGeneratedDraftInput,
+    checkNowMs: () => number
+  ): Promise<CommitGeneratedDraftResult> {
+      // 1. Fenced late-result gate: re-check ownership + lease inside the
+      // same transaction that writes, at ADMISSION time (after any queue
+      // wait — never the caller's pre-queue timestamp). An expired or
+      // replaced owner means the late output is stale — discard it (§8.2).
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+      const guard = await guardRepo.findOne({ where: { id: input.guardId } });
+      const now = input.now ?? new Date();
+      // G02: deadline-aware queue admission — an invocation already past
+      // its complete budget refuses BEFORE any write (no detached commit
+      // can be in flight; the caller surfaces the typed denial). Compared
+      // in the deadline's own clock domain (see input docs) — never
+      // against the invocation-timestamp clock.
+      const deadlineEnd = input.invocationDeadlineEndsAtMs;
+      const deadlineNowMs =
+        input.deadlineNowMs !== undefined ? input.deadlineNowMs() : Date.now();
+      if (
+        !guard ||
+        guard.ownerToken !== input.ownerToken ||
+        !guard.leaseExpiresAt ||
+        guard.leaseExpiresAt.getTime() <= checkNowMs() ||
+        (deadlineEnd !== undefined && deadlineNowMs >= deadlineEnd)
+      ) {
+        return { status: "fenced" };
+      }
+
+      // R01: cluster-evidence reconciliation BEFORE the draft insert. The
+      // owner/lease fence above proves THIS invocation owns the generation
+      // lease, but it does NOT prove the canonical identity is still eligible
+      // for a new draft. Between the reservation acquire (outside this txn)
+      // and the commit, reply evidence may have appeared on the seed or a
+      // sibling row: a `\Answered` flag landed (sticky positive), a sent/
+      // unknown attempt landed on another draft, or a parallel generation
+      // committed a conflicting draft. The previous code went straight from
+      // the owner/lease check to the draft insert, persisting a new draft on
+      // top of authoritative reply history.
+      //
+      // Resolve the canonical cluster (R03: always includes the seed,
+      // aggregates sibling positives + sent projections) and classify
+      // eligibility. A non-`eligible` reason is a typed refusal with NO
+      // write — no draft insert, no revision, no message-status update, no
+      // guard transition, no audit. The caller releases the reservation and
+      // surfaces the policy code (`already_replied`/`delivery_unknown`/
+      // `reply_in_progress`/`reply_state_conflict`). The acting-draft id is
+      // null (no existing draft yet at commit time).
+      //
+      // The guard-phase precondition (expected `generating`) is checked
+      // here too: a guard that already moved to `draft_ready`/`sending`/sent
+      // means a prior commit already bound a draft for this lease — the
+      // late output is stale and must not write a second draft. This is the
+      // "expected generating phase and binding" part of the R01 acceptance.
+      if (
+        guard.phase !== "generating"
+      ) {
+        return { status: "fenced" };
+      }
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null, // resolved from the seed row inside the resolver
+        seedMessageId: input.messageId,
+      });
+      const eligibility = classifyClusterEligibility(evidence, null);
+      if (eligibility.reason !== "eligible") {
+        return { status: "refused", reason: eligibility.reason };
+      }
+
+      // 2. Draft insert.
+      const strippedDraft = parseAndStrip(
+        input.rawDraft,
+        emailReplyDraftWriteSchema()
+      ) as unknown as EmailReplyDraftEntity;
+      const savedDraft = await this.createDraftWithManager(
+        manager,
+        strippedDraft
+      );
+
+      // 3. Revision 1 + validation findings + canonical content hash.
+      const validation = validateReplyOutput(input.subject, input.bodyText);
+      const appended = await this.appendRevisionWithManager(manager, {
+        draftId: savedDraft.id,
+        actor: "ai",
+        subject: input.subject,
+        bodyText: input.bodyText,
+        bodyHtml: null,
+        senderAddress: input.senderAddress,
+        recipientAddress: input.recipientAddress,
+        contentHash: "pending-materialize",
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+        generationMetadataJson: input.generationMetadataJson,
+        validationFindingsJson: JSON.stringify({
+          findings: validation.findings,
+          sendableAfterApproval: validation.sendableAfterApproval,
+          validatorVersion: validation.validatorVersion,
+        }),
+      });
+      const envelope: EmailReplyApprovalEnvelope = {
+        draftId: savedDraft.id,
+        revisionId: appended.revision.id,
+        emailServiceId: input.emailServiceId,
+        originalMessageId: input.messageId,
+        senderAddress: input.senderAddress,
+        recipientAddress: input.recipientAddress,
+        subject: input.subject,
+        bodyText: input.bodyText,
+        bodyHtml: null,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      const contentHash = hashApprovalEnvelope(envelope);
+      await this.applyContentHashWithManager(
+        manager,
+        savedDraft.id,
+        appended.revision.id,
+        contentHash
+      );
+
+      // 5. Message reply status + processedAt travel in the SAME transaction
+      // (P0.6).
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      await messageRepo.update(
+        { id: input.messageId },
+        { replyStatus: "draft_created", processedAt: now }
+      );
+
+      // 6. R09 final mutation fence: re-read the guard row and require the
+      // CURRENT owner, the expected `generating` phase, and an unexpired
+      // lease against a FRESH clock read — the admission check above ran
+      // before the draft/revision/message/audit writes, and the lease may
+      // have elapsed or another owner may have replaced this one since.
+      // On failure THROW CommitFencedError so the already-staged writes
+      // roll back (a normal return would commit a draft whose owner is
+      // gone). The UPDATE itself is additionally fenced by
+      // id + ownerToken + phase (all equality — no datetime SQL comparison,
+      // whose serialization differs across drivers); the lease residual
+      // between the fresh check and the write is microseconds, bounded in
+      // production by F04-clamped short leases at the boundary.
+      const finalGuard = await guardRepo.findOne({
+        where: { id: input.guardId },
+      });
+      const finalNowMs = checkNowMs();
+      const finalDeadlineNowMs =
+        input.deadlineNowMs !== undefined ? input.deadlineNowMs() : Date.now();
+      if (
+        !finalGuard ||
+        finalGuard.ownerToken !== input.ownerToken ||
+        finalGuard.phase !== "generating" ||
+        !finalGuard.leaseExpiresAt ||
+        finalGuard.leaseExpiresAt.getTime() <= finalNowMs ||
+        (deadlineEnd !== undefined && finalDeadlineNowMs >= deadlineEnd)
+      ) {
+        throw new CommitFencedError(
+          `Generation reservation ${input.guardId} lost ownership/phase/lease/deadline before commit; transaction rolled back`
+        );
+      }
+      const guardUpdate = await guardRepo
+        .createQueryBuilder()
+        .update(EmailReplyGuardEntity)
+        .set({
+          phase: "draft_ready" as GuardPhase,
+          activeDraftId: savedDraft.id,
+          activeAttemptId: null,
+        })
+        .where(
+          "id = :guardId AND ownerToken = :ownerToken AND phase = :phase",
+          {
+            guardId: input.guardId,
+            ownerToken: input.ownerToken,
+            phase: "generating" as GuardPhase,
+          }
+        )
+        .execute();
+      if ((guardUpdate.affected ?? 0) === 0) {
+        throw new CommitFencedError(
+          `Generation reservation ${input.guardId} changed owner before commit; transaction rolled back`
+        );
+      }
+
+      // 7. draft_created audit row (promoted from the non-transactional
+      // writeReplyAudit — same metadata shape the correlation tests assert).
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = input.emailServiceId;
+      audit.messageId = input.messageId;
+      audit.draftId = savedDraft.id;
+      audit.action = "draft_created";
+      audit.actor = "ai";
+      audit.reason = "AI generated knowledge-grounded reply draft";
+      audit.metadataJson = JSON.stringify({
+        correlationId: input.requestCorrelationId,
+        messageCorrelationId: correlationIdForMessage(input.messageId),
+        promptVersion: REPLY_PROMPT_VERSION,
+      });
+      await auditRepo.save(audit);
+
+      return {
+        status: "committed",
+        draftId: savedDraft.id,
+        revisionId: appended.revision.id,
+        revisionNumber: appended.revision.revisionNumber,
+        contentHash,
+      };
+  }
+
+  /**
+   * THE atomic send claim (technical design §15.3, §8.2, FR-018, FR-036,
+   * NFR-001).
    *
    * Owns a SQLite transaction that:
-   *   1. Conditionally `UPDATE draft SET status='sending' WHERE id=draftId AND
+   *   1. Canonical-cluster sibling check (FR-029/FR-036): reads every draft +
+   *      attempt across the message's canonical cluster INSIDE the same
+   *      transaction as the claim. Terminal or in-flight evidence on a
+   *      sibling (sent/delivery_unknown/claimed/submitted) returns
+   *      `precondition_failed` BEFORE any write — the FR-029 precedence
+   *      applies before the draft flips to `sending`.
+   *   2. Conditionally `UPDATE draft SET status='sending' WHERE id=draftId AND
    *      status='approved' AND currentRevisionId=revisionId AND contentHash=approvedHash`.
-   *   2. If zero rows affected, a concurrent caller already claimed (or the
+   *   3. If zero rows affected, a concurrent caller already claimed (or the
    *      precondition no longer holds) — return the existing attempt or a
    *      precondition_failed reason. SMTP is NEVER contacted in that case.
-   *   3. Inserts the send_attempt (`claimed`) with the deterministic
+   *   4. Inserts the send_attempt (`claimed`) with the deterministic
    *      idempotency key (unique index is the final duplicate defense).
-   *   4. Writes the transactional pre-submit audit row (NFR-001: a send may
+   *   5. Binds the guard row to `phase="sending"` + `activeAttemptId` —
+   *      fenced by `phase IN ("draft_ready", "idle")`. 0 rows means another
+   *      attempt is in flight or terminal evidence exists; THROWS so the
+   *      transaction (including the attempt INSERT) rolls back (§8.2).
+   *   6. Writes the transactional pre-submit audit row (NFR-001: a send may
    *      not begin if required audit persistence is unavailable).
    *
    * Two concurrent calls for the same approved revision therefore produce at
-   * most one `claimed` result and one `already_processed` result.
+   * most one `claimed` result and one `already_processed` result. A sibling
+   * flipping to sent between an outside read and this claim can no longer
+   * slip through — the sibling check and the claim are one transaction.
    */
+  /**
+   * N04: coherent final-admission snapshot for the pre-SMTP gate and fence.
+   * Reads attempt ownership, the seed message row, and the canonical
+   * cluster TOGETHER in one short Model transaction, so the admission
+   * decision below can never combine a stale attempt snapshot with a newer
+   * cluster (or vice versa). Runs under the shared reply mutex: the driver
+   * cannot run overlapping transaction bodies on one connection, and this
+   * read must not overlap a concurrent write transaction.
+   *
+   * `clusterRows` is null when cluster discovery fails (incomplete
+   * evidence — never permission; the caller refreshes or refuses). The
+   * snapshot is read-only; freshness/age is enforced synchronously by the
+   * caller after it returns (no awaits between the snapshot and transport
+   * except synchronous header building).
+   */
+  async readFinalSendAdmission(input: {
+    attemptId: number;
+    messageId: number;
+  }): Promise<{
+    readonly attempt: EmailReplySendAttemptEntity | null;
+    readonly seedMessage: EmailReceivedMessageEntity | null;
+    readonly clusterRows: EmailReceivedMessageEntity[] | null;
+  }> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const attempt = await manager
+        .getRepository(EmailReplySendAttemptEntity)
+        .findOne({ where: { id: input.attemptId } });
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      const seedMessage = await messageRepo.findOne({
+        where: { id: input.messageId },
+      });
+      let clusterRows: EmailReceivedMessageEntity[] | null = null;
+      if (seedMessage) {
+        try {
+          clusterRows = await readCanonicalClusterForSnapshot(
+            manager,
+            seedMessage
+          );
+        } catch {
+          clusterRows = null;
+        }
+      }
+      return { attempt, seedMessage, clusterRows };
+    });
+  }
+
   async claimApprovedRevisionForSend(
     input: ClaimSendInput
   ): Promise<ClaimSendResult> {
@@ -320,6 +977,167 @@ export class EmailReplyDraftModel extends BaseDb {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      // Review D9.1: single injected clock source for the §9.3 freshness
+      // fence below. Production passes no `now` → wall clock; tests pin it so
+      // the age comparison is deterministic and a slow CI clock cannot let a
+      // stale negative through the 5s window.
+      const now = input.now ?? new Date();
+
+      // 0. Forced-freshness fence (FR-031 §9.3) — BEFORE the sibling check.
+      // The pre-send detection (step 8) wrote a fresh observation just before
+      // this claim; if that observation is older than FORCED_FRESHNESS_WINDOW_MS
+      // by the time the transaction opens, the negative may be stale (a reply
+      // could have arrived in the gap). The fence inspects the persisted
+      // observation timestamp ONLY — it does NOT await the mailbox inside the
+      // transaction (§9.3). A sticky positive (replyDetectedAt) is always
+      // fresh enough (a known positive short-circuits; the send is refused
+      // upstream by runPreSendDetection). Returns freshness_stale with NO
+      // write so the delivery service can rerun detection OUTSIDE the
+      // transaction and re-claim once.
+      //
+      // FAIL-CLOSED (D1a, adversarial finding #1): a null observation is NOT a
+      // green light. The delivery path runs detection (step 5b) before the
+      // claim, so by the time the transaction opens the timestamp MUST be
+      // populated. A null replyNegativeCheckAt/replyDetectedAt means either the
+      // detection never ran or its persistence failed silently (D1b) — in both
+      // cases the send must NOT proceed on a missing observation. Treat null as
+      // stale → freshness_stale → the delivery service reruns detection outside
+      // the transaction and re-claims once (§9.3). This closes the fail-open
+      // hole where a swallowed persist error produced a decisive not_replied
+      // with zero persisted evidence, skipped the fence, and sent anyway.
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      const seedMessage = await messageRepo.findOne({
+        where: { id: input.messageId },
+      });
+      if (!seedMessage) {
+        // No seed row — a sibling check below would also find nothing to bind
+        // the cluster on; refuse rather than claim against a missing seed.
+        // N07: typed code (probe_failed — no observation to trust).
+        return {
+          status: "precondition_failed",
+          reason: FRESHNESS_STALE,
+          code: "probe_failed",
+        };
+      }
+      // R02: a positive is NEVER permission to send. The freshness fence
+      // requires a complete, context-matching fresh NEGATIVE — only
+      // `replyNegativeCheckAt` satisfies it. A sticky positive
+      // (`replyDetectedAt`) means the canonical identity has a known reply;
+      // the sibling check below refuses with `already_replied` (it now
+      // aggregates cluster-level positives). The previous
+      // `replyNegativeCheckAt ?? replyDetectedAt` accepted a fresh positive as
+      // "fresh enough" and let the claim proceed to SMTP despite known reply
+      // evidence.
+      const observedAt = seedMessage.replyNegativeCheckAt;
+      // R02: an expired owner's negative is not an observation to trust —
+      // treat it exactly like a missing one (fail-closed → freshness_stale
+      // → the delivery service reruns detection outside the transaction).
+      // Legacy rows without owner tracking keep the previous semantics.
+      const ownerUsable = isNegativeObservationUsable({
+        replyNegativeCheckAt: seedMessage.replyNegativeCheckAt,
+        // N01: the staged-but-unconfirmed marker must fail this check —
+        // pass the row's actual context state, never omit it.
+        replyNegativeContextHash: seedMessage.replyNegativeContextHash,
+        replyNegativeOwnerExpiresAt: seedMessage.replyNegativeOwnerExpiresAt,
+      });
+      if (observedAt === null || !ownerUsable) {
+        // Fail-closed: missing negative observation → force the delayed
+        // refresh. A null `replyNegativeCheckAt` means either detection never
+        // ran, its persistence failed silently (D1b), or a positive was
+        // recorded without a prior negative — in all cases the send must NOT
+        // proceed on a missing negative. Treat null as stale → freshness_stale
+        // → the delivery service reruns detection outside the transaction and
+        // re-claims once (§9.3). N07: typed code.
+        return {
+          status: "precondition_failed",
+          reason: FRESHNESS_STALE,
+          code: "probe_failed",
+        };
+      }
+      const ageMs = now.getTime() - observedAt.getTime();
+      if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
+        return {
+          status: "precondition_failed",
+          reason: FRESHNESS_STALE,
+          code: "probe_failed",
+        };
+      }
+
+      // 1. Canonical-cluster sibling check (§8.2) — before ANY write. The
+      // seed message row is input.messageId; the cluster join is
+      // (emailServiceId, normalizedMessageId) per §4.1.
+      const evidence = await readClusterEvidence(manager, {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: null, // resolved from the seed row below
+        seedMessageId: input.messageId,
+      });
+      if (clusterEvidenceBlocksSend(evidence, input.draftId)) {
+        // §5.2: the guard row's phase must not linger behind the cluster —
+        // reconcile it to the evidence phase (stale projection → sent) before
+        // refusing. Best-effort inside the same transaction; the refusal
+        // itself is the authority.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          const { phase, activeDraftId, activeAttemptId } =
+            evidenceToPhase(evidence);
+          await manager.getRepository(EmailReplyGuardEntity).update(
+            { id: input.guardId },
+            { phase, activeDraftId, activeAttemptId }
+          );
+        }
+        // N07: typed refusal via the canonical eligibility ladder — never
+        // infer from English text downstream.
+        const eligibility = classifyClusterEligibility(evidence, input.draftId);
+        const siblingCode =
+          eligibility.reason === "already_replied"
+            ? ("already_replied" as const)
+            : eligibility.reason === "delivery_unknown"
+              ? ("delivery_unknown" as const)
+              : eligibility.reason === "reply_in_progress"
+                ? ("reply_in_progress" as const)
+                : ("reply_state_conflict" as const);
+        return {
+          status: "precondition_failed",
+          reason:
+            "Message-level state blocks send: a sibling draft or attempt is sent, delivery-unknown, or in flight (FR-029)",
+          code: siblingCode,
+        };
+      }
+
+      // 2. Guard-phase precondition (T08/FR-036): a bound guard accepts a new
+      // send only from `draft_ready`/`idle`. A `sending`/`sent`/
+      // `delivery_unknown` guard is in-flight or terminal evidence — refuse
+      // BEFORE any write (§8.2). A missing guard row (deleted between the
+      // caller's resolution and this claim) skips binding entirely.
+      let bindGuardId: number | null = null;
+      if (input.guardId !== null && input.guardId !== undefined) {
+        const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+        const guardRow = await guardRepo.findOne({
+          where: { id: input.guardId },
+        });
+        if (guardRow) {
+          if (
+            guardRow.phase !== "draft_ready" &&
+            guardRow.phase !== "idle"
+          ) {
+            // N07: typed guard-phase refusal — map terminal/in-flight phases
+            // to stable policy codes (never parse the English reason).
+            const guardCode =
+              guardRow.phase === "sent"
+                ? ("already_replied" as const)
+                : guardRow.phase === "delivery_unknown"
+                  ? ("delivery_unknown" as const)
+                  : guardRow.phase === "sending"
+                    ? ("reply_in_progress" as const)
+                    : ("reply_state_conflict" as const);
+            return {
+              status: "precondition_failed",
+              reason: `Message guard is ${guardRow.phase}; a new send requires draft_ready or idle (FR-029)`,
+              code: guardCode,
+            };
+          }
+          bindGuardId = input.guardId;
+        }
+      }
 
       const updateResult = await draftRepo
         .createQueryBuilder()
@@ -348,6 +1166,7 @@ export class EmailReplyDraftModel extends BaseDb {
           status: "precondition_failed",
           reason:
             "Draft is not approved, or its current revision/hash no longer matches the approved envelope",
+          code: "reply_state_conflict",
         };
       }
 
@@ -371,6 +1190,23 @@ export class EmailReplyDraftModel extends BaseDb {
       attemptEntity.sanitizedError = null;
       const savedAttempt = await attemptRepo.save(attemptEntity);
 
+      // 5. Guard binding (T08/FR-036) — same transaction as the claim, using
+      // the pre-write-verified `bindGuardId`. 0 rows here means the guard
+      // phase changed between step 2 and this UPDATE (mutex serialization
+      // makes it near-impossible); THROW so the attempt INSERT rolls back
+      // (§8.2) rather than committing a claim without its cluster exclusion.
+      if (bindGuardId !== null) {
+        const bound = await bindGuardToSendPhase(manager, {
+          guardId: bindGuardId,
+          activeAttemptId: savedAttempt.id,
+        });
+        if (!bound) {
+          throw new Error(
+            `Guard ${bindGuardId} changed phase before the send bind; transaction rolled back`
+          );
+        }
+      }
+
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
       audit.messageId = input.messageId;
@@ -378,8 +1214,14 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.action = "send_claimed";
       audit.actor = "system";
       audit.reason = "Atomic approved->sending claim before SMTP";
+      // R20: dual correlation — the per-invocation id joins THIS send request's
+      // claim to its refusal/result; the deterministic message id stays a
+      // separate field. Omitted input (legacy caller) falls back to the
+      // message id so grouping by correlationId keeps working.
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: savedAttempt.id,
         revisionId: input.revisionId,
         policyVersion: input.policyVersion,
@@ -392,8 +1234,23 @@ export class EmailReplyDraftModel extends BaseDb {
 
   /**
    * Finalize a claimed attempt in ONE transaction: update attempt status,
-   * advance the draft state machine, consume the one-time approval, and write
-   * the outcome audit (technical design §15.5, FR-016/018/019).
+   * advance the draft state machine, consume the one-time approval, transition
+   * the guard, and write the outcome audit (technical design §15.5, §8.2,
+   * FR-016/018/019/036).
+   *
+   * Conditional fence (§9 final paragraph):
+   *   - `outcome = "sent"`: matches `status IN (claimed, submitted,
+   *     delivery_unknown)` — a late successful SMTP finalization UPGRADES an
+   *     earlier `delivery_unknown` (recovery timed out, then SMTP succeeded).
+   *   - `outcome = "failed" | "delivery_unknown"`: strict
+   *     `status IN (claimed, submitted)` — cannot downgrade a `sent`.
+   * 0 rows = another caller already finalized → leave everything untouched
+   * (fenced late-result rejection at the attempt level).
+   *
+   * Guard transition (T08): fenced by `phase="sending"` so a guard recovery
+   * already moved (to `sent`/`delivery_unknown`/`idle`) is left alone. The
+   * `delivery_unknown → sent` upgrade is allowed (late success); `sent → *`
+   * is forbidden (the fence refuses — guard stays `sent`).
    *
    * `delivery_unknown` is terminal: the approval is consumed and the draft
    * cannot be auto-retried — a fresh explicit approval on a (possibly new)
@@ -409,13 +1266,17 @@ export class EmailReplyDraftModel extends BaseDb {
 
       const completedAt = new Date();
       const attemptStatus: EmailReplySendAttemptStatus = input.outcome;
-      // CONDITIONAL finalize: only advance an attempt that is still in-flight.
-      // A recovery sweep can select a stale 'claimed' attempt and then race with
-      // a late delivery finalize; without this guard, recovery would clobber a
-      // successful 'sent' -> 'delivery_unknown'. If 0 rows match, another caller
-      // already finalized — leave the attempt, draft, and approval untouched.
+      // CONDITIONAL finalize (§9/N02). A late `sent` upgrades an earlier
+      // `delivery_unknown` AND a `failed` downgrade (the original transport
+      // outlived a premature negative reconciliation — late actual acceptance
+      // is terminal evidence and must not be lost). A downgrade
+      // (`failed`/`delivery_unknown`) can never match a `sent` attempt.
+      const matchStatuses: EmailReplySendAttemptStatus[] =
+        input.outcome === "sent"
+          ? ["claimed", "submitted", "delivery_unknown", "failed"]
+          : ["claimed", "submitted"];
       const attemptUpdate = await attemptRepo.update(
-        { id: input.attemptId, status: In(["claimed", "submitted"]) },
+        { id: input.attemptId, status: In(matchStatuses) },
         {
           status: attemptStatus,
           completedAt,
@@ -458,6 +1319,40 @@ export class EmailReplyDraftModel extends BaseDb {
         }
       );
 
+      // T08 guard transition (§8.2). The fence mirrors the attempt fence:
+      //   - `outcome = "sent"` matches `phase IN (sending, delivery_unknown)` —
+      //     a late success upgrades an earlier unknown (recovery moved the
+      //     guard to `delivery_unknown`, then SMTP succeeded).
+      //   - `outcome = "failed" | "delivery_unknown"` matches only
+      //     `phase = "sending"` — never downgrade a `sent`, never release the
+      //     `delivery_unknown` protection (a timeout alone never opens the
+      //     message). A guard recovery already finalized (any other phase) is
+      //     left alone.
+      if (input.guardId !== null && input.guardId !== undefined) {
+        const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+        const guardPatch: Partial<EmailReplyGuardEntity> = {
+          phase:
+            input.outcome === "sent"
+              ? ("sent" as GuardPhase)
+              : input.outcome === "delivery_unknown"
+              ? ("delivery_unknown" as GuardPhase)
+              : ("draft_ready" as GuardPhase),
+          activeAttemptId: null,
+        };
+        // N02: a late `sent` upgrades from `draft_ready` too (the guard was
+        // reopened by a premature negative reconciliation before the original
+        // transport succeeded — late acceptance is terminal and must reclaim
+        // the guard). Never downgrade a `sent` guard.
+        const guardMatchPhases: GuardPhase[] =
+          input.outcome === "sent"
+            ? ["sending", "delivery_unknown", "draft_ready"]
+            : ["sending"];
+        await guardRepo.update(
+          { id: input.guardId, phase: In(guardMatchPhases) },
+          guardPatch
+        );
+      }
+
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
       audit.messageId = input.messageId;
@@ -474,12 +1369,32 @@ export class EmailReplyDraftModel extends BaseDb {
           ? "SMTP accepted reply"
           : input.sanitizedError ?? input.outcome;
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        // R20: dual correlation — per-invocation id first (joins THIS send
+        // request's result), deterministic message id kept separately. A
+        // recovery sweep without an invocation id falls back to the message id.
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         providerMessageId: input.providerMessageId ?? null,
         failureCode: input.failureCode ?? null,
       });
       await auditRepo.save(audit);
+
+      // G03-1c: mirror the send outcome into the auto-reply audit table the
+      // UI reads, in the SAME transaction so the UI never shows a decision
+      // the pipeline log lacks (or vice versa).
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: audit.emailServiceId,
+        messageId: audit.messageId,
+        draftId: audit.draftId,
+        action: audit.action,
+        reason: audit.reason,
+        metadataJson: audit.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await manager.getRepository(EmailAutoReplyAuditLogEntity).save(mirrorRow);
+      }
     });
   }
 
@@ -518,6 +1433,7 @@ export class EmailReplyDraftModel extends BaseDb {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const now = new Date();
 
       const approved = await draftRepo.find({
@@ -533,6 +1449,22 @@ export class EmailReplyDraftModel extends BaseDb {
             { draftId: d.id, invalidatedAt: IsNull() as never },
             { invalidatedAt: now, invalidationReason: reason }
           );
+          // T08/FR-036: release any guard bound to this now-invalidated draft.
+          // Fenced by `phase="draft_ready" AND activeDraftId = :draftId` so a
+          // guard that already moved to `sending` (an in-flight send on this
+          // draft) is NOT released — that send can still complete and must not
+          // lose its message-level exclusion (§9). 0 rows = no guard bound to
+          // this draft, or the guard already transitioned → leave untouched.
+          await guardRepo.update(
+            { activeDraftId: d.id, phase: "draft_ready" as GuardPhase },
+            {
+              phase: "idle" as GuardPhase,
+              ownerToken: null,
+              leaseExpiresAt: null,
+              activeDraftId: null,
+              activeAttemptId: null,
+            }
+          );
         }
       }
       // Plain 'draft' rows get the stamp too so the UI can show a stale marker.
@@ -546,11 +1478,20 @@ export class EmailReplyDraftModel extends BaseDb {
 
   /**
    * Operator-driven manual reconciliation of an ambiguous delivery (P0.6,
-   * FR-019, technical design §16). UNCONDITIONAL transactional update (the
-   * operator is the trusted authority here, unlike the conditional auto-finalize):
+   * FR-019, technical design §16). CONDITIONAL transactional update — the
+   * operator is the trusted authority, but only over eligible `delivery_unknown`
+   * attempts (R04):
    *   - confirm_sent: attempt -> 'sent', draft -> 'sent', message -> 'sent'.
-   *   - confirm_not_sent: attempt -> 'failed', draft -> 'draft' (re-editable;
-   *     the user's next edit creates a fresh revision via materializeRevision1).
+   *     Always safe (terminal upgrade; preserves accepted evidence).
+   *   - confirm_not_sent: REFUSED unless the target attempt is
+   *     `delivery_unknown` AND the canonical cluster has no positive evidence
+   *     and no in-flight sibling. A `claimed`/`submitted` target means the
+   *     original SMTP submitter is still running — reopening the guard would
+   *     permit a fresh submission that races it, and its late success would be
+   *     lost (finalize cannot match `failed`). A `sent` target cannot be
+   *     downgraded (terminal accepted evidence, §9). When eligible, the
+   *     attempt -> 'failed', draft -> 'draft' (re-editable; the user's next
+   *     edit creates a fresh revision via materializeRevision1).
    *   - leave_unresolved: no state change (audit only).
    * Always writes a reconciliation audit row with the supplied evidence.
    */
@@ -562,13 +1503,140 @@ export class EmailReplyDraftModel extends BaseDb {
     action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
     evidence?: string | null;
     providerMessageId?: string | null;
+    /**
+     * T08/FR-036: guard row bound to this attempt. When non-null, the guard
+     * transitions alongside the reconciliation. `confirm_not_sent` is REFUSED
+     * unless the target attempt is `delivery_unknown` AND the canonical cluster
+     * has no positive evidence and no in-flight sibling (R04/§9: "While an
+     * original submitter could still be running, reconciliation cannot
+     * authorize retry; terminal accepted evidence cannot be downgraded").
+     */
+    guardId?: number | null;
+    /**
+     * Per-invocation request correlation id (R20). When provided, the
+     * reconciliation audit carries it as `correlationId` and keeps the
+     * deterministic per-message id in `messageCorrelationId`. When omitted
+     * (operator reconcile path with no invocation id), `correlationId` falls
+     * back to the message id.
+     */
+    requestCorrelationId?: string;
   }): Promise<void> {
     await runReplyTxn(this.sqliteDb, async (manager) => {
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
       const now = new Date();
+
+      // R04/§9: `confirm_not_sent` is a destructive downgrade (attempt →
+      // failed, draft → draft, guard → draft_ready). It is REFUSED unless ALL
+      // of the following hold:
+      //   (a) The target attempt is `delivery_unknown`. A `claimed`/`submitted`
+      //       target means the original SMTP submitter is still running —
+      //       reopening the guard authorizes a fresh submission that races it,
+      //       and its late success is lost (finalize cannot match `failed`). A
+      //       `sent` target is terminal accepted evidence and must not be
+      //       downgraded.
+      //   (b) The canonical cluster has no positive evidence (sibling
+      //       `replyDetectedAt`/`replyStatus=sent`/sent draft or attempt) —
+      //       accepted reply history is preserved.
+      //   (c) No in-flight sibling attempt/draft on a different draft is live
+      //       on the cluster — the original submitter (or a sibling send) must
+      //       quiesce first.
+      // `confirm_sent` (terminal upgrade) and `leave_unresolved` (no-op) are
+      // always safe and skip this gate.
+      if (input.action === "confirm_not_sent") {
+        const targetAttempt = await attemptRepo.findOne({
+          where: { id: input.attemptId },
+        });
+        if (!targetAttempt) {
+          throw new Error(
+            `Reconciliation refused: send attempt ${input.attemptId} not found`
+          );
+        }
+        if (
+          targetAttempt.status === "claimed" ||
+          targetAttempt.status === "submitted"
+        ) {
+          throw new Error(
+            `Reconciliation refused: attempt ${input.attemptId} is still ${targetAttempt.status} — the original submitter may still be running (§9)`
+          );
+        }
+        if (targetAttempt.status === "sent") {
+          throw new Error(
+            `Reconciliation refused: attempt ${input.attemptId} is already sent — terminal accepted evidence cannot be downgraded (§9)`
+          );
+        }
+        if (targetAttempt.status === "failed") {
+          // Already downgraded — idempotent: no state change, still audit.
+          // N02: even idempotent re-confirm still requires submitter
+          // quiescence — a live original transport may still succeed and its
+          // late acceptance must not be lost to a concurrent downgrade.
+          if (isSubmitterRunning(input.attemptId)) {
+            throw new Error(
+              `Reconciliation refused: original SMTP submitter for attempt ${input.attemptId} is still running — quiescence not proven (§9/N02)`
+            );
+          }
+        } else if (targetAttempt.status !== "delivery_unknown") {
+          throw new Error(
+            `Reconciliation refused: attempt ${input.attemptId} is in unexpected status ${targetAttempt.status}`
+          );
+        } else {
+          // N02: the recovered unknown target is eligible ONLY when the
+          // original submitter is proven quiescent. A timeout/status change
+          // alone never proves non-delivery — the original promise may still
+          // be alive past the five-minute recovery threshold. Optional
+          // operator evidence is not a cancellation fence.
+          if (isSubmitterRunning(input.attemptId)) {
+            throw new Error(
+              `Reconciliation refused: original SMTP submitter for attempt ${input.attemptId} is still running — quiescence not proven (§9/N02)`
+            );
+          }
+        }
+
+        // Canonical-cluster eligibility (R03/R04): a sibling positive or
+        // in-flight attempt blocks the downgrade. Reconcile has different
+        // semantics from commit/claim — the target's OWN `delivery_unknown`
+        // status is the eligible state here, so `classifyClusterEligibility`
+        // (which returns `delivery_unknown` for the target's own records) cannot
+        // be reused directly. Instead inspect the cluster evidence for the
+        // reconcile-specific conditions:
+        //   (b) No cluster positive evidence (sibling `replyDetectedAt`/
+        //       `replyStatus=sent`/sent draft/sent attempt) — preserve accepted
+        //       reply history.
+        //   (c) No in-flight sibling: any `claimed`/`submitted` attempt with a
+        //       DIFFERENT id (same OR different draft — two attempts on one
+        //       draft is still a live submitter), or a `sending` draft on a
+        //       different draft. The original submitter must quiesce first.
+        const evidence = await readClusterEvidence(manager, {
+          emailServiceId: input.emailServiceId,
+          normalizedMessageId: null,
+          seedMessageId: input.messageId,
+        });
+        if (
+          evidence.clusterReplyDetectedAt !== null ||
+          evidence.clusterHasRowLevelSent ||
+          evidence.replyStatus === "sent" ||
+          evidence.sentDrafts.length > 0 ||
+          evidence.sentAttempts.length > 0
+        ) {
+          throw new Error(
+            `Reconciliation refused: canonical cluster already has a reply (§9)`
+          );
+        }
+        const inFlightSibling = evidence.inFlightAttempts.some(
+          (a) => a.id !== input.attemptId
+        );
+        const sendingSiblingDraft = evidence.sendingDrafts.some(
+          (d) => d.id !== input.draftId
+        );
+        if (inFlightSibling || sendingSiblingDraft) {
+          throw new Error(
+            `Reconciliation refused: a different send is in flight on this message (§9)`
+          );
+        }
+      }
 
       if (input.action === "confirm_sent") {
         await attemptRepo.update(
@@ -588,6 +1656,19 @@ export class EmailReplyDraftModel extends BaseDb {
           { id: input.messageId },
           { replyStatus: "sent", processedAt: now }
         );
+        // Guard → `sent` (terminal protection). Fenced by
+        // `phase IN (sending, delivery_unknown)`: the operator resolves the
+        // ambiguous state the guard is parked in; a guard already at `sent`
+        // (recovery or a sibling) is left alone.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          await guardRepo.update(
+            {
+              id: input.guardId,
+              phase: In(["sending", "delivery_unknown"] as GuardPhase[]),
+            },
+            { phase: "sent" as GuardPhase, activeAttemptId: null }
+          );
+        }
       } else if (input.action === "confirm_not_sent") {
         await attemptRepo.update(
           { id: input.attemptId },
@@ -601,24 +1682,70 @@ export class EmailReplyDraftModel extends BaseDb {
           { id: input.draftId },
           { status: "draft", sendError: input.evidence ?? null }
         );
+        // Guard → `draft_ready` (reopens the draft for a fresh approval +
+        // send). The eligibility gate above already confirmed the target is
+        // `delivery_unknown` and no sibling is in flight, so a guard in
+        // `delivery_unknown` (the normal post-recovery phase) or a stale
+        // `sending` bound to this same attempt may safely reopen. A guard in
+        // any other phase (`sent`/`idle`/`generating`/`conflict`) is a no-op
+        // (0 rows) — defense-in-depth, not the authority.
+        if (input.guardId !== null && input.guardId !== undefined) {
+          await guardRepo.update(
+            {
+              id: input.guardId,
+              phase: In(["sending", "delivery_unknown"] as GuardPhase[]),
+            },
+            { phase: "draft_ready" as GuardPhase, activeAttemptId: null }
+          );
+        }
       }
-      // leave_unresolved: no state change.
+      // leave_unresolved: no state change, no guard change.
 
+      // N09: leave_unresolved retains ambiguity — it is NOT a confirmed
+      // failure. Record a reconciliation-note with typed delivery_unknown
+      // semantics (attempt/draft/guard unchanged above); the mirror surfaces
+      // it as needs-human-review with correct guidance, never failed.
       const audit = new EmailReplyAuditLogEntity();
       audit.emailServiceId = input.emailServiceId;
       audit.messageId = input.messageId;
       audit.draftId = input.draftId;
       audit.action =
-        input.action === "confirm_sent" ? "reply_sent" : "send_failed";
+        input.action === "confirm_sent"
+          ? "reply_sent"
+          : input.action === "confirm_not_sent"
+            ? "send_failed"
+            : "reconciliation_noted";
       audit.actor = "system";
-      audit.reason = `Manual reconciliation: ${input.action}`;
+      audit.reason =
+        input.action === "leave_unresolved"
+          ? `Manual reconciliation: leave_unresolved — delivery remains unknown, human review required`
+          : `Manual reconciliation: ${input.action}`;
       audit.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(input.messageId),
+        // R20: dual correlation — per-invocation id first (joins the operator
+        // reconcile request when provided), deterministic message id separate.
+        correlationId:
+          input.requestCorrelationId ?? correlationIdForMessage(input.messageId),
+        messageCorrelationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         evidence: input.evidence ?? null,
         providerMessageId: input.providerMessageId ?? null,
       });
       await auditRepo.save(audit);
+
+      // G03-1c/N09: same-transaction mirror into the auto-reply audit table
+      // the UI reads (confirm_sent → auto_sent, confirm_not_sent → failed,
+      // leave_unresolved → needs-human-review via reconciliation_noted).
+      const mirrorRow = buildAutoReplyAuditMirrorRow({
+        emailServiceId: audit.emailServiceId,
+        messageId: audit.messageId,
+        draftId: audit.draftId,
+        action: audit.action,
+        reason: audit.reason,
+        metadataJson: audit.metadataJson,
+      });
+      if (mirrorRow !== null) {
+        await manager.getRepository(EmailAutoReplyAuditLogEntity).save(mirrorRow);
+      }
     });
   }
 
@@ -728,6 +1855,60 @@ export interface AppendRevisionInput {
   replyToAddress?: string | null;
 }
 
+/**
+ * N04: manager-bound canonical-cluster read for
+ * {@link EmailReplyDraftModel.readFinalSendAdmission}. Mirrors
+ * `EmailReceivedMessageModule.findCanonicalEquivalents` (singleton for
+ * rows without an RFC id, seed-row inclusion, bounded legacy scan that
+ * throws on incomplete discovery) but runs on the caller's transaction
+ * manager so the cluster is read inside the admission snapshot.
+ */
+async function readCanonicalClusterForSnapshot(
+  manager: EntityManager,
+  seedRow: EmailReceivedMessageEntity
+): Promise<EmailReceivedMessageEntity[]> {
+  const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+  const normalizedId =
+    seedRow.normalizedMessageId ??
+    normalizeStoredMessageId(seedRow.messageId);
+  if (!normalizedId) {
+    const self = await messageRepo.findOne({ where: { id: seedRow.id } });
+    return self ? [self] : [];
+  }
+  const equivalents = await messageRepo.find({
+    where: {
+      emailServiceId: seedRow.emailServiceId,
+      normalizedMessageId: normalizedId,
+    },
+    order: { id: "ASC" },
+  });
+  const legacyCandidates = await messageRepo.find({
+    where: {
+      emailServiceId: seedRow.emailServiceId,
+      normalizedMessageId: IsNull(),
+    },
+    order: { id: "ASC" },
+    take: LEGACY_SIBLING_SCAN_LIMIT + 1,
+  });
+  if (legacyCandidates.length > LEGACY_SIBLING_SCAN_LIMIT) {
+    throw new Error(
+      `Canonical discovery incomplete: more than ${LEGACY_SIBLING_SCAN_LIMIT} null-normalized rows in service ${seedRow.emailServiceId} (§4.1)`
+    );
+  }
+  const rows = [...equivalents];
+  for (const candidate of legacyCandidates) {
+    if (normalizeStoredMessageId(candidate.messageId) === normalizedId) {
+      rows.push(candidate);
+    }
+  }
+  rows.sort((a, b) => a.id - b.id);
+  if (!rows.some((r) => r.id === seedRow.id)) {
+    const seed = await messageRepo.findOne({ where: { id: seedRow.id } });
+    if (seed) rows.push(seed);
+  }
+  return rows;
+}
+
 export interface ClaimSendInput {
   draftId: number;
   revisionId: number;
@@ -740,15 +1921,50 @@ export interface ClaimSendInput {
   senderAddress: string;
   recipientAddress: string;
   policyVersion: string | null;
+  /**
+   * T08/FR-036: the guard row to bind to `phase="sending"` + the new
+   * attempt, resolved by the caller (delivery service) from the draft's
+   * `(emailServiceId, replyKey)` BEFORE the claim. Null/undefined (no guard
+   * row — e.g. legacy rows predating the guard) skips binding: the claim's
+   * conditional draft UPDATE + sibling check remain the authority.
+   */
+  guardId?: number | null;
+  /**
+   * Injected clock source for the §9.3 forced-freshness fence (review D9.1).
+   * Production callers leave this undefined → `new Date()` at the top of the
+   * claim; tests pin it so the fence's age comparison is deterministic. Use
+   * this instead of `Date.now()` so a slow CI clock or real skew cannot let a
+   * stale negative through the 5s window.
+   */
+  now?: Date;
+  /**
+   * Per-invocation request correlation id (R20). When provided by the delivery
+   * service, the `send_claimed` audit carries it as `correlationId` (joining
+   * THIS invocation's refusal/result) and keeps the deterministic per-message id
+   * in `messageCorrelationId`. When omitted (legacy callers / recovery sweep
+   * with no invocation id), `correlationId` falls back to the message id so
+   * existing audit grouping still works.
+   */
+  requestCorrelationId?: string;
 }
 
+/**
+ * N07: typed claim-time refusal. `code` is the stable machine-readable policy
+ * code (never inferred from English `reason` text by callers). `reason`
+ * remains human-readable English for logs. Callers MUST switch on `code`,
+ * never parse `reason`.
+ */
 export type ClaimSendResult =
   | { readonly status: "claimed"; readonly attemptId: number }
   | {
       readonly status: "already_processed";
       readonly attempt: EmailReplySendAttemptEntity;
     }
-  | { readonly status: "precondition_failed"; readonly reason: string };
+  | {
+      readonly status: "precondition_failed";
+      readonly reason: string;
+      readonly code: import("@/entityTypes/emailReplyReliabilityTypes").EmailReplyPolicyCode;
+    };
 
 export interface FinalizeOutcomeInput {
   attemptId: number;
@@ -766,4 +1982,102 @@ export interface FinalizeOutcomeInput {
    * delivery_unknown (no EmailReplyStatus for ambiguous delivery).
    */
   messageReplyStatus?: EmailReplyStatus;
+  /**
+   * T08/FR-036: guard row bound to this attempt's send claim. When non-null,
+   * {@link finalizeSendOutcome} transitions the guard in the SAME transaction
+   * (fenced by `phase="sending"`). Null = no guard (legacy data / pre-guard
+   * claim) → the attempt/draft conditional UPDATEs remain the authority.
+   */
+  guardId?: number | null;
+  /**
+   * Per-invocation request correlation id (R20). When provided, the outcome
+   * audit (`reply_sent` / `send_failed` / `delivery_unknown`) carries it as
+   * `correlationId` and keeps the deterministic per-message id in
+   * `messageCorrelationId`. When omitted (recovery sweep without an invocation
+   * id), `correlationId` falls back to the message id.
+   */
+  requestCorrelationId?: string;
 }
+
+/** Input to the atomic generation commit ({@link commitGeneratedDraft}). */
+export interface CommitGeneratedDraftInput {
+  /** Guard row this invocation owns (reservation acquired before generation). */
+  guardId: number;
+  /** Opaque fencing token proving ownership of the guard lease (§8.2). */
+  ownerToken: string;
+  /** Raw (unsaved) draft entity built by the generation service. */
+  rawDraft: EmailReplyDraftEntity;
+  emailServiceId: number;
+  messageId: number;
+  subject: string;
+  bodyText: string;
+  /**
+   * Resolved sender/recipient binding for the revision + approval envelope.
+   * Resolved by the caller (generation service) OUTSIDE the transaction
+   * (§8.1 — no network/reads of other domains inside the commit txn).
+   */
+  senderAddress: string;
+  recipientAddress: string;
+  /** Sanitized generation metadata JSON (prompt/scope/context versions). */
+  generationMetadataJson: string | null;
+  /** Request-scoped correlation id written on the draft_created audit row. */
+  requestCorrelationId: string;
+  /** Optional clock for deterministic tests. */
+  now?: Date;
+  /**
+   * R09: advancing clock for owner/lease fences, read AFTER transaction
+   * admission and again at the final mutation fence (never a pre-queue
+   * timestamp). Defaults to the wall clock; tests inject a manual or
+   * call-counted clock for deterministic expiry races.
+   */
+  nowForCheck?: () => number;
+  /**
+   * G02: invocation work-budget end (epoch ms) for deadline-aware queue
+   * admission. When provided, BOTH the admission fence and the final
+   * mutation fence additionally require the invocation to be live — a
+   * commit that waited past the complete budget in the queue, or whose
+   * in-transaction writes outlived it, is fenced with zero writes instead
+   * of completing past the wall contract. Optional so model-level callers
+   * without an invocation deadline keep the lease-only semantics; the
+   * generation service always provides it.
+   *
+   * Compared against {@link deadlineNowMs} below — NEVER against
+   * `nowForCheck`: the deadline lives in the budget-clock domain
+   * (frozen/manual clocks in tests), while `nowForCheck` lives in the
+   * invocation-timestamp domain. Mixing them fences healthy commits.
+   */
+  invocationDeadlineEndsAtMs?: number;
+  /**
+   * G02: clock reading the deadline's domain for the deadline fence above.
+   * Defaults to the wall clock (matching the deadline's own default);
+   * callers with a controlled budget clock pass the same closure. When
+   * `invocationDeadlineEndsAtMs` is absent this is unused.
+   */
+  deadlineNowMs?: () => number;
+}
+
+export type CommitGeneratedDraftResult =
+  | {
+      readonly status: "committed";
+      readonly draftId: number;
+      readonly revisionId: number;
+      readonly revisionNumber: number;
+      readonly contentHash: string;
+    }
+  | { readonly status: "fenced" }
+  | {
+      /**
+       * R01: the canonical cluster carries reply evidence that makes this
+       * generation ineligible to commit — a sibling (or the seed itself) is
+       * already replied, delivery-unknown, in-flight on another draft, or in
+       * a contradictory multi-draft state. Returned BEFORE any draft insert,
+       * revision, message-status update, guard transition, or audit write —
+       * the transaction performs NO write and the caller must release the
+       * reservation and surface a typed refusal. Distinct from `fenced`
+       * (owner/lease failure) so the caller can map to the right policy code
+       * (`already_replied`/`delivery_unknown`/`reply_in_progress`/
+       * `reply_state_conflict`) instead of a generic transport-error.
+       */
+      readonly status: "refused";
+      readonly reason: ClusterEligibilityReason;
+    };

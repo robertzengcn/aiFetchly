@@ -1,0 +1,1088 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHash } from "node:crypto";
+
+// Mock electron + Logger BEFORE the import so the lazy default-port getters
+// never reach the real ipcMain / BaseModule (TDZ under vi.mock). Pattern
+// matches EmailReplyDetectionService.test.ts.
+vi.mock("electron", () => ({
+  ipcMain: { handle: vi.fn() },
+}));
+vi.mock("@/modules/Logger", () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import type {
+  RefreshedFlags,
+  ReplyHeaderCandidate,
+  ReplyHeaderSearchResult,
+  SentFolder,
+} from "@/service/emailReceive/EmailReceiveClient";
+import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
+import { log } from "@/modules/Logger";
+import {
+  EmailReplyDetectionService,
+  PROBE_DEADLINE_MS,
+  REPLY_DETECTOR_VERSION,
+  clampCacheObservationMs,
+  type ReplyDetectionMessagePort,
+  type ReplyDetectionDraftPort,
+  type ReplyDetectionAttemptPort,
+  type ReplyDetectionEmailServicePort,
+  type ReplyDetectionImapPort,
+} from "@/service/emailReceive/EmailReplyDetectionService";
+
+/**
+ * T05 step 10 (FR-031/FR-037 §7.3) — the in-memory detection cache,
+ * single-flight, the 15s probe deadline, and context-hash invalidation.
+ *
+ * The persisted negative cache (Step 3's `replyNegativeCheckAt`/
+ * `replyNegativeContextHash` columns) covers cross-process/cross-restart
+ * reuse; this layer coalesces concurrent calls within one process. Proves:
+ * negative reused within 60s; negative expired → fresh probe; positive sticky
+ * across calls; `forceRefresh` skips the negative cache but honors sticky
+ * positive; single-flight joins a live probe for the same context; a second
+ * mailbox probe does NOT block a different mailbox; deadline exceeded →
+ * probe_timeout + late result discarded; config change invalidates the
+ * negative; identity change with a cached positive → identity_conflict.
+ */
+
+const ORIGINAL_ID = "<orig-77@example.com>";
+const SENDER = "me@example.com";
+
+function messageFixture(
+  overrides: Partial<EmailReceivedMessageEntity> = {}
+): EmailReceivedMessageEntity {
+  const e = new EmailReceivedMessageEntity();
+  e.id = 100;
+  e.emailServiceId = 5;
+  e.providerUid = "imap:aaaaaaaaaaaaaaaa:424242:77";
+  e.messageId = ORIGINAL_ID;
+  e.normalizedMessageId = ORIGINAL_ID;
+  e.replyStatus = "not_started";
+  e.isAnswered = 0;
+  e.answeredFlagCheckedAt = null;
+  e.replyDetectedAt = null;
+  e.replyDetectionSource = null;
+  e.replyMatchedMessageId = null;
+  e.replyNegativeCheckAt = null;
+  e.replyNegativeContextHash = null;
+  e.providerFolder = "INBOX";
+  e.providerUidValidity = "424242";
+  Object.assign(e, overrides);
+  return e;
+}
+
+function imapConfig(
+  overrides: Partial<EmailReceiveConnectionConfig> = {}
+): EmailReceiveConnectionConfig {
+  return {
+    emailServiceId: 5,
+    protocol: "imap",
+    host: "imap.example.com",
+    port: 993,
+    ssl: true,
+    username: SENDER,
+    password: "secret-pw",
+    folder: "INBOX",
+    ...overrides,
+  };
+}
+
+function defaultIdentity() {
+  return {
+    smtpUsername: SENDER,
+    fromAddress: SENDER,
+    replyToAddress: null,
+    receiveUsername: SENDER,
+  };
+}
+
+/**
+ * Reproduce the production pre-probe context hash (empty Sent scope) for a
+ * config + configured-sender pair, so persisted-negative tests can seed the
+ * exact hash a real probe under that context would persist (D5 read-side
+ * recompute compares against it). Material order mirrors hashContext:
+ * endpoint|protocol|username|scope|sender|detector-version.
+ */
+function preProbeContextHash(
+  config: EmailReceiveConnectionConfig,
+  configuredSender: string
+): string {
+  const material = [
+    `${config.host}:${config.port}`,
+    config.protocol,
+    config.username,
+    "",
+    configuredSender.toLowerCase(),
+    REPLY_DETECTOR_VERSION,
+  ].join("|");
+  return createHash("sha256").update(material, "utf8").digest("hex");
+}
+
+interface FakeImapOptions {
+  flags?: RefreshedFlags | null;
+  sentFolders?: SentFolder[];
+  /** Per-folder search result; `false` = failed/incomplete search. A bare
+   * candidate array is wrapped as a complete, untruncated result. */
+  candidatesByFolder?: Map<string, ReplyHeaderSearchResult | ReplyHeaderCandidate[] | false>;
+}
+
+interface FakeKit {
+  service: EmailReplyDetectionService;
+  messagePort: ReplyDetectionMessagePort & {
+    updateCalls: Array<Record<string, unknown>>;
+  };
+  emailServicePort: ReplyDetectionEmailServicePort & {
+    callCount: number;
+    setConfig: (c: EmailReceiveConnectionConfig | null) => void;
+    setIdentity: (i: ReturnType<typeof defaultIdentity> | null) => void;
+  };
+  imapPort: ReplyDetectionImapPort & {
+    refreshCalls: Array<{ folder: string; uid: string }>;
+    searchCalls: Array<{ folder: string; originalMessageId: string }>;
+    discoverCalls: number;
+  };
+}
+
+/**
+ * Build a kit with a controllable clock. The clock advances manually so the
+ * cache TTL (60s) and deadline (15s) are deterministic — no real timers.
+ */
+function buildKit(opts: {
+  message: EmailReceivedMessageEntity;
+  config?: EmailReceiveConnectionConfig;
+  identity?: ReturnType<typeof defaultIdentity> | null;
+  imap?: FakeImapOptions;
+  now?: () => number;
+}): FakeKit {
+  const updateCalls: Array<Record<string, unknown>> = [];
+  const messagePort: ReplyDetectionMessagePort & {
+    updateCalls: Array<Record<string, unknown>>;
+  } = {
+    async read(id) {
+      return id === opts.message.id ? opts.message : null;
+    },
+    async findCanonicalEquivalents() {
+      return [opts.message];
+    },
+    async updateReplyEvidence(input) {
+      updateCalls.push(input);
+      return true;
+    },
+    async confirmStagedNegativeEvidence(input) {
+      updateCalls.push(input);
+      return true;
+    },
+    updateCalls,
+  };
+  const draftPort: ReplyDetectionDraftPort = {
+    async listByMessages() {
+      return [];
+    },
+  };
+  const attemptPort: ReplyDetectionAttemptPort = {
+    async listByMessages() {
+      return [];
+    },
+  };
+  let currentConfig: EmailReceiveConnectionConfig | null =
+    opts.config ?? imapConfig();
+  let currentIdentity: ReturnType<typeof defaultIdentity> | null =
+    opts.identity ?? defaultIdentity();
+  const emailServicePort: ReplyDetectionEmailServicePort & {
+    callCount: number;
+    setConfig: (c: EmailReceiveConnectionConfig | null) => void;
+    setIdentity: (i: ReturnType<typeof defaultIdentity> | null) => void;
+  } = {
+    callCount: 0,
+    async getEmailServiceReceiveConfig() {
+      this.callCount += 1;
+      return currentConfig;
+    },
+    async readIdentity() {
+      return currentIdentity;
+    },
+    setConfig(c) {
+      currentConfig = c;
+    },
+    setIdentity(i) {
+      currentIdentity = i;
+    },
+  } as ReplyDetectionEmailServicePort & {
+    callCount: number;
+    setConfig: (c: EmailReceiveConnectionConfig | null) => void;
+    setIdentity: (i: ReturnType<typeof defaultIdentity> | null) => void;
+  };
+  const refreshCalls: Array<{ folder: string; uid: string }> = [];
+  const searchCalls: Array<{
+    folder: string;
+    originalMessageId: string;
+  }> = [];
+  let discoverCalls = 0;
+  const imap: FakeImapOptions = opts.imap ?? {};
+  const imapPort: ReplyDetectionImapPort & {
+    refreshCalls: Array<{ folder: string; uid: string }>;
+    searchCalls: Array<{ folder: string; originalMessageId: string }>;
+    discoverCalls: number;
+  } = {
+    refreshCalls,
+    searchCalls,
+    get discoverCalls() {
+      return discoverCalls;
+    },
+    async refreshMessageFlags(input) {
+      refreshCalls.push({ folder: input.folder, uid: input.uid });
+      return imap.flags ?? null;
+    },
+    async discoverSentFolders() {
+      discoverCalls += 1;
+      return imap.sentFolders ?? [];
+    },
+    async searchReplyHeaders(input) {
+      searchCalls.push({
+        folder: input.folder,
+        originalMessageId: input.originalMessageId,
+      });
+      const v = imap.candidatesByFolder?.get(input.folder);
+      if (v === false) return false;
+      if (v === undefined) {
+        return { candidates: [], truncated: false, failedFetchCount: 0 };
+      }
+      if (Array.isArray(v)) {
+        return { candidates: v, truncated: false, failedFetchCount: 0 };
+      }
+      return v;
+    },
+  };
+  const service = new EmailReplyDetectionService({
+    messagePort,
+    draftPort,
+    attemptPort,
+    emailServicePort,
+    imapPort,
+    now: opts.now,
+  });
+  return { service, messagePort, emailServicePort, imapPort };
+}
+
+/** A clock you can advance by hand — deterministic TTL/deadline tests. */
+function manualClock(): { now: () => number; advance: (ms: number) => void } {
+  let t = 1_000_000;
+  return {
+    now: () => t,
+    advance: (ms) => {
+      t += ms;
+    },
+  };
+}
+
+/** A clean negative: source present + not answered + Sent search complete. */
+function cleanNegativeImap(): FakeImapOptions {
+  return {
+    flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\Seen"], checkedAt: new Date() },
+    sentFolders: [{ folder: "Sent", verified: true }],
+    candidatesByFolder: new Map([["Sent", []]]),
+  };
+}
+
+/** A verified Sent direct match → replied(sent_search). */
+function sentMatchImap(): FakeImapOptions {
+  return {
+    flags: { uid: "77", isAnswered: false, isSeen: true, flags: ["\\Seen"], checkedAt: new Date() },
+    sentFolders: [{ folder: "Sent", verified: true }],
+    candidatesByFolder: new Map([
+      [
+        "Sent",
+        [
+          {
+            folder: "Sent",
+            uid: 501,
+            messageId: "<sent-501@example.com>",
+            inReplyTo: ORIGINAL_ID,
+            references: ORIGINAL_ID,
+            from: SENDER,
+            to: "prospect@example.com",
+            date: "2026-10-05T11:00:00Z",
+          },
+        ],
+      ],
+    ]),
+  };
+}
+
+// ===========================================================================
+// In-memory negative cache.
+// ===========================================================================
+
+describe("EmailReplyDetection cache (T05 step 10, §7.3)", () => {
+  it("negative reused within 60s — second call does NOT re-probe", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("not_replied");
+    expect(r1.fromCache).toBe(false);
+    const probes1 = kit.imapPort.discoverCalls;
+
+    // Same context, 30s later — within the 60s TTL.
+    clock.advance(30_000);
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(true);
+    // No new mailbox probe — cache hit.
+    expect(kit.imapPort.discoverCalls).toBe(probes1);
+  });
+
+  it("negative expired after 60s → fresh probe", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+    const probes1 = kit.imapPort.discoverCalls;
+
+    // 61s later — past the 60s TTL.
+    clock.advance(61_000);
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+
+  it("positive sticky across calls — no expiry, no re-probe", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: sentMatchImap(),
+      now: clock.now,
+    });
+
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("replied");
+    const probes1 = kit.imapPort.discoverCalls;
+
+    // Far future — positive is sticky (no expiry).
+    clock.advance(86_400_000);
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("replied");
+    expect(r2.fromCache).toBe(true);
+    expect(kit.imapPort.discoverCalls).toBe(probes1);
+  });
+
+  it("forceRefresh skips the negative cache — re-probes even within 60s", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+    const probes1 = kit.imapPort.discoverCalls;
+
+    clock.advance(5_000); // well within 60s
+    const r2 = await kit.service.detect({
+      messageId: message.id,
+      forceRefresh: true,
+    });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    // forceRefresh skipped the negative cache → fresh probe.
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+
+  it("forceRefresh still honors a sticky positive — known positive short-circuits", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: sentMatchImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+    const probes1 = kit.imapPort.discoverCalls;
+
+    clock.advance(5_000);
+    const r2 = await kit.service.detect({
+      messageId: message.id,
+      forceRefresh: true,
+    });
+    expect(r2.state).toBe("replied");
+    expect(r2.fromCache).toBe(true);
+    expect(kit.imapPort.discoverCalls).toBe(probes1); // sticky positive, no re-probe
+  });
+
+  // -----------------------------------------------------------------------
+  // Single-flight.
+  // -----------------------------------------------------------------------
+
+  it("single-flight: concurrent calls for the same message join ONE probe", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    // A slow Sent-folder discovery so both calls overlap in-flight.
+    let resolveDiscover: () => void;
+    const discoverPromise = new Promise<void>(
+      (resolve) => (resolveDiscover = resolve)
+    );
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const originalDiscover = kit.imapPort.discoverSentFolders;
+    kit.imapPort.discoverSentFolders = async (config) => {
+      await discoverPromise;
+      return originalDiscover.call(kit.imapPort, config);
+    };
+
+    const p1 = kit.service.detect({ messageId: message.id });
+    const p2 = kit.service.detect({ messageId: message.id });
+    // Let the microtask queue settle so the first probe has entered flight.
+    await Promise.resolve();
+    resolveDiscover!();
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.state).toBe("not_replied");
+    expect(r2.state).toBe("not_replied");
+    // One probe served both calls (single-flight join).
+    expect(kit.imapPort.discoverCalls).toBe(1);
+  });
+
+  it("second mailbox probe does NOT block a different mailbox", async () => {
+    const clock = manualClock();
+    const messageA = messageFixture({ id: 100, emailServiceId: 5 });
+    const messageB = messageFixture({
+      id: 200,
+      emailServiceId: 6,
+      providerUid: "imap:bbbbbbbbbbbbbbbb:424242:88",
+    });
+    let resolveA: () => void;
+    const blockA = new Promise<void>((resolve) => (resolveA = resolve));
+    const kitA = buildKit({
+      message: messageA,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const origDiscoverA = kitA.imapPort.discoverSentFolders;
+    kitA.imapPort.discoverSentFolders = async (config) => {
+      await blockA;
+      return origDiscoverA.call(kitA.imapPort, config);
+    };
+
+    const kitB = buildKit({
+      message: messageB,
+      config: imapConfig({
+        emailServiceId: 6,
+        username: "other@example.com",
+      }),
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const pA = kitA.service.detect({ messageId: messageA.id });
+    // Let A enter flight.
+    await Promise.resolve();
+    // B is a different mailbox — must NOT wait behind A.
+    const rB = await kitB.service.detect({ messageId: messageB.id });
+    expect(rB.state).toBe("not_replied");
+    resolveA!();
+    const rA = await pA;
+    expect(rA.state).toBe("not_replied");
+  });
+
+  // -------------------------------------------------------------------------
+  // R07 — Queued mailbox probes must NOT fan out after one predecessor.
+  // The old snapshot-await pattern read the predecessor and awaited it before
+  // installing a node in the mailbox map, so distinct-message B and C both
+  // observed A and started together when A settled (max active probes > 1).
+  // The chained release-token fix installs each caller's own token
+  // synchronously, so C chains onto B, not A.
+  // -------------------------------------------------------------------------
+
+  it("R07 — concurrent B and C on the same mailbox do NOT fan out after A; max one active probe", async () => {
+    const clock = manualClock();
+    const messageA = messageFixture({
+      id: 100,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:77",
+    });
+    const messageB = messageFixture({
+      id: 200,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:78",
+    });
+    const messageC = messageFixture({
+      id: 300,
+      providerUid: "imap:aaaaaaaaaaaaaaaa:424242:79",
+    });
+
+    // Concurrency tracker wrapping the fake IMAP port. `active` counts
+    // probes currently INSIDE discoverSentFolders; `maxActive` is the
+    // high-water mark. A one-shot `enteredA` signal tells the test when A has
+    // actually reached the mailbox probe (so we don't have to guess microtask
+    // counts). `discoverGate` blocks every probe until the test releases it.
+    let active = 0;
+    let maxActive = 0;
+    let releaseDiscover!: () => void;
+    const discoverGate = new Promise<void>(
+      (resolve) => (releaseDiscover = resolve)
+    );
+    let signalAEntered!: () => void;
+    const aEntered = new Promise<void>(
+      (resolve) => (signalAEntered = resolve)
+    );
+    let aHasEntered = false;
+
+    const kit = buildKit({
+      message: messageA,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const origDiscover = kit.imapPort.discoverSentFolders;
+    kit.imapPort.discoverSentFolders = async (config) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (!aHasEntered) {
+        aHasEntered = true;
+        signalAEntered();
+      }
+      try {
+        // Every probe blocks on the gate. A arrives first and blocks; B and
+        // C must NOT reach here until A releases the mailbox lock (R07).
+        await discoverGate;
+        return origDiscover.call(kit.imapPort, config);
+      } finally {
+        active -= 1;
+      }
+    };
+
+    // Make all three messages resolve to their own rows on the same mailbox.
+    (kit.messagePort as unknown as {
+      read: (id: number) => Promise<EmailReceivedMessageEntity | null>;
+    }).read = async (id: number) => {
+      if (id === messageA.id) return messageA;
+      if (id === messageB.id) return messageB;
+      if (id === messageC.id) return messageC;
+      return null;
+    };
+    (kit.messagePort as unknown as {
+      findCanonicalEquivalents: (seed: EmailReceivedMessageEntity) => Promise<EmailReceivedMessageEntity[]>;
+    }).findCanonicalEquivalents = async (seed: EmailReceivedMessageEntity) =>
+      [seed];
+
+    // Start A on the mailbox. Wait until it actually ENTERS discoverSentFolders
+    // (proves A acquired the lock + reached the mailbox probe) before starting
+    // B and C. This isolates the R07 fan-out question: with A holding the lock,
+    // do B and C start mailbox work concurrently?
+    const pA = kit.service.detect({ messageId: messageA.id });
+    await aEntered;
+    expect(active).toBe(1);
+    expect(maxActive).toBe(1);
+
+    // Start B and C (same mailbox, different messages → different cache keys,
+    // so single-flight does NOT join them; they each reach the mailbox queue).
+    const pB = kit.service.detect({ messageId: messageB.id });
+    const pC = kit.service.detect({ messageId: messageC.id });
+    // Drain the microtask queue so B and C settle into their queue waits
+    // (each installs its own token + awaits the predecessor). A generous
+    // drain guarantees they have had a chance to fan out IF the bug exists.
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
+    // R07: B and C must NOT have entered discoverSentFolders. Only A is
+    // active; maxActive stayed 1. Under the old snapshot-await pattern, B
+    // and C would both observe A's predecessor slot and enter together.
+    expect(active).toBe(1);
+    expect(maxActive).toBe(1);
+
+    // Release the gate. A completes; the chain hands off to B, then C
+    // (strictly serialized, never concurrent). After all settle, maxActive
+    // is still 1 and three probes ran total.
+    releaseDiscover();
+    const [rA, rB, rC] = await Promise.all([pA, pB, pC]);
+    expect(rA.state).toBe("not_replied");
+    expect(rB.state).toBe("not_replied");
+    expect(rC.state).toBe("not_replied");
+    expect(maxActive).toBe(1);
+    // All three eventually probed (one per distinct message/context).
+    expect(kit.imapPort.discoverCalls).toBe(3);
+  });
+
+  it("R07 — queue wait counts against the 15s deadline; a queued probe that exhausts the budget returns probe_timeout without opening a connection", async () => {
+    vi.useFakeTimers();
+    try {
+      const messageA = messageFixture({
+        id: 100,
+        providerUid: "imap:aaaaaaaaaaaaaaaa:424242:77",
+      });
+      const messageB = messageFixture({
+        id: 200,
+        providerUid: "imap:aaaaaaaaaaaaaaaa:424242:78",
+      });
+
+      let resolveA!: () => void;
+      let signalAEntered!: () => void;
+      const aEntered = new Promise<void>(
+        (resolve) => (signalAEntered = resolve)
+      );
+      let aHasEntered = false;
+      const blockA = new Promise<void>((resolve) => (resolveA = resolve));
+      const kit = buildKit({
+        message: messageA,
+        imap: cleanNegativeImap(),
+      });
+      const origDiscover = kit.imapPort.discoverSentFolders;
+      kit.imapPort.discoverSentFolders = async (config) => {
+        if (!aHasEntered) {
+          aHasEntered = true;
+          signalAEntered();
+        }
+        await blockA;
+        return origDiscover.call(kit.imapPort, config);
+      };
+      (kit.messagePort as unknown as {
+        read: (id: number) => Promise<EmailReceivedMessageEntity | null>;
+      }).read = async (id: number) =>
+        id === messageA.id ? messageA : id === messageB.id ? messageB : null;
+      (kit.messagePort as unknown as {
+        findCanonicalEquivalents: (seed: EmailReceivedMessageEntity) => Promise<EmailReceivedMessageEntity[]>;
+      }).findCanonicalEquivalents = async (seed: EmailReceivedMessageEntity) =>
+        [seed];
+
+      // A starts and blocks on discover. B queues behind A on the same
+      // mailbox. The 15s deadline for B was started before queue acquisition,
+      // so the queue wait counts against the budget.
+      const pA = kit.service.detect({ messageId: messageA.id });
+      // Wait for A to actually enter the mailbox probe (hold the lock).
+      await aEntered;
+      const pB = kit.service.detect({ messageId: messageB.id });
+      // Drain so B installs its token + awaits the predecessor (A).
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      // B is queued behind A. Advance past the 15s deadline. B's deadline
+      // expires during the queue wait; when A releases, B must return
+      // probe_timeout WITHOUT opening a connection (no discover call for B).
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
+
+      // Release A so the chain hands off to B. B sees the deadline expired
+      // after the queue wait and returns probe_timeout without probing.
+      resolveA();
+
+      const rA = await pA;
+      const rB = await pB;
+      expect(rA.state).toBe("unknown");
+      expect(rA.reasonCode).toBe("probe_timeout");
+      expect(rB.state).toBe("unknown");
+      expect(rB.reasonCode).toBe("probe_timeout");
+
+      // Only A entered discoverSentFolders (B was queued, then found the
+      // deadline expired after the queue wait → returned probe_timeout from
+      // the queue-wait branch without opening a connection). Neither result
+      // was cached (probe_timeout is unknown-state).
+      expect(kit.imapPort.discoverCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  // -----------------------------------------------------------------------
+  // 15s deadline.
+  // -----------------------------------------------------------------------
+  //
+  // The deadline racer arms a REAL setTimeout(fn, Math.max(1, remainingMs()))
+  // where remainingMs is computed from `this.now`. We use vitest fake timers
+  // (scoped to this test only) so advancing timers past 15s fires the racer
+  // deterministically — no 15s wall-clock wait. The service's `now` defaults to
+  // Date.now under fake timers, so the deadline budget tracks the fake clock.
+
+  it("deadline exceeded (slow probe) → probe_timeout, late result discarded", async () => {
+    // Fake timers control both Date.now (the service's default clock) and
+    // setTimeout (the deadline racer). Advancing past 15s fires the racer
+    // deterministically — no 15s wall-clock wait. The probe blocks on a
+    // promise we control so it never resolves until we release it.
+    vi.useFakeTimers();
+    try {
+      const message = messageFixture();
+      let resolveDiscover: () => void;
+      const block = new Promise<void>(
+        (resolve) => (resolveDiscover = resolve)
+      );
+      const kit = buildKit({
+        message,
+        imap: cleanNegativeImap(),
+      });
+      const origDiscover = kit.imapPort.discoverSentFolders;
+      kit.imapPort.discoverSentFolders = async (config) => {
+        await block;
+        return origDiscover.call(kit.imapPort, config);
+      };
+
+      // Start the probe; it blocks on the unresolved discover promise. The
+      // 15s deadline setTimeout is armed inside raceProbeAgainstDeadline.
+      const probeP = kit.service.detect({ messageId: message.id });
+      // Let the probe enter flight + the racer arm its setTimeout. Under fake
+      // timers we must drain microtasks asynchronously (advanceTimersByTimeAsync
+      // both advances the clock and flushes the microtask queue).
+      await vi.advanceTimersByTimeAsync(0);
+      // Advance past the 15s deadline — the racer fires and resolves with
+      // probe_timeout (winning the race against the blocked probe).
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
+
+      const r = await probeP;
+      expect(r.state).toBe("unknown");
+      expect(r.reasonCode).toBe("probe_timeout");
+
+      // Release the slow probe. Its eventual resolution is discarded by
+      // Promise.race — it must NOT be cached (probe_timeout is unknown-state,
+      // and the late value is discarded anyway). Drain the late probe's
+      // microtasks so its discarded resolution settles quietly.
+      resolveDiscover!();
+      await vi.advanceTimersByTimeAsync(0);
+      // The late probe incremented discoverCalls when it resolved; capture
+      // the post-late count so the follow-up assertion is against THAT.
+      const probesBefore = kit.imapPort.discoverCalls;
+      // probe_timeout was NOT cached (unknown-state), so a follow-up call
+      // re-probes immediately — no 60s wait needed. Advance the clock a tick
+      // to be safe and re-detect.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const r2 = await kit.service.detect({ messageId: message.id });
+      expect(r2.state).toBe("not_replied");
+      // A fresh probe ran — the late result was not cached as a negative.
+      expect(kit.imapPort.discoverCalls).toBeGreaterThan(probesBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  // -----------------------------------------------------------------------
+  // Context-hash invalidation.
+  // -----------------------------------------------------------------------
+
+  it("config change (account endpoint) invalidates the in-memory negative", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+    const probes1 = kit.imapPort.discoverCalls;
+
+    // 5s later (within 60s TTL) but the account host changed → context hash
+    // mismatch → the cached negative does not apply → fresh probe under the
+    // NEW context.
+    clock.advance(5_000);
+    kit.emailServicePort.setConfig(
+      imapConfig({ host: "imap.different.example.com" })
+    );
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+
+  it("identity change (configured sender) invalidates the in-memory negative", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+    const probes1 = kit.imapPort.discoverCalls;
+
+    // 5s later (within 60s TTL), same account endpoint, but the configured
+    // sender changed (alias added). The context hash incorporates
+    // `configuredSender`, so the cache key differs → no negative reuse → a
+    // fresh probe runs under the new identity.
+    clock.advance(5_000);
+    kit.emailServicePort.setIdentity({
+      smtpUsername: SENDER,
+      fromAddress: "alias@example.com",
+      replyToAddress: null,
+      receiveUsername: SENDER,
+    });
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+});
+
+// ===========================================================================
+// T12/FR-039 — detection-side telemetry coverage. The cache counters
+// (detection_cache{hit,kind|expired}) and the probe-latency emission
+// (email_reply_detection_duration_ms) are observable here because this suite
+// already mocks @/modules/Logger (so `log.info` is a vi.fn spy) and uses a
+// manual clock for deterministic cache transitions.
+// ===========================================================================
+describe("EmailReplyDetection cache telemetry (T12/FR-039)", () => {
+  beforeEach(() => {
+    drainCountersForTest();
+    vi.mocked(log.info).mockClear();
+  });
+
+  it("cold miss — fresh kit emits detection_cache{hit=false,kind=miss} exactly once", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+
+    const counters = drainCountersForTest();
+    // A fresh kit has no in-memory cache entry, so the first call is a cold
+    // miss → exactly one cold-miss counter (the probe then settles not_replied
+    // and caches a negative for the next call, but that next call never runs
+    // in this test).
+    expect(counters.get("detection_cache{hit=false,kind=miss}")).toBe(1);
+    // No cache-hit/expired counters on a cold miss.
+    expect(counters.get("detection_cache{hit=true,kind=negative}")).toBeUndefined();
+    expect(counters.get("detection_cache{hit=false,expired=true}")).toBeUndefined();
+  });
+
+  it("persisted sticky-positive reuse emits detection_cache{hit=true,kind=persisted_positive}, no probe", async () => {
+    const clock = manualClock();
+    // A message whose persisted evidence already records a positive — the
+    // detector must short-circuit on it WITHOUT a mailbox probe.
+    const message = messageFixture({
+      replyDetectedAt: new Date(1_000_000 - 60_000),
+      replyDetectionSource: "sent_search",
+      replyMatchedMessageId: "<sent-501@example.com>",
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("replied");
+    expect(r.fromCache).toBe(true);
+
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_positive}")
+    ).toBe(1);
+    // No mailbox round trip — the persisted positive short-circuits.
+    expect(kit.imapPort.discoverCalls).toBe(0);
+    expect(kit.imapPort.refreshCalls).toHaveLength(0);
+  });
+
+  it("persisted negative reuse emits detection_cache{hit=true,kind=persisted_negative}, no probe", async () => {
+    const clock = manualClock();
+    // A message whose persisted negative evidence is 30s old (within the 60s
+    // TTL, observed before `now` so age >= 0). The stored hash is the real
+    // pre-probe hash for this kit's config + sender, so the D5 read-side
+    // recompute compares equal and the negative is reused WITHOUT a probe.
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("not_replied");
+    expect(r.fromCache).toBe(true);
+
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_negative}")
+    ).toBe(1);
+    expect(kit.imapPort.discoverCalls).toBe(0);
+    expect(kit.imapPort.refreshCalls).toHaveLength(0);
+  });
+
+  it("R02: expired-owner persisted negative is never reused — a fresh probe runs", async () => {
+    const clock = manualClock();
+    // Same fresh-looking negative (30s old, matching context hash), but its
+    // owning probe expired 40s ago (observed AFTER the owner end): an
+    // abandoned timed-out probe whose compensating void never ran. Readers
+    // must reject it even though the TTL has not elapsed.
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
+      replyNegativeOwnerExpiresAt: new Date(1_000_000 - 40_000),
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    // Not served from cache: a full probe ran instead.
+    expect(r.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBeGreaterThan(0);
+    const counters = drainCountersForTest();
+    expect(
+      counters.get("detection_cache{expired_owner=true,hit=false}")
+    ).toBe(1);
+    expect(
+      counters.get("detection_cache{hit=true,kind=persisted_negative}")
+    ).toBeUndefined();
+  });
+
+  it("R02: legacy persisted negative without owner tracking still reuses", async () => {
+    // Grandfathered rows (written before owner tracking) keep the previous
+    // age-only semantics: a fresh matching negative is served from cache.
+    const clock = manualClock();
+    const message = messageFixture({
+      replyNegativeCheckAt: new Date(1_000_000 - 30_000),
+      replyNegativeContextHash: preProbeContextHash(imapConfig(), SENDER),
+      replyNegativeOwnerExpiresAt: null,
+    });
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    const r = await kit.service.detect({ messageId: message.id });
+    expect(r.state).toBe("not_replied");
+    expect(r.fromCache).toBe(true);
+  });
+
+  it("probe path emits email_reply_detection_duration_ms via the logger (p95-able latency signal)", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+
+    await kit.service.detect({ messageId: message.id });
+
+    // The probe timer (timedReplyStage("detection", ..., { state: "probe" }))
+    // emits its duration ONLY to log.info as a `[metrics]` JSONL line — it is
+    // not tracked by the counters map. Assert the spy received such a line.
+    const calls = vi.mocked(log.info).mock.calls;
+    const metricsCalls = calls.filter(([line]) =>
+      typeof line === "string" && line.startsWith("[metrics]")
+    );
+    expect(metricsCalls.length).toBeGreaterThan(0);
+    const detectionDurationCalls = metricsCalls.filter(([line]) => {
+      if (typeof line !== "string") return false;
+      return line.includes("email_reply_detection_duration_ms");
+    });
+    expect(detectionDurationCalls.length).toBeGreaterThan(0);
+    // Privacy/§25: the latency line carries only the `state` label, never a
+    // message id, address, or body.
+    const firstLine = detectionDurationCalls[0][0] as string;
+    expect(firstLine).not.toContain(message.messageId);
+    expect(firstLine).not.toContain(SENDER);
+    expect(firstLine).toContain('"state":"probe"');
+  });
+});
+
+describe("clampCacheObservationMs (N03)", () => {
+  const NOW = 2_000_000_000_000;
+  it("keeps a valid past observation instant", () => {
+    expect(clampCacheObservationMs(new Date(NOW - 1_000).toISOString(), NOW)).toBe(
+      NOW - 1_000
+    );
+    expect(clampCacheObservationMs(NOW - 1_000, NOW)).toBe(NOW - 1_000);
+  });
+  it("clamps future stamps to now (skew must never extend freshness)", () => {
+    expect(clampCacheObservationMs(new Date(NOW + 5_000).toISOString(), NOW)).toBe(
+      NOW
+    );
+  });
+  it("falls back to now for missing or unparseable stamps", () => {
+    for (const bad of [null, undefined, {}, [], "", "not-a-date", NaN]) {
+      expect(clampCacheObservationMs(bad, NOW)).toBe(NOW);
+    }
+  });
+});
+
+describe("EmailReplyDetection memory TTL anchors on observation time (N03)", () => {
+  it("closing work after observation does not restart the 60s TTL", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    // N03: closing reads (config/identity reread after mailbox I/O)
+    // consume 10s inside the probe budget: observation at T, cache
+    // insertion at T+10s.
+    const innerGetConfig = kit.emailServicePort.getEmailServiceReceiveConfig.bind(
+      kit.emailServicePort
+    );
+    kit.emailServicePort.getEmailServiceReceiveConfig = async (id: number) => {
+      clock.advance(10_000);
+      return innerGetConfig(id);
+    };
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("not_replied");
+    expect(r1.fromCache).toBe(false);
+    const observedAt = new Date(r1.checkedAt ?? 0).getTime();
+    const probes1 = kit.imapPort.discoverCalls;
+    // Advance to observation+65s (insertion+55s): the persisted-cache path
+    // rejects this (65s > 60s TTL); the memory path must agree — a new
+    // network probe, not a stale hit.
+    clock.advance(55_000);
+    expect(clock.now()).toBe(observedAt + 65_000);
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.state).toBe("not_replied");
+    expect(r2.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+
+  it("exact TTL boundary: observation+60s hits, observation+60s+1ms re-probes", async () => {
+    const clock = manualClock();
+    const message = messageFixture();
+    const kit = buildKit({
+      message,
+      imap: cleanNegativeImap(),
+      now: clock.now,
+    });
+    const r1 = await kit.service.detect({ messageId: message.id });
+    expect(r1.state).toBe("not_replied");
+    const observedAt = new Date(r1.checkedAt ?? 0).getTime();
+    const probes1 = kit.imapPort.discoverCalls;
+    // Exactly at the boundary (ageMs <= TTL): memory hit, no re-probe.
+    clock.advance(60_000 - (clock.now() - observedAt));
+    const r2 = await kit.service.detect({ messageId: message.id });
+    expect(r2.fromCache).toBe(true);
+    expect(kit.imapPort.discoverCalls).toBe(probes1);
+    // 1ms past: expired, re-probes.
+    clock.advance(1);
+    const r3 = await kit.service.detect({ messageId: message.id });
+    expect(r3.fromCache).toBe(false);
+    expect(kit.imapPort.discoverCalls).toBe(probes1 + 1);
+  });
+});

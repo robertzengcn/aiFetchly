@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 import {
   mapLegacyDecision,
   isValidReplyAddress,
@@ -85,5 +86,122 @@ describe("isValidReplyAddress", () => {
 
   it("rejects an over-long address", () => {
     expect(isValidReplyAddress("a@" + "x".repeat(330) + ".com")).toBe(false);
+  });
+});
+
+describe("EmailReplyPolicyCode — FR-028/029/036/027 duplicate/refusal codes", () => {
+  // Compile-time assertion: each new code is assignable to the union. If any
+  // code is removed or misspelled in the union, this block fails to type-check
+  // (the tsc gate at test startup catches it).
+  const newCodes: readonly EmailReplyPolicyCode[] = [
+    "already_replied",
+    "reply_in_progress",
+    "generation_in_progress",
+    "reply_state_conflict",
+    "reply_state_unknown",
+    "needs_human_review",
+    "delivery_unknown",
+  ];
+
+  it("exposes all seven new codes as valid union members", () => {
+    expect(newCodes).toHaveLength(7);
+    // Ensure no accidental duplication.
+    expect(new Set(newCodes).size).toBe(7);
+  });
+
+  it("does not collide with historical codes", () => {
+    const historical: readonly EmailReplyPolicyCode[] = [
+      "allowed",
+      "approval_required",
+      "automated_sender",
+      "bounce",
+      "unsubscribe",
+      "blocked_sender",
+      "blocked_domain",
+      "sensitive_topic",
+      "invalid_recipient",
+      "mailbox_mismatch",
+      "daily_limit",
+      "thread_limit",
+      "classification_unknown",
+      "context_ambiguous",
+      "draft_not_approved",
+      "approval_stale",
+      "draft_terminal",
+    ];
+    const overlap = newCodes.filter((c) =>
+      (historical as readonly string[]).includes(c)
+    );
+    expect(overlap).toEqual([]);
+  });
+
+  it("mapLegacyDecision still emits historical codes (new codes come from the guard, not legacy)", () => {
+    // Regression: the new union members must not leak into the legacy mapper.
+    const d = mapLegacyDecision("draft_created", "ok", null);
+    expect(d.code).toBe("allowed");
+    // The new codes are valid values the orchestrator can return via `deny`,
+    // but mapLegacyDecision should never produce them.
+    const legacyCodes: readonly string[] = [
+      "bounce",
+      "unsubscribe",
+      "automated_sender",
+      "blocked_sender",
+      "blocked_domain",
+      "daily_limit",
+      "thread_limit",
+      "sensitive_topic",
+      "approval_required",
+      "allowed",
+    ];
+    for (const status of [
+      "blocked",
+      "skipped",
+      "needs_human_review",
+      "approval_required",
+      "draft_created",
+    ] as const) {
+      const mapped = mapLegacyDecision(
+        status,
+        status === "blocked"
+          ? "bounce"
+          : status === "skipped"
+          ? "Daily send limit reached for this inbox"
+          : "ok",
+        null
+      );
+      expect(legacyCodes).toContain(mapped.code);
+    }
+  });
+
+  it("maps classification-flavored blocked reasons to accurate codes (FR-007 §10.1 follow-up)", () => {
+    // The classification hard-block reason carries the classification literal.
+    // An unattended evaluator that still emits the unknown reason maps to
+    // classification_unknown, not the generic blocked_sender fallthrough.
+    // A human-confirmed send does not feed stored `unknown` into that evaluator.
+    const unknownBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'unknown' must not be auto-replied",
+      null
+    );
+    expect(unknownBlock.allowed).toBe(false);
+    expect(unknownBlock.code).toBe("classification_unknown");
+
+    // A stored 'auto_reply' classification (e.g. list mail) is an automated
+    // sender block, not blocked_sender.
+    const autoReplyBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'auto_reply' must not be auto-replied",
+      null
+    );
+    expect(autoReplyBlock.code).toBe("automated_sender");
+
+    // A deterministic 'needs_human_review' classification is a sensitive
+    // topic, not blocked_sender.
+    const reviewBlock = mapLegacyDecision(
+      "blocked",
+      "Classification 'needs_human_review' must not be auto-replied",
+      null
+    );
+    expect(reviewBlock.code).toBe("sensitive_topic");
   });
 });

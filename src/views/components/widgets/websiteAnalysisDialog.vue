@@ -83,7 +83,7 @@ import { CapitalizeFirstLetter } from '@/views/utils/function';
 import { getSystemSettinglist, updateSystemSetting } from '@/views/api/systemsetting';
 import { ai_website_analysis_business_info } from '@/config/settinggroupInit';
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 interface Props {
   showDialog: boolean;

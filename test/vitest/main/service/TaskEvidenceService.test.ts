@@ -521,7 +521,7 @@ describe("TaskEvidenceService.checkCandidate (Slice 2, FR-05/06/16, AC-12/13)", 
         checkerDispatch: async (prompt: string): Promise<string> => {
           // T04: return the §8.2 JSON for the criterion id in the prompt,
           // citing its admissible text evidence id (B04).
-          const m = prompt.match(/Criterion \(([^\)]+)\):/);
+          const m = prompt.match(/Criterion \(([^)]+)\):/);
           const cid = m ? m[1] : "rec-4";
           return JSON.stringify({
             criteria: [
@@ -867,7 +867,7 @@ describe("TaskEvidenceService.checkCandidate — T03 provider-backed evidence (F
         sourceRevision: "slice2-t03",
         expectedStateVersion: 0,
         checkerDispatch: async (prompt: string): Promise<string> => {
-          const m = prompt.match(/Criterion \(([^\)]+)\):/);
+          const m = prompt.match(/Criterion \(([^)]+)\):/);
           const cid = m ? m[1] : "rec-2";
           return JSON.stringify({
             criteria: [

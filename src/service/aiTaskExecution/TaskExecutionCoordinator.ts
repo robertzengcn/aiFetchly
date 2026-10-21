@@ -390,6 +390,11 @@ export class TaskExecutionCoordinator {
    */
   async cancel(
     executionId: string,
+    // Intentionally unused: the CAS retry loop re-reads the authoritative
+    // row version fresh (see finalizeWithCasRetry), so the caller's snapshot
+    // cannot be used as the optimistic-concurrency token here. The parameter
+    // is kept for signature symmetry with finalizeManual.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _expectedVersion?: number
   ): Promise<FinalizeResult> {
     return this.finalizeWithCasRetry(executionId, (expectedVersion) =>

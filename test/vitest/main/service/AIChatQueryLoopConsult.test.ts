@@ -204,7 +204,7 @@ describe("consultLoopEndCandidate — decision→outcome mapping (AC-07/08)", ()
     };
     const binding = {
       ...makeBinding({ decision, reservation: BudgetReservationResult.Reserved }),
-      persistBudget: async (_delta: unknown) => false,
+      persistBudget: async () => false,
     };
     const outcome = await consultLoopEndCandidate({
       binding,

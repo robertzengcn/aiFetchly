@@ -41,7 +41,7 @@ import {BuckEmailListType} from "@/entityTypes/buckemailType"
 import router from '@/views/router';
 import { Header } from "@/entityTypes/commonType"
 //import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 const selected = ref<Array<BuckEmailListType>>([]);
 const computedHeaders = computed(() => {
     if (props.isSelectedtable) {

@@ -259,6 +259,7 @@
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
         :reported-message-ids="reportedMessageIds"
+        :awaiting-tool-message-ids="awaitingToolMessageIds"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -990,6 +991,7 @@ import {
 } from "./contextUsageUtil";
 import {
   clearToolProgressForToolResult,
+  collectAwaitingToolMessageIds,
   hasPendingToolExecution,
   markPermissionPromptExecuting,
 } from "./toolExecutionStateUtil";
@@ -1477,8 +1479,30 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
   toolApprovalMode.value = mode;
   if (!activeConversationId.value) return;
+  await writeToolApprovalMode(activeConversationId.value, mode);
+}
+
+/**
+ * Persist a non-default selector mode once a conversation id exists.
+ *
+ * The selector can show Full access before a conversation id exists, and
+ * that choice is only kept in memory. A scheduled run reads the persisted
+ * mode, so the id must be saved before the loop is created.
+ */
+async function persistCurrentToolApprovalMode(
+  conversationId: string
+): Promise<void> {
+  if (toolApprovalMode.value === "ask_for_approval") return;
+  await writeToolApprovalMode(conversationId, toolApprovalMode.value);
+}
+
+async function writeToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<void> {
+  if (!conversationId) return;
   try {
-    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    const saved = await setChatV2ToolApprovalMode(conversationId, mode);
     toolApprovalMode.value = saved;
   } catch (err) {
     console.error("[AiChatV2] failed to save tool approval mode:", err);
@@ -2557,6 +2581,7 @@ async function runScheduledLoopCreate(
   }
 ): Promise<void> {
   const conversationId = ensureWorkspaceConversationId();
+  await persistCurrentToolApprovalMode(conversationId);
   try {
     const created = await createScheduledLoop({
       conversationId,
@@ -3153,6 +3178,22 @@ const hasLoadedPendingToolExecution = computed(() => {
     return false;
   }
   return hasPendingToolExecution(messages.value);
+});
+
+const EMPTY_AWAITING_TOOL_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Tool-call rows that still have no result while this turn is running.
+ * Reads `messages` directly so a second tool starting (or one of several
+ * finishing) refreshes the spinner. Watching only the boolean pending
+ * flag would stay `true` and skip that update.
+ */
+const awaitingToolMessageIds = computed((): ReadonlySet<string> => {
+  const currentMessages = messages.value;
+  if (!hasLoadedPendingToolExecution.value) {
+    return EMPTY_AWAITING_TOOL_IDS;
+  }
+  return collectAwaitingToolMessageIds(currentMessages);
 });
 
 const chatIsRunning = computed(
@@ -3995,6 +4036,62 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   } catch (err) {
     if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);
+  }
+};
+
+/**
+ * Insert tool rows that were saved but never arrived as live chunks.
+ * A full history reload is not safe here: it also resets plan approval,
+ * reasoning, and the task badge from whatever the history response contains.
+ */
+const reconcileMissedToolMessages = async (
+  conversationId: string,
+  messageList: MessageListController,
+  assistantMessageId: string
+): Promise<void> => {
+  try {
+    const resp = await getChatV2History(conversationId);
+    if (activeConversationId.value !== conversationId) return;
+    if (activeSuccessorTurns.value.has(conversationId)) return;
+    const runtime = conversationRuntime.value.get(conversationId);
+    if (runtime?.isStreaming) return;
+
+    const current = messageList.get();
+    const missing = (resp?.messages ?? [])
+      .filter((message) => {
+        if (
+          message.messageType !== MessageType.TOOL_CALL &&
+          message.messageType !== MessageType.TOOL_RESULT
+        ) {
+          return false;
+        }
+        const toolCallId = message.metadata?.toolCallId;
+        return !current.some((live) => {
+          if (live.id === message.id) return true;
+          return (
+            typeof toolCallId === "string" &&
+            toolCallId.length > 0 &&
+            live.messageType === message.messageType &&
+            live.metadata?.toolCallId === toolCallId
+          );
+        });
+      })
+      .map((message) =>
+        ensureToolOutputMetadata(ensureArtifactMetadata(message))
+      );
+    if (missing.length === 0) return;
+    if (activeConversationId.value !== conversationId) return;
+    if (conversationRuntime.value.get(conversationId)?.isStreaming) return;
+
+    const next = [...messageList.get()];
+    const assistantIndex = next.findIndex(
+      (message) => message.id === assistantMessageId
+    );
+    const insertAt = assistantIndex === -1 ? next.length : assistantIndex;
+    next.splice(insertAt, 0, ...missing);
+    messageList.set(next);
+  } catch {
+    // A failed history read must leave the live transcript in place.
   }
 };
 
@@ -5625,6 +5722,19 @@ const onSend = async (
           streamMessageListController.set([
             ...streamMessageListController.get(),
           ]);
+          // Tool rows are committed before this complete event. Pull in any
+          // saved call or result the live handler missed, without replacing
+          // the transcript or the task/plan state built during the turn.
+          if (
+            isCurrentStreamView() &&
+            !activeSuccessorTurns.value.has(streamConversationId)
+          ) {
+            void reconcileMissedToolMessages(
+              streamConversationId,
+              streamMessageListController,
+              assistant.id
+            );
+          }
         });
         void loadConversations();
       },

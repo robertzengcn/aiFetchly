@@ -381,10 +381,11 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
   });
 });
 
-describe("validateSendBinding — §18.3 legacy v1 gate", () => {
+describe("validateSendBinding — legacy v1 revisions send without an identity re-check", () => {
   /**
    * The v1 baseInput already produces a v1 revision (no envelopeVersion set,
-   * so it defaults to 1). We reuse it and add service identity fields.
+   * so it defaults to 1). A confirmed v1 send must not be rejected because
+   * the mailbox SMTP username or Reply-To differs from From.
    */
   it("passes v1 when service smtpUsername == from and replyTo is null", () => {
     const base = baseInput();
@@ -416,45 +417,48 @@ describe("validateSendBinding — §18.3 legacy v1 gate", () => {
     ).not.toThrow();
   });
 
-  it("rejects v1 when service replyTo is non-null (legacy_reply_identity_requires_review)", () => {
+  it("passes v1 when the mailbox Reply-To is set", () => {
     const base = baseInput();
-    expectBindingError(
-      baseInput({
-        service: {
-          ...base.service,
-          smtpUsername: "owner@svc.com",
-          replyTo: "replies@other.com",
-        },
-      }),
-      "legacy_reply_identity_requires_review"
-    );
+    expect(() =>
+      validateSendBinding(
+        baseInput({
+          service: {
+            ...base.service,
+            smtpUsername: "owner@svc.com",
+            replyTo: "replies@other.com",
+          },
+        })
+      )
+    ).not.toThrow();
   });
 
-  it("rejects v1 when service smtpUsername differs from from (legacy_reply_identity_requires_review)", () => {
+  it("passes v1 when the SMTP username differs from From", () => {
     const base = baseInput();
-    expectBindingError(
-      baseInput({
-        service: {
-          ...base.service,
-          smtpUsername: "different-login@svc.com",
-          replyTo: null,
-        },
-      }),
-      "legacy_reply_identity_requires_review"
-    );
+    expect(() =>
+      validateSendBinding(
+        baseInput({
+          service: {
+            ...base.service,
+            smtpUsername: "different-login@svc.com",
+            replyTo: null,
+          },
+        })
+      )
+    ).not.toThrow();
   });
 
-  it("rejects v1 when both smtpUsername differs AND replyTo is set", () => {
+  it("passes v1 when both the SMTP username differs and Reply-To is set", () => {
     const base = baseInput();
-    expectBindingError(
-      baseInput({
-        service: {
-          ...base.service,
-          smtpUsername: "different@svc.com",
-          replyTo: "replies@other.com",
-        },
-      }),
-      "legacy_reply_identity_requires_review"
-    );
+    expect(() =>
+      validateSendBinding(
+        baseInput({
+          service: {
+            ...base.service,
+            smtpUsername: "different@svc.com",
+            replyTo: "replies@other.com",
+          },
+        })
+      )
+    ).not.toThrow();
   });
 });

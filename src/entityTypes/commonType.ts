@@ -54,6 +54,22 @@ export interface CommonMessage<Type> {
   status: boolean;
   msg: string;
   data?: Type;
+  /**
+   * B12: structured-failure fields. Present ONLY on `status:false` envelopes
+   * whose handler threw an error carrying a stable machine-readable `code`
+   * (e.g. {@link SendPolicyRejection}, {@link SendBindingError}, or an error
+   * built from a widened {@link CreateDraftOutcome} failure). Absent on every
+   * success envelope and on failures that carry no typed code (input errors,
+   * AI-disabled, generic internal exceptions). Callers branch on `code`
+   * instead of parsing English out of `msg`.
+   *
+   * These fields are optional and purely additive — every existing
+   * success/failure path that does not set them remains valid.
+   */
+  code?: string;
+  existing_draft_id?: number;
+  next_action?: string;
+  requestCorrelationId?: string;
 }
 export interface NumProcessdata {
   // total:number,

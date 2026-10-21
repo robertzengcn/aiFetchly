@@ -48,10 +48,6 @@ import {
   type StartScheduledInput,
 } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import {
-  TaskEvidenceService,
-  makeModuleBackedStore,
-} from "@/service/aiTaskExecution/TaskEvidenceService";
-import {
   buildEvidenceService,
   makeNativeSendStatusReader,
 } from "@/service/aiTaskExecution/EvidenceProviderFactory";

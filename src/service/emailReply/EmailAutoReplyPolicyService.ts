@@ -4,7 +4,10 @@ import type {
   EmailMessageClassification,
   EmailAutoReplyDecisionStatus,
 } from "@/entityTypes/emailReceiveTypes";
-import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import {
+  isAutomatedSender,
+  replyRecipientAddress,
+} from "@/service/emailReceive/EmailMessageParser";
 
 /** Inputs to the policy evaluator. */
 export interface EmailAutoReplyPolicyInput {
@@ -29,7 +32,15 @@ export interface EmailAutoReplyPolicyDecision {
   readonly canSendAutomatically: boolean;
 }
 
-/** Classifications that must never receive a normal sales/auto reply. */
+/**
+ * Classifications that must never receive an unattended auto reply.
+ *
+ * `unknown` stays in this set so a direct evaluator call cannot treat an
+ * inconclusive verdict as permission to auto-send. A human-confirmed send
+ * strips it first via {@link classificationForConfirmedSend}: the user
+ * already reviewed the draft, and `unknown` only means the deterministic
+ * rules were inconclusive.
+ */
 const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set([
   "bounce",
   "auto_reply",
@@ -37,6 +48,21 @@ const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set
   "needs_human_review",
   "unknown",
 ]);
+
+/**
+ * Classification passed into {@link evaluateAutoReplyPolicy} for a
+ * human-confirmed send (draft approval or pre-send).
+ *
+ * A stored `unknown` is not evidence of a bounce, list, or unsubscribe.
+ * Returning null lets the confirmed send proceed. Bounce, auto-reply,
+ * unsubscribe, and needs_human_review are returned unchanged and still block.
+ */
+export function classificationForConfirmedSend(
+  classification: string | null | undefined
+): string | null {
+  if (classification == null || classification === "unknown") return null;
+  return classification;
+}
 
 /** Body keywords that signal a sensitive request requiring human review. */
 const SENSITIVE_KEYWORDS: readonly string[] = [
@@ -65,9 +91,18 @@ export function evaluateAutoReplyPolicy(
 ): EmailAutoReplyPolicyDecision {
   const { message, classification, confidence, rule, sendCounts } = input;
 
-  // 1. Loop prevention: never reply to automated senders.
-  if (isAutomatedSender({ fromAddress: message.fromAddress })) {
-    return blocked("Sender is an automated/no-reply address");
+  // 1. Loop prevention: never reply to an automated mailbox. The address
+  // that would receive the reply is Reply-To when present, otherwise From.
+  // This is the inbound message, not the mailbox's configured send address.
+  const recipient = replyRecipientAddress(
+    message.fromAddress,
+    message.replyToAddress
+  );
+  if (isAutomatedSender({ fromAddress: recipient })) {
+    return blocked(
+      `Reply recipient "${recipient}" is an automated/no-reply address. ` +
+        "This check uses the inbound message From or Reply-To, not the mailbox's configured send address."
+    );
   }
 
   // 2. Classification hard block.

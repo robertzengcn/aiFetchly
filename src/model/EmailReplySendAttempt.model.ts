@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplySendAttemptWriteSchema } from "@/schemas/entity/emailReplySendAttempt";
@@ -41,6 +41,34 @@ export class EmailReplySendAttemptModel extends BaseDb {
   async listByDraft(draftId: number): Promise<EmailReplySendAttemptEntity[]> {
     return await this.repository.find({
       where: { draftId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /**
+   * All send attempts for an inbound message id (FR-029/B02). The message-level
+   * guard inspects this to find authoritative delivery evidence — sent,
+   * unresolved (`delivery_unknown`), or in-flight (`claimed`/`submitted`) —
+   * even when the linked draft row is missing/stale and the message
+   * `replyStatus` projection still looks unanswered. Ordered newest-first so
+   * the guard's precedence scan sees the most recent attempt first.
+   */
+  async listByMessage(
+    messageId: number
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    return await this.repository.find({
+      where: { messageId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplySendAttemptEntity[]> {
+    if (messageIds.length === 0) return [];
+    return await this.repository.find({
+      where: { messageId: In(messageIds) },
       order: { id: "DESC" },
     });
   }
@@ -107,11 +135,22 @@ export class EmailReplySendAttemptModel extends BaseDb {
       .getCount();
   }
 
-  /** Count all attempts for a source message (per-thread-limit proxy). */
+  /**
+   * Count SENT attempts for a source message (per-thread-limit proxy, R13).
+   *
+   * A failed attempt delivered no email (definite SMTP rejection), so an
+   * explicit re-approval + retry of the same draft must not consume the
+   * per-thread limit. Mirrors the sent-only daily-limit proxy
+   * {@link countSentByServiceSince}. `delivery_unknown` (ambiguous — might
+   * have delivered) and `claimed`/`submitted` (in-flight) are excluded: an
+   * ambiguous prior send blocks retry through the cluster fence, not here;
+   * an in-flight attempt blocks through the send-claim sibling check.
+   */
   async countAttemptsForMessage(messageId: number): Promise<number> {
     return await this.repository
       .createQueryBuilder("attempt")
       .where("attempt.messageId = :messageId", { messageId })
+      .andWhere("attempt.status = :status", { status: "sent" })
       .getCount();
   }
 }

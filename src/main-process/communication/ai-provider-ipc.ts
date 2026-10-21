@@ -4,7 +4,6 @@ import type {
   AIProviderMode,
   AIProviderSettingsView,
   LocalAIProviderConfig,
-  LocalAIProviderConfigInput,
   RefreshLocalAIModelsRequest,
   RefreshLocalAIModelsResponse,
   SaveAIProviderSettingsRequest,
@@ -19,6 +18,7 @@ import {
   AI_PROVIDER_API_KEY_CLEAR,
 } from "@/config/channellist";
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
+import { invalidateEmailReplyModelCatalogs } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { AIProviderConnectionTester } from "@/service/aiProvider/AIProviderConnectionTester";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import { validateLocalProviderConfig } from "@/service/aiProvider/AIProviderConfigValidator";
@@ -86,6 +86,10 @@ export function registerAIProviderIpcHandlers(): void {
           // (Provider config is retained for when the user switches back.)
         }
         svc.setMode(mode);
+        // R04: provider identity may have changed (mode switch and/or new
+        // local config) — drop the reply path's cached model caps so a
+        // previous provider can never supply the current limits.
+        invalidateEmailReplyModelCatalogs();
         return ok(svc.getSettingsView());
       } catch (err) {
         return denied(err instanceof Error ? err.message : String(err));
@@ -99,6 +103,9 @@ export function registerAIProviderIpcHandlers(): void {
       try {
         const svc = service();
         svc.clearApiKey();
+        // R04: credentials changed → provider identity may change — drop
+        // cached caps (same rationale as settings save).
+        invalidateEmailReplyModelCatalogs();
         return ok(svc.getSettingsView());
       } catch (err) {
         return denied(err instanceof Error ? err.message : String(err));

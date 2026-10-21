@@ -51,7 +51,7 @@ export class ContactInfoRepository {
      */
     async findByResultId(resultId: number): Promise<ContactInfoEntity | null> {
         const repository = await this.getRepository();
-        return repository.findOne({ where: { resultId } as any });
+        return repository.findOne({ where: { resultId } });
     }
 
     /**
@@ -74,7 +74,7 @@ export class ContactInfoRepository {
     ): Promise<void> {
         const repository = await this.getRepository();
         await repository.update(
-            { resultId } as any,
+            { resultId },
             {
                 extractionStatus: status,
                 extractionError: error || null,
@@ -88,7 +88,7 @@ export class ContactInfoRepository {
      */
     async findByStatus(status: string): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
-        return repository.find({ where: { extractionStatus: status } as any });
+        return repository.find({ where: { extractionStatus: status } });
     }
 
     /**
@@ -97,9 +97,9 @@ export class ContactInfoRepository {
     async findPendingExtractions(limit = 10): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
         return repository.find({
-            where: { extractionStatus: 'pending' } as any,
+            where: { extractionStatus: 'pending' },
             take: limit,
-            order: { id: 'ASC' } as any
+            order: { id: 'ASC' }
         });
     }
 
@@ -109,9 +109,9 @@ export class ContactInfoRepository {
     async findFailedExtractions(limit = 10): Promise<ContactInfoEntity[]> {
         const repository = await this.getRepository();
         return repository.find({
-            where: { extractionStatus: 'failed' } as any,
+            where: { extractionStatus: 'failed' },
             take: limit,
-            order: { id: 'ASC' } as any
+            order: { id: 'ASC' }
         });
     }
 
@@ -123,8 +123,17 @@ export class ContactInfoRepository {
         const existing = await this.findByResultId(resultId);
 
         if (existing) {
-            await repository.update({ resultId } as any, data);
-            return this.findByResultId(resultId) as Promise<ContactInfoEntity>;
+            await repository.update({ resultId }, data);
+            // The row exists (checked above); a null re-read means it was
+            // deleted concurrently — a real invariant violation, not a
+            // fallible cast to hide.
+            const updated = await this.findByResultId(resultId);
+            if (!updated) {
+                throw new Error(
+                    `ContactInfo row ${resultId} disappeared during saveOrUpdate`
+                );
+            }
+            return updated;
         } else {
             const newContactInfo = repository.create({ resultId, ...data });
             return repository.save(newContactInfo);
@@ -136,7 +145,7 @@ export class ContactInfoRepository {
      */
     async deleteByResultId(resultId: number): Promise<void> {
         const repository = await this.getRepository();
-        await repository.delete({ resultId } as any);
+        await repository.delete({ resultId });
     }
 
     /**
@@ -159,10 +168,10 @@ export class ContactInfoRepository {
             analyzing
         ] = await Promise.all([
             repository.count(),
-            repository.count({ where: { extractionStatus: 'completed' } as any }),
-            repository.count({ where: { extractionStatus: 'failed' } as any }),
-            repository.count({ where: { extractionStatus: 'pending' } as any }),
-            repository.count({ where: { extractionStatus: 'analyzing' } as any })
+            repository.count({ where: { extractionStatus: 'completed' } }),
+            repository.count({ where: { extractionStatus: 'failed' } }),
+            repository.count({ where: { extractionStatus: 'pending' } }),
+            repository.count({ where: { extractionStatus: 'analyzing' } })
         ]);
 
         return { total, completed, failed, pending, analyzing };

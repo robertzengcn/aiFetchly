@@ -21,6 +21,7 @@ export type ReplyMetricStage =
   | "approval"
   | "claim"
   | "smtp"
+  | "detection"
   | "database"
   | "reconciliation";
 

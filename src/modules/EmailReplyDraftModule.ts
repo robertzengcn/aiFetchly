@@ -6,6 +6,8 @@ import {
   ClaimSendInput,
   ClaimSendResult,
   FinalizeOutcomeInput,
+  CommitGeneratedDraftInput,
+  CommitGeneratedDraftResult,
 } from "@/model/EmailReplyDraft.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
@@ -84,6 +86,19 @@ export class EmailReplyDraftModule extends BaseModule {
       return await this.draftModel.listByMessage(messageId);
     } catch (error) {
       console.error("Error listing drafts by message:", error);
+      throw error;
+    }
+  }
+
+  /** Batched {@link listByMessage} for a cluster of message ids (one query). */
+  async listByMessageIds(
+    messageIds: number[]
+  ): Promise<EmailReplyDraftEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.listByMessageIds(messageIds);
+    } catch (error) {
+      console.error("Error listing drafts by message ids:", error);
       throw error;
     }
   }
@@ -173,6 +188,45 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  /**
+   * N04: coherent final-admission snapshot (attempt ownership + seed row +
+   * canonical cluster in one short transaction) for the pre-SMTP gate and
+   * fence. Read-only; freshness is enforced synchronously by the caller.
+   */
+  async readFinalSendAdmission(input: {
+    attemptId: number;
+    messageId: number;
+  }): Promise<{
+    readonly attempt: import("@/entity/EmailReplySendAttempt.entity").EmailReplySendAttemptEntity | null;
+    readonly seedMessage: import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity | null;
+    readonly clusterRows: import("@/entity/EmailReceivedMessage.entity").EmailReceivedMessageEntity[] | null;
+  }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readFinalSendAdmission(input);
+    } catch (error) {
+      console.error("Error reading final send admission:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Atomic generation commit (Step 4, T07): persists draft + revision +
+   * content hash + message replyStatus + guard transition + audit in ONE
+   * transaction. Delegates to {@link EmailReplyDraftModel.commitGeneratedDraft}.
+   */
+  async commitGeneratedDraft(
+    input: CommitGeneratedDraftInput
+  ): Promise<CommitGeneratedDraftResult> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.commitGeneratedDraft(input);
+    } catch (error) {
+      console.error("Error committing generated reply draft:", error);
+      throw error;
+    }
+  }
+
   async finalizeSendOutcome(input: FinalizeOutcomeInput): Promise<void> {
     try {
       await this.ensureConnection();
@@ -247,12 +301,57 @@ export class EmailReplyDraftModule extends BaseModule {
     action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
     evidence?: string | null;
     providerMessageId?: string | null;
+    /** T08/FR-036: guard row bound to this attempt (null = legacy data). */
+    guardId?: number | null;
+    /** R20: per-invocation id (operator reconcile); omitted on background sweep. */
+    requestCorrelationId?: string;
   }): Promise<void> {
     try {
       await this.ensureConnection();
       await this.draftModel.reconcileDelivery(input);
     } catch (error) {
       console.error("Error reconciling reply delivery:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * R13: fenced `failed -> draft` reopen for an explicitly re-approved
+   * definitely-rejected draft. Thin wrapper over the model method (the
+   * cluster fence + conditional UPDATE live in the model transaction). The
+   * approval service calls this BEFORE its normal approval path when the
+   * draft is `failed`.
+   */
+  async reopenFailedDraftForRetry(input: {
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+  }): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.draftModel.reopenFailedDraftForRetry(input);
+    } catch (error) {
+      console.error("Error reopening failed draft for retry:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * G02: explicit human-review resolution. Thin wrapper over the model
+   * transaction (revision-bound stamp + audit). Called ONLY by the renderer
+   * IPC handler (user gesture) — never by AI tools.
+   */
+  async resolveHumanReview(input: {
+    draftId: number;
+    revisionId: number;
+    resolvedBy: string;
+    note?: string | null;
+  }): Promise<{ resolved: boolean; reason?: string }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.resolveHumanReview(input);
+    } catch (error) {
+      console.error("Error resolving human review:", error);
       throw error;
     }
   }

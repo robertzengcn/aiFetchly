@@ -8,7 +8,7 @@
  * Drives attachChatV2SuccessorStream against the typed window.api fake
  * (emits JSON-stringified chunks like the real IPC bridge).
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { WindowApiFake } from "./windowApiFake";
 import {
   attachChatV2SuccessorStream,

@@ -39,8 +39,12 @@ export class WindowApiFake {
           resp ?? { status: false, msg: `no fake response for ${channel}`, data: null }
         );
       },
-      send: (_channel: string, _data: unknown): void => {
-        /* no-op for renderer-only tests */
+      send: (channel: string, data: unknown): void => {
+        // Renderer-only fake: sends are recorded but never answered. The
+        // parameters are part of the window.api contract even though this
+        // fake ignores them.
+        void channel;
+        void data;
       },
       receive: (channel: string, cb: (...args: unknown[]) => void): void => {
         const list = this.listeners.get(channel) ?? [];
@@ -54,8 +58,10 @@ export class WindowApiFake {
           list.filter((fn) => fn !== (cb as (value: unknown) => void))
         );
       },
-      removeAllListeners: (_channel: string): void => {
-        /* no-op */
+      removeAllListeners: (channel: string): void => {
+        // The removeAllListeners contract carries the channel; this fake
+        // tracks no global state to clear.
+        void channel;
       },
     };
     (

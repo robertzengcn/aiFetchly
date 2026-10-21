@@ -68,12 +68,14 @@ import {
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
   EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
   EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+  EMAIL_REPLY_CHECK_REPLIED,
   SOCIALACCOUNTlIST,
   SOCIALACCOUNTSAVE,
   SOCIAL_ACCOUNT_LOGIN_MESSSAGE,
@@ -492,10 +494,13 @@ import {
   OUTBOUND_EMAIL_BATCH_DISCARD,
   OUTBOUND_EMAIL_BATCH_STATUS,
   OUTBOUND_EMAIL_BATCH_PROGRESS,
-  // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
+  // E2E test-support channels — no handler exists outside AIFETCHLY_E2E=1, so
   // a production/dev invoke always fails with "No handler registered" (see
   // src/main-process/e2e/E2ESeedIpc.ts).
   E2E_SEED_EMAIL_SERVICE,
+  E2E_SEED_RECEIVED_MESSAGE,
+  E2E_SEED_AUTO_REPLY_AUDIT,
+  E2E_SEED_REPLY_DRAFT,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -858,13 +863,15 @@ contextBridge.exposeInMainWorld("api", {
       EMAIL_REPLY_DRAFT_DETAIL,
       EMAIL_REPLY_DRAFT_UPDATE,
       EMAIL_REPLY_SEND,
-      EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_DRAFT_RESOLVE_REVIEW,
       EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
       EMAIL_REPLY_DELIVERY_RECONCILE,
       EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
       EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
       EMAIL_AUTO_REPLY_AUDIT_LIST,
       EMAIL_AUTO_REPLY_AUDIT_DETAIL,
+      EMAIL_REPLY_CHECK_REPLIED,
       VIDEODOWNLOAD_LIST,
       VIDEODOWN_TASK_ERROR_LOG_QUERY,
       VIDEODOWNLOAD_LOG_QUERY,
@@ -1230,6 +1237,9 @@ contextBridge.exposeInMainWorld("api", {
       // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
       // elsewhere this invoke fails with "No handler registered".
       E2E_SEED_EMAIL_SERVICE,
+      E2E_SEED_RECEIVED_MESSAGE,
+      E2E_SEED_AUTO_REPLY_AUDIT,
+      E2E_SEED_REPLY_DRAFT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

@@ -82,7 +82,7 @@ import { buckEmailsend, receiveBuckEmailevent } from "@/views/api/buckemail"
 import { BUCKEMAILSENDMESSAGE } from "@/config/channellist"
 import { VslotHeader } from "@/entityTypes/commonType";
 
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 
 type marketType = {
   key: number;

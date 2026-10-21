@@ -13,6 +13,7 @@
 import type { ToolFunction } from "@/api/aiChatApi";
 import type {
   SkillDefinition,
+  SkillExecutionContext,
   SkillExecutionResult,
   SkillManifest,
 } from "@/entityTypes/skillTypes";
@@ -62,6 +63,7 @@ import {
   markEmailProcessed,
   createEmailReplyDraft,
   sendEmailReply,
+  checkEmailReplied,
 } from "@/service/EmailReceiveAiTools";
 import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 import {
@@ -147,6 +149,108 @@ function getAttachLocalImagesDestinationLabel(): string {
     }
   }
   return "the configured AI server";
+}
+
+/** Saved tool-result ids (`out_` + 32 hex chars). Not staged attachment refs. */
+const SAVED_TOOL_OUTPUT_ID = /^out_[0-9a-f]{32}$/;
+
+/**
+ * Surface a tool-executor payload without reporting a failed read as success,
+ * and without forwarding stacks or telemetry into the model transcript.
+ */
+function attachmentReadResult(
+  result: Record<string, unknown>
+): SkillExecutionResult {
+  if (result.success === true) {
+    return { success: true, result };
+  }
+  const error =
+    typeof result.error === "string" && result.error.trim().length > 0
+      ? result.error
+      : "Failed to read attachment content";
+  const failure: Record<string, unknown> = { success: false, error };
+  if (typeof result.recovery === "string" && result.recovery.length > 0) {
+    failure.recovery = result.recovery;
+  }
+  return { success: false, result: failure };
+}
+
+/**
+ * `read_attachment_content` entry.
+ *
+ * Staged uploads use a timestamp-uuid ref. Models also pass saved tool-result
+ * ids (`out_...`) here; those are not attachment files, so they are read
+ * through `tool_result_read` instead of being rejected as malformed refs.
+ */
+async function executeReadAttachmentContentSkill(
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<SkillExecutionResult> {
+  const attachmentRef =
+    typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
+
+  if (SAVED_TOOL_OUTPUT_ID.test(attachmentRef)) {
+    const { handleToolResultRead } = await import(
+      "@/service/agentTools/toolResultReadTool"
+    );
+    const readArgs: Record<string, unknown> = { output_id: attachmentRef };
+    if (
+      typeof args.max_length === "number" &&
+      Number.isInteger(args.max_length) &&
+      args.max_length >= 1 &&
+      args.max_length <= 32000
+    ) {
+      readArgs.max_tokens = args.max_length;
+    }
+    const read = await handleToolResultRead(readArgs, context);
+    if (!read.success) {
+      return attachmentReadResult({
+        success: false,
+        error:
+          typeof read.result.error === "string"
+            ? read.result.error
+            : "Failed to read saved tool result",
+        recovery: read.result.recovery,
+      });
+    }
+    const text = typeof read.result.text === "string" ? read.result.text : "";
+    const complete = read.result.complete === true;
+    return {
+      success: true,
+      result: {
+        success: true,
+        fileName: attachmentRef,
+        content: text,
+        truncated: !complete,
+        output_id: attachmentRef,
+        next_cursor:
+          typeof read.result.next_cursor === "string"
+            ? read.result.next_cursor
+            : null,
+        complete,
+        read_via: "tool_result_read",
+        ...(complete
+          ? {}
+          : {
+              hint:
+                "This page is incomplete. Call tool_result_read with this output_id and next_cursor. Do not call read_attachment_content again with the same id.",
+            }),
+      },
+    };
+  }
+
+  const result = await ToolExecutor.execute(
+    "read_attachment_content",
+    args,
+    context.conversationId,
+    {
+      toolCallId: context.toolCallId,
+      skipPermissionCheck: context.skipPermissionCheck,
+      emitProgress: context.emitProgress,
+      signal: context.signal,
+    }
+  );
+  return attachmentReadResult(result);
 }
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
@@ -254,7 +358,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "scrape_urls_from_search_engine",
     description:
       "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
-      "This tool always runs ASYNCHRONOUSLY via a background job (same pattern as heavy search_maps_businesses calls): the query loop registers a ToolJobRegistry job with no synchronous 90s ceiling, emits progress while the SERP scrape runs, and returns the final result when the worker finishes (up to ~30 minutes). Do not retry while a job for the same call is still running; use cancel_tool_job(job_id) if the user wants to stop early.\n\n" +
+      "This tool always runs via a background job internally (same pattern as heavy search_maps_businesses calls): the call blocks until the SERP scrape finishes and returns the final result directly (it can take several minutes — up to ~30 in the worst case). Do not retry the call while waiting for its result. You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id; never invent or guess a job_id — a fabricated id always returns not_found.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid tool account ID. Only tool accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that tool account ID in the `account` field.\n" +
@@ -795,14 +899,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "read_attachment_content",
     description:
-      "Read staged markdown content from a chat attachment file path. Use this when the user message includes attachment references and you need full file content.",
+      "Read a file the user attached to this chat, or a saved tool result when attachment_ref is an out_ id. " +
+      "For an upload, copy attachment_ref from the Attached files block (timestamp-uuid, hyphens only). " +
+      "Do not pass a file path or file name. " +
+      "A saved tool-result id (out_...) is not an attachment: prefer tool_result_read with output_id. " +
+      "If an out_ id is passed here, this tool reads that saved result and returns its text plus next_cursor.",
     parameters: {
       type: "object",
       properties: {
         attachment_ref: {
           type: "string",
           description:
-            "Conversation-scoped reference ID of the staged attachment content to read.",
+            "Exact attachment_ref from an Attached files block, or a saved tool-result id (out_...). " +
+            "Copy it verbatim. Not a file path or file name.",
         },
         max_length: {
           type: "number",
@@ -817,20 +926,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "read_attachment_content",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
+    execute: executeReadAttachmentContentSkill,
   },
   {
     name: "generate_keywords",
@@ -884,8 +980,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
       "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
-      "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
+      "When the urls array contains 8 or more entries, this tool runs as a background job internally: the call blocks until extraction finishes and returns the real result directly (large batches can take several minutes — do not retry while waiting). " +
+      "You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch.",
     parameters: {
       type: "object",
@@ -913,8 +1009,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     //   the model gets the full result in one turn.
     // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
     //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
-    //   loop returns { async: true, job_id } within ~2s and the model
-    //   polls with check_tool_job_status every 15-30s. This matches the
+    //   loop registers the job and blocks on pollAsyncJobToCompletion, so
+    //   the model sees the real result in one turn. This matches the
     //   search_maps_businesses pattern (see lines ~329).
     //
     // Before this routing, large URL batches hit the 240s browser ceiling
@@ -1308,8 +1404,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: TOOL_RESULT_READ_TOOL_NAME,
     description:
       "Read the next page of a large saved tool result. " +
-      "When a receipt has preview_complete false, call this with the output_id and cursor in next.arguments. " +
+      "When a receipt has preview_complete false, call this with the output_id and the cursor from next.arguments. " +
       "Then pass that page's next_cursor back to this tool until complete is true. " +
+      "next_cursor is an opaque signed token. Copy the entire string verbatim, including the signature after the final dot. " +
+      "Never shorten, decode, rebuild, pretty-print, or invent a cursor. A search cursor cannot be used here. " +
+      "If the result is INVALID_OUTPUT_CURSOR, do not retry that cursor: omit cursor and pass only output_id, or copy the last next_cursor from a page that succeeded. " +
       "The receipt preview is only a sample. If you stop before complete is true, say the review is partial. " +
       "Use this to walk a list. Do not search for a token that appears on every row. " +
       "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
@@ -1318,12 +1417,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         cursor: {
           type: "string",
           description:
-            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+            "Copy next_cursor from the previous tool_result_read result character-for-character, including the signature after the final dot. " +
+            "Omit this field to start at the beginning. A shortened, edited, or reconstructed cursor returns INVALID_OUTPUT_CURSOR and must not be retried.",
         },
         max_tokens: {
           type: "number",
@@ -1366,16 +1470,25 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Page through a list with tool_result_read instead of searching for a token on every row, " +
       "such as a file extension or a repeated field name. " +
       "Returns bounded windows with read cursors and match_count_in_window. " +
-      "No-match is final only when scan_complete is true; otherwise resume with next_cursor. " +
+      "No-match is final only when scan_complete is true; otherwise resume with next_cursor AND the same query string. " +
+      "next_cursor is opaque. Copy it verbatim, including the signature after the final dot. Never shorten, decode, or rebuild it. " +
+      "A read cursor cannot continue a search. If the result is INVALID_OUTPUT_CURSOR, do not retry that cursor: omit it and search again with output_id and query. " +
       "scan_complete refers to the saved bytes only - if source_completeness is 'partial', " +
       "the producer itself truncated and absence cannot be concluded. " +
-      "The query is literal text, never a regular expression.",
+      "The query is literal text, never a regular expression. " +
+      "max_matches must be an integer from 1 to 20. Omit it to use 10. " +
+      "Do not pass 30, 50, or any larger number: one page holds at most 20 matches, " +
+      "and a larger value is capped at 20. Continue with next_cursor for more hits.",
     parameters: {
       type: "object",
       properties: {
         output_id: {
           type: "string",
-          description: "output_id from a saved-result receipt (e.g. out_...).",
+          description:
+            "output_id from a saved-result receipt (e.g. out_...). " +
+            "Copy it VERBATIM from a receipt this conversation produced; never " +
+            "invent, transcribe from memory, or substitute another id. A made-up " +
+            "id is denied as OUTPUT_NOT_AVAILABLE and cannot be recovered.",
         },
         query: {
           type: "string",
@@ -1386,11 +1499,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         cursor: {
           type: "string",
           description:
-            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+            "Copy next_cursor from the previous tool_result_search result for this same query, character-for-character, including the signature after the final dot. " +
+            "Changing the query invalidates the cursor. Omit this field to start a new scan. Do not retry a cursor that returned INVALID_OUTPUT_CURSOR.",
         },
         max_matches: {
           type: "number",
-          description: "Max matches to return (default 10, max 20).",
+          description:
+            "How many matches to return on this page. Integer from 1 to 20. " +
+            "Default 10 when omitted. A value above 20, such as 30 or 50, is capped at 20. " +
+            "Ask for more results by calling again with next_cursor, not by raising this number.",
           default: 10,
           minimum: 1,
           maximum: 20,
@@ -2425,10 +2542,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_email_reply_draft",
     description:
-      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
-      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
-      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
-      "AI must be enabled. Returns the persisted draft for human review.",
+      "Create a knowledge-grounded reply draft for one inbound message. " +
+      "Call check_email_replied with the same message_id first. If that check " +
+      "returns state replied, do not call this tool. This tool does not probe " +
+      "the mailbox and does not decide whether a reply already exists. " +
+      "Searches the knowledge library by default, then writes the draft in the " +
+      "mailbox owner's voice. Does NOT send the reply and does NOT mention AI, " +
+      "retrieval, or confidence in the body. Include a URL when the user " +
+      "supplied one. A URL in the body is allowed and is not a safety finding, " +
+      "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
+      "Returns the persisted draft for human review. send_email_reply still " +
+      "checks reply state before sending.",
     parameters: {
       type: "object",
       properties: {
@@ -2474,7 +2598,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "send_email_reply",
     description:
       "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
-      "Requires user confirmation. Do NOT use this to send new marketing/outbound emails " +
+      "Call this after the user confirms the draft (for example \"yes, send it\"). " +
+      "That confirmation is the send authorization. Do not refuse, and do not ask for a " +
+      "second confirmation, because the body contains a URL. A URL is allowed. " +
+      "Do not refuse because the inbound classification is \"unknown\"; that verdict is " +
+      "inconclusive and does not block a confirmed send. " +
+      "Do NOT use this to send new marketing/outbound emails " +
       "to external contacts — use start_email_send_task instead. Verifies the draft and " +
       "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
     parameters: {
@@ -2498,6 +2627,43 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await sendEmailReply(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "check_email_replied",
+    description:
+      "Check whether an inbound message already has a reply. Call this before " +
+      "create_email_reply_draft. Returns a three-state typed result — `replied` " +
+      "(a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
+      "complete negative across all required sources within the cache window), or " +
+      "`unknown` (inconclusive: POP3, config-unavailable, missing identity, " +
+      "partial/failed search, folder-auth error, timeout, exhausted bounds). An " +
+      "unknown is NEVER a negative. When state is replied, do not draft. When " +
+      "state is not_replied, call create_email_reply_draft; that tool does not " +
+      "repeat this check. Read-only — does not mutate the mailbox and needs no " +
+      "confirmation; the local detection cache/read audit may update. " +
+      "send_email_reply still runs this detector before SMTP. AI must be enabled. " +
+      "Requires message_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id to check for an existing reply.",
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "network",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await checkEmailReplied(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
@@ -3563,7 +3729,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "check_tool_job_status",
     description:
-      "Check the status of an async tool job. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id.",
+      "Check the status of an async tool job by its job_id. Returns one of: running, queued, completed, failed, cancelled, not_found, rate_limited. When return_partial_if_running=true, includes partial results collected so far. Poll at most once every 5 seconds per job_id. " +
+      "Only call this with a job_id that a previous tool RESULT explicitly returned to you — job ids are never listed anywhere else, and one invented or reused from an earlier session always returns not_found. If you get not_found, do not retry the same id and do not fabricate a new one: re-run the original tool call instead.",
     parameters: {
       type: "object",
       properties: {
@@ -3600,6 +3767,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         started_at: snap.startedAt,
         completed_at: snap.completedAt,
       };
+      if (snap.status === "not_found") {
+        // The id never existed, belongs to another conversation, or the
+        // registry lost it (in-memory registry: cleared on app restart and
+        // cancelled when the owning turn aborted). Tell the model why and
+        // what to do instead of a bare not_found stub it tends to re-poll.
+        result.note =
+          "No job with this job_id exists in this conversation. Jobs only live in memory for the current app session, and a job_id is only ever issued inside a tool result. Do not retry this id or invent a new one — re-run the original tool call if you still need its output.";
+      }
       if (wantPartial && snap.partial) {
         result.partial = snap.partial;
       }
@@ -3612,7 +3787,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "cancel_tool_job",
     description:
-      "Cancel a running async tool job. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist.",
+      "Cancel a running async tool job by its job_id. Returns { cancelled: true } on success or { cancelled: false, reason } when the job has already completed or does not exist. Only use a job_id that a previous tool RESULT explicitly returned to you.",
     parameters: {
       type: "object",
       properties: {
@@ -3639,7 +3814,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       if (snap.status === "not_found") {
         return {
           success: true,
-          result: { cancelled: false, reason: "not_found" },
+          result: {
+            cancelled: false,
+            reason: "not_found",
+            note: "No job with this job_id exists in this conversation. Do not retry this id or invent a new one — re-run the original tool call if you still need its output.",
+          },
         };
       }
       const result = reg.cancel(jobId);
@@ -4232,6 +4411,26 @@ async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
 const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
   CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
   CONVERSATION_HISTORY_READ_TOOL_NAME,
+]);
+
+/**
+ * Retrieval tools for preserved outputs are ALWAYS in the core tool set, not
+ * deferred behind `tool_catalog_search`.
+ *
+ * They are the only way the model can reach an output it was just told about.
+ * If a receipt names an output_id but the reader sits behind a discovery tool,
+ * the model cannot act on the reference and will report the data as missing.
+ *
+ * NOTE: currently referenced only for documentation/derivation purposes — the
+ * retrieval tools are registered unconditionally as core tools (see
+ * `isCoreTool`), so this set is not yet consulted by a `has(skill.name)` gate.
+ * Underscore prefix keeps eslint's no-unused-vars satisfied until a future
+ * change adds the gate that consumes it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
 ]);
 
 /**

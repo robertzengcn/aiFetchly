@@ -375,7 +375,7 @@ describe("T01 regression — resolver → compiler → freeze → evidence → c
   // --------------------------------------------------------------------
   it("AC-21: ambiguous 'Post this.' → operation_receipt → never verified without evidence", async () => {
     const message = "Post this.";
-    const { route, contract } = runPipeline(message);
+    const { route } = runPipeline(message);
     // Resolver: "post" is an action verb, ≤4 words, no recipient/quantity →
     // preparation (AC-21: needs clarification). The compiler still emits a
     // criterion for the route it was given; here we force task_best_effort

@@ -65,7 +65,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { computed } from 'vue';
-const { t } = useI18n({ inheritLocale: true });
+const { t } = useI18n();
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 
 interface Props {

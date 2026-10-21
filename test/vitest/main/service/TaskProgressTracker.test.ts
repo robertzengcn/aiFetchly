@@ -251,6 +251,7 @@ describe("TaskProgressTracker.recordToolRound (FR-09, §7.2 step 7)", () => {
     // A later bound tracker starts from zero streak.
     const budget = makeBudget();
     const bound = new TaskProgressTracker({ budget });
+    expect(bound).toBeDefined();
     expect(budget.getConsumed().noProgressStreak).toBe(0);
   });
 
