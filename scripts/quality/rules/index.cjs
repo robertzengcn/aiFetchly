@@ -47,7 +47,10 @@ const ALLOWED_PREFIXES = ['src/entityTypes'];
 function classifySpecifier(rawSpecifier, importerRepoPath) {
   const spec = rawSpecifier;
   if (spec.startsWith('@/')) {
-    return { kind: 'repo', repoPath: spec.slice(2) };
+    // The repo's vite/tsconfig alias maps @/ -> src/, so the normalized
+    // repo path is 'src/' + the rest — matching the src/-rooted prohibited
+    // prefixes regardless of where the importing file lives.
+    return { kind: 'repo', repoPath: 'src/' + spec.slice(2) };
   }
   if (spec.startsWith('./') || spec.startsWith('../')) {
     const importerDir = path.posix.dirname(importerRepoPath);

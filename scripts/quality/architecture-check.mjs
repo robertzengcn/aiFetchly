@@ -42,6 +42,8 @@ function parseFor(fileName, code) {
     ecmaVersion: 'latest',
     sourceType: fileName.endsWith('.cjs') ? 'commonjs' : 'module',
     filePath: fileName,
+    loc: true,
+    range: true,
   });
 }
 
@@ -79,13 +81,25 @@ export function collectDirectImports(ast, code) {
     if (!n || typeof n.type !== 'string') return;
     if (
       n.type === 'CallExpression' &&
-      ((n.callee.type === 'Identifier' && n.callee.name === 'require') ||
-        n.callee.type === 'ImportExpression') &&
+      n.callee.type === 'Identifier' &&
+      n.callee.name === 'require' &&
       n.arguments.length === 1 &&
       n.arguments[0].type === 'Literal' &&
       typeof n.arguments[0].value === 'string'
     ) {
       found.push({ specifier: n.arguments[0].value, node: n, typeOnly: false });
+    }
+    // The TS parser emits dynamic import(...) as a bare ImportExpression
+    // node (callee-type variants appear in other parsers) — handle both.
+    if (
+      (n.type === 'ImportExpression' ||
+        (n.type === 'CallExpression' &&
+          (n.callee.type === 'ImportExpression' || n.callee.type === 'Import'))) &&
+      n.source &&
+      n.source.type === 'Literal' &&
+      typeof n.source.value === 'string'
+    ) {
+      found.push({ specifier: n.source.value, node: n, typeOnly: false });
     }
     for (const key of Object.keys(n)) {
       if (key === 'loc' || key === 'range' || key === 'parent') continue;
@@ -109,13 +123,17 @@ export function collectDirectImports(ast, code) {
  */
 export function checkArchitecture(files, repoRoot) {
   const findings = [];
-  const workerScope = /^src\/childprocess\//;
-  const ipcScope = /^src\/main-process\/communication\//;
+  // Scope by path SEGMENT so nested fixture roots (and the real tree) match:
+  // both 'src/childprocess/x.ts' and 'tmp-quality-arch/src/childprocess/x.ts'.
+  const inWorkerScope = (rel) => rel.startsWith('src/childprocess/') || rel.includes('/src/childprocess/');
+  const inIpcScope = (rel) =>
+    rel.startsWith('src/main-process/communication/') ||
+    rel.includes('/src/main-process/communication/');
 
   for (const file of files) {
     const rel = path.relative(repoRoot, file).split(path.sep).join('/');
-    const isWorker = workerScope.test(rel);
-    const isIpc = ipcScope.test(rel);
+    const isWorker = inWorkerScope(rel);
+    const isIpc = inIpcScope(rel);
     if (!isWorker && !isIpc) continue;
 
     let code;

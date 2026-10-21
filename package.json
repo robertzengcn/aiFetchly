@@ -111,7 +111,7 @@
     "quality:audit": "node scripts/quality/audit.mjs",
     "quality:fix": "node node_modules/eslint/bin/eslint.js --fix",
     "quality:doctor": "node scripts/quality/doctor.mjs",
-    "test:quality-gate": "node --test test/quality-gate/"
+    "test:quality-gate": "node --test \"test/quality-gate/*.test.mjs\""
   },
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",

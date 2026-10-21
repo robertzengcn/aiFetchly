@@ -134,48 +134,37 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
         kept.push(message);
         continue;
       }
-      if (message.ruleId === COMPLEXITY_RULE) {
-        const observed = parseComplexity(message.message);
-        if (observed == null) {
-          // Unknown message format: fail closed for exceptional findings.
-          kept.push(message);
-          continue;
-        }
-        if (observed > entry.maxComplexity) {
-          kept.push(message);
-          continue;
-        }
-        acceptedDebt += 1;
-        continue; // within ceiling: accepted
-      }
-      // Ordinary rule: count against maxCount after the loop; stash for now.
+      // Both ordinary and complexity findings are counted in the second
+      // pass; complexity findings additionally face the numeric ceiling.
       kept.push(message);
       message.__qgExceptionKey = key;
     }
     return { ...result, messages: kept };
   });
 
-  // Second pass: enforce maxCount per (path, rule) among stashed findings.
+  // Second pass: enforce ceilings per (path, rule) among stashed findings.
+  // AC-08: at most maxCount findings may be accepted — debt never grows.
+  // AC-09: a complexity finding also blocks when its observed value exceeds
+  // maxComplexity (or the message format is unknown — fail closed).
   const counts = new Map();
-  for (const result of out) {
-    for (const message of result.messages) {
-      if (!message.__qgExceptionKey) continue;
-      counts.set(message.__qgExceptionKey, (counts.get(message.__qgExceptionKey) || 0) + 1);
-    }
-  }
   for (const result of out) {
     result.messages = result.messages.filter((message) => {
       if (!message.__qgExceptionKey) return true;
       const entry = byKey.get(message.__qgExceptionKey);
-      const used = counts.get(message.__qgExceptionKey);
-      if (used <= entry.maxCount) {
+      const used = counts.get(message.__qgExceptionKey) || 0;
+      const withinCount = used < entry.maxCount;
+      let withinCeiling = true;
+      if (entry.ruleId === COMPLEXITY_RULE) {
+        const observed = parseComplexity(message.message);
+        withinCeiling = observed != null && observed <= entry.maxComplexity;
+      }
+      if (withinCount && withinCeiling) {
+        counts.set(message.__qgExceptionKey, used + 1);
         acceptedDebt += 1;
-        counts.set(message.__qgExceptionKey, used - 1);
         return false; // within allowance: accepted debt
       }
-      counts.set(message.__qgExceptionKey, used - 1);
       delete message.__qgExceptionKey;
-      return true; // over allowance: blocks
+      return true; // over allowance or over ceiling: blocks
     });
   }
   return { results: out, acceptedDebt, errors: [] };
