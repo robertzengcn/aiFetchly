@@ -43,7 +43,7 @@ import {
 } from "../fixtures/electronApp";
 import { writeStateManifest } from "../fixtures/temporaryState";
 import { closeApp } from "../support/processCleanup";
-import { assertCleanTeardown } from "../support/assertions";
+import { assertCleanTeardown, assertIconFontsServed, assertImagesDecoded } from "../support/assertions";
 import {
   chatRoot,
   composerTextarea,
@@ -191,6 +191,10 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
+    // Audit V04: counts alone do not prove decoding; also verify the icon
+    // fonts are served (the pre-fix guard blocked @fs hoisted font paths).
+    await assertImagesDecoded(root, { minCount: 4 });
+    await assertIconFontsServed(aiApp.mainWindow);
 
     // Select all 4 into the tray (the draft cap is 50, so all four land).
     for (let i = 0; i < 4; i += 1) {
@@ -339,6 +343,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
       .locator(".v2-message__generated-image")
       .count();
     expect(finalTiles).toBeGreaterThanOrEqual(4);
+    await assertImagesDecoded(root, { minCount: 4 });
   });
 
   test("R-2: stopping a batch mid-flight keeps completed outputs and cancels the rest", async ({
@@ -362,6 +367,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
+    await assertImagesDecoded(root, { minCount: 4 });
     for (let i = 0; i < 4; i += 1) {
       await imageBlocks
         .nth(i)
@@ -479,6 +485,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
       .locator(".v2-message__generated-image")
       .count();
     expect(tilesAfterStop).toBeGreaterThanOrEqual(4);
+    await assertImagesDecoded(root, { minCount: 4 });
   });
 
   test("R-3: a batch-produced image is usable as a reference in a follow-up edit under the parent identity", async ({
@@ -503,6 +510,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
+    await assertImagesDecoded(root, { minCount: 4 });
     for (let i = 0; i < 4; i += 1) {
       await imageBlocks
         .nth(i)
@@ -550,6 +558,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const tilesAfterBatch = root.locator(".v2-message__generated-image");
     const tileCount = await tilesAfterBatch.count();
     expect(tileCount).toBeGreaterThan(4); // seeded 4 + batch outputs
+    await assertImagesDecoded(root, { minCount: 5 });
 
     const lastTile = tilesAfterBatch.nth(tileCount - 1);
     await lastTile.getByRole("button", { name: "Use as reference" }).click();
@@ -649,6 +658,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
+    await assertImagesDecoded(root, { minCount: 4 });
     for (const i of clickOrder) {
       await imageBlocks
         .nth(i)
@@ -808,6 +818,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     // Durable outputs still render (4 seeded + >=4 batch outputs).
     const tiles = await root.locator(".v2-message__generated-image").count();
     expect(tiles).toBeGreaterThanOrEqual(4);
+    await assertImagesDecoded(root, { minCount: 4 });
   });
 
   test("R-5: partial success surfaces a failed item with its error and the retry action", async ({
@@ -994,6 +1005,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const tiles = root.locator(".v2-message__generated-image");
     const tileCount = await tiles.count();
     expect(tileCount).toBeGreaterThanOrEqual(4);
+    await assertImagesDecoded(root, { minCount: 4 });
     await tiles
       .nth(tileCount - 1)
     .getByRole("button", { name: "Save to workspace" })

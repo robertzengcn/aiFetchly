@@ -309,7 +309,15 @@ export async function launchAiFetchly(
   // but still polled once at startup); abort every external origin and record it
   // (design §10.2 — relaxed to loopback so the security goal "no external
   // traffic" is preserved without flagging known-local polls).
+  // Audit V04: generated images load through the app's OWN custom protocol
+  // handler (src/background.ts `protocol.handle`), which serves only
+  // existence- and path-validated files under the redirected userData root.
+  // That is explicitly trusted app-local traffic. A non-special scheme URL
+  // parses with an opaque ("null") origin, so the guard must recognize the
+  // intended scheme + authority by prefix — never a blanket `origin === null`
+  // allowance, which every unrelated opaque origin shares.
   const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+  const TRUSTED_LOCAL_PROTOCOL_PREFIX = "aifetchly-generated-image://local/";
   await mainWindow.route("**/*", (route) => {
     const request = route.request();
     const url = request.url();
@@ -322,7 +330,10 @@ export async function launchAiFetchly(
     } catch {
       origin = url;
     }
-    if (LOOPBACK_HOSTS.has(hostname)) {
+    if (
+      url.startsWith(TRUSTED_LOCAL_PROTOCOL_PREFIX) ||
+      LOOPBACK_HOSTS.has(hostname)
+    ) {
       void route.continue();
       return;
     }

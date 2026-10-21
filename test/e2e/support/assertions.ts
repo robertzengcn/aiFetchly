@@ -8,7 +8,7 @@
  */
 
 import * as fs from "fs";
-import { expect } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import type { LaunchedApp } from "../fixtures/electronApp";
 
 export interface TeardownOptions {
@@ -101,4 +101,118 @@ export function assertCleanTeardown(
     unexpectedMainViolations,
     "main-process network guard recorded violations"
   ).toEqual([]);
+}
+
+/**
+ * Audit V04: decoded-render assertion. Tile/card counts alone do not
+ * establish that an image DECODED — a failed protocol load keeps the wrapper
+ * in the DOM while the <img> stays empty. Every <img> matched inside `scope`
+ * must finish decoding (non-zero natural dimensions). Images that simply
+ * have not STARTED their lazy load yet report complete=false and settle —
+ * so this polls rather than asserting instanteously; a genuinely broken
+ * load never leaves that state.
+ */
+export async function assertImagesDecoded(
+  scope: Locator,
+  options: { minCount?: number; timeout?: number } = {}
+): Promise<void> {
+  const minCount = options.minCount ?? 0;
+  const timeout = options.timeout ?? 15_000;
+
+  const readImages = async (): Promise<{
+    total: number;
+    broken: Array<{ src: string; complete: boolean; naturalWidth: number }>;
+  }> =>
+    scope.locator("img").evaluateAll((elements) =>
+      elements.map((element) => {
+        const img = element as HTMLImageElement;
+        return {
+          src: img.currentSrc || img.src,
+          complete: img.complete,
+          naturalWidth: img.naturalWidth,
+        };
+      })
+    );
+
+  const initial = await readImages();
+  const brokenInitially = initial.filter(
+    (state) => !state.complete || state.naturalWidth === 0
+  );
+  expect(
+    initial.length,
+    `expected >=${minCount} <img> elements inside the asserted scope`
+  ).toBeGreaterThanOrEqual(minCount);
+  if (brokenInitially.length === 0) {
+    return;
+  }
+
+  try {
+    await expect
+      .poll(
+        async () => {
+          const states = await readImages();
+          return states.filter(
+            (state) => !state.complete || state.naturalWidth === 0
+          ).length;
+        },
+        { timeout, intervals: [250, 500, 1_000] }
+      )
+      .toBe(0);
+  } catch {
+    const states = await readImages();
+    const broken = states.filter(
+      (state) => !state.complete || state.naturalWidth === 0
+    );
+    throw new Error(
+      `images failed to decode within ${timeout}ms: ${JSON.stringify(broken)}`
+    );
+  }
+}
+
+/**
+ * Audit V04: icon-font serving assertion. When the dev server blocks the
+ * hoisted @mdi/font path the DOM keeps rendering (tofu glyphs) and text-only
+ * assertions keep passing. Discover every @font-face src the renderer
+ * document actually references for Material Design Icons and fetch it through
+ * the real page path (subject to the renderer network guard) — each must
+ * return 200.
+ */
+export async function assertIconFontsServed(page: Page): Promise<void> {
+  const fontUrls: string[] = await page.evaluate(() => {
+    const urls: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules: CSSRuleList;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        continue; // cross-origin (dev-only sheet) — skip
+      }
+      for (const rule of Array.from(rules)) {
+        if (!(rule instanceof CSSFontFaceRule)) continue;
+        const family = rule.style.getPropertyValue("font-family");
+        if (!family.toLowerCase().includes("material design icons")) continue;
+        const src = rule.style.getPropertyValue("src");
+        for (const match of src.matchAll(/url\((['"]?)([^'")]+)\1\)/g)) {
+          urls.push(
+            new URL(match[2], sheet.href ?? window.location.href).href
+          );
+        }
+      }
+    }
+    return Array.from(new Set(urls));
+  });
+  expect(
+    fontUrls.length,
+    "no MDI @font-face src discovered in the renderer document"
+  ).toBeGreaterThanOrEqual(1);
+  for (const url of fontUrls) {
+    const status: number = await page.evaluate(async (fontUrl) => {
+      try {
+        return (await fetch(fontUrl)).status;
+      } catch {
+        return -1;
+      }
+    }, url);
+    expect(status, `MDI font request failed: ${url}`).toBe(200);
+  }
 }

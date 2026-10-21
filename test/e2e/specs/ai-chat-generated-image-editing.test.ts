@@ -23,7 +23,7 @@
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
-import { assertCleanTeardown } from "../support/assertions";
+import { assertCleanTeardown, assertImagesDecoded } from "../support/assertions";
 import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
 import type { LaunchedApp } from "../fixtures/electronApp";
 import type { E2ETestRoot } from "../fixtures/types";
@@ -434,6 +434,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     const root = aiApp.mainWindow.getByTestId("chat-center-surface");
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
+    await assertImagesDecoded(root, { minCount: 2 });
 
     // Numbered badges reflect the document position of each generated image.
     const tileBadges = root.locator(".v2-message__generated-image-index");
@@ -509,6 +510,10 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
       .getByTestId("chat-center-surface")
       .locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
+    await assertImagesDecoded(
+      aiApp.mainWindow.getByTestId("chat-center-surface"),
+      { minCount: 2 }
+    );
 
     await imageBlocks
       .nth(0)
