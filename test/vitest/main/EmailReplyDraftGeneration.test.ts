@@ -2110,6 +2110,61 @@ describe("createDraft refines a stored deterministic-unknown classification (FR-
     // zero AI calls even for a persisted unknown classification.
     expect(requests).toHaveLength(0);
   });
+
+  it("routes a model-sourced auto_reply verdict to review: persists needs_human_review, refuses sensitive_topic, never automated_sender", async () => {
+    // Regression (2026-10-21 incident, erx-req-1-bu11tp58): a human reply
+    // from estewaycom@gmail.com asked "what is feature of aifetchly" and
+    // quoted the recipient's own marketing email below the question. The
+    // stage-2 model answered auto_reply; the refined value was PERSISTED
+    // sticky, and the re-gate refused with "[automated_sender] Classification
+    // 'auto_reply' must not be auto-replied" — labeling a human sender as
+    // automated. A model verdict is not deterministic-grade evidence for a
+    // hard block: the deterministic rules already saw the headers/sender and
+    // found nothing. The verdict must route to review (needs_human_review,
+    // source review) so the refusal carries the honest sensitive_topic code
+    // and the DB never records a machine-asserted automated sender.
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({ classification: "auto_reply", confidence: 0.95 })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    // The honest code — NOT the old automated_sender.
+    expect(result.code).toBe("sensitive_topic");
+    // The classification call was attempted; generation never fired.
+    expect(requests).toHaveLength(1);
+    // The sticky brick: the DB must NEVER hold a model-asserted hard block.
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("needs_human_review");
+    expect(stored?.classificationSource).toBe("review");
+  });
+
+  it("routes a model-sourced bounce verdict to review the same way", async () => {
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const { factory } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({ classification: "bounce", confidence: 0.97 })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("sensitive_topic");
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("needs_human_review");
+    expect(stored?.classificationSource).toBe("review");
+  });
 });
 
 // ---------------------------------------------------------------------------
