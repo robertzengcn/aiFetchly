@@ -4575,12 +4575,15 @@ describe("AiChatCenterSurface image-reference draft clears (audit R05)", () => {
     await loadConversation("conv-1");
     const store = useSelectedConversationStore();
 
-    // The selection handshake clobbers the snapshot's runtime state onto the
-    // presenter's disposed (idle, null) view — a mere mid-run event must not
-    // be mistaken for a completion off that shape.
-    expect(store.streamStatus).toBe("idle");
-    expect(store.runtimeStatus).toBe("idle");
-    expect(store.activeRunId).toBeNull();
+    // Audit R6-01: the re-selection snapshot is now HYDRATED into the
+    // presenter instead of being clobbered onto the disposed (idle, null)
+    // view — a quiet running engine presents running, with the run strip
+    // and Stop affordance, until the genuine terminal clears it. A mere
+    // mid-run event cannot be mistaken for a completion because the
+    // hydration state is the state the engine itself reported.
+    expect(store.streamStatus).toBe("streaming");
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.activeRunId).toBe("run-1");
 
     // Stage the next draft's reference while run-1 continues.
     const transcriptA = wrapper.findComponent({

@@ -230,6 +230,26 @@ export const useSelectedConversationStore = defineStore(
     let nextBeforeCursor: { timestamp: string; messageId: string } | null =
       null;
     /**
+     * Audit R6-01: between `presenter.dispose()` and the selection
+     * snapshot's resolution, the redacted snapshot can be OLDER than facts
+     * the live detail stream delivers (a run may complete, error or start
+     * streaming during the await). Applying those events against an empty
+     * presenter would (a) lose their content when `seedHistory` replaces
+     * the rows and (b) let the snapshot's possibly stale runtime facts
+     * overwrite a newer terminal seen during the load. Events received in
+     * that window are therefore BUFFERED and replayed after the snapshot
+     * seeds and hydrates — newer streamed/terminal facts always apply
+     * AFTER the authoritative snapshot, so an older snapshot can never
+     * overwrite them.
+     */
+    let deferDetailEventsDuringSelection = false;
+    let deferredDetailEvents: ChatRunDetailEvent[] = [];
+
+    function clearDeferredDetailEvents(): void {
+      deferDetailEventsDuringSelection = false;
+      deferredDetailEvents = [];
+    }
+    /**
      * Audit R4-01: monotonic id of the in-flight `loadOlder` operation.
      * The selection handshake advances it, so a page resolved after a
      * selection change belongs to a superseded attempt and is discarded
@@ -914,6 +934,15 @@ export const useSelectedConversationStore = defineStore(
       // other event type projects synchronously through the presenter's
       // onMutate hook, so the observation below covers its application
       // loop through the reactive sync.
+      // Audit R6-01: during a selection's snapshot await, events wait for
+      // the replay (below) so they project only once with the final
+      // ordering (snapshot seed → newer stream facts). No projection
+      // timing window opens for deferred events — the projection happens
+      // at replay, and the replayed application opens its own windows.
+      if (deferDetailEventsDuringSelection) {
+        deferredDetailEvents.push(event);
+        return;
+      }
       const receivedAt = performance.now();
       const isBufferedDelta =
         event.eventType === "token" || event.eventType === "reasoning_delta";
@@ -1005,12 +1034,17 @@ export const useSelectedConversationStore = defineStore(
       // Clear only presentation buffers — the previous run keeps executing.
       presenter.dispose();
       syncFromPresenter();
+      // Audit R6-01: hold the new selection's first detail events until
+      // the authoritative snapshot lands, then replay them over the seed.
+      clearDeferredDetailEvents();
+      deferDetailEventsDuringSelection = true;
 
       if (conversationId === null) {
         nextBeforeCursor = null;
         hasOlder.value = false;
         selectedTitle.value = null;
         loading.value = false;
+        clearDeferredDetailEvents();
         return;
       }
 
@@ -1026,6 +1060,7 @@ export const useSelectedConversationStore = defineStore(
           appliedGeneration !== generation ||
           snapshot.acceptedGeneration === -1
         ) {
+          clearDeferredDetailEvents();
           emitShellDiagnostic({
             type: "chat.selection_loaded",
             conversationHash: hashConversationId(conversationId),
@@ -1036,12 +1071,33 @@ export const useSelectedConversationStore = defineStore(
           return;
         }
         presenter.seedHistory([...snapshot.messages]);
+        // Audit R6-01: hydrate the presenter from the SAME authoritative
+        // snapshot — seeding resets the presenter to default idle, so the
+        // previous manual assignment of `runtimeStatus`/`activeRunId` was
+        // immediately overwritten by `syncFromPresenter()` afterwards
+        // (selected run presented idle with no run strip/Stop affordance
+        // until another engine event repaired it). Hydration registers
+        // restored actionable rows too (audit R6-02), keeping a quiet
+        // waiting/running conversation protective from the first moment.
+        presenter.hydrateRuntime({
+          runtimeStatus: snapshot.runtimeStatus,
+          activeRunId: snapshot.activeRunId,
+        });
         nextBeforeCursor = snapshot.nextBefore;
         hasOlder.value = snapshot.hasOlder;
-        runtimeStatus.value = snapshot.runtimeStatus;
-        activeRunId.value = snapshot.activeRunId;
         selectedTitle.value = snapshot.title;
         syncFromPresenter();
+        // Audit R6-01: replay the events the live channel delivered during
+        // the snapshot await AFTER the seed+hydration, so newer terminal/
+        // streamed facts overwrite the (possibly older) snapshot facts —
+        // deterministically the stream is the authoritative source for
+        // what happened while the snapshot was being assembled.
+        deferDetailEventsDuringSelection = false;
+        const pendingEvents = deferredDetailEvents;
+        deferredDetailEvents = [];
+        for (const event of pendingEvents) {
+          applyDetailEvent(event);
+        }
         emitShellDiagnostic({
           type: "chat.selection_loaded",
           conversationHash: hashConversationId(conversationId),
@@ -1051,6 +1107,8 @@ export const useSelectedConversationStore = defineStore(
         });
         await markReadAfterLoad(conversationId);
       } catch (err) {
+        deferDetailEventsDuringSelection = false;
+        deferredDetailEvents = [];
         if (appliedGeneration === generation) {
           loadError.value =
             err instanceof Error ? err.message : "Failed to load conversation";
@@ -1534,6 +1592,9 @@ export const useSelectedConversationStore = defineStore(
       }
       presenter.dispose();
       syncFromPresenter();
+      // Audit R6-01: the store's scoping ends with the session — a pending
+      // selection's deferred events must never replay after teardown.
+      clearDeferredDetailEvents();
       // Audit R2 G01: flush the session's projection aggregates into main's
       // telemetry before the renderer tears the store down (best-effort).
       void flushRendererMetricsOnce();

@@ -121,6 +121,21 @@ function m0Metadata(): { source: "chat-v2" } {
 }
 
 /**
+ * Rows whose mounted presence is REQUIRED for user action (audit R6-02/03,
+ * FR-PER-001..008): permission prompts awaiting a decision and pending
+ * plan/question prompts. Identifiable solely from row metadata, so both
+ * live rows and reseeded history rows classify identically.
+ */
+function isAwaitingDecisionRow(row: ChatV2MessageView): boolean {
+  const metadata = row.metadata;
+  if (!metadata) return false;
+  if (metadata.toolResult?.needsPermissionPrompt === true) return true;
+  if (metadata.planEventType === "plan_submitted") return true;
+  if (metadata.questionView) return true;
+  return false;
+}
+
+/**
  * Presenter instance — construct one per selected conversation subscription.
  * `dispose()` clears buffers without touching main-process run state.
  */
@@ -139,6 +154,17 @@ export function createWorkspaceStreamPresenter(
    * in previous sessions).
    */
   setGoal(goal: GoalRunInfo | null): void;
+  /**
+   * Audit R6-01: hydrate the presenter's authoritative runtime facts from
+   * ONE runtime snapshot (selection load). Overwrites the default idle
+   * projection (status + active run identity) and pins restored
+   * actionable rows so window eviction cannot lose them before the run
+   * resumes.
+   */
+  hydrateRuntime(next: {
+    runtimeStatus: ConversationRuntimeStatus;
+    activeRunId: string | null;
+  }): void;
   /** Prepend an older history page, preserving order. */
   prependHistory(messages: ChatV2MessageView[]): void;
   /** Optimistic user message shown while the run request is in flight. */
@@ -207,6 +233,26 @@ export function createWorkspaceStreamPresenter(
    * dispose, so completed rows become ordinary evictable history again.
    */
   const pinnedRowIds = new Set<string>();
+  /**
+   * Authoritative accumulated text of the ACTIVE turn's delta-bearing rows
+   * (audit R6-02/R6-03): content the turn's tokens/reasoning deltas must
+   * survive row-state hazards the mounted window alone cannot guarantee.
+   * Kept INDEPENDENT of the mounted row set because:
+   * - assumption "a row created with `{content: ''`'" — after re-selection
+   *   the persisted row is ADOPTED (`saved ` content, audit R6-02), and its
+   *   protected status must not depend on the append/dedup early-return
+   *   path that previously skipped pin registration;
+   * - trimToWindow may evict even pinned rows once the pinned population
+   *   alone overflows the bound (audit R6-03) — the NEXT delta must restore
+   *   the full `prefix suffix` accumulation instead of recreating an empty
+   *   row. Baselines are captured at adoption/creation; cleared per run
+   *   terminal, on seed, and on dispose so content accumulation is turn-
+   *   scoped and never grows unbounded across turns.
+   */
+  const activeTurnAccumulator = new Map<
+    string,
+    { content: string; reasoning: string }
+  >();
 
   const state: WorkspaceStreamState = {
     get messages() {
@@ -287,6 +333,16 @@ export function createWorkspaceStreamPresenter(
     text: string
   ): void {
     const runId = activeRunId ?? "(none)";
+    // Audit R6-02/R6-03: every observable token/reasoning delta lands in
+    // the turn accumulator the moment it is buffered (not at flush) so the
+    // register always holds ALL content observed for this turn, regardless
+    // of how the mounted row later suffers (dedupe adoption, eviction,
+    // recreation).
+    const accumulated = activeTurnAccumulator.get(messageId);
+    if (accumulated) {
+      if (channel === "content") accumulated.content += text;
+      else accumulated.reasoning += text;
+    }
     const last = buffer[buffer.length - 1];
     if (
       last &&
@@ -305,14 +361,69 @@ export function createWorkspaceStreamPresenter(
     scheduleBufferedFlush();
   }
 
+  /**
+   * Audit R6-02/R6-03: re-materialize one evicted row from the turn
+   * accumulator. When pruning dropped a registered content-bearing row
+   * (the pinned population alone overflowed the bound) the next flush or
+   * terminal must present `saved prefix suffix` again — not an empty
+   * recreation. The row is re-appended at the tail (its run is still the
+   * active one) and re-pinned.
+   */
+  function materializeFromAccumulator(messageId: string): void {
+    const accumulated = activeTurnAccumulator.get(messageId);
+    if (!accumulated) return;
+    if (messages.some((m) => m.id === messageId)) return;
+    appendMessage({
+      id: messageId,
+      conversationId: conversationId ?? "",
+      role: "assistant",
+      content: accumulated.content,
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        ...(accumulated.reasoning
+          ? {
+              reasoning: {
+                content: accumulated.reasoning,
+                format: "plain_text" as const,
+                source: "server" as const,
+              },
+            }
+          : {}),
+      },
+    });
+  }
+
   function ensureAssistantView(messageId: string): void {
-    if (
-      activeAssistantMessageId === messageId &&
-      messages.some((m) => m.id === messageId)
-    ) {
+    const existing = messages.find((m) => m.id === messageId);
+    if (existing) {
+      activeAssistantMessageId = messageId;
+      // Audit R6-02: a hydrated (history-reseeded) active answer row ADOPTS
+      // the live view here — earlier code routed adoption through
+      // appendMessage whose id-duplicate guard returned BEFORE pin
+      // registration, so a resumed answer stayed un-protected and paging
+      // destroyed its saved prefix. Pin the adopted row whenever its run
+      // is streaming, independently of whether a new row is appended.
+      // Idempotent: re-adopting the same row re-adds the same id.
+      if (streamStatus === "streaming") {
+        pinnedRowIds.add(messageId);
+      }
+      // Register the adoption baseline ONLY when absent: the first ensure
+      // of the turn captures the observable `saved ` content so later
+      // flushes keep applying against the full accumulation; repeated
+      // ensures mid-turn must not reset the already-accumulated text.
+      if (!activeTurnAccumulator.has(messageId)) {
+        activeTurnAccumulator.set(messageId, {
+          content: existing.content,
+          reasoning: existing.metadata?.reasoning?.content ?? "",
+        });
+      }
       return;
     }
     activeAssistantMessageId = messageId;
+    // Fresh rows under review never carry prior content.
+    activeTurnAccumulator.set(messageId, { content: "", reasoning: "" });
     appendMessage({
       id: messageId,
       conversationId: conversationId ?? "",
@@ -701,13 +812,25 @@ export function createWorkspaceStreamPresenter(
         errorMessage = null;
         retry = null;
         recovery = null;
-        // The turn's rows become ordinary evictable history again.
+        // The turn's rows become ordinary evictable history again. Audit
+        // R6-02/R6-03: clear the turn accumulation with them — a completion
+        // carries the authoritative content, so stale accumulation must
+        // never overwrite later-persisted rows on a subsequent turn.
         pinnedRowIds.clear();
+        activeTurnAccumulator.clear();
         break;
       }
       case "error": {
         bufferedOnly = false;
         flushNow();
+        // Audit R6-02/R6-03: a turn that ended in error with no further
+        // fullContent still owes its accumulated rows to the display —
+        // materialize evicted registered rows BEFORE the pins/accumulator
+        // retire, so paged-back saved text survives cancellation as well.
+        for (const registeredId of [...activeTurnAccumulator.keys()]) {
+          materializeFromAccumulator(registeredId);
+        }
+        activeTurnAccumulator.clear();
         streamStatus = "error";
         runtimeStatus = "idle";
         errorMessage = str(chunk.errorMessage) ?? "Unknown error";
@@ -737,6 +860,13 @@ export function createWorkspaceStreamPresenter(
       case "cancelled": {
         bufferedOnly = false;
         flushNow();
+        // Audit R6-02/R6-03: same terminal materialization as the error
+        // path — cancelled turns still keep their accumulated text on the
+        // display instead of silently dropping the evicted prefix.
+        for (const registeredId of [...activeTurnAccumulator.keys()]) {
+          materializeFromAccumulator(registeredId);
+        }
+        activeTurnAccumulator.clear();
         streamStatus = "cancelled";
         runtimeStatus = "idle";
         retry = null;
@@ -774,7 +904,36 @@ export function createWorkspaceStreamPresenter(
       byMessage.set(delta.messageId, entry);
     }
     for (const [messageId, entry] of byMessage) {
+      // Audit R6-02/R6-03: the accumulator is the authoritative content for
+      // registered (active-turn) rows. If the row fell out of the mounted
+      // window (dedupe adoption hazard, pinned-population overflow), the
+      // flush RESTORES the full observed accumulation instead of appending
+      // onto a recreated empty row — `saved prefix suffix`, `prefix suffix`
+      // etc. survive whichever row-state hazard hit the turn.
+      materializeFromAccumulator(messageId);
+      const accumulated = activeTurnAccumulator.get(messageId);
       updateMessage(messageId, (m) => {
+        if (accumulated) {
+          // Full cumulative text observed for the turn so far — includes
+          // this flush's pending deltas (the accumulator advanced at
+          // appendDelta, before the batch window closed).
+          return {
+            ...m,
+            content: entry.content ? accumulated.content : m.content,
+            metadata: accumulated.reasoning
+              ? {
+                  ...(m.metadata ?? { source: "chat-v2" as const }),
+                  reasoning: {
+                    content: accumulated.reasoning,
+                    format: "plain_text" as const,
+                    source: "server" as const,
+                  },
+                }
+              : m.metadata,
+          };
+        }
+        // Unregistered deltas (turn already retired between buffer and
+        // flush) keep the legacy incremental presentation.
         const reasoningBefore = m.metadata?.reasoning?.content ?? "";
         return {
           ...m,
@@ -862,8 +1021,11 @@ export function createWorkspaceStreamPresenter(
       retry = null;
       recovery = null;
       // A fresh snapshot re-mounts authoritative rows — the previous (or
-      // stale) active-turn pins never apply to it.
+      // stale) active-turn pins never apply to it, and the previous turn's
+      // accumulation must not inject content into reseeded rows (audit
+      // R6-02: the next resume re-registers its baseline from the snapshot).
       pinnedRowIds.clear();
+      activeTurnAccumulator.clear();
     },
     prependHistory(older: ChatV2MessageView[]): void {
       flushNow();
@@ -887,6 +1049,8 @@ export function createWorkspaceStreamPresenter(
       if (exists) {
         flushNow();
         messages = messages.filter((m) => m.id !== messageId);
+        // Audit R6-03 hygiene: pin protection never outlives the row.
+        pinnedRowIds.delete(messageId);
       }
       return exists;
     },
@@ -912,6 +1076,21 @@ export function createWorkspaceStreamPresenter(
      * history paging keeps the OLDEST rows so the just-requested page
      * survives — the newest end is recoverable through the live stream and
      * the selection snapshot (audit R4-04). The row bound is never removed.
+     *
+     * Audit R6-03: BOTH directions respect the active-turn protection
+     * (pinned rows, the streamed assistant answer, rows whose registered
+     * accumulator carries content). Eviction order inside a direction:
+     *   pass 1 — unprotected rows from the evict end first;
+     *   pass 2 — pinned rows that carry neither streamed content nor a
+     *            pending decision (compact completed tool/plan rows) —
+     *            needed once the pinned population alone overflows the
+     *            bound, which would otherwise force an unbounded mount;
+     *   pass 3 — remaining protected rows (the bound is authoritative;
+     *            accumulated content still survives through the turn
+     *            accumulator, so the NEXT delta/terminal re-materializes
+     *            the full text).
+      * Evicted pin bookkeeping is pruned so protection never lingers on
+     * unmounted rows.
      */
     trimToWindow(
       maxRows: number,
@@ -919,29 +1098,124 @@ export function createWorkspaceStreamPresenter(
     ): void {
       const retain = options?.retain ?? "newest";
       if (messages.length <= maxRows) return;
-      if (retain === "newest") {
-        // Live direction: the oldest rows leave (the mount bound stays;
-        // the store re-arms cursor/availability so evicted rows stay
-        // reachable — audit R5-02).
-        messages = messages.slice(messages.length - maxRows);
-        return;
+      const overflow = messages.length - maxRows;
+      const protectIds = new Set(pinnedRowIds);
+      if (activeAssistantMessageId) protectIds.add(activeAssistantMessageId);
+      for (const contentId of activeTurnAccumulator.keys()) {
+        protectIds.add(contentId);
       }
-      // Backward paging direction: evict from the newest end but NEVER the
-      // active turn's rows (audit R5-01) — a mid-run streamed answer must
-      // not be destroyed by the older page the user requested. The nearest
-      // unpinned rows leave instead; the bound still holds for the
-      // unpinned population.
-      const keep: ChatV2MessageView[] = [];
-      let removable = messages.length - maxRows;
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const row = messages[index] as ChatV2MessageView;
-        if (removable > 0 && !pinnedRowIds.has(row.id)) {
-          removable -= 1;
-          continue;
+      // Protection classes, evaluated once per row per call:
+      //   none      — unprotected settled history (evicts first);
+      //   pinned    — pinned turn rows that are neither the streamed
+      //               answer nor content/action-bearing (completed tool/
+      //               plan receipts — compact second);
+      //   protected — actionable or content-bearing rows (permission
+      //               prompts, pending plan/question rows, the answer the
+      //               accumulator protects): evict only after 1+2 and only
+      //               actionable ones first;
+      //   (final pass evicts ANY remaining row — the bound is authoritative
+      //   and the accumulator still preserves content through hazards).
+      const classOf = (row: ChatV2MessageView): "none" | "pinned" | "protected" => {
+        if (!protectIds.has(row.id)) return "none";
+        const isAnswer = row.id === activeAssistantMessageId;
+        const contentBearing = activeTurnAccumulator.has(row.id);
+        return isAnswer || contentBearing || isAwaitingDecisionRow(row)
+          ? "protected"
+          : "pinned";
+      };
+      const isAnswerOrContent = (row: ChatV2MessageView): boolean =>
+        row.id === activeAssistantMessageId ||
+        activeTurnAccumulator.has(row.id);
+      // Evict candidates in direction order (oldest-first for the live
+      // direction, newest-first for backward paging).
+      const victims: ChatV2MessageView[] =
+        retain === "newest" ? [...messages] : [...messages].reverse();
+      const dropped = new Set<string>();
+      const consider = (
+        predicate: (row: ChatV2MessageView) => boolean
+      ): void => {
+        for (const row of victims) {
+          if (dropped.size >= overflow) return;
+          if (dropped.has(row.id)) continue;
+          if (predicate(row)) dropped.add(row.id);
         }
-        keep.unshift(row);
+      };
+      consider((row) => classOf(row) === "none");
+      if (dropped.size < overflow) {
+        consider((row) => classOf(row) === "pinned");
       }
-      messages = keep;
+      if (dropped.size < overflow) {
+        // Compact actionable yet non-content rows before touching the
+        // answer/history content the accumulator protects (audit R6-03:
+        // "preserve current response and actionable decisions" – decisions
+        // stay reachable while their run streams).
+        consider(
+          (row) => classOf(row) === "protected" && !isAnswerOrContent(row)
+        );
+      }
+      if (dropped.size < overflow) {
+        // Bound is authoritative; the accumulator still re-materializes
+        // the content on the next flush/terminal.
+        consider(() => true);
+      }
+      if (dropped.size === 0) return;
+      messages = messages.filter((m) => !dropped.has(m.id));
+      // Bound/retire pin bookkeeping (audit R6-03): protection never
+      // outlives the mounted row it referred to.
+      for (const id of dropped) {
+        pinnedRowIds.delete(id);
+      }
+    },
+    /**
+     * Audit R6-01: hydrate the presenter from ONE authoritative runtime
+     * snapshot (the selection snapshot's persisted run facts). Prior
+     * behavior stored `runtimeStatus`/`activeRunId` on the store refs and
+     * then let `syncFromPresenter()` overwrite them with the presenter's
+     * default idle state — returning to a quiet running conversation showed
+     * `{ status: 'idle', run: null }` until another engine event repaired
+     * the projection. Hydration is idempotent: later synchronizations with
+     * a hydrated presenter read the same authoritative state; events that
+     * arrive after seeding replay over it with newer facts.
+     */
+    hydrateRuntime(next: {
+      runtimeStatus: ConversationRuntimeStatus;
+      activeRunId: string | null;
+    }): void {
+      runtimeStatus = next.runtimeStatus;
+      activeRunId = next.activeRunId ?? activeRunId;
+      // Presentation mapping mirror of sendMessage acceptance semantics:
+      // a running run presents streaming; queued/waiting/terminal keep the
+      // (idle) stream presentation while runtimeStatus carries the state.
+      streamStatus = next.runtimeStatus === "running" ? "streaming" : "idle";
+      // Audit R6-02: an authoritative waiting/running snapshot must keep
+      // its actionable rows protected from the FIRST invocation of window
+      // eviction — a quiet engine may never emit the event that would
+      // otherwise register them lazily. Pin permission prompts (parked
+      // tool results awaiting a decision) and pending plan/question rows;
+      // a running run also pins its last persisted assistant answer so a
+      // resumed stream adopts (`saved `) content protection immediately.
+      // Terminal snapshot states skip registration: their turns are over,
+      // rows are ordinary evictable history again, and no terminal event
+      // would ever arrive to retire the pins.
+      if (
+        next.runtimeStatus === "running" ||
+        next.runtimeStatus === "queued" ||
+        next.runtimeStatus === "awaiting_permission" ||
+        next.runtimeStatus === "awaiting_user"
+      ) {
+        for (const row of messages) {
+          if (isAwaitingDecisionRow(row)) {
+            pinnedRowIds.add(row.id);
+          } else if (
+            next.runtimeStatus === "running" &&
+            row.role === "assistant" &&
+            row.messageType === MessageType.MESSAGE
+          ) {
+            pinnedRowIds.add(row.id);
+          }
+        }
+      }
+      notifyMutate?.();
     },
     flush(): void {
       flushNow();
@@ -966,6 +1240,7 @@ export function createWorkspaceStreamPresenter(
       activeRunId = null;
       activeAssistantMessageId = null;
       pinnedRowIds.clear();
+      activeTurnAccumulator.clear();
       // Review C8: transient retry/recovery banners never outlive their run.
       retry = null;
       recovery = null;
