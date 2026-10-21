@@ -1,7 +1,7 @@
 # Local Commit Quality Gate — Technical Design
 
-Status: Proposed; paths and commands marked proposed are not implemented.  
-Date: 2026-10-21  
+Status: Proposed; paths and commands marked proposed are not implemented.
+Date: 2026-10-21
 Requirements: [PRD.md](PRD.md)
 
 ## 1. Technical decision
@@ -145,6 +145,168 @@ Enable `@typescript-eslint/no-floating-promises` and `@typescript-eslint/no-misu
 Include relevant source, test, and tooling files explicitly. Validate Vue typed-script handling against real fixtures. An excluded file or unavailable parser service is a setup failure, not permission to silently disable a requested typed rule. Report any intentional scope exclusions.
 
 Deep validation uses the working tree and says so in its output. It is not an index-exact commit validator. It sequentially runs typed lint, `yarn typecheck`, and `yarn vue-typecheck`; it stops on failure and never invokes watch scripts. Test suites remain independently selected according to the code change.
+
+### 7.1 SonarJS setup and configuration recipe
+
+The following is the intended ESLint 8 integration. These snippets document proposed files; they do not install the plugin or implement the coordinator/exception logic. Execute commands from the repository root during implementation.
+
+#### A. Select and install the plugin
+
+Inspect the candidate package metadata before installation:
+
+```sh
+npm view eslint-plugin-sonarjs version peerDependencies engines license --json
+```
+
+After selecting a version that passes section 3, install that exact release:
+
+```sh
+# Replace the placeholder with the exact release verified in section 3.
+yarn add --dev --exact eslint-plugin-sonarjs@<verified-version>
+```
+
+`<verified-version>` is a documentation placeholder, not a literal shell argument. Do not run the installation line unchanged. An exact release is intentionally not invented here: peer compatibility and the Vue fixtures must be verified together. Reuse the existing ESLint, TypeScript ESLint, and Vue plugins; declare `vue-eslint-parser` directly if the new configuration refers to it explicitly. Commit the manifest and lockfile together.
+
+These are setup-time network operations. The installed hook must never execute them.
+
+#### B. Define selected SonarJS rules
+
+Proposed `scripts/quality/policy.cjs`, showing the SonarJS portion only:
+
+```js
+module.exports = {
+  sonarRules: {
+    'sonarjs/cognitive-complexity': ['error', 15],
+    'sonarjs/no-identical-functions': 'error',
+    'sonarjs/no-all-duplicated-branches': 'error',
+  },
+};
+```
+
+The `sonarjs/` prefix selects the plugin namespace; `error` makes an unexcepted finding blocking. The number `15` is the per-function cognitive-complexity limit. Change this shared value to tune the threshold, then re-run fixtures, inventory, and benchmarks. Do not duplicate the numeric policy in the hook or exception adapter.
+
+Do not add `plugin:sonarjs/recommended` indiscriminately. Preset names/shapes differ between releases and legacy/flat configuration. This design registers the plugin and lists the selected rules directly, so it does not depend on a recommended preset alias.
+
+#### C. Connect the fast ESLint profile and Vue parser
+
+Proposed `scripts/quality/eslint-fast.cjs`, a SonarJS integration example:
+
+```js
+const { sonarRules } = require('./policy.cjs');
+
+module.exports = {
+  root: true,
+  // Preserve existing Vue rules, environment settings, and overrides.
+  extends: [require.resolve('../../.eslintrc.json')],
+  plugins: ['sonarjs'],
+  rules: {
+    ...sonarRules,
+  },
+  overrides: [
+    {
+      files: ['**/*.ts', '**/*.tsx'],
+      parser: '@typescript-eslint/parser',
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+      },
+    },
+    {
+      files: ['**/*.vue'],
+      parser: 'vue-eslint-parser',
+      parserOptions: {
+        parser: '@typescript-eslint/parser',
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        extraFileExtensions: ['.vue'],
+      },
+    },
+  ],
+};
+```
+
+This is a deliberate explicit extension of the current JSON config, not automatic filesystem discovery. During configuration consolidation, replace that extension with the extracted authoritative base policy if `.eslintrc.json` is removed. Never make the base extend the fast profile as well: that would create a configuration cycle. Remove the redundant `package.json.eslintConfig` after verifying equivalent behavior for `yarn lint`.
+
+Merge the TypeScript severity overrides, CommonJS/JSX environments, declaration/test exceptions, approved ignores, and architecture rules from section 7 into the production profile; this snippet isolates the SonarJS/Vue wiring rather than pretending to implement every policy requirement. Keep `parserOptions.project` absent from fast configuration. Check the inherited effective configuration to ensure it has not enabled type services.
+
+Vue templates continue to use Vue rules. SonarJS analyzes the script AST and must not be represented as a comprehensive Vue-template analyzer.
+
+#### D. Point the runner and hook at this profile
+
+The ESLint 8 Node runner must instantiate ESLint with these options:
+
+```js
+const options = {
+  cwd: repositoryRoot,
+  useEslintrc: false,
+  overrideConfigFile: fastConfigAbsolutePath,
+  resolvePluginsRelativeTo: repositoryRoot,
+  fix: false,
+};
+```
+
+`repositoryRoot` and `fastConfigAbsolutePath` are resolved absolute paths from the coordinator, not user-controlled shell fragments. Call `lintFiles` with the provided filename array, validate operational failures, apply section 9's reviewed exceptions, then return nonzero for remaining errors. Do not convert missing-plugin errors or parser errors into accepted debt.
+
+Proposed `scripts/quality/lint-staged.config.mjs`:
+
+```js
+export default {
+  '*.{js,jsx,cjs,mjs,ts,tsx,vue}': 'node scripts/quality/lint-files.mjs',
+};
+```
+
+The coordinator explicitly selects this configuration, sets `concurrent: false`, preserves default backups/partial-staging isolation, and runs lint-staged only once. lint-staged appends selected filenames; the runner consumes them as an array without shell splitting. Preserve any other legitimate existing staged tasks when consolidating configuration.
+
+Proposed `.husky/pre-commit`:
+
+```sh
+node scripts/quality/pre-commit.mjs
+```
+
+The coordinator is mandatory: substituting a bare ESLint command would omit policy consistency, exceptions, and recovery checks specified by this design. Implement these scripts before replacing the current hook.
+
+#### E. Inspect and verify configuration
+
+After installing the plugin and creating the proposed fast configuration:
+
+```sh
+# Inspect the resolved rule/parser configuration for an existing TS file.
+yarn exec eslint --no-eslintrc --config scripts/quality/eslint-fast.cjs --print-config src/background.ts
+
+# Inspect Vue parsing and SonarJS rules separately.
+yarn exec eslint --no-eslintrc --config scripts/quality/eslint-fast.cjs --print-config src/views/components/aiChatV2/AiChatV2.vue
+
+# Check a working-tree file without modifying it.
+yarn exec eslint --no-eslintrc --config scripts/quality/eslint-fast.cjs --no-fix src/background.ts
+```
+
+The direct ESLint command does not apply the custom legacy exception manifest and is not a staged-snapshot check. After the full runner exists, use `yarn quality:staged` for the actual commit policy. Inspection should show `sonarjs/cognitive-complexity` severity 2 with limit 15, the two other SonarJS rules enabled, and the correct Vue parser for `.vue` files.
+
+Use this isolated fixture to prove that the plugin actually detects a violation:
+
+```ts
+export function chooseLabel(enabled: boolean): string {
+  if (enabled) {
+    return 'same';
+  } else {
+    return 'same';
+  }
+}
+```
+
+Expect `sonarjs/no-all-duplicated-branches`. Replace the conditional with `return enabled ? 'enabled' : 'disabled';` and expect this rule to pass. Also exercise a fixture whose complexity exceeds 15 and a corrected fixture at/below the ceiling. Run these in the dedicated harness; do not leave intentionally invalid fixtures in ordinary source directories.
+
+| Failure | Configuration action |
+|---|---|
+| Cannot find `eslint-plugin-sonarjs` | Install locked development dependencies locally; check plugin resolution root |
+| Definition for a SonarJS rule was not found | Verify pinned plugin exports and exact rule ID; never suppress the error |
+| Vue parse failure at `<template>` | Restore `vue-eslint-parser` as the outer parser |
+| Rule requests parser services | Remove it from the fast profile or configure it explicitly in the deep profile |
+| Unexpected rules or type-analysis startup | Inspect effective configuration and remove unintended inherited presets |
+| Valid direct lint but rejected commit | Check staged content and exception/policy diagnostics; working tree may differ |
+
+The plugin configuration is local. Do not add `sonar-project.properties`, a SonarQube server URL, or a token for this ESLint-based integration. Consult the [current SonarJS ESLint plugin documentation](https://github.com/SonarSource/SonarJS/blob/master/packages/analysis/src/jsts/rules/README.md) alongside the selected release's own README; current upstream examples may target a newer ESLint major.
 
 ## 8. Architecture rules and limits
 

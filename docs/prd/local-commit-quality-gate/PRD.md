@@ -1,8 +1,8 @@
 # Local Commit Quality Gate — Product Requirements
 
-Status: Proposed; this document does not install or enable the gate.  
-Date: 2026-10-21  
-Project: AiFetchly  
+Status: Proposed; this document does not install or enable the gate.
+Date: 2026-10-21
+Project: AiFetchly
 Technical companion: [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md)
 
 ## 1. Problem and intended outcome
@@ -97,6 +97,33 @@ The initial policy combines bug patterns with maintainability limits:
 | Unhandled/misused promises requiring type information | Deep local command, not routine pre-commit |
 
 A complexity value of 15 is a proposed project threshold, not a proven boundary between correct and incorrect code. It measures function reasoning complexity, unlike FTA's file aggregate. Refactoring should improve cohesion and readability; splitting files merely to manipulate a score is not an acceptance criterion.
+
+### 7.1 SonarJS configuration deliverable
+
+The implementation must include a copyable setup guide, not just a list of tools. Follow technical design section 7.1 for the actual configuration examples.
+
+1. Install an exact compatible `eslint-plugin-sonarjs` release as a development dependency and commit `yarn.lock`. No global installation or server is required.
+2. Register `sonarjs` in the ESLint 8 `plugins` array. Use the existing Vue parser configuration and delegate TypeScript script parsing correctly.
+3. Enable these initial SonarJS rules explicitly:
+
+```json
+{
+  "plugins": ["sonarjs"],
+  "rules": {
+    "sonarjs/cognitive-complexity": ["error", 15],
+    "sonarjs/no-identical-functions": "error",
+    "sonarjs/no-all-duplicated-branches": "error"
+  }
+}
+```
+
+This is a configuration fragment to merge with the existing policy, not a replacement for the repository's entire ESLint configuration. Do not enable the complete SonarJS recommended preset in the fast hook: it may introduce expensive, type-dependent, or noisy rules beyond the selected policy.
+
+4. Connect the explicit fast profile to the existing Husky/lint-staged flow. A SonarJS error must reject a staged commit; a warning must remain nonblocking.
+5. Document how to change the complexity limit, inspect effective rules, run a single-file check, and diagnose missing-plugin/configuration errors.
+6. Verify a deliberately duplicated-branch fixture fails and a corrected fixture passes, including a Vue script fixture.
+
+Configuration acceptance: the guide must identify exact file locations, show install and verification commands, distinguish ESLint 8 legacy syntax from ESLint 9 flat syntax, and explain that the three SonarJS rules above require no SonarQube account, service URL, or token. Version compatibility must be established before publishing the final installation command with its exact version.
 
 ## 8. Legacy code rollout
 
