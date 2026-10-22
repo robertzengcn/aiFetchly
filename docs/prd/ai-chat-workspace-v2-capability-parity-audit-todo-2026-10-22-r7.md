@@ -6,7 +6,9 @@ Authorities: [PRD](./ai-chat-workspace-v2-capability-parity-prd.md), [technical 
 
 **Verdict: not complete.** The original R6-01/02/03 cases are addressed and the deterministic voice journey now passes. This review reproduced **two additional code defects through three focused checks** and rechecked the already-open reload-preservation issue. Remaining real-runtime, accessibility/browser and soak evidence is listed separately. This is an incremental audit of the updated implementation and adjacent failure paths, not an exhaustive security review of the entire application.
 
-No application fixes were applied at audit time. Only this report was intended for that commit. (**Superseded:** the follow-up fix round committed `442d3197d`, `e185d7801` and `4d6347963` on this same worktree — see the final-revision addendum at the end.) The earlier untracked `...audit-todo-2026-10-20.md` remained untouched.
+No application fixes were applied at audit time. Only this report was intended for that commit. (**Superseded:** the follow-up fix round committed `442d3197d`, `e185d7801` and `4d6347963` on this same worktree, then the R7-04 projection fix committed `110519323` with the doc addendum `c5eb0b617` — see the final-revision addendum at the end.) The earlier untracked `...audit-todo-2026-10-20.md` remained untouched.
+
+**Verdict update (2026-10-22): every agent-completable defect in this report (R7-01, R7-02, R7-03 and R7-04) is fixed, tested and committed.** The R7-04 projection fix landed as `110519323` and this document's R7-04 fix record is part of the follow-up docs commit ("docs: R7-04 fix record" — see git log for the hash). All remaining work is the release certification the codebase cannot self-supply: V01 real speech-runtime models, V02 manual AT/platform/browser evidence, V03 soak/sign-off. Definition of Done is not met until those are recorded.
 
 ## Fresh verification
 
@@ -134,7 +136,7 @@ All functional families are accounted for below. “Retained” means the previo
 | FR-VOI-001–010 | Deterministic success/failure E2E now passes; real-runtime V01 remains. |
 | FR-WSP-001–010 | Workspace/trust/watcher/memory retained; remaining platform/runtime verification. |
 | FR-REC-001–008 | Runtime hydration fixed; event-buffer ownership fixed in the fix round (addendum R7-01); soak remains. |
-| FR-LIF-001–006 | Reload/restore rebuilt in the fix round (addendum R7-03); new durable sidebar-projection follow-up recorded below (addendum R7-04). |
+| FR-LIF-001–006 | Reload/restore rebuilt in the fix round (addendum R7-03); durable sidebar projection closed in the fix round (`110519323`, addendum R7-04 fix record). |
 | FR-SKL-001–006 | Installation/approval/invocation retained; final integration/accessibility checks remain. |
 | FR-BRW-001–006 | Managed-browser surfaces retained; authenticated V02 lifecycle evidence remains. |
 | FR-HIS-001–005 | Row/adoption/eviction cases fixed; protected-content overflow fallback fixed in the fix round (addendum R7-02); soak remains. |
@@ -182,6 +184,31 @@ Regression: `test/vitest/main/components/store/selectedConversation.r7OverflowAc
 - **Impact / follow-up:** sidebar *persistence fidelity* — a reload can leave the sidebar temporarily empty of prior-session rows, and any restore scheme that validates against the boot projection would drop valid pointers (this is precisely what a first R7-03 draft did; the pointer-based semantics above replaced it). A dedicated fix should couple projection upserts into the durable turn path (e.g. `AIChatV2Module` persist paths or the bridge terminal mapping) and make the boot backfill idempotent-safe under concurrent backfills; needs its own audit + evidence cycle. Not fixed in this round.
 - **Requires:** PRD §10 sidebar durability, design §8.6 projection precedence; regression should assert durably persisted conversations appear in the boot projection after a reload that was preceded by a full turn.
 
+#### R7-04 fix record (fix round, commit `110519323`)
+
+**Design (mirrors the coordinator's direct-send projection semantics; no double counting):**
+
+1. **User moment — promote coupling** (`AIChatPendingMessageModule.ts`): `promoteDispatchToUserMessage` and `promoteSteeringToUserMessage` now call `AIChatConversationModule.recordMessagePersisted({ isResult: false, previewText: saved.content, generatedTitle: saved.content, timestamp: saved.timestamp })` after the promote resolves. Promotion is exactly-once (`pendingModel.promoteDispatchToUserMessage` status CAS; steering leaves `applied`), so retries cannot double-count; only the queue service and `createSteeringPromoter` reach these methods, so there is no overlap with the coordinator path. Best effort — a projection failure logs and never fails the turn.
+2. **Result moment — terminal coupling** (`AIChatTurnQueueService.ts`): new optional dep `conversationModule` + `recordTurnResult({ conversationId, assistantMessageId, status })` on `AIChatConversationModule` — reads the turn's durable assistant row (`assistant-pending-<pendingId>`, the row the engine persisted), skips when the row is absent (failed turns with no partial content) or the content is empty, projects otherwise with `isResult: status === "completed"` (cancelled/failed never mark unread — parity with the coordinator's terminal projection). Called after `persistTerminal` success in the completed **and** cancelled/failed branches and in `settleParkedRunContinuation` after the gate flush; try/catch warn-only so the queue advance is never blocked.
+3. **IPC wiring** (`ai-chat-v2-ipc.ts` `getQueueService()`): passes `conversationModule: new AIChatConversationModule()`.
+4. **Backfill race resilience** (`AIChatConversationModule.ts` `backfillProjections`): the per-row path now isolates failures — a row materialized concurrently by a live coupling adds `(+1)` on the unique index instead of aborting the pass (previously the exact unique-constraint hit from my race probe crashed the whole backfill); skipped rows are logged and reconciled by the next pass.
+5. **Circular imports checked:** `AIChatPendingMessageModule → AIChatConversationModule → AIChatV2Module` and queue service → conversation module; nothing imports back into the queue service.
+
+**Tests (TDD: written first, red-verified, then greened):**
+
+- `test/vitest/main/service/AIChatTurnQueueService.test.ts` — new describe "AIChatTurnQueueService conversation projection parity (audit R7-04)" (4 tests): a completed drain materializes the projection (preview = assistant answer, generated title = first user content, unread, sidebar membership via `getWorkspaceSidebar`); a cancelled drain projects the partial assistant content but **never** sets unread/lastResultAt; a failed drain with no assistant row still registers the user message; steering promotion advances only the preview (title pinned to turn A). Red-verified before implementation (projection absent / unique-constraint crash), green after.
+- `test/vitest/main/aiChatWorkspaceProjectionBackfillRace.test.ts` — new file (2 tests): the unique-index race simulation through the REAL module ⇒ `backfillProjections` returns `changed: 0` and the concurrently materialized row survives intact (previously: the pass crashed); plus an idempotency pin asserting rows the live couplings created are not re-written by backfill.
+
+**Gates after the R7-04 fix (HEAD `110519323`):**
+
+| Check | Result |
+| --- | --- |
+| R7-04 targeted files (2 files, real sqlite) | **28 passed** (was 6 red pre-fix). |
+| Full `yarn testmain` | **8,642 tests passed**; the only 2 failures (`PortableMemoryPrivacyReview`, `SkillInstallationLifecycle`) reproduce identically on the pre-R7-04-HEAD baseline — pre-existing, unrelated to this change (their full-suite flakes in other files rebased away on rerun). |
+| `yarn test:components` | **165 files / 1,370 tests passed.** |
+| `yarn typecheck` / `yarn vue-typecheck` | Passed (26.17 s / 46.57 s). |
+| E2E after `yarn build:e2e` | **179 passed / 2 skipped, 0 failures (29.1 min).** |
+
 ### Decision on restore validation (recorded)
 
 The first implementation validated the pointer against the boot-time sidebar projection and was shown to **drop valid pointers** exactly because of R7-04 (instrumented evidence: `[absence check 0 [] null]`). The committed design therefore treats the snapshot as the validator. Deleted conversations: `loadHistoryPage` returns an empty page for unknown ids, so a deleted selection hydrates as an empty idle transcript; it does not error and does not start a run. Durable summary rows reconcile at the next process start (`backfillProjections`). This is an honest limitation recorded under R7-04 instead of a hidden failure.
@@ -201,4 +228,4 @@ Log: `/tmp/opencode/parity-r7-final-e2e.log`. Debug instrumentation used during 
 
 ### Remaining work (unchanged from the audit body)
 
-V01 real speech-runtime certification, V02 manual AT/platform/browser/accessibility evidence (the final gate rerun part of V02 is now supplied above) and V03 soak/sign-off remain open, as does R7-04. Six-language parity: no user-facing text was added in this fix round (pointer persistence is invisible; restore reuses existing surfaces), so no `src/views/lang/` change is required.
+V01 real speech-runtime certification, V02 manual AT/platform/browser/accessibility evidence (the final gate rerun part of V02 is now supplied above) and V03 soak/sign-off remain open **as the only remaining items — R7-04 is fixed (see its fix record and the addendum)**. Six-language parity: no user-facing text was added in this fix round (pointer persistence is invisible; restore reuses existing surfaces; the R7-04 projection coupling is renderer-invisible), so no `src/views/lang/` change is required.
