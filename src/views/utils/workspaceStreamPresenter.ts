@@ -290,29 +290,43 @@ export function createWorkspaceStreamPresenter(
     },
   };
 
+  /**
+   * Audit R7-02 overflow definition: a turn's logical content population
+   * may legitimately exceed the mounted-window policy (the bound is
+   * authoritative). Multi-row work (batched delta flushes, terminal
+   * re-materialization of registered rows) must mutate the row set as ONE
+   * presentation step, then let the single bound re-establishment decide
+   * which rows leave — per-append syncs would instead let each re-mounted
+   * row evict its predecessor in a procession and lose the turn's
+   * earliest content before the bound even sees the final population.
+   */
+  let suppressSync = false;
+
   function updateMessage(
     messageId: string,
     updater: (view: ChatV2MessageView) => ChatV2MessageView
   ): void {
     messages = messages.map((m) => (m.id === messageId ? updater(m) : m));
-    notifyMutate?.();
+    if (!suppressSync) notifyMutate?.();
   }
 
   function appendMessage(
     view: ChatV2MessageView,
-    options?: { pin?: boolean }
+    options?: { pin?: boolean; silentSync?: boolean }
   ): void {
     // Idempotent append keyed by message id (duplicate terminal events).
     if (messages.some((m) => m.id === view.id)) return;
     // Active-turn rows (assistant answer, tool/plan cards) survive window
     // eviction while their run streams (audit R5-01). The optimistic user
     // row pins nothing — it is replaced or removed once the send is
-    // accepted and must never block eviction of settled history.
+    // accepted and must never block eviction of settled history. Pinning
+    // is INDEPENDENT of sync suppression (audit R7-02): a batched append
+    // still joins the active-turn protection.
     if (options?.pin ?? streamStatus === "streaming") {
       pinnedRowIds.add(view.id);
     }
     messages = [...messages, view];
-    notifyMutate?.();
+    if (!options?.silentSync) notifyMutate?.();
   }
 
   function scheduleBufferedFlush(): void {
@@ -369,30 +383,36 @@ export function createWorkspaceStreamPresenter(
    * recreation. The row is re-appended at the tail (its run is still the
    * active one) and re-pinned.
    */
-  function materializeFromAccumulator(messageId: string): void {
+  function materializeFromAccumulator(
+    messageId: string,
+    options?: { silentSync?: boolean }
+  ): void {
     const accumulated = activeTurnAccumulator.get(messageId);
     if (!accumulated) return;
     if (messages.some((m) => m.id === messageId)) return;
-    appendMessage({
-      id: messageId,
-      conversationId: conversationId ?? "",
-      role: "assistant",
-      content: accumulated.content,
-      timestamp: new Date().toISOString(),
-      messageType: MessageType.MESSAGE,
-      metadata: {
-        source: "chat-v2",
-        ...(accumulated.reasoning
-          ? {
-              reasoning: {
-                content: accumulated.reasoning,
-                format: "plain_text" as const,
-                source: "server" as const,
-              },
-            }
-          : {}),
+    appendMessage(
+      {
+        id: messageId,
+        conversationId: conversationId ?? "",
+        role: "assistant",
+        content: accumulated.content,
+        timestamp: new Date().toISOString(),
+        messageType: MessageType.MESSAGE,
+        metadata: {
+          source: "chat-v2",
+          ...(accumulated.reasoning
+            ? {
+                reasoning: {
+                  content: accumulated.reasoning,
+                  format: "plain_text" as const,
+                  source: "server" as const,
+                },
+              }
+            : {}),
+        },
       },
-    });
+      options?.silentSync ? { silentSync: true } : undefined
+    );
   }
 
   function ensureAssistantView(messageId: string): void {
@@ -422,17 +442,31 @@ export function createWorkspaceStreamPresenter(
       return;
     }
     activeAssistantMessageId = messageId;
-    // Fresh rows under review never carry prior content.
-    activeTurnAccumulator.set(messageId, { content: "", reasoning: "" });
-    appendMessage({
-      id: messageId,
-      conversationId: conversationId ?? "",
-      role: "assistant",
-      content: "",
-      timestamp: new Date().toISOString(),
-      messageType: MessageType.MESSAGE,
-      metadata: { source: "chat-v2" },
-    });
+    // Audit R7-02: an absent row may still own a SAVED accumulation — the
+    // bound-authoritative final eviction pass ("the bound is authoritative;
+    // the accumulator still re-materializes the content") deliberately lets
+    // content-bearing rows leave the mounted window on the premise that the
+    // turn accumulator survives. Recreating an empty row here erases that
+    // premise: materialize the evicted row from its existing accumulation
+    // first (text AND reasoning), and initialize empty content ONLY for a
+    // genuinely new logical message. The accumulator population stays
+    // turn-scoped (cleared on seed/dispose/run terminal), so it never grows
+    // across turns; within one turn it is bounded by the turn's own
+    // message population.
+    materializeFromAccumulator(messageId);
+    if (!messages.some((m) => m.id === messageId)) {
+      // Fresh rows under review never carry prior content.
+      activeTurnAccumulator.set(messageId, { content: "", reasoning: "" });
+      appendMessage({
+        id: messageId,
+        conversationId: conversationId ?? "",
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toISOString(),
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2" },
+      });
+    }
   }
 
   function applyChunk(runId: string, chunk: Record<string, unknown>): void {
@@ -827,8 +861,17 @@ export function createWorkspaceStreamPresenter(
         // fullContent still owes its accumulated rows to the display —
         // materialize evicted registered rows BEFORE the pins/accumulator
         // retire, so paged-back saved text survives cancellation as well.
-        for (const registeredId of [...activeTurnAccumulator.keys()]) {
-          materializeFromAccumulator(registeredId);
+        // Audit R7-02: the re-materialization mutates the row set as ONE
+        // presentation step; the post-loop bound re-establishment decides
+        // the survivors (per-append syncs would evict every re-mounted
+        // row's predecessor in a procession and lose the earliest content).
+        suppressSync = true;
+        try {
+          for (const registeredId of [...activeTurnAccumulator.keys()]) {
+            materializeFromAccumulator(registeredId, { silentSync: true });
+          }
+        } finally {
+          suppressSync = false;
         }
         activeTurnAccumulator.clear();
         streamStatus = "error";
@@ -863,8 +906,14 @@ export function createWorkspaceStreamPresenter(
         // Audit R6-02/R6-03: same terminal materialization as the error
         // path — cancelled turns still keep their accumulated text on the
         // display instead of silently dropping the evicted prefix.
-        for (const registeredId of [...activeTurnAccumulator.keys()]) {
-          materializeFromAccumulator(registeredId);
+        // Audit R7-02: same one-step re-materialization discipline.
+        suppressSync = true;
+        try {
+          for (const registeredId of [...activeTurnAccumulator.keys()]) {
+            materializeFromAccumulator(registeredId, { silentSync: true });
+          }
+        } finally {
+          suppressSync = false;
         }
         activeTurnAccumulator.clear();
         streamStatus = "cancelled";
@@ -903,54 +952,64 @@ export function createWorkspaceStreamPresenter(
       else entry.reasoning += delta.text;
       byMessage.set(delta.messageId, entry);
     }
-    for (const [messageId, entry] of byMessage) {
-      // Audit R6-02/R6-03: the accumulator is the authoritative content for
-      // registered (active-turn) rows. If the row fell out of the mounted
-      // window (dedupe adoption hazard, pinned-population overflow), the
-      // flush RESTORES the full observed accumulation instead of appending
-      // onto a recreated empty row — `saved prefix suffix`, `prefix suffix`
-      // etc. survive whichever row-state hazard hit the turn.
-      materializeFromAccumulator(messageId);
-      const accumulated = activeTurnAccumulator.get(messageId);
-      updateMessage(messageId, (m) => {
-        if (accumulated) {
-          // Full cumulative text observed for the turn so far — includes
-          // this flush's pending deltas (the accumulator advanced at
-          // appendDelta, before the batch window closed).
+    // Audit R7-02: the flush mutates the row set as ONE presentation step —
+    // per-entry syncs would re-arm the mount bound per re-materialized row
+    // and churn the turn's earliest content before the mount bound saw the
+    // final population. One sync opens the window (above), one closes it.
+    suppressSync = true;
+    try {
+      for (const [messageId, entry] of byMessage) {
+        // Audit R6-02/R6-03: the accumulator is the authoritative content for
+        // registered (active-turn) rows. If the row fell out of the mounted
+        // window (dedupe adoption hazard, pinned-population overflow), the
+        // flush RESTORES the full observed accumulation instead of appending
+        // onto a recreated empty row — `saved prefix suffix`, `prefix suffix`
+        // etc. survive whichever row-state hazard hit the turn.
+        materializeFromAccumulator(messageId, { silentSync: true });
+        const accumulated = activeTurnAccumulator.get(messageId);
+        updateMessage(messageId, (m) => {
+          if (accumulated) {
+            // Full cumulative text observed for the turn so far — includes
+            // this flush's pending deltas (the accumulator advanced at
+            // appendDelta, before the batch window closed).
+            return {
+              ...m,
+              content: entry.content ? accumulated.content : m.content,
+              metadata: accumulated.reasoning
+                ? {
+                    ...(m.metadata ?? { source: "chat-v2" as const }),
+                    reasoning: {
+                      content: accumulated.reasoning,
+                      format: "plain_text" as const,
+                      source: "server" as const,
+                    },
+                  }
+                : m.metadata,
+            };
+          }
+          // Unregistered deltas (turn already retired between buffer and
+          // flush) keep the legacy incremental presentation.
+          const reasoningBefore = m.metadata?.reasoning?.content ?? "";
           return {
             ...m,
-            content: entry.content ? accumulated.content : m.content,
-            metadata: accumulated.reasoning
+            content: entry.content ? m.content + entry.content : m.content,
+            metadata: entry.reasoning
               ? {
                   ...(m.metadata ?? { source: "chat-v2" as const }),
                   reasoning: {
-                    content: accumulated.reasoning,
+                    content: reasoningBefore + entry.reasoning,
                     format: "plain_text" as const,
                     source: "server" as const,
                   },
                 }
               : m.metadata,
           };
-        }
-        // Unregistered deltas (turn already retired between buffer and
-        // flush) keep the legacy incremental presentation.
-        const reasoningBefore = m.metadata?.reasoning?.content ?? "";
-        return {
-          ...m,
-          content: entry.content ? m.content + entry.content : m.content,
-          metadata: entry.reasoning
-            ? {
-                ...(m.metadata ?? { source: "chat-v2" as const }),
-                reasoning: {
-                  content: reasoningBefore + entry.reasoning,
-                  format: "plain_text" as const,
-                  source: "server" as const,
-                },
-              }
-            : m.metadata,
-        };
-      });
+        });
+      }
+    } finally {
+      suppressSync = false;
     }
+    notifyMutate?.();
   }
 
   return {
