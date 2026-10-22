@@ -51,6 +51,20 @@ function parseFor(fileName, code) {
  * Collect direct module specifiers with their AST nodes.
  * Returns [{ specifier, node, typeOnly }] for import/require/import().
  */
+/**
+ * BUG-8: a declaration is type-only when the declaration itself is
+ * `import type` / `export type`, OR when EVERY named specifier carries the
+ * inline `type` modifier (`import { type Foo } from ...`). A mixed
+ * value-and-type import still counts as a runtime import and blocks.
+ */
+function declarationIsTypeOnly(node) {
+  if (node.importKind === 'type' || node.exportKind === 'type') return true;
+  if (Array.isArray(node.specifiers) && node.specifiers.length > 0) {
+    return node.specifiers.every((spec) => spec.importKind === 'type');
+  }
+  return false;
+}
+
 export function collectDirectImports(ast, code) {
   void code;
   const found = [];
@@ -59,13 +73,13 @@ export function collectDirectImports(ast, code) {
       found.push({
         specifier: node.source.value,
         node,
-        typeOnly: node.importKind === 'type',
+        typeOnly: declarationIsTypeOnly(node),
       });
     } else if (node.type === 'ExportNamedDeclaration' && node.source) {
       found.push({
         specifier: node.source.value,
         node,
-        typeOnly: node.exportKind === 'type',
+        typeOnly: declarationIsTypeOnly(node),
       });
     } else if (node.type === 'ExportAllDeclaration' && node.source) {
       found.push({
@@ -121,78 +135,80 @@ export function collectDirectImports(ast, code) {
  * Run the two architecture rules over selected files.
  * Returns ESLint-shaped findings: [{ filePath, line, column, ruleId, message }].
  */
+function architectureFindingsForFile(file, rel, isWorker, repoRoot) {
+  void repoRoot;
+  const findings = [];
+  const ruleId = isWorker
+    ? 'aifetchly/no-worker-db-imports'
+    : 'aifetchly/no-ipc-db-imports';
+  const layer = isWorker
+    ? 'worker (src/childprocess)'
+    : 'IPC handler (src/main-process/communication)';
+
+  let code;
+  try {
+    code = readFileSync(file, 'utf8');
+  } catch (e) {
+    // BUG-9: fatal:true — read failures can NEVER be excepted (PRD §8.8).
+    findings.push({
+      filePath: file, line: 0, column: 0, ruleId,
+      message: `architecture check could not read the file: ${e.message}`,
+      fatal: true,
+    });
+    return findings;
+  }
+
+  let ast;
+  try {
+    ast = parseFor(file, code);
+  } catch (e) {
+    findings.push({
+      filePath: file, line: 0, column: 0, ruleId,
+      message: `architecture check parse failure (never exceptable): ${e.message}`,
+      fatal: true,
+    });
+    return findings;
+  }
+
+  const prohibitedList = isWorker ? localRules.worker : localRules.ipc;
+  for (const entry of collectDirectImports(ast, code)) {
+    if (entry.typeOnly) continue;
+    const prohibited = localRules._internals.isProhibited(
+      entry.specifier,
+      rel,
+      prohibitedList.repoPrefixes,
+      prohibitedList.packages
+    );
+    if (prohibited) {
+      findings.push({
+        filePath: file,
+        line: entry.node.loc ? entry.node.loc.start.line : 0,
+        column: entry.node.loc ? entry.node.loc.start.column + 1 : 0,
+        ruleId,
+        message:
+          `${entry.specifier} is a prohibited direct dependency for ${layer} files ` +
+          `(database access belongs to the main process via Modules).`,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Run the two architecture rules over selected files.
+ * Returns ESLint-shaped findings: [{ filePath, line, column, ruleId, message }].
+ */
 export function checkArchitecture(files, repoRoot) {
   const findings = [];
-  // Scope by path SEGMENT so nested fixture roots (and the real tree) match:
-  // both 'src/childprocess/x.ts' and 'tmp-quality-arch/src/childprocess/x.ts'.
-  const inWorkerScope = (rel) => rel.startsWith('src/childprocess/') || rel.includes('/src/childprocess/');
-  const inIpcScope = (rel) =>
-    rel.startsWith('src/main-process/communication/') ||
-    rel.includes('/src/main-process/communication/');
+  const workerScope = /(^|\/)src\/childprocess\//;
+  const ipcScope = /(^|\/)src\/main-process\/communication\//;
 
   for (const file of files) {
     const rel = path.relative(repoRoot, file).split(path.sep).join('/');
-    const isWorker = inWorkerScope(rel);
-    const isIpc = inIpcScope(rel);
+    const isWorker = workerScope.test(rel);
+    const isIpc = ipcScope.test(rel);
     if (!isWorker && !isIpc) continue;
-
-    let code;
-    try {
-      code = readFileSync(file, 'utf8');
-    } catch (e) {
-      findings.push({
-        filePath: file,
-        line: 0,
-        column: 0,
-        ruleId: isWorker ? 'aifetchly/no-worker-db-imports' : 'aifetchly/no-ipc-db-imports',
-        message: `architecture check could not read the file: ${e.message}`,
-      });
-      continue;
-    }
-
-    let ast;
-    try {
-      ast = parseFor(file, code);
-    } catch (e) {
-      findings.push({
-        filePath: file,
-        line: 0,
-        column: 0,
-        ruleId: isWorker ? 'aifetchly/no-worker-db-imports' : 'aifetchly/no-ipc-db-imports',
-        message: `architecture check parse failure (never exceptable): ${e.message}`,
-      });
-      continue;
-    }
-
-    const ruleId = isWorker
-      ? 'aifetchly/no-worker-db-imports'
-      : 'aifetchly/no-ipc-db-imports';
-    const layer = isWorker
-      ? 'worker (src/childprocess)'
-      : 'IPC handler (src/main-process/communication)';
-
-    for (const entry of collectDirectImports(ast, code)) {
-      if (entry.typeOnly) continue;
-      const repoPrefixes = ['src/model', 'src/entity', 'src/config/SqliteDb'];
-      const packages = ['typeorm', 'better-sqlite3', 'sqlite3'];
-      const prohibited = localRules._internals.isProhibited(
-        entry.specifier,
-        rel,
-        repoPrefixes,
-        packages
-      );
-      if (prohibited) {
-        findings.push({
-          filePath: file,
-          line: entry.node.loc ? entry.node.loc.start.line : 0,
-          column: entry.node.loc ? entry.node.loc.start.column + 1 : 0,
-          ruleId,
-          message:
-            `${entry.specifier} is a prohibited direct dependency for ${layer} files ` +
-            `(database access belongs to the main process via Modules).`,
-        });
-      }
-    }
+    findings.push(...architectureFindingsForFile(file, rel, isWorker, repoRoot));
   }
   return findings;
 }

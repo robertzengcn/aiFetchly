@@ -6,6 +6,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -138,5 +139,56 @@ describe('collectDirectImports internals', () => {
     const ast = mod._internals.parseFor('x.ts', code);
     const found = collectDirectImports(ast, code);
     assert.equal(found.length, 0);
+  });
+});
+
+describe('audit bug fixes (BUG-7/8/9)', () => {
+  test('BUG-7: SqliteDb with extension or index segment is prohibited', async () => {
+    const internals = nodeRequire(
+      path.join(repoRoot, 'scripts/quality/rules/index.cjs')
+    )._internals;
+    const P = ['src/model', 'src/entity', 'src/config/SqliteDb'];
+    const pkgs = ['typeorm', 'better-sqlite3'];
+    for (const spec of ['@/config/SqliteDb.ts', '@/config/SqliteDb.js', '@/config/SqliteDb/index.ts']) {
+      assert.equal(internals.isProhibited(spec, 'src/childprocess/w.ts', P, pkgs), true, spec);
+    }
+    // Near-miss file name is NOT prohibited
+    assert.equal(internals.isProhibited('@/config/SqliteDbFoo', 'src/childprocess/w.ts', P, pkgs), false);
+  });
+
+  test('BUG-8: all-inline-type import is allowed; mixed value+type blocks', async () => {
+    const mod = await import(
+      pathToFileURL(path.join(repoRoot, 'scripts/quality/architecture-check.mjs')).href
+    );
+    const allType = "import { type Foo } from '@/entity/Foo.entity';\nexport const x = 1;\n";
+    const mixed = "import { type Foo, Bar } from '@/entity/Foo.entity';\nexport const x = Bar;\n";
+    const astAll = mod._internals.parseFor('a.ts', allType);
+    const astMixed = mod._internals.parseFor('b.ts', mixed);
+    assert.equal(collectDirectImports(astAll, allType)[0].typeOnly, true, 'all-inline-type skipped');
+    const mixedEntries = collectDirectImports(astMixed, mixed);
+    assert.equal(mixedEntries[0].typeOnly, false, 'mixed import still blocks');
+  });
+
+  test('BUG-9: parse-failure findings are fatal and survive an allowance', async () => {
+    const { applyExceptions } = await import(
+      pathToFileURL(path.join(repoRoot, 'scripts/quality/check-exceptions.mjs')).href
+    );
+    const file = path.join(repoRoot, 'src/childprocess/Broken.ts');
+    const manifest = path.join(os.tmpdir(), `qg-bug9-${Date.now()}.json`);
+    writeFileSync(manifest, JSON.stringify({
+      schemaVersion: 1,
+      exceptions: [{
+        path: 'src/childprocess/Broken.ts',
+        ruleId: 'aifetchly/no-worker-db-imports',
+        maxCount: 1,
+        reason: 'legacy', owner: 'maintainer', expiresOn: '2099-01-01',
+      }],
+    }));
+    const out = applyExceptions(
+      [{ filePath: file, messages: [{ severity: 2, fatal: true, ruleId: 'aifetchly/no-worker-db-imports', message: 'parse failure', line: 0, column: 0 }] }],
+      manifest
+    );
+    assert.equal(out.results[0].messages.length, 1, 'fatal architecture finding NOT excepted');
+    rmSync(manifest, { force: true });
   });
 });

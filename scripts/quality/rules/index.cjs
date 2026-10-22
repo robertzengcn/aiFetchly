@@ -68,10 +68,26 @@ function repoPathMatches(repoPath, prohibitedRepoPrefix) {
   if (ALLOWED_PREFIXES.some((p) => repoPath === p || repoPath.startsWith(p + '/'))) {
     return false;
   }
-  return (
+  if (
     repoPath === prohibitedRepoPrefix ||
     repoPath.startsWith(prohibitedRepoPrefix + '/')
-  );
+  ) {
+    return true;
+  }
+  // BUG-7: a FILE-prefix prohibition (e.g. src/config/SqliteDb) must also
+  // match the same path spelled WITH an extension or an index segment —
+  // tech design §8 "compare normalized repository paths, including
+  // explicit extension and index-file variants".
+  const rest = repoPath.slice(prohibitedRepoPrefix.length);
+  if (rest === '/index' || /^\/index\.[A-Za-z0-9]+$/.test(rest)) {
+    // src/config/SqliteDb/index.ts (directory-module form)
+    return true;
+  }
+  if (rest.length > 0 && rest[0] === '.') {
+    // src/config/SqliteDb.ts / .js / .tsx — but NOT src/config/SqliteDbFoo
+    return /^\.[A-Za-z0-9]+$/.test(rest);
+  }
+  return false;
 }
 
 function isProhibited(specifier, importerRepoPath, prohibitedRepoPrefixes, prohibitedPackages) {
@@ -88,124 +104,22 @@ function isProhibited(specifier, importerRepoPath, prohibitedRepoPrefixes, prohi
 }
 
 /**
- * Shared rule body. `options.prohibited` = { repoPrefixes, packages }.
- * Walks the Program once, reporting ImportDeclaration, ExportNamedDeclaration
- * /ExportAllDeclaration with source, CallExpression require('...'), and
- * literal dynamic import('...').
+ * The live checker is scripts/quality/architecture-check.mjs, which imports
+ * the normalization helpers (_internals below) and runs its own AST pass.
+ * The ESLint-rule form that used to live here was a dead second
+ * implementation that could drift from the checker — removed (BUG-18).
  */
-function makeDirectImportRule(metaMessages, prohibited) {
-  return {
-    meta: {
-      type: 'problem',
-      docs: {
-        description: metaMessages.description,
-      },
-      schema: [],
-      messages: {
-        forbidden:
-          '{{specifier}} is a prohibited direct dependency for {{layer}} files ({{reason}}). Use the allowed boundary instead.',
-      },
-    },
-    create(context) {
-      const filename = context.getFilename();
-      const repoRoot = process.env.AIFETCHLY_QUALITY_REPO_ROOT || process.cwd();
-      const abs = path.resolve(filename);
-      const importerRepoPath = path.relative(repoRoot, abs).split(path.sep).join('/');
-      const layer = metaMessages.layer;
-
-      function check(specifier, node) {
-        if (
-          isProhibited(
-            specifier,
-            importerRepoPath,
-            prohibited.repoPrefixes,
-            prohibited.packages
-          )
-        ) {
-          context.report({
-            node,
-            messageId: 'forbidden',
-            data: {
-              specifier,
-              layer,
-              reason: metaMessages.reason,
-            },
-          });
-        }
-      }
-
-      function isTypeOnlyImport(node) {
-        // `import type X from ...` cannot initialize persistence at runtime.
-        return node.importKind === 'type';
-      }
-
-      return {
-        ImportDeclaration(node) {
-          if (isTypeOnlyImport(node)) return;
-          check(node.source.value, node);
-        },
-        ExportNamedDeclaration(node) {
-          if (node.source && node.exportKind !== 'type') {
-            check(node.source.value, node);
-          }
-        },
-        ExportAllDeclaration(node) {
-          if (node.exportKind !== 'type' && node.source) {
-            check(node.source.value, node);
-          }
-        },
-        CallExpression(node) {
-          if (
-            node.callee.type === 'Identifier' &&
-            node.callee.name === 'require' &&
-            node.arguments.length === 1 &&
-            node.arguments[0].type === 'Literal' &&
-            typeof node.arguments[0].value === 'string'
-          ) {
-            check(node.arguments[0].value, node);
-          }
-          if (
-            node.callee.type === 'ImportExpression' &&
-            node.arguments.length === 1 &&
-            node.arguments[0].type === 'Literal' &&
-            typeof node.arguments[0].value === 'string'
-          ) {
-            check(node.arguments[0].value, node);
-          }
-        },
-      };
-    },
-  };
-}
 
 const WORKER_REPO_PREFIXES = WORKER_PROHIBITED.filter((p) => p.startsWith('src/'));
 const WORKER_PACKAGES = WORKER_PROHIBITED.filter((p) => !p.startsWith('src/'));
 const IPC_REPO_PREFIXES = IPC_PROHIBITED.filter((p) => p.startsWith('src/'));
 const IPC_PACKAGES = IPC_PROHIBITED.filter((p) => !p.startsWith('src/'));
 
+// Exported for the checker and unit tests: the prohibited lists (single
+// source) plus the lexical-normalization helpers the live pass uses.
 module.exports = {
-  rules: {
-    'no-worker-db-imports': makeDirectImportRule(
-      {
-        layer: 'worker (src/childprocess)',
-        description:
-          'Workers must not import the database directly; send data over IPC to the main process.',
-        reason:
-          'worker processes have no Electron app context; CRUD belongs to the main process',
-      },
-      { repoPrefixes: WORKER_REPO_PREFIXES, packages: WORKER_PACKAGES }
-    ),
-    'no-ipc-db-imports': makeDirectImportRule(
-      {
-        layer: 'IPC handler (src/main-process/communication)',
-        description:
-          'IPC handlers must not import models/TypeORM directly; call Module/Controller methods.',
-        reason: 'IPC handlers delegate to the Module layer per the four-layer architecture',
-      },
-      { repoPrefixes: IPC_REPO_PREFIXES, packages: IPC_PACKAGES }
-    ),
-  },
-  // Exported for unit tests.
+  worker: { repoPrefixes: WORKER_REPO_PREFIXES, packages: WORKER_PACKAGES },
+  ipc: { repoPrefixes: IPC_REPO_PREFIXES, packages: IPC_PACKAGES },
   _internals: {
     classifySpecifier,
     isProhibited,

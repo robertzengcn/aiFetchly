@@ -42,7 +42,17 @@ if (files.length === 0) {
 
 // Resolve every selected path inside the repository; reject symlink escape
 // (tech design §11) before the engine starts. path.resolve collapses `..`,
-// so an escaped traversal cannot masquerade as an in-repo path.
+// so an escaped traversal cannot masquerade as an in-repo path — but a
+// symlinked DIRECTORY inside the repo still resolves outside it, so the
+// realpath of the resolved file must also sit inside the real repo root
+// (BUG-18).
+import { realpathSync } from 'node:fs';
+let realRepoRoot = repoRoot;
+try {
+  realRepoRoot = realpathSync(repoRoot);
+} catch {
+  /* repo root itself unresolvable: fall back to the lexical check */
+}
 for (const file of files) {
   const abs = path.resolve(repoRoot, file);
   if (!abs.startsWith(repoRoot + path.sep)) {
@@ -50,6 +60,19 @@ for (const file of files) {
       `selected path escapes the repository boundary: ${file}`,
       'This is a policy/configuration failure, not accepted debt.'
     );
+  }
+  try {
+    const realAbs = realpathSync(abs);
+    if (!realAbs.startsWith(realRepoRoot + path.sep)) {
+      failOperational(
+        `selected path resolves (symlink) outside the repository: ${file} -> ${realAbs}`,
+        'Symlinked source cannot be checked safely. This is an operational failure, not accepted debt.'
+      );
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      failOperational(`could not resolve selected path ${file}: ${e.message}`);
+    }
   }
 }
 
@@ -114,6 +137,7 @@ for (const finding of archFindings) {
     existing.messages.push({
       ruleId: finding.ruleId,
       severity: 2,
+      fatal: finding.fatal === true,
       message: finding.message,
       line: finding.line,
       column: finding.column,
@@ -125,6 +149,7 @@ for (const finding of archFindings) {
         {
           ruleId: finding.ruleId,
           severity: 2,
+          fatal: finding.fatal === true,
           message: finding.message,
           line: finding.line,
           column: finding.column,
