@@ -131,6 +131,33 @@ describe("useChatCommandRouting.routeCommand", () => {
     }
   });
 
+  it("rejects /goal in the queued-accept window before the first stream event (FR-SUB-009 P1-7)", async () => {
+    // The store derives isBusy from runtimeStatus, and the queued accept
+    // path must keep runtimeStatus at "queued" (store P1-7 test). Wire the
+    // same derivation here so the routing guard is proven against the
+    // state the accept leaves behind — not just a generic busy flag.
+    let runtimeStatus: string = "running";
+    const { ports } = makePorts({
+      isBusy: () =>
+        runtimeStatus === "running" ||
+        runtimeStatus === "queued" ||
+        runtimeStatus === "streaming",
+    });
+    const router = useChatCommandRouting(ports);
+    // The host turn ended and the follow-up was accepted into the durable
+    // queue: queued, no stream event yet.
+    runtimeStatus = "queued";
+    const result = await router.routeCommand(
+      "/goal Build a Facebook campaign scraper",
+      {}
+    );
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect(result.code).toBe("command_busy");
+      expect(result.message).toContain("T(workspaceChat.command.busy");
+    }
+  });
+
   it("still stages a scheduled loop while another conversation runs (staging needs no interactive stream)", async () => {
     // chatIsRunning in the V2 reference is the ACTIVE conversation's state —
     // a busy OTHER conversation must not block staging here.

@@ -137,6 +137,43 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.activeRunId).toBe("run-2");
   });
 
+  it("a queued acceptance stays busy before the first stream event (FR-SUB-009 P1-7)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn ends BEFORE the queued send's IPC response resolves
+    // (slow round-trip): the presenter flushes to idle, and when the
+    // accept finally answers `pending-…` / `queued` the durable turn
+    // already owns this conversation.
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 2,
+      emittedAt: new Date(2026, 8, 18, 10, 0, 2).toISOString(),
+      eventType: "complete",
+      payload: {
+        eventType: "complete",
+        conversationId: "conv-1",
+        messageId: "a-running",
+        fullContent: "done",
+      },
+    });
+    expect(store.isBusy).toBe(false);
+
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-9",
+      status: "queued",
+    });
+    await store.sendMessage("queued follow-up");
+    await flushPromises();
+
+    // No stream event arrived yet — the queued runtime status must SURVIVE
+    // the accept-path sync, or Clear / /goal treat this conversation as
+    // idle while a durable turn is pending (the R8 P1-7 hole).
+    expect(store.runtimeStatus).toBe("queued");
+    expect(store.isBusy).toBe(true);
+  });
+
   it("a rejection surfaces the error and REMOVES the optimistic row (T8/D5: no draft duplication)", async () => {
     await seedStore("running");
     startChatRunMock.mockRejectedValue(

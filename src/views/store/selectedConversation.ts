@@ -1342,6 +1342,19 @@ export const useSelectedConversationStore = defineStore(
           response.runId.startsWith("pending-")
         ) {
           presenter.removeMessage(optimisticId);
+          // R8 P1-7 (FR-SUB-009): the queued runtime status must survive
+          // the accept-path sync. syncFromPresenter copies the presenter's
+          // facts, which may still be the just-terminalized host turn's
+          // (idle) projection when the IPC response resolves after a turn
+          // ended — without hydration the store reverts to idle and Clear
+          // / command routing treat this conversation as writable while a
+          // durable turn is pending. Hydrate the authoritative queued
+          // status FIRST (R6-01 pattern); activeRunId stays null so the
+          // pending row never displaces the host run identity.
+          presenter.hydrateRuntime({
+            runtimeStatus: "queued",
+            activeRunId: null,
+          });
           syncFromPresenter();
         }
         return true;
