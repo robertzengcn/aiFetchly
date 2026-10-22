@@ -60,7 +60,15 @@ export function loadManifest(manifestPath = MANIFEST_PATH) {
     return { exceptions: [], errors };
   }
   const seen = new Set();
-  const today = new Date().toISOString().slice(0, 10);
+  // LOCAL calendar date, not UTC: expiry dates are written in the
+  // maintainer's local frame; toISOString would flip a day early/late near
+  // midnight (BUG-18).
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
   const exceptions = [];
   for (const entry of parsed.exceptions) {
     const label = `${entry.path}::${entry.ruleId}`;

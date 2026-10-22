@@ -6,25 +6,29 @@
  * Responsibilities:
  *  1. Preflight: dependency presence (no network, no npx fallback), unstaged
  *     policy/control edits, unmerged index stages (QG-09, QG-12, §6.1).
- *  2. Documentation-only commits skip lint engine startup entirely (QG-10),
- *     except when policy-control inputs are staged (they validate instead).
+ *  2. Documentation-only commits skip lint engine startup entirely (QG-10).
+ *     Staged policy-control inputs are VALIDATED before any exit (BUG-5):
+ *     a broken manifest/config must never be recorded as a passing commit.
  *  3. Staged-source enumeration via NUL-delimited git output — never shell
- *     string parsing (§6.1, AC-07).
+ *     string parsing (§6.1, AC-07). Renames AND copies consume both paths
+ *     (BUG-6); the new destination is what this commit adds.
  *  4. One lint-staged invocation (concurrent: false) using the committed
- *     config; lint-staged owns backup + partial-staging isolation and the
- *     index-identity check (§6.2/6.3).
- *  5. 120s safety timeout: on timeout the commit fails with a diagnostic —
- *     never a silent pass (§11).
+ *     config; lint-staged owns backup + partial-staging isolation (§6.2/6.3).
+ *     The index tree identity is compared before/after the run — a change
+ *     means concurrent staging and refuses the commit (BUG-10).
+ *  5. 120s safety timeout: on timeout the commit fails with a diagnostic
+ *     that names lint-staged's backup recovery path (BUG-13) — never a
+ *     silent pass (§11).
  *
  * Exit codes: 0 pass, 1 policy violations, 2 operational failures.
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -55,6 +59,10 @@ function failOperational(message, hint) {
   process.exit(OPERATIONAL_FAILURE);
 }
 
+const STASH_RECOVERY_HINT =
+  'If a lint-staged backup stash remains, inspect `git stash list` and restore it ' +
+  'manually (`git stash apply`). The hook never deletes stashes or resets anything.';
+
 // --- 1. Preflight -----------------------------------------------------------
 
 // Dependency presence: the pinned plugin must be importable from the repo's
@@ -79,6 +87,7 @@ for (const dep of ['eslint', 'lint-staged', 'vue-eslint-parser', '@typescript-es
 }
 try {
   require('./eslint-fast.cjs');
+  require('./policy.cjs');
 } catch (e) {
   failOperational(`fast ESLint profile failed to load: ${e.message}`);
 }
@@ -112,19 +121,25 @@ const staged = [];
   for (let i = 0; i < parts.length; i += 1) {
     const status = parts[i];
     if (!status) continue;
-    // -z name-status emits status then path. Renames emit TWO paths
-    // (old, new); the NEW destination is what this commit adds.
-    const oldPath = parts[i + 1];
-    if (!oldPath) break;
-    staged.push(status.startsWith('R') ? parts[i + 2] : oldPath);
-    i += status.startsWith('R') ? 2 : 1;
+    // -z name-status emits status then path. Renames AND COPIES emit TWO
+    // paths (old, new); the NEW destination is what this commit adds. Copy
+    // detection (`diff.renames=copies`) emits C<score> the same way — a
+    // mis-parsed record shifts every later offset (BUG-6).
+    const isTwoPath = status.startsWith('R') || status.startsWith('C');
+    const firstPath = parts[i + 1];
+    if (!firstPath) break;
+    staged.push(isTwoPath ? parts[i + 2] : firstPath);
+    i += isTwoPath ? 2 : 1;
   }
 }
 
 const sourceExt = new Set(policy.sourceExtensions);
 const stagedSource = staged.filter((f) => sourceExt.has(path.extname(f)));
 
-// Policy-control inputs among STAGED files → always validate policy (QG-10).
+// Policy-control inputs among STAGED files → validate policy before ANY
+// exit (QG-10, BUG-5). This list is policy/config only; documentation is
+// deliberately absent (BUG-17: the operator guide is documentation, not a
+// policy input per tech design §6.1).
 const stagedPolicy = staged.filter((f) =>
   policy.policyControlInputs.some(
     (p) => f === p || (p.endsWith('/**') && f.startsWith(p.slice(0, -2)))
@@ -150,9 +165,49 @@ if (unstagedPolicy.length > 0) {
   );
 }
 
+// BUG-5: staged policy inputs are validated NOW — including in policy-only
+// commits with zero staged source. A broken exceptions.json or unparseable
+// profile is exit 2 here, not a deferred failure on the next source commit.
+if (stagedPolicy.length > 0) {
+  const moduleUrls = [
+    'scripts/quality/check-exceptions.mjs',
+    'scripts/quality/policy.cjs',
+    'scripts/quality/eslint-fast.cjs',
+    'scripts/quality/lint-staged.config.mjs',
+  ]
+    .map((rel) => path.join(repoRoot, rel))
+    .map((abs) => pathToFileURL(abs).href)
+    .map((href) => JSON.stringify(href))
+    .join(', ');
+  const snippet = `
+    const [exceptions, policyMod, fastProfile, stagedConfig] = await Promise.all(
+      [${moduleUrls}].map((u) => import(u))
+    );
+    const manifest = exceptions.loadManifest();
+    if (manifest.errors.length > 0) {
+      process.stderr.write(manifest.errors.join('\\n') + '\\n');
+      process.exit(1);
+    }
+    void policyMod; void fastProfile; void stagedConfig;
+  `;
+  const validation = spawnSync(process.execPath, ['--input-type=module', '-e', snippet], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (validation.status !== 0) {
+    failOperational(
+      'staged policy-control inputs failed validation:\n' +
+        (validation.stderr || validation.stdout || '(no output)'),
+      'Fix the staged policy files before committing. Configuration failures are never deferrable debt.'
+    );
+  }
+  process.stdout.write('quality: staged policy inputs validated\n');
+}
+
 // Documentation-only fast path (QG-10): no staged source and no staged
 // policy-control change → skip lint-staged and the engine entirely.
-if (stagedSource.length === 0 && stagedPolicy.length === 0) {
+if (stagedSource.length === 0) {
   process.stdout.write(
     `quality: no staged source files (staged: ${staged.length} non-source) — lint engine skipped\n`
   );
@@ -184,6 +239,11 @@ process.stdout.write(
   `quality: checking ${stagedSource.length} staged source file(s)\n`
 );
 
+// BUG-10: record the index tree identity before lint-staged; the gate is
+// read-only, so any change after the run means concurrent staging — refuse
+// rather than reset anything (§6.2).
+const indexTreeBefore = git(['write-tree']).stdout.trim();
+
 // lint-staged's package exports hide its bin from module RESOLVERS; drive
 // the real JS entry via process.execPath (cross-platform: no .bin shim
 // execution, which breaks spawnSync on Windows).
@@ -212,11 +272,23 @@ process.stderr.write(run.stderr || '');
 if (run.error && run.error.code === 'ETIMEDOUT') {
   failOperational(
     `quality gate exceeded the ${SAFETY_TIMEOUT_MS / 1000}s safety timeout`,
-    'The commit was NOT created. Run `yarn quality:doctor`, reduce the staged batch, or raise the timeout consciously in scripts/quality/pre-commit.mjs.'
+    // BUG-13: name lint-staged's backup recovery path explicitly.
+    `The commit was NOT created. ${STASH_RECOVERY_HINT} Then run \`yarn quality:doctor\`, reduce the staged batch, or raise the timeout consciously in scripts/quality/pre-commit.mjs.`
   );
 }
 if (run.error) {
-  failOperational(`lint-staged could not run: ${run.error.message}`);
+  failOperational(`lint-staged could not run: ${run.error.message}`, STASH_RECOVERY_HINT);
+}
+
+// BUG-10: index identity must be unchanged by the run. A mismatch means
+// something else staged during the hook — fail closed with a retry hint,
+// never a reset (the user's concurrent staging is preserved).
+const indexTreeAfter = git(['write-tree']).stdout.trim();
+if (indexTreeAfter !== indexTreeBefore) {
+  failOperational(
+    'the git index changed while the quality gate was running (concurrent git add?)',
+    'The commit was NOT created. Re-run `git commit`; no reset or stash deletion was performed.'
+  );
 }
 
 // Exit 1 from lint-staged = task failure (our runner's policy violation or

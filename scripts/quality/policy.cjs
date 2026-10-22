@@ -89,11 +89,15 @@ const approvedIgnores = [
   'test/quality-gate/fixtures/invalid/**',
 ];
 
-/** Policy/control inputs whose unstaged edits reject a commit (§6.1). */
+/**
+ * Policy/control inputs whose unstaged edits reject a commit and whose
+ * STAGED edits trigger validation before any exit (§6.1). Documentation is
+ * deliberately absent: the operator guide is documentation, not policy —
+ * a docs-only commit including it still takes the skip path (BUG-17).
+ */
 const policyControlInputs = [
   '.eslintrc.json',
   'scripts/quality/**',
-  'docs/development/local-quality-gate.md',
   'package.json',
   'yarn.lock',
   '.gitignore',
