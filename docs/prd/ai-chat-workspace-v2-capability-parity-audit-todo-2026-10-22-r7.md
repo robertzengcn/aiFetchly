@@ -6,7 +6,7 @@ Authorities: [PRD](./ai-chat-workspace-v2-capability-parity-prd.md), [technical 
 
 **Verdict: not complete.** The original R6-01/02/03 cases are addressed and the deterministic voice journey now passes. This review reproduced **two additional code defects through three focused checks** and rechecked the already-open reload-preservation issue. Remaining real-runtime, accessibility/browser and soak evidence is listed separately. This is an incremental audit of the updated implementation and adjacent failure paths, not an exhaustive security review of the entire application.
 
-No application fixes were applied. Only this report is intended for commit. The earlier untracked `...audit-todo-2026-10-20.md` was left untouched.
+No application fixes were applied at audit time. Only this report was intended for that commit. (**Superseded:** the follow-up fix round committed `442d3197d`, `e185d7801` and `4d6347963` on this same worktree — see the final-revision addendum at the end.) The earlier untracked `...audit-todo-2026-10-20.md` remained untouched.
 
 ## Fresh verification
 
@@ -63,7 +63,7 @@ Logs: `/tmp/parity-r7-{components,main,typecheck,vue,repro,e2e,reload}.log`. Foc
 
 ### R7-01 — P1: an older selection request clears the newer selection's buffered completion
 
-- [ ] Give the deferred detail-event buffer and its cleanup immutable selection ownership; a superseded request must never clear or disable the current selection's buffer.
+- [x] Give the deferred detail-event buffer and its cleanup immutable selection ownership; a superseded request must never clear or disable the current selection's buffer. (**Fixed — addendum R7-01 record.**)
 - **Requirements:** FR-LIF-002/004, FR-REC-008; technical design §9.3 reconstruction and selected-generation isolation.
 - **Location:** `src/views/store/selectedConversation.ts:1060–1063` detects a superseded snapshot but then calls `clearDeferredDetailEvents()` on the shared current buffer. The catch block at :1109–1112 also clears that buffer and disables deferral **before** checking generation. Current-generation replay uses the same variables at :1095–1099.
 - **Reproduce:** Start loading A and hold its reply. Start loading B and hold its reply. Deliver B's `complete` detail event with final content while B is loading. Resolve **or reject** A's old request, then resolve B's snapshot containing earlier partial text and `runtimeStatus: 'running'`.
@@ -74,7 +74,7 @@ Logs: `/tmp/parity-r7-{components,main,typecheck,vue,repro,e2e,reload}.log`. Foc
 
 ### R7-02 — P2: recreating an evicted content row overwrites the logical accumulator
 
-- [ ] Reuse an existing active-turn accumulator when a row is absent; initialize empty content only for a genuinely new logical message.
+- [x] Reuse an existing active-turn accumulator when a row is absent; initialize empty content only for a genuinely new logical message. (**Fixed — addendum R7-02 record.**)
 - **Requirements:** FR-HIS-001/005, PRD §19, technical design §17; the R6 content-preserving overflow contract.
 - **Location:** `src/views/utils/workspaceStreamPresenter.ts:400–421` preserves the accumulator for an existing mounted row. But when the row is absent, :424–431 unconditionally executes `activeTurnAccumulator.set(messageId, { content: '', reasoning: '' })` before appending. The last-pass eviction at :1157–1160 deliberately permits content-bearing rows to leave the mounted window on the premise that the accumulator survives.
 - **Reproduce:** Start answer-0 and stream `prefix `; verify it rendered. Stream 200 additional distinct content-bearing answer IDs within that same run, reaching the protected-content overflow case. Flush and verify answer-0 is evicted while mounted rows remain ≤200. Resume answer-0 with `suffix`.
@@ -85,8 +85,8 @@ Logs: `/tmp/parity-r7-{components,main,typecheck,vue,repro,e2e,reload}.log`. Foc
 
 ### R7-03 — P1: reload does not restore the active conversation; its deterministic test is hidden by a live-provider skip
 
-- [ ] Restore the selected conversation and reconnect its surviving run after renderer reload/crash recovery.
-- [ ] Move the LIVE_AI skip into the actual live-provider test so the deterministic reload test runs in every ordinary gate invocation.
+- [x] Restore the selected conversation and reconnect its surviving run after renderer reload/crash recovery. (**Fixed — addendum R7-03 record.**)
+- [x] Move the LIVE_AI skip into the actual live-provider test so the deterministic reload test runs in every ordinary gate invocation. (**Fixed — addendum R7-03 record.**)
 - **Status:** Carried forward from the newly recorded **R6-04**, not claimed as a newly introduced regression. The latest commits document it but do not fix it.
 - **Evidence:** `test/e2e/specs/workspace-shell.test.ts:203–248` sends a deterministic delayed stream, reloads while Stop/Streaming is visible, and expects the selected transcript to reconnect. The describe-level `test.skip(!LIVE_AI, ...)` at :251–254 applies to the entire describe, unintentionally skipping this test too. `src/views/store/chatWorkspace.ts:91` starts selected conversation as null; the current restore path does not satisfy this scenario.
 - **Fresh result:** The combined run first timed out at `page.reload()` waiting for the load event. A fresh isolated rerun using the same built assets (`AIFETCHLY_E2E_LIVE_AI=1 xvfb-run -a yarn playwright test test/e2e/specs/workspace-shell.test.ts --grep 'deterministic in-flight' --output /tmp/parity-r7-reload-results`) then **failed at :242**: `workspace-transcript` was absent for 30 seconds. The shell/tree checks passed; the error-context snapshot shows heading **New chat** and “Ask anything, or pick a conversation on the left.” This independently confirms the documented selection-restore failure. Log: `/tmp/parity-r7-reload.log`; screenshot/trace/error context: `/tmp/parity-r7-reload-results/specs-workspace-shell-run--e56e7-derer-reload-and-reconnects/`. The earlier load timeout is recorded separately, not asserted to have this same root cause.
@@ -133,11 +133,11 @@ All functional families are accounted for below. “Retained” means the previo
 | FR-RPT-001–009 | Per-output/conversation reporting retained; no new reporting defect reproduced. |
 | FR-VOI-001–010 | Deterministic success/failure E2E now passes; real-runtime V01 remains. |
 | FR-WSP-001–010 | Workspace/trust/watcher/memory retained; remaining platform/runtime verification. |
-| FR-REC-001–008 | Original runtime hydration fixed; event-buffer ownership and reload continuation still fail (R7-01/03). |
-| FR-LIF-001–006 | R7-01 current-generation buffer isolation and R7-03 renderer restore remain open. |
+| FR-REC-001–008 | Runtime hydration fixed; event-buffer ownership fixed in the fix round (addendum R7-01); soak remains. |
+| FR-LIF-001–006 | Reload/restore rebuilt in the fix round (addendum R7-03); new durable sidebar-projection follow-up recorded below (addendum R7-04). |
 | FR-SKL-001–006 | Installation/approval/invocation retained; final integration/accessibility checks remain. |
 | FR-BRW-001–006 | Managed-browser surfaces retained; authenticated V02 lifecycle evidence remains. |
-| FR-HIS-001–005 | Original row/adoption/eviction cases fixed; protected-content overflow fallback still resets text (R7-02). |
+| FR-HIS-001–005 | Row/adoption/eviction cases fixed; protected-content overflow fallback fixed in the fix round (addendum R7-02); soak remains. |
 | FR-INT-001–005 | Shared integrations retained; final cross-feature regression pending. |
 | PRD §14/18/19 security/failure/resources | No fresh full security certification; findings prove renderer state/content failures, not a DB-loss or authorization-bypass claim. |
 | A11Y-001–010 / localization | Existing automated subset retained; V02 evidence and final locale checks still required. |
@@ -146,7 +146,59 @@ All functional families are accounted for below. “Retained” means the previo
 
 ## Suggested order
 
-1. Fix R7-01 event-buffer ownership and R7-03 reload/skip placement.
-2. Fix R7-02 accumulator reuse without weakening the mounted bound.
-3. Add permanent regressions for all focused failures, repeat affected gates and complete V01/V02 on the final revision.
-4. Collect V03 before declaring parity complete or removing rollback.
+1. Fix R7-01 event-buffer ownership and R7-03 reload/skip placement. (**Done** — `442d3197d`, `4d6347963`.)
+2. Fix R7-02 accumulator reuse without weakening the mounted bound. (**Done** — `e185d7801`.)
+3. Add permanent regressions for all focused failures, repeat affected gates and complete V01/V02 on the final revision. (**Regressions + gates done**; V01 real models and V02 AT/platform checks remain open.)
+4. Collect V03 before declaring parity complete or removing rollback. (**Still open.**)
+
+## Final-revision addendum — fix round 2026-10-22 (agent)
+
+All three code defects of this audit are fixed on this worktree, each with permanent regressions, and every agent-runnable gate was rerun on the final revision. The audit checkboxes above are marked done; historical evidence text is preserved unchanged.
+
+### R7-01 — fixed (`442d3197d`)
+
+`src/views/store/selectedConversation.ts`: the deferred detail-event buffer now has **immutable selection ownership** via a generation token (`deferredDetailEventsOwner`). New guarded `clearDeferredDetailEventsOwned(generation)` mutates the buffer only if the caller still owns it. `loadSelection` takes ownership before its snapshot await; the superseded-success path and the catch path use the guarded clear; teardown stays an unconditional `clearDeferredDetailEvents()` (explicit teardown may drop everything); null selection is explicit. Stale success and stale rejection now behave identically — both are no-ops — so a superseded request can never clear or disable the current selection's buffer, and every current-generation event replays exactly once after the snapshot.
+
+Regression: `test/vitest/main/components/store/selectedConversation.r7SelectionBufferOwnership.test.ts` (5 tests): stale-success clearing, stale-rejection followed by late A events surviving on B, A→B→A with dual stale settle, three overlapping loads replaying buffered token/permission/terminal events exactly once, and teardown no-resurrection. 4/5 fail on the pre-fix code (teardown case pins a preserved contract, not the regression). Pre-fix verification used a `/tmp` copy + `git checkout --` swap; post-fix all 14 store suites (122 tests) pass.
+
+### R7-02 — fixed (`e185d7801`)
+
+`src/views/utils/workspaceStreamPresenter.ts`: `ensureAssistantView()`'s absent-row path now **materializes from the existing turn accumulator** (text + reasoning) before appending; the empty initialization only happens for genuinely new message ids. The logical accumulator stays lifetime-scoped (cleared on seed/dispose/terminal); the mounted bound is unchanged (`MAX_MOUNTED_MESSAGES = 200`) and multi-pass trimming retains its ordering. Additional contract surfaced by the tests and implemented in the same commit: per-entry `syncFromPresenter` during batched flush/terminal materialization loops caused procession churn (each re-mount evicted its predecessor, dropping the earliest content), so `flushNow`'s entry loop and the error/cancel terminal `materializeFromAccumulator` loops run with `suppressSync` and a single tail notify; `appendMessage` gained `{ silentSync }` (pin semantics independent of sync suppression) and `materializeFromAccumulator` gained `{ silentSync }`.
+
+Regression: `test/vitest/main/components/store/selectedConversation.r7OverflowAccumulator.test.ts` (6 tests): 200-distinct-id forward overflow resuming `prefix suffix`, reasoning preservation across overflow, backward paging during overflow, hydrated running answer with `saved ` baseline, error terminal, cancellation. All 6 fail on the pre-fix code (verified by the same swap technique). Real protected-content eviction is exercised in the forward direction; backward paging pins retain-oldest trim.
+
+### R7-03 — fixed (`4d6347963`)
+
+**Restore.** `src/views/store/chatWorkspace.ts` persists a lightweight selection pointer (`localStorage["aiChatWorkspace.selectedConversation"]`) on every selection; explicit deselection drops it. New `consumeRestorableSelectionPointer()` is a pure breadcrumb read: null when nothing stored or a selection is already active (deep link / notification entry wins). Validity is deliberately **not** decided against the boot-time sidebar projection (see R7-04 below) — the authoritative validator is the selection handshake itself: `loadSelection` is read-only, never starts a run, hydrates the runtime snapshot, re-establishes the detail subscription before the snapshot await (so the surviving run's events replay via the R6-01/R7-01 machinery), and for an unknown/deleted conversation hydrates an empty transcript instead of resurrecting anything. `AuthenticatedWorkspaceLayout.vue` runs `restoreWorkspaceSession()` on mount: bootstrap → pointer → `openConversation(pointer)` through the ordinary coordinator (routing-first, changed-selection check), non-fatal on failure.
+
+**Skip placement.** The describe-level `test.skip(!LIVE_AI, ...)` was moved inside the live-provider test only; the deterministic mid-run reload test now runs in every ordinary gate invocation.
+
+**Evidence.** Deterministic reload test: `1 passed (16.9s)` isolated, then part of the full-suite run below (the ordinary gate runs it LIVE_AI-unset). Shell spec full run: **9 passed / 1 skipped** (the live-provider case owning its gate). Regressions: `test/vitest/main/components/store/chatWorkspaceSelectionRestore.test.ts` (6 tests: pointer lifecycle/drop, restore without/with bootstrap failure, overwrite semantics, already-active selection wins) and an added layout contract test asserting mount restores the pointer via the handshake (detail subscription re-established) **without starting a run**; the original mount-ownership test is preserved with the no-pointer invariant plus pointer isolation (`localStorage.clear()` per test).
+
+### R7-04 — NEW P2 finding (from the R7-03 investigation): durable sidebar projection lags turns until backfill
+
+- **What the E2E investigation established (instrumented, then reverted):** a deterministic turn created through the durable queue persists `ai_chat_messages` (2 rows) and `ai_chat_runs` (1 row) but **no `ai_chat_conversations` projection row**. `AIChatCoordinator.recordMessagePersisted` (`AIChatCoordinator.ts:285/:926`) never executes on the queue path — the queue dispatches through `AIChatWorkspaceRunDispatchBridge` → `AIChatQueryEngine`, and nothing in `AIChatV2Module.saveUserMessage/saveAssistantMessage` couples a projection upsert. The boot-time `getWorkspaceSidebar()` therefore legitimately returns **0/0 rows** (verified from the renderer twice and in-process once), and the once-per-process `backfillProjections()` (`AIChatConversationModule.ts:396`, bootstrapped at `ai-chat-workspace-ipc.ts:317`) only repairs rows at the next process start. During a session the sidebar is fed by `upsertLocalConversation` + summary events; after a reload those are gone until the next summary event.
+- **Why R7-03 was NOT built on it:** the selected-conversation restore is independent of the projection — the snapshot/run/subscription machinery is authoritative — which is why the deterministic reload test passes despite the empty boot projection. Sidebar rows for prior-session conversations reappear via summary events on load, so the reload scenario does not strand the choice.
+- **Impact / follow-up:** sidebar *persistence fidelity* — a reload can leave the sidebar temporarily empty of prior-session rows, and any restore scheme that validates against the boot projection would drop valid pointers (this is precisely what a first R7-03 draft did; the pointer-based semantics above replaced it). A dedicated fix should couple projection upserts into the durable turn path (e.g. `AIChatV2Module` persist paths or the bridge terminal mapping) and make the boot backfill idempotent-safe under concurrent backfills; needs its own audit + evidence cycle. Not fixed in this round.
+- **Requires:** PRD §10 sidebar durability, design §8.6 projection precedence; regression should assert durably persisted conversations appear in the boot projection after a reload that was preceded by a full turn.
+
+### Decision on restore validation (recorded)
+
+The first implementation validated the pointer against the boot-time sidebar projection and was shown to **drop valid pointers** exactly because of R7-04 (instrumented evidence: `[absence check 0 [] null]`). The committed design therefore treats the snapshot as the validator. Deleted conversations: `loadHistoryPage` returns an empty page for unknown ids, so a deleted selection hydrates as an empty idle transcript; it does not error and does not start a run. Durable summary rows reconcile at the next process start (`backfillProjections`). This is an honest limitation recorded under R7-04 instead of a hidden failure.
+
+### Final-revision gates
+
+| Check | Result (final revision, HEAD `4d6347963`) |
+| --- | --- |
+| `yarn test:components` | **165 files / 1,370 tests passed** (adds 6 restore-pointer tests + 1 layout restore-contract test). |
+| Targeted main suite | **17 files / 160 tests passed**. |
+| `yarn typecheck` | Passed (26.19 s; hook rerun 28.75 s). |
+| `yarn vue-typecheck` | Passed (41.63 s; hook rerun 45.02 s). |
+| Full Electron E2E (`xvfb-run -a yarn test:e2e`) | **179 passed / 2 skipped, 0 failures (26.6 min)**. Skips: the live-provider case inside the reload describe (owns its LIVE_AI gate) and one other standing live-gate; the deterministic mid-run reload test ran in the ordinary gate. |
+| Workspace-shell spec targeted (`xvfb-run … yarn playwright test test/e2e/specs/workspace-shell.test.ts`) | **9 passed / 1 skipped (44.4 s)**. |
+
+Log: `/tmp/opencode/parity-r7-final-e2e.log`. Debug instrumentation used during the R7-04 investigation was reverted before the gates (`git diff` on `src/modules/AIChatConversationModule.ts` and `src/model/AIChatConversation.model.ts` is empty at HEAD). E2E bundle rebuilt from clean sources before the full run (`yarn build:e2e`). The untracked `...audit-todo-2026-10-20.md` remains preserved, uncommitted.
+
+### Remaining work (unchanged from the audit body)
+
+V01 real speech-runtime certification, V02 manual AT/platform/browser/accessibility evidence (the final gate rerun part of V02 is now supplied above) and V03 soak/sign-off remain open, as does R7-04. Six-language parity: no user-facing text was added in this fix round (pointer persistence is invisible; restore reuses existing surfaces), so no `src/views/lang/` change is required.
