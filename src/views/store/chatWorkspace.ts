@@ -21,6 +21,13 @@ export type WorkspaceInspectorTab = "artifacts" | "activity" | "context";
 
 const INSPECTOR_PREFS_KEY = "aiChatWorkspace.inspector";
 const COLLAPSED_PREFS_KEY = "aiChatWorkspace.collapsedWorkspaces";
+/**
+ * Audit R7-03: the selected conversation survives a renderer reload/crash
+ * through this pointer. It stores ONLY an id — the authoritative content
+ * and runtime snapshot always come from `loadSelection` after the sidebar
+ * projection validates the conversation still exists.
+ */
+const SELECTED_POINTER_KEY = "aiChatWorkspace.selectedConversation";
 /** Bounded recent-conversation rows per workspace before `More` (PRD §10.2). */
 export const WORKSPACE_ROW_LIMIT = 30;
 
@@ -71,6 +78,24 @@ function loadCollapsedKeys(): Set<string> {
     // fall through
   }
   return new Set();
+}
+
+function readSelectedPointer(): string | null {
+  try {
+    const raw = localStorage.getItem(SELECTED_POINTER_KEY);
+    return raw && raw.trim() ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSelectedPointer(conversationId: string | null): void {
+  try {
+    if (conversationId) localStorage.setItem(SELECTED_POINTER_KEY, conversationId);
+    else localStorage.removeItem(SELECTED_POINTER_KEY);
+  } catch {
+    // Storage unavailable — restore is best-effort.
+  }
 }
 
 export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
@@ -236,6 +261,29 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
 
   function setSelected(conversationId: string | null): void {
     selectedConversationId.value = conversationId;
+    // Audit R7-03: track the latest selection so a reload/crash recovery can
+    // re-select it; explicit deselection drops the pointer immediately.
+    persistSelectedPointer(conversationId);
+  }
+
+  /**
+   * Audit R7-03: after a reload, restore the previously selected
+   * conversation through the ordinary selection coordinator.
+   *
+   * Returns the restorable id, or null when there is nothing to restore
+   * (no pointer) or a selection is already active (deep link, notification
+   * entry). Validity is NOT decided against the sidebar projection: the
+   * boot-time projection legitimately lags (durable summary rows for turns
+   * completed in the previous session materialize via the once-per-process
+   * backfill and summary events, not at bootstrap), so the AUTHORITATIVE
+   * validator is the selection handshake's runtime snapshot — an
+   * unknown/deleted conversation hydrates an empty transcript and never
+   * starts a run; `loadSelection` is read-only.
+   */
+  function consumeRestorableSelectionPointer(): string | null {
+    const stored = readSelectedPointer();
+    if (!stored || selectedConversationId.value) return null;
+    return stored;
   }
 
   // -----------------------------------------------------------------------
@@ -371,6 +419,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     selectionGeneration,
     nextGeneration,
     setSelected,
+    consumeRestorableSelectionPointer,
     searchQuery,
     visibleWorkspaceGroups,
     visibleUnassigned,

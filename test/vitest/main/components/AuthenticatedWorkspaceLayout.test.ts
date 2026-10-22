@@ -110,6 +110,9 @@ async function mountLayout(shellWidth = 1400) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Audit R7-03: the selection pointer is persisted in localStorage — never
+  // leak it across tests (a stray pointer turns the NEXT mount's restore on).
+  localStorage.clear();
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
   setWorkspaceRedesignEnabledMock.mockResolvedValue(undefined);
@@ -253,9 +256,23 @@ describe("AuthenticatedWorkspaceLayout (chat-first shell design §7.2, TODO gap 
 
     // No history loads, no run starts, and no detail subscription are
     // triggered by the layout itself (design §7.2 ownership boundaries).
+    // With NO stored selection pointer there is nothing to restore.
     expect(loadHistoryPageMock).not.toHaveBeenCalled();
     expect(startChatRunMock).not.toHaveBeenCalled();
     expect(subscribeDetailEventsMock).not.toHaveBeenCalled();
+  });
+
+  it("audit R7-03: mount restores the persisted selection through the handshake — never a run", async () => {
+    localStorage.setItem("aiChatWorkspace.selectedConversation", "restored-1");
+    const { router } = await mountLayout();
+    await router.push("/aiworkspace");
+    await router.isReady();
+    await flushPromises();
+
+    // The selection handshake re-selects the persisted pointer (snapshot
+    // hydration + detail subscription), but never starts a run.
+    expect(selectConversationMock).toHaveBeenCalledWith("restored-1", 1);
+    expect(startChatRunMock).not.toHaveBeenCalled();
   });
 
   describe("narrow drawer focus management (design §13)", () => {

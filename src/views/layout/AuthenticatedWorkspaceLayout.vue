@@ -104,6 +104,25 @@ async function openConversation(conversationId: string): Promise<void> {
   }
 }
 
+/**
+ * Audit R7-03: reload/crash restore. After the sidebar projection loads,
+ * re-select the persisted selected conversation through the ordinary
+ * coordinator — the selection handshake hydrates persisted content and
+ * re-attaches detail subscriptions for any live run WITHOUT starting a
+ * duplicate run. Deleted/unavailable selections are dropped by the store;
+ * a restore failure is non-fatal (the shell still opens at the chat).
+ */
+async function restoreWorkspaceSession(): Promise<void> {
+  await chatWorkspace.bootstrap();
+  const restorable = chatWorkspace.consumeRestorableSelectionPointer();
+  if (!restorable) return;
+  try {
+    await openConversation(restorable);
+  } catch {
+    // Best-effort restore — selection state stays unset on failure.
+  }
+}
+
 async function createChat(): Promise<string> {
   await ensureChatRoute();
   return createAndSelectWorkspaceChat();
@@ -184,7 +203,9 @@ onMounted(() => {
   // Application-scoped bootstrap: exactly one summary subscription for the
   // authenticated lifetime (design §8.3), torn down only when the
   // authenticated application unmounts — never on center-route changes.
-  void chatWorkspace.bootstrap();
+  // Audit R7-03: the bootstrap also drives the reload/crash restore of the
+  // persisted selected conversation.
+  void restoreWorkspaceSession();
   // The workspace shell is now the only shell (footer toggle removed):
   // land the durable redesign DEFAULT and the boundary flag on mount so the
   // app always lands on the converged shell — but never overwrite an

@@ -248,14 +248,16 @@ test.describe("run preservation (§25.6 scenario 10, FR-SHELL-009)", () => {
     );
   });
 
-  test.skip(
-    !LIVE_AI,
-    "requires AIFETCHLY_E2E_LIVE_AI=1 with a provider backend"
-  );
-
   test("live provider: inner-page navigation during a real run", async ({
     aiApp,
   }) => {
+    // Audit R7-03: the LIVE_AI gate rides THE LIVE TEST (never the whole
+    // describe) — the deterministic reload test above must run in every
+    // ordinary gate invocation.
+    test.skip(
+      !LIVE_AI,
+      "requires AIFETCHLY_E2E_LIVE_AI=1 with a provider backend"
+    );
     const page = aiApp.mainWindow;
     await openWorkspace(page);
     await page.getByTestId("workspace-insights").click();
