@@ -353,7 +353,7 @@ The implementation must compose these concerns. It must not:
 - **FR-PER-003**: Users can grant once, grant persistently when allowed, or deny.
 - **FR-PER-004**: Grant and deny actions use the existing trusted permission IPC and never expose raw permission tokens to the DOM or logs.
 - **FR-PER-005**: A successful grant resumes the exact paused tool continuation once.
-- **FR-PER-006**: Denial produces the existing safe tool result and lets the AI explain or recover.
+- **FR-PER-006**: In scheduled-loop journeys, denial produces the existing safe tool result and lets the AI explain or recover. In interactive (workspace-coordinator-owned) turns, denial is the validated stop of the paused run (deny-equals-stop): the decision row renders the denied receipt and the turn does not continue with an unobserved engine resume.
 - **FR-PER-007**: Failure leaves the decision available and announces the error.
 - **FR-PER-008**: Inactive conversations show only bounded permission attention in the sidebar. Selecting the conversation reveals the full decision.
 
