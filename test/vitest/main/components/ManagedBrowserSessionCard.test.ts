@@ -313,6 +313,67 @@ describe("ManagedBrowserSessionCard", () => {
     );
   });
 
+  it("R8 P2-6: a late non-terminal status never resurrects a locally stopped session", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-stop']").exists()).toBe(true)
+    );
+    await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+        false
+      )
+    );
+
+    // A queued status event for the stopped session arrives late.
+    capturedStatusCallback()(status({ state: "running" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
+    );
+  });
+
+  it("R8 P2-6: a takeover reply confirming a session stopped mid-flight is dropped", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    interface HandoffResolve {
+      (s: SafeManagedBrowserStatus | null): void;
+    }
+    let resolveHandoff: HandoffResolve | undefined;
+    apiMocks.requestHandoff.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveHandoff = resolve as HandoffResolve;
+        })
+    );
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-takeover']").exists()).toBe(
+        true
+      )
+    );
+
+    // Take over, but the reply is pending when the session goes terminal.
+    await wrapper.find("[data-testid='mb-btn-takeover']").trigger("click");
+    await nextTick();
+    capturedStatusCallback()(status({ state: "stopped" }));
+    await nextTick();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+        false
+      )
+    );
+
+    // The awaited takeover reply lands after the stop: it must not revive
+    // the dead session.
+    resolveHandoff?.(status({ state: "handoff", handoffReason: "user_requested" }));
+    await nextTick();
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
+    );
+  });
+
   it("renders a localized last-error code line", async () => {
     // Non-terminal state carrying an error code (e.g. a failed cookie
     // refresh keeps the session usable but flagged).

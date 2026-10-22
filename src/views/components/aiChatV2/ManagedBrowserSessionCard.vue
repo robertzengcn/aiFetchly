@@ -265,6 +265,13 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+/**
+ * R8 P2-6: sessions this card has seen go away — terminal status events and
+ * local stop clicks both land here. A late non-terminal status for one of
+ * them must never resurrect the card ("stopped stays empty until
+ * listActiveSessions or a new start says otherwise").
+ */
+const stoppedSessionIds = new Set<string>();
 const recentNotices = ref<
   Array<{
     readonly eventId: string;
@@ -373,12 +380,24 @@ const stateIcon = computed(() => {
 
 function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!next || TERMINAL_STATES.has(next.state)) {
+    if (next?.sessionId) {
+      stoppedSessionIds.add(next.sessionId);
+    }
     status.value = null;
     handoffDialogOpen.value = false;
     approvalRequest.value = null;
     progressLine.value = null;
     firstSeenAt.value = null;
     clearScreenshot();
+    return;
+  }
+  // R8 P2-6: ignore events that are not about the card's current session
+  // (this includes any session that was already stopped), and drop results
+  // for a session other than the one displayed when one is up.
+  if (stoppedSessionIds.has(next.sessionId)) {
+    return;
+  }
+  if (status.value && status.value.sessionId !== next.sessionId) {
     return;
   }
   status.value = next;
@@ -481,6 +500,7 @@ function onStop(): void {
   }
   void run(async () => {
     await stopManagedBrowser(current.sessionId, "user_stop");
+    stoppedSessionIds.add(current.sessionId);
     applyStatus(null);
   });
 }
@@ -493,6 +513,7 @@ function onCancelTask(): void {
   handoffDialogOpen.value = false;
   void run(async () => {
     await stopManagedBrowser(current.sessionId, "cancelled");
+    stoppedSessionIds.add(current.sessionId);
     applyStatus(null);
   });
 }
