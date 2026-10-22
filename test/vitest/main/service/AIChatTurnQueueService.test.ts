@@ -152,11 +152,25 @@ function makeEngineStub() {
 }
 
 function makeService(
-  engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>
+  engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>,
+  preparedOverrides?: Partial<AIChatPendingPreparedContent>
 ) {
   const stub = makeEngineStub();
   Object.assign(stub, engineOverrides ?? {});
-  const module = new AIChatPendingMessageModule(fakePrep());
+  const prep = fakePrep();
+  if (preparedOverrides) {
+    const original = prep.prepare as unknown as (
+      input: { request: { message: string } }
+    ) => Promise<AIChatPendingPreparedContent>;
+    (prep.prepare as unknown) = vi.fn(
+      async (input: { request: { message: string } }) =>
+        ({
+          ...(await original(input)),
+          ...preparedOverrides,
+        } as AIChatPendingPreparedContent)
+    );
+  }
+  const module = new AIChatPendingMessageModule(prep);
   const events: AIChatPendingMessageEvent[] = [];
   let leaseEnabled = true;
   const service = new AIChatTurnQueueService({
@@ -638,6 +652,60 @@ describe("AIChatTurnQueueService steer", () => {
     ).rejects.toMatchObject({ code: "TURN_NOT_STEERABLE" });
     const views = await service.list("v2-st2");
     expect(views[0].status).toBe("sent");
+  });
+
+  it("rejects steering for a queued row carrying generated-image references (FR-QUE-005 P1-3)", async () => {
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    const { service, stub } = makeService(undefined, {
+      messageMetadata: {
+        source: "chat-v2",
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m1", imageIndex: 1 },
+        ],
+      },
+    });
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-imgsteer-a",
+      request: { message: "A", conversationId: "v2-imgsteer" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    stub.statuses.set("v2-imgsteer", "running");
+
+    const receiptB = await service.submit({
+      clientRequestId: "cr-imgsteer-b",
+      request: { message: "now batch-edit all of them", conversationId: "v2-imgsteer" },
+    });
+    expect(receiptB.disposition).toBe("queued");
+
+    // Force the steering path past the reservation so the test targets the
+    // metadata check, not a null-reservation refusal.
+    stub.setReserve({
+      reservationId: "r-img",
+      targetAssistantMessageId: "assistant-img",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+    stub.setCommit(true);
+
+    // A stale renderer must not be able to bypass the UI gate: the durable
+    // row carries a reference channel that steering would drop, so the
+    // service rejects with the not-steerable error and keeps the row queued.
+    await expect(
+      service.steer({
+        conversationId: "v2-imgsteer",
+        pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+      })
+    ).rejects.toMatchObject({ code: "TURN_NOT_STEERABLE" });
+    const views = await service.list("v2-imgsteer");
+    const row = views.find((v) => v.content.includes("batch-edit"));
+    expect(row?.status).toBe("queued");
+
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-imgsteer",
+      assistantMessageId: "a",
+    });
   });
 
   it("commit-false race restores the row to queued", async () => {

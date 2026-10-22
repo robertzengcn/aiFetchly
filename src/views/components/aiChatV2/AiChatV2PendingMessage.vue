@@ -144,6 +144,7 @@ const steerBlockedByAttachments = computed(
 const showSteer = computed(
   () =>
     props.steeringEnabled !== false &&
+    props.view.canSteer !== false &&
     props.view.status === "queued" &&
     attachmentChips.value.length === 0 &&
     props.runtimeStatus === "running"

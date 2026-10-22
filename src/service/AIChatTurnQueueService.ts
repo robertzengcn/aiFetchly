@@ -668,6 +668,25 @@ export class AIChatTurnQueueService {
         "The message is no longer queued."
       );
     }
+    // FR-QUE-005 (P1-3): rows carrying generated-image references are not
+    // steerable — steering carries display/model text only and would drop
+    // the reference channel. Reject BEFORE the reservation so a stale
+    // renderer consumes no steering slot (claimForSteering re-checks as a
+    // defense-in-depth).
+    const rowView = await this.deps.pendingModule.getView(
+      input.pendingMessageId,
+      "running"
+    );
+    if (rowView && rowView.canSteer === false) {
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_steering_rejected_total",
+        "references_not_steerable"
+      );
+      throw new AIChatTurnQueueError(
+        "TURN_NOT_STEERABLE",
+        "Messages with attachments or generated images will send after the current response."
+      );
+    }
 
     // Phase 1: synchronous reservation on the active turn.
     const reservation = this.deps.engine.reserveSteering(
