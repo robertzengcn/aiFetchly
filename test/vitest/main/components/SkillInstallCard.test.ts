@@ -5,7 +5,7 @@
  */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import SkillInstallCard from "@/views/components/aiChatV2/SkillInstallCard.vue";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import en from "@/views/lang/en";
@@ -29,6 +29,7 @@ import {
   approveSkillInstallDependency,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
+  getSkillInstallStatus,
   retrySkillInstall,
   runApprovedSkillInstallCommand,
   submitSkillInstallSecret,
@@ -109,6 +110,51 @@ function mountCard(snapshot: InstallSnapshot) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("SkillInstallCard historical refresh (P1-4)", () => {
+  // Clear the per-test implementations contaminating the factory mock.
+  afterAll(() => {
+    vi.mocked(getSkillInstallStatus).mockReset();
+  });
+
+  it("reopens with authoritative status and drops a stale approve gate", async () => {
+    // Persisted tool row says awaiting_approval; the live install is done.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(
+      makeSnapshot({ state: "ready", nextAction: "ready" })
+    );
+    const wrapper = mountCard(makeSnapshot());
+    expect(
+      wrapper.find('[data-testid="skill-install-review"]').exists()
+    ).toBe(true);
+    await flushPromises();
+
+    // A reopened historical card must re-fetch its status (PRD §22.2).
+    expect(getSkillInstallStatus).toHaveBeenCalledWith("sess-1");
+    // The refreshed state renders the outcome — no Approve replay.
+    expect(
+      wrapper.find('[data-testid="skill-install-review"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="skill-install-ready"]').exists()).toBe(
+      true
+    );
+  });
+
+  it("keeps the approve gate when the live status is still awaiting_approval", async () => {
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(
+      makeSnapshot({ state: "awaiting_approval" })
+    );
+    const wrapper = mountCard(makeSnapshot());
+    await flushPromises();
+
+    expect(getSkillInstallStatus).toHaveBeenCalledWith("sess-1");
+    expect(
+      wrapper.find('[data-testid="skill-install-review"]').exists()
+    ).toBe(true);
+    expect(wrapper.find('[data-testid="skill-install-approve"]').exists()).toBe(
+      true
+    );
+  });
 });
 
 describe("SkillInstallCard", () => {

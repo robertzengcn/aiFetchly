@@ -201,7 +201,7 @@
 
       <!-- Plan review (awaiting_approval) -->
       <div
-        v-if="snapshot?.state === 'awaiting_approval'"
+        v-if="snapshotView?.state === 'awaiting_approval'"
         data-testid="skill-install-review"
         class="mt-2"
       >
@@ -236,7 +236,7 @@
            catalog-validated system installer; decline rolls the activation
            back and cancels. Token binding is identical to plan approval. -->
       <div
-        v-if="snapshot?.state === 'installing_dependencies' && unsatisfiedDependencies.length > 0"
+        v-if="snapshotView?.state === 'installing_dependencies' && unsatisfiedDependencies.length > 0"
         data-testid="skill-install-deps"
         class="mt-2"
       >
@@ -367,7 +367,7 @@
 
       <!-- Secure credential input (awaiting_secret) -->
       <div
-        v-if="snapshot?.state === 'awaiting_secret'"
+        v-if="snapshotView?.state === 'awaiting_secret'"
         data-testid="skill-install-secret"
         class="mt-2"
       >
@@ -406,7 +406,7 @@
       <div
         v-if="
           ['failed', 'rollback_required', 'installing_dependencies'].includes(
-            snapshot?.state ?? ''
+            snapshotView?.state ?? ''
           )
         "
         class="mt-2 d-flex ga-2"
@@ -422,14 +422,14 @@
 
       <!-- Terminal states -->
       <div
-        v-if="snapshot?.state === 'ready'"
+        v-if="snapshotView?.state === 'ready'"
         class="text-success text-body-2 mt-2"
         data-testid="skill-install-ready"
       >
         {{ t("skillInstall.ready") }}
       </div>
       <div
-        v-if="snapshot?.state === 'cancelled'"
+        v-if="snapshotView?.state === 'cancelled'"
         class="text-medium-emphasis text-body-2 mt-2"
       >
         {{ t("skillInstall.cancelled") }}
@@ -494,6 +494,11 @@ onMounted(() => {
     lastSeq = event.seq;
     void refreshSnapshot();
   });
+  // P1-4 (FR-SKL-003): a reopened historical card must re-fetch the
+  // authoritative install status — the persisted tool-result snapshot is
+  // stale by definition (its Approve gate cannot be trusted until the
+  // fresh read confirms the session still needs approval).
+  void refreshSnapshot();
 });
 onUnmounted(() => {
   unsubscribe?.();
@@ -501,6 +506,10 @@ onUnmounted(() => {
 });
 
 async function refreshSnapshot(): Promise<void> {
+  // P1-4: stale gate against a session-local id that the card has not yet
+  // rendered — the tool result class only mounts the card when a sessionId
+  // exists, but the manager page reuse path may render an empty snapshot.
+  if (!snapshotView.value.sessionId) return;
   const snapshot = await getSkillInstallStatus(snapshotView.value.sessionId);
   if (snapshot) {
     localSnapshot.value = snapshot;

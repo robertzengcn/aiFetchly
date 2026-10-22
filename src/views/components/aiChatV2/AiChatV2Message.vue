@@ -939,6 +939,14 @@ const installSnapshot = computed<InstallSnapshot>(() => {
     safeSummary: String(raw.safeSummary ?? ""),
     recoverable: raw.recoverable !== false,
     ...(raw.errorCode ? { errorCode: String(raw.errorCode) } : {}),
+    // P1-4: the installer tool result carries the safePlan alongside the
+    // snapshot — pass it through so a reopened historical card renders the
+    // same structured plan as the live card (refreshSnapshot re-fetches
+    // authoritative state on mount, but the persisted plan is the
+    // reviewable copy of record).
+    ...(raw.safePlan && typeof raw.safePlan === "object"
+      ? { safePlan: raw.safePlan as InstallSnapshot["safePlan"] }
+      : {}),
   };
 });
 // ---------------------------------------------------------------------------
