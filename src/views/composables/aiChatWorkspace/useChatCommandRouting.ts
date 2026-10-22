@@ -396,7 +396,11 @@ export function useChatCommandRouting(
     }
     if (!result.status) {
       ports.appendLocalExchange(rawInput, result.msg, conversationId);
-      return { kind: "handled", acceptedSend: true, acceptanceDelegated: false };
+      // R8 P2 (FR-CMD-004 / invariant 12): a status:false registry result
+      // is a FAILURE — the local error exchange is appended, but nothing
+      // ran. Reporting acceptedSend true here had the surface consume the
+      // draft for a command that was never executed; the caller retains it.
+      return { kind: "handled", acceptedSend: false, acceptanceDelegated: false };
     }
     if (result.action === "submit_prompt") {
       // The expanded prompt is submitted exactly once through the ordinary

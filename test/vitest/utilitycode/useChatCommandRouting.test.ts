@@ -447,7 +447,11 @@ describe("useChatCommandRouting.routeCommand", () => {
       files: [file],
     });
     expect(state.slashDispatches).toEqual(["/review Acme"]);
-    expect(result).toEqual({ kind: "completed", acceptedSend: true });
+    expect(result).toEqual({
+      kind: "completed",
+      acceptedSend: true,
+      acceptanceDelegated: true,
+    });
     expect(seen).toHaveLength(1);
     expect(seen[0].prompt).toBe("expanded prompt");
     expect(seen[0].files).toHaveLength(1);
@@ -507,7 +511,11 @@ describe("useChatCommandRouting.routeCommand", () => {
     });
     const router = useChatCommandRouting(ports);
     const result = await router.routeCommand("/x", {});
-    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+    expect(result).toEqual({
+      kind: "completed",
+      acceptedSend: false,
+      acceptanceDelegated: true,
+    });
   });
 
   it("reports acceptedSend=false with an error when no conversation can be ensured", async () => {
@@ -516,9 +524,37 @@ describe("useChatCommandRouting.routeCommand", () => {
     });
     const router = useChatCommandRouting(ports);
     const result = await router.routeCommand("/anything", {});
-    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+    expect(result).toEqual({
+      kind: "completed",
+      acceptedSend: false,
+      acceptanceDelegated: false,
+    });
     // The silent-vanish fix: a visible error, never nothing.
     expect(state.errors.at(-1)).toContain("noConversation");
+  });
+
+  it("reports acceptedSend=false when the registry returns status:false (P2: unknown command retains the draft)", async () => {
+    // R8 P2 (FR-CMD-004 / invariant 12): a status:false registry result is
+    // a FAILURE — the local error exchange is appended, but nothing ran, so
+    // a true acceptedSend cleared the composer text for a command that was
+    // never executed. Failure keeps the draft, success consumes it.
+    const { ports, state } = makePorts({
+      dispatchSlashCommand: async (input) => {
+        state.slashDispatches.push(input.rawInput);
+        return { status: false as const, msg: "Unknown command" };
+      },
+    });
+    const router = useChatCommandRouting(ports);
+    const result = await router.routeCommand("/nope", {});
+    expect(result).toEqual({
+      kind: "completed",
+      acceptedSend: false,
+      acceptanceDelegated: false,
+    });
+    // The failure receipt is still surfaced as the local exchange.
+    expect(state.localExchanges).toEqual([
+      { user: "/nope", assistant: "Unknown command" },
+    ]);
   });
 
   it("does not double-dispatch /goal through the generic registry", async () => {
@@ -543,7 +579,11 @@ describe("useChatCommandRouting.routeCommand", () => {
     const result = await router.routeCommand("/help", {});
     // Handled-but-rejected: acceptedSend false so the caller retains the
     // draft (it was never accepted for execution).
-    expect(result).toEqual({ kind: "completed", acceptedSend: false });
+    expect(result).toEqual({
+      kind: "completed",
+      acceptedSend: false,
+      acceptanceDelegated: false,
+    });
     expect(seenExchanges).toHaveLength(1);
     expect(seenExchanges[0].origin).toBe("v2-cmd-test");
   });

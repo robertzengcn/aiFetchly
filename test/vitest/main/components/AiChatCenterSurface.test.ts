@@ -768,6 +768,34 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(notice.text()).toContain("missing-skill");
     });
 
+    it("keeps the draft when the registry rejects an unknown slash command (FR-CMD-004 P2)", async () => {
+      // R8 P2: a status:false registry result is a FAILURE — the surface
+      // consumed the draft (onAccepted) for a command that never ran. It
+      // must retain the text exactly like the transport-failure path.
+      mockInvokeByChannel({
+        [SLASH_COMMAND_DISPATCH]: {
+          status: true,
+          data: { status: false, msg: "Unknown command" },
+        },
+      });
+      const wrapper = mountSurface();
+      await flushPromises();
+
+      const acceptedSpy = vi.fn();
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "/nope", [], { onAccepted: acceptedSpy });
+      await flushPromises();
+
+      expect(acceptedSpy).not.toHaveBeenCalled();
+      // The failure receipt still renders as the local exchange.
+      const selected = useSelectedConversationStore();
+      const exchange = selected.messages.filter(
+        (m: ChatV2MessageView) => m.metadata?.source === "slash-command"
+      );
+      expect(exchange).toHaveLength(1);
+      expect(exchange[0].content).toBe("Unknown command");
+    });
+
     it("stages a scheduled loop for approval and persists it only on confirm (FR-CMD-007)", async () => {
       mockInvokeByChannel({
         [AI_CHAT_V2_SCHEDULED_LOOP_CREATE]: {
