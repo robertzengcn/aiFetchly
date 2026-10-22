@@ -1286,6 +1286,10 @@ function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
  */
 interface PendingGeneratedImageSend {
   readonly conversationKey: string;
+  // P1-2 (FR-IMG-015): the owning conversation id captured at staging — the
+  // confirm replay must target THIS conversation or abort, never the chat
+  // the user may have switched to while the dialog stayed open.
+  readonly conversationId: string | null;
   readonly text: string;
   readonly files: File[];
   readonly options?: {
@@ -1343,6 +1347,7 @@ function runGeneratedImagePreflight(
       // survive the dialog so the replayed send behaves like the original.
       pendingGeneratedImageSend.value = {
         conversationKey: composerDraftKey.value,
+        conversationId: conversationId.value,
         text,
         files,
         options: options
@@ -1377,6 +1382,7 @@ function runGeneratedImagePreflight(
     if (result.kind === "batch_confirmation") {
       pendingGeneratedImageSend.value = {
         conversationKey: composerDraftKey.value,
+        conversationId: conversationId.value,
         text,
         files,
         options: options
@@ -1407,6 +1413,7 @@ function runGeneratedImagePreflight(
     // confirmation instead of hard-blocking (FR-IMG-008).
     pendingGeneratedImageSend.value = {
       conversationKey: composerDraftKey.value,
+      conversationId: conversationId.value,
       text,
       files,
       options: options
@@ -1439,7 +1446,11 @@ function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
   composerDrafts.setGeneratedImageReferences(pending.conversationKey, [
     view.reference,
   ]);
-  void performOrdinarySend(pending.text, pending.files, pending.options);
+  // P1-2: ride the staged conversation id exactly like plan continuation —
+  // a selection change during any later await aborts instead of retargeting.
+  void performOrdinarySend(pending.text, pending.files, pending.options, {
+    targetConversationId: pending.conversationId,
+  });
 }
 
 function cancelAmbiguityChooser(): void {
@@ -1459,10 +1470,23 @@ function confirmGeneratedImageBatch(): void {
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
   if (!pending || !confirmed || confirmed.length === 0) return;
-  void performOrdinarySend(pending.text, pending.files, {
-    ...pending.options,
-    confirmedBatchReferences: [...confirmed],
-  });
+  // P1-2 (FR-IMG-015): same stale-dialog guard as the ambiguity chooser —
+  // a confirm click after the user switched chats must never submit
+  // conv-A's batch into the newly selected conversation.
+  if (pending.conversationKey !== composerDraftKey.value) return;
+  // T7-style capture: the confirmed set targets the staged conversation so
+  // a selection change during the send's awaits aborts instead of
+  // retargeting (Codex P2: empty-but-confirmed batches could send
+  // without a captured target).
+  void performOrdinarySend(
+    pending.text,
+    pending.files,
+    {
+      ...pending.options,
+      confirmedBatchReferences: [...confirmed],
+    },
+    { targetConversationId: pending.conversationId }
+  );
 }
 
 function declineGeneratedImageBatch(): void {

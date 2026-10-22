@@ -1636,6 +1636,14 @@ function confirmGeneratedImageBatch(): void {
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
   if (!pending || !confirmed || confirmed.length === 0) return;
+  // FR-IMG-015 P1-2: same stale-dialog guard as the ambiguity chooser —
+  // a confirm click after the user switched conversations must never
+  // submit conv-A's confirmed batch into the newly active conversation.
+  if (
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    return;
+  }
   void onSend(pending.text, pending.files, {
     ...pending.options,
     bypassGeneratedImageInference: true,

@@ -2306,6 +2306,38 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(startChatRunMock).not.toHaveBeenCalled();
     });
 
+    it("discards a pending batch confirm when the conversation switched before the confirm (FR-IMG-015 P1-2)", async () => {
+      const wrapper = await mountWithImages(4);
+      const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit(
+        "send",
+        "sharpen image 1, image 2, image 3 and image 4",
+        []
+      );
+      await flushPromises();
+      const confirmDialog = wrapper.findComponent({
+        name: "GeneratedImageBatchConfirmDialog",
+      });
+      expect(confirmDialog.exists()).toBe(true);
+
+      // Switch to another chat and confirm in the SAME synchronous window —
+      // the selection watcher flushes on the next tick, which is exactly the
+      // race a real confirm click can hit. The confirm must behave like the
+      // ambiguity chooser's stale pick: nothing submits into the NEW chat.
+      useChatWorkspaceStore().setSelected("conv-other");
+      confirmDialog.vm.$emit("confirm");
+      await flushPromises();
+
+      // B's queue is untouched and B's image tray stays empty.
+      expect(startChatRunMock).not.toHaveBeenCalled();
+      const composerStub = wrapper.findComponent({ name: "AiChatV2Composer" });
+      const tray = composerStub.props(
+        "selectedGeneratedImages"
+      ) as unknown[];
+      expect(tray).toEqual([]);
+      wrapper.unmount();
+    });
+
     it("resolves an unambiguous numbered reference directly (FR-IMG-005)", async () => {
       const wrapper = await mountWithImages(3);
       const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
