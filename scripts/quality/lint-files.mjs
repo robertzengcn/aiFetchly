@@ -34,7 +34,11 @@ function failOperational(message, hint) {
   process.exit(OPERATIONAL_FAILURE);
 }
 
-const files = process.argv.slice(2).filter((a) => a !== '--json');
+// BUG-16: --json is a FLAG only when it is the FIRST argument; a file
+// literally named --json stays in the list (checked below, never silently
+// dropped to a vacuous pass).
+const jsonMode = process.argv[2] === '--json';
+const files = jsonMode ? process.argv.slice(3) : process.argv.slice(2);
 if (files.length === 0) {
   process.stdout.write('quality: no files to check\n');
   process.exit(0);
@@ -98,11 +102,30 @@ try {
   );
 }
 
-// Detect eligible files that were excluded by ignore rules (AC-17): ESLint
-// either omits the result or returns a severity-1 "File ignored" stub —
-// neither may masquerade as a checked file. Fail with the reason.
+// BUG-15/AC-17: distinguish APPROVED ignores (skipped with the pattern
+// printed) from unexpected ones (exit 2 — never pretend a file was
+// checked). ESLint either omits ignored files from results or returns a
+// severity-1 "File ignored" stub.
+function globToRegExp(glob) {
+  // policy globs are simple: `**` any path, `*` any segment chars. The
+  // double-star is staged through a plain-text placeholder (no control
+  // characters in regex source - no-control-regex) then joined to `.*`.
+  const STAGE = '@@DOUBLESTAR@@';
+  const staged = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, STAGE)
+    .replace(/\*/g, '[^/]*');
+  return new RegExp(`^${staged.split(STAGE).join('.*')}$`);
+}
+const approvedRegexes = policy.approvedIgnores.map(globToRegExp);
+function approvedIgnorePatternFor(relPath) {
+  for (let i = 0; i < policy.approvedIgnores.length; i += 1) {
+    if (approvedRegexes[i].test(relPath)) return policy.approvedIgnores[i];
+  }
+  return null;
+}
+
 const resultFiles = new Set(results.map((r) => path.resolve(repoRoot, r.filePath)));
-const ignored = files.filter((f) => !resultFiles.has(path.resolve(repoRoot, f)));
 const ignoredStubs = [];
 for (const r of results) {
   if (r.messages.some((m) => m.ruleId === null && /File ignored/.test(m.message))) {
@@ -112,14 +135,36 @@ for (const r of results) {
     (m) => !(m.ruleId === null && /File ignored/.test(m.message))
   );
 }
-if (ignored.length > 0 || ignoredStubs.length > 0) {
+const ignoredPaths = [...new Set([
+  ...files.filter((f) => !resultFiles.has(path.resolve(repoRoot, f))).map((f) => path.relative(repoRoot, path.resolve(repoRoot, f)).split(path.sep).join('/')),
+  ...ignoredStubs,
+])];
+
+const approvedSkipped = [];
+const unexpected = [];
+for (const rel of ignoredPaths) {
+  const pattern = approvedIgnorePatternFor(rel);
+  if (pattern !== null) approvedSkipped.push({ rel, pattern });
+  else unexpected.push(rel);
+}
+if (unexpected.length > 0) {
   failOperational(
-    `selected file(s) were excluded by ignore rules instead of checked:\n` +
-      [...ignored, ...ignoredStubs].map((f) => `  - ${f}`).join('\n') +
+    `selected file(s) were excluded by UNAPPROVED ignore rules instead of checked:\n` +
+      unexpected.map((f) => `  - ${f}`).join('\n') +
       `\n(approved ignore patterns live in scripts/quality/policy.cjs)`,
-    'Hidden dot-directories and ignore patterns exclude files silently. Move the file, or adjust the approved ignore list deliberately.'
+    'Hidden dot-directories and non-approved ignore patterns exclude files silently. Move the file, or adjust the approved ignore list deliberately.'
   );
 }
+for (const { rel, pattern } of approvedSkipped) {
+  (jsonMode ? process.stderr : process.stdout).write(
+    `quality: skipped ${rel} (approved ignore: ${pattern})\n`
+  );
+}
+// Files that were entirely approved-skips are removed from the result set.
+const approvedSkipSet = new Set(approvedSkipped.map((a) => a.rel));
+results = results.filter(
+  (r) => !approvedSkipSet.has(path.relative(repoRoot, r.filePath).split(path.sep).join('/'))
+);
 
 // Architecture direct-import checks (dedicated AST pass, §8): merged into
 // the results before exception application so legacy allowances work the
@@ -171,35 +216,79 @@ if (exceptionOutcome.errors.length > 0) {
   );
 }
 
-let blockers = 0;
+// BUG-16: structured finding collection feeds BOTH outputs. Human output is
+// capped (first 50 blockers) with the total and a pointer to --json; the
+// versioned JSON document goes to stdout in --json mode with human
+// diagnostics on stderr.
+const MAX_HUMAN_BLOCKERS = 50;
+const findings = [];
 let warnings = 0;
 for (const result of exceptionOutcome.results) {
+  const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
   for (const message of result.messages) {
     if (message.fatal || message.severity === 2) {
-      blockers += 1;
-      const rel = path.relative(repoRoot, result.filePath);
-      process.stdout.write(
-        `${rel}:${message.line}:${message.column} error ${message.ruleId || '(fatal)'}\n` +
-          `  ${message.message}\n`
-      );
+      findings.push({
+        path: rel,
+        line: message.line,
+        column: message.column,
+        ruleId: message.ruleId ?? null,
+        fatal: message.fatal === true,
+        message: message.message,
+      });
     } else if (message.severity === 1) {
       warnings += 1;
     }
   }
 }
+const blockers = findings.length;
 
 const elapsedMs = Number((process.hrtime.bigint() - startNs) / 1_000_000n);
-process.stdout.write(
-  `quality: checked ${results.length} file(s) in ${elapsedMs}ms; ` +
-    `${blockers} blocker(s); ${warnings} warning(s)` +
-    (exceptionOutcome.acceptedDebt > 0
-      ? `; ${exceptionOutcome.acceptedDebt} accepted legacy finding(s)`
-      : '') +
-    '\n'
-);
+
+if (jsonMode) {
+  // Versioned JSON schema (tech design §10) on stdout; human lines on stderr.
+  const document = {
+    schema: 'quality-gate/1',
+    mode: 'staged-fast',
+    filesChecked: results.length,
+    filesSkippedApproved: approvedSkipped.length,
+    elapsedMs,
+    blockers: findings,
+    blockerCount: blockers,
+    warningCount: warnings,
+    acceptedDebt: exceptionOutcome.acceptedDebt,
+    operationalErrors: [],
+  };
+  process.stdout.write(JSON.stringify(document) + '\n');
+} else {
+  for (const f of findings.slice(0, MAX_HUMAN_BLOCKERS)) {
+    process.stdout.write(
+      `${f.path}:${f.line}:${f.column} error ${f.ruleId || '(fatal)'}\n` +
+        `  ${f.message}\n`
+    );
+  }
+  if (findings.length > MAX_HUMAN_BLOCKERS) {
+    process.stdout.write(
+      `… ${findings.length - MAX_HUMAN_BLOCKERS} more blocker(s) not shown. ` +
+        `Re-run with --json for the full list.\n`
+    );
+  }
+  process.stdout.write(
+    `quality: checked ${results.length} file(s) in ${elapsedMs}ms; ` +
+      `${blockers} blocker(s); ${warnings} warning(s)` +
+      (exceptionOutcome.acceptedDebt > 0
+        ? `; ${exceptionOutcome.acceptedDebt} accepted legacy finding(s)`
+        : '') +
+      (approvedSkipped.length > 0
+        ? `; ${approvedSkipped.length} approved skip(s)`
+        : '') +
+      '\n'
+  );
+}
 
 if (blockers > 0) {
-  process.stdout.write(
+  // BUG-16: keep stdout PURE JSON in --json mode; human lines on stderr.
+  const human = process.stderr;
+  human.write(
     'Commit blocked. Fix the finding(s), stage the correction, and retry.\n' +
       'Deep checks were not run. Use `yarn quality:deep` for typed validation.\n'
   );

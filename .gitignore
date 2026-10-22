@@ -168,3 +168,6 @@ debug/*
 # Local worktree: node_modules is symlinked to the primary checkout.
 node_modules
 .husky/_/
+
+# Quality-gate transient probe/fixture dirs (doctor + test suites)
+tmp-quality-*/

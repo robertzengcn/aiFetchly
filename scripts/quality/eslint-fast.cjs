@@ -17,6 +17,7 @@ const {
   typescriptBlockingRules,
   typescriptAdvisoryRules,
   coreBlockingRules,
+  approvedIgnores,
 } = require('./policy.cjs');
 
 module.exports = {
@@ -26,6 +27,11 @@ module.exports = {
   // eslintConfig is removed, this remains the only extension chain.
   extends: [require.resolve('../../.eslintrc.json')],
   plugins: ['sonarjs'],
+  // BUG-15: the APPROVED ignore list from policy.cjs is the single source.
+  // Anything ignored for a reason NOT on this list makes the runner exit 2
+  // (AC-17's fail-closed half); anything on it is skipped with the pattern
+  // printed by the runner.
+  ignorePatterns: approvedIgnores,
   rules: {
     ...coreBlockingRules,
     ...sonarRules,

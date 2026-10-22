@@ -9,7 +9,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -120,21 +120,27 @@ if (existsSync(hookFile)) {
 }
 
 // Fixture rejection probe: invalid code must be REJECTED (fail closed proof).
+// BUG-12: the fixture lives under tmp-quality-probe/ (gitignored, non-hidden
+// so ESLint does not silently skip it) and deletion is in finally. NOTE:
+// this probes the RUNNER's rejection, not a git commit — the commit-level
+// proof lives in the disposable-repo integration suite.
 let probeOk = false;
 let probeDetail = 'probe did not run';
 const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'quality-doctor-'));
+const probeDir = path.join(repoRoot, 'tmp-quality-probe');
+let probeFixture = null;
 try {
-  const fixture = path.join(repoRoot, 'tmp-quality-doctor-fixture.ts');
+  mkdirSync(probeDir, { recursive: true });
+  probeFixture = path.join(probeDir, 'doctor-fixture.ts');
   writeFileSync(
-    fixture,
+    probeFixture,
     "export function dup(v: boolean): string {\n  if (v) { return 'same'; } else { return 'same'; }\n}\n"
   );
   const run = spawnSync(
     process.execPath,
-    [path.join(repoRoot, 'scripts', 'quality', 'lint-files.mjs'), 'tmp-quality-doctor-fixture.ts'],
+    [path.join(repoRoot, 'scripts', 'quality', 'lint-files.mjs'), path.join('tmp-quality-probe', 'doctor-fixture.ts')],
     { cwd: repoRoot, encoding: 'utf8', timeout: 60_000 }
   );
-  rmSync(fixture, { force: true });
   probeOk = run.status === 1;
   probeDetail =
     run.status === 1
@@ -144,6 +150,7 @@ try {
   probeDetail = e.message;
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
+  if (probeFixture) rmSync(probeFixture, { force: true });
 }
 check('probe:duplicated-branches', probeOk, probeDetail, 'The runner must reject a duplicated-branch fixture (exit 1)');
 

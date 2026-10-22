@@ -109,7 +109,7 @@
     "quality:staged": "node scripts/quality/pre-commit.mjs",
     "quality:deep": "node scripts/quality/deep.mjs",
     "quality:audit": "node scripts/quality/audit.mjs",
-    "quality:fix": "node node_modules/eslint/bin/eslint.js --fix",
+    "quality:fix": "node scripts/quality/fix.mjs",
     "quality:doctor": "node scripts/quality/doctor.mjs",
     "test:quality-gate": "node --test \"test/quality-gate/*.test.mjs\""
   },
