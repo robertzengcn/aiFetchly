@@ -324,9 +324,11 @@
         </slot>
       </div>
       <!-- Attach file button: after the selectors, before the trailing
-           actions. -->
+           actions. FR-SUB-008 (R8 P2): allowed while a turn runs — the
+           queued follow-up carries the files; only attachment
+           preprocessing (isProcessing) keeps it hidden. -->
       <v-btn
-        v-if="!isStreaming && !isProcessing"
+        v-if="!isProcessing"
         icon
         size="small"
         variant="text"
@@ -1350,7 +1352,13 @@ function removePastedChip(pasteId: number): void {
 }
 
 function onPaste(event: ClipboardEvent): void {
-  if (props.isStreaming || props.isProcessing) return;
+  // R8 P2 (FR-SUB-008 / design invariant 11): a busy conversation's
+  // follow-up may carry pasted content — the pending queue sends it with
+  // the queued turn. Paste was blocked for the whole busy period, so the
+  // composer rejected the input the PRD requires it to accept. Only
+  // attachment preprocessing (isProcessing, which mutates the staged
+  // attachment state) still blocks paste.
+  if (props.isProcessing) return;
   event.preventDefault();
 
   const target = event.target;
