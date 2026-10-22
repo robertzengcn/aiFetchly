@@ -1241,11 +1241,16 @@ export class AIChatCoordinator {
     const runtimeStatus: ConversationRuntimeStatus = live
       ? live.status
       : "idle";
+    // R8 P2-7: the live entry is already deleted for terminal broadcasts —
+    // a `run_failed` summary must still mark the sidebar (queue-path parity,
+    // FR-REC-007): status metadata only, no transcript bodies.
     const attention =
       runtimeStatus === "awaiting_permission"
         ? ("permission" as const)
         : runtimeStatus === "awaiting_user"
         ? ("user_input" as const)
+        : reason === "run_failed"
+        ? ("failure" as const)
         : ("none" as const);
     // A conversation created via the renderer's New-chat button enters the
     // sidebar with an EMPTY title and only learns the projection's generated

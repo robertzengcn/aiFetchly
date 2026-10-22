@@ -852,6 +852,27 @@ describe("AIChatCoordinator", () => {
     const row = await runModel.getByRunId(accepted.response.runId);
     expect(row?.errorSummary).toContain("busy");
   });
+
+  it("R8 P2-7: a failed interactive run marks the sidebar with failure attention", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(36);
+    win.register(router);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(36));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    fake.turns[0].reject(new Error("engine vanished"));
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    await waitFor(() => win.summaries.some((s) => s.reason === "run_failed"));
+    const failedSummary = win.summaries.find((s) => s.reason === "run_failed");
+    expect(failedSummary?.attention).toBe("failure");
+    // Status metadata only — no transcript bodies in the attention event.
+    expect(JSON.stringify(failedSummary ?? {})).not.toContain("engine vanished");
+  });
 });
 
 describe("summary event privacy (FR-022)", () => {
