@@ -6,6 +6,7 @@ import {
 } from "@/model/AIChatPendingMessage.model";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatPendingMessagePreparationService, normalizeChatV2UploadedFiles } from "@/service/AIChatPendingMessagePreparationService";
 import type {
   AIChatPendingMessageView,
@@ -503,10 +504,12 @@ export class AIChatPendingMessageModule extends BaseModule {
       input.pendingMessageId
     );
     const metadata = row ? this.parseMessageMetadata(row) : undefined;
-    return await this.pendingModel.promoteDispatchToUserMessage({
+    const saved = await this.pendingModel.promoteDispatchToUserMessage({
       ...input,
       metadata,
     });
+    await this.projectUserMessage(saved);
+    return saved;
   }
 
   async promoteSteeringToUserMessage(input: {
@@ -532,10 +535,39 @@ export class AIChatPendingMessageModule extends BaseModule {
           },
         }
       : undefined;
-    return await this.pendingModel.promoteSteeringToUserMessage({
+    const saved = await this.pendingModel.promoteSteeringToUserMessage({
       ...input,
       metadata,
     });
+    await this.projectUserMessage(saved);
+    return saved;
+  }
+
+  /**
+   * Conversation-projection coupling (audit R7-04): promote is the durable
+   * user moment on the queue/bridge path; mirror the coordinator's
+   * recordMessagePersisted-at-accept so the sidebar matches. Promotion is
+   * exactly-once (status CAS), so the projection cannot double-count on
+   * retries. Best effort — projection failure never fails the turn.
+   */
+  private async projectUserMessage(saved: AIChatMessageEntity): Promise<void> {
+    try {
+      await new AIChatConversationModule().recordMessagePersisted({
+        conversationId: saved.conversationId,
+        isResult: false,
+        previewText: saved.content,
+        // Generated title derives from the first user content, like the
+        // coordinator path.
+        generatedTitle: saved.content,
+        timestamp: saved.timestamp,
+      });
+    } catch (err) {
+      console.warn(
+        "[ai-chat-pending] conversation projection failed for",
+        saved.messageId,
+        err
+      );
+    }
   }
 
   /**

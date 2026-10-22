@@ -40,6 +40,11 @@ import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
 import type { AIChatTurnTerminalEvent } from "@/service/AIChatQueryEvents";
 import { SqliteDb } from "@/config/SqliteDb";
 import { resolveTestDbPath } from "@/config/testDbPath";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatConversationModel } from "@/model/AIChatConversation.model";
+import { AIChatMessageModel } from "@/model/AIChatMessage.model";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { MessageType } from "@/entityTypes/commonType";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -78,6 +83,16 @@ function makeEngineStub() {
   let nextSubmit: Deferred<AIChatTurnTerminalEvent> | null = null;
   let reserveResult: unknown = null;
   let commitResult = true;
+  // R7-04 probe: full-behavior responder for one submit — restores the
+  // bookkeeping invariants (submitted counter) while letting a test drive
+  // the durable assistant persistence like the real engine does.
+  let submitResponder:
+    | null
+    | ((
+        input: Parameters<
+          AIChatTurnQueueEngine["submitPersistedUserMessage"]
+        >[0]
+      ) => Promise<AIChatTurnTerminalEvent>) = null;
   const engine: AIChatTurnQueueEngine = {
     getConversationRuntimeStatus: (id: string) =>
       (statuses.get(id) as never) ?? "idle",
@@ -91,6 +106,9 @@ function makeEngineStub() {
           conversationId: input.savedUser.conversationId,
           modelContent: input.modelContent,
         });
+        if (submitResponder) {
+          return await submitResponder(input);
+        }
         if (nextSubmit) {
           return await nextSubmit.promise;
         }
@@ -118,6 +136,17 @@ function makeEngineStub() {
     },
     setCommit(value: boolean) {
       commitResult = value;
+    },
+    setSubmitResponder(
+      responder:
+        | null
+        | ((
+            input: Parameters<
+              AIChatTurnQueueEngine["submitPersistedUserMessage"]
+            >[0]
+          ) => Promise<AIChatTurnTerminalEvent>)
+    ) {
+      submitResponder = responder;
     },
   };
 }
@@ -709,5 +738,226 @@ describe("AIChatTurnQueueService gating", () => {
         request: { message: "nope", conversationId: "v2-off" },
       })
     ).rejects.toBeInstanceOf(AIChatTurnQueueError);
+  });
+});
+
+/**
+ * Audit R7-04 (conversation-projection parity): a queue-drained turn persists
+ * durable message rows but never materializes `ai_chat_conversations`, so the
+ * boot-time sidebar loses the conversation until the next backfill. The seams
+ * must couple projection upserts at the durable moments — user promotion and
+ * turn terminal — like the coordinator's direct-send path (recordMessagePersisted
+ * at accept + completed/cancelled terminal).
+ */
+describe("AIChatTurnQueueService conversation projection parity (audit R7-04)", () => {
+  /**
+   * Same shape as makeService, but with a released-lease counter — the drain
+   * resolves its lease in the drain's `finally`, so release count is a
+   * deterministic end-of-drain signal even for cancelled/failed terminals
+   * that emit no event.
+   */
+  function makeR7Service() {
+    const stub = makeEngineStub();
+    const module = new AIChatPendingMessageModule(fakePrep());
+    const events: AIChatPendingMessageEvent[] = [];
+    const released = { count: 0 };
+    const service = new AIChatTurnQueueService({
+      engine: stub.engine,
+      pendingModule: module,
+      eventSink: { emit: (e) => events.push(e) },
+      streamSinkFactory: () => ({ emit: () => undefined }),
+      tryAcquireLease: (() => ({
+        release: (): void => {
+          released.count += 1;
+        },
+      })) as never,
+      isAiEnabled: () => true,
+      isQueueEnabled: () => true,
+      isSteeringEnabled: () => true,
+      // Audit R7-04: the drained-turn projection couplings under test.
+      conversationModule: new AIChatConversationModule(),
+    });
+    return { service, module, events, stub, released };
+  }
+
+  /** Persist the durable assistant row exactly as the real engine does. */
+  function makeAssistantPersister() {
+    const messageModel = new AIChatMessageModel(resolveTestDbPath());
+    return async (
+      input: Parameters<
+        AIChatTurnQueueEngine["submitPersistedUserMessage"]
+      >[0],
+      terminal: AIChatTurnTerminalEvent
+    ): Promise<AIChatTurnTerminalEvent> => {
+      if (input.assistantMessageId && terminal.type !== "failed") {
+        const entity = new AIChatMessageEntity();
+        entity.messageId = input.assistantMessageId;
+        entity.conversationId = input.savedUser.conversationId;
+        entity.role = "assistant";
+        entity.content =
+          terminal.type === "completed"
+            ? "assistant answer"
+            : "partial output persisted before cancellation";
+        entity.timestamp = new Date();
+        entity.messageType = MessageType.MESSAGE;
+        entity.metadata = JSON.stringify({ source: "chat-v2" });
+        await messageModel.saveMessage(entity);
+      }
+      return terminal;
+    };
+  }
+
+  async function readProjection(conversationId: string) {
+    const conversationModule = new AIChatConversationModule();
+    return conversationModule.getConversationProjection(conversationId);
+  }
+
+  it("a completed drain materializes the projection: preview, generated title, counters, unread", async () => {
+    const { service, stub, released } = makeR7Service();
+    const persistTurn = makeAssistantPersister();
+    stub.setSubmitResponder((input) =>
+      persistTurn(input, {
+        type: "completed",
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-done",
+      request: {
+        message: "run preservation probe",
+        conversationId: "v2-r7-done",
+      },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-done");
+    expect(projection).not.toBeNull();
+    // The last durable message is the assistant answer → the sidebar preview.
+    expect(projection?.preview).toBe("assistant answer");
+    // The generated title derives once from the first user content.
+    expect(projection?.title).toBe("run preservation probe");
+    // user registration creates the row (count 0), the completed result bumps it
+    expect(projection?.messageCount).toBe(1);
+    expect(projection?.lastResultAt).not.toBeNull();
+    expect(AIChatConversationModel.isUnread(projection as never)).toBe(true);
+
+    const sidebar = await new AIChatConversationModule().getWorkspaceSidebar(
+      () => null,
+      "v2-r7-done"
+    );
+    expect(
+      sidebar.unassigned.some((s) => s.conversationId === "v2-r7-done")
+    ).toBe(true);
+  });
+
+  it("a cancelled drain updates the preview but never marks unread", async () => {
+    const { service, stub, released } = makeR7Service();
+    const persistTurn = makeAssistantPersister();
+    stub.setSubmitResponder((input) =>
+      persistTurn(input, {
+        type: "cancelled",
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-cancel",
+      request: { message: "cancel probe", conversationId: "v2-r7-cancel" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-cancel");
+    expect(projection).not.toBeNull();
+    // The partial assistant content survived cancellation and is projected,
+    // but a cancelled turn is NOT a result — no unread.
+    expect(projection?.preview).toBe(
+      "partial output persisted before cancellation"
+    );
+    expect(projection?.messageCount).toBe(1);
+    expect(projection?.lastResultAt).toBeNull();
+    expect(AIChatConversationModel.isUnread(projection as never)).toBe(false);
+  });
+
+  it("a failed drain with no assistant row still registers the user message", async () => {
+    const { service, stub, released } = makeR7Service();
+    stub.setSubmitResponder((input) =>
+      Promise.resolve({
+        type: "failed" as const,
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-fail",
+      request: { message: "failure probe", conversationId: "v2-r7-fail" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-fail");
+    expect(projection).not.toBeNull();
+    expect(projection?.preview).toBe("failure probe");
+    expect(projection?.messageCount).toBe(0);
+    expect(projection?.lastResultAt).toBeNull();
+  });
+
+  it("steering promotion advances the projection preview", async () => {
+    const { service, stub, module } = makeR7Service();
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-r7-04-steer-a",
+      request: { message: "A", conversationId: "v2-r7-steer" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    stub.statuses.set("v2-r7-steer", "running");
+
+    const receiptB = await service.submit({
+      clientRequestId: "cr-r7-04-steer-b",
+      request: { message: "focus on Europe", conversationId: "v2-r7-steer" },
+    });
+    stub.setReserve({
+      reservationId: "r1",
+      targetAssistantMessageId: "assistant-9",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+    stub.setCommit(true);
+    await service.steer({
+      conversationId: "v2-r7-steer",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+
+    // The engine's steering mailbox (createSteeringPromoter) promotes through
+    // the SAME module seam after commitSteering; drive it here.
+    const claimed = await module
+      .getModel()
+      .getByPendingMessageId(receiptB.pendingMessage.pendingMessageId);
+    await module.promoteSteeringToUserMessage({
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+      claimToken: claimed?.claimToken ?? "",
+      boundary: "after_tool",
+      targetAssistantMessageId: "assistant-9",
+    });
+    // The promoted coupling writes the projection synchronously; the held
+    // drain (first deferred) still owns the conversation.
+
+    const projection = await readProjection("v2-r7-steer");
+    expect(projection).not.toBeNull();
+    // The steering row became the latest durable user message.
+    expect(projection?.preview).toBe("focus on Europe");
+    // The generated title stays on the FIRST turn's content.
+    expect(projection?.title).toBe("A");
+
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-r7-steer",
+      assistantMessageId: "a",
+    });
   });
 });

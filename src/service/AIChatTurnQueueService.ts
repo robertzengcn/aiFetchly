@@ -19,6 +19,7 @@ import {
   AIChatPendingMessageModule,
   type AIChatPendingModuleErrorCode,
 } from "@/modules/AIChatPendingMessageModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { log } from "@/modules/Logger";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
@@ -155,6 +156,14 @@ export interface AIChatTurnQueueServiceDeps {
   readonly isAiEnabled: () => boolean;
   readonly isQueueEnabled: () => boolean;
   readonly isSteeringEnabled: () => boolean;
+  /**
+   * Audit R7-04: conversation-projection couplings for drained turns
+   * (durable user/assistant persistence → sidebar projection). Optional so
+   * legacy unit wiring stays unchanged; production passes the module.
+   * Best effort inside the module — a projection failure never breaks the
+   * terminal/queue advance.
+   */
+  readonly conversationModule?: AIChatConversationModule;
   /**
    * T1 (AD-002/003): mints the durable run envelope at the scheduling
    * claim (sourceId = pendingMessageId) and persists the terminal mapping.
@@ -483,7 +492,43 @@ export class AIChatTurnQueueService {
     }
     this.parkedRuns.delete(conversationId);
     await parked.gate.flush();
+    await this.projectTurnResult({
+      conversationId,
+      pendingMessageId: parked.pendingMessageId,
+      status: outcome,
+    });
     return true;
+  }
+
+  /**
+   * Audit R7-04: project the durable assistant result of a drained turn so
+   * the conversation row exists before the app restarts. Best effort —
+   * projection failures are logged and never affect the queue/terminal
+   * advance (mirrors the coordinator's terminal projection semantics).
+   */
+  private async projectTurnResult(input: {
+    readonly conversationId: string;
+    readonly pendingMessageId: string;
+    readonly status: "completed" | "failed" | "cancelled" | "interrupted";
+    readonly assistantMessageId?: string | null;
+  }): Promise<void> {
+    const conversationModule = this.deps.conversationModule;
+    if (!conversationModule) return;
+    try {
+      await conversationModule.recordTurnResult({
+        conversationId: input.conversationId,
+        assistantMessageId:
+          input.assistantMessageId && input.assistantMessageId.length > 0
+            ? input.assistantMessageId
+            : `assistant-pending-${input.pendingMessageId}`,
+        status: input.status,
+      });
+    } catch (err) {
+      log.warn(
+        `[ai-chat-queue] conversation projection failed conv=${input.conversationId} pending=${input.pendingMessageId}`,
+        err
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1205,6 +1250,13 @@ export class AIChatTurnQueueService {
           await reconcilePersistenceFailure();
           return;
         }
+        // Audit R7-04: durable assistant result → sidebar projection.
+        await this.projectTurnResult({
+          conversationId,
+          pendingMessageId: row.pendingMessageId,
+          status: "completed",
+          assistantMessageId: terminal.assistantMessageId,
+        });
         await terminalGate.flush();
         // B06: background summary — terminal success (bounded, no bodies).
         this.deps.summarySink?.({
@@ -1291,6 +1343,15 @@ export class AIChatTurnQueueService {
         await reconcilePersistenceFailure();
         return;
       }
+      // Audit R7-04: even a cancelled/failed turn may have persisted a final
+      // assistant row (partial content) — project it without marking the
+      // conversation unread (isResult only on completed).
+      await this.projectTurnResult({
+        conversationId,
+        pendingMessageId: row.pendingMessageId,
+        status: failedStatus,
+        assistantMessageId: terminal.assistantMessageId,
+      });
       await terminalGate.flush();
       // B06: background summary — terminal failure/cancel (bounded).
       this.deps.summarySink?.({

@@ -5,6 +5,7 @@ import {
   createSteeringPromoter,
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import {
   AI_CHAT_MESSAGE_QUEUE_ENABLED,
@@ -727,6 +728,9 @@ export function getQueueService(): AIChatTurnQueueService {
       isAiEnabled: () => canUseChat().ok,
       isQueueEnabled: isQueueFeatureEnabled,
       isSteeringEnabled: isSteeringFeatureEnabled,
+      // Audit R7-04: queue-drained turns project their durable user/assistant
+      // moments into ai_chat_conversations (parity with the coordinator path).
+      conversationModule: new AIChatConversationModule(),
     });
   }
   return queueService;

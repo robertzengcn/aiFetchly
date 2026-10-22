@@ -292,6 +292,36 @@ export class AIChatConversationModule extends BaseModule {
     });
   }
 
+  /**
+   * Queue-path terminal coupling (audit R7-04): project the durable
+   * assistant result of a drained turn. Reads the turn's final assistant
+   * row (`assistant-pending-<pendingId>`) so semantics match the
+   * coordinator's terminal projection (completed/cancelled with content;
+   * completion drives unread). Best effort — a projection write must never
+   * break the terminal/queue advance.
+   */
+  async recordTurnResult(input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+    status: "completed" | "failed" | "cancelled" | "interrupted";
+  }): Promise<void> {
+    await this.ensureConnection();
+    if (!input.assistantMessageId) return;
+    const row = await this.messageModel().repository.findOne({
+      where: {
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+      },
+    });
+    if (!row || row.content.trim().length === 0) return;
+    await this.recordMessagePersisted({
+      conversationId: input.conversationId,
+      isResult: input.status === "completed",
+      previewText: row.content,
+      timestamp: row.timestamp,
+    });
+  }
+
   async deleteProjection(conversationId: string): Promise<void> {
     await this.ensureConnection();
     await this.convModel().deleteByConversationId(conversationId);
@@ -395,42 +425,57 @@ export class AIChatConversationModule extends BaseModule {
     for (const conv of allConversations) {
       if (!conv.conversationId.startsWith(V2_CONVERSATION_PREFIX)) continue;
 
-      const existing = await convModel.getByConversationId(conv.conversationId);
-      if (existing) continue; // repair pass is limited to missing rows
+      try {
+        const existing = await convModel.getByConversationId(
+          conv.conversationId
+        );
+        if (existing) continue; // repair pass is limited to missing rows
 
-      const messages = await messageModel.getMessagesByConversation(
-        conv.conversationId,
-        50
-      );
-      const firstUser = messages.find(
-        (m) => m.role === "user" && m.content.trim().length > 0
-      );
-      const lastAssistantResult = [...messages]
-        .reverse()
-        .find((m) => m.role === "assistant" && m.content.trim().length > 0);
+        const messages = await messageModel.getMessagesByConversation(
+          conv.conversationId,
+          50
+        );
+        const firstUser = messages.find(
+          (m) => m.role === "user" && m.content.trim().length > 0
+        );
+        const lastAssistantResult = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.content.trim().length > 0);
 
-      await convModel.createProjection({
-        conversationId: conv.conversationId,
-        // Filled by the workspace-key backfill; null rows stay Unassigned.
-        workspaceKey: null,
-        title: firstUser ? excerpt(firstUser.content, TITLE_EXCERPT_MAX) : null,
-        preview: excerpt(conv.lastMessage, PREVIEW_EXCERPT_MAX),
-        createdAt: conv.createdAt,
-      });
-      // Repair counters/timestamps in one pass after creation.
-      const projection = await convModel.getByConversationId(
-        conv.conversationId
-      );
-      if (projection) {
-        const entity = { ...projection };
-        entity.messageCount = conv.messageCount;
-        entity.lastMessageAt = conv.lastMessageTimestamp;
-        entity.lastResultAt = lastAssistantResult?.timestamp ?? null;
-        entity.lastReadAt = conv.lastMessageTimestamp; // backfilled rows start read
-        entity.updatedAt = new Date();
-        await convModel.repository.save(entity);
+        await convModel.createProjection({
+          conversationId: conv.conversationId,
+          // Filled by the workspace-key backfill; null rows stay Unassigned.
+          workspaceKey: null,
+          title: firstUser
+            ? excerpt(firstUser.content, TITLE_EXCERPT_MAX)
+            : null,
+          preview: excerpt(conv.lastMessage, PREVIEW_EXCERPT_MAX),
+          createdAt: conv.createdAt,
+        });
+        // Repair counters/timestamps in one pass after creation.
+        const projection = await convModel.getByConversationId(
+          conv.conversationId
+        );
+        if (projection) {
+          const entity = { ...projection };
+          entity.messageCount = conv.messageCount;
+          entity.lastMessageAt = conv.lastMessageTimestamp;
+          entity.lastResultAt = lastAssistantResult?.timestamp ?? null;
+          entity.lastReadAt = conv.lastMessageTimestamp; // backfilled rows start read
+          entity.updatedAt = new Date();
+          await convModel.repository.save(entity);
+        }
+        changed += 1;
+      } catch (err) {
+        // Race resilience (audit R7-04): a live coupling can materialize the
+        // row mid-pass and hit the unique index — skip and keep the pass
+        // running; the next pass reconciles anything still missing.
+        console.warn(
+          "[ai-chat-workspace] projection backfill skipped conversation",
+          conv.conversationId,
+          err
+        );
       }
-      changed += 1;
     }
     return changed;
   }
