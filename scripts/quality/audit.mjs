@@ -18,16 +18,18 @@ import { readFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const policy = require('./policy.cjs');
-const { loadManifest } = await import('./check-exceptions.mjs');
+const { loadManifest, parseComplexity } = await import('./check-exceptions.mjs');
 
 process.stdout.write('quality audit: full-source read-only inventory (fast profile)\n');
 
-// 1. Engine pass over the source tree. eslint 8's package exports do not
-// expose ./bin/eslint.js to ESM resolvers — drive the .bin shim directly.
-const eslintBin = path.join(repoRoot, 'node_modules', '.bin', 'eslint');
+// 1. Engine pass over the source tree. The bin runs via process.execPath +
+// the real JS entry: package exports hide it from module RESOLVERS
+// (require.resolve fails) but direct execution is unaffected — and unlike
+// the .bin shim this also works under spawnSync on Windows.
 const run = spawnSync(
-  eslintBin,
+  process.execPath,
   [
+    path.join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js'),
     '--no-eslintrc',
     '--config',
     path.join(repoRoot, 'scripts', 'quality', 'eslint-fast.cjs'),
@@ -68,8 +70,10 @@ for (const result of results) {
       const key = `${rel}::${message.ruleId || '(fatal)'}`;
       findings.set(key, (findings.get(key) || 0) + 1);
       if (message.ruleId === 'sonarjs/cognitive-complexity') {
-        const m = /Cognitive Complexity from (\d+)/i.exec(message.message);
-        const value = m ? Number(m[1]) : 0;
+        // Shared version-specific adapter (fail-closed): an unknown message
+        // format counts as 0 here, which can only UNDER-report a ceiling —
+        // the gate itself keeps the finding blocking.
+        const value = parseComplexity(message.message) ?? 0;
         complexityMax.set(rel, Math.max(complexityMax.get(rel) || 0, value));
       }
     }
@@ -79,7 +83,6 @@ for (const result of results) {
 // 3. Manifest state: stale paths, expired entries, drift below allowances.
 const { exceptions, errors } = loadManifest();
 for (const e of errors) process.stderr.write(`manifest error: ${e}\n`);
-const manifestPaths = new Set(exceptions.map((e) => e.path));
 const stale = exceptions.filter((e) => !findings.has(`${e.path}::${e.ruleId}`));
 const expired = exceptions.filter((e) => e.expired);
 

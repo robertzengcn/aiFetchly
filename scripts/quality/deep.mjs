@@ -39,7 +39,12 @@ process.stdout.write(
 // 1. Typed ESLint over the source tree (deep profile). The deep profile
 //    extends the fast profile and adds parser services; the ESLint CLI with
 //    --no-eslintrc keeps discovery explicit.
-runStep('typed lint', path.join(repoRoot, 'node_modules', '.bin', 'eslint'), [
+// Typed lint covers the tsconfig-included trees (src, test). scripts/** is
+// NOT in tsconfig include — running the typed profile there errors on every
+// file ("not included in project"); those files are covered by the fast
+// profile when staged, and by the step below.
+runStep('typed lint', process.execPath, [
+  path.join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js'),
   '--no-eslintrc',
   '--config',
   path.join(repoRoot, 'scripts', 'quality', 'eslint-deep.cjs'),
@@ -47,6 +52,14 @@ runStep('typed lint', path.join(repoRoot, 'node_modules', '.bin', 'eslint'), [
   '.js,.jsx,.cjs,.mjs,.ts,.tsx,.vue',
   'src',
   'test',
+]);
+runStep('tooling lint (fast profile)', process.execPath, [
+  path.join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js'),
+  '--no-eslintrc',
+  '--config',
+  path.join(repoRoot, 'scripts', 'quality', 'eslint-fast.cjs'),
+  '--ext',
+  '.js,.jsx,.cjs,.mjs,.ts,.tsx,.vue',
   'scripts',
 ]);
 

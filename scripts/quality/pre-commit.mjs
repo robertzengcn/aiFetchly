@@ -112,11 +112,12 @@ const staged = [];
   for (let i = 0; i < parts.length; i += 1) {
     const status = parts[i];
     if (!status) continue;
-    // -z name-status emits status then path (rename: R<old> then NEW path).
-    const filePath = parts[i + 1];
-    if (!filePath) break;
-    staged.push(filePath);
-    i += 1;
+    // -z name-status emits status then path. Renames emit TWO paths
+    // (old, new); the NEW destination is what this commit adds.
+    const oldPath = parts[i + 1];
+    if (!oldPath) break;
+    staged.push(status.startsWith('R') ? parts[i + 2] : oldPath);
+    i += status.startsWith('R') ? 2 : 1;
   }
 }
 
@@ -183,13 +184,13 @@ process.stdout.write(
   `quality: checking ${stagedSource.length} staged source file(s)\n`
 );
 
-// lint-staged's package exports hide its bin subpath from ESM resolvers —
-// drive the node_modules/.bin shim (an executable JS entry with a node
-// shebang) directly, exactly like audit.mjs/deep.mjs drive eslint's.
-const lintStagedBin = path.join(repoRoot, 'node_modules', '.bin', 'lint-staged');
+// lint-staged's package exports hide its bin from module RESOLVERS; drive
+// the real JS entry via process.execPath (cross-platform: no .bin shim
+// execution, which breaks spawnSync on Windows).
 const run = spawnSync(
-  lintStagedBin,
+  process.execPath,
   [
+    path.join(repoRoot, 'node_modules', 'lint-staged', 'bin', 'lint-staged.js'),
     '--config',
     path.join(repoRoot, 'scripts', 'quality', 'lint-staged.config.mjs'),
     '--concurrent',
