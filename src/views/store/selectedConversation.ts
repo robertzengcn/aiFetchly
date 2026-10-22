@@ -1479,6 +1479,24 @@ export const useSelectedConversationStore = defineStore(
     /** One in-flight resume per tool id — double clicks are no-ops. */
     const permissionResumeInFlightToolIds = new Set<string>();
 
+    /**
+     * R8 P2-5: "already resumed / already claimed" is a benign race, not a
+     * failed resume — the tool ({@link resumeToolAfterPermission} consumed
+     * the pending permission) is already running, so the executing rewrite
+     * is the correct state and Grant/Deny must NOT return on top of it
+     * (FR-PER-007 restores only genuine failures).
+     */
+    function isPermissionAlreadyConsumedError(error: string | undefined): boolean {
+      if (!error) return false;
+      // Coordinator claim: "No pending action for this run (stale or
+      // already consumed)." / legacy engine: "No active permission-gated
+      // tool call to continue."
+      return (
+        error.includes("No pending action") ||
+        error.includes("No active permission-gated tool call")
+      );
+    }
+
     /** Resolve the tool id for a permission message: direct metadata first,
      * then the nearest preceding TOOL_CALL with the same tool name (mirrors
      * the legacy dock's resolution for histories without toolCallId rows). */
@@ -1541,6 +1559,11 @@ export const useSelectedConversationStore = defineStore(
         const res = raw as { ok: boolean; error?: string } | null;
         if (!res?.ok) {
           const errMsg = res?.error || texts.resumeFailedText;
+          if (isPermissionAlreadyConsumedError(errMsg)) {
+            // R8 P2-5: a second grant raced the running tool — keep the
+            // executing rewrite instead of restoring the card (FR-PER-005).
+            return;
+          }
           // T4/D1 (audit): a failed resume RESTORES the prompt — Grant/Deny
           // stay mounted and actionable (FR-PER-007); the safe error rides
           // the row content so it is announced without stealing focus.

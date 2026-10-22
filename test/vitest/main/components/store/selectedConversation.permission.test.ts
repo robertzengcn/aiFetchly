@@ -208,6 +208,38 @@ describe("selectedConversation permission actions (design §15.5)", () => {
     expect(windowInvokeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("R8 P2-5: a settled duplicate grant does not restore Grant/Deny on a running tool", async () => {
+    const perm = permissionResult("m-perm-9", { toolCallId: "tc-dupe" });
+    await seedStore([perm]);
+    cancelChatRunMock.mockClear();
+
+    // First grant succeeds: the executing rewrite stays until the resumed
+    // tool_result event replaces the row.
+    windowInvokeMock.mockResolvedValue({ ok: true });
+    await useSelectedConversationStore().grantToolPermission(perm, TEXTS);
+    await flushPromises();
+    const store = useSelectedConversationStore();
+    expect(
+      store.messages.find((m) => m.id === "m-perm-9")?.metadata?.toolResult
+        ?.executionPending
+    ).toBe(true);
+
+    // A second click after the in-flight lock dropped: the pending
+    // permission is already consumed (coordinator's stale/claimed error).
+    // Treating it as failure would put Grant/Deny back on a running tool.
+    windowInvokeMock.mockResolvedValue({
+      ok: false,
+      error: "No pending action for this run (stale or already consumed).",
+    });
+    await store.grantToolPermission(perm, TEXTS);
+    await flushPromises();
+
+    const row = store.messages.find((m) => m.id === "m-perm-9");
+    expect(row?.metadata?.toolResult?.executionPending).toBe(true);
+    expect(row?.content).toBe("");
+    expect(store.errorMessage).toBeNull();
+  });
+
   it("denyToolPermission rewrites the row to a denied receipt and stops the run", async () => {
     const perm = permissionResult("m-perm-6", { toolCallId: "tc-deny" });
     await seedStore([perm]);
