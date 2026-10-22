@@ -1301,6 +1301,8 @@ export default {
     unknown_summary: "Statut de livraison inconnu.",
     failed_summary: "Le lot a échoué.",
     discarded_summary: "Lot abandonné.",
+    cancelled_summary: "Lot annulé.",
+    summary_detail: "Envoyés : {sent}/{total} · Raison : {reason}",
     review_title: "Réviser le Courrier Sortant",
     recipient: "Destinataire",
     sender: "Expéditeur",

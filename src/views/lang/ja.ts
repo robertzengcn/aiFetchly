@@ -1290,6 +1290,8 @@ export default {
     unknown_summary: "配信ステータス不明。",
     failed_summary: "バッチが失敗しました。",
     discarded_summary: "バッチは破棄されました。",
+    cancelled_summary: "バッチはキャンセルされました。",
+    summary_detail: "送信済み：{sent}/{total} ・理由：{reason}",
     review_title: "送信メールをレビュー",
     recipient: "受信者",
     sender: "送信者",

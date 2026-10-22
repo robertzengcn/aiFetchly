@@ -1309,6 +1309,8 @@ export default {
     unknown_summary: "Lieferstatus unbekannt.",
     failed_summary: "Stapel fehlgeschlagen.",
     discarded_summary: "Stapel verworfen.",
+    cancelled_summary: "Stapel abgebrochen.",
+    summary_detail: "Gesendet: {sent}/{total} · Grund: {reason}",
     review_title: "Ausgehende E-Mail prüfen",
     recipient: "Empfänger",
     sender: "Absender",

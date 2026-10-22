@@ -1312,6 +1312,8 @@ export default {
     unknown_summary: "Estado de entrega desconocido.",
     failed_summary: "El lote falló.",
     discarded_summary: "Lote descartado.",
+    cancelled_summary: "Lote cancelado.",
+    summary_detail: "Enviados: {sent}/{total} · Motivo: {reason}",
     review_title: "Revisar Correo Saliente",
     recipient: "Destinatario",
     sender: "Remitente",

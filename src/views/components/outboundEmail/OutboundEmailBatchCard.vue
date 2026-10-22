@@ -50,6 +50,22 @@
         <v-icon size="small" start :color="summaryColor">{{ summaryIcon }}</v-icon>
         {{ summaryText }}
       </div>
+      <!-- P1-6: authoritative detail (sent count + sanitized reason code) —
+           the frozen draft must carry the terminal evidence, and the
+           delivery-unknown copy stays distinct from success (§18). -->
+      <div
+        v-if="summaryDetailVisible"
+        class="text-caption text-medium-emphasis mt-1"
+        data-testid="outbound-batch-summary-detail"
+      >
+        {{
+          t("outboundEmail.summary_detail", {
+            sent: sentCount,
+            total: recipientCount,
+            reason: reasonCode,
+          })
+        }}
+      </div>
     </v-card-item>
   </v-card>
 </template>
@@ -96,9 +112,25 @@ const modeLabel = computed<string>(() => {
 
 /** Terminal batches hide the review button and show a summary instead. */
 const showReviewAction = computed<boolean>(() => {
-  return !["sent", "partially_sent", "delivery_unknown", "failed", "discarded"].includes(
-    props.batchStatus
-  );
+  return ![
+    "sent",
+    "partially_sent",
+    "delivery_unknown",
+    "failed",
+    "cancelled",
+    "discarded",
+  ].includes(props.batchStatus);
+});
+
+const summaryDetailVisible = computed<boolean>(() => {
+  return [
+    "sent",
+    "partially_sent",
+    "delivery_unknown",
+    "failed",
+    "cancelled",
+    "discarded",
+  ].includes(props.batchStatus);
 });
 
 const summaryText = computed<string>(() => {
@@ -113,6 +145,8 @@ const summaryText = computed<string>(() => {
       return t("outboundEmail.failed_summary") || "Batch failed.";
     case "discarded":
       return t("outboundEmail.discarded_summary") || "Batch discarded.";
+    case "cancelled":
+      return t("outboundEmail.cancelled_summary") || "Batch cancelled.";
     default:
       return "";
   }

@@ -1263,6 +1263,8 @@ export default {
     unknown_summary: "投递状态未知。",
     failed_summary: "批次发送失败。",
     discarded_summary: "批次已丢弃。",
+    cancelled_summary: "批次已取消。",
+    summary_detail: "已发送 {sent}/{total} · 原因：{reason}",
     review_title: "审阅外发邮件",
     recipient: "收件人",
     sender: "发件人",

@@ -1321,6 +1321,8 @@ export default {
     unknown_summary: "Delivery status unknown.",
     failed_summary: "Batch failed.",
     discarded_summary: "Batch discarded.",
+    cancelled_summary: "Batch cancelled.",
+    summary_detail: "Sent: {sent}/{total} · Reason: {reason}",
     review_title: "Review Outbound Email",
     recipient: "Recipient",
     sender: "Sender",
