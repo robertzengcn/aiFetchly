@@ -1,7 +1,18 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import PluginsPage from "@/views/pages/systemsetting/plugins.vue";
+import SkillInstallManager from "@/views/components/aiChatV2/SkillInstallManager.vue";
+
+vi.mock("@/views/api/skillInstallation", () => ({
+  listSkillInstallations: vi.fn().mockResolvedValue([]),
+  updateSkillInstall: vi.fn(),
+  repairSkillInstall: vi.fn(),
+  disableSkillInstall: vi.fn(),
+  enableSkillInstall: vi.fn(),
+  uninstallSkillInstall: vi.fn(),
+  revealSkillInstallSource: vi.fn(),
+}));
 
 const i18n = createI18n({
   legacy: false,
@@ -21,6 +32,10 @@ describe("PluginsPage layout", () => {
             name: "PluginManager",
             template: '<div data-testid="plugin-manager-stub" />',
           },
+          SkillInstallManager: {
+            name: "SkillInstallManager",
+            template: '<div data-testid="skill-install-manager-stub" />',
+          },
         },
       },
     });
@@ -30,6 +45,23 @@ describe("PluginsPage layout", () => {
     expect(shell.classes()).toContain("width-full");
     expect(shell.classes()).not.toContain("width-wide");
     expect(wrapper.find('[data-testid="plugin-manager-stub"]').exists()).toBe(
+      true
+    );
+  });
+
+  it("mounts the skill installation manager (FR-SKL-006)", async () => {
+    const wrapper = mount(PluginsPage, {
+      global: {
+        plugins: [i18n],
+        stubs: { PluginManager: true },
+      },
+    });
+    await flushPromises();
+    // Installation management stays reachable from the existing Plugins
+    // settings page — the real SkillInstallManager lists installed prompt
+    // skills with their lifecycle actions (PRD §22.3).
+    expect(wrapper.findComponent(SkillInstallManager).exists()).toBe(true);
+    expect(wrapper.find('[data-testid="skill-install-manager"]').exists()).toBe(
       true
     );
   });
