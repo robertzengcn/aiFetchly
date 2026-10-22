@@ -375,7 +375,10 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         WorkspaceTrustCard: true,
         WorkspaceMemoryPanel: true,
         AiChatV2ModeSelector: defineComponent({
-          template: '<div data-testid="mode-selector-stub" />',
+          name: "AiChatV2ModeSelector",
+          props: ["modelValue"],
+          emits: ["update:modelValue"],
+          template: '<div data-testid="mode-selector-stub">{{ modelValue }}</div>',
         }),
         AiChatV2ModelSelector: defineComponent({
           name: "AiChatV2ModelSelector",
@@ -1085,8 +1088,42 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       return wrapper;
     }
 
-    it("starts exactly one execution continuation after a persisted approval (FR-PLN-006)", async () => {
-      const approveMock = vi.mocked(approveChatV2Plan);
+    it("returns the composer selector to chat mode after a successful approval (FR-PLN-006 P2)", async () => {
+      vi.mocked(approveChatV2Plan).mockResolvedValueOnce({
+        planId: "plan-1",
+        currentVersion: 2,
+        status: "approved",
+      } as never);
+      const wrapper = await mountWithPlan();
+
+      // Journey 17.3: the user flips the selector to plan mode before
+      // deciding. The approval binds the decision to the selector ONLY
+      // while the card is open.
+      const selector = wrapper.findComponent({ name: "AiChatV2ModeSelector" });
+      selector.vm.$emit("update:modelValue", "plan");
+      await flushPromises();
+      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
+        "plan"
+      );
+
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("approve-plan");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      await flushPromises();
+
+      // The continuation rode modeOverride:"chat"; the selector must ALSO
+      // return to chat so the user's next manual send is not silently plan
+      // mode (the audit defect: only the payload was overridden).
+      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
+        "chat"
+      );
+    });
+
+    it("starts exactly one execution continuation after a persisted approval (FR-PLN-006)", async () => {      const approveMock = vi.mocked(approveChatV2Plan);
       approveMock.mockResolvedValueOnce({
         planId: "plan-1",
         currentVersion: 2,

@@ -3368,6 +3368,12 @@ async function onLegacyPlanAction(
       // must not suppress a future decision for this conversation.
       clearPlanContinuationDismissal(targetConversationId);
       pendingPlanContinuation.value = null;
+      // R8 P2 (FR-PLN-006, journey 17.3 step 5): the decision succeeded and
+      // the chat-mode continuation was accepted — return the selector to
+      // chat mode too. Only the continuation payload carried
+      // modeOverride:"chat" before, so a user who had flipped the selector
+      // to plan stayed in plan mode for the next manual send.
+      mode.value = "chat";
     } else {
       refreshPendingPlanContinuation();
       if (!planDecisionError.value) {
