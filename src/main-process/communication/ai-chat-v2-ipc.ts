@@ -35,6 +35,10 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { Token } from "@/modules/token";
 import { log } from "@/modules/Logger";
+// P1-1 (audit 2026-10-22): the clear channel shares the delete handler's
+// authoritative busy predicate (B03). Call-time use only — the module graph
+// between the two IPC files is circular by design with deferred access.
+import { getConversationBusyReason } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
@@ -1684,6 +1688,26 @@ async function handleClearConversation(
     if (!conversationId) {
       return denied("conversationId is required");
     }
+    // P1-1 (audit 2026-10-22): the clear channel obeys the SAME authoritative
+    // busy guard as delete (B03). Under a live run, non-idle engine runtime,
+    // non-terminal pending rows, or a non-terminal durable run envelope, the
+    // wipe would let that owner re-persist content after the transcript is
+    // dropped (queue cascade clears parked envelopes first only when it runs
+    // — and deleting live pending rows would kill recoverable queued work).
+    const busyReason = await getConversationBusyReason(conversationId);
+    if (busyReason) {
+      aiChatQueueCounters.incrementWorkspace(
+        "ai_chat_workspace_action_total",
+        {
+          capability: "workspace",
+          action: "conversation_clear",
+          outcome: "denied_busy",
+        }
+      );
+      return denied(
+        `This conversation is busy (${busyReason}). Stop it before clearing.`
+      );
+    }
     // Queue cascade FIRST (FR-44): stop the runtime, delete pending rows
     // and their staged attachment bytes before the transcript goes away.
     try {
@@ -1693,6 +1717,11 @@ async function handleClearConversation(
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
+    aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
+      capability: "workspace",
+      action: "conversation_clear",
+      outcome: "cleared",
+    });
     // Cascade: clear any durable plan state for this conversation.
     try {
       const planModule = new AIChatPlanModule();

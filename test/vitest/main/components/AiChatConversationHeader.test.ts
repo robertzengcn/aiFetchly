@@ -70,3 +70,41 @@ describe("AiChatConversationHeader delete protection (B03)", () => {
     }
   );
 });
+
+/**
+ * P1-1 (audit 2026-10-22, FR-LIF-005): Clear must be disabled for the SAME
+ * states as Delete. A parked permission/question run can still write
+ * transcript content, so clearing must not be clickable — the main-process
+ * busy guard refuses it too.
+ */
+describe("AiChatConversationHeader clear protection (P1-1)", () => {
+  it.each([
+    "running",
+    "queued",
+    "awaiting_permission",
+    "awaiting_user",
+  ] as const)(
+    "disables Clear while %s",
+    (status) => {
+      const wrapper = mountHeader(status);
+      const clearItem = wrapper.find('[data-testid="workspace-overflow-clear"]');
+      expect(clearItem.attributes("disabled")).toBeDefined();
+    }
+  );
+
+  it.each([
+    "idle",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+  ] as const)(
+    "enables Clear when %s",
+    (status) => {
+      const wrapper = mountHeader(status);
+      const clearItem = wrapper.find('[data-testid="workspace-overflow-clear"]');
+      // Unstubbed custom element renders :disabled="false" as disabled="false".
+      expect(clearItem.attributes("disabled")).toBe("false");
+    }
+  );
+});

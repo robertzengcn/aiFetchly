@@ -89,6 +89,7 @@
             :title="t('workspaceChat.header.clear') || 'Clear messages'"
             prepend-icon="mdi-eraser-variant"
             data-testid="workspace-overflow-clear"
+            :disabled="isWriteDisabled"
             @click="emit('clear')"
           />
           <v-list-item
@@ -97,7 +98,7 @@
             :title="t('workspaceChat.header.delete') || 'Delete chat'"
             prepend-icon="mdi-delete-outline"
             data-testid="workspace-overflow-delete"
-            :disabled="isDeleteDisabled"
+            :disabled="isWriteDisabled"
             @click="emit('delete')"
           />
         </v-list>
@@ -143,11 +144,12 @@ const displayTitle = computed(
   () => props.title?.trim() || (t("workspaceChat.newChat") || "New chat")
 );
 
-// B03: disable Delete while the conversation can still receive writes
-// (running, queued, parked on permission/question). The main-process IPC
-// guard is authoritative; this only prevents the unsafe click. Matches the
-// center's onDelete/onClear busy checks (selectedStore.isBusy).
-const isDeleteDisabled = computed(() =>
+// B03 + P1-1 (FR-LIF-005): disable Delete AND Clear while the conversation
+// can still receive writes (running, queued, parked on permission/question).
+// The main-process IPC guard (getConversationBusyReason) is authoritative;
+// this only prevents the unsafe click. Matches the center surface's
+// onDelete/onClear busy+parked checks (selectedStore.isBusy / isParked).
+const isWriteDisabled = computed(() =>
   ["running", "queued", "awaiting_permission", "awaiting_user"].includes(
     props.runtimeStatus
   )

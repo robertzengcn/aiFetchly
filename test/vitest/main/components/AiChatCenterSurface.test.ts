@@ -5932,3 +5932,93 @@ describe("streaming answer survives paging (audit R5-01)", () => {
     wrapper.unmount();
   });
 });
+
+/**
+ * P1-1 (audit 2026-10-22, FR-LIF-005): while a permission or question card is
+ * parked the conversation can still receive writes, so the header Clear must
+ * not reach the clear IPC. The main process refuses it too (delete-guard
+ * parity); this proves the renderer-side guard.
+ */
+describe("AiChatCenterSurface clear refused while parked (P1-1)", () => {
+  const permissionMessage: ChatV2MessageView = {
+    id: "perm-row-1",
+    conversationId: "conv-a",
+    role: "assistant",
+    content: "",
+    timestamp: "2026-10-22T08:00:00.000Z",
+    messageType: MessageType.TOOL_RESULT,
+    metadata: {
+      source: "chat-v2",
+      toolCallId: "tool-p1",
+      toolName: "run_command",
+      toolResult: { needsPermissionPrompt: true },
+    },
+  };
+
+  async function mountParked(
+    runtimeStatus: "awaiting_permission" | "awaiting_user"
+  ): Promise<ReturnType<typeof mountSurface>> {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [permissionMessage],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus,
+      activeRunId: "run-parked",
+      title: "Selected chat",
+    } as never);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await useSelectedConversationStore().loadSelection("conv-a");
+    await flushPromises();
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    // jsdom's confirm may be undefined (custom element env) — force "OK" so
+    // the ONLY thing standing between the click and the IPC is the parked
+    // guard. Restored in afterEach (jsdom does not define confirm here).
+    window.confirm = () => true;
+    vi.mocked(clearChatV2Conversation).mockReset();
+    vi.mocked(clearChatV2Conversation).mockResolvedValue({ deleted: 4 });
+  });
+
+  afterEach(() => {
+    const win = window as unknown as { confirm?: unknown };
+    delete win.confirm;
+  });
+
+  it("does not clear while a permission card is parked (awaiting_permission)", async () => {
+    const wrapper = await mountParked("awaiting_permission");
+    const selected = useSelectedConversationStore();
+    expect(selected.isBusy).toBe(false);
+    expect(selected.runtimeStatus).toBe("awaiting_permission");
+
+    // The header is stubbed in this harness; emit the same event the real
+    // Clear v-list-item emits.
+    wrapper
+      .findComponent({ name: "AiChatConversationHeader" })
+      .vm.$emit("clear");
+    await flushPromises();
+
+    expect(clearChatV2Conversation).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("does not clear while a question card is parked (awaiting_user)", async () => {
+    const wrapper = await mountParked("awaiting_user");
+    const selected = useSelectedConversationStore();
+    expect(selected.isBusy).toBe(false);
+
+    wrapper
+      .findComponent({ name: "AiChatConversationHeader" })
+      .vm.$emit("clear");
+    await flushPromises();
+
+    expect(clearChatV2Conversation).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});

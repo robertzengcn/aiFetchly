@@ -163,8 +163,12 @@ export function getAiChatWorkspaceEventRouter(): AIChatEventRouter {
  * rows covering running/parked/pending dispatch, or a non-terminal durable
  * run envelope), or null when deletion is safe. Renderer state alone is
  * never trusted — this runs in main before any delete proceeds.
+ *
+ * P1-1 (audit 2026-10-22): the v2 clear channel consults this SAME
+ * predicate — a parked/queued run must not survive as a writer while the
+ * transcript is wiped underneath it.
  */
-async function getConversationBusyReason(
+export async function getConversationBusyReason(
   conversationId: string
 ): Promise<string | null> {
   if (getAiChatWorkspaceCoordinator().getLiveRuntime(conversationId)) {

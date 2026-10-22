@@ -3017,11 +3017,11 @@ async function onDuplicate(): Promise<void> {
 
 async function onDelete(): Promise<void> {
   if (!conversationId.value) return;
-  if (selectedStore.isBusy) {
-    // B03: deleting under an active/queued/parked run would let the engine
-    // or queued follow-ups re-persist content after the wipe (potentially
-    // resurrecting the conversation). Main-process IPC denies it; block the
-    // click here too (matches onClear's busy guard).
+  if (selectedStore.isBusy || selectedStore.isParked) {
+    // B03/P1-1: deleting under an active, queued, or PARKED run would let the
+    // engine or queued/parked execution re-persist content after the wipe
+    // (potentially resurrecting the conversation). Main-process IPC denies
+    // it; block the click here too (matches onClear's busy guard).
     return;
   }
   const confirmed = window.confirm(
@@ -3040,9 +3040,13 @@ async function onDelete(): Promise<void> {
 
 async function onClear(): Promise<void> {
   if (!conversationId.value) return;
-  if (selectedStore.isBusy) {
-    // Clearing under an active run would let the engine re-persist its
-    // result after the wipe — stop the run first.
+  if (selectedStore.isBusy || selectedStore.isParked) {
+    // B03/P1-1 (FR-LIF-005): clearing under an active run — running, queued,
+    // or parked on permission/question — would let the engine or queued
+    // follow-ups re-persist content after the wipe. Parked states leave the
+    // store's isBusy false (they still take user decisions), so they need
+    // their own guard. Main-process IPC refuses the clear with the same
+    // delete busy predicate; block the click here too.
     return;
   }
   const confirmed = window.confirm(

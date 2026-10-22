@@ -1673,6 +1673,16 @@ export const useSelectedConversationStore = defineStore(
         streamStatus.value === "streaming"
     );
 
+    // P1-1 (FR-LIF-005): parked conversations still accept user decisions
+    // (grant/deny, answer) — that is why isBusy is false here — but they can
+    // still WRITE transcript content. Destructive maintenance (header
+    // Clear/Delete) must treat them exactly like running turns.
+    const isParked = computed(
+      () =>
+        runtimeStatus.value === "awaiting_permission" ||
+        runtimeStatus.value === "awaiting_user"
+    );
+
     /** Latest scheduled-loop row state derived from message metadata. */
     const scheduledLoop = computed(() => {
       for (let i = messages.value.length - 1; i >= 0; i -= 1) {
@@ -1718,6 +1728,7 @@ export const useSelectedConversationStore = defineStore(
       markReadAfterLoad,
       teardown,
       isBusy,
+      isParked,
       resetPresenter,
     };
   }

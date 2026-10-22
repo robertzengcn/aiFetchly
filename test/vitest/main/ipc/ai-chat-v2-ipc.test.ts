@@ -37,6 +37,15 @@ const mockGetAllToolFunctions = vi.hoisted(() =>
 const mockGetSkill = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
 const mockIsRegistered = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockSkillExecute = vi.hoisted(() => vi.fn());
+// P1-1 (audit 2026-10-22): the clear handler consults the SAME authoritative
+// busy predicate the delete handler uses (getConversationBusyReason from the
+// workspace IPC module). Mocking that module keeps this file focused on the
+// clear-channel wiring; the predicate's own checks are durable-state checks.
+const mockGetConversationBusyReason = vi
+  .hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock("@/main-process/communication/ai-chat-workspace-ipc", () => ({
+  getConversationBusyReason: mockGetConversationBusyReason,
+}));
 const mockToolApprovalState = vi.hoisted(() => ({
   modes: new Map<string, string>(),
 }));
@@ -480,6 +489,22 @@ describe("AI Chat V2 IPC handlers", () => {
     );
     expect(mockClearConversation).toHaveBeenCalledWith("v2-1");
     expect(result).toMatchObject({ status: true });
+  });
+
+  it("refuses clear while a non-terminal run or pending row exists (P1-1)", async () => {
+    mockGetConversationBusyReason.mockResolvedValueOnce("durable run active");
+
+    const result = await mockIpcMain.callHandler(
+      AI_CHAT_V2_CLEAR_CONVERSATION,
+      {},
+      JSON.stringify({ conversationId: "v2-1" })
+    );
+
+    expect(mockGetConversationBusyReason).toHaveBeenCalledWith("v2-1");
+    expect(result).toMatchObject({ status: false });
+    // The queue cascade and the transcript wipe must not run under an
+    // active owner — stopped runs re-persist content into a wiped chat.
+    expect(mockClearConversation).not.toHaveBeenCalled();
   });
 
   it("clears all v2 history through the module", async () => {
