@@ -771,6 +771,7 @@ import {
   exportConversation,
 } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { useChatModelsStore } from "@/views/store/chatModels";
 import {
   composerDraftKeyFor,
   sameGeneratedImageRef,
@@ -1899,6 +1900,10 @@ async function loadModels(): Promise<void> {
         ? saved
         : defaultModelId.value ?? validModels[0]?.id;
     selectedModel.value = usable;
+    // R8 P2-11 (FR-REC-005): publish to the shared store so the Context
+    // inspector (app-shell mount, no surface props) resolves the SAME
+    // denominator as this badge.
+    useChatModelsStore().publishModelCatalog(map, usable, resp?.default_model);
   } catch {
     // Model list unavailable — "Auto" fallback; sending still works.
   } finally {
@@ -1921,6 +1926,16 @@ const contextPercent = computed(() =>
     streamingEstimatedTokens: 0,
     model: selectedModel.value ?? defaultModelId.value,
   })
+);
+
+// Keep the shared denominator in sync when the user changes the model
+// (R8 P2-11, FR-REC-005) — the Context inspector reads the store, not this
+// component's local refs.
+watch(
+  () => selectedModel.value,
+  (next) => {
+    useChatModelsStore().setSelectedModelId(next);
+  }
 );
 
 // --- Selection (layout-provided, local fallback) ----------------------------

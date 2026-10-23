@@ -13,6 +13,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createI18n } from "vue-i18n";
 import AiChatContextPanel from "@/views/components/aiChatWorkspace/AiChatContextPanel.vue";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { useChatModelsStore } from "@/views/store/chatModels";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type {
   WorkspaceConversationSummary,
@@ -146,5 +147,40 @@ describe("AiChatContextPanel memory entry point (FR-WSP-007)", () => {
       wrapper.find('[data-testid="workspace-context-memory"]').exists()
     ).toBe(false);
     expect(listMemoriesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("AiChatContextPanel context usage (FR-REC-005, R8 P2-11)", () => {
+  beforeEach(() => {
+    setActivePinia(pinia);
+    listMemoriesMock.mockReset();
+    listMemoriesMock.mockResolvedValue({ status: true, data: [] });
+  });
+
+  it("resolves the percent with the shared model window map, not the util default", async () => {
+    seedStore("approved");
+    // A model whose window is NOT the util default (256k): a 100k window
+    // with 50k used tokens must render 50% — the empty-map fallback would
+    // have rendered ~20% and disagreed with the composer badge.
+    const modelsStore = useChatModelsStore();
+    modelsStore.publishModelCatalog(
+      new Map([["small-window-model", 100_000]]),
+      "small-window-model"
+    );
+
+    const wrapper = mountPanel({
+      messages: [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "long reply",
+          tokensUsed: 50_000,
+        } as never,
+      ],
+    });
+    await flushPromises();
+
+    const meter = wrapper.get('[role="meter"]');
+    expect(meter.attributes("aria-label")).toContain("50%");
   });
 });

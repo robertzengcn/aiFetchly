@@ -105,6 +105,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { useChatModelsStore } from "@/views/store/chatModels";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import {
   computeContextPercent,
@@ -171,11 +172,18 @@ const lastKnownTokens = computed(() => {
   return undefined;
 });
 
+// R8 P2-11 (FR-REC-005): resolve the denominator with the SAME window map
+// the composer badge uses (shared store, published by the surface loader) —
+// the empty-map fallback made the inspector disagree with the badge for the
+// same token count.
+const modelsStore = useChatModelsStore();
+
 const contextPercent = computed(() =>
   computeContextPercent({
-    modelContextWindows: new Map(),
+    modelContextWindows: modelsStore.modelContextWindows,
     lastTotalTokens: lastKnownTokens.value,
     streamingEstimatedTokens: 0,
+    model: modelsStore.selectedModelId,
   })
 );
 
