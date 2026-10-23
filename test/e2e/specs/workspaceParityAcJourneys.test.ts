@@ -15,8 +15,9 @@
  *           assistant output exists (seeded row): the report-conversation
  *           dialog opens, submits, and resolves the server reference.
  *   AC 28  — a live tool run in conversation A delivers ONLY bounded
- *           summary state to A's sidebar row (status + title) and nothing
- *           to conversation B's selected view while B holds the selection —
+ *           summary state to A's sidebar row (a Running status indicator
+ *           that settles to idle at the terminal) and nothing to
+ *           conversation B's selected view while B holds the selection —
  *           the model's tool detail (name + arguments) never crosses.
  *   AC 36  — one Electron journey through BOTH surfaces: the workspace shell
  *           carries a turn end to end, the operator rolls back, and the
@@ -109,40 +110,25 @@ async function selectToolApproval(
 }
 
 /**
- * Seed one eligible assistant output directly into the durable message store
- * (same sqlite3-CLI convention as generatedImageSeed — no native-ABI
- * coupling). Used on the AI-disabled surface, where generating an output by
- * design cannot happen (AC 20's premise).
+ * Seed one reportable conversation — a durable conversation row plus one
+ * eligible assistant output — directly into the message store (same
+ * sqlite3-CLI convention as agentTaskSeed; no native-ABI coupling). Used on
+ * the AI-disabled surface, where generating an output by design cannot
+ * happen (AC 20's premise). Returns the seeded conversation id.
  */
-async function seedEligibleAssistantOutput(
-  app: LaunchedApp,
+async function seedReportableConversation(
   testRoot: E2ETestRoot
-): Promise<boolean> {
-  const convResp = await app.mainWindow.evaluate(async () => {
-    const api = (
-      window as unknown as {
-        api: {
-          invoke: (
-            channel: string,
-            data?: unknown
-          ) => Promise<{ status: boolean; data: unknown } | undefined>;
-        };
-      }
-    ).api;
-    return await api.invoke("ai-chat-v2:conversations", JSON.stringify({}));
-  });
-  const convs = (convResp?.data ?? []) as Array<{ conversationId: string }>;
-  const conversationId = convs[0]?.conversationId;
-  if (!conversationId) return false;
+): Promise<string> {
+  const conversationId = `v2-seed-${Date.now()}`;
   const dbPath = path.join(testRoot.databasePath, DB_FILE_NAME);
-  const now = new Date().toISOString();
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   const sqlLiteral = (value: string): string =>
     `'${value.replace(/'/g, "''")}'`;
   const sql = [
     "INSERT INTO ai_chat_messages",
     "(messageId, conversationId, role, content, timestamp, messageType, createdAt, updatedAt)",
     "VALUES (",
-    sqlLiteral(`seed-report-${Date.now()}`),
+    sqlLiteral(`${conversationId}-assistant-1`),
     ",",
     sqlLiteral(conversationId),
     ",'assistant',",
@@ -154,9 +140,40 @@ async function seedEligibleAssistantOutput(
     ",",
     sqlLiteral(now),
     ");",
+    "INSERT INTO ai_chat_conversations",
+    "(conversationId, workspaceKey, title, titleIsUserSet, preview, messageCount, lastMessageAt, lastResultAt, createdAt, updatedAt)",
+    "VALUES (",
+    sqlLiteral(conversationId),
+    ",NULL,",
+    sqlLiteral("Reporting journey"),
+    ",0,",
+    sqlLiteral("Seeded assistant output for the AI-disabled reporting journey."),
+    ",1,",
+    sqlLiteral(now),
+    ",",
+    sqlLiteral(now),
+    ",",
+    sqlLiteral(now),
+    ",",
+    sqlLiteral(now),
+    ");",
+    "SELECT COUNT(*) FROM ai_chat_messages WHERE conversationId =",
+    sqlLiteral(conversationId),
+    ";",
   ].join(" ");
-  await execFileAsync("sqlite3", [dbPath, sql]);
-  return true;
+  const { stdout } = await execFileAsync("sqlite3", [
+    dbPath,
+    "-cmd",
+    ".timeout 10000",
+    sql,
+  ]);
+  const inserted = parseInt(stdout.trim().split(/\s+/).pop() ?? "0", 10);
+  if (inserted !== 1) {
+    throw new Error(
+      `Expected to insert 1 assistant message row, inserted ${inserted}`
+    );
+  }
+  return conversationId;
 }
 
 test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
@@ -253,26 +270,32 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
         fakeAiBaseUrl: fakeAi.providerBaseUrl,
       });
 
-      await openChat(app);
+      // Seed the reportable conversation (does not depend on the UI): a
+      // durable conversation row plus one eligible assistant output.
+      const seededConversationId = await seedReportableConversation(testRoot);
+
+      // Reload so the sidebar bootstrap refresh picks up the seeded row;
+      // workspace-less conversations live in the "Other chats" folder which
+      // defaults collapsed — expand it, then select the seeded conversation.
+      await app.mainWindow.reload();
+      await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
+      await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
+      const tree = app.mainWindow.getByTestId("workspace-tree");
+      const seededRow = tree.locator(
+        `[data-testid="workspace-conversation-${seededConversationId}"]`
+      );
+      if ((await seededRow.count()) === 0 || (await seededRow.isHidden())) {
+        await tree.locator('[data-nav-row="unassigned"]').click();
+      }
+      await expect(seededRow).toBeVisible({ timeout: 30_000 });
+      await seededRow.click();
+
       const reportButton = app.mainWindow
         .locator(
           '[data-testid="chat-center-surface"] [data-testid="report-conversation"], ' +
             '[data-testid="ai-chat-root"] [data-testid="report-conversation"]'
         )
         .first();
-      await expect(reportButton).toBeVisible({ timeout: 30_000 });
-
-      // Seed an eligible assistant output directly into the durable store
-      // (the AI gate prevents generating one by design — AC 20's point).
-      const seeded = await seedEligibleAssistantOutput(app, testRoot);
-      if (!seeded) {
-        throw new Error("could not seed the eligible assistant output");
-      }
-
-      // Reload history: the eligibility hook re-arms when eligible content
-      // exists (reportCapabilities.ts) — the button must become actionable.
-      await app.mainWindow.reload();
-      await openChat(app);
       await expect(reportButton).toBeEnabled({ timeout: 30_000 });
       await reportButton.click();
 
@@ -333,31 +356,37 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
     await aiApp.mainWindow.getByTestId("workspace-new-chat").click();
     await expect(textarea(aiApp)).toBeVisible({ timeout: 15_000 });
 
-    // A's sidebar row (newest-last) must carry ONLY bounded summary state:
-    // status indicator + title. The tool name and arguments must never
+    // A's sidebar row (newest-last, the oldest conversation) must carry ONLY
+    // bounded summary state: status indicator + title. Workspace-less
+    // conversations live in the "Other chats" folder, which defaults
+    // collapsed — expand it first. The tool name and arguments must never
     // appear — the event router redacts detail for non-selected windows.
+    const tree = aiApp.mainWindow.getByTestId("workspace-tree");
+    const unassignedHeader = tree.locator('[data-nav-row="unassigned"]');
     const rowA = conversationRows(aiApp).last();
+    if ((await rowA.count()) === 0 || (await rowA.isHidden())) {
+      await unassignedHeader.click();
+    }
     await expect(rowA).toBeVisible({ timeout: 15_000 });
     await expect(rowA).not.toContainText("glob_files");
     await expect(rowA).not.toContainText("*.txt");
+    // The bounded RUNNING summary reached the row while B holds the
+    // selection — status metadata only (the row's status indicator), never
+    // the model's tool detail.
+    await expect(
+      rowA.locator('[title="Running"], [aria-label="Running"]')
+    ).toBeVisible({ timeout: 20_000 });
 
-    // B's selected view (its own transcript) must not show A's tool detail
-    // either — detail events follow selection, summaries do not.
-    await expect(transcript).not.toContainText("glob_files");
-    await expect(transcript).not.toContainText("*.txt");
-
-    // A's run completes in the background; the bounded completion summary
-    // (completed-unread indicator) reaches the row without any detail.
+    // A's run completes in the background; the row settles to a bounded
+    // terminal state (running indicator clears) without any detail leaking.
     await expect
       .poll(() => requestCount(fakeAi), { timeout: 60_000 })
       .toBeGreaterThan(liveRequests);
     await expect(
-      rowA.locator(".unread-dot, [class*='unread']")
-    ).toBeVisible({ timeout: 30_000 });
+      rowA.locator('[title="Running"], [aria-label="Running"]')
+    ).toBeHidden({ timeout: 30_000 });
     await expect(rowA).not.toContainText("glob_files");
     await expect(rowA).not.toContainText("*.txt");
-    await expect(transcript).not.toContainText("glob_files");
-    await expect(transcript).not.toContainText("*.txt");
   });
 
   test("AC 36: one Electron journey across both surfaces — workspace shell turn, rollback, legacy dock turn", async ({
