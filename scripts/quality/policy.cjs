@@ -26,6 +26,13 @@ const sonarRules = {
  */
 const TS_AST_REQUIRED_RULES = {
   '@typescript-eslint/no-explicit-any': 'error',
+  // F14: the design's rule contract specifies Error. Enabled as blocking
+  // on 2026-10-24 with the reviewed legacy migration — every pre-existing
+  // violation under src/test/scripts and the root configs is pinned per
+  // file in exceptions.json (counts may only shrink; new functions must
+  // annotate). agent-harness/ debt is intentionally NOT baselined: it is
+  // review-pending exactly like its other unmanifested pairs.
+  '@typescript-eslint/explicit-function-return-type': 'error',
 };
 
 const typescriptBlockingRules = {
@@ -46,14 +53,11 @@ const typescriptBlockingRules = {
 };
 
 /**
- * Explicit return types stay WARN in the fast profile for now: the repo has
- * substantial legacy debt here and PRD §7 requires accounting for it before
- * enforcement. The deep audit reports counts; flip to 'error' after the
- * manifest absorbs the debt.
+ * F14 closed the last advisory: explicit-function-return-type moved to the
+ * blocking TS set above with a reviewed per-file baseline. Kept (empty) as
+ * the documented extension point for future advisory rules.
  */
-const typescriptAdvisoryRules = {
-  '@typescript-eslint/explicit-function-return-type': 'warn',
-};
+const typescriptAdvisoryRules = {};
 
 /** Core correctness rules that need no parser services. */
 const coreBlockingRules = {

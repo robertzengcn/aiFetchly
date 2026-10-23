@@ -191,3 +191,32 @@ describe('fail-closed behavior (AC-10)', () => {
 test('module URL sanity (keeps fileURLToPath import used)', () => {
   assert.ok(typeof pathToFileURL(fixtureDir).href === 'string');
 });
+
+describe('explicit return types are blocking (F14)', () => {
+  test('an unannotated exported function is a blocker', async () => {
+    writeFileSync(
+      path.join(fixtureDir, 'bare.ts'),
+      'export function bare(x: number) {\n  return x * 2;\n}\n'
+    );
+    const messages = await lint('bare.ts');
+    assert.ok(
+      messages.some(
+        (m) => m.ruleId === '@typescript-eslint/explicit-function-return-type' && m.severity === 2
+      ),
+      JSON.stringify(messages)
+    );
+  });
+
+  test('an annotated function passes without an allowance', async () => {
+    writeFileSync(
+      path.join(fixtureDir, 'annotated.ts'),
+      'export function double(x: number): number {\n  return x * 2;\n}\n'
+    );
+    const messages = await lint('annotated.ts');
+    assert.equal(
+      messages.filter((m) => m.severity === 2).length,
+      0,
+      JSON.stringify(messages)
+    );
+  });
+});

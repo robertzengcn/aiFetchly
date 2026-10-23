@@ -21,10 +21,12 @@ const fixtureDir = path.join(repoRoot, 'tmp-quality-report');
 before(() => {
   rmSync(fixtureDir, { recursive: true, force: true });
   mkdirSync(fixtureDir, { recursive: true });
-  // Missing return type = advisory WARNING under the fast profile.
+  // Clean code with a hex color literal = advisory WARNING under the fast
+  // profile (no-restricted-syntax); explicit return types are BLOCKING
+  // since F14, so this file annotates everything.
   writeFileSync(
     path.join(fixtureDir, 'Mixed.ts'),
-    'export function double(x: number) {\n  return x * 2;\n}\n'
+    "export const theme = '#aabbcc';\nexport function double(x: number): number {\n  return x * 2;\n}\n"
   );
   writeFileSync(path.join(fixtureDir, 'Bad.ts'), 'export const v: any = 1;\n');
 });
@@ -53,10 +55,8 @@ describe('JSON reporting (F10)', () => {
     const doc = parseJson(res.stdout);
     assert.equal(doc.schema, 'quality-gate/1');
     assert.equal(doc.mode, 'working-tree-fast', 'direct invocation is working-tree');
-    assert.ok(doc.warningCount >= 1, 'expected the missing return type as a warning');
-    const warn = doc.warnings.find(
-      (w) => w.ruleId === '@typescript-eslint/explicit-function-return-type'
-    );
+    assert.ok(doc.warningCount >= 1, 'expected the hex-literal advisory as a warning');
+    const warn = doc.warnings.find((w) => w.ruleId === 'no-restricted-syntax');
     assert.ok(warn, JSON.stringify(doc.warnings));
     assert.equal(typeof warn.line, 'number');
     assert.equal(typeof warn.column, 'number');
