@@ -2571,6 +2571,8 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "Die Konversation ist zu lang für das Kontextfenster des Modells. Bitte starten Sie eine neue Konversation oder löschen Sie einen Teil des Verlaufs.",
   skillSlash: {
       notFound:
         "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",

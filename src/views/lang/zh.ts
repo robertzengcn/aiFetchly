@@ -2447,6 +2447,8 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "对话内容超出了模型的上下文窗口长度。请新建对话或清除部分历史记录。",
   skillSlash: {
       notFound:
         "没有匹配 '{name}' 的已安装提示技能。使用 /skills 查看已安装技能。",

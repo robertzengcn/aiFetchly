@@ -2588,6 +2588,8 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "The conversation is too long for the model's context window. Please start a new conversation or clear some history.",
   skillSlash: {
       notFound:
         "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",

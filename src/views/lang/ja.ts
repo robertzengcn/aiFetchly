@@ -2529,6 +2529,8 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "会話が長すぎてモデルのコンテキストウィンドウに収まりません。新しい会話を開始するか、履歴の一部を削除してください。",
   skillSlash: {
       notFound:
         "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",

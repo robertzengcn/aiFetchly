@@ -2564,6 +2564,8 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "La conversation est trop longue pour la fenêtre de contexte du modèle. Veuillez démarrer une nouvelle conversation ou effacer une partie de l'historique.",
   skillSlash: {
       notFound:
         "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
