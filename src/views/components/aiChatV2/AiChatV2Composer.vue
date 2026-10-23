@@ -439,6 +439,12 @@ const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 
 const props = defineProps<{
   isStreaming: boolean;
+  /**
+   * Bound workspace id for this conversation (surface feeds it from
+   * useConversationWorkspace). Rebinding a different directory on the SAME
+   * conversation re-scopes the slash/@-mention catalogs (R8 P2, FR-WSP-006).
+   */
+  workspaceId?: number | null;
   isProcessing?: boolean;
   /**
    * Show a push-to-talk microphone button for local voice input. Off by
@@ -1199,6 +1205,24 @@ onBeforeUnmount(
       refreshSlashSuggestions();
     }
   })
+);
+
+// R8 P2 (FR-WSP-006/007): rebinding a different directory on the SAME
+// conversation changes the scoped command and workspace-file catalogs. The
+// conversationId watch above does not fire for a rebind, so watch the bound
+// workspace id too — refresh what the user has open, never open unprompted.
+watch(
+  () => props.workspaceId,
+  (next, prev) => {
+    if (next === prev) return;
+    if (draft.value.startsWith("/")) {
+      refreshSlashSuggestions();
+    }
+    const ta = textareaEl;
+    if (atMentionOpen.value && ta) {
+      refreshAtMention(draft.value, ta.selectionStart ?? draft.value.length);
+    }
+  }
 );
 
 // Audit R2 N06 (FR-LIF-002): a recording must not outlive its owner. When the

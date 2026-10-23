@@ -278,6 +278,7 @@
     <AiChatV2Composer
       :is-streaming="selectedStore.isBusy"
       :conversation-id="conversationId"
+      :workspace-id="conversationWorkspace.workspace.value?.id ?? null"
       :voice-enabled="voice.inputEnabled.value"
       :voice-auto-send="voice.autoSend.value"
       :voice-max-recording-ms="voice.maxRecordingMs.value"
