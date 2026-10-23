@@ -426,7 +426,10 @@ const run = spawnSync(
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: SAFETY_TIMEOUT_MS,
-    env: { ...process.env, FORCE_COLOR: '0' },
+    // QUALITY_GATE_CONTEXT propagates through lint-staged into the runner
+    // so its JSON output reports 'staged-fast' for hook runs and
+    // 'working-tree-fast' for direct invocations (F10).
+    env: { ...process.env, FORCE_COLOR: '0', QUALITY_GATE_CONTEXT: 'lint-staged' },
   }
 );
 

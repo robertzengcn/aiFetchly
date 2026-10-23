@@ -10,5 +10,9 @@
 export default {
   // Only the supported source extensions are gated; everything else
   // (docs, config, assets) never starts the lint engine via this task.
+  // The coordinator spawns lint-staged with QUALITY_GATE_CONTEXT=lint-staged
+  // in the environment, so the runner's JSON output can distinguish staged
+  // coordinator runs from direct working-tree invocations (tech design
+  // §10; F10) — env injection in the task string would not be portable.
   '*.{js,jsx,cjs,mjs,ts,tsx,vue}': 'node scripts/quality/lint-files.mjs',
 };

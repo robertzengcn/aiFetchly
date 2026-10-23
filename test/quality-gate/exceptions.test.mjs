@@ -343,3 +343,26 @@ describe('per-function complexity identities (F04)', () => {
     assert.ok(e2.some((e) => e.includes('must equal maxCount')));
   });
 });
+
+describe('accepted-debt details (F10)', () => {
+  test('acceptance returns structured findings, not only a count', () => {
+    const file = path.join(process.cwd(), 'src/modules/LegacyExample.ts');
+    const msg = {
+      severity: 2,
+      ruleId: '@typescript-eslint/no-explicit-any',
+      message: 'Unexpected any. Specify a different type.',
+      line: 7,
+      column: 12,
+    };
+    const out = applyExceptions(
+      [{ filePath: file, messages: [msg] }],
+      manifest(VALID({ ruleId: '@typescript-eslint/no-explicit-any', maxComplexity: undefined }))
+    );
+    assert.equal(out.acceptedDebt, 1);
+    assert.equal(out.acceptedDebtFindings.length, 1);
+    assert.equal(out.acceptedDebtFindings[0].ruleId, '@typescript-eslint/no-explicit-any');
+    assert.equal(out.acceptedDebtFindings[0].line, 7);
+    assert.equal(out.acceptedDebtFindings[0].column, 12);
+    assert.equal(out.acceptedDebtFindings[0].path, 'src/modules/LegacyExample.ts');
+  });
+});

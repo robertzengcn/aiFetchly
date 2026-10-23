@@ -296,7 +296,7 @@ function validateFunctionIdentities(functions, label, errors) {
 export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
   const { exceptions, errors } = loadManifest(manifestPath);
   if (errors.length > 0) {
-    return { results, acceptedDebt: 0, errors };
+    return { results, acceptedDebt: 0, acceptedDebtFindings: [], errors };
   }
   const byKey = new Map(exceptions.map((e) => [`${e.path}::${e.ruleId}`, e]));
 
@@ -347,7 +347,9 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
   // has no allowance at all.
   const counts = new Map();
   const complexitySums = new Map(); // "path::rule" -> running accepted sum
+  const acceptedDebtFindings = []; // F10: detailed accepted debt, not a bare count
   for (const result of out) {
+    const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
     result.messages = result.messages.filter((message) => {
       if (!message.__qgExceptionKey) return true;
       const entry = byKey.get(message.__qgExceptionKey);
@@ -356,13 +358,20 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
       if (accepted) {
         counts.set(message.__qgExceptionKey, used + 1);
         acceptedDebt += 1;
+        acceptedDebtFindings.push({
+          path: rel,
+          line: message.line,
+          column: message.column,
+          ruleId: message.ruleId,
+          message: message.message,
+        });
         return false; // within allowance: accepted debt
       }
       delete message.__qgExceptionKey;
       return true; // over allowance, over ceiling, or over aggregate: blocks
     });
   }
-  return { results: out, acceptedDebt, errors: [] };
+  return { results: out, acceptedDebt, acceptedDebtFindings, errors: [] };
 }
 
 /**

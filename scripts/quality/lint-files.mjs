@@ -29,16 +29,46 @@ const { applyExceptions, isOperationalDiagnostic } = await import('./check-excep
 const OPERATIONAL_FAILURE = 2;
 const POLICY_VIOLATION = 1;
 
-function failOperational(message, hint) {
-  process.stderr.write(`quality: OPERATIONAL FAILURE — ${message}\n`);
-  if (hint) process.stderr.write(`  ${hint}\n`);
-  process.exit(OPERATIONAL_FAILURE);
-}
-
 // BUG-16: --json is a FLAG only when it is the FIRST argument; a file
 // literally named --json stays in the list (checked below, never silently
 // dropped to a vacuous pass).
 const jsonMode = process.argv[2] === '--json';
+// F10: distinguish staged coordinator execution from direct working-tree
+// invocation — the coordinator exports QUALITY_GATE_CONTEXT through
+// lint-staged; direct runs (doctor, CI, humans) do not.
+const runMode = process.env.QUALITY_GATE_CONTEXT === 'lint-staged' ? 'staged-fast' : 'working-tree-fast';
+
+/**
+ * F10: operational failures still produce the versioned JSON document on
+ * stdout in --json mode (with operationalErrors populated) so machine
+ * consumers always get parseable output; human diagnostics go to stderr.
+ */
+function failOperational(message, hint) {
+  if (jsonMode) {
+    const document = {
+      schema: 'quality-gate/1',
+      mode: runMode,
+      filesChecked: 0,
+      filesSkippedApproved: 0,
+      elapsedMs: Number((process.hrtime.bigint() - startNs) / 1_000_000n),
+      blockers: [],
+      blockerCount: 0,
+      warnings: [],
+      warningCount: 0,
+      acceptedDebt: 0,
+      acceptedDebtFindings: [],
+      operationalErrors: [message],
+    };
+    process.stdout.write(JSON.stringify(document) + '\n');
+    process.stderr.write(`quality: OPERATIONAL FAILURE — ${message}\n`);
+    if (hint) process.stderr.write(`  ${hint}\n`);
+  } else {
+    process.stderr.write(`quality: OPERATIONAL FAILURE — ${message}\n`);
+    if (hint) process.stderr.write(`  ${hint}\n`);
+  }
+  process.exit(OPERATIONAL_FAILURE);
+}
+
 const files = jsonMode ? process.argv.slice(3) : process.argv.slice(2);
 if (files.length === 0) {
   process.stdout.write('quality: no files to check\n');
@@ -210,6 +240,24 @@ for (const result of exceptionOutcome.results) {
 }
 if (operationalErrors.length > 0) {
   for (const e of operationalErrors) process.stderr.write(`quality: ${e}\n`);
+  if (jsonMode) {
+    process.stdout.write(
+      JSON.stringify({
+        schema: 'quality-gate/1',
+        mode: runMode,
+        filesChecked: exceptionOutcome.results.length,
+        filesSkippedApproved: approvedSkipped.length,
+        elapsedMs: Number((process.hrtime.bigint() - startNs) / 1_000_000n),
+        blockers: [],
+        blockerCount: 0,
+        warnings: [],
+        warningCount: 0,
+        acceptedDebt: 0,
+        acceptedDebtFindings: [],
+        operationalErrors,
+      }) + '\n'
+    );
+  }
   process.stderr.write(
     'quality: OPERATIONAL FAILURE — the effective ESLint configuration is broken\n' +
     '  Configuration failures are never deferrable debt. Fix the rule/plugin configuration.\n'
@@ -217,13 +265,13 @@ if (operationalErrors.length > 0) {
   process.exit(OPERATIONAL_FAILURE);
 }
 
-// BUG-16: structured finding collection feeds BOTH outputs. Human output is
-// capped (first 50 blockers) with the total and a pointer to --json; the
-// versioned JSON document goes to stdout in --json mode with human
-// diagnostics on stderr.
+// BUG-16/F10: structured finding collection feeds BOTH outputs. Human
+// output is capped (first 50 blockers) with the total and a pointer to
+// --json; the versioned JSON document carries full detail for blockers,
+// warnings, accepted debt, and operational errors.
 const MAX_HUMAN_BLOCKERS = 50;
 const findings = [];
-let warnings = 0;
+const warningFindings = [];
 for (const result of exceptionOutcome.results) {
   const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
   for (const message of result.messages) {
@@ -233,15 +281,23 @@ for (const result of exceptionOutcome.results) {
         line: message.line,
         column: message.column,
         ruleId: message.ruleId ?? null,
+        severity: message.severity ?? 2,
         fatal: message.fatal === true,
         message: message.message,
       });
     } else if (message.severity === 1) {
-      warnings += 1;
+      warningFindings.push({
+        path: rel,
+        line: message.line,
+        column: message.column,
+        ruleId: message.ruleId ?? null,
+        message: message.message,
+      });
     }
   }
 }
 const blockers = findings.length;
+const warnings = warningFindings.length;
 
 const elapsedMs = Number((process.hrtime.bigint() - startNs) / 1_000_000n);
 
@@ -249,14 +305,16 @@ if (jsonMode) {
   // Versioned JSON schema (tech design §10) on stdout; human lines on stderr.
   const document = {
     schema: 'quality-gate/1',
-    mode: 'staged-fast',
+    mode: runMode,
     filesChecked: results.length,
     filesSkippedApproved: approvedSkipped.length,
     elapsedMs,
     blockers: findings,
     blockerCount: blockers,
+    warnings: warningFindings,
     warningCount: warnings,
     acceptedDebt: exceptionOutcome.acceptedDebt,
+    acceptedDebtFindings: exceptionOutcome.acceptedDebtFindings ?? [],
     operationalErrors: [],
   };
   process.stdout.write(JSON.stringify(document) + '\n');
