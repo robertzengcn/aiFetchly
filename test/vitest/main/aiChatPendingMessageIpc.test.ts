@@ -125,7 +125,11 @@ vi.mock("@/service/AIChatConversationTurnCoordinator", () => ({
   },
 }));
 vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: class {},
+  AiChatApi: class {
+    listOpenAIModels(): { data: Array<{ id: string }> } {
+      return { data: [{ id: "model-a" }] };
+    }
+  },
 }));
 vi.mock("@/service/AIChatAuthExpiredHandler", () => ({
   redirectToLoginOnAuthExpired: () => undefined,
@@ -146,6 +150,7 @@ import {
   AI_CHAT_V2_PENDING_CREATE,
   AI_CHAT_V2_PENDING_STEER,
   AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_MODELS,
 } from "@/config/channellist";
 
 function callChannel(
@@ -184,6 +189,20 @@ describe("pending-message IPC handlers", () => {
     expect(result.status).toBe(false);
     expect(result.msg).toContain("not available");
     expect(queueSpies.submit).not.toHaveBeenCalled();
+  });
+
+  /** R8 P3: the model list is a metadata call, not a generation bypass —
+   * it must return the same denied envelope as the other chat handlers
+   * when AI is not enabled (PRD §14 item 1). */
+  it("gates the model list behind chat availability", async () => {
+    chatAvailable = false;
+    const result = await callChannel(AI_CHAT_V2_MODELS, undefined);
+    expect(result.status).toBe(false);
+    expect(result.msg).toContain("not available");
+
+    chatAvailable = true;
+    const allowed = await callChannel(AI_CHAT_V2_MODELS, undefined);
+    expect(allowed.status).toBe(true);
   });
 
   it("rejects oversized messages with a stable error", async () => {

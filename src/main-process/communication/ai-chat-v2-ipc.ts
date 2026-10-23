@@ -1577,6 +1577,13 @@ export async function handleDenyToolPermission(
 // -------------------------------------------------------------------------
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
+  // R8 P3 (PRD §14 item 1): the model list is a metadata call, not a
+  // generation bypass — gate it like the other chat handlers so a disabled
+  // plan cannot enumerate the provider catalog. Same denied envelope.
+  const chatAccess = await canUseChatWithReconcile();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
   try {
     const api = new AiChatApi();
     const models = await api.listOpenAIModels();
