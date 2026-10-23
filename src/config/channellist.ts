@@ -561,6 +561,9 @@ export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
 /** Audit R2 G01: renderer→main bounded metrics push (diagnostics export). */
 export const AI_CHAT_RENDERER_METRICS_PUSH =
   "ai-chat-renderer-metrics:push";
+/** R8 §2: renderer-originated workspace action counts (bounded labels). */
+export const AI_CHAT_WORKSPACE_ACTION_COUNT =
+  "ai-chat-v2:workspace-action-count";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
