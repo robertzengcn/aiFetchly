@@ -104,6 +104,29 @@ const policyControlInputs = [
   '.eslintignore',
 ];
 
+/**
+ * POSIX glob → RegExp for the simple glob forms used in approvedIgnores
+ * (`**` any path, `*` any segment characters). Shared by the runner and
+ * the audit so ignore semantics cannot drift apart (F11).
+ */
+function globToRegExp(glob) {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '@@DOUBLESTAR@@')
+    .replace(/\*/g, '[^/]*');
+  return new RegExp(`^${escaped.split('@@DOUBLESTAR@@').join('.*')}$`);
+}
+
+const approvedIgnoreRegexes = approvedIgnores.map(globToRegExp);
+
+/** Which approved ignore pattern covers this repo-relative POSIX path (or null)? */
+function approvedIgnorePatternFor(relPath) {
+  for (let i = 0; i < approvedIgnores.length; i += 1) {
+    if (approvedIgnoreRegexes[i].test(relPath)) return approvedIgnores[i];
+  }
+  return null;
+}
+
 module.exports = {
   COGNITIVE_COMPLEXITY_LIMIT,
   sonarRules,
@@ -114,5 +137,6 @@ module.exports = {
   architectureScopes,
   sourceExtensions,
   approvedIgnores,
+  approvedIgnorePatternFor,
   policyControlInputs,
 };

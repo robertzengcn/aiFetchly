@@ -73,6 +73,11 @@ export function isNonExceptable(message) {
   return NON_EXCEPTIONABLE_RULES.has(message.ruleId);
 }
 
+/** F11: may an allowance for this rule id ever exist? (shared with audit) */
+export function isExceptableRuleId(ruleId) {
+  return typeof ruleId === 'string' && !NON_EXCEPTIONABLE_RULES.has(ruleId);
+}
+
 /**
  * Extract the numeric cognitive complexity from a SonarJS message.
  * SonarJS 1.0.4 emits: "Refactor this function to reduce its Cognitive

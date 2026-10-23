@@ -112,25 +112,9 @@ try {
 // BUG-15/AC-17: distinguish APPROVED ignores (skipped with the pattern
 // printed) from unexpected ones (exit 2 — never pretend a file was
 // checked). ESLint either omits ignored files from results or returns a
-// severity-1 "File ignored" stub.
-function globToRegExp(glob) {
-  // policy globs are simple: `**` any path, `*` any segment chars. The
-  // double-star is staged through a plain-text placeholder (no control
-  // characters in regex source - no-control-regex) then joined to `.*`.
-  const STAGE = '@@DOUBLESTAR@@';
-  const staged = glob
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, STAGE)
-    .replace(/\*/g, '[^/]*');
-  return new RegExp(`^${staged.split(STAGE).join('.*')}$`);
-}
-const approvedRegexes = policy.approvedIgnores.map(globToRegExp);
-function approvedIgnorePatternFor(relPath) {
-  for (let i = 0; i < policy.approvedIgnores.length; i += 1) {
-    if (approvedRegexes[i].test(relPath)) return policy.approvedIgnores[i];
-  }
-  return null;
-}
+// severity-1 "File ignored" stub. The matcher itself lives in policy.cjs
+// (F11 single source, shared with the audit inventory).
+const approvedIgnorePatternFor = policy.approvedIgnorePatternFor;
 
 const resultFiles = new Set(results.map((r) => path.resolve(repoRoot, r.filePath)));
 const ignoredStubs = [];

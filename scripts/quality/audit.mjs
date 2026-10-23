@@ -1,190 +1,178 @@
 #!/usr/bin/env node
 /**
- * Full-source audit command (PRD QG-11, §8): read-only inventory of every
- * blocker the fast profile finds across src/test/scripts, exception-manifest
- * validation, stale/expired entry detection, and candidates for tightening.
+ * Full-source audit command (PRD QG-11, §8; F11): read-only inventory of
+ * every blocker the fast profile finds across ALL eligible tracked source
+ * — any directory, including root tooling like forge.config.js and the
+ * vite configs, not just src/test/scripts — under the shared approved
+ * ignores. Reports exception-manifest state (stale with reason, expired,
+ * tightening candidates including NONZERO count reductions and per-
+ * function complexity easing), ceiling breaches, code defects that can
+ * never carry allowances, and reviewable draft entries (never applied,
+ * never regenerated automatically; §8.6).
  *
- * Never rewrites or increases allowances, never regenerates a baseline
- * automatically (§8.6), and never blocks — it reports.
+ * --json emits the versioned quality-gate-audit/1 document on stdout.
+ * Never rewrites, never blocks.
  */
 
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const { loadManifest, parseComplexity } = await import('./check-exceptions.mjs');
+const { loadManifest } = await import('./check-exceptions.mjs');
 const { checkArchitecture } = await import('./architecture-check.mjs');
-const { readdirSync } = await import('node:fs');
+const { buildAuditReport } = await import('./audit-core.mjs');
+const policy = require('./policy.cjs');
 
-/** Recursively list source files under a repo-relative directory. */
-function listSourceFiles(relDir) {
-  const out = [];
-  const absDir = path.join(repoRoot, relDir);
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(abs);
-      else if (/\.(js|jsx|cjs|mjs|ts|tsx|vue)$/.test(entry.name)) out.push(abs);
-    }
-  };
-  walk(absDir);
-  return out;
-}
+const jsonMode = process.argv[2] === '--json';
 
-process.stdout.write('quality audit: full-source read-only inventory (fast profile)\n');
-
-// 1. Engine pass over the source tree. The bin runs via process.execPath +
-// the real JS entry: package exports hide it from module RESOLVERS
-// (require.resolve fails) but direct execution is unaffected — and unlike
-// the .bin shim this also works under spawnSync on Windows.
-const run = spawnSync(
-  process.execPath,
-  [
-    path.join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js'),
-    '--no-eslintrc',
-    '--config',
-    path.join(repoRoot, 'scripts', 'quality', 'eslint-fast.cjs'),
-    '--format',
-    'json',
-    '--no-fix',
-    '--ext',
-    '.js,.jsx,.cjs,.mjs,.ts,.tsx,.vue',
-    'src',
-    'test',
-    'scripts',
-  ],
-  { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, shell: false }
-);
-
-if (run.error || (run.status !== 0 && run.status !== 1)) {
-  process.stderr.write(`quality audit: engine failed (exit ${run.status})\n${run.stderr}\n`);
+// --- 1. Inventory: every tracked source file under the shared exclusions ---
+const sourceExt = new Set(policy.sourceExtensions);
+const ls = spawnSync('git', ['ls-files', '-z'], {
+  cwd: repoRoot,
+  encoding: 'utf8',
+  maxBuffer: 64 * 1024 * 1024,
+});
+if (ls.error || ls.status !== 0) {
+  process.stderr.write(`quality audit: git ls-files failed: ${ls.stderr}\n`);
   process.exit(2);
 }
-
-let results;
-try {
-  results = JSON.parse(run.stdout);
-} catch (e) {
-  process.stderr.write(`quality audit: could not parse engine output: ${e.message}\n`);
-  process.exit(2);
+const inventory = [];
+const inventorySet = new Set();
+for (const entry of ls.stdout.split('\0')) {
+  if (entry.length === 0) continue;
+  if (!sourceExt.has(path.posix.extname(entry))) continue;
+  if (policy.approvedIgnorePatternFor(entry) !== null) continue;
+  inventory.push(entry);
+  inventorySet.add(entry);
 }
 
-// 2. Tally blockers per (file, rule).
-const findings = new Map(); // "path::rule" -> count
-const complexityMax = new Map(); // "path" -> max observed complexity
-const complexitySum = new Map(); // "path" -> SUM of observed complexities (BUG-3 aggregate ceiling)
-let totalBlockers = 0;
-for (const result of results) {
-  const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
-  for (const message of result.messages) {
-    if (message.fatal || message.severity === 2) {
-      totalBlockers += 1;
-      const key = `${rel}::${message.ruleId || '(fatal)'}`;
-      findings.set(key, (findings.get(key) || 0) + 1);
-      if (message.ruleId === 'sonarjs/cognitive-complexity') {
-        // Shared version-specific adapter (fail-closed): an unknown message
-        // format counts as 0 here, which can only UNDER-report a ceiling —
-        // the gate itself keeps the finding blocking.
-        const value = parseComplexity(message.message) ?? 0;
-        complexityMax.set(rel, Math.max(complexityMax.get(rel) || 0, value));
-        complexitySum.set(rel, (complexitySum.get(rel) || 0) + value);
-      }
+// --- 2. Engine pass over the explicit inventory (chunked, execPath-driven) ---
+const CHUNK = 200;
+const allFindings = [];
+const eslintBin = path.join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js');
+for (let i = 0; i < inventory.length; i += CHUNK) {
+  const run = spawnSync(
+    process.execPath,
+    [
+      eslintBin,
+      '--no-eslintrc',
+      '--config',
+      path.join(repoRoot, 'scripts', 'quality', 'eslint-fast.cjs'),
+      '--format', 'json',
+      '--no-fix',
+      ...inventory.slice(i, i + CHUNK),
+    ],
+    { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, shell: false }
+  );
+  if (run.error || (run.status !== 0 && run.status !== 1)) {
+    process.stderr.write(`quality audit: engine failed (exit ${run.status})\n${run.stderr}\n`);
+    process.exit(2);
+  }
+  let results;
+  try {
+    results = JSON.parse(run.stdout);
+  } catch (e) {
+    process.stderr.write(`quality audit: could not parse engine output: ${e.message}\n`);
+    process.exit(2);
+  }
+  for (const result of results) {
+    const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
+    for (const message of result.messages) {
+      allFindings.push({
+        path: rel,
+        ruleId: message.ruleId ?? null,
+        severity: message.severity,
+        fatal: message.fatal === true,
+        line: message.line,
+        column: message.column,
+        message: message.message,
+      });
     }
   }
 }
 
-// 2b. Architecture direct-import pass (BUG-2): the audit must surface
-// worker/IPC architecture debt exactly like the hook does, so allowances
-// for it are drafted from the same findings the gate reports.
-const archScope = [
-  ...listSourceFiles('src/childprocess'),
-  ...listSourceFiles('src/main-process/communication'),
-];
-const archFindings = checkArchitecture(archScope, repoRoot);
-const archComplexityMax = new Map();
-{
-  // Merge architecture findings into the same tallies.
-  for (const finding of archFindings) {
-    const rel = path.relative(repoRoot, finding.filePath).split(path.sep).join('/');
-    totalBlockers += 1;
-    const key = `${rel}::${finding.ruleId}`;
-    findings.set(key, (findings.get(key) || 0) + 1);
-  }
-  void archComplexityMax;
+// --- 2b. Architecture direct-import pass (same findings the gate reports) ---
+const archScope = inventory
+  .filter((rel) => /(^|\/)src\/(childprocess|main-process\/communication)\//.test(rel))
+  .map((rel) => path.join(repoRoot, rel));
+for (const finding of checkArchitecture(archScope, repoRoot)) {
+  allFindings.push({
+    path: path.relative(repoRoot, finding.filePath).split(path.sep).join('/'),
+    ruleId: finding.ruleId,
+    severity: 2,
+    fatal: finding.fatal === true,
+    line: finding.line,
+    column: finding.column,
+    message: finding.message,
+  });
 }
 
-// 3. Manifest state: stale paths, expired entries, drift below allowances.
+// --- 3. Manifest state + report core ---
 const { exceptions, errors } = loadManifest();
 for (const e of errors) process.stderr.write(`manifest error: ${e}\n`);
-const stale = exceptions.filter((e) => !findings.has(`${e.path}::${e.ruleId}`));
-const expired = exceptions.filter((e) => e.expired);
+const report = buildAuditReport(allFindings, { exceptions }, inventorySet);
 
-// 4. Report.
-process.stdout.write(`\nBlockers (fast profile, full source): ${totalBlockers}\n`);
-process.stdout.write(`Distinct (file, rule) pairs: ${findings.size}\n\n`);
-
-const grouped = new Map();
-for (const [key, count] of findings) {
-  const [file, rule] = key.split('::');
-  if (!grouped.has(rule)) grouped.set(rule, []);
-  grouped.get(rule).push({ file, count });
-}
-for (const [rule, files] of [...grouped.entries()].sort((a, b) => b[1].length - a[1].length)) {
-  process.stdout.write(`${rule}: ${files.length} file(s), ${files.reduce((n, f) => n + f.count, 0)} finding(s)\n`);
-}
-
-if (stale.length > 0) {
-  process.stdout.write(`\nStale exception entries (finding gone — candidates for removal):\n`);
-  for (const e of stale) process.stdout.write(`  - ${e.path} :: ${e.ruleId}\n`);
-}
-if (expired.length > 0) {
-  process.stdout.write(`\nEXPIRED exception entries (block when their file is touched; remove or renew deliberately):\n`);
-  for (const e of expired) process.stdout.write(`  - ${e.path} :: ${e.ruleId} (expired ${e.expiresOn})\n`);
-}
-for (const e of exceptions) {
-  if (e.ruleId === 'sonarjs/cognitive-complexity' && complexityMax.has(e.path)) {
-    const observed = complexityMax.get(e.path);
-    if (observed > e.maxComplexity) {
-      process.stdout.write(
-        `\nCEILING EXCEEDED (would block when touched): ${e.path} observed ${observed} > allowed ${e.maxComplexity}\n`
-      );
+// --- 4. Output ---
+if (jsonMode) {
+  const document = {
+    schema: 'quality-gate-audit/1',
+    inventoryFiles: inventory.length,
+    totalBlockers: report.totalBlockers,
+    distinctPairs: report.distinctPairs,
+    byRule: report.byRule,
+    stale: report.stale,
+    expired: report.expired,
+    tightening: report.tightening,
+    ceilingExceeded: report.ceilingExceeded,
+    codeDefects: report.codeDefects,
+    draftEntries: report.draft,
+    manifestErrors: errors,
+  };
+  process.stdout.write(JSON.stringify(document) + '\n');
+} else {
+  process.stdout.write(
+    `quality audit: full-source read-only inventory (fast profile, ${inventory.length} tracked file(s))\n`
+  );
+  process.stdout.write(`\nBlockers (fast profile, full source): ${report.totalBlockers}\n`);
+  process.stdout.write(`Distinct (file, rule) pairs: ${report.distinctPairs}\n\n`);
+  for (const { rule, files, findings: n } of report.byRule) {
+    process.stdout.write(`${rule}: ${files} file(s), ${n} finding(s)\n`);
+  }
+  if (report.stale.length > 0) {
+    process.stdout.write(`\nStale exception entries (candidates for removal):\n`);
+    for (const s of report.stale) process.stdout.write(`  - ${s.path} (${s.reason})\n`);
+  }
+  if (report.expired.length > 0) {
+    process.stdout.write(`\nEXPIRED exception entries (block when their file is touched):\n`);
+    for (const e of report.expired) process.stdout.write(`  - ${e.path} :: ${e.ruleId} (expired ${e.expiresOn})\n`);
+  }
+  if (report.tightening.length > 0) {
+    process.stdout.write(`\nTightening candidates (debt shrank — reduce the allowances deliberately):\n`);
+    for (const t of report.tightening) process.stdout.write(`  - ${t.path} :: ${t.ruleId} [${t.kind}] ${t.detail}\n`);
+  }
+  if (report.ceilingExceeded.length > 0) {
+    process.stdout.write(`\nCEILING EXCEEDED (would block when touched):\n`);
+    for (const c of report.ceilingExceeded) process.stdout.write(`  - ${c.path} :: ${c.ruleId} — ${c.detail}\n`);
+  }
+  if (report.codeDefects.length > 0) {
+    process.stdout.write(`\nCode defects (fatal/parse/unexceptable — fixes, NEVER allowances):\n`);
+    for (const d of report.codeDefects.slice(0, 50)) {
+      process.stdout.write(`  - ${d.path}:${d.line ?? 0}:${d.column ?? 0} ${d.message}\n`);
+    }
+    if (report.codeDefects.length > 50) {
+      process.stdout.write(`  … ${report.codeDefects.length - 50} more (see --json)\n`);
     }
   }
+  process.stdout.write(
+    '\nDraft manifest entries for reviewed adoption (copy into scripts/quality/exceptions.json ONLY after review):\n'
+  );
+  process.stdout.write(JSON.stringify(report.draft, null, 2) + '\n');
+  process.stdout.write(
+    `\nquality audit: done (read-only; nothing was rewritten, no baseline regenerated)\n`
+  );
 }
-
-// 5. Machine-readable draft (NOT auto-applied — §8.6: new allowances are
-// deliberate policy changes). Operators review and merge manually.
-process.stdout.write(
-  '\nDraft manifest entries for reviewed adoption (copy into scripts/quality/exceptions.json ONLY after review):\n'
-);
-process.stdout.write('[\n');
-const draftEntries = [...findings.entries()]
-  .filter(([key]) => {
-    const [file, rule] = key.split('::');
-    return !exceptions.some((e) => e.path === file && e.ruleId === rule);
-  })
-  .map(([key, count]) => {
-    const [file, rule] = key.split('::');
-    const entry = {
-      path: file,
-      ruleId: rule,
-      maxCount: count,
-      reason: 'REVIEW BEFORE ADOPTING: legacy baseline from quality audit',
-      owner: 'maintainer',
-      expiresOn: '2027-01-31',
-    };
-    if (rule === 'sonarjs/cognitive-complexity') {
-      entry.maxComplexity = complexityMax.get(file) ?? 0;
-      entry.maxTotalComplexity = complexitySum.get(file) ?? entry.maxComplexity;
-    }
-    return JSON.stringify(entry);
-  });
-process.stdout.write(draftEntries.map((e) => `  ${e}`).join(',\n'));
-process.stdout.write('\n]\n');
-
-process.stdout.write(
-  `\nquality audit: done (read-only; nothing was rewritten, no baseline regenerated)\n`
-);
 process.exit(errors.length > 0 ? 2 : 0);
