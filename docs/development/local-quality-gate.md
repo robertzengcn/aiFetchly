@@ -93,6 +93,43 @@ The CLI does NOT apply the exception manifest or staged-snapshot semantics — u
 | lint-staged backup mentioned in a failure | Follow its printed recovery line; the coordinator never blanket-deletes stashes |
 | Deliberate bypass needed | `git commit --no-verify` is a documented Git limitation of any local hook, not a repair |
 
+## Worktrees: run `yarn prepare` once per worktree
+
+Git executes hooks from `core.hooksPath` (`.husky/_`), and the generated
+shim directory is NOT checked out — a fresh git worktree has no `.husky/_`
+until `yarn prepare` (or `husky`) runs inside it. Until then Git silently
+runs NO hook in that worktree and every commit passes ungated.
+`yarn quality:doctor` detects exactly this (`husky:shims` FAIL). The
+coordinator cannot detect a hook Git never started.
+
+## Release-one policy decisions (explicit)
+
+- **`explicit-function-return-type` stays WARN in the fast profile.** The
+  tree carries substantial legacy debt; the audit did not baseline it (the
+  rule is not an error). Flipping to error requires baselining first.
+- **Inherited `eslint:recommended` errors stay blocking deliberately**
+  (`no-unreachable`, `require-yield`, `prefer-const`, `no-regex-spaces`,
+  `no-unexpected-multiline`, `no-control-regex`, …): they are correctness
+  rules, not style. Their legacy findings are baselined with named reasons
+  in the manifest. Cosmetic/style rules remain warnings.
+- **Deep typed lint owns exactly the two typed rules** (floating/misused
+  promises) — it does NOT re-run fast blockers (their legacy baseline is
+  manifest-gated at commit time; a CLI pass cannot apply the manifest).
+  `yarn quality:deep` currently exits 1 on ~70 genuine pre-existing
+  floating-promise findings in the tree — real debt the command exists to
+  surface; fix or baseline them deliberately.
+
+## Release evidence
+
+- Performance: [quality-gate-performance.md](quality-gate-performance.md) —
+  all three PRD §10 budgets measured PASS (p95 34ms / 862ms / 1513ms).
+- Compatibility: [quality-gate-compatibility.md](quality-gate-compatibility.md) —
+  engines/peers/licenses, requiresTypeChecking verification, parse proofs.
+- Platform: **Linux only**. macOS/Windows are unmeasured; do not enable the
+  gate for those platforms without running the integration suite there
+  (Windows specifics are handled — execPath+JS-entry spawning — but
+  unverified).
+
 ## Known limitations (release one)
 
 - **Direct imports only**: the architecture rules do not prove a worker cannot
