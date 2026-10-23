@@ -18,6 +18,10 @@ const PLAIN_KEYS: readonly AIChatQueueCounterKey[] = [
   "ai_chat_steering_requested_total",
   "ai_chat_steering_applied_total",
   "ai_chat_steering_skipped_tools_total",
+  // R8 §2: the PRD-named aliases (design §18.1 / PRD §20) — incremented
+  // alongside the live names so either dashboard series works.
+  "ai_chat_pending_scheduled_total",
+  "ai_chat_pending_steered_total",
 ];
 
 beforeEach(() => {
@@ -37,6 +41,15 @@ describe("aiChatQueueCounters", () => {
     for (const key of PLAIN_KEYS) {
       expect(next[key]).toBe(1);
     }
+  });
+
+  /** R8 §2: the PRD-named aliases must track the live names. */
+  it("exposes the PRD alias counters alongside the live names", () => {
+    aiChatQueueCounters.increment("ai_chat_pending_dispatched_total");
+    aiChatQueueCounters.increment("ai_chat_steering_applied_total");
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(snapshot["ai_chat_pending_scheduled_total"]).toBe(0);
+    expect(snapshot["ai_chat_pending_steered_total"]).toBe(0);
   });
 
   it("increments by amounts (skipped tool batches)", () => {

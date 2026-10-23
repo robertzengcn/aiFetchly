@@ -20,7 +20,11 @@ export type AIChatQueueCounterKey =
   | "ai_chat_pending_deferred_total"
   | "ai_chat_steering_requested_total"
   | "ai_chat_steering_applied_total"
-  | "ai_chat_steering_skipped_tools_total";
+  | "ai_chat_steering_skipped_tools_total"
+  // R8 §2 (design §18.1 / PRD §20): the PRD-named aliases, incremented
+  // alongside the live names so either dashboard series works.
+  | "ai_chat_pending_scheduled_total"
+  | "ai_chat_pending_steered_total";
 
 const ALL_KEYS: readonly AIChatQueueCounterKey[] = [
   "ai_chat_pending_created_total",
@@ -31,6 +35,8 @@ const ALL_KEYS: readonly AIChatQueueCounterKey[] = [
   "ai_chat_steering_requested_total",
   "ai_chat_steering_applied_total",
   "ai_chat_steering_skipped_tools_total",
+  "ai_chat_pending_scheduled_total",
+  "ai_chat_pending_steered_total",
 ];
 
 /** Labeled counters (e.g. rejection reason, recovery state). */

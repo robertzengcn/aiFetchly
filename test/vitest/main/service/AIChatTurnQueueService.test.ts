@@ -31,6 +31,7 @@ import {
   type AIChatTurnQueueEngine,
   type AIChatQueueLease,
 } from "@/service/AIChatTurnQueueService";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import {
   AIChatPendingMessagePreparationService,
@@ -233,6 +234,9 @@ describe("AIChatTurnQueueService submit + drain", () => {
     );
     const views = await service.list("v2-a");
     expect(views[0].status).toBe("sent");
+    // R8 §2 (PRD §20): the PRD-named `scheduled` alias must move with every
+    // dispatch, so the soak dashboard can read either series.
+    expect(aiChatQueueCounters.get("ai_chat_pending_scheduled_total")).toBe(1);
   });
 
   it("busy submit stays queued with no dispatch", async () => {
@@ -600,6 +604,9 @@ describe("AIChatTurnQueueService steer", () => {
         }),
       },
     ]);
+    // R8 §2 (PRD §20): the PRD-named `steered` alias moves with every
+    // applied steering promote, alongside the live applied/requested series.
+    expect(aiChatQueueCounters.get("ai_chat_pending_steered_total")).toBe(1);
     const views = await service.list("v2-pro");
     expect(views.find((v) => v.content === "focus on Europe")?.status).toBe(
       "applied"

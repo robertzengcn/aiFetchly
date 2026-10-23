@@ -340,6 +340,8 @@ export function createSteeringPromoter(
       Date.now() - transactionStartedAt
     );
     aiChatQueueCounters.increment("ai_chat_steering_applied_total");
+    // R8 §2: PRD-named alias moves with every applied steering.
+    aiChatQueueCounters.increment("ai_chat_pending_steered_total");
     const clickStartedAt = Date.parse(instruction.createdAt);
     if (!Number.isNaN(clickStartedAt)) {
       aiChatQueueCounters.observeTiming(
@@ -1101,6 +1103,8 @@ export class AIChatTurnQueueService {
           Date.now() - transactionStartedAt
         );
         aiChatQueueCounters.increment("ai_chat_pending_dispatched_total");
+        // R8 §2: PRD-named alias moves with every dispatch.
+        aiChatQueueCounters.increment("ai_chat_pending_scheduled_total");
         if (!Number.isNaN(enqueueStartedAt)) {
           aiChatQueueCounters.observeTiming(
             "enqueue_to_dispatch_ms",
