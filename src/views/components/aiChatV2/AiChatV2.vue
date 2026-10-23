@@ -768,6 +768,7 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
+import { useChatReportState } from "@/views/store/chatReportState";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageEvent,
@@ -1035,7 +1036,10 @@ const conversationReportDialogOpen = ref(false);
 const conversationReportSnapshot = ref<
   ReturnType<typeof buildChatV2ConversationSnapshot> | null
 >(null);
-const reportedMessageIds = ref<Set<string>>(new Set());
+// R9 B04 (FR-RPT-009 / AD-005): the module-scope session singleton is the
+// owner; it survives remounts. Same pattern as useInnerPageShellFlag.
+const chatReportState = useChatReportState();
+const reportedMessageIds = chatReportState.reportedMessageIds;
 const singleReportDialogOpen = ref(false);
 const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
 
@@ -6558,10 +6562,8 @@ function onConversationReportSubmitted(payload: {
   reportId: string;
   selectedMessageIds: string[];
 }): void {
-  reportedMessageIds.value = new Set([
-    ...reportedMessageIds.value,
-    ...payload.selectedMessageIds,
-  ]);
+  // R9 B04: the session-scoped store owns the markers.
+  chatReportState.markReported(payload.selectedMessageIds);
   // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
   // and copy the report reference; the dialog itself owns closing on dismiss.
 }
@@ -6576,7 +6578,8 @@ function onSingleReportRequest(
 function onSingleReportSubmitted(): void {
   const id = activeSingleDescriptor.value?.context.messageId;
   if (id) {
-    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+    // R9 B04: the session-scoped store owns the markers.
+    chatReportState.markReported([id]);
   }
 }
 

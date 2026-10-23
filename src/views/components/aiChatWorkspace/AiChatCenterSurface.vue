@@ -772,6 +772,7 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
+import { useChatReportState } from "@/views/store/chatReportState";
 import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import {
   composerDraftKeyFor,
@@ -1257,9 +1258,11 @@ function onConversationReportSubmitted(payload: {
   reportId: string;
   selectedMessageIds: string[];
 }): void {
+  // R9 B04 (FR-RPT-009): every successfully selected output carries the
+  // session "Reported" marker — the payload is no longer discarded.
+  chatReportState.markReported(payload.selectedMessageIds);
   // Keep the dialog OPEN so the user can copy the report reference; the
   // dialog itself owns closing on dismiss (FR-5.5 / Journey 11.1 step 8).
-  void payload;
 }
 
 // An open dialog must never describe a conversation the user navigated away
@@ -1626,8 +1629,10 @@ function onReorderGeneratedImages(
  */
 
 // --- Per-output reporting + generated-image batch actions (FR-RPT/FR-IMG) ---
-/** FR-RPT-009: session-only reported ids (never persisted). */
-const reportedMessageIds = ref(new Set<string>());
+/** FR-RPT-009: session-only reported ids (never persisted). R9 B04: the
+ *  module-scope session singleton survives center remounts (AD-005). */
+const chatReportState = useChatReportState();
+const reportedMessageIds = chatReportState.reportedMessageIds;
 const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
 const singleReportDialogOpen = ref(false);
 
@@ -1640,7 +1645,7 @@ function onSingleReportRequest(descriptor: ReportableOutputDescriptor): void {
 function onSingleReportSubmitted(): void {
   const id = activeSingleDescriptor.value?.context.messageId;
   if (id) {
-    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+    chatReportState.markReported([id]);
   }
 }
 
@@ -3528,6 +3533,10 @@ async function onRetryPlanContinuation(): Promise<void> {
       // future NEW decision must resurface without a stale suppression.
       clearPlanContinuationDismissal(intent.conversationId);
       pendingPlanContinuation.value = null;
+      // R9 B03 (FR-PLN-006): apply the SAME mode transition as the initial
+      // approval — the chat-mode continuation was accepted, so the selector
+      // returns to chat mode for the next manual send.
+      mode.value = "chat";
     } else {
       refreshPendingPlanContinuation();
     }

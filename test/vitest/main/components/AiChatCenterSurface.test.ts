@@ -436,6 +436,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           emits: ["submitted", "update:modelValue"],
           template: '<div data-testid="single-report-dialog-stub" />',
         }),
+        AIConversationReportDialog: defineComponent({
+          name: "AIConversationReportDialog",
+          props: ["modelValue", "snapshot"],
+          emits: ["submitted", "update:modelValue"],
+          template:
+            '<div data-testid="conversation-report-dialog-stub" />',
+        }),
         ScheduledLoopToolApprovalDialog: defineComponent({
           name: "ScheduledLoopToolApprovalDialog",
           props: ["modelValue", "rawCommand", "prompt"],
@@ -1571,10 +1578,12 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
    * and retry-batch tile events; the center owns the dialogs and flows.
    */
   describe("report and generated-image actions", () => {
+    /** R9 B04: captured for the remount-preservation test (same session). */
+    let pinia: ReturnType<typeof createPinia> | null = null;
     async function mountWithSelection(): Promise<
       ReturnType<typeof mountSurface>
     > {
-      const pinia = createPinia();
+      pinia = createPinia();
       setActivePinia(pinia);
       const wrapper = mountSurface(pinia);
       const chatWorkspace = useChatWorkspaceStore();
@@ -1604,6 +1613,65 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       // Session-only reported set flows back to reportable tiles.
       expect(transcript.props("reportedMessageIds")?.has("m-report")).toBe(
         true
+      );
+    });
+
+    /**
+     * R9 B04 (FR-RPT-009): a successful CONVERSATION report marks every
+     * selected output reported — the payload is no longer discarded.
+     */
+    it("marks conversation-report selected outputs as reported (FR-RPT-009 B04)", async () => {
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      wrapper
+        .findComponent({ name: "AIConversationReportButton" })
+        .vm.$emit("open");
+      await flushPromises();
+      const dialog = wrapper.findComponent({
+        name: "AIConversationReportDialog",
+      });
+      expect(dialog.exists()).toBe(true);
+
+      dialog.vm.$emit("submitted", {
+        reportId: "air_r9-0001",
+        selectedMessageIds: ["output-r9"],
+      });
+      await flushPromises();
+      expect(transcript.props("reportedMessageIds")?.has("output-r9")).toBe(
+        true
+      );
+    });
+
+    /**
+     * R9 B04 (AD-005): the reported markers survive a center remount within
+     * the session — the set lives in the session-scoped Pinia store.
+     */
+    it("preserves reported markers across a center remount (AD-005 B04)", async () => {
+      const first = await mountWithSelection();
+      first
+        .findComponent({ name: "AIConversationReportButton" })
+        .vm.$emit("open");
+      await flushPromises();
+      first.findComponent({ name: "AIConversationReportDialog" }).vm.$emit(
+        "submitted",
+        { reportId: "air_r9-0002", selectedMessageIds: ["m-remount"] }
+      );
+      await flushPromises();
+      first.unmount();
+
+      // A fresh center mount on the SAME pinia (same session).
+      const second = mountSurface(pinia!);
+      const transcript = second.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      expect(transcript.props("reportedMessageIds")?.has("m-remount")).toBe(
+        true
+      );
+      // ...and never transfers markers to unrelated messages.
+      expect(transcript.props("reportedMessageIds")?.has("m-other")).toBe(
+        false
       );
     });
 
@@ -3015,6 +3083,51 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
           .find('[data-testid="workspace-plan-continuation-banner"]')
           .exists()
       ).toBe(false);
+    });
+
+    it("returns the selector to chat mode after a successful continuation retry (FR-PLN-006 B03)", async () => {
+      recoverPlanContinuationMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        planId: "plan-rec",
+        version: 2,
+        action: "approve-plan",
+        feedback: "",
+        clientRequestId: "plan-rec-retry",
+        decidedAt: "2026-10-17T00:00:00.000Z",
+      });
+      const wrapper = await mountOnConv("conv-rec");
+      await flushPromises();
+
+      // The user flips the selector to plan mode before retrying the saved
+      // continuation.
+      const selector = wrapper.findComponent({ name: "AiChatV2ModeSelector" });
+      selector.vm.$emit("update:modelValue", "plan");
+      await flushPromises();
+      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
+        "plan"
+      );
+
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-rec",
+        runId: "run-rec",
+        status: "running",
+        acceptedAt: "",
+      });
+      await wrapper
+        .get('[data-testid="workspace-plan-continuation-retry"]')
+        .trigger("click");
+      await vi.waitFor(() => {
+        expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      });
+      await flushPromises();
+
+      // The retried continuation rode modeOverride:"chat" (the request is
+      // correct) AND the visible selector must return to chat mode too —
+      // the next manual send must not silently run in plan mode.
+      expect(startChatRunMock.mock.calls[0][0].mode).toBe("chat");
+      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
+        "chat"
+      );
     });
 
     it("preserves recovered rejected/changes feedback in the retry message", async () => {
