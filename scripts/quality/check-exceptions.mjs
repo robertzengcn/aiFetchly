@@ -27,6 +27,49 @@ const MANIFEST_PATH = path.join(repoRoot, 'scripts', 'quality', 'exceptions.json
 const COMPLEXITY_RULE = 'sonarjs/cognitive-complexity';
 
 /**
+ * Rules that report parse/infrastructure failures. Their findings can never
+ * be excepted (F03): `vue/no-parsing-error` arrives with severity 2 but
+ * WITHOUT `fatal` set, so the old fatal-only guard let an allowance swallow
+ * invalid Vue templates as "accepted debt".
+ */
+const NON_EXCEPTIONABLE_RULES = new Set(['vue/no-parsing-error']);
+
+/**
+ * ESLint reports configuration/rule-resolution failures as ordinary-looking
+ * severity-2 messages — "Definition for rule 'x' was not found" even keeps
+ * the MISSING rule's id as ruleId — so they must be recognized by message
+ * shape (F03). Otherwise an allowance for that (file, rule) pair accepts
+ * them as debt and a broken policy lints green.
+ */
+const OPERATIONAL_MESSAGE_PATTERN =
+  /^Definition for rule '.+' was not found|^Configuration for rule ".+" is invalid/;
+
+/**
+ * F03: is this message an OPERATIONAL (configuration) diagnostic? Such
+ * messages are never source-code policy violations; the runner exits 2 on
+ * them. Fatal parse crashes and parser-category rules are NOT operational —
+ * they are the file's own blockers (exit 1) — but they are equally never
+ * exceptable.
+ */
+export function isOperationalDiagnostic(message) {
+  if (message.fatal === true || message.severity !== 2) return false;
+  return (
+    message.ruleId == null || OPERATIONAL_MESSAGE_PATTERN.test(String(message.message))
+  );
+}
+
+/**
+ * F03: is this message an operational/parser diagnostic that must survive
+ * every exception filter? Covers (a) parser crashes (`fatal`), (b) config /
+ * rule-resolution failures, and (c) parser-category rules.
+ */
+export function isNonExceptable(message) {
+  if (message.fatal) return true;
+  if (isOperationalDiagnostic(message)) return true;
+  return NON_EXCEPTIONABLE_RULES.has(message.ruleId);
+}
+
+/**
  * Extract the numeric cognitive complexity from a SonarJS message.
  * SonarJS 1.0.4 emits: "Refactor this function to reduce its Cognitive
  * Complexity from 36 to the 15 allowed." Isolated here so a pinned-plugin
@@ -88,8 +131,13 @@ function validateEntry(entry, label, errors) {
   if (typeof entry.path !== 'string' || entry.path.startsWith('/') || entry.path.includes('..')) {
     errors.push(`invalid path in ${label}: must be an exact repo-relative path`);
   }
-  if (typeof entry.ruleId !== 'string' || entry.ruleId.includes('*')) {
-    errors.push(`invalid ruleId in ${label}: wildcards are forbidden`);
+  if (typeof entry.ruleId !== 'string' || entry.ruleId.length === 0 || entry.ruleId.includes('*')) {
+    errors.push(`invalid ruleId in ${label}: must be an exact rule id; wildcards are forbidden`);
+  } else if (NON_EXCEPTIONABLE_RULES.has(entry.ruleId)) {
+    // F03: parser/operational categories can never carry debt.
+    errors.push(
+      `invalid ruleId in ${label}: ${entry.ruleId} reports parse/infrastructure failures and can never be excepted`
+    );
   }
   if (!Number.isInteger(entry.maxCount) || entry.maxCount < 0) {
     errors.push(`invalid maxCount in ${label}: must be a nonnegative integer`);
@@ -143,8 +191,9 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
     const kept = [];
     // Count blockers per rule for this file AFTER exception filtering.
     for (const message of result.messages) {
-      if (message.fatal) {
-        // Parse errors are never exceptable.
+      if (isNonExceptable(message)) {
+        // Parse errors, config/rule-resolution failures, and parser-category
+        // rules are never exceptable (F03).
         kept.push(message);
         continue;
       }

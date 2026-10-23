@@ -23,7 +23,7 @@ const startNs = process.hrtime.bigint();
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const policy = require('./policy.cjs');
-const { applyExceptions } = await import('./check-exceptions.mjs');
+const { applyExceptions, isOperationalDiagnostic } = await import('./check-exceptions.mjs');
 
 const OPERATIONAL_FAILURE = 2;
 const POLICY_VIOLATION = 1;
@@ -214,6 +214,30 @@ if (exceptionOutcome.errors.length > 0) {
     'exception manifest validation failed',
     'Fix scripts/quality/exceptions.json. Parser and operational failures can never be excepted.'
   );
+}
+
+// F03: configuration/rule-resolution failures ("Definition for rule 'x' was
+// not found", invalid rule options, no-ruleId config errors) are OPERATIONAL
+// failures (exit 2): never accepted debt, never a source-code policy
+// violation, and never exceptable. Source parse errors (fatal) and
+// vue/no-parsing-error stay BLOCKERS (exit 1) — those are the file's own
+// defects.
+const operationalErrors = [];
+for (const result of exceptionOutcome.results) {
+  const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
+  for (const message of result.messages) {
+    if (isOperationalDiagnostic(message)) {
+      operationalErrors.push(`${rel}:${message.line ?? 0}:${message.column ?? 0} ${message.message}`);
+    }
+  }
+}
+if (operationalErrors.length > 0) {
+  for (const e of operationalErrors) process.stderr.write(`quality: ${e}\n`);
+  process.stderr.write(
+    'quality: OPERATIONAL FAILURE — the effective ESLint configuration is broken\n' +
+    '  Configuration failures are never deferrable debt. Fix the rule/plugin configuration.\n'
+  );
+  process.exit(OPERATIONAL_FAILURE);
 }
 
 // BUG-16: structured finding collection feeds BOTH outputs. Human output is

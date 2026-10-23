@@ -203,4 +203,91 @@ describe('git integration (AC-04/05/07/15/16)', () => {
     assert.ok(!combined.includes('Running tasks'), 'no task execution');
     assert.ok(!combined.includes('typecheck'), 'no typecheck invocation');
   });
+
+  test('F03/AC-10: missing rule definition is operational (exit 2), never accepted debt', () => {
+    const { root } = makeRepo('f03-rule');
+    // Add a nonexistent rule to the effective base policy the fast profile
+    // extends, plus an allowance crafted to swallow the config error.
+    const eslintrc = JSON.parse(readFileSync(path.join(root, '.eslintrc.json'), 'utf8'));
+    eslintrc.rules['missing-plugin/nonexistent-rule'] = 'error';
+    writeFileSync(path.join(root, '.eslintrc.json'), JSON.stringify(eslintrc, null, 2));
+    writeFileSync(path.join(root, 'Good.ts'), 'export const value = 1;\n');
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'exceptions.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        exceptions: [{
+          path: 'Good.ts',
+          ruleId: 'missing-plugin/nonexistent-rule',
+          maxCount: 1,
+          reason: 'attempted exemption of a config failure',
+          owner: 'maintainer',
+          expiresOn: '2099-01-01',
+        }],
+      })
+    );
+    const res = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'quality', 'lint-files.mjs'), 'Good.ts'],
+      { cwd: root, encoding: 'utf8' }
+    );
+    assert.equal(res.status, 2, 'config failure must be exit 2 (operational)');
+    assert.ok((res.stdout + res.stderr).includes('was not found'));
+    assert.ok((res.stdout + res.stderr).includes('OPERATIONAL FAILURE'));
+  });
+
+  test('F03/AC-10: invalid Vue template blocks; a valid allowance cannot swallow it', () => {
+    const { root } = makeRepo('f03-vue');
+    writeFileSync(
+      path.join(root, 'Bad.vue'),
+      '<template>{{ value + }}</template>\n<script setup lang="ts">const value = 1;</script>\n'
+    );
+    // A VALID manifest (the unused-var allowance applies normally) — the
+    // vue/no-parsing-error finding must still block. An entry naming the
+    // parser rule itself is rejected outright by the manifest validator,
+    // which is also asserted here.
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'exceptions.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        exceptions: [{
+          path: 'Bad.vue',
+          ruleId: '@typescript-eslint/no-unused-vars',
+          maxCount: 5,
+          reason: 'legit debt on the same file',
+          owner: 'maintainer',
+          expiresOn: '2099-01-01',
+        }],
+      })
+    );
+    const res = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'quality', 'lint-files.mjs'), 'Bad.vue'],
+      { cwd: root, encoding: 'utf8' }
+    );
+    assert.equal(res.status, 1, 'parse error must block (exit 1)');
+    assert.ok((res.stdout + res.stderr).includes('vue/no-parsing-error'));
+    // And the parser-rule category cannot even be expressed in the manifest.
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'exceptions.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        exceptions: [{
+          path: 'Bad.vue',
+          ruleId: 'vue/no-parsing-error',
+          maxCount: 5,
+          reason: 'attempted exemption of a parse error',
+          owner: 'maintainer',
+          expiresOn: '2099-01-01',
+        }],
+      })
+    );
+    const res2 = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'quality', 'lint-files.mjs'), 'Bad.vue'],
+      { cwd: root, encoding: 'utf8' }
+    );
+    assert.equal(res2.status, 2, 'manifest naming a parser category is invalid');
+    assert.ok((res2.stdout + res2.stderr).includes('can never be excepted'));
+  });
 });

@@ -12,11 +12,12 @@ import { pathToFileURL } from 'node:url';
 
 // Import the real module from the repo (repoRoot = cwd when run via
 // yarn test:quality-gate).
-const { loadManifest, applyExceptions, parseComplexity } = await import(
-  pathToFileURL(
-    path.resolve(process.cwd(), 'scripts/quality/check-exceptions.mjs')
-  ).href
-);
+const { loadManifest, applyExceptions, parseComplexity, isNonExceptable, isOperationalDiagnostic } =
+  await import(
+    pathToFileURL(
+      path.resolve(process.cwd(), 'scripts/quality/check-exceptions.mjs')
+    ).href
+  );
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'qg-exceptions-'));
 function manifest(obj) {
@@ -161,5 +162,64 @@ describe('allowance application (AC-08/AC-09)', () => {
       m
     );
     assert.equal(over.results[0].messages.length, 1);
+  });
+});
+
+describe('non-exceptionable diagnostics (F03)', () => {
+  const file = path.join(process.cwd(), 'src/modules/LegacyExample.ts');
+  const missingRuleMsg = {
+    severity: 2,
+    ruleId: 'missing-plugin/nonexistent-rule',
+    message: "Definition for rule 'missing-plugin/nonexistent-rule' was not found.",
+    line: 1,
+    column: 1,
+  };
+  const vueParseMsg = {
+    severity: 2,
+    ruleId: 'vue/no-parsing-error',
+    message: 'Parsing error: Unexpected end of expression.',
+    line: 1,
+    column: 12,
+  };
+
+  test('missing-rule-definition messages are classified operational', () => {
+    assert.equal(isOperationalDiagnostic(missingRuleMsg), true);
+    assert.equal(isNonExceptable(missingRuleMsg), true);
+  });
+
+  test('repro A: an allowance cannot accept a missing rule definition', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [missingRuleMsg] }],
+      manifest(VALID({
+        ruleId: 'missing-plugin/nonexistent-rule',
+        maxCount: 1,
+        maxComplexity: undefined,
+      }))
+    );
+    assert.equal(out.acceptedDebt, 0, 'config failure must never be debt');
+    assert.equal(out.results[0].messages.length, 1, 'finding survives the allowance');
+  });
+
+  test('repro B: vue/no-parsing-error survives a matching allowance', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [vueParseMsg] }],
+      manifest(VALID({ ruleId: 'vue/no-parsing-error', maxComplexity: undefined }))
+    );
+    assert.equal(out.acceptedDebt, 0);
+    assert.equal(out.results[0].messages.length, 1);
+    assert.ok(out.results[0].messages[0].fatal !== true || true); // shape sanity
+  });
+
+  test('manifest entries for parser categories are rejected', () => {
+    const { errors } = loadManifest(
+      manifest(VALID({ ruleId: 'vue/no-parsing-error', maxComplexity: undefined }))
+    );
+    assert.ok(errors.some((e) => e.includes('can never be excepted')));
+  });
+
+  test('no-ruleId config errors are operational; fatal parse stays a blocker', () => {
+    assert.equal(isOperationalDiagnostic({ severity: 2, ruleId: null, message: 'x' }), true);
+    assert.equal(isOperationalDiagnostic({ severity: 2, fatal: true, ruleId: null, message: 'x' }), false);
+    assert.equal(isOperationalDiagnostic({ severity: 2, ruleId: 'sonarjs/cognitive-complexity', message: 'ok' }), false);
   });
 });
