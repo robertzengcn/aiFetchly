@@ -31,6 +31,50 @@ export type ToolOutputKind =
   | "error"
   | "structured";
 
+// ---------------------------------------------------------------------------
+// Specialized-surface predicates (R8 P3, PRD §13.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * FR-SKL-001: an installer tool result carrying an install session — the
+ * shared AiChatV2Message branch mounts SkillInstallCard for exactly this
+ * predicate (toolName prefix + sessionId), so reuse it rather than
+ * fabricating a snapshot from arbitrary structured text.
+ */
+export function isSkillInstallResult(message: ChatV2MessageView): boolean {
+  return (
+    message.messageType === ("tool_result" as MessageType) &&
+    String(message.metadata?.toolName || "").startsWith("skill_install_") &&
+    typeof (
+      message.metadata?.toolResult as { sessionId?: unknown } | undefined
+    )?.sessionId === "string"
+  );
+}
+
+/** T3/D2: a generated-image batch card (live progress, Stop, Retry). */
+export function isBatchToolCard(message: ChatV2MessageView): boolean {
+  return (
+    (message.messageType === ("tool_call" as MessageType) ||
+      message.messageType === ("tool_result" as MessageType)) &&
+    String(message.metadata?.toolName || "") === "process_artifact_batch"
+  );
+}
+
+/**
+ * R8 P3 (PRD §13.3): the result renders a SPECIALIZED transcript surface
+ * (skill install, outbound batch, generated-image batch) beside the
+ * execution group. The group row keeps its identity but must suppress the
+ * generic body, or the same result renders twice.
+ */
+export function hasSpecializedSurface(message: ChatV2MessageView): boolean {
+  if (isSkillInstallResult(message) || isBatchToolCard(message)) return true;
+  return (
+    message.messageType === MessageType.TOOL_RESULT &&
+    String(message.metadata?.toolName || "") === "draft_outbound_email_batch" &&
+    typeof message.metadata?.toolResult?.batchId === "number"
+  );
+}
+
 export interface ToolExecutionView {
   readonly key: string;
   readonly assistantMessageId: string | null;
@@ -68,6 +112,13 @@ export interface ToolExecutionView {
    * "result not saved" failure and never shows running or success.
    */
   readonly persistFailure?: "tool_call_persist_failed" | "tool_result_persist_failed";
+  /**
+   * R8 P3 (PRD §13.3): the result renders its own specialized transcript
+   * surface (skill install / outbound batch / image batch) beside the
+   * group — the generic SemanticToolResult body must be suppressed while
+   * the execution identity and Activity detail stay.
+   */
+  readonly hasSpecializedCard?: boolean;
 }
 
 export interface ToolExecutionGroupView {
@@ -283,6 +334,7 @@ export function buildToolExecutionGroups(
     } else if (message.messageType === MessageType.TOOL_RESULT) {
       const toolCallId = metadata?.toolCallId?.trim() || null;
       const classification = classifyOutput(message);
+      const specialized = hasSpecializedSurface(message);
       const finishedAt = message.timestamp;
       const pending = toolCallId ? byCallId.get(toolCallId) : undefined;
       if (toolCallId && pending) {
@@ -306,6 +358,7 @@ export function buildToolExecutionGroups(
                 ? undefined
                 : Math.max(0, finishedMs - startedMs),
             permissionResumed: metadata?.permissionResumed === true,
+            hasSpecializedCard: specialized,
           },
         });
       } else {
@@ -326,6 +379,7 @@ export function buildToolExecutionGroups(
             finishedAt,
             isLegacyUnpaired: true,
             permissionResumed: metadata?.permissionResumed === true,
+            hasSpecializedCard: specialized,
           },
         });
       }

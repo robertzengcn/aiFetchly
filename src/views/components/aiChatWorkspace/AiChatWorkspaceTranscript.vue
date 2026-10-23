@@ -165,6 +165,8 @@ import AiChatPlanReceipt from "@/views/components/aiChatWorkspace/AiChatPlanRece
 import AiChatPlanQuestionFlow from "@/views/components/aiChatWorkspace/AiChatPlanQuestionFlow.vue";
 import {
   buildToolExecutionGroups,
+  isBatchToolCard,
+  isSkillInstallResult,
   type ToolExecutionGroupView,
   type ToolExecutionView,
 } from "@/views/components/aiChatWorkspace/toolExecutionProjection";
@@ -531,36 +533,10 @@ function streamStatusForMessage(
 }
 
 /**
- * T3/D2 (audit): a process_artifact_batch call/result row — AiChatV2Message
- * renders live progress, Stop, and Retry-failed for exactly this tool name;
- * the workspace must surface it outside collapsed execution receipts
- * (FR-IMG-010..012, presentation §13.2).
+ * A gated tool result parked on the permission card (design §15.5).
+ * (isSkillInstallResult / isBatchToolCard live in the shared projection
+ * module so the specialized-card flag on execution rows cannot drift.)
  */
-function isBatchToolCard(message: ChatV2MessageView): boolean {
-  return (
-    (message.messageType === ("tool_call" as MessageType) ||
-      message.messageType === ("tool_result" as MessageType)) &&
-    String(message.metadata?.toolName || "") === "process_artifact_batch"
-  );
-}
-
-/**
- * FR-SKL-001: an installer tool result carrying an install session — the
- * shared AiChatV2Message branch mounts SkillInstallCard for exactly this
- * predicate (toolName prefix + sessionId), so reuse it rather than
- * fabricating a snapshot from arbitrary structured text.
- */
-function isSkillInstallResult(message: ChatV2MessageView): boolean {
-  return (
-    message.messageType === ("tool_result" as MessageType) &&
-    String(message.metadata?.toolName || "").startsWith("skill_install_") &&
-    typeof (
-      message.metadata?.toolResult as { sessionId?: unknown } | undefined
-    )?.sessionId === "string"
-  );
-}
-
-/** A gated tool result parked on the permission card (design §15.5). */
 function isPermissionPrompt(message: ChatV2MessageView): boolean {
   return (
     message.messageType === ("tool_result" as MessageType) &&

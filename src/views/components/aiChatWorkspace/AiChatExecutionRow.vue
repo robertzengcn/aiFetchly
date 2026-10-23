@@ -20,7 +20,7 @@
         :data-testid="'workspace-execution-persist-failure'"
       >{{ persistFailureLabel }}</span>
       <SemanticToolResult
-        v-else-if="terminal"
+        v-else-if="terminal && !execution.hasSpecializedCard"
         :output-kind="execution.outputKind"
         :summary="execution.summary"
         :is-error="execution.isError"
@@ -51,6 +51,14 @@
     <AiChatExecutionDetail v-if="withDetails" :execution="execution" />
   </div>
 </template>
+
+<!--
+  R8 P3 (PRD §13.3): when the row's result renders its own specialized
+  transcript surface (skill install / outbound batch / image batch card),
+  the generic SemanticToolResult body above is suppressed — the status,
+  action label, meta, and Activity detail still identify the execution, so
+  the same result never renders twice.
+-->
 
 <script setup lang="ts">
 import { computed } from "vue";
