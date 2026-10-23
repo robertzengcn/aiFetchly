@@ -17,7 +17,7 @@ const { resolveTypedScope } = await import(
   pathToFileURL(path.join(repoRoot, 'scripts', 'quality', 'deep-scope.mjs')).href
 );
 
-const fixtureRoot = path.join(repoRoot, 'tmp-quality-fixtures', 'deep-scope-repo');
+const fixtureRoot = path.join(repoRoot, 'tmp-quality-deep-scope');
 
 before(() => {
   rmSync(fixtureRoot, { recursive: true, force: true });

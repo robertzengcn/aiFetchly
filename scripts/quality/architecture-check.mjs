@@ -16,7 +16,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 
 // Anchor require at THIS module so './rules/index.cjs' resolves relative to
 // scripts/quality/, never the caller's cwd.
@@ -65,133 +64,82 @@ function declarationIsTypeOnly(node) {
   return false;
 }
 
+/** Literal require('x') matcher used by the manual walker. */
+function isRequireOfStringLiteral(n) {
+  return (
+    n.type === 'CallExpression' &&
+    n.callee.type === 'Identifier' &&
+    n.callee.name === 'require' &&
+    n.arguments.length === 1 &&
+    n.arguments[0].type === 'Literal' &&
+    typeof n.arguments[0].value === 'string'
+  );
+}
+
+/** Literal dynamic import('x'): bare ImportExpression node or callee form. */
+function isLiteralDynamicImport(n) {
+  return (
+    (n.type === 'ImportExpression' ||
+      (n.type === 'CallExpression' &&
+        (n.callee.type === 'ImportExpression' || n.callee.type === 'Import'))) &&
+    !!n.source &&
+    n.source.type === 'Literal' &&
+    typeof n.source.value === 'string'
+  );
+}
+
+/** Depth-first walk collecting require/import literals into `found`. */
+function visitForRequireAndImport(n, found) {
+  if (!n || typeof n.type !== 'string') return;
+  if (isRequireOfStringLiteral(n)) {
+    found.push({ specifier: n.arguments[0].value, node: n, typeOnly: false });
+  }
+  if (isLiteralDynamicImport(n)) {
+    found.push({ specifier: n.source.value, node: n, typeOnly: false });
+  }
+  visitAstChildren(n, found);
+}
+
+/** Recurse into child nodes only (skips loc/range/parent metadata). */
+function visitAstChildren(n, found) {
+  for (const key of Object.keys(n)) {
+    if (key === 'loc' || key === 'range' || key === 'parent') continue;
+    const value = n[key];
+    if (Array.isArray(value)) {
+      visitArrayChildren(value, found);
+    } else if (value && typeof value.type === 'string') {
+      visitForRequireAndImport(value, found);
+    }
+  }
+}
+
+function visitArrayChildren(children, found) {
+  for (const child of children) {
+    if (child && typeof child.type === 'string') visitForRequireAndImport(child, found);
+  }
+}
+
 export function collectDirectImports(ast, code) {
   void code;
   const found = [];
-  for (const node of ast.body) {
-    if (node.type === 'ImportDeclaration' && node.source) {
-      found.push({
-        specifier: node.source.value,
-        node,
-        typeOnly: declarationIsTypeOnly(node),
-      });
-    } else if (node.type === 'ExportNamedDeclaration' && node.source) {
-      found.push({
-        specifier: node.source.value,
-        node,
-        typeOnly: declarationIsTypeOnly(node),
-      });
-    } else if (node.type === 'ExportAllDeclaration' && node.source) {
-      found.push({
-        specifier: node.source.value,
-        node,
-        typeOnly: node.exportKind === 'type',
-      });
-    }
-  }
+  collectBodyLevelImports(ast, found);
   // require(...) and literal import(...) can appear anywhere: walk manually
   // (no eslint traverse dependency). Depth-bounded, allocation-light.
-  const visit = (n) => {
-    if (!n || typeof n.type !== 'string') return;
-    if (
-      n.type === 'CallExpression' &&
-      n.callee.type === 'Identifier' &&
-      n.callee.name === 'require' &&
-      n.arguments.length === 1 &&
-      n.arguments[0].type === 'Literal' &&
-      typeof n.arguments[0].value === 'string'
-    ) {
-      found.push({ specifier: n.arguments[0].value, node: n, typeOnly: false });
-    }
-    // The TS parser emits dynamic import(...) as a bare ImportExpression
-    // node (callee-type variants appear in other parsers) — handle both.
-    if (
-      (n.type === 'ImportExpression' ||
-        (n.type === 'CallExpression' &&
-          (n.callee.type === 'ImportExpression' || n.callee.type === 'Import'))) &&
-      n.source &&
-      n.source.type === 'Literal' &&
-      typeof n.source.value === 'string'
-    ) {
-      found.push({ specifier: n.source.value, node: n, typeOnly: false });
-    }
-    for (const key of Object.keys(n)) {
-      if (key === 'loc' || key === 'range' || key === 'parent') continue;
-      const value = n[key];
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (child && typeof child.type === 'string') visit(child);
-        }
-      } else if (value && typeof value.type === 'string') {
-        visit(value);
-      }
-    }
-  };
-  visit(ast);
+  visitForRequireAndImport(ast, found);
   return found;
 }
 
-/**
- * Run the two architecture rules over selected files.
- * Returns ESLint-shaped findings: [{ filePath, line, column, ruleId, message }].
- */
-function architectureFindingsForFile(file, rel, isWorker, repoRoot) {
-  void repoRoot;
-  const findings = [];
-  const ruleId = isWorker
-    ? 'aifetchly/no-worker-db-imports'
-    : 'aifetchly/no-ipc-db-imports';
-  const layer = isWorker
-    ? 'worker (src/childprocess)'
-    : 'IPC handler (src/main-process/communication)';
-
-  let code;
-  try {
-    code = readFileSync(file, 'utf8');
-  } catch (e) {
-    // BUG-9: fatal:true — read failures can NEVER be excepted (PRD §8.8).
-    findings.push({
-      filePath: file, line: 0, column: 0, ruleId,
-      message: `architecture check could not read the file: ${e.message}`,
-      fatal: true,
-    });
-    return findings;
-  }
-
-  let ast;
-  try {
-    ast = parseFor(file, code);
-  } catch (e) {
-    findings.push({
-      filePath: file, line: 0, column: 0, ruleId,
-      message: `architecture check parse failure (never exceptable): ${e.message}`,
-      fatal: true,
-    });
-    return findings;
-  }
-
-  const prohibitedList = isWorker ? localRules.worker : localRules.ipc;
-  for (const entry of collectDirectImports(ast, code)) {
-    if (entry.typeOnly) continue;
-    const prohibited = localRules._internals.isProhibited(
-      entry.specifier,
-      rel,
-      prohibitedList.repoPrefixes,
-      prohibitedList.packages
-    );
-    if (prohibited) {
-      findings.push({
-        filePath: file,
-        line: entry.node.loc ? entry.node.loc.start.line : 0,
-        column: entry.node.loc ? entry.node.loc.start.column + 1 : 0,
-        ruleId,
-        message:
-          `${entry.specifier} is a prohibited direct dependency for ${layer} files ` +
-          `(database access belongs to the main process via Modules).`,
-      });
+/** Import/export declarations at the Program body level. */
+function collectBodyLevelImports(ast, found) {
+  for (const node of ast.body) {
+    if (node.type === 'ImportDeclaration' && node.source) {
+      found.push({ specifier: node.source.value, node, typeOnly: declarationIsTypeOnly(node) });
+    } else if (node.type === 'ExportNamedDeclaration' && node.source) {
+      found.push({ specifier: node.source.value, node, typeOnly: declarationIsTypeOnly(node) });
+    } else if (node.type === 'ExportAllDeclaration' && node.source) {
+      found.push({ specifier: node.source.value, node, typeOnly: node.exportKind === 'type' });
     }
   }
-  return findings;
 }
 
 /**
@@ -209,6 +157,85 @@ export function checkArchitecture(files, repoRoot) {
     const isIpc = ipcScope.test(rel);
     if (!isWorker && !isIpc) continue;
     findings.push(...architectureFindingsForFile(file, rel, isWorker, repoRoot));
+  }
+  return findings;
+}
+
+function architectureRuleId(isWorker) {
+  return isWorker ? 'aifetchly/no-worker-db-imports' : 'aifetchly/no-ipc-db-imports';
+}
+
+function architectureLayer(isWorker) {
+  return isWorker ? 'worker (src/childprocess)' : 'IPC handler (src/main-process/communication)';
+}
+
+function architectureFindingsForFile(file, rel, isWorker, repoRoot) {
+  void repoRoot;
+  const ruleId = architectureRuleId(isWorker);
+  const layer = architectureLayer(isWorker);
+  const parsed = readAndParseForArchitecture(file, ruleId);
+  if (parsed.error !== undefined) {
+    return [parsed.error];
+  }
+  return prohibitedImportFindings(file, rel, ruleId, layer, parsed.ast, parsed.code);
+}
+
+/** Read + parse; on failure returns { error: fatalFinding } (BUG-9). */
+function readAndParseForArchitecture(file, ruleId) {
+  let code;
+  try {
+    code = readFileSync(file, 'utf8');
+  } catch (e) {
+    return {
+      error: fatalArchitectureFinding(
+        file, ruleId, `architecture check could not read the file: ${e.message}`
+      ),
+    };
+  }
+  try {
+    return { ast: parseFor(file, code), code };
+  } catch (e) {
+    return {
+      error: fatalArchitectureFinding(
+        file, ruleId, `architecture check parse failure (never exceptable): ${e.message}`
+      ),
+    };
+  }
+}
+
+function fatalArchitectureFinding(file, ruleId, message) {
+  return { filePath: file, line: 0, column: 0, ruleId, message, fatal: true };
+}
+
+/** True when a direct import entry hits the prohibited list for its layer. */
+function isProhibitedEntry(entry, rel, prohibitedList) {
+  return localRules._internals.isProhibited(
+    entry.specifier,
+    rel,
+    prohibitedList.repoPrefixes,
+    prohibitedList.packages
+  );
+}
+
+/** Report prohibited direct imports for one parsed file. */
+function prohibitedImportFindings(file, rel, ruleId, layer, ast, code) {
+  const findings = [];
+  const prohibitedList = ruleId === 'aifetchly/no-worker-db-imports'
+    ? localRules.worker
+    : localRules.ipc;
+  for (const entry of collectDirectImports(ast, code)) {
+    if (entry.typeOnly) continue;
+    if (isProhibitedEntry(entry, rel, prohibitedList)) {
+      findings.push({
+        filePath: file,
+        line: entry.node.loc ? entry.node.loc.start.line : 0,
+        column: entry.node.loc ? entry.node.loc.start.column + 1 : 0,
+        ruleId,
+        message:
+          `${entry.specifier} is a prohibited direct dependency for ${layer} files ` +
+          `(database access belongs to the main process via Modules).`,
+      });
+    }
   }
   return findings;
 }

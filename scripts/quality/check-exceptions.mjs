@@ -77,32 +77,53 @@ export function loadManifest(manifestPath = MANIFEST_PATH) {
       continue;
     }
     seen.add(label);
-    if (typeof entry.path !== 'string' || entry.path.startsWith('/') || entry.path.includes('..')) {
-      errors.push(`invalid path in ${label}: must be an exact repo-relative path`);
-    }
-    if (typeof entry.ruleId !== 'string' || entry.ruleId.includes('*')) {
-      errors.push(`invalid ruleId in ${label}: wildcards are forbidden`);
-    }
-    if (!Number.isInteger(entry.maxCount) || entry.maxCount < 0) {
-      errors.push(`invalid maxCount in ${label}: must be a nonnegative integer`);
-    }
-    if (entry.ruleId === COMPLEXITY_RULE) {
-      if (!Number.isInteger(entry.maxComplexity) || entry.maxComplexity < 0) {
-        errors.push(`complexity entry ${label} requires a nonnegative integer maxComplexity`);
-      }
-    }
-    if (typeof entry.reason !== 'string' || entry.reason.trim().length === 0) {
-      errors.push(`empty reason in ${label}`);
-    }
-    if (typeof entry.owner !== 'string' || entry.owner.trim().length === 0) {
-      errors.push(`empty owner in ${label}`);
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(entry.expiresOn))) {
-      errors.push(`invalid expiresOn in ${label}: expected YYYY-MM-DD`);
-    }
+    validateEntry(entry, label, errors);
     exceptions.push({ ...entry, expired: String(entry.expiresOn) < today });
   }
   return { exceptions, errors };
+}
+
+/** Per-entry manifest validation (schema §9). Mutates `errors`. */
+function validateEntry(entry, label, errors) {
+  if (typeof entry.path !== 'string' || entry.path.startsWith('/') || entry.path.includes('..')) {
+    errors.push(`invalid path in ${label}: must be an exact repo-relative path`);
+  }
+  if (typeof entry.ruleId !== 'string' || entry.ruleId.includes('*')) {
+    errors.push(`invalid ruleId in ${label}: wildcards are forbidden`);
+  }
+  if (!Number.isInteger(entry.maxCount) || entry.maxCount < 0) {
+    errors.push(`invalid maxCount in ${label}: must be a nonnegative integer`);
+  }
+  if (entry.ruleId === COMPLEXITY_RULE) {
+    validateComplexityCeilings(entry, label, errors);
+  }
+  if (typeof entry.reason !== 'string' || entry.reason.trim().length === 0) {
+    errors.push(`empty reason in ${label}`);
+  }
+  if (typeof entry.owner !== 'string' || entry.owner.trim().length === 0) {
+    errors.push(`empty owner in ${label}`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(entry.expiresOn))) {
+    errors.push(`invalid expiresOn in ${label}: expected YYYY-MM-DD`);
+  }
+}
+
+/**
+ * Complexity-specific ceilings (BUG-3): per-function maxComplexity is
+ * required; the aggregate maxTotalComplexity bounds total growth across
+ * the file's functions (absent on legacy entries, drafted by the audit).
+ * Mutates `errors`.
+ */
+function validateComplexityCeilings(entry, label, errors) {
+  if (!Number.isInteger(entry.maxComplexity) || entry.maxComplexity < 0) {
+    errors.push(`complexity entry ${label} requires a nonnegative integer maxComplexity`);
+  }
+  if (
+    entry.maxTotalComplexity !== undefined &&
+    (!Number.isInteger(entry.maxTotalComplexity) || entry.maxTotalComplexity < 0)
+  ) {
+    errors.push(`complexity entry ${label} has an invalid maxTotalComplexity`);
+  }
 }
 
 /**
@@ -152,30 +173,50 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
 
   // Second pass: enforce ceilings per (path, rule) among stashed findings.
   // AC-08: at most maxCount findings may be accepted — debt never grows.
-  // AC-09: a complexity finding also blocks when its observed value exceeds
-  // maxComplexity (or the message format is unknown — fail closed).
+  // AC-09: a complexity finding blocks when (a) its observed value exceeds
+  // maxComplexity, (b) the message format is unknown (fail closed), or
+  // (c) the file's AGGREGATE complexity sum would exceed maxTotalComplexity
+  // — the sum ceiling is what catches "a lesser function rises while the
+  // count stays the same" on multi-function files (BUG-3).
   const counts = new Map();
+  const complexitySums = new Map(); // "path::rule" -> running accepted sum
   for (const result of out) {
     result.messages = result.messages.filter((message) => {
       if (!message.__qgExceptionKey) return true;
       const entry = byKey.get(message.__qgExceptionKey);
       const used = counts.get(message.__qgExceptionKey) || 0;
-      const withinCount = used < entry.maxCount;
-      let withinCeiling = true;
-      if (entry.ruleId === COMPLEXITY_RULE) {
-        const observed = parseComplexity(message.message);
-        withinCeiling = observed != null && observed <= entry.maxComplexity;
-      }
-      if (withinCount && withinCeiling) {
+      const accepted = acceptFinding(message, entry, used, complexitySums);
+      if (accepted) {
         counts.set(message.__qgExceptionKey, used + 1);
         acceptedDebt += 1;
         return false; // within allowance: accepted debt
       }
       delete message.__qgExceptionKey;
-      return true; // over allowance or over ceiling: blocks
+      return true; // over allowance, over ceiling, or over aggregate: blocks
     });
   }
   return { results: out, acceptedDebt, errors: [] };
+}
+
+/**
+ * Complexity-acceptance decision for one finding (BUG-3): within count,
+ * within per-function ceiling (fail-closed on unknown format), and within
+ * the file's AGGREGATE sum ceiling. Mutates `complexitySums` on acceptance.
+ */
+function acceptFinding(message, entry, used, complexitySums) {
+  if (used >= entry.maxCount) return false;
+  if (entry.ruleId !== COMPLEXITY_RULE) return true;
+  const observed = parseComplexity(message.message);
+  if (observed == null || observed > entry.maxComplexity) return false;
+  if (entry.maxTotalComplexity !== undefined) {
+    const running = complexitySums.get(message.__qgExceptionKey) || 0;
+    if (running + observed > entry.maxTotalComplexity) return false;
+  }
+  complexitySums.set(
+    message.__qgExceptionKey,
+    (complexitySums.get(message.__qgExceptionKey) || 0) + observed
+  );
+  return true;
 }
 
 export const _internals = { repoRoot, MANIFEST_PATH };

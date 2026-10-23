@@ -11,14 +11,27 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
 
-const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const policy = require('./policy.cjs');
 const { loadManifest, parseComplexity } = await import('./check-exceptions.mjs');
+const { checkArchitecture } = await import('./architecture-check.mjs');
+const { readdirSync } = await import('node:fs');
+
+/** Recursively list source files under a repo-relative directory. */
+function listSourceFiles(relDir) {
+  const out = [];
+  const absDir = path.join(repoRoot, relDir);
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(abs);
+      else if (/\.(js|jsx|cjs|mjs|ts|tsx|vue)$/.test(entry.name)) out.push(abs);
+    }
+  };
+  walk(absDir);
+  return out;
+}
 
 process.stdout.write('quality audit: full-source read-only inventory (fast profile)\n');
 
@@ -61,6 +74,7 @@ try {
 // 2. Tally blockers per (file, rule).
 const findings = new Map(); // "path::rule" -> count
 const complexityMax = new Map(); // "path" -> max observed complexity
+const complexitySum = new Map(); // "path" -> SUM of observed complexities (BUG-3 aggregate ceiling)
 let totalBlockers = 0;
 for (const result of results) {
   const rel = path.relative(repoRoot, result.filePath).split(path.sep).join('/');
@@ -75,9 +89,30 @@ for (const result of results) {
         // the gate itself keeps the finding blocking.
         const value = parseComplexity(message.message) ?? 0;
         complexityMax.set(rel, Math.max(complexityMax.get(rel) || 0, value));
+        complexitySum.set(rel, (complexitySum.get(rel) || 0) + value);
       }
     }
   }
+}
+
+// 2b. Architecture direct-import pass (BUG-2): the audit must surface
+// worker/IPC architecture debt exactly like the hook does, so allowances
+// for it are drafted from the same findings the gate reports.
+const archScope = [
+  ...listSourceFiles('src/childprocess'),
+  ...listSourceFiles('src/main-process/communication'),
+];
+const archFindings = checkArchitecture(archScope, repoRoot);
+const archComplexityMax = new Map();
+{
+  // Merge architecture findings into the same tallies.
+  for (const finding of archFindings) {
+    const rel = path.relative(repoRoot, finding.filePath).split(path.sep).join('/');
+    totalBlockers += 1;
+    const key = `${rel}::${finding.ruleId}`;
+    findings.set(key, (findings.get(key) || 0) + 1);
+  }
+  void archComplexityMax;
 }
 
 // 3. Manifest state: stale paths, expired entries, drift below allowances.
@@ -142,6 +177,7 @@ const draftEntries = [...findings.entries()]
     };
     if (rule === 'sonarjs/cognitive-complexity') {
       entry.maxComplexity = complexityMax.get(file) ?? 0;
+      entry.maxTotalComplexity = complexitySum.get(file) ?? entry.maxComplexity;
     }
     return JSON.stringify(entry);
   });
