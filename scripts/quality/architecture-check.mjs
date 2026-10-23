@@ -53,13 +53,20 @@ function parseFor(fileName, code) {
 /**
  * BUG-8: a declaration is type-only when the declaration itself is
  * `import type` / `export type`, OR when EVERY named specifier carries the
- * inline `type` modifier (`import { type Foo } from ...`). A mixed
- * value-and-type import still counts as a runtime import and blocks.
+ * inline `type` modifier (`import { type Foo } from ...` / `export { type
+ * Foo } from ...`). A mixed value-and-type import still counts as a runtime
+ * import and blocks.
+ * F07: ImportSpecifier exposes `importKind` while ExportSpecifier exposes
+ * `exportKind` — checking only importKind made every inline-type EXPORT
+ * (`export { type Foo } from '@/entity/Foo'`) look like a runtime import
+ * and falsely blocked it.
  */
 function declarationIsTypeOnly(node) {
   if (node.importKind === 'type' || node.exportKind === 'type') return true;
   if (Array.isArray(node.specifiers) && node.specifiers.length > 0) {
-    return node.specifiers.every((spec) => spec.importKind === 'type');
+    return node.specifiers.every(
+      (spec) => (spec.importKind ?? spec.exportKind) === 'type'
+    );
   }
   return false;
 }
@@ -88,6 +95,28 @@ function isLiteralDynamicImport(n) {
   );
 }
 
+/**
+ * F07: `import Db = require('typeorm')` — TypeScript import-equals with an
+ * external module reference. The parser emits TSImportEqualsDeclaration /
+ * TSExternalModuleReference (never a require CallExpression), so the old
+ * walker never collected it and prohibited DB packages slipped through.
+ * The entity-name form (`import A = B.C`) has no module specifier and is
+ * skipped. Import-equals binds a VALUE by default, so it is never type-only.
+ */
+function externalModuleSpecifier(n) {
+  if (
+    n.type === 'TSImportEqualsDeclaration' &&
+    n.moduleReference &&
+    n.moduleReference.type === 'TSExternalModuleReference' &&
+    n.moduleReference.expression &&
+    n.moduleReference.expression.type === 'Literal' &&
+    typeof n.moduleReference.expression.value === 'string'
+  ) {
+    return n.moduleReference.expression.value;
+  }
+  return null;
+}
+
 /** Depth-first walk collecting require/import literals into `found`. */
 function visitForRequireAndImport(n, found) {
   if (!n || typeof n.type !== 'string') return;
@@ -96,6 +125,10 @@ function visitForRequireAndImport(n, found) {
   }
   if (isLiteralDynamicImport(n)) {
     found.push({ specifier: n.source.value, node: n, typeOnly: false });
+  }
+  const importEquals = externalModuleSpecifier(n);
+  if (importEquals !== null) {
+    found.push({ specifier: importEquals, node: n, typeOnly: false });
   }
   visitAstChildren(n, found);
 }

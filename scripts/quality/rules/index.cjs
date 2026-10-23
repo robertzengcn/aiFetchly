@@ -49,8 +49,11 @@ function classifySpecifier(rawSpecifier, importerRepoPath) {
   if (spec.startsWith('@/')) {
     // The repo's vite/tsconfig alias maps @/ -> src/, so the normalized
     // repo path is 'src/' + the rest — matching the src/-rooted prohibited
-    // prefixes regardless of where the importing file lives.
-    return { kind: 'repo', repoPath: 'src/' + spec.slice(2) };
+    // prefixes regardless of where the importing file lives. The result is
+    // NORMALIZED exactly like the relative form: without this,
+    // '@/entityTypes/../model/Foo' kept the allowed entityTypes prefix and
+    // concealed its src/model destination (F06).
+    return { kind: 'repo', repoPath: path.posix.normalize('src/' + spec.slice(2)) };
   }
   if (spec.startsWith('./') || spec.startsWith('../')) {
     const importerDir = path.posix.dirname(importerRepoPath);
@@ -78,6 +81,13 @@ function repoPathMatches(repoPath, prohibitedRepoPrefix) {
   // match the same path spelled WITH an extension or an index segment —
   // tech design §8 "compare normalized repository paths, including
   // explicit extension and index-file variants".
+  // F06: extension/index matching runs ONLY after a real stem-prefix
+  // match. The old code sliced by prefix LENGTH without requiring the
+  // prefix to match at all, so the unrelated `src/utils.ts` "matched"
+  // `src/model` (same stem length) and was falsely rejected.
+  if (!repoPath.startsWith(prohibitedRepoPrefix)) {
+    return false;
+  }
   const rest = repoPath.slice(prohibitedRepoPrefix.length);
   if (rest === '/index' || /^\/index\.[A-Za-z0-9]+$/.test(rest)) {
     // src/config/SqliteDb/index.ts (directory-module form)

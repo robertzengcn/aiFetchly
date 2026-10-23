@@ -57,6 +57,32 @@ before(() => {
     path.join(otherDir, 'model-use-ok.ts'),
     "import { ContactInfoModel } from '@/model/ContactInfo.model';\nexport const v = ContactInfoModel;\n"
   );
+  // F06: alias traversal must normalize before prefix comparison.
+  writeFileSync(
+    path.join(workerDir, 'alias-traversal.ts'),
+    "import { Foo } from '@/entityTypes/../model/Foo.model';\nexport const t = Foo;\n"
+  );
+  writeFileSync(
+    path.join(workerDir, 'alias-traversal-config.ts'),
+    "import { SqliteDb } from '@/modules/../config/SqliteDb';\nexport const u = SqliteDb;\n"
+  );
+  writeFileSync(
+    path.join(workerDir, 'unrelated-utils.ts'),
+    "import { util } from '@/utils.ts';\nexport const s = util;\n"
+  );
+  // F07: TS import-equals and inline-type exports.
+  writeFileSync(
+    path.join(workerDir, 'import-equals.ts'),
+    "import Db = require('typeorm');\nexport { Db };\n"
+  );
+  writeFileSync(
+    path.join(workerDir, 'export-type-only.ts'),
+    "export { type Shape } from '@/entityTypes/shape';\nexport { type E } from '@/entity/E.entity';\nexport const q = 1;\n"
+  );
+  writeFileSync(
+    path.join(workerDir, 'export-mixed.ts'),
+    "export { type E, Other } from '@/entity/E.entity';\nexport const r = Other;\n"
+  );
 });
 
 after(() => {
@@ -190,5 +216,66 @@ describe('audit bug fixes (BUG-7/8/9)', () => {
     );
     assert.equal(out.results[0].messages.length, 1, 'fatal architecture finding NOT excepted');
     rmSync(manifest, { force: true });
+  });
+});
+
+describe('requirements-audit fixes (F06/F07)', () => {
+  test('F06: alias traversal through an allowed prefix is prohibited', () => {
+    const traversalModel = findingsFor(rel(path.join(workerDir, 'alias-traversal.ts')));
+    assert.equal(traversalModel.length, 1, JSON.stringify(traversalModel));
+    assert.ok(traversalModel[0].message.includes('entityTypes/../model'));
+
+    const traversalConfig = findingsFor(rel(path.join(workerDir, 'alias-traversal-config.ts')));
+    assert.equal(traversalConfig.length, 1, JSON.stringify(traversalConfig));
+  });
+
+  test('F06: unrelated same-stem-length path is not falsely rejected', () => {
+    const internals = nodeRequire(
+      path.join(repoRoot, 'scripts/quality/rules/index.cjs')
+    )._internals;
+    const P = ['src/model', 'src/entity', 'src/config/SqliteDb'];
+    const pkgs = ['typeorm'];
+    // src/utils.ts has the same stem length as src/model — the old
+    // length-based slice treated the leftover '.ts' as an extension match.
+    assert.equal(
+      internals.isProhibited('@/utils.ts', 'src/childprocess/probe.ts', P, pkgs),
+      false,
+      'unrelated path must pass'
+    );
+    // Real extension variants keep working after the stem-prefix requirement.
+    for (const spec of ['@/model/Foo.model.ts', '@/entity/index.ts', '@/config/SqliteDb.js']) {
+      assert.equal(internals.isProhibited(spec, 'src/childprocess/w.ts', P, pkgs), true, spec);
+    }
+    // entityTypes allowance holds at BOTH boundaries: direct and traversed.
+    assert.equal(
+      internals.isProhibited('@/entityTypes/shape', 'src/childprocess/w.ts', P, pkgs),
+      false
+    );
+    assert.equal(
+      internals.isProhibited('@/entityTypes/../entityTypes/deep', 'src/childprocess/w.ts', P, pkgs),
+      false
+    );
+  });
+
+  test('F06: unrelated same-length fixture file is clean end to end', () => {
+    const findings = findingsFor(rel(path.join(workerDir, 'unrelated-utils.ts')));
+    assert.equal(findings.length, 0, JSON.stringify(findings));
+  });
+
+  test('F07: TS import-equals require() of a DB package is prohibited', () => {
+    const findings = findingsFor(rel(path.join(workerDir, 'import-equals.ts')));
+    assert.equal(findings.length, 1, JSON.stringify(findings));
+    assert.equal(findings[0].ruleId, 'aifetchly/no-worker-db-imports');
+    assert.ok(findings[0].message.includes('typeorm'));
+  });
+
+  test('F07: inline-type-only re-export from entity is allowed', () => {
+    const findings = findingsFor(rel(path.join(workerDir, 'export-type-only.ts')));
+    assert.equal(findings.length, 0, JSON.stringify(findings));
+  });
+
+  test('F07: mixed runtime/type re-export still blocks', () => {
+    const findings = findingsFor(rel(path.join(workerDir, 'export-mixed.ts')));
+    assert.equal(findings.length, 1, JSON.stringify(findings));
   });
 });
