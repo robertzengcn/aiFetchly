@@ -6,8 +6,11 @@
  *  - Ordinary rules: an entry allows at most `maxCount` CURRENT findings for
  *    its (path, ruleId) pair. More findings than the ceiling → the excess
  *    blocks. Fewer is fine (debt may shrink).
- *  - Cognitive complexity: BOTH the finding count and the maximum observed
- *    complexity must stay ≤ the ceilings (`maxCount`, `maxComplexity`).
+ *  - Cognitive complexity: per-function identities (`functions`:
+ *    `[{line, column, maxComplexity}]`) pin which functions carry the
+ *    exceptional complexity. A finding is accepted only at its baselined
+ *    position, within that function's own ceiling, within the count
+ *    (`maxCount`), and within the aggregate sum (`maxTotalComplexity`).
  *    The numeric value is extracted by a version-specific adapter isolated
  *    in `parseComplexity`; unknown message formats FAIL CLOSED for
  *    exceptional files (never a silent regex fallback).
@@ -208,10 +211,14 @@ function validateEntry(entry, label, errors) {
 }
 
 /**
- * Complexity-specific ceilings (BUG-3): per-function maxComplexity is
- * required; the aggregate maxTotalComplexity bounds total growth across
- * the file's functions (absent on legacy entries, drafted by the audit).
- * Mutates `errors`.
+ * Complexity-specific ceilings (BUG-3 + F04). Per-function identities are
+ * REQUIRED: `functions: [{line, column, maxComplexity}]` pins WHICH
+ * functions carry the exceptional complexity and how hard each one may
+ * get. Aggregate-only ceilings (count + maxComplexity + maxTotal) cannot
+ * tell which function grew — a redistribution 30+20 -> 25+25 kept every
+ * aggregate constant while the second function got worse. Consistency is
+ * enforced: functions.length === maxCount, maxComplexity === the max
+ * per-function ceiling, maxTotalComplexity === their sum. Mutates `errors`.
  */
 function validateComplexityCeilings(entry, label, errors) {
   if (!Number.isInteger(entry.maxComplexity) || entry.maxComplexity < 0) {
@@ -223,6 +230,63 @@ function validateComplexityCeilings(entry, label, errors) {
   ) {
     errors.push(`complexity entry ${label} has an invalid maxTotalComplexity`);
   }
+  if (!Array.isArray(entry.functions) || entry.functions.length === 0) {
+    errors.push(
+      `complexity entry ${label} requires per-function identities: functions: [{line, column, maxComplexity}]`
+    );
+    return;
+  }
+  if (entry.functions.length !== entry.maxCount) {
+    errors.push(
+      `complexity entry ${label}: functions length (${entry.functions.length}) must equal maxCount (${entry.maxCount})`
+    );
+  }
+  const { max, sum } = validateFunctionIdentities(entry.functions, label, errors);
+  if (Number.isInteger(entry.maxComplexity) && entry.maxComplexity !== max) {
+    errors.push(
+      `complexity entry ${label}: maxComplexity (${entry.maxComplexity}) must equal the max per-function ceiling (${max})`
+    );
+  }
+  if (Number.isInteger(entry.maxTotalComplexity) && entry.maxTotalComplexity !== sum) {
+    errors.push(
+      `complexity entry ${label}: maxTotalComplexity (${entry.maxTotalComplexity}) must equal the sum of per-function ceilings (${sum})`
+    );
+  }
+}
+
+/** Structural check for one functions[] identity member. */
+function isValidFunctionIdentity(fn) {
+  return (
+    fn !== null &&
+    typeof fn === 'object' &&
+    Number.isInteger(fn.line) &&
+    fn.line >= 1 &&
+    Number.isInteger(fn.column) &&
+    fn.column >= 1 &&
+    Number.isInteger(fn.maxComplexity) &&
+    fn.maxComplexity >= 0
+  );
+}
+
+/** Validate identity members; returns their max ceiling and sum. */
+function validateFunctionIdentities(functions, label, errors) {
+  const seenPositions = new Set();
+  let max = 0;
+  let sum = 0;
+  for (const fn of functions) {
+    if (!isValidFunctionIdentity(fn)) {
+      errors.push(`complexity entry ${label}: invalid functions[] member ${JSON.stringify(fn)}`);
+      continue;
+    }
+    const pos = `${fn.line}:${fn.column}`;
+    if (seenPositions.has(pos)) {
+      errors.push(`complexity entry ${label}: duplicate function position ${pos}`);
+    }
+    seenPositions.add(pos);
+    max = Math.max(max, fn.maxComplexity);
+    sum += fn.maxComplexity;
+  }
+  return { max, sum };
 }
 
 /**
@@ -273,11 +337,14 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
 
   // Second pass: enforce ceilings per (path, rule) among stashed findings.
   // AC-08: at most maxCount findings may be accepted — debt never grows.
-  // AC-09: a complexity finding blocks when (a) its observed value exceeds
-  // maxComplexity, (b) the message format is unknown (fail closed), or
-  // (c) the file's AGGREGATE complexity sum would exceed maxTotalComplexity
-  // — the sum ceiling is what catches "a lesser function rises while the
-  // count stays the same" on multi-function files (BUG-3).
+  // AC-09/F04: a complexity finding is accepted only when it lands EXACTLY
+  // on a baselined function position (line+column) with an observed value
+  // within THAT function's ceiling, the message format is known (fail
+  // closed), and the file's aggregate sum stays within maxTotalComplexity.
+  // Exact identity is what makes "a lesser function rises while the count
+  // and total stay the same" block: the redistributed value exceeds its
+  // own function's ceiling, and a replacement function at a new position
+  // has no allowance at all.
   const counts = new Map();
   const complexitySums = new Map(); // "path::rule" -> running accepted sum
   for (const result of out) {
@@ -299,15 +366,23 @@ export function applyExceptions(results, manifestPath = MANIFEST_PATH) {
 }
 
 /**
- * Complexity-acceptance decision for one finding (BUG-3): within count,
- * within per-function ceiling (fail-closed on unknown format), and within
- * the file's AGGREGATE sum ceiling. Mutates `complexitySums` on acceptance.
+ * Complexity-acceptance decision for one finding (BUG-3 + F04): within
+ * count, landing exactly on a baselined function position with a value
+ * within THAT function's individual ceiling (fail-closed on unknown format
+ * or missing identity), and within the file's AGGREGATE sum ceiling.
+ * Mutates `complexitySums` on acceptance.
  */
 function acceptFinding(message, entry, used, complexitySums) {
   if (used >= entry.maxCount) return false;
   if (entry.ruleId !== COMPLEXITY_RULE) return true;
   const observed = parseComplexity(message.message);
-  if (observed == null || observed > entry.maxComplexity) return false;
+  if (observed == null) return false;
+  if (!Array.isArray(entry.functions)) return false; // identities required
+  const fn = entry.functions.find(
+    (f) => f.line === message.line && f.column === message.column
+  );
+  if (fn === undefined) return false; // moved or new function: no allowance
+  if (observed > fn.maxComplexity) return false; // this function got harder
   if (entry.maxTotalComplexity !== undefined) {
     const running = complexitySums.get(message.__qgExceptionKey) || 0;
     if (running + observed > entry.maxTotalComplexity) return false;

@@ -35,6 +35,8 @@ const VALID = (over = {}) => ({
       ruleId: 'sonarjs/cognitive-complexity',
       maxCount: 1,
       maxComplexity: 24,
+      maxTotalComplexity: 24,
+      functions: [{ line: 1, column: 1, maxComplexity: 24 }],
       reason: 'Split during the scheduled module refactor',
       owner: 'maintainer',
       expiresOn: '2099-01-01',
@@ -256,5 +258,88 @@ describe('strict schema validation (F09)', () => {
     assert.ok(r2.errors.some((e) => e.includes('must be an object')));
     const arrayDoc = manifest([1, 2]);
     assert.ok(loadManifest(arrayDoc).errors.length > 0);
+  });
+});
+
+describe('per-function complexity identities (F04)', () => {
+  const file = path.join(process.cwd(), 'src/modules/LegacyExample.ts');
+  const cx = (value, line, column = 1) => ({
+    severity: 2,
+    ruleId: 'sonarjs/cognitive-complexity',
+    message: `Refactor this function to reduce its Cognitive Complexity from ${value} to the 15 allowed.`,
+    line,
+    column,
+  });
+  const TWO_FN = {
+    maxCount: 2,
+    maxComplexity: 30,
+    maxTotalComplexity: 50,
+    functions: [
+      { line: 10, column: 1, maxComplexity: 30 },
+      { line: 40, column: 1, maxComplexity: 20 },
+    ],
+  };
+
+  test('same-sum redistribution blocks (25+25 vs ceilings 30/20)', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [cx(25, 10), cx(25, 40)] }],
+      manifest(VALID(TWO_FN))
+    );
+    assert.equal(out.acceptedDebt, 1, 'first function is within its own ceiling');
+    assert.equal(out.results[0].messages.length, 1, 'second function exceeded ITS ceiling');
+  });
+
+  test('function deletion: the remaining function stays accepted', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [cx(20, 40)] }],
+      manifest(VALID(TWO_FN))
+    );
+    assert.equal(out.acceptedDebt, 1);
+    assert.equal(out.results[0].messages.length, 0);
+  });
+
+  test('replacement at a new position is new debt and blocks', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [cx(30, 10), cx(16, 100)] }],
+      manifest(VALID(TWO_FN))
+    );
+    assert.equal(out.results[0].messages.length, 1);
+    assert.equal(out.results[0].messages[0].line, 100);
+  });
+
+  test('identical positions and values stay accepted', () => {
+    const out = applyExceptions(
+      [{ filePath: file, messages: [cx(30, 10), cx(20, 40)] }],
+      manifest(VALID(TWO_FN))
+    );
+    assert.equal(out.acceptedDebt, 2);
+    assert.equal(out.results[0].messages.length, 0);
+  });
+
+  test('entries without identities fail closed (validator + acceptance)', () => {
+    const noFns = VALID({ maxTotalComplexity: 24 });
+    delete noFns.exceptions[0].functions;
+    const loaded = loadManifest(manifest(noFns));
+    assert.ok(loaded.errors.some((e) => e.includes('per-function identities')));
+    const out = applyExceptions([{ filePath: file, messages: [cx(20, 1)] }], manifest(noFns));
+    assert.equal(out.acceptedDebt, 0, 'fail closed without identities');
+    assert.equal(out.results[0].messages.length, 1);
+  });
+
+  test('validator: aggregates must match the per-function data', () => {
+    const inconsistent = VALID({
+      maxCount: 2,
+      maxComplexity: 30,
+      maxTotalComplexity: 99,
+      functions: [
+        { line: 10, column: 1, maxComplexity: 30 },
+        { line: 40, column: 1, maxComplexity: 20 },
+      ],
+    });
+    const { errors } = loadManifest(manifest(inconsistent));
+    assert.ok(errors.some((e) => e.includes('sum of per-function ceilings')));
+    const wrongCount = VALID({ ...TWO_FN, maxCount: 5 });
+    const { errors: e2 } = loadManifest(manifest(wrongCount));
+    assert.ok(e2.some((e) => e.includes('must equal maxCount')));
   });
 });
