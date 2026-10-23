@@ -21,8 +21,31 @@
         {{ snapshot?.safeSummary || t("skillInstall.state.requested") }}
       </div>
 
+      <!-- R9 B01: the authoritative status read failed — the trust state is
+           unknown, so the card shows the retryable error and locks every
+           control until a fresh read confirms the state. -->
+      <div
+        v-if="statusUnknown"
+        data-testid="skill-install-status-unknown"
+        class="mt-2"
+      >
+        <div class="text-caption text-error">
+          {{ t("skillInstall.errors.statusUnavailable") }}
+        </div>
+        <v-btn
+          size="small"
+          variant="outlined"
+          class="mt-1"
+          :loading="statusRefreshing"
+          data-testid="skill-install-status-retry"
+          @click="onRetryStatusRead"
+        >
+          {{ t("skillInstall.retry") }}
+        </v-btn>
+      </div>
+
       <v-progress-linear
-        v-if="inProgress"
+        v-if="!statusUnknown && inProgress"
         indeterminate
         color="primary"
         height="4"
@@ -163,7 +186,7 @@
            card so approving is informed consent for repository-controlled
            execution. Never rendered outside the review state. -->
       <div
-        v-if="snapshotView?.state === 'awaiting_approval' && safePlan?.commands?.length"
+        v-if="!statusUnknown && snapshotView?.state === 'awaiting_approval' && safePlan?.commands?.length"
         data-testid="skill-install-commands"
         class="mt-2"
       >
@@ -201,7 +224,7 @@
 
       <!-- Plan review (awaiting_approval) -->
       <div
-        v-if="snapshotView?.state === 'awaiting_approval'"
+        v-if="!statusUnknown && snapshotView?.state === 'awaiting_approval'"
         data-testid="skill-install-review"
         class="mt-2"
       >
@@ -236,7 +259,7 @@
            catalog-validated system installer; decline rolls the activation
            back and cancels. Token binding is identical to plan approval. -->
       <div
-        v-if="snapshotView?.state === 'installing_dependencies' && unsatisfiedDependencies.length > 0"
+        v-if="!statusUnknown && snapshotView?.state === 'installing_dependencies' && unsatisfiedDependencies.length > 0"
         data-testid="skill-install-deps"
         class="mt-2"
       >
@@ -295,7 +318,7 @@
            directly into the child environment. The model has no channel
            that accepts command text. -->
       <div
-        v-if="commandSectionVisible && safePlan?.commands?.length"
+        v-if="!statusUnknown && commandSectionVisible && safePlan?.commands?.length"
         data-testid="skill-install-run-commands"
         class="mt-2"
       >
@@ -367,7 +390,7 @@
 
       <!-- Secure credential input (awaiting_secret) -->
       <div
-        v-if="snapshotView?.state === 'awaiting_secret'"
+        v-if="!statusUnknown && snapshotView?.state === 'awaiting_secret'"
         data-testid="skill-install-secret"
         class="mt-2"
       >
@@ -405,6 +428,7 @@
            (rollback_required) — both offer recovery guidance. -->
       <div
         v-if="
+          !statusUnknown &&
           ['failed', 'rollback_required', 'installing_dependencies'].includes(
             snapshotView?.state ?? ''
           )
@@ -422,14 +446,14 @@
 
       <!-- Terminal states -->
       <div
-        v-if="snapshotView?.state === 'ready'"
+        v-if="!statusUnknown && snapshotView?.state === 'ready'"
         class="text-success text-body-2 mt-2"
         data-testid="skill-install-ready"
       >
         {{ t("skillInstall.ready") }}
       </div>
       <div
-        v-if="snapshotView?.state === 'cancelled'"
+        v-if="!statusUnknown && snapshotView?.state === 'cancelled'"
         class="text-medium-emphasis text-body-2 mt-2"
       >
         {{ t("skillInstall.cancelled") }}
@@ -477,6 +501,50 @@ const snapshotView = computed(
   () => localSnapshot.value ?? props.snapshot
 );
 
+// R9 B01: a rejected authoritative status read leaves the trust state
+// unknown — the card renders a localized retryable error and locks every
+// trust-sensitive control until a fresh read confirms the state (the
+// fresh approval gate cannot be bypassed by the stale tool result).
+const statusUnknown = ref(false);
+const statusRefreshing = ref(false);
+// R9 B02: one ordered state owner. Every authoritative input — an action
+// result or a material parent-snapshot transition — bumps the epoch, so an
+// in-flight status read issued earlier can never overwrite it.
+let authorityEpoch = 0;
+
+function adoptAuthoritative(snapshot: InstallSnapshot): void {
+  authorityEpoch += 1;
+  statusUnknown.value = false;
+  localSnapshot.value = snapshot;
+}
+
+// The parent rewrites the snapshot prop only from accepted action results
+// (its own updated handler) or newer tool-result payloads. A MATERIAL
+// transition (state/revision/session/installation) is authoritative: adopt
+// it and invalidate in-flight reads. Identity-only re-renders are ignored
+// so a unrelated parent re-render cannot unlock a locked card.
+watch(
+  () =>
+    [
+      props.snapshot.state,
+      props.snapshot.planRevision,
+      props.snapshot.sessionId,
+      props.snapshot.installationId,
+    ] as const,
+  (next, previous) => {
+    if (
+      previous &&
+      next[0] === previous[0] &&
+      next[1] === previous[1] &&
+      next[2] === previous[2] &&
+      next[3] === previous[3]
+    ) {
+      return;
+    }
+    adoptAuthoritative(props.snapshot);
+  }
+);
+
 // TODO 7: live progress — refresh the snapshot when a NEWER event for this
 // session arrives on the monotonic SKILL_INSTALL_PROGRESS channel. Stale or
 // duplicate events (renderer retries) are ignored via the seq gate.
@@ -510,10 +578,36 @@ async function refreshSnapshot(): Promise<void> {
   // rendered — the tool result class only mounts the card when a sessionId
   // exists, but the manager page reuse path may render an empty snapshot.
   if (!snapshotView.value.sessionId) return;
-  const snapshot = await getSkillInstallStatus(snapshotView.value.sessionId);
-  if (snapshot) {
+  const requestEpoch = authorityEpoch;
+  const requestSessionId = snapshotView.value.sessionId;
+  statusRefreshing.value = true;
+  try {
+    const snapshot = await getSkillInstallStatus(requestSessionId);
+    // R9 B02: drop obsolete replies — an authoritative action result or a
+    // newer parent transition that arrived while this read was in flight
+    // wins over the stale status.
+    if (authorityEpoch !== requestEpoch) return;
+    // A null/undefined read is not a confirmed state either — treat it as
+    // unknown (the manager page can return null for an unknown session).
+    if (!snapshot || snapshot.sessionId !== requestSessionId) {
+      statusUnknown.value = true;
+      return;
+    }
     localSnapshot.value = snapshot;
+    statusUnknown.value = false;
+  } catch {
+    // R9 B01: a rejected status read never escapes as an unhandled
+    // rejection; the controls lock behind the retryable error instead.
+    if (authorityEpoch !== requestEpoch) return;
+    statusUnknown.value = true;
+  } finally {
+    statusRefreshing.value = false;
   }
+}
+
+/** R9 B01: the unknown-state retry affordance — re-read the status. */
+async function onRetryStatusRead(): Promise<void> {
+  await refreshSnapshot();
 }
 
 const inProgress = computed(() =>
@@ -529,6 +623,7 @@ const inProgress = computed(() =>
 );
 
 const cardColor = computed(() => {
+  if (statusUnknown.value) return "grey";
   switch (snapshotView.value?.state) {
     case "ready":
       return "success";
@@ -546,6 +641,7 @@ const cardColor = computed(() => {
 });
 
 const cardIcon = computed(() => {
+  if (statusUnknown.value) return "mdi-help-circle-outline";
   switch (snapshotView.value?.state) {
     case "ready":
       return "mdi-check-circle";
@@ -558,6 +654,7 @@ const cardIcon = computed(() => {
 });
 
 const stateLabel = computed(() => {
+  if (statusUnknown.value) return t("skillInstall.stateUnknown");
   const key = `skillInstall.state.${snapshotView.value?.state ?? "requested"}`;
   const label = t(key);
   return label === key ? snapshotView.value?.state ?? "" : label;
@@ -657,6 +754,7 @@ async function onApprove(approve: boolean): Promise<void> {
         : {}),
     });
     if (snapshot) {
+      adoptAuthoritative(snapshot);
       emit("updated", snapshot);
     } else {
       emit("failed", t("skillInstall.errors.actionFailed"));
@@ -694,6 +792,7 @@ async function onApproveDependency(
         : {}),
     });
     if (snapshot) {
+      adoptAuthoritative(snapshot);
       emit("updated", snapshot);
     } else {
       emit("failed", t("skillInstall.errors.actionFailed"));
@@ -744,6 +843,7 @@ async function onSubmitSecret(): Promise<void> {
       // Clear ONLY on success — the value lives in the secure store now.
       // On failure the typed value stays so the user can retry (D2 test).
       secretValue.value = "";
+      adoptAuthoritative(result.snapshot);
       emit("updated", result.snapshot);
     } else {
       emit("failed", t("skillInstall.errors.secretFailed"));
@@ -761,7 +861,10 @@ async function onCancel(): Promise<void> {
         ? { conversationId: props.conversationId }
         : {}),
     });
-    if (snapshot) emit("updated", snapshot);
+    if (snapshot) {
+      adoptAuthoritative(snapshot);
+      emit("updated", snapshot);
+    }
   } finally {
     busy.value = false;
   }
@@ -782,7 +885,9 @@ async function onRetry(): Promise<void> {
         : {}),
     });
     if (snapshot) {
-      localSnapshot.value = snapshot;
+      // A retried install carries a NEW session id — the authoritative
+      // adoption also invalidates any in-flight read for the old session.
+      adoptAuthoritative(snapshot);
       emit("updated", snapshot);
     } else {
       emit("failed", t("skillInstall.errors.actionFailed"));

@@ -219,12 +219,14 @@ describe("SkillInstallCard", () => {
       environmentVariable: "ELEVENLABS_API_KEY",
       snapshot: resumed,
     });
-    const wrapper = mountCard(
-      makeSnapshot({
-        state: "awaiting_secret",
-        safeSummary: "credentials: ELEVENLABS_API_KEY",
-      })
-    );
+    // R9 B01/B02: the mount re-fetches the authoritative status — provide
+    // a successful read of the same awaiting_secret state.
+    const secretSnapshot = makeSnapshot({
+      state: "awaiting_secret",
+      safeSummary: "credentials: ELEVENLABS_API_KEY",
+    });
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(secretSnapshot);
+    const wrapper = mountCard(secretSnapshot);
     // Drive the stubbed password field like a user typing.
     await wrapper
       .find('input[label="ELEVENLABS_API_KEY"]')
@@ -238,13 +240,12 @@ describe("SkillInstallCard", () => {
       environmentVariable: "ELEVENLABS_API_KEY",
       value: "sk-test-secret-value-123",
     });
-    // The value is cleared immediately after submission.
+    // R9 B02: the successful submit is an authoritative adoption — the
+    // card immediately reflects the verifying state, so the secret input
+    // section is gone (a stronger post-state than reading the field).
     expect(
-      (
-        wrapper.find('input[label="ELEVENLABS_API_KEY"]')
-          .element as HTMLInputElement
-      ).value
-    ).toBe("");
+      wrapper.find('[data-testid="skill-install-secret"]').exists()
+    ).toBe(false);
     expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
       state: "verifying",
     });
@@ -424,12 +425,13 @@ describe("SkillInstallCard", () => {
 
   it("secret submission failure keeps the typed value and emits failed (D2)", async () => {
     vi.mocked(submitSkillInstallSecret).mockResolvedValue(null);
-    const wrapper = mountCard(
-      makeSnapshot({
-        state: "awaiting_secret",
-        safeSummary: "credentials: ELEVENLABS_API_KEY",
-      })
-    );
+    // R9 B01/B02: provide a successful same-state status read.
+    const secretSnapshot = makeSnapshot({
+      state: "awaiting_secret",
+      safeSummary: "credentials: ELEVENLABS_API_KEY",
+    });
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(secretSnapshot);
+    const wrapper = mountCard(secretSnapshot);
     await wrapper
       .find('input[label="ELEVENLABS_API_KEY"]')
       .setValue("sk-keep-me-on-failure-123");
@@ -613,6 +615,8 @@ describe("SkillInstallCard", () => {
     vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(
       "test-approval-token"
     );
+    // R9 B01/B02: provide a successful same-state status read.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(commandSnapshot);
     vi.mocked(runApprovedSkillInstallCommand).mockResolvedValue({
       ok: true,
       commandId: "cmd:setup",
@@ -657,6 +661,8 @@ describe("SkillInstallCard", () => {
       injectedEnvNames: [],
       errorCode: "COMMAND_FAILED",
     });
+    // R9 B01/B02: provide a successful same-state status read.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(commandSnapshot);
     const wrapper = mountCard(commandSnapshot);
     await wrapper
       .find('[data-testid="skill-install-run-cmd:setup"]')
@@ -727,7 +733,14 @@ describe("SkillInstallCard — multi-skill selection (audit R2)", () => {
   } as unknown as NonNullable<InstallSnapshot["safePlan"]>;
 
   it("renders candidate checkboxes for multi-skill plans and submits the selection", async () => {
+    // R9 B01/B02: provide a successful same-state status read.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(
+      makeSnapshot({ safePlan: multiSafePlan })
+    );
     const wrapper = mountCard(makeSnapshot({ safePlan: multiSafePlan }));
+    // R9 B02: let the authoritative mount refresh settle BEFORE selecting
+    // candidates, so the checkbox list is not rebuilt mid-interaction.
+    await flushPromises();
     const boxes = wrapper.findAll('[data-testid="skill-install-candidate"]');
     expect(boxes.length).toBe(2);
     await boxes[0].find("input").setValue(true);
@@ -754,14 +767,15 @@ describe("SkillInstallCard — multi-skill selection (audit R2)", () => {
 
 describe("SkillInstallCard — multi-secret advance (audit R3)", () => {
   it("labels and submits the snapshot's nextMissingCredential", async () => {
-    const wrapper = mountCard(
-      makeSnapshot({
-        state: "awaiting_secret",
-        nextAction: "provide-secret-securely",
-        safeSummary: "requires FIRST_API_KEY= and SECOND_API_KEY=",
-        nextMissingCredential: "SECOND_API_KEY",
-      })
-    );
+    const credentialSnapshot = makeSnapshot({
+      state: "awaiting_secret",
+      nextAction: "provide-secret-securely",
+      safeSummary: "requires FIRST_API_KEY= and SECOND_API_KEY=",
+      nextMissingCredential: "SECOND_API_KEY",
+    });
+    // R9 B01/B02: provide a successful same-state status read.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(credentialSnapshot);
+    const wrapper = mountCard(credentialSnapshot);
     const label = wrapper.text();
     expect(label).toContain("SECOND_API_KEY");
     // Submit uses the NEXT variable — not the first name in the summary.
@@ -898,5 +912,105 @@ describe("SkillInstallCard — audit R9 (plan detail completeness)", () => {
     expect(deps.text()).toContain("4.4.2");
     expect(deps.text()).toContain("Incompatible");
     expect(deps.text()).toContain("needs >=3.10");
+  });
+
+  /**
+   * R9 B01: a rejected authoritative status read must never escape as an
+   * unhandled rejection, must render a localized retryable error, and must
+   * keep every trust-sensitive control locked until a fresh read confirms
+   * the state (the fresh approval gate cannot be bypassed).
+   */
+  it("locks controls behind a retryable error when the status read rejects", async () => {
+    vi.mocked(getSkillInstallStatus).mockRejectedValue(
+      new Error("unknow error")
+    );
+    const wrapper = mountCard(makeSnapshot()); // stale tool result: awaiting_approval
+    await flushPromises();
+
+    const unknownBlock = wrapper.find('[data-testid="skill-install-status-unknown"]');
+    expect(unknownBlock.exists()).toBe(true);
+    // Every action surface is gated until the status read succeeds.
+    expect(wrapper.find('[data-testid="skill-install-review"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.find('[data-testid="skill-install-secret"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.find('[data-testid="skill-install-retry"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.find('[data-testid="skill-install-cancel"]').exists()).toBe(
+      false
+    );
+
+    // The retry read recovers: unknown block clears, fresh state renders.
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(
+      makeSnapshot({ state: "cancelled" })
+    );
+    await wrapper
+      .find('[data-testid="skill-install-status-retry"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="skill-install-status-unknown"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="skill-install-review"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).toContain("Cancelled");
+  });
+
+  /**
+   * R9 B02: the parent's authoritative action update (prop) must never be
+   * shadowed by the card's earlier mount-refresh snapshot — exactly the
+   * probe that reproduced the stale review panel after a cancellation.
+   */
+  it("follows the parent's authoritative prop update over the refresh shadow", async () => {
+    vi.mocked(getSkillInstallStatus).mockResolvedValue(
+      makeSnapshot({ state: "awaiting_approval" })
+    );
+    const wrapper = mountCard(makeSnapshot());
+    await flushPromises();
+    expect(wrapper.find('[data-testid="skill-install-review"]').exists()).toBe(
+      true
+    );
+
+    // The parent action handler stores the card's emitted result and the
+    // prop becomes the cancelled snapshot.
+    await wrapper.setProps({
+      snapshot: makeSnapshot({ state: "cancelled" }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="skill-install-review"]').exists()).toBe(
+      false
+    );
+  });
+
+  /**
+   * R9 B02: an in-flight (out-of-order) refresh reply must not overwrite a
+   * later authoritative result — the read loses to the action regardless of
+   * which response lands last on the wire.
+   */
+  it("drops a late refresh reply that raced a newer authoritative result", async () => {
+    let resolveRefresh!: (value: InstallSnapshot) => void;
+    vi.mocked(getSkillInstallStatus).mockReturnValue(
+      new Promise<InstallSnapshot>((resolve) => {
+        resolveRefresh = resolve;
+      })
+    );
+    const wrapper = mountCard(makeSnapshot());
+    await flushPromises(); // refresh read still in flight
+
+    // Authoritative action result adopted through the parent prop.
+    await wrapper.setProps({
+      snapshot: makeSnapshot({ state: "cancelled" }),
+    });
+    // The stale read reply lands AFTER the action result.
+    resolveRefresh(makeSnapshot({ state: "awaiting_approval" }));
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="skill-install-review"]').exists()).toBe(
+      false
+    );
   });
 });
