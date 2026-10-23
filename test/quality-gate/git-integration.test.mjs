@@ -13,52 +13,27 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
-  mkdirSync, writeFileSync, rmSync, cpSync, symlinkSync, readFileSync, mkdtempSync,
+  mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, mkdtempSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const realRepo = process.cwd();
+const { createDisposableGateRepo } = await import(
+  pathToFileURL(path.join(realRepo, 'scripts', 'quality', 'disposable-gate.mjs')).href
+);
 const sandboxes = [];
 
-/** Create a disposable repo wired to run the real gate on ITS tree. */
+/**
+ * Create a disposable repo wired to run the real gate on ITS tree — shared
+ * wiring with the doctor's real-commit probe (F13) lives in
+ * scripts/quality/disposable-gate.mjs.
+ */
 function makeRepo(name) {
-  const root = path.join(os.tmpdir(), `qg-git-${name}-${process.pid}`);
-  rmSync(root, { recursive: true, force: true });
-  mkdirSync(root, { recursive: true });
-  const git = (args, opts = {}) =>
-    execSync(`git ${args}`, { cwd: root, encoding: 'utf8', stdio: 'pipe', ...opts });
-  git('init -q');
-  git('config user.email t@t'); git('config user.name t');
-  git('config core.hooksPath .husky/_');
-  // Copy the gate + base config; symlink node_modules.
-  cpSync(path.join(realRepo, 'scripts'), path.join(root, 'scripts'), { recursive: true });
-  cpSync(path.join(realRepo, '.eslintrc.json'), path.join(root, '.eslintrc.json'));
-  cpSync(path.join(realRepo, 'tsconfig.json'), path.join(root, 'tsconfig.json'));
-  symlinkSync(path.join(realRepo, 'node_modules'), path.join(root, 'node_modules'), 'dir');
-  // Minimal manifest so exceptions resolve deterministically.
-  writeFileSync(
-    path.join(root, 'scripts', 'quality', 'exceptions.json'),
-    JSON.stringify({ schemaVersion: 1, exceptions: [] })
-  );
-  // husky-9 shim layout: the hook git actually executes.
-  mkdirSync(path.join(root, '.husky', '_'), { recursive: true });
-  writeFileSync(
-    path.join(root, '.husky', '_', 'pre-commit'),
-    '#!/usr/bin/env sh\nnode "$PWD/scripts/quality/pre-commit.mjs"\n'
-  );
-  execSync(`chmod +x ${path.join(root, '.husky', '_', 'pre-commit')}`);
-  // Seed-commit the gate with the hook disabled: the coordinator rejects
-  // UNTRACKED policy-control inputs (F02), so the harness's own copied
-  // scripts tree must be committed before any gated commit runs. The seed
-  // commit also brings .eslintrc.json under version control the same way
-  // a real checkout has it.
-  git('config core.hooksPath /dev/null');
-  git('add scripts .eslintrc.json tsconfig.json');
-  git('commit -q -m "seed gate"');
-  git('config core.hooksPath .husky/_');
+  const { root, git } = createDisposableGateRepo(realRepo, name);
   sandboxes.push(root);
   return { root, git };
 }
