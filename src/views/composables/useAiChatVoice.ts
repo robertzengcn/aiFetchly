@@ -355,6 +355,12 @@ export function useAiChatVoice(options: {
         ttsMode: enabling ? "all_assistant_messages" : "disabled",
       });
       applySettings(saved);
+      // R8 P2 (FR-VOI-009): the saved mode gates NEW speech only — when the
+      // user turns spoken responses off, queued/playing utterances must not
+      // outlive the preference change.
+      if (!enabling) {
+        speechController.stop();
+      }
     } catch {
       // FR-VOICE-004: a preference-save failure is a RECOVERABLE state —
       // bounded flag + localized retry in the chat center; the raw error

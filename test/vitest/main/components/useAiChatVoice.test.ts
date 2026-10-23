@@ -51,6 +51,7 @@ vi.mock("@/views/utils/localAiRuntimeUi", () => ({
 }));
 
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
+import { SpeechResponseController } from "@/views/components/aiChatV2/voice/SpeechResponseController";
 
 const i18n = createI18n({
   legacy: false,
@@ -189,6 +190,31 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
       expect.objectContaining({ ttsMode: "disabled" })
     );
     expect(voice.spokenResponseEnabled.value).toBe(false);
+  });
+
+  it("R8 P2: turning spoken responses off cancels speech already queued (FR-VOI-009)", async () => {
+    getVoiceSettingsMock.mockResolvedValue({
+      ...baseSettings,
+      ttsMode: "all_assistant_messages",
+    });
+    getVoiceStatusMock.mockResolvedValue(readyStatus());
+    setVoiceSettingsMock.mockImplementation(async (s) => s);
+    const stopSpy = vi.spyOn(SpeechResponseController.prototype, "stop");
+    try {
+      const voice = mountVoice();
+      await voice.loadSettings();
+
+      await voice.toggleSpokenResponse();
+
+      // The saved mode gates NEW speech only — already queued/playing
+      // utterances must be cancelled when the user turns the control off.
+      expect(setVoiceSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ ttsMode: "disabled" })
+      );
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      stopSpy.mockRestore();
+    }
   });
 
   it("enabling with a missing TTS model prompts install without persisting", async () => {
