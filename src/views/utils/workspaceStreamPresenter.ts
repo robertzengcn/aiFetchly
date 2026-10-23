@@ -725,8 +725,9 @@ export function createWorkspaceStreamPresenter(
       }
       case "recovery_status": {
         bufferedOnly = false;
-        // The recovery layer supersedes the raw transport-retry line.
-        retry = null;
+        // R8 P2-8: the recovery layer no longer discards the live
+        // transport-retry line — both render together when both report
+        // (the template owns the joint display; FR-REC-002/003).
         recovery = {
           layer: str(chunk.recoveryLayer) ?? "",
           reason: str(chunk.recoveryReason) ?? "",

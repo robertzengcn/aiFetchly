@@ -3837,6 +3837,7 @@ export default {
         "The message could not be dispatched. Please try again.",
       runTerminalPersistFailed:
         "The reply finished but could not be saved. It will recover on reload.",
+      contextWindow: "The conversation is too long for the model's context window. Start a new conversation or clear some history.",
     },
     history: {
       selectionLimit: "Up to 20 passages can be attached to one message.",
@@ -3845,6 +3846,7 @@ export default {
     recovery: {
       retry: "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
       recovering: "Recovering via {layer}: {reason}",
+      recoveringDetail: "Recovering via {layer}: {reason} (attempt {attempt} of {max})",
     },
     empty: {
       title: "Ask anything, or pick a conversation on the left.",

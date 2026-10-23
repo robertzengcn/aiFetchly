@@ -14,6 +14,7 @@ import {
   AUTH_EXPIRED_SENTINEL,
   IMAGE_EDIT_UNAVAILABLE_SENTINEL,
   IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
   type ImageEditErrorCode,
 } from "./AIChatErrorSentinels";
 export {
@@ -21,6 +22,7 @@ export {
   AUTH_EXPIRED_SENTINEL,
   IMAGE_EDIT_UNAVAILABLE_SENTINEL,
   IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
 } from "./AIChatErrorSentinels";
 export type { ImageEditErrorCode } from "./AIChatErrorSentinels";
 import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
@@ -401,14 +403,15 @@ export function userSafeError(err: unknown): string {
     // Context window exceeded: the conversation history (including tool
     // call/result pairs) grew beyond the model's context length. This is
     // NOT a transient error — retrying with the same input will always
-    // fail. Surface a clear, actionable message so the user knows to start
-    // a new conversation or clear history instead of retrying blindly.
+    // fail. Emit the stable sentinel (R8 P2-8 / FR-REC-004) so renderers
+    // map it to the localized actionable copy (start a new conversation or
+    // clear history) instead of carrying a prose string across locales.
     if (
       /context_window_exceeded|context window|context length|contextwindowexceeded|longer than the model/i.test(
         msg
       )
     ) {
-      return "The conversation is too long for the model's context window. Please start a new conversation or clear some history.";
+      return CONTEXT_WINDOW_EXCEEDED_SENTINEL;
     }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";

@@ -14,6 +14,23 @@
 
 const CODE_PREFIX_PATTERN = /^\[([A-Z_]+)\]\s?/;
 
+/**
+ * Sentinel messages (bare, no `[CODE]` prefix) the main process emits for
+ * known error classes. Chat V2 maps them the same way
+ * (AiChatV2.view mapStreamErrorMessage); the workspace banner now shares the
+ * mapping (R8 P2-8, FR-REC-004). Codes that genuinely travel the stream
+ * transport — provider/quota/auth, context window, generated-image — resolve
+ * to localized copy; permission and outbound failures carry no stream codes
+ * today (batch cards own their states).
+ */
+const SENTINELS: ReadonlySet<string> = new Set([
+  "QUOTA_EXHAUSTED",
+  "AUTH_EXPIRED",
+  "IMAGE_EDIT_UNAVAILABLE",
+  "IMAGE_EDIT_PROVIDER_FAILED",
+  "CONTEXT_WINDOW_EXCEEDED",
+]);
+
 /** Renderer i18n key per bounded main-process error code. */
 const CODE_TO_I18N_KEY: Readonly<Record<string, string>> = {
   QUEUE_LIMIT_REACHED: "workspaceChat.errors.queueLimit",
@@ -34,6 +51,14 @@ const CODE_TO_I18N_KEY: Readonly<Record<string, string>> = {
   RUN_ENVELOPE_FAILED: "workspaceChat.errors.runEnvelopeFailed",
   DISPATCH_PROMOTE_FAILED: "workspaceChat.errors.dispatchPromoteFailed",
   RUN_TERMINAL_PERSIST_FAILED: "workspaceChat.errors.runTerminalPersistFailed",
+  // R8 P2-8: stable sentinels now travel the stream transport; map them to
+  // the (already six-language) Chat V2 keys plus the new context-window key.
+  CONTEXT_WINDOW_EXCEEDED: "workspaceChat.errors.contextWindow",
+  QUOTA_EXHAUSTED: "aiChatV2.quota_exhausted",
+  AUTH_EXPIRED: "aiChatV2.auth_expired",
+  IMAGE_EDIT_UNAVAILABLE: "aiChatV2.generatedImageRefs.errors.image_edit_unavailable",
+  IMAGE_EDIT_PROVIDER_FAILED:
+    "aiChatV2.generatedImageRefs.errors.image_edit_provider_failed",
 };
 
 /** English guidance per code (fallback when the locale key is missing). */
@@ -66,6 +91,15 @@ const CODE_TO_ENGLISH: Readonly<Record<string, string>> = {
     "The message could not be dispatched. Please try again.",
   RUN_TERMINAL_PERSIST_FAILED:
     "The reply finished but could not be saved. It will recover on reload.",
+  CONTEXT_WINDOW_EXCEEDED:
+    "The conversation is too long for the model's context window. Please start a new conversation or clear some history.",
+  QUOTA_EXHAUSTED:
+    "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
+  AUTH_EXPIRED: "Your session has expired. Please sign in again.",
+  IMAGE_EDIT_UNAVAILABLE:
+    "Image editing is unavailable: no edit-capable model is configured. Configure one and try again.",
+  IMAGE_EDIT_PROVIDER_FAILED:
+    "The AI provider failed to edit the image. Retry, or check the provider configuration.",
 };
 
 export interface WorkspaceErrorLocalization {
@@ -87,20 +121,48 @@ export function localizeWorkspaceError(
 ): WorkspaceErrorLocalization {
   const match = CODE_PREFIX_PATTERN.exec(message);
   if (!match) {
+    // R8 P2-8: bare sentinels (no `[CODE]` prefix) map the same way when
+    // the whole message is the sentinel string.
+    if (SENTINELS.has(message)) {
+      const text = localizedNameFor(translate, CODE_TO_I18N_KEY[message], CODE_TO_ENGLISH[message]);
+      if (text) {
+        return { code: message, text };
+      }
+    }
     return { code: null, text: message };
   }
   const code = match[1];
   const key = CODE_TO_I18N_KEY[code];
   if (key) {
-    const translated = translate(key);
-    if (typeof translated === "string" && translated.length > 0) {
-      return { code, text: translated };
-    }
-    const english = CODE_TO_ENGLISH[code];
-    if (english) {
-      return { code, text: english };
+    const text = localizedNameFor(translate, key, CODE_TO_ENGLISH[code]);
+    if (text) {
+      return { code, text };
     }
   }
   // Unknown code: keep the full message (never drop the reason).
   return { code, text: message };
+}
+
+/**
+ * Resolve a code to its localized copy; vue-i18n echoes the raw key when a
+ * translation is missing (truthy string), so treat a key-echo as missing and
+ * fall back to the English guidance. Never drop the reason (unknown codes
+ * pass through — see callers).
+ */
+function localizedNameFor(
+  translate: (key: string) => unknown,
+  key: string | undefined,
+  english: string | undefined
+): string | undefined {
+  if (key) {
+    const translated = translate(key);
+    if (
+      typeof translated === "string" &&
+      translated.length > 0 &&
+      translated !== key
+    ) {
+      return translated;
+    }
+  }
+  return english;
 }

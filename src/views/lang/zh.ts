@@ -3623,6 +3623,7 @@ export default {
       runEnvelopeFailed: "执行无法启动，请稍后重试。",
       dispatchPromoteFailed: "消息无法派出，请重试。",
       runTerminalPersistFailed: "回复已完成但未能保存，重新加载后将恢复。",
+      contextWindow: "会话内容超出模型上下文窗口长度。请开启新会话或清理部分历史记录。",
     },
     history: {
       selectionLimit: "一条消息最多可附加 20 段引文。",
@@ -3631,6 +3632,7 @@ export default {
     recovery: {
       retry: "正在重新连接… 第 {attempt}/{max} 次尝试（等待约 {seconds} 秒）",
       recovering: "正在通过 {layer} 恢复：{reason}",
+      recoveringDetail: "正在通过 {layer} 恢复：{reason}（第 {attempt}/{max} 次尝试）",
     },
     empty: {
       title: "随便问点什么，或在左侧选择一个会话。",

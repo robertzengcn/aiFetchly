@@ -39,7 +39,14 @@
       data-testid="workspace-recovery-detail"
     >
       <v-icon size="x-small" class="mr-1">mdi-progress-clock</v-icon>
-      <span>{{ retryDetailText ?? recoveryDetailText }}</span>
+      <!-- R8 P2-8 (FR-REC-002/003): retry and recovery render together when
+           both are live — the fallback `??` hid live recovery behind retry. -->
+      <span v-if="retryDetailText !== null" data-testid="workspace-retry-detail">{{
+        retryDetailText
+      }}</span>
+      <span v-if="recoveryDetailText !== null" data-testid="workspace-recovery-reason">{{
+        recoveryDetailText
+      }}</span>
     </div>
 
     <!-- Managed-browser region (capability parity FR-BRW-001..005): the
@@ -86,7 +93,7 @@
         :messages="[...selectedStore.messages]"
         :active-assistant-message-id="selectedStore.activeAssistantMessageId"
         :stream-status="streamStatusForMessages"
-        :error-message="selectedStore.errorMessage ?? undefined"
+        :error-message="localizedBannerError ?? undefined"
         :show-reasoning="showReasoning"
         :plan-submit-error="planSubmitError"
         :plan-decision-in-flight="planDecisionInFlight"
@@ -984,13 +991,41 @@ const retryDetailText = computed<string | null>(() => {
 const recoveryDetailText = computed<string | null>(() => {
   const info = selectedStore.recovery;
   if (!info) return null;
-  return (
-    t("workspaceChat.recovery.recovering", {
-      layer: info.layer,
-      reason: info.reason,
-    }) ||
-    `Recovering via ${info.layer}: ${info.reason}`
-  );
+  // R8 P2-8: the presenter stores attempt/max attempts and a bounded safe
+  // message — render them, not just layer + reason (FR-REC-003).
+  let text =
+    (info.attempt != null && info.maxAttempts != null
+      ? t("workspaceChat.recovery.recoveringDetail", {
+          layer: info.layer,
+          reason: info.reason,
+          attempt: info.attempt,
+          max: info.maxAttempts,
+        })
+      : t("workspaceChat.recovery.recovering", {
+          layer: info.layer,
+          reason: info.reason,
+        })) || `Recovering via ${info.layer}: ${info.reason}`;
+  if (
+    info.attempt != null &&
+    info.maxAttempts != null &&
+    !text.includes(`attempt ${info.attempt} of ${info.maxAttempts}`)
+  ) {
+    // Missing locale key: keep the attempt window visible in the fallback.
+    text = `${text} (attempt ${info.attempt} of ${info.maxAttempts})`;
+  }
+  return info.message ? `${text} — ${info.message}` : text;
+});
+
+/**
+ * R8 P2-8 (FR-REC-004): the transcript banner maps stable error codes the
+ * same way Chat V2 does — typed `[CODE]` prefixes and bare sentinels
+ * (quota/auth/image-edit/context window) become localized copy; unknown
+ * prose passes through byte-identical.
+ */
+const localizedBannerError = computed<string | null>(() => {
+  const raw = selectedStore.errorMessage;
+  if (!raw) return null;
+  return localizeWorkspaceError(raw, (key) => t(key)).text;
 });
 
 /**

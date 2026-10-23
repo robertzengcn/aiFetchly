@@ -3851,6 +3851,7 @@ export default {
       dispatchPromoteFailed: "Die Nachricht konnte nicht gesendet werden. Versuche es erneut.",
       runTerminalPersistFailed:
         "Die Antwort ist fertig, konnte aber nicht gespeichert werden. Sie wird beim Neuladen wiederhergestellt.",
+      contextWindow: "Die Konversation ist zu lang für das Kontextfenster des Modells. Starten Sie eine neue Konversation oder löschen Sie etwas Historie.",
     },
     history: {
       selectionLimit: "An eine Nachricht lassen sich maximal 20 Passagen anhängen.",
@@ -3859,6 +3860,7 @@ export default {
     recovery: {
       retry: "Verbinde erneut… Versuch {attempt} von {max} (wartet ~{seconds} s)",
       recovering: "Wiederherstellung über {layer}: {reason}",
+      recoveringDetail: "Wiederherstellung über {layer}: {reason} (Versuch {attempt} von {max})",
     },
     empty: {
       title: "Stelle eine Frage oder wähle links eine Unterhaltung.",

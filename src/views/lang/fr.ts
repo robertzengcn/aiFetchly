@@ -3835,6 +3835,7 @@ export default {
       dispatchPromoteFailed: "Le message n'a pas pu être envoyé. Réessayez.",
       runTerminalPersistFailed:
         "La réponse est terminée mais n'a pas pu être enregistrée. Elle sera récupérée au rechargement.",
+      contextWindow: "La conversation est trop longue pour la fenêtre de contexte du modèle. Démarrez une nouvelle conversation ou effacez une partie de l'historique.",
     },
     history: {
       selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",
@@ -3843,6 +3844,7 @@ export default {
     recovery: {
       retry: "Reconnexion… tentative {attempt} sur {max} (attente ~{seconds} s)",
       recovering: "Récupération via {layer} : {reason}",
+      recoveringDetail: "Récupération via {layer} : {reason} (tentative {attempt} sur {max})",
     },
     empty: {
       title: "Posez une question ou choisissez une conversation à gauche.",

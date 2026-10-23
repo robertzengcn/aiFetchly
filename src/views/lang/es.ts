@@ -3851,6 +3851,7 @@ export default {
       dispatchPromoteFailed: "No se pudo enviar el mensaje. Inténtalo de nuevo.",
       runTerminalPersistFailed:
         "La respuesta terminó pero no pudo guardarse. Se recuperará al recargar.",
+      contextWindow: "La conversación es demasiado larga para la ventana de contexto del modelo. Inicia una conversación nueva o borra parte del historial.",
     },
     history: {
       selectionLimit: "Se pueden adjuntar hasta 20 pasajes a un mensaje.",
@@ -3859,6 +3860,7 @@ export default {
     recovery: {
       retry: "Reconectando… intento {attempt} de {max} (esperando ~{seconds} s)",
       recovering: "Recuperando vía {layer}: {reason}",
+      recoveringDetail: "Recuperando vía {layer}: {reason} (intento {attempt} de {max})",
     },
     empty: {
       title: "Pregunta lo que quieras o elige una conversación a la izquierda.",

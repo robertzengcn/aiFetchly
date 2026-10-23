@@ -3956,6 +3956,15 @@ const mapStreamErrorMessage = (raw: string): string => {
       "The AI provider failed to edit the image. Retry, or check the provider configuration."
     );
   }
+  // R8 P2-8: the former English prose became a stable sentinel (shared with
+  // workspaceErrorLocalization); map it back to the identical copy so the
+  // Chat V2 banner does not regress.
+  if (raw === "CONTEXT_WINDOW_EXCEEDED") {
+    return (
+      t("aiChatV2.context_window_exceeded") ||
+      "The conversation is too long for the model's context window. Please start a new conversation or clear some history."
+    );
+  }
   return raw;
 };
 

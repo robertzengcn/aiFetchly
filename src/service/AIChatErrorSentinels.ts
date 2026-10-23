@@ -43,6 +43,15 @@ export const IMAGE_EDIT_UNAVAILABLE_SENTINEL = "IMAGE_EDIT_UNAVAILABLE";
  */
 export const IMAGE_EDIT_PROVIDER_FAILED_SENTINEL = "IMAGE_EDIT_PROVIDER_FAILED";
 
+/**
+ * Sentinel returned by {@link AIChatErrorMapper.userSafeError} when the
+ * conversation history grew beyond the model's context length (a permanent
+ * failure — retrying the same input always fails). The renderer detects this
+ * and shows the actionable "start a new conversation / clear history" message
+ * instead of surfacing the raw sentinel.
+ */
+export const CONTEXT_WINDOW_EXCEEDED_SENTINEL = "CONTEXT_WINDOW_EXCEEDED";
+
 /** Stable machine-readable error codes for chat image-edit failures. */
 export type ImageEditErrorCode =
   | "image_edit_unavailable"

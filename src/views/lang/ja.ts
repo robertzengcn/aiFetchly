@@ -3758,6 +3758,7 @@ export default {
       dispatchPromoteFailed: "メッセージを送信できませんでした。再試行してください。",
       runTerminalPersistFailed:
         "返信は完了しましたが保存できませんでした。再読み込み時に回復します。",
+      contextWindow: "会話がモデルのコンテキストウィンドウに対して長すぎます。新しい会話を開始するか、履歴の一部を消去してください。",
     },
     history: {
       selectionLimit: "1 つのメッセージに添付できる引用は最大 20 件です。",
@@ -3766,6 +3767,7 @@ export default {
     recovery: {
       retry: "再接続中… 試行 {attempt}/{max}（約 {seconds} 秒待機）",
       recovering: "{layer} で復旧中：{reason}",
+      recoveringDetail: "{layer} で復旧中：{reason}（試行 {attempt}/{max}）",
     },
     empty: {
       title: "何でも質問するか、左の会話を選択してください。",

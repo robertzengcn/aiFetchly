@@ -238,6 +238,8 @@ const i18n = createI18n({
           retry:
             "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
           recovering: "Recovering via {layer}: {reason}",
+          recoveringDetail:
+            "Recovering via {layer}: {reason} (attempt {attempt} of {max})",
         },
         command: {
           clearFailed: "Could not clear this chat. Try again.",
@@ -2588,6 +2590,128 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       wrapper.find('[data-testid="workspace-recovery-detail"]').exists()
     ).toBe(false);
+  });
+
+  /**
+   * R8 P2-8 (FR-REC-003): recovery shows attempt/max and the safe message,
+   * and retry + recovery render together when both are live.
+   */
+  it("shows the recovery attempt and safe message, with retry staying visible (FR-REC-003 P2)", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-rec2");
+    await flushPromises();
+    const selected = useSelectedConversationStore();
+
+    const detailEvent = (
+      sequence: number,
+      eventType: string,
+      payload: Record<string, unknown>
+    ): unknown => ({
+      sequence,
+      runId: "run-rec2",
+      conversationId: "conv-rec2",
+      eventType,
+      emittedAt: "2026-10-11T00:00:00.000Z",
+      payload: { eventType, ...payload },
+    });
+
+    // Transport retry is live…
+    selected.applyDetailEvent(
+      detailEvent(1, "retry_connect", {
+        retryAttempt: 2,
+        retryMaxAttempts: 5,
+        retryDelayMs: 3000,
+      }) as never
+    );
+    await flushPromises();
+    const detail = wrapper.get('[data-testid="workspace-recovery-detail"]');
+    expect(detail.text()).toContain("attempt 2 of 5");
+
+    // …and the recovery layer reports the same window plus a safe message:
+    // both must render together, with the attempt AND message on the line.
+    selected.applyDetailEvent(
+      detailEvent(2, "recovery_status", {
+        recoveryLayer: "reactive_compact",
+        recoveryReason: "context_overflow",
+        recoveryAttempt: 2,
+        recoveryMaxAttempts: 5,
+        recoveryMessage: "Compaction keeps history within the context window.",
+      }) as never
+    );
+    await flushPromises();
+    const combined = wrapper.get('[data-testid="workspace-recovery-detail"]');
+    expect(combined.text()).toContain("Reconnecting… attempt 2 of 5");
+    expect(combined.text()).toContain("Recovering via reactive_compact");
+    expect(combined.text()).toContain("(attempt 2 of 5)");
+    expect(combined.text()).toContain(
+      "Compaction keeps history within the context window."
+    );
+  });
+
+  /**
+   * R8 P2-8 (FR-REC-004): the transcript banner maps stable error codes the
+   * same way Chat V2 does — sentinels (quota/auth/image-edit) and a bare
+   * context-window sentinel become localized copy, never raw codes.
+   */
+  it("maps stable error codes on the transcript banner (FR-REC-004 P2)", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-code");
+    await flushPromises();
+    const selected = useSelectedConversationStore();
+
+    const detailEvent = (
+      sequence: number,
+      eventType: string,
+      payload: Record<string, unknown>
+    ): unknown => ({
+      sequence,
+      runId: "run-code",
+      conversationId: "conv-code",
+      eventType,
+      emittedAt: "2026-10-11T00:00:00.000Z",
+      payload: { eventType, ...payload },
+    });
+
+    // Quota sentinel → localized recharge copy (surface→transcript input).
+    selected.applyDetailEvent(
+      detailEvent(1, "error", { errorMessage: "QUOTA_EXHAUSTED" }) as never
+    );
+    await flushPromises();
+    const stub = wrapper.get('[data-testid="transcript-stub"]');
+    const quotaText = String(stub.attributes("error-message"));
+    expect(quotaText).not.toContain("QUOTA_EXHAUSTED");
+    expect(quotaText).toContain("recharge your account");
+
+    // Context-window sentinel → localized actionable copy.
+    selected.applyDetailEvent(
+      detailEvent(
+        2,
+        "error",
+        { errorMessage: "CONTEXT_WINDOW_EXCEEDED" }
+      ) as never
+    );
+    await flushPromises();
+    const ctxText = String(
+      wrapper.get('[data-testid="transcript-stub"]').attributes("error-message")
+    );
+    expect(ctxText).not.toContain("CONTEXT_WINDOW_EXCEEDED");
+    expect(ctxText).toContain("too long for the model's context window");
+
+    // Prefix-less prose passes through byte-identical (unknown fallback).
+    selected.applyDetailEvent(
+      detailEvent(3, "error", { errorMessage: "something custom" }) as never
+    );
+    await flushPromises();
+    const rawText = String(
+      wrapper.get('[data-testid="transcript-stub"]').attributes("error-message")
+    );
+    expect(rawText).toContain("something custom");
   });
 
   /**
