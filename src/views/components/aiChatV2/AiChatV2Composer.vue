@@ -411,6 +411,7 @@ import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { ChatV2AtMentionSuggestionView } from "@/entityTypes/aiChatAtMentionTypes";
 import { BrowserVoiceRecorder } from "./voice/BrowserVoiceRecorder";
 import { transcribeVoice } from "@/views/api/aiChatV2Voice";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import { blobToWavBase64 } from "./voice/audioConversion";
 import {
   classifyRecorderError,
@@ -906,6 +907,9 @@ async function processVoiceRecording(
   filesBeforeVoiceSend: File[]
 ): Promise<void> {
   isTranscribing.value = true;
+  // R8 §2: renderer-side voice actions count into the workspace action
+  // counter (fire-and-forget, labels only).
+  void recordWorkspaceActionCount("voice", "record_complete", "ok");
   try {
     // Decode/resample (WebM -> WAV). Distinct failure kind from the worker
     // transcription call below (TODO P2 error classification).
@@ -935,6 +939,7 @@ async function processVoiceRecording(
       // exception can carry filesystem paths or provider details and is
       // never appended to renderer-visible text. Stale chains (audit
       // 2026-10-20 B01) stay silent in the switched conversation.
+      void recordWorkspaceActionCount("voice", "transcribe", "error");
       if (stillOwnsComposition(voiceOwnerDraftKey)) {
         showNotice(
           t("aiChatV2.voice.transcription_failed") ||
@@ -1082,6 +1087,8 @@ async function onMicClick(): Promise<void> {
   try {
     await voiceRecorder.start(props.voiceMaxRecordingMs ?? 60_000);
     isRecording.value = true;
+    // R8 §2: recording-start action count (labels only).
+    void recordWorkspaceActionCount("voice", "record_start", "ok");
     // Starting a new voice input stops any queued/current TTS playback
     // (PRD §7.5). The parent owns the SpeechResponseController.
     emit("voice-recording-start");
@@ -1090,6 +1097,7 @@ async function onMicClick(): Promise<void> {
     // release the session so a later Stop cannot act on stale ownership.
     voiceSessionOwnerDraftKey = null;
     voiceSessionOwnerFiles = [];
+    void recordWorkspaceActionCount("voice", "record_start", "error");
     // Distinguish permission denied / no microphone / unsupported type /
     // generic recording failure (TODO P2 error classification).
     showNotice(recorderErrorNotice(err));

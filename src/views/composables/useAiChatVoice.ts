@@ -27,6 +27,7 @@ import {
 } from "@/views/api/localAiRuntime";
 import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
 import { emitShellDiagnostic } from "@/views/utils/shellDiagnostics";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import type {
   AiChatVoiceRuntimeStatus,
   AiChatVoiceSettingsView,
@@ -144,6 +145,11 @@ export function useAiChatVoice(options: {
   );
   speechController.start();
   const unsubscribeSpeaking = speechController.subscribe((value) => {
+    // R8 §2: count each playback start (labels only). The false transition
+    // is the natural stop and is not separately counted.
+    if (value) {
+      void recordWorkspaceActionCount("voice", "playback", "ok");
+    }
     speaking.value = value;
   });
 
@@ -302,6 +308,13 @@ export function useAiChatVoice(options: {
         runtimeReady: !runtimeUnavailable.value,
         outcome: "ok",
       });
+      // R8 §2: capability-state count in the workspace action counter
+      // (labels only — booleans rendered as stable tokens).
+      void recordWorkspaceActionCount(
+        "voice",
+        "capability_state",
+        !runtimeUnavailable.value && inputEnabled.value ? "ready" : "setup"
+      );
     } catch {
       // Settings load failure: voice actions show unavailable/setup state;
       // typed chat remains usable (design §11.4). settingsUnavailable keeps
@@ -316,6 +329,8 @@ export function useAiChatVoice(options: {
         runtimeReady: false,
         outcome: "error",
       });
+      // R8 §2: capability-state count — load failure stays countable.
+      void recordWorkspaceActionCount("voice", "capability_state", "error");
       autoSend.value = false;
       maxRecordingMs.value = DEFAULT_MAX_RECORDING_MS;
       settings.value = null;
@@ -375,6 +390,8 @@ export function useAiChatVoice(options: {
     if (modelInstalling.value) return;
     modelInstalling.value = true;
     modelInstallError.value = null;
+    // R8 §2: install action count (labels only, fire-and-forget).
+    void recordWorkspaceActionCount("voice", "install_model", "ok");
     try {
       await downloadVoiceModel(
         status.value?.sttModelId ?? "sherpa-onnx:stt:auto"
@@ -419,6 +436,8 @@ export function useAiChatVoice(options: {
     runtimeInstallProgress.value = null;
     runtimeModelProgress.value = null;
     runtimeInstallDialog.value = true;
+    // R8 §2: runtime install offer count (labels only).
+    void recordWorkspaceActionCount("voice", "install_runtime_offer", "ok");
     try {
       runtimeInstallOffer.value = await prepareLocalAiRuntimeInstall(
         VOICE_SHERPA_RUNTIME_ID
@@ -458,12 +477,15 @@ export function useAiChatVoice(options: {
       applySettings(saved);
       await loadSettings();
       runtimeInstallDialog.value = false;
+      // R8 §2: runtime install completion count (labels only).
+      void recordWorkspaceActionCount("voice", "install_runtime", "ok");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       runtimeInstallError.value = `${
         t("aiChatV2.voice.runtime_install_failed") ||
         "Voice runtime installation failed."
       } ${msg}`;
+      void recordWorkspaceActionCount("voice", "install_runtime", "error");
       await loadSettings();
     } finally {
       runtimeInstalling.value = false;

@@ -772,6 +772,7 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import {
   composerDraftKeyFor,
   sameGeneratedImageRef,
@@ -1413,6 +1414,9 @@ function runGeneratedImagePreflight(
           candidate.thumbUrl,
       }));
       showGeneratedImageChooser.value = true;
+      // R8 §2: renderer-side image actions count into the workspace
+      // action counter (fire-and-forget, labels only).
+      void recordWorkspaceActionCount("image", "chooser_open", "ok");
       return null;
     }
     if (
@@ -1515,6 +1519,8 @@ function confirmGeneratedImageBatch(): void {
   const confirmed = pending?.confirmedReferences;
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
+  // R8 §2: batch-confirmation action count (labels only).
+  void recordWorkspaceActionCount("image", "batch_confirm", "ok");
   if (!pending || !confirmed || confirmed.length === 0) return;
   // P1-2 (FR-IMG-015): same stale-dialog guard as the ambiguity chooser —
   // a confirm click after the user switched chats must never submit
@@ -1538,6 +1544,7 @@ function confirmGeneratedImageBatch(): void {
 function declineGeneratedImageBatch(): void {
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
+  void recordWorkspaceActionCount("image", "batch_confirm", "declined");
 }
 
 /** "Edit" tile action: exactly this image becomes the tray selection. */
@@ -1801,6 +1808,8 @@ async function onSaveGeneratedImage(
 
 /** FR-IMG-012: stop preserves completed outputs; the run cancel owns the rest. */
 function onStopBatch(): void {
+  // R8 §2: batch stop action count (labels only).
+  void recordWorkspaceActionCount("image", "batch_stop", "ok");
   // Audit 2026-10-20 B06: the batch Stop cancels spoken output too — same
   // stop contract as the composer and run-strip affordances.
   void stopActiveRunWithSpeech();
@@ -1815,6 +1824,8 @@ function onRetryGeneratedImageBatch(payload: {
   instruction: string;
 }): void {
   if (payload.references.length === 0) return;
+  // R8 §2: batch retry action count (labels only).
+  void recordWorkspaceActionCount("image", "batch_retry", "ok");
   void performOrdinarySend(payload.instruction, [], {
     confirmedBatchReferences: [...payload.references],
   });

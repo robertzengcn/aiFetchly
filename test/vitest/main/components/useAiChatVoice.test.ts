@@ -50,6 +50,12 @@ vi.mock("@/views/utils/localAiRuntimeUi", () => ({
   isLocalAiRuntimeUsable: (state: unknown) => state === "installed",
 }));
 
+const recordWorkspaceActionMock = vi.fn();
+vi.mock("@/views/api/aiChatWorkspaceActions", () => ({
+  recordWorkspaceActionCount: (...args: unknown[]) =>
+    recordWorkspaceActionMock(...args),
+}));
+
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import { SpeechResponseController } from "@/views/components/aiChatV2/voice/SpeechResponseController";
 
@@ -327,6 +333,55 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
       })
     );
     expect(voice.runtimeInstallDialog.value).toBe(false);
+  });
+
+  /** R8 §2: renderer-side voice actions count into the workspace action
+   * counter (fire-and-forget, labels only). */
+  it("counts capability-state, install, and install-offer actions", async () => {
+    getVoiceSettingsMock.mockResolvedValue(baseSettings);
+    getVoiceStatusMock.mockResolvedValue(readyStatus());
+    const voice = mountVoice();
+
+    await voice.loadSettings();
+
+    const capabilityCalls = recordWorkspaceActionMock.mock.calls.filter(
+      (c) => c[0] === "voice" && c[1] === "capability_state"
+    );
+    expect(capabilityCalls.length).toBeGreaterThanOrEqual(1);
+    expect(capabilityCalls[0][2]).toBe("ready");
+
+    recordWorkspaceActionMock.mockClear();
+    downloadVoiceModelMock.mockResolvedValue(undefined);
+    await voice.installRequiredModel();
+    expect(recordWorkspaceActionMock).toHaveBeenCalledWith(
+      "voice",
+      "install_model",
+      "ok"
+    );
+
+    recordWorkspaceActionMock.mockClear();
+    const offer = {
+      operationId: "op-3",
+      runtimeId: "voice-sherpa",
+      runtimeVersion: "1",
+      consentToken: "tok",
+      archiveSizeBytes: 8192,
+    };
+    prepareLocalAiRuntimeInstallMock.mockResolvedValue(offer);
+    installLocalAiRuntimeMock.mockResolvedValue(undefined);
+    setVoiceSettingsMock.mockImplementation(async (s) => s);
+    await voice.installRequiredRuntime();
+    expect(recordWorkspaceActionMock).toHaveBeenCalledWith(
+      "voice",
+      "install_runtime_offer",
+      "ok"
+    );
+    await voice.confirmRuntimeInstall();
+    expect(recordWorkspaceActionMock).toHaveBeenCalledWith(
+      "voice",
+      "install_runtime",
+      "ok"
+    );
   });
 
   it("stopSpeaking halts playback and cancels worker synthesis", async () => {
