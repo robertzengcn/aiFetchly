@@ -92,6 +92,25 @@ try {
   failOperational(`fast ESLint profile failed to load: ${e.message}`);
 }
 
+// F08: the gate's own policy inputs must physically live inside the
+// repository. A symlinked policy.cjs / exceptions.json pointing outside
+// would let the effective policy be supplied from beyond the commit.
+const { assertInsideRepo } = require('./repo-boundary.cjs');
+for (const policyFile of [
+  'scripts/quality/policy.cjs',
+  'scripts/quality/eslint-fast.cjs',
+  'scripts/quality/exceptions.json',
+  'scripts/quality/lint-staged.config.mjs',
+  'scripts/quality/check-exceptions.mjs',
+  '.eslintrc.json',
+]) {
+  try {
+    assertInsideRepo(repoRoot, path.join(repoRoot, policyFile), `policy input ${policyFile}`);
+  } catch (e) {
+    failOperational(e.message, 'Policy must be committed in the repository, not supplied from outside it.');
+  }
+}
+
 // Unmerged index stages block everything (§6.1).
 const unmerged = git(['diff', '--cached', '--name-only', '--diff-filter=U']).stdout;
 if (unmerged.trim().length > 0) {

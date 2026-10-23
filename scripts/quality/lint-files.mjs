@@ -23,6 +23,7 @@ const startNs = process.hrtime.bigint();
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const policy = require('./policy.cjs');
+const { assertInsideRepo } = require('./repo-boundary.cjs');
 const { applyExceptions, isOperationalDiagnostic } = await import('./check-exceptions.mjs');
 
 const OPERATIONAL_FAILURE = 2;
@@ -45,38 +46,14 @@ if (files.length === 0) {
 }
 
 // Resolve every selected path inside the repository; reject symlink escape
-// (tech design §11) before the engine starts. path.resolve collapses `..`,
-// so an escaped traversal cannot masquerade as an in-repo path — but a
-// symlinked DIRECTORY inside the repo still resolves outside it, so the
-// realpath of the resolved file must also sit inside the real repo root
-// (BUG-18).
-import { realpathSync } from 'node:fs';
-let realRepoRoot = repoRoot;
-try {
-  realRepoRoot = realpathSync(repoRoot);
-} catch {
-  /* repo root itself unresolvable: fall back to the lexical check */
-}
+// (tech design §11) before the engine starts. Shared boundary helper (F08)
+// — the same lexical + realpath validation the fix command and the
+// manifest loader use, so the checks cannot drift apart again.
 for (const file of files) {
-  const abs = path.resolve(repoRoot, file);
-  if (!abs.startsWith(repoRoot + path.sep)) {
-    failOperational(
-      `selected path escapes the repository boundary: ${file}`,
-      'This is a policy/configuration failure, not accepted debt.'
-    );
-  }
   try {
-    const realAbs = realpathSync(abs);
-    if (!realAbs.startsWith(realRepoRoot + path.sep)) {
-      failOperational(
-        `selected path resolves (symlink) outside the repository: ${file} -> ${realAbs}`,
-        'Symlinked source cannot be checked safely. This is an operational failure, not accepted debt.'
-      );
-    }
+    assertInsideRepo(repoRoot, path.resolve(repoRoot, file), `selected path ${file}`);
   } catch (e) {
-    if (e.code !== 'ENOENT') {
-      failOperational(`could not resolve selected path ${file}: ${e.message}`);
-    }
+    failOperational(e.message, 'Symlinked source cannot be checked safely.');
   }
 }
 

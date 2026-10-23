@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertInsideRepo } from './repo-boundary.cjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -82,6 +83,17 @@ export function parseComplexity(message) {
 
 /** Load + validate the manifest. Returns { exceptions, errors } . */
 export function loadManifest(manifestPath = MANIFEST_PATH) {
+  // F08: the hook's manifest must physically live inside the repository —
+  // a symlinked scripts/quality/exceptions.json pointing at an outside
+  // file would let policy be supplied from beyond the commit. Explicit
+  // non-default paths (tests pass temp manifests) are exempt.
+  if (path.resolve(manifestPath) === MANIFEST_PATH) {
+    try {
+      assertInsideRepo(repoRoot, MANIFEST_PATH, 'exception manifest');
+    } catch (e) {
+      return { exceptions: [], errors: [e.message] };
+    }
+  }
   let raw;
   try {
     raw = readFileSync(manifestPath, 'utf8');

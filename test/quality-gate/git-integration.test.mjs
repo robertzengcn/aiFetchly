@@ -15,7 +15,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync, spawnSync } from 'node:child_process';
 import {
-  mkdirSync, writeFileSync, rmSync, cpSync, symlinkSync, readFileSync,
+  mkdirSync, writeFileSync, rmSync, cpSync, symlinkSync, readFileSync, mkdtempSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -289,5 +289,75 @@ describe('git integration (AC-04/05/07/15/16)', () => {
     );
     assert.equal(res2.status, 2, 'manifest naming a parser category is invalid');
     assert.ok((res2.stdout + res2.stderr).includes('can never be excepted'));
+  });
+});
+
+describe('filesystem boundaries (F08)', () => {
+  // Symlink creation needs privileges on Windows; the boundary check itself
+  // is platform-independent and covered by repo-boundary unit usage.
+  const canSymlink = process.platform !== 'win32';
+
+  test('F08: quality:fix refuses a symlinked target; external bytes stay unchanged', () => {
+    if (!canSymlink) return;
+    const { root } = makeRepo('f08-fix');
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), 'qg-f08-out-'));
+    try {
+      const outside = path.join(outsideDir, 'OutsideTarget.ts');
+      const before = 'export let value = 1;\n';
+      writeFileSync(outside, before);
+      rmSync(path.join(root, 'Linked.ts'), { force: true });
+      symlinkSync(outside, path.join(root, 'Linked.ts'));
+      const res = spawnSync(
+        process.execPath,
+        [path.join(root, 'scripts', 'quality', 'fix.mjs'), 'Linked.ts'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      assert.equal(res.status, 2, 'symlinked fix target must be refused');
+      assert.ok((res.stdout + res.stderr).includes('outside the repository'));
+      assert.equal(
+        readFileSync(outside, 'utf8'),
+        before,
+        'external bytes must be untouched by the rejected fix'
+      );
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F08: symlinked exception manifest is an operational failure', () => {
+    if (!canSymlink) return;
+    const { root } = makeRepo('f08-manifest');
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), 'qg-f08-man-'));
+    try {
+      const outside = path.join(outsideDir, 'evil-manifest.json');
+      writeFileSync(outside, JSON.stringify({ schemaVersion: 1, exceptions: [] }));
+      rmSync(path.join(root, 'scripts', 'quality', 'exceptions.json'));
+      symlinkSync(outside, path.join(root, 'scripts', 'quality', 'exceptions.json'));
+      writeFileSync(path.join(root, 'Good.ts'), 'export const value = 1;\n');
+      const res = spawnSync(
+        process.execPath,
+        [path.join(root, 'scripts', 'quality', 'lint-files.mjs'), 'Good.ts'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      assert.equal(res.status, 2, 'outside manifest must never load');
+      assert.ok((res.stdout + res.stderr).includes('outside the repository'));
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F08: symlinked staged source is rejected by the coordinator', () => {
+    if (!canSymlink) return;
+    const { root } = makeRepo('f08-src');
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), 'qg-f08-src-'));
+    try {
+      const outside = path.join(outsideDir, 'OutsideSrc.ts');
+      writeFileSync(outside, 'export const value = 1;\n');
+      symlinkSync(outside, path.join(root, 'Linked.ts'));
+      run(root, ['add', 'Linked.ts']);
+      assert.notEqual(commitIn(root, 'symlinked source'), 0, 'commit must fail');
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });

@@ -13,10 +13,13 @@
 
 import path from 'node:path';
 import process from 'node:process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 
+const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const { assertInsideRepo } = require('./repo-boundary.cjs');
 
 const files = process.argv.slice(2).filter((a) => a !== '--json');
 if (files.length === 0) {
@@ -28,10 +31,16 @@ if (files.length === 0) {
   process.exit(2);
 }
 
+// F08: fix REWRITES files, so the boundary check needs the realpath too —
+// the old lexical-only check let a symlinked target pull the fixer's
+// rewrite outside the repository. Checked before the engine starts, so
+// rejected fixes leave the external bytes untouched.
 for (const file of files) {
-  const abs = path.resolve(repoRoot, file);
-  if (!abs.startsWith(repoRoot + path.sep)) {
-    process.stderr.write(`quality:fix path escapes the repository: ${file}\\n`);
+  try {
+    assertInsideRepo(repoRoot, path.resolve(repoRoot, file), `quality:fix target ${file}`);
+  } catch (e) {
+    process.stderr.write(`quality:fix — ${e.message}\n`);
+    process.stderr.write('Nothing was changed and nothing was staged.\n');
     process.exit(2);
   }
 }
