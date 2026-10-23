@@ -987,10 +987,9 @@ export class AIChatContextAssembler {
    */
   private countProjectionFallbackForTool(row: AIChatMessageEntity): void {
     if (row.messageType !== MessageType.TOOL_RESULT) {
-      aiChatQueueCounters.incrementLabeled(
-        "ai_chat_workspace_projection_fallback_total",
-        "non_tool_row"
-      );
+      // R8 P2-13 (PRD §20): an ordinary user/assistant row without a
+      // projection is expected, not a fallback — counting it here poisoned
+      // the soak metric. Return without incrementing.
       return;
     }
     let toolLabel = "tool_unknown";

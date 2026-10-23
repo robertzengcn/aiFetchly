@@ -1542,7 +1542,7 @@ describe("AIChatContextAssembler specialized projection fallback counters (G01)"
     ).toBe(1);
   });
 
-  it("keeps non-tool fallbacks and corrupt metadata anonymous", async () => {
+  it("keeps corrupt metadata anonymous and does NOT count ordinary rows (R8 P2-13)", async () => {
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
     mockGetRecentMessages.mockResolvedValue([
@@ -1578,10 +1578,12 @@ describe("AIChatContextAssembler specialized projection fallback counters (G01)"
         'ai_chat_workspace_projection_fallback_total{reason="tool:tool_unknown"}'
       ]
     ).toBe(1);
+    // R8 P2-13: an ordinary user/assistant row is NOT a projection
+    // fallback — counting it poisons the soak metric (PRD §20).
     expect(
       snapshot[
         'ai_chat_workspace_projection_fallback_total{reason="non_tool_row"}'
       ]
-    ).toBe(1);
+    ).toBeUndefined();
   });
 });
