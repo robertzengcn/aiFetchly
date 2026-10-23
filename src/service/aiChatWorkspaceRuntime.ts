@@ -73,7 +73,7 @@ export interface RunOwnerResumeRouter {
           readonly questionId: string;
           readonly answers: import("@/entityTypes/aiChatPlanTypes").AskUserQuestionAnswer[];
         };
-  }): Promise<{ ok: boolean; error?: string }>;
+  }): Promise<{ ok: boolean; claimed?: boolean; error?: string }>;
 }
 
 let runOwnerResumeRouter: RunOwnerResumeRouter | null = null;

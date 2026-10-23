@@ -1950,24 +1950,105 @@ describe("R01: permission grant/deny owner routing at the IPC boundary", () => {
       },
       resumeRun: async () => {
         calls.push("resume");
-        return { ok: false, error: "No pending action" };
+        // R9 B07: a FRESH claim is required for the deny-equals-stop
+        // cancellation; the coordinator now reports it explicitly.
+        return { ok: true, claimed: true };
       },
     });
     const mod = await import("@/main-process/communication/ai-chat-v2-ipc");
-    const deny = (mod as unknown as {
-      __testDenyHandler: unknown;
-    }).__testDenyHandler;
-    // The deny handler is module-private; exercise it through the exported
-    // registration table instead if present. Fall back to asserting the
-    // stop routing (the documented deny fallback) below.
-    void deny;
-    const stopHandler = (mod as unknown as {
-      handleStop?: (d: unknown) => void;
-    }).handleStop;
-    if (stopHandler) {
-      stopHandler({ conversationId: "v2-r01d" });
-      await new Promise((r) => setTimeout(r, 10));
-      expect(calls).toContain("cancel");
-    }
+    const result = await (
+      mod as unknown as {
+        handleDenyToolPermission: (d: unknown) => Promise<{
+          status: boolean;
+          msg: string;
+          data: { ok: boolean; handled: boolean } | null;
+        }>;
+      }
+    ).handleDenyToolPermission({
+      toolId: "tool-r01d",
+      conversationId: "v2-r01d",
+    });
+    expect(result.status).toBe(true);
+    expect(result.data?.handled).toBe(true);
+    expect(calls).toEqual(["resume", "cancel"]);
+  });
+
+  /**
+   * R9 B07: a stale decision (mismatched/consumed tool id — the delayed
+   * old-card deny after a new turn began) must be a NO-OP with recoverable
+   * feedback: the currently owned run keeps running.
+   */
+  it("stale deny on an owned run never cancels the live run", async () => {
+    const calls: string[] = [];
+    const { setRunOwnerResumeRouter } = await import(
+      "@/service/aiChatWorkspaceRuntime"
+    );
+    setRunOwnerResumeRouter({
+      ownsConversation: (id: string) => id === "v2-r01s",
+      cancelOwnedRun: async () => {
+        calls.push("cancel");
+        return true;
+      },
+      resumeRun: async () => {
+        calls.push("resume");
+        return { ok: false, error: "No pending action (stale)." };
+      },
+    });
+    const mod = await import("@/main-process/communication/ai-chat-v2-ipc");
+    const result = await (
+      mod as unknown as {
+        handleDenyToolPermission: (d: unknown) => Promise<{
+          status: boolean;
+          msg: string;
+          data: { ok: boolean; handled: boolean } | null;
+        }>;
+      }
+    ).handleDenyToolPermission({
+      toolId: "tool-old",
+      conversationId: "v2-r01s",
+    });
+    expect(result.status).toBe(true);
+    expect(result.data).toMatchObject({ ok: true, handled: true });
+    expect(calls).toEqual(["resume"]);
+  });
+
+  /**
+   * R9 B07: an already-claimed action (another grant/deny consumed the
+   * claim) is owned by that gesture — a racing stale deny must not cancel
+   * the live run either.
+   */
+  it("a deny racing an already-claimed action is a no-op", async () => {
+    const calls: string[] = [];
+    const { setRunOwnerResumeRouter } = await import(
+      "@/service/aiChatWorkspaceRuntime"
+    );
+    setRunOwnerResumeRouter({
+      ownsConversation: (id: string) => id === "v2-r01c",
+      cancelOwnedRun: async () => {
+        calls.push("cancel");
+        return true;
+      },
+      resumeRun: async () => {
+        calls.push("resume");
+        // already_claimed maps to ok:true WITHOUT the fresh-claim marker.
+        return { ok: true };
+      },
+    });
+    const mod = await import("@/main-process/communication/ai-chat-v2-ipc");
+    const result = await (
+      mod as unknown as {
+        handleDenyToolPermission: (d: unknown) => Promise<{
+          status: boolean;
+          msg: string;
+          data: { ok: boolean; handled: boolean } | null;
+        }>;
+      }
+    ).handleDenyToolPermission({
+      toolId: "tool-claimed",
+      conversationId: "v2-r01c",
+    });
+    expect(result.status).toBe(true);
+    expect(result.data).toMatchObject({ ok: true, handled: true });
+    expect(calls).toEqual(["resume"]);
   });
 });

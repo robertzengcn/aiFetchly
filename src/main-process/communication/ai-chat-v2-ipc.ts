@@ -1534,24 +1534,27 @@ export async function handleDenyToolPermission(
     conversationId &&
     getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
   ) {
+    // R9 B07: bind the denial to the exact run/tool claim BEFORE any
+    // mutation. A stale decision — mismatched/consumed tool id, an
+    // already-claimed action, or a delayed old-card deny after a newer
+    // turn began — must be a NO-OP with recoverable feedback, never a
+    // cancellation of the currently owned run. A valid (fresh-claim)
+    // deny keeps the deny-equals-stop policy.
     const validated = await getRunOwnerResumeRouter()!.resumeRun({
       conversationId,
       action: { kind: "permission", toolId: parsed.toolId },
     });
-    if (validated.ok) {
-      // The action existed and a resume was queued — convert it to a deny:
-      // cancel the now-queued resume before the tool starts.
+    if (validated.ok && validated.claimed) {
+      // The action existed and this deny claimed it — the queued resume is
+      // cancelled before the tool starts (deny-equals-stop).
       const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
         conversationId
       );
       return ok({ ok: cancelled, handled: true });
     }
-    // Stale/duplicate deny on an owned run: cancel under the documented
-    // deny-equals-stop policy (idempotent when already terminal).
-    const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
-      conversationId
-    );
-    return ok({ ok: cancelled, handled: true });
+    // Stale/duplicate deny: idempotent no-op; the renderer rewrites the
+    // stale card to the denied receipt without stopping the live run.
+    return ok({ ok: true, handled: true });
   }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();

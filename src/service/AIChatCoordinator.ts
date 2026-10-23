@@ -438,7 +438,7 @@ export class AIChatCoordinator {
           readonly questionId: string;
           readonly answers: AskUserQuestionAnswer[];
         };
-  }): Promise<{ ok: boolean; error?: string }> {
+  }): Promise<{ ok: boolean; claimed?: boolean; error?: string }> {
     const live = this.liveRuns.get(input.conversationId);
     if (!live) {
       return {
@@ -478,7 +478,10 @@ export class AIChatCoordinator {
             input.action.questionId
           );
     if (claim.status === "already_claimed") {
-      return { ok: true }; // idempotent duplicate approval
+      // Idempotent duplicate approval — NOT a fresh claim: the consuming
+      // gesture owns the outcome, and R9 B07 denial routing relies on the
+      // distinction (a duplicate deny must never cancel a newer turn).
+      return { ok: true, claimed: false };
     }
     if (claim.status === "not_found") {
       return {
@@ -506,7 +509,9 @@ export class AIChatCoordinator {
     });
     void this.broadcastRunSummary(input.conversationId, "run_queued");
     this.pump();
-    return { ok: true };
+    // A FRESH claim: this gesture consumed the pending action and queued
+    // its resume.
+    return { ok: true, claimed: true };
   }
 
   // -------------------------------------------------------------------------
