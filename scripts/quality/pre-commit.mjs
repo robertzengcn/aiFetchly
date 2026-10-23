@@ -36,7 +36,40 @@ const policy = require('./policy.cjs');
 
 const OPERATIONAL_FAILURE = 2;
 const POLICY_VIOLATION = 1;
-const SAFETY_TIMEOUT_MS = 120_000;
+// Tech design §11: the safety timeout is deliberately configurable so an
+// operator can consciously raise it for oversized staged batches.
+const SAFETY_TIMEOUT_MS =
+  Number.parseInt(process.env.QUALITY_GATE_TIMEOUT_MS ?? '', 10) || 120_000;
+
+/**
+ * F02: coordinator-owned CORE policy-control list. Deliberately NOT read
+ * from policy.cjs — an unstaged edit that weakens policyControlInputs must
+ * not be able to silence these consistency checks. policy.policyControlInputs
+ * (loaded afterwards) can only ADD entries.
+ */
+const CORE_POLICY_CONTROL_INPUTS = [
+  '.eslintrc.json',
+  'scripts/quality/**',
+  'package.json',
+  'yarn.lock',
+  '.gitignore',
+  '.eslintignore',
+];
+
+/** Does a repo-relative path match a control entry (exact or dir glob)? */
+function matchesControl(relPath, control) {
+  if (control.endsWith('/**')) {
+    const dir = control.slice(0, -3);
+    return relPath === dir || relPath.startsWith(dir + '/');
+  }
+  return relPath === control;
+}
+
+function controlPathspec(control) {
+  // `git diff -- scripts/quality` already covers the whole tree; keep the
+  // glob form out of the pathspec (glob magic differs across git versions).
+  return control.endsWith('/**') ? control.slice(0, -3) : control;
+}
 
 function git(args, { allowFailure = false } = {}) {
   const result = spawnSync('git', args, {
@@ -155,24 +188,28 @@ const staged = [];
 const sourceExt = new Set(policy.sourceExtensions);
 const stagedSource = staged.filter((f) => sourceExt.has(path.extname(f)));
 
-// Policy-control inputs among STAGED files → validate policy before ANY
-// exit (QG-10, BUG-5). This list is policy/config only; documentation is
-// deliberately absent (BUG-17: the operator guide is documentation, not a
-// policy input per tech design §6.1).
-const stagedPolicy = staged.filter((f) =>
-  policy.policyControlInputs.some(
-    (p) => f === p || (p.endsWith('/**') && f.startsWith(p.slice(0, -2)))
-  )
-);
+// --- 2b. Policy-input consistency (F02) -------------------------------------
+//
+// The effective policy is read from the WORKING TREE, so every control
+// input it depends on must be committed and match the index — tracked
+// files with unstaged edits AND untracked helpers are both rejected.
+// Untracked files are invisible to `git diff`, which is exactly how a
+// staged policy.cjs importing an untracked, weaker helper slipped through.
+// The control list is coordinator-owned (see CORE_POLICY_CONTROL_INPUTS);
+// policy.policyControlInputs may only extend it.
+const controls = [...new Set([
+  ...CORE_POLICY_CONTROL_INPUTS,
+  ...(Array.isArray(policy.policyControlInputs) ? policy.policyControlInputs : []),
+])];
 
-// Unstaged edits to policy/control inputs reject the commit (AC-16): an
-// unstaged weaker configuration must not determine a staged commit's result.
 const unstagedPolicy = [];
-for (const control of policy.policyControlInputs) {
-  const diff = git(['diff', '--name-only', '--', control], { allowFailure: true });
+{
+  const diff = git(['diff', '--name-only', '-z', '--', ...controls.map(controlPathspec)], {
+    allowFailure: true,
+  });
   if (diff.status === 0) {
-    for (const line of diff.stdout.split('\n')) {
-      if (line.trim().length > 0) unstagedPolicy.push(line.trim());
+    for (const p of diff.stdout.split('\0')) {
+      if (p.length > 0) unstagedPolicy.push(p);
     }
   }
 }
@@ -184,10 +221,40 @@ if (unstagedPolicy.length > 0) {
   );
 }
 
-// BUG-5: staged policy inputs are validated NOW — including in policy-only
-// commits with zero staged source. A broken exceptions.json or unparseable
-// profile is exit 2 here, not a deferred failure on the next source commit.
+const untrackedPolicy = [];
+{
+  const others = git(['ls-files', '--others', '--exclude-standard', '-z']);
+  for (const p of others.stdout.split('\0')) {
+    if (p.length === 0) continue;
+    if (controls.some((c) => matchesControl(p, c)) || /^\.eslintrc[^/]*$/.test(p)) {
+      untrackedPolicy.push(p);
+    }
+  }
+}
+if (untrackedPolicy.length > 0) {
+  failOperational(
+    `UNTRACKED policy/control inputs exist (they will not be in this commit):\n` +
+      untrackedPolicy.map((f) => `  - ${f}`).join('\n'),
+    'Stage them (git add) or remove them. A commit may not depend on policy files that a fresh checkout would not have.'
+  );
+}
+
+// Policy-control inputs among STAGED files → validate policy before ANY
+// exit (QG-10, BUG-5). This list is policy/config only; documentation is
+// deliberately absent (BUG-17: the operator guide is documentation, not a
+// policy input per tech design §6.1).
+const stagedPolicy = staged.filter((f) => controls.some((c) => matchesControl(f, c)));
+
+// BUG-5/F01: staged policy inputs are validated NOW — including in
+// policy-only commits with zero staged source. A broken exceptions.json or
+// unparseable profile is exit 2 here, not a deferred failure on the next
+// source commit. F01: validation also EXERCISES the effective ESLint
+// configuration (lintText on clean TS/Vue/CJS samples) — loading modules
+// proves nothing about rule names, rule options, parser/plugin resolution,
+// or the effective per-dialect profiles, so a config naming a nonexistent
+// rule used to validate green and then break every later source commit.
 if (stagedPolicy.length > 0) {
+  validateStagedPackageControls(stagedPolicy);
   const moduleUrls = [
     'scripts/quality/check-exceptions.mjs',
     'scripts/quality/policy.cjs',
@@ -198,21 +265,55 @@ if (stagedPolicy.length > 0) {
     .map((abs) => pathToFileURL(abs).href)
     .map((href) => JSON.stringify(href))
     .join(', ');
+  const rootLiteral = JSON.stringify(repoRoot);
   const snippet = `
+    const path = await import('node:path');
     const [exceptions, policyMod, fastProfile, stagedConfig] = await Promise.all(
       [${moduleUrls}].map((u) => import(u))
     );
+    void policyMod; void fastProfile; void stagedConfig;
     const manifest = exceptions.loadManifest();
     if (manifest.errors.length > 0) {
       process.stderr.write(manifest.errors.join('\\n') + '\\n');
       process.exit(1);
     }
-    void policyMod; void fastProfile; void stagedConfig;
+    const { createRequire } = await import('node:module');
+    const root = ${rootLiteral};
+    const requireFromRoot = createRequire(path.join(root, 'package.json'));
+    const { ESLint } = requireFromRoot('eslint');
+    const eslint = new ESLint({
+      cwd: root,
+      useEslintrc: false,
+      overrideConfigFile: path.join(root, 'scripts', 'quality', 'eslint-fast.cjs'),
+      resolvePluginsRelativeTo: root,
+      fix: false,
+    });
+    // Clean, representative samples for each dialect profile. ANY severity-2
+    // finding on clean code is a configuration failure (unknown rule,
+    // invalid options, unresolvable plugin/parser) — including the
+    // "Definition for rule ... was not found" shape.
+    const samples = [
+      ['probe.ts', 'export const value: number = 1;\\n'],
+      ['probe.vue', '<template><div>{{ ok }}</div></template>\\n<script setup lang="ts">\\nconst ok = 1;\\n</script>\\n'],
+      ['probe.cjs', 'module.exports = { ok: true };\\n'],
+    ];
+    for (const [name, code] of samples) {
+      const [result] = await eslint.lintText(code, {
+        filePath: path.join(root, 'tmp-quality-probe', name),
+      });
+      const blockers = result.messages.filter((m) => m.severity === 2);
+      if (blockers.length > 0) {
+        for (const m of blockers) {
+          process.stderr.write(\`policy probe \${name}: \${m.ruleId ?? '(config)'} — \${m.message}\\n\`);
+        }
+        process.exit(1);
+      }
+    }
   `;
   const validation = spawnSync(process.execPath, ['--input-type=module', '-e', snippet], {
     cwd: repoRoot,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: 60_000,
   });
   if (validation.status !== 0) {
     failOperational(
@@ -222,6 +323,50 @@ if (stagedPolicy.length > 0) {
     );
   }
   process.stdout.write('quality: staged policy inputs validated\n');
+}
+
+/**
+ * F01: staged package/lockfile control changes must not uninstall or
+ * unpin the gate — the staged devDependencies must still declare every
+ * engine dependency, and a staged yarn.lock must still contain the pinned
+ * SonarJS plugin entry.
+ */
+function validateStagedPackageControls(stagedPolicy) {
+  const REQUIRED_DEV_DEPS = [
+    'eslint',
+    'eslint-plugin-sonarjs',
+    'eslint-plugin-vue',
+    'vue-eslint-parser',
+    '@typescript-eslint/parser',
+    'lint-staged',
+  ];
+  if (stagedPolicy.includes('package.json')) {
+    const staged = git(['show', ':package.json']).stdout;
+    let pkg;
+    try {
+      pkg = JSON.parse(staged);
+    } catch (e) {
+      failOperational(`staged package.json is not valid JSON: ${e.message}`);
+    }
+    const dev = { ...(pkg.devDependencies ?? {}), ...(pkg.dependencies ?? {}) };
+    const missing = REQUIRED_DEV_DEPS.filter((d) => !(d in dev));
+    if (missing.length > 0) {
+      failOperational(
+        `staged package.json no longer declares the quality-gate dependencies:\n` +
+          missing.map((d) => `  - ${d}`).join('\n'),
+        'Removing a gate dependency disables the hook. Revert the removal deliberately (and update the gate) rather than committing a broken policy.'
+      );
+    }
+  }
+  if (stagedPolicy.includes('yarn.lock')) {
+    const staged = git(['show', ':yarn.lock']).stdout;
+    if (!/^eslint-plugin-sonarjs@/m.test(staged)) {
+      failOperational(
+        'staged yarn.lock no longer contains the pinned eslint-plugin-sonarjs entry',
+        'The hook resolves the pinned plugin from the lockfile. Restore the entry or update the gate deliberately.'
+      );
+    }
+  }
 }
 
 // Documentation-only fast path (QG-10): no staged source and no staged

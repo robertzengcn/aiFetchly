@@ -50,6 +50,15 @@ function makeRepo(name) {
     '#!/usr/bin/env sh\nnode "$PWD/scripts/quality/pre-commit.mjs"\n'
   );
   execSync(`chmod +x ${path.join(root, '.husky', '_', 'pre-commit')}`);
+  // Seed-commit the gate with the hook disabled: the coordinator rejects
+  // UNTRACKED policy-control inputs (F02), so the harness's own copied
+  // scripts tree must be committed before any gated commit runs. The seed
+  // commit also brings .eslintrc.json under version control the same way
+  // a real checkout has it.
+  git('config core.hooksPath /dev/null');
+  git('add scripts .eslintrc.json tsconfig.json');
+  git('commit -q -m "seed gate"');
+  git('config core.hooksPath .husky/_');
   sandboxes.push(root);
   return { root, git };
 }
@@ -359,5 +368,70 @@ describe('filesystem boundaries (F08)', () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('policy-input consistency (F01/F02)', () => {
+  test('F02: staged policy importing an UNTRACKED helper rejects the commit', () => {
+    const { root } = makeRepo('f02-helper');
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'local-overrides.cjs'),
+      "module.exports = { '@typescript-eslint/no-explicit-any': 'off' };\n"
+    );
+    const policyPath = path.join(root, 'scripts', 'quality', 'policy.cjs');
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, 'utf8') +
+        "\nObject.assign(module.exports, require('./local-overrides.cjs'));\n"
+    );
+    writeFileSync(path.join(root, 'S.ts'), 'export const value: any = 1;\n');
+    run(root, ['add', 'S.ts', 'scripts/quality/policy.cjs']);
+    const res = run(root, ['commit', '-m', 'untracked helper']);
+    assert.notEqual(res.status, 0, 'commit must not pass with untracked policy');
+    assert.ok(
+      (res.stdout + res.stderr).includes('UNTRACKED policy'),
+      `expected UNTRACKED diagnostic, got: ${(res.stdout + res.stderr).slice(0, 400)}`
+    );
+    // And the untracked helper is still untracked afterwards (nothing staged).
+    const others = run(root, ['ls-files', '--others', '--exclude-standard']).stdout;
+    assert.ok(others.includes('local-overrides.cjs'));
+  });
+
+  test('F01: policy-only commit with a missing rule definition is rejected', () => {
+    const { root } = makeRepo('f01-missing-rule');
+    const eslintrc = JSON.parse(readFileSync(path.join(root, '.eslintrc.json'), 'utf8'));
+    eslintrc.rules['missing-plugin/nonexistent-rule'] = 'error';
+    writeFileSync(path.join(root, '.eslintrc.json'), JSON.stringify(eslintrc, null, 2));
+    run(root, ['add', '.eslintrc.json']);
+    const res = run(root, ['commit', '-m', 'broken policy']);
+    assert.notEqual(res.status, 0, 'a broken effective policy must never commit');
+    assert.ok(
+      (res.stdout + res.stderr).includes('was not found'),
+      `expected the missing-rule diagnostic, got: ${(res.stdout + res.stderr).slice(0, 400)}`
+    );
+  });
+
+  test('F01: a valid policy-only commit validates the effective config and passes', () => {
+    const { root } = makeRepo('f01-valid');
+    const policyPath = path.join(root, 'scripts', 'quality', 'policy.cjs');
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, 'utf8') + '\n// policy-only change: documentation comment\n'
+    );
+    run(root, ['add', 'scripts/quality/policy.cjs']);
+    const res = run(root, ['commit', '-m', 'valid policy edit']);
+    assert.equal(res.status, 0, `valid policy commit must pass: ${(res.stdout + res.stderr).slice(0, 400)}`);
+  });
+
+  test('F01: staged package.json dropping a gate dependency is rejected', () => {
+    const { root } = makeRepo('f01-pkg');
+    writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ name: 'disposable', version: '0.0.0' }, null, 2)
+    );
+    run(root, ['add', 'package.json']);
+    const res = run(root, ['commit', '-m', 'uninstall gate']);
+    assert.notEqual(res.status, 0);
+    assert.ok((res.stdout + res.stderr).includes('no longer declares the quality-gate dependencies'));
   });
 });
