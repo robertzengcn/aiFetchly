@@ -84,3 +84,40 @@ describe('deep scope resolution (BUG-1)', () => {
     }
   });
 });
+
+describe('deep scope resolution (F05)', () => {
+  test('Vue include patterns resolve .vue targets TS cannot enumerate', () => {
+    writeFileSync(
+      path.join(fixtureRoot, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { allowJs: true, noEmit: true },
+        include: ['src/**/*.ts', 'src/**/*.vue'],
+      })
+    );
+    writeFileSync(
+      path.join(fixtureRoot, 'src', 'Panel.vue'),
+      '<template><div/></template>\n<script setup lang="ts">\nexport const ok = 1;\n</script>\n'
+    );
+    const scope = resolveTypedScope(fixtureRoot);
+    assert.ok(scope.vueTargets.includes('src/Panel.vue'), JSON.stringify(scope.vueTargets));
+    assert.ok(scope.typedTargets.includes('src/Panel.vue'));
+    assert.ok(!scope.typedTargets.includes('src/OutOfProject.js'));
+  });
+
+  test('tsconfig configuration diagnostics throw (operational failure)', () => {
+    writeFileSync(
+      path.join(fixtureRoot, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { allowJs: true, noSuchCompilerOption: true },
+        include: ['src/**/*.ts'],
+      })
+    );
+    assert.throws(() => resolveTypedScope(fixtureRoot), /configuration diagnostics/);
+  });
+
+  test('real repo: every tracked .vue file under src is in the typed scope', () => {
+    const scope = resolveTypedScope(repoRoot);
+    assert.ok(scope.vueTargets.length > 200, `expected the Vue tree in scope, got ${scope.vueTargets.length}`);
+    assert.ok(scope.jsInProject.includes('forge.config.js'));
+  });
+});
