@@ -14,14 +14,17 @@
  *           reporting capability endpoint is available and an eligible
  *           assistant output exists (seeded row): the report-conversation
  *           dialog opens, submits, and resolves the server reference.
+ *   AC 28  — a live tool run in conversation A delivers ONLY bounded
+ *           summary state to A's sidebar row (status + title) and nothing
+ *           to conversation B's selected view while B holds the selection —
+ *           the model's tool detail (name + arguments) never crosses.
  *   AC 36  — one Electron journey through BOTH surfaces: the workspace shell
  *           carries a turn end to end, the operator rolls back, and the
  *           legacy Chat V2 dock carries the next turn end to end.
  *
  * AC 11/12 (plan-approval continuation counting) need a scripted plan
- * document scenario on the fake provider; AC 28 (inactive-conversation
- * summary-only payload) needs a two-conversation run-detail observer — both
- * remain open in the audit table by explicit decision (no scenario exists).
+ * document scenario on the fake provider — they remain open in the audit
+ * table by explicit decision (no scenario exists).
  *
  * Relative imports only (design §9.3).
  */
@@ -81,6 +84,28 @@ async function requestCount(
   fakeAi: { getRequests(): Promise<readonly unknown[]> }
 ): Promise<number> {
   return (await fakeAi.getRequests()).length;
+}
+
+/** Sidebar conversation rows (same scoping as the steering spec). */
+function conversationRows(app: LaunchedApp): import("@playwright/test").Locator {
+  return app.mainWindow
+    .getByTestId("workspace-tree")
+    .locator('[data-testid^="workspace-conversation-v2-"]');
+}
+
+/**
+ * Switch the composer's tool-approval selector (glob_files is permission-
+ * gated in ask_for_approval mode — auto-approve so the run stays live).
+ */
+async function selectToolApproval(
+  app: LaunchedApp,
+  optionTitle: string
+): Promise<void> {
+  await app.mainWindow
+    .locator(".v2-tool-approval-selector")
+    .locator(".v-field")
+    .click();
+  await app.mainWindow.getByRole("option", { name: optionTitle }).click();
 }
 
 /**
@@ -277,6 +302,62 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
       }
       await reporting.close();
     }
+  });
+
+  test("AC 28: a live run in an inactive conversation reaches its sidebar row as bounded summary only", async ({
+    aiApp,
+    fakeAi,
+  }) => {
+    test.setTimeout(300_000);
+    // Conversation A runs a scripted tool call with a long pre-delta delay —
+    // a comfortable live window in which to switch selection to B.
+    await openChat(aiApp);
+    await selectToolApproval(aiApp, "Approve for me");
+    await fakeAi.setToolCalls(
+      [{ name: "glob_files", arguments: '{"pattern":"*.txt"}' }],
+      15_000
+    );
+
+    await send(aiApp, "list both file sets");
+    // A's turn is live (the request has been dispatched and is mid-stream).
+    const transcript = aiApp.mainWindow
+      .getByTestId("workspace-transcript")
+      .first();
+    await expect(transcript).toContainText("Generating…", {
+      timeout: 30_000,
+    });
+    const liveRequests = await requestCount(fakeAi);
+    expect(liveRequests).toBeGreaterThanOrEqual(0);
+
+    // B holds the selection while A keeps running.
+    await aiApp.mainWindow.getByTestId("workspace-new-chat").click();
+    await expect(textarea(aiApp)).toBeVisible({ timeout: 15_000 });
+
+    // A's sidebar row (newest-last) must carry ONLY bounded summary state:
+    // status indicator + title. The tool name and arguments must never
+    // appear — the event router redacts detail for non-selected windows.
+    const rowA = conversationRows(aiApp).last();
+    await expect(rowA).toBeVisible({ timeout: 15_000 });
+    await expect(rowA).not.toContainText("glob_files");
+    await expect(rowA).not.toContainText("*.txt");
+
+    // B's selected view (its own transcript) must not show A's tool detail
+    // either — detail events follow selection, summaries do not.
+    await expect(transcript).not.toContainText("glob_files");
+    await expect(transcript).not.toContainText("*.txt");
+
+    // A's run completes in the background; the bounded completion summary
+    // (completed-unread indicator) reaches the row without any detail.
+    await expect
+      .poll(() => requestCount(fakeAi), { timeout: 60_000 })
+      .toBeGreaterThan(liveRequests);
+    await expect(
+      rowA.locator(".unread-dot, [class*='unread']")
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(rowA).not.toContainText("glob_files");
+    await expect(rowA).not.toContainText("*.txt");
+    await expect(transcript).not.toContainText("glob_files");
+    await expect(transcript).not.toContainText("*.txt");
   });
 
   test("AC 36: one Electron journey across both surfaces — workspace shell turn, rollback, legacy dock turn", async ({
