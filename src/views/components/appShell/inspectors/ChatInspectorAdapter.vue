@@ -14,6 +14,7 @@
     @update:tab="chatWorkspace.setInspectorTab"
     @update:width="chatWorkspace.setInspectorWidth"
     @compact="onCompact"
+    @open-memory="onOpenMemory"
     @close="onClose"
   />
 </template>
@@ -54,5 +55,11 @@ async function onCompact(): Promise<void> {
 function onClose(): void {
   chatWorkspace.setInspectorOpen(false);
   inspector.close();
+}
+
+/** R8 P2 (FR-WSP-007): the Context-inspector memory entry opens the same
+ * shared overlay the workspace badge entry opens (single store owner). */
+function onOpenMemory(): void {
+  chatWorkspace.openMemoryOverlay();
 }
 </script>

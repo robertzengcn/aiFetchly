@@ -329,6 +329,20 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     persistInspector();
   }
 
+  // R8 P2 (FR-WSP-007): the workspace memory overlay is shell-shared state —
+  // the badge entry (center surface) and the Context-inspector entry (app
+  // shell adapter bridge) both open THE SAME overlay through this flag, so
+  // the dialog binding has a single owner.
+  const memoryOverlayOpen = ref(false);
+
+  function openMemoryOverlay(): void {
+    memoryOverlayOpen.value = true;
+  }
+
+  function setMemoryOverlayOpen(open: boolean): void {
+    memoryOverlayOpen.value = open;
+  }
+
   function persistInspector(): void {
     try {
       localStorage.setItem(
@@ -433,6 +447,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     setInspectorOpen,
     setInspectorTab,
     setInspectorWidth,
+    memoryOverlayOpen,
+    openMemoryOverlay,
+    setMemoryOverlayOpen,
     teardown,
   };
 });

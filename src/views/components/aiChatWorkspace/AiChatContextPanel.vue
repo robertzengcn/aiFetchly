@@ -74,15 +74,38 @@
           {{ t('workspaceChat.context.compact') || 'Compact conversation' }}
         </button>
       </section>
+
+      <!-- Workspace memory entry (R8 P2, FR-WSP-007): the Context inspector
+           exposes the same memory surface the workspace badge owns — the
+           active count plus an action that opens the shared overlay. -->
+      <section
+        v-if="showMemory && workspaceGroup?.approvalState === 'approved'"
+        class="context-section"
+      >
+        <button
+          type="button"
+          class="compact-action"
+          data-testid="workspace-context-memory"
+          @click="emit('open-memory')"
+        >
+          <v-icon icon="mdi-brain" size="16" aria-hidden="true" />
+          {{ t('workspaceMemory.memoryAction') || 'Memory' }}
+          <span
+            class="trust-badge"
+            data-testid="workspace-context-memory-count"
+          >{{ memoryCount }}</span>
+        </button>
+      </section>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import {
   computeContextPercent,
 } from "@/views/components/aiChatV2/contextUsageUtil";
@@ -90,10 +113,13 @@ import {
 const props = defineProps<{
   conversationId: string | null;
   messages: readonly ChatV2MessageView[];
+  /** Memory entry visibility (rollout adapter §23.1); inspector feeds it. */
+  showMemory?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "compact"): void;
+  (e: "open-memory"): void;
 }>();
 
 const { t } = useI18n();
@@ -176,6 +202,38 @@ const attachmentItems = computed(() => {
 });
 
 const attachmentCount = computed(() => attachmentItems.value.length);
+
+/** FR-WSP-007: active workspace-memory count for the Context entry point
+ * (same bounded fetch the workspace badge uses — one IPC round-trip). */
+const memoryCount = ref(0);
+
+async function refreshMemoryCount(): Promise<void> {
+  const id = props.conversationId;
+  if (!id || workspaceGroup.value?.approvalState !== "approved") {
+    memoryCount.value = 0;
+    return;
+  }
+  try {
+    const resp = await workspaceMemoryApi.list({
+      conversationId: id,
+      status: "active",
+      limit: 200,
+    });
+    memoryCount.value =
+      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+  } catch {
+    // Non-fatal: the entry point stays usable with a zero count.
+    memoryCount.value = 0;
+  }
+}
+
+watch(
+  () => [props.conversationId, workspaceGroup.value?.approvalState] as const,
+  () => {
+    void refreshMemoryCount();
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>

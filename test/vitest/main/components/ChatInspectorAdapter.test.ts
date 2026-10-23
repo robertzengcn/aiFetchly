@@ -10,6 +10,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import ChatInspectorAdapter from "@/views/components/appShell/inspectors/ChatInspectorAdapter.vue";
 import { useAppInspectorStore } from "@/views/store/appInspector";
+import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 
 const startCompactionMock = vi.fn().mockResolvedValue({ started: true });
 
@@ -17,13 +18,14 @@ vi.mock("@/views/api/aiChatV2", () => ({
   startCompaction: (...args: unknown[]) => startCompactionMock(...args),
 }));
 
-/** Stubbed inspector surface: a button that emits the compact event. */
+/** Stubbed inspector surface: buttons that emit the compact / open-memory events. */
 const InspectorStub = {
   name: "AiChatInspector",
   props: ["activeTab", "width", "overlay", "conversationId", "messages"],
-  emits: ["update:tab", "update:width", "compact", "close"],
+  emits: ["update:tab", "update:width", "compact", "open-memory", "close"],
   template:
-    '<button data-testid="inspector-compact-stub" @click="$emit(\'compact\')" />',
+    '<button data-testid="inspector-compact-stub" @click="$emit(\'compact\')" />' +
+    '<button data-testid="inspector-memory-stub" @click="$emit(\'open-memory\')" />',
 };
 
 function mountAdapter() {
@@ -88,5 +90,27 @@ describe("ChatInspectorAdapter compact routing", () => {
     // Non-fatal by design: the rejection must not surface as an unhandled
     // error (onCompact catches) — reaching here without throwing is the pass.
     expect(startCompactionMock).toHaveBeenCalledWith("conv-adapt-2");
+  });
+
+  /** R8 P2 (FR-WSP-007): the Context panel's memory entry opens the same
+   * shared memory overlay the workspace badge uses — through the store
+   * flag so the chat-first shell stays the single owner. */
+  it("opens the workspace memory overlay from the context memory entry point", async () => {
+    const inspector = useAppInspectorStore();
+    inspector.open({
+      kind: "chat",
+      ownerRoute: "/aiworkspace",
+      conversationId: "conv-adapt",
+      tab: "context",
+    });
+
+    const wrapper = mountAdapter();
+    await wrapper
+      .find('[data-testid="inspector-memory-stub"]')
+      .trigger("click");
+    await flushPromises();
+
+    const chatWorkspace = useChatWorkspaceStore();
+    expect(chatWorkspace.memoryOverlayOpen).toBe(true);
   });
 });

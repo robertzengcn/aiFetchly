@@ -81,7 +81,9 @@
         v-if="activeTab === 'context'"
         :conversation-id="conversationId"
         :messages="messages"
+        :show-memory="voiceMemoryEnabled"
         @compact="emit('compact')"
+        @open-memory="emit('open-memory')"
       />
     </div>
   </aside>
@@ -111,6 +113,7 @@ const emit = defineEmits<{
   (e: "update:tab", tab: "artifacts" | "activity" | "context"): void;
   (e: "update:width", width: number): void;
   (e: "compact"): void;
+  (e: "open-memory"): void;
   (e: "close"): void;
 }>();
 
@@ -119,6 +122,8 @@ const { t } = useI18n();
 /** A02 (§23.1): artifacts degrade to a placeholder when the adapter is off. */
 const rolloutAdapters = useWorkspaceRolloutAdapters();
 const specializedResultsEnabled = rolloutAdapters.specializedResults;
+/** A02 (§23.1): the memory entry gate mirrors the badge (adapter answer). */
+const voiceMemoryEnabled = rolloutAdapters.voiceMemory;
 
 /** Resizing applies on wide screens only (design §15.8). */
 const resizable = computed(() => props.overlay !== true);

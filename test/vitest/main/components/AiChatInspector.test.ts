@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { defineComponent } from "vue";
 import { createI18n } from "vue-i18n";
 import AiChatInspector from "@/views/components/aiChatWorkspace/AiChatInspector.vue";
 
@@ -77,5 +78,35 @@ describe("AiChatInspector close control", () => {
       .find('[data-testid="workspace-inspector"]')
       .trigger("keydown.escape");
     expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  /** R8 P2 (FR-WSP-007): the memory entry lives in the Context panel; the
+   * inspector forwards it so the adapter bridge can open the shared
+   * memory overlay. */
+  it("forwards the context panel's memory entry point", async () => {
+    const wrapper = mount(AiChatInspector, {
+      props: {
+        activeTab: "context",
+        width: 420,
+        conversationId: "conv-1",
+        messages: [],
+      },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          VIcon: { template: "<i />" },
+          AiChatContextPanel: defineComponent({
+            props: ["conversationId", "messages", "showMemory"],
+            emits: ["compact", "open-memory"],
+            template:
+              '<button data-testid="ctx-memory" @click="$emit(\'open-memory\')" />',
+          }),
+        },
+      },
+    });
+
+    await wrapper.find('[data-testid="ctx-memory"]').trigger("click");
+
+    expect(wrapper.emitted("open-memory")).toBeTruthy();
   });
 });

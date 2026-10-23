@@ -545,8 +545,15 @@
       @submitted="onSingleReportSubmitted"
     />
 
-    <!-- Workspace memory dialog (existing surface, fed by the composable). -->
-    <v-dialog v-model="showWorkspaceMemory" max-width="760">
+    <!-- Workspace memory dialog (existing surface, fed by the composable).
+         R8 P2 (FR-WSP-007): the open state lives in the workspace store so
+         the Context-inspector entry (app shell adapter) opens this SAME
+         dialog. -->
+    <v-dialog
+      :model-value="workspaceStore.memoryOverlayOpen"
+      max-width="760"
+      @update:model-value="workspaceStore.setMemoryOverlayOpen"
+    >
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon class="mr-2">mdi-brain</v-icon>
@@ -556,7 +563,7 @@
             icon="mdi-close"
             variant="text"
             size="small"
-            @click="showWorkspaceMemory = false"
+            @click="workspaceStore.setMemoryOverlayOpen(false)"
           />
         </v-card-title>
         <v-divider />
@@ -851,7 +858,9 @@ const voiceRuntimeInstallDialog = computed({
     voice.runtimeInstallDialog.value = value;
   },
 });
-const showWorkspaceMemory = ref(false);
+// R8 P2 (FR-WSP-007): the dialog's open state moved to the workspace store
+// (`memoryOverlayOpen`) so both the badge entry and the Context-inspector
+// entry drive the same overlay.
 
 function openWorkspaceMemory(): void {
   // A02 (§23.1): the voice/memory adapter off removes the memory surface —
@@ -861,10 +870,10 @@ function openWorkspaceMemory(): void {
   }
   const workspace = conversationWorkspace.workspace.value;
   if (!workspace || workspace.approvalState !== "approved") {
-    showWorkspaceMemory.value = false;
+    workspaceStore.setMemoryOverlayOpen(false);
     return;
   }
-  showWorkspaceMemory.value = true;
+  workspaceStore.openMemoryOverlay();
 }
 
 /**

@@ -3295,6 +3295,29 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
   });
 
+  it("opens the shared memory overlay through the store flag (FR-WSP-007 R8 P2)", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Same overlay owner as the Context-inspector entry (adapter bridge):
+    // the badge entry flips the store flag, not a surface-local ref.
+    wrapper
+      .findComponent({ name: "WorkspaceBadge" })
+      .vm.$emit("request-open-memory");
+    await flushPromises();
+
+    expect(chatWorkspace.memoryOverlayOpen).toBe(true);
+  });
+
   it("renders the approved workspace through the shared composable", async () => {
     getWorkspaceMock.mockResolvedValue({
       id: 7,
