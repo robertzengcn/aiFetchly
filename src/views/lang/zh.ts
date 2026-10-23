@@ -4228,8 +4228,11 @@ export default {
       resultFailed: "失败：{message}",
       output: "输出",
     },
+    stateUnknown: "状态未知",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "安装操作失败。请重试。",
+      statusUnavailable: "无法刷新安装状态。在状态确认之前保持锁定——请检查网络连接后重试。",
       secretFailed: "保存凭据失败。凭据未被保存。",
     },
     state: {

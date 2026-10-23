@@ -4395,8 +4395,11 @@ export default {
       resultFailed: "失敗：{message}",
       output: "出力",
     },
+    stateUnknown: "状態不明",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "インストール操作に失敗しました。再試行してください。",
+      statusUnavailable: "インストール状態を更新できませんでした。状態が確認されるまで承認はロックされたままです。接続を確認して再試行してください。",
       secretFailed: "認証情報の保存に失敗しました。保存されていません。",
     },
     state: {

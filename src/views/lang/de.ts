@@ -4512,11 +4512,15 @@ export default {
       resultFailed: "Fehlgeschlagen: {message}",
       output: "Ausgabe",
     },
+    stateUnknown: "Status unbekannt",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed:
         "Die Installationsaktion ist fehlgeschlagen. Versuchen Sie es erneut.",
       secretFailed:
         "Speichern der Zugangsdaten fehlgeschlagen. Sie wurden NICHT gespeichert.",
+      statusUnavailable:
+        "Der Installationsstatus konnte nicht aktualisiert werden. Genehmigungen bleiben gesperrt, bis der Status bestätigt ist – prüfen Sie die Verbindung und versuchen Sie es erneut.",
     },
     state: {
       requested: "Angefordert",

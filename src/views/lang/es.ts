@@ -4503,8 +4503,11 @@ export default {
       resultFailed: "Error: {message}",
       output: "Salida",
     },
+    stateUnknown: "Estado desconocido",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "La acción de instalación falló. Inténtalo de nuevo.",
+      statusUnavailable: "No se pudo actualizar el estado de la instalación. Las aprobaciones permanecen bloqueadas hasta confirmar el estado: revise la conexión y reintente.",
       secretFailed: "No se pudo guardar la credencial. NO se guardó.",
     },
     state: {

@@ -4480,8 +4480,11 @@ export default {
       resultFailed: "Failed: {message}",
       output: "Output",
     },
+    stateUnknown: "Status unknown",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "The installation action failed. Try again.",
+      statusUnavailable: "Could not refresh the installation status. Approvals stay locked until the status is confirmed — check the connection and retry.",
       secretFailed: "Storing the credential failed. It was NOT saved.",
     },
     state: {

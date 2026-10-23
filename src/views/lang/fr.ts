@@ -4491,8 +4491,11 @@ export default {
       resultFailed: "Échec : {message}",
       output: "Sortie",
     },
+    stateUnknown: "Statut inconnu",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "L'action d'installation a échoué. Réessayez.",
+      statusUnavailable: "Impossible d'actualiser le statut de l'installation. Les approbations restent verrouillées jusqu'à la confirmation du statut : vérifiez la connexion et réessayez.",
       secretFailed:
         "Échec de l'enregistrement de l'identifiant. Il n'a PAS été enregistré.",
     },
