@@ -223,3 +223,38 @@ describe('non-exceptionable diagnostics (F03)', () => {
     assert.equal(isOperationalDiagnostic({ severity: 2, ruleId: 'sonarjs/cognitive-complexity', message: 'ok' }), false);
   });
 });
+
+describe('strict schema validation (F09)', () => {
+  test('impossible calendar dates are rejected; leap days round-trip', () => {
+    const bad = loadManifest(manifest(VALID({ expiresOn: '2099-99-99' })));
+    assert.ok(bad.errors.some((e) => e.includes('calendar date')));
+    const feb30 = loadManifest(manifest(VALID({ expiresOn: '2027-02-30' })));
+    assert.ok(feb30.errors.some((e) => e.includes('calendar date')));
+    const nonLeap = loadManifest(manifest(VALID({ expiresOn: '2027-02-29' })));
+    assert.ok(nonLeap.errors.some((e) => e.includes('calendar date')));
+    const leap = loadManifest(manifest(VALID({ expiresOn: '2028-02-29' })));
+    assert.equal(leap.errors.length, 0, '2028 is a leap year');
+  });
+
+  test('wildcard, empty, absolute, drive-letter, traversal, and noncanonical paths are rejected', () => {
+    for (const p of ['*', '', '/absolute.ts', 'C:\\x.ts', 'a//b.ts', './x.ts', 'x.ts/', 'a/../b.ts', 'a\\b.ts']) {
+      const { errors } = loadManifest(manifest(VALID({ path: p })));
+      assert.ok(errors.some((e) => e.includes('invalid path')), `path must be rejected: ${p}`);
+    }
+  });
+
+  test('malformed document shapes never throw', () => {
+    const nullDoc = manifest(null);
+    assert.ok(loadManifest(nullDoc).errors.length > 0);
+    const nullEntry = VALID();
+    nullEntry.exceptions.push(null);
+    const r1 = loadManifest(manifest(nullEntry));
+    assert.ok(r1.errors.some((e) => e.includes('must be an object')));
+    const strEntry = VALID();
+    strEntry.exceptions.push('not-an-object');
+    const r2 = loadManifest(manifest(strEntry));
+    assert.ok(r2.errors.some((e) => e.includes('must be an object')));
+    const arrayDoc = manifest([1, 2]);
+    assert.ok(loadManifest(arrayDoc).errors.length > 0);
+  });
+});

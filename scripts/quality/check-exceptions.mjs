@@ -95,6 +95,9 @@ export function loadManifest(manifestPath = MANIFEST_PATH) {
     return { exceptions: [], errors: [`manifest is not valid JSON: ${e.message}`] };
   }
   const errors = [];
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { exceptions: [], errors: ['manifest must be a JSON object'] };
+  }
   if (parsed.schemaVersion !== 1) {
     errors.push(`unsupported schemaVersion: ${parsed.schemaVersion}`);
   }
@@ -114,6 +117,10 @@ export function loadManifest(manifestPath = MANIFEST_PATH) {
   ].join('-');
   const exceptions = [];
   for (const entry of parsed.exceptions) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`invalid entry (must be an object): ${JSON.stringify(entry)}`);
+      continue;
+    }
     const label = `${entry.path}::${entry.ruleId}`;
     if (seen.has(label)) {
       errors.push(`duplicate (path, ruleId) pair: ${label}`);
@@ -126,10 +133,42 @@ export function loadManifest(manifestPath = MANIFEST_PATH) {
   return { exceptions, errors };
 }
 
+/**
+ * F09: a real CALENDAR date in YYYY-MM-DD form. The old digit-pattern check
+ * accepted impossible dates ('2099-99-99'), keeping allowances alive on a
+ * month that never occurs.
+ */
+export function isValidCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  if (month < 1 || month > 12) return false;
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= daysInMonth[month - 1];
+}
+
+/**
+ * F09: an EXACT canonical repository-relative POSIX path — non-empty, no
+ * glob characters, no traversal, no absolute/platform-drive prefix, no
+ * backslashes, no redundant segments. Wildcards ('*') previously passed
+ * validation and would have matched no finding while claiming an allowance.
+ */
+export function isValidManifestPath(p) {
+  if (typeof p !== 'string' || p.length === 0) return false;
+  if (/[*?[\]]/.test(p)) return false; // glob characters
+  if (p.includes('\\')) return false; // POSIX separators only
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return false; // absolute
+  if (p.includes('..')) return false; // traversal
+  if (p.startsWith('./') || p.includes('/./') || p.includes('//') || p.endsWith('/')) {
+    return false; // non-canonical
+  }
+  return true;
+}
+
 /** Per-entry manifest validation (schema §9). Mutates `errors`. */
 function validateEntry(entry, label, errors) {
-  if (typeof entry.path !== 'string' || entry.path.startsWith('/') || entry.path.includes('..')) {
-    errors.push(`invalid path in ${label}: must be an exact repo-relative path`);
+  if (!isValidManifestPath(entry.path)) {
+    errors.push(`invalid path in ${label}: must be an exact canonical repo-relative path`);
   }
   if (typeof entry.ruleId !== 'string' || entry.ruleId.length === 0 || entry.ruleId.includes('*')) {
     errors.push(`invalid ruleId in ${label}: must be an exact rule id; wildcards are forbidden`);
@@ -151,8 +190,8 @@ function validateEntry(entry, label, errors) {
   if (typeof entry.owner !== 'string' || entry.owner.trim().length === 0) {
     errors.push(`empty owner in ${label}`);
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(entry.expiresOn))) {
-    errors.push(`invalid expiresOn in ${label}: expected YYYY-MM-DD`);
+  if (!isValidCalendarDate(entry.expiresOn)) {
+    errors.push(`invalid expiresOn in ${label}: expected a real calendar date YYYY-MM-DD`);
   }
 }
 
