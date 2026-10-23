@@ -34,6 +34,7 @@ import {
   AI_CHAT_WORKSPACE_GET_FLAG,
   AI_CHAT_WORKSPACE_SET_FLAG,
 } from "@/config/channellist";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import {
   AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION,
   AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS,
@@ -74,6 +75,49 @@ function invoke(channel: string, payload: unknown): Promise<FlagResult> {
 beforeEach(() => {
   tokenValues.clear();
   registerAiChatWorkspaceIpcHandlers();
+});
+
+/**
+ * R8 §2 (PRD §33 / §23.2): the operator rollback drill must show in the
+ * workspace action counter — redesign enabled/rollback and adapter
+ * enable/disable, labels only.
+ */
+describe("workspace rollout flag action counts (R8 §2)", () => {
+  it("counts a redesign rollback and a re-enable", async () => {
+    await invoke(AI_CHAT_WORKSPACE_SET_FLAG, { enabled: false });
+    expect(
+      aiChatQueueCounters.snapshot()[
+        'ai_chat_workspace_action_total{action="redesign_flag",capability="workspace",outcome="rollback"}'
+      ]
+    ).toBe(1);
+    await invoke(AI_CHAT_WORKSPACE_SET_FLAG, { enabled: true });
+    expect(
+      aiChatQueueCounters.snapshot()[
+        'ai_chat_workspace_action_total{action="redesign_flag",capability="workspace",outcome="enabled"}'
+      ]
+    ).toBe(1);
+  });
+
+  it("counts adapter flag toggles", async () => {
+    await invoke(AI_CHAT_WORKSPACE_SET_FLAG, {
+      feature: "shared_orchestration",
+      enabled: false,
+    });
+    expect(
+      aiChatQueueCounters.snapshot()[
+        'ai_chat_workspace_action_total{action="adapter_flag",capability="workspace",outcome="disabled"}'
+      ]
+    ).toBe(1);
+    await invoke(AI_CHAT_WORKSPACE_SET_FLAG, {
+      feature: "voice_memory",
+      enabled: true,
+    });
+    expect(
+      aiChatQueueCounters.snapshot()[
+        'ai_chat_workspace_action_total{action="adapter_flag",capability="workspace",outcome="enabled"}'
+      ]
+    ).toBe(1);
+  });
 });
 
 /**

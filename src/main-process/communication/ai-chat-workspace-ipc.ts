@@ -890,11 +890,24 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
               ? AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS
               : AI_CHAT_WORKSPACE_VOICE_MEMORY;
         token.setValue(key, parsed.data.enabled ? "true" : "false");
+        // R8 §2 (§23.2): adapter toggle counts — labels only.
+        aiChatQueueCounters.recordWorkspaceAction(
+          "workspace",
+          "adapter_flag",
+          parsed.data.enabled ? "enabled" : "disabled"
+        );
         return ok({ enabled: parsed.data.enabled, feature });
       }
       token.setValue(
         USER_AI_CHAT_WORKSPACE_REDESIGN,
         parsed.data.enabled ? "true" : "false"
+      );
+      // R8 §2 (PRD §33 / §23.2): the operator rollback (enabled=false) is
+      // the workspace→Chat-V2 drill — it must show in the action counter.
+      aiChatQueueCounters.recordWorkspaceAction(
+        "workspace",
+        "redesign_flag",
+        parsed.data.enabled ? "enabled" : "rollback"
       );
       return ok({ enabled: parsed.data.enabled, feature });
     } catch (err) {

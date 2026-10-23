@@ -208,6 +208,7 @@ import Breadcrumbs from '@/views/components/breadcrumbs/breadcrumbs.vue';
 import { reactive, computed, watch } from 'vue';
 import { useMainStore } from '@/views/store/appMain';
 import { Signout } from '@/views/api/users'
+import { recordWorkspaceActionCount } from '@/views/api/aiChatWorkspaceActions'
 import {setLanguage} from '@/views/utils/cookies'
 import {useI18n} from "vue-i18n";
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -675,6 +676,12 @@ onMounted(async () => {
         workspaceRedesignEnabled.value = await isWorkspaceRedesignEnabled();
     } catch {
         workspaceRedesignEnabled.value = true;
+    }
+    // R8 §2 (PRD §33/§23.2): a disabled redesign mounts the legacy Chat V2
+    // dock — the parity fallback. Count each activation (labels only,
+    // fire-and-forget) so rollback drills show in the soak series.
+    if (!workspaceRedesignEnabled.value) {
+        void recordWorkspaceActionCount("workspace", "parity_fallback", "activated");
     }
 
     await initializeSavedLanguage()
