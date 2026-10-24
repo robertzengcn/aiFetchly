@@ -40,6 +40,14 @@ is preserved unchanged below the ledger for traceability.
 | V05 performance evidence | `70d105d16` | committed harness `yarn quality:benchmark`, raw sample series artifact, real CPU model + workstation RAM, tabulated cold start, unambiguous p95 indexing |
 | D01 documentation | this commit | IMPLEMENTATION_TODO marked historical with a link here; operator guide rewritten (copyable ESLint-8 recipe, per-function manifest shape, current decisions/evidence/limitations) |
 
+Review-pending debt surfaced by the widened F11 audit (deliberately NOT
+auto-adopted per §8.6): 22 unmanifested (path, rule) pairs — the
+agent-harness tree plus root tooling (forge.config.js, vite*.mjs,
+typings, docs/scecurit_issues/verify-fixes.js). These were invisible to
+the old src/test/scripts-scoped audit; the gate already blocked commits
+touching them, and adopting them is a deliberate maintainer decision
+via `yarn quality:audit --json` draft entries.
+
 Remaining environment-gated work (documented in the compatibility matrix,
 not code): run `yarn quality:fresh-checkout` and the integration suite on
 a networked machine / macOS / Windows.
