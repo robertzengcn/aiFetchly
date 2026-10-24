@@ -32,7 +32,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const policy = require('./policy.cjs');
 
 const OPERATIONAL_FAILURE = 2;
 const POLICY_VIOLATION = 1;
@@ -92,6 +91,29 @@ function failOperational(message, hint) {
   process.exit(OPERATIONAL_FAILURE);
 }
 
+// F08 (outside-review D2): the gate's own policy inputs must physically
+// live inside the repository — checked BEFORE any of them is REQUIRED, so
+// a symlinked policy file's outside target can never execute, even once.
+// repo-boundary.cjs is the validator itself (self-contained, nothing else
+// to validate it against).
+const { assertInsideRepo } = require('./repo-boundary.cjs');
+for (const policyFile of [
+  'scripts/quality/policy.cjs',
+  'scripts/quality/eslint-fast.cjs',
+  'scripts/quality/repo-boundary.cjs',
+  'scripts/quality/exceptions.json',
+  'scripts/quality/lint-staged.config.mjs',
+  'scripts/quality/check-exceptions.mjs',
+  '.eslintrc.json',
+]) {
+  try {
+    assertInsideRepo(repoRoot, path.join(repoRoot, policyFile), `policy input ${policyFile}`);
+  } catch (e) {
+    failOperational(e.message, 'Policy must be committed in the repository, not supplied from outside it.');
+  }
+}
+const policy = require('./policy.cjs');
+
 const STASH_RECOVERY_HINT =
   'If a lint-staged backup stash remains, inspect `git stash list` and restore it ' +
   'manually (`git stash apply`). The hook never deletes stashes or resets anything.';
@@ -123,25 +145,6 @@ try {
   require('./policy.cjs');
 } catch (e) {
   failOperational(`fast ESLint profile failed to load: ${e.message}`);
-}
-
-// F08: the gate's own policy inputs must physically live inside the
-// repository. A symlinked policy.cjs / exceptions.json pointing outside
-// would let the effective policy be supplied from beyond the commit.
-const { assertInsideRepo } = require('./repo-boundary.cjs');
-for (const policyFile of [
-  'scripts/quality/policy.cjs',
-  'scripts/quality/eslint-fast.cjs',
-  'scripts/quality/exceptions.json',
-  'scripts/quality/lint-staged.config.mjs',
-  'scripts/quality/check-exceptions.mjs',
-  '.eslintrc.json',
-]) {
-  try {
-    assertInsideRepo(repoRoot, path.join(repoRoot, policyFile), `policy input ${policyFile}`);
-  } catch (e) {
-    failOperational(e.message, 'Policy must be committed in the repository, not supplied from outside it.');
-  }
 }
 
 // Unmerged index stages block everything (§6.1).
@@ -223,12 +226,18 @@ if (unstagedPolicy.length > 0) {
 
 const untrackedPolicy = [];
 {
-  const others = git(['ls-files', '--others', '--exclude-standard', '-z']);
+  // Outside-review D3: NO --exclude-standard — a policy helper hidden by a
+  // STAGED .gitignore change must not slip past this check. The pathspecs
+  // restrict enumeration to the control paths (plus root .eslintrc* via
+  // glob magic), so the scan stays cheap instead of walking every
+  // untracked file in the tree.
+  const others = git([
+    'ls-files', '--others', '-z', '--',
+    ...controls.map(controlPathspec),
+    ':(glob).eslintrc*',
+  ]);
   for (const p of others.stdout.split('\0')) {
-    if (p.length === 0) continue;
-    if (controls.some((c) => matchesControl(p, c)) || /^\.eslintrc[^/]*$/.test(p)) {
-      untrackedPolicy.push(p);
-    }
+    if (p.length > 0) untrackedPolicy.push(p);
   }
 }
 if (untrackedPolicy.length > 0) {
@@ -339,6 +348,7 @@ function validateStagedPackageControls(stagedPolicy) {
     'vue-eslint-parser',
     '@typescript-eslint/parser',
     'lint-staged',
+    'husky',
   ];
   if (stagedPolicy.includes('package.json')) {
     const staged = git(['show', ':package.json']).stdout;
@@ -355,6 +365,16 @@ function validateStagedPackageControls(stagedPolicy) {
         `staged package.json no longer declares the quality-gate dependencies:\n` +
           missing.map((d) => `  - ${d}`).join('\n'),
         'Removing a gate dependency disables the hook. Revert the removal deliberately (and update the gate) rather than committing a broken policy.'
+      );
+    }
+    // Outside-review D4: dropping husky or the prepare script breaks hook
+    // installation on every FRESH checkout while this machine keeps working
+    // — the same silent-uninstall class the dependency list guards.
+    const prepare = typeof pkg.scripts?.prepare === 'string' ? pkg.scripts.prepare : '';
+    if (!/husky/i.test(prepare)) {
+      failOperational(
+        'staged package.json no longer installs the git hooks (scripts.prepare must run husky)',
+        'Fresh checkouts would get no pre-commit hook. Revert the change or update the gate deliberately.'
       );
     }
   }

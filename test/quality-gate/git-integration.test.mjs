@@ -593,3 +593,84 @@ describe('failure, Git-state, and filename coverage (V01)', () => {
     assert.ok(!/lint-staged/i.test(stashList), 'lint-staged must clean up its own backup');
   });
 });
+
+describe('outside-review hardening (codex round)', () => {
+  const canSymlink = process.platform !== 'win32';
+
+  test('D1: quality:fix refuses symlinked files reached via DIRECTORY expansion', () => {
+    if (!canSymlink) return;
+    const { root } = makeRepo('d1-dirfix');
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), 'qg-d1-out-'));
+    try {
+      const outside = path.join(outsideDir, 'Outside.ts');
+      const before = 'export let value = 1;\n';
+      writeFileSync(outside, before);
+      mkdirSync(path.join(root, 'srcdir'), { recursive: true });
+      symlinkSync(outside, path.join(root, 'srcdir', 'Linked.ts'));
+      const res = spawnSync(
+        process.execPath,
+        [path.join(root, 'scripts', 'quality', 'fix.mjs'), 'srcdir'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      assert.equal(res.status, 2, `directory-expanded symlink must be refused:\n${res.stdout}${res.stderr}`);
+      assert.equal(readFileSync(outside, 'utf8'), before, 'external bytes unchanged');
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test('D3: a policy helper hidden by a STAGED .gitignore change still rejects', () => {
+    const { root } = makeRepo('d3-ignorehide');
+    const helperRel = 'scripts/quality/local-overrides.cjs';
+    // Hide the helper via a staged .gitignore edit — --exclude-standard
+    // would have made it invisible to the untracked-policy scan.
+    writeFileSync(
+      path.join(root, '.gitignore'),
+      `node_modules/\n${helperRel}\n`
+    );
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'local-overrides.cjs'),
+      "module.exports = {};\n"
+    );
+    const policyPath = path.join(root, 'scripts', 'quality', 'policy.cjs');
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, 'utf8') +
+        "\nObject.assign(module.exports, require('./local-overrides.cjs'));\n"
+    );
+    writeFileSync(path.join(root, 'S.ts'), 'export const value = 1;\n');
+    run(root, ['add', 'S.ts', 'scripts/quality/policy.cjs', '.gitignore']);
+    const res = run(root, ['commit', '-m', 'ignored helper']);
+    assert.notEqual(res.status, 0, 'commit must not pass');
+    assert.match(res.stdout + res.stderr, /UNTRACKED policy/);
+  });
+
+  test('D4: dropping husky or the prepare script from package.json is rejected', () => {
+    const { root } = makeRepo('d4-husky');
+    // All lint deps present + prepare present -> passes; then remove husky.
+    const withAll = {
+      name: 'disposable',
+      version: '0.0.0',
+      devDependencies: {
+        eslint: '8.57.1',
+        'eslint-plugin-sonarjs': '1.0.4',
+        'eslint-plugin-vue': '9.33.0',
+        'vue-eslint-parser': '9.4.3',
+        '@typescript-eslint/parser': '7.18.0',
+        'lint-staged': '16.2.7',
+        husky: '9.1.7',
+      },
+      scripts: { prepare: 'husky' },
+    };
+    writeFileSync(path.join(root, 'package.json'), JSON.stringify(withAll, null, 2));
+    run(root, ['add', 'package.json']);
+    assert.equal(commitIn(root, 'pkg with husky'), 0, 'complete package.json passes');
+    const noPrepare = JSON.parse(JSON.stringify(withAll));
+    delete noPrepare.scripts;
+    writeFileSync(path.join(root, 'package.json'), JSON.stringify(noPrepare, null, 2));
+    run(root, ['add', 'package.json']);
+    const res = run(root, ['commit', '-m', 'drop prepare']);
+    assert.notEqual(res.status, 0, 'prepare-script removal must reject');
+    assert.match(res.stdout + res.stderr, /prepare/);
+  });
+});

@@ -66,6 +66,18 @@ const remaining = results.reduce(
   0
 );
 const fixedCount = results.reduce((n, r) => n + (r.output ? 1 : 0), 0);
+// Outside-review D1: ESLint expands directory arguments into per-file
+// results — validate every file the engine would REWRITE, not just the
+// paths the user typed, before any bytes change.
+for (const r of results) {
+  if (!r.output) continue; // only files with pending rewrites matter
+  try {
+    assertInsideRepo(repoRoot, path.resolve(repoRoot, r.filePath), `fix target ${r.filePath}`);
+  } catch (e) {
+    process.stderr.write(`quality:fix — ${e.message}\nNothing was changed and nothing was staged.\n`);
+    process.exit(2);
+  }
+}
 await ESLint.outputFixes(results);
 
 process.stdout.write(
