@@ -708,7 +708,7 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     );
   });
 
-  it("§18: a terminal outbound batch (delivery_unknown) renders the card without the review action", async () => {
+  it("§18: an inconclusive outbound batch (delivery_unknown) renders the summary card with exactly one dialog reopen entry", async () => {
     const messages = [
       msg(MessageType.TOOL_RESULT, {
         toolCallId: "tc-outbound-done",
