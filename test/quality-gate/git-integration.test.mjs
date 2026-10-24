@@ -13,9 +13,9 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execSync } from 'node:child_process';
 import {
-  mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, mkdtempSync,
+  mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, mkdtempSync, copyFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -408,5 +408,187 @@ describe('policy-input consistency (F01/F02)', () => {
     const res = run(root, ['commit', '-m', 'uninstall gate']);
     assert.notEqual(res.status, 0);
     assert.ok((res.stdout + res.stderr).includes('no longer declares the quality-gate dependencies'));
+  });
+});
+
+describe('failure, Git-state, and filename coverage (V01)', () => {
+  test('timeout: commit fails operationally with recovery guidance; index/worktree/stashes preserved', () => {
+    const { root } = makeRepo('v01-timeout');
+    writeFileSync(path.join(root, 'Slow.ts'), VALID);
+    run(root, ['add', 'Slow.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    // A pre-existing user stash must survive the aborted run. Created
+    // BEFORE staging T2.ts — stash push would otherwise swallow the staged
+    // file under test.
+    writeFileSync(path.join(root, 'scratch.txt'), 'junk\n');
+    run(root, ['add', 'scratch.txt']);
+    run(root, ['stash', 'push', '-q', '-m', 'user-stash']);
+    writeFileSync(path.join(root, 'T2.ts'), VALID);
+    run(root, ['add', 'T2.ts']);
+    const stashesBefore = run(root, ['stash', 'list']).stdout.trim();
+    const treeBefore = run(root, ['write-tree']).stdout.trim();
+    const blobBefore = run(root, ['ls-files', '-s', 'T2.ts']).stdout.trim();
+    const res = spawnSync('git', ['commit', '-m', 'slow'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, QUALITY_GATE_TIMEOUT_MS: '1' },
+    });
+    assert.notEqual(res.status, 0, `1ms timeout must fail operationally:\n${res.stdout}${res.stderr}`);
+    // Git normalizes hook exit codes; assert the coordinator's marker.
+    assert.match(res.stderr, /OPERATIONAL FAILURE/);
+    assert.match(res.stderr, /timeout/i);
+    assert.match(res.stderr, /stash/, 'recovery guidance must name the backup stash path');
+    assert.equal(run(root, ['write-tree']).stdout.trim(), treeBefore, 'index tree unchanged');
+    assert.equal(run(root, ['ls-files', '-s', 'T2.ts']).stdout.trim(), blobBefore, 'staged blob unchanged');
+    assert.equal(readFileSync(path.join(root, 'T2.ts'), 'utf8'), VALID, 'worktree bytes unchanged');
+    assert.equal(run(root, ['stash', 'list']).stdout.trim(), stashesBefore, 'user stash untouched');
+  });
+
+  test('copy record: git emits C for the staged copy before the destination is linted', () => {
+    const { root } = makeRepo('v01-copy-record');
+    // Seed with the long content: copy similarity compares Dest against
+    // Origin's INDEX PREIMAGE, so the preimage must be the similar text.
+    const lines = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
+    const seeded = lines.join('\n') + '\n';
+    writeFileSync(path.join(root, 'Origin.ts'), seeded);
+    run(root, ['add', 'Origin.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    run(root, ['config', 'diff.renames', 'copies']);
+    // -C copy detection only scans sources modified in the same diff and
+    // needs high similarity: modify Origin slightly and add a near-identical
+    // Dest that appends a violating line.
+    const next = seeded.replace('v39 = 39', 'v39 = 40');
+    writeFileSync(path.join(root, 'Origin.ts'), next);
+    writeFileSync(path.join(root, 'Dest.ts'), next + 'export const bad: any = 1;\n');
+    run(root, ['add', 'Origin.ts', 'Dest.ts']);
+    const status = run(root, ['diff', '--cached', '--name-status']).stdout;
+    assert.match(status, /C\d+\tOrigin\.ts\tDest\.ts/, `git must emit a copy record, got: ${JSON.stringify(status)}`);
+    assert.notEqual(commitIn(root, 'copy'), 0, 'the copy DESTINATION must be linted');
+  });
+
+  test('rename record: git emits R and the commit of clean content passes', () => {
+    const { root } = makeRepo('v01-rename');
+    writeFileSync(path.join(root, 'Old.ts'), VALID);
+    run(root, ['add', 'Old.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    run(root, ['mv', 'Old.ts', 'New.ts']);
+    const status = run(root, ['diff', '--cached', '--name-status']).stdout;
+    assert.match(status, /R\d+\tOld\.ts\tNew\.ts/, `git must emit a rename record, got: ${JSON.stringify(status)}`);
+    assert.equal(commitIn(root, 'rename'), 0);
+  });
+
+  test('deletion-only change takes the skip path and commits', () => {
+    const { root } = makeRepo('v01-delete');
+    writeFileSync(path.join(root, 'Gone.ts'), VALID);
+    run(root, ['add', 'Gone.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    run(root, ['rm', '-q', 'Gone.ts']);
+    const res = run(root, ['commit', '-m', 'deletion only']);
+    assert.equal(res.status, 0);
+    assert.ok(!(res.stdout + res.stderr).includes('lint-staged'), 'no engine for deletions');
+  });
+
+  test('submodule gitlink is not source and commits cleanly', () => {
+    const { root } = makeRepo('v01-submodule');
+    const sub = mkdtempSync(path.join(os.tmpdir(), 'qg-v01-sub-'));
+    try {
+      execSync('git init -q && git config user.email t@t && git config user.name t && echo hi > f && git add f && git commit -q -m init', { cwd: sub, encoding: 'utf8', stdio: 'pipe' });
+      // git >= 2.38 denies the file transport for submodules by default,
+      // and the submodule helper ignores repo config for protocol allows —
+      // this test uses a LOCAL path repo, so allow it on the command line.
+      run(root, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'vendored']);
+      const res = run(root, ['commit', '-m', 'add submodule']);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+    } finally {
+      rmSync(sub, { recursive: true, force: true });
+    }
+  });
+
+  test('leading-hyphen, quote, and newline filenames commit valid content', () => {
+    if (process.platform === 'win32') return; // newline-in-filename is POSIX
+    const { root } = makeRepo('v01-names');
+    const weirdNames = ['-leading-hyphen.ts', 'quo"te.ts', 'new\nline.ts'];
+    for (const name of weirdNames) {
+      writeFileSync(path.join(root, name), VALID);
+      run(root, ['add', '--', name]);
+    }
+    const staged = run(root, ['diff', '--cached', '--name-only', '-z']).stdout.split('\0').filter(Boolean);
+    for (const name of weirdNames) assert.ok(staged.includes(name), `staged: ${name}`);
+    assert.equal(commitIn(root, 'weird names'), 0);
+  });
+
+  test('alternate GIT_INDEX_FILE: gate runs against that index; the main index is untouched', () => {
+    const { root } = makeRepo('v01-alt-index');
+    writeFileSync(path.join(root, 'Base.ts'), VALID);
+    run(root, ['add', 'Base.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    copyFileSync(path.join(root, '.git', 'index'), path.join(root, '.git', 'index-alt'));
+    const altEnv = { ...process.env, GIT_INDEX_FILE: '.git/index-alt' };
+    writeFileSync(path.join(root, 'AltBad.ts'), INVALID);
+    spawnSync('git', ['add', 'AltBad.ts'], { cwd: root, encoding: 'utf8', env: altEnv });
+    const res = spawnSync('git', ['commit', '-m', 'alt index'], { cwd: root, encoding: 'utf8', env: altEnv });
+    assert.notEqual(res.status, 0, 'the alternate index is gated too');
+    const mainStaged = run(root, ['diff', '--cached', '--name-only']).stdout.trim();
+    assert.equal(mainStaged, '', 'the main index was never touched');
+  });
+
+  test('concurrent staging during the run is detected and refused', () => {
+    const { root } = makeRepo('v01-concurrent');
+    // Stage a lint-staged config whose task stages an EXTRA file mid-run —
+    // the coordinator must see the index tree change and refuse.
+    const cfgPath = path.join(root, 'scripts', 'quality', 'lint-staged.config.mjs');
+    writeFileSync(
+      cfgPath,
+      [
+        "import { execSync } from 'node:child_process';",
+        'export default {',
+        "  '*.{js,jsx,cjs,mjs,ts,tsx,vue}': (files) => {",
+        "    execSync('git add Extra.ts', { cwd: process.cwd() });",
+        "    return `node scripts/quality/lint-files.mjs ${files.map((f) => JSON.stringify(f)).join(' ')}`;",
+        '  },',
+        '};',
+        '',
+      ].join('\n')
+    );
+    writeFileSync(path.join(root, 'Extra.ts'), VALID); // untracked non-policy file
+    writeFileSync(path.join(root, 'Main.ts'), VALID);
+    run(root, ['add', 'Main.ts', 'scripts/quality/lint-staged.config.mjs']);
+    const res = run(root, ['commit', '-m', 'concurrent staging']);
+    assert.notEqual(res.status, 0, 'concurrent staging must never pass');
+    assert.match(res.stdout + res.stderr, /index changed|concurrent/i);
+  });
+
+  test('policy deletion commit fails validation (the gate cannot uninstall itself)', () => {
+    const { root } = makeRepo('v01-policy-del');
+    run(root, ['rm', '-q', 'scripts/quality/policy.cjs']);
+    const res = run(root, ['commit', '-m', 'delete policy']);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stdout + res.stderr, /failed validation|policy/i);
+  });
+
+  test('a file with unsupported encoding blocks instead of passing', () => {
+    const { root } = makeRepo('v01-encoding');
+    writeFileSync(path.join(root, 'BadBytes.ts'), 'export const v: any = 1;\n');
+    // Prepend invalid UTF-8 bytes to the staged content.
+    const fd = path.join(root, 'BadBytes.ts');
+    const broken = Buffer.concat([Buffer.from([0xff, 0xfe, 0x00, 0x81]), readFileSync(fd)]);
+    writeFileSync(fd, broken);
+    run(root, ['add', 'BadBytes.ts']);
+    const res = run(root, ['commit', '-m', 'bad encoding']);
+    assert.notEqual(res.status, 0, 'non-UTF-8 source must never pass');
+    assert.ok(res.status === 1 || res.status === 2, `defined failure code, got ${res.status}`);
+  });
+
+  test('success commit: HEAD advances, worktree intact, no lint-staged backup stash remains', () => {
+    const { root } = makeRepo('v01-success-state');
+    writeFileSync(path.join(root, 'Fine.ts'), VALID);
+    run(root, ['add', 'Fine.ts']);
+    const headBefore = run(root, ['rev-parse', 'HEAD']).stdout.trim();
+    const bytes = readFileSync(path.join(root, 'Fine.ts'), 'utf8');
+    assert.equal(commitIn(root, 'good'), 0);
+    assert.notEqual(run(root, ['rev-parse', 'HEAD']).stdout.trim(), headBefore);
+    assert.equal(readFileSync(path.join(root, 'Fine.ts'), 'utf8'), bytes);
+    const stashList = run(root, ['stash', 'list']).stdout;
+    assert.ok(!/lint-staged/i.test(stashList), 'lint-staged must clean up its own backup');
   });
 });
