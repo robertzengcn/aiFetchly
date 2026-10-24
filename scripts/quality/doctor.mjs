@@ -124,6 +124,20 @@ if (hooksValue === '.husky/_') {
       }
     }
     check('husky:shims', executable, detail, executable ? undefined : `chmod +x .husky/_/pre-commit (or re-run \`yarn prepare\`)`);
+    // Outside-review D7: a shim that is present and executable but
+    // content-broken would otherwise get an all-clear. Husky 9 shims source
+    // the runner script next to themselves — tolerate layout changes by
+    // requiring the reference, not an exact byte match.
+    if (executable) {
+      const shimContent = readFileSync(shimFile, 'utf8');
+      const sourcesRunner = /\/h("|'|\s|$)/.test(shimContent) || shimContent.includes('husky');
+      check(
+        'husky:shim-content',
+        sourcesRunner,
+        sourcesRunner ? 'shim sources the husky runner' : shimContent.trim().split('\n')[0],
+        'The shim must source the husky runner — re-run `yarn prepare`'
+      );
+    }
   }
 }
 const hookFile = path.join(repoRoot, '.husky', 'pre-commit');

@@ -65,7 +65,7 @@ function timeCommit(repo, message) {
 }
 
 /** One workload: (label, prepare) — prepare stages the run's files. */
-function measureWorkload(label, budgets, prepare, coldStartOnly) {
+function measureWorkload(label, budgets, prepare) {
   const repo = createDisposableGateRepo(repoRoot, `bench-${label}`);
   const samples = [];
   let coldStartSample = null;
@@ -79,7 +79,6 @@ function measureWorkload(label, budgets, prepare, coldStartOnly) {
       // Drop the commit so every run starts from the same baseline state.
       repo.run(['reset', '-q', '--hard', 'HEAD~1']);
     }
-    if (coldStartOnly) void coldStartOnly;
     return { label, runs, samples, coldStartSample, budgetP95Ms: budgets };
   } finally {
     removeDisposableGateRepo(repo.root);
