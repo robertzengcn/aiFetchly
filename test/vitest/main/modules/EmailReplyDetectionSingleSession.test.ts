@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { ListResponse, MailboxObject } from "imapflow";
+import type { ListResponse, MailboxObject, SearchObject } from "imapflow";
 
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
@@ -87,7 +87,11 @@ function listFolder(path: string, specialUse?: string): ListResponse {
   };
 }
 
-function countingConnection(state: { connects: number; logouts: number }): ImapFlowConnection {
+function countingConnection(
+  state: { connects: number; logouts: number },
+  searches: SearchObject[] = [],
+  searchDelayMs = 0
+): ImapFlowConnection {
   return {
     async connect(): Promise<void> {
       state.connects += 1;
@@ -110,7 +114,11 @@ function countingConnection(state: { connects: number; logouts: number }): ImapF
         exists: 1,
       };
     },
-    async search(): Promise<number[] | false> {
+    async search(query: SearchObject): Promise<number[] | false> {
+      if (searchDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, searchDelayMs));
+      }
+      searches.push(query);
       return [];
     },
     async fetchOne(seq) {
@@ -123,14 +131,19 @@ function countingConnection(state: { connects: number; logouts: number }): ImapF
   };
 }
 
+const RECEIVED_AT = new Date("2026-10-19T06:00:00.000Z");
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
 describe("reply detection mailbox probe (single IMAP session)", () => {
   it("observes flags, Sent folders, and reply headers on one connection", async () => {
     const message = messageFixture();
+    message.receivedAt = RECEIVED_AT;
     const sockets = { connects: 0, logouts: 0, clients: 0 };
+    const searches: SearchObject[] = [];
     const client = new ImapEmailReceiveClient({
       imapFlowFactory: () => {
         sockets.clients += 1;
-        return countingConnection(sockets);
+        return countingConnection(sockets, searches);
       },
     });
     const messagePort: ReplyDetectionMessagePort = {
@@ -185,5 +198,83 @@ describe("reply detection mailbox probe (single IMAP session)", () => {
     expect(sockets.clients).toBe(1);
     expect(sockets.connects).toBe(1);
     expect(sockets.logouts).toBe(1);
+    // A reply cannot predate the inbound message. Bound the Sent HEADER
+    // scan to one day before receipt so a large Sent mailbox can finish
+    // inside the probe budget instead of scanning all history. The search
+    // token is the normalized id (angle brackets removed).
+    expect(searches).toHaveLength(1);
+    expect(searches[0]?.since).toEqual(new Date(RECEIVED_AT.getTime() - ONE_DAY_MS));
+    expect(searches[0]?.or).toEqual([
+      { header: { "in-reply-to": "orig-77@example.com" } },
+      { header: { references: "orig-77@example.com" } },
+    ]);
+  });
+
+  it("settles not_replied when Sent search takes longer than 15s but finishes inside the probe budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const message = messageFixture();
+      const sockets = { connects: 0, logouts: 0, clients: 0 };
+      const client = new ImapEmailReceiveClient({
+        imapFlowFactory: () => {
+          sockets.clients += 1;
+          return countingConnection(sockets, [], 20_000);
+        },
+      });
+      const messagePort: ReplyDetectionMessagePort = {
+        async read(id) {
+          return id === message.id ? message : null;
+        },
+        async findCanonicalEquivalents() {
+          return [message];
+        },
+        async updateReplyEvidence() {
+          return true;
+        },
+        async confirmStagedNegativeEvidence() {
+          return true;
+        },
+      };
+      const draftPort: ReplyDetectionDraftPort = {
+        async listByMessages() {
+          return [];
+        },
+      };
+      const attemptPort: ReplyDetectionAttemptPort = {
+        async listByMessages() {
+          return [];
+        },
+      };
+      const emailServicePort: ReplyDetectionEmailServicePort = {
+        async getEmailServiceReceiveConfig() {
+          return imapConfig();
+        },
+        async readIdentity() {
+          return {
+            smtpUsername: SENDER,
+            fromAddress: SENDER,
+            replyToAddress: null,
+            receiveUsername: SENDER,
+          };
+        },
+      };
+      const service = new EmailReplyDetectionService({
+        messagePort,
+        draftPort,
+        attemptPort,
+        emailServicePort,
+        imapPort: createReplyDetectionImapPort(client),
+      });
+
+      const pending = service.detect({ messageId: message.id });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await pending;
+
+      expect(result.state).toBe("not_replied");
+      expect(result.reasonCode).toBe("no_reply_observed");
+      expect(sockets.connects).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

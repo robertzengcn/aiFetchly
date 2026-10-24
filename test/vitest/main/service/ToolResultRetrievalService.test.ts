@@ -404,6 +404,25 @@ describe("ToolResultRetrievalService — literal search", () => {
     });
     expect(outcome.ok).toBe(false);
   });
+
+  it("reports argument failures with INVALID_OUTPUT_ARGUMENTS, not INVALID_OUTPUT_CURSOR", async () => {
+    // Regression (2026-10-21 incident): an empty or over-long query used to
+    // return INVALID_OUTPUT_CURSOR — the code the model is told means "your
+    // cursor is damaged". The model then followed the cursor-recovery
+    // guidance (re-copying cursors, restarting pages) when the real problem
+    // was the query argument. Argument-shaped failures must carry the
+    // argument code so recovery guidance points at the right fix.
+    const target = await storeText("needle here");
+    const empty = await service.search({ target, query: "" });
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) expect(empty.code).toBe("INVALID_OUTPUT_ARGUMENTS");
+    const tooLong = await service.search({
+      target,
+      query: "y".repeat(TOOL_RESULT_CONFIG.searchQueryMaxChars + 1),
+    });
+    expect(tooLong.ok).toBe(false);
+    if (!tooLong.ok) expect(tooLong.code).toBe("INVALID_OUTPUT_ARGUMENTS");
+  });
 });
 
 describe("ToolResultCursorCodec — integrity", () => {
@@ -531,6 +550,74 @@ describe("ToolResultCursorCodec — integrity", () => {
         decodeToolResultCursor(bad, { outputId: "out_abc", mode: "read" }).ok
       ).toBe(false);
     }
+  });
+
+  it("decodes a cursor the model copied with stray whitespace (copy-artifact trim)", () => {
+    // Regression (2026-10-21 incident): the model's tool_result_read call
+    // passed a cursor minted moments earlier by the SAME process and got
+    // INVALID_OUTPUT_CURSOR. The minted payload was byte-identical to the
+    // issued one; the only realistic damage left is copy artifacts in the
+    // model's transcription. Whitespace around the token survives into the
+    // string the model emits (newline from JSON wrapping, leading space from
+    // quoting) and is NOT part of the signature — trim it before authenticating.
+    const encoded = encodeToolResultCursor({
+      outputId: "out_abc",
+      revision: 1,
+      mode: "read",
+      position: 0,
+    });
+    for (const copied of [
+      encoded,
+      ` ${encoded}`,
+      `${encoded} `,
+      `${encoded}\n`,
+      `\n${encoded}\n`,
+      `\t${encoded}\t`,
+    ]) {
+      const decoded = decodeToolResultCursor(copied, {
+        outputId: "out_abc",
+        mode: "read",
+        revision: 1,
+      });
+      if (!decoded.ok) {
+        throw new Error(
+          `whitespace-padded cursor must decode (input: ${JSON.stringify(copied)})`
+        );
+      }
+      expect(decoded.payload.position).toBe(0);
+    }
+  });
+
+  it("rejects a cursor minted under a different policy version (version comparison)", () => {
+    // The payload schema requires policyVersion to be present, but decode
+    // never COMPARED it to the current TOOL_RESULT_POLICY_VERSION — rotation
+    // of the policy was a silent no-op. An old-policy cursor must be refused
+    // even when correctly signed under the current key.
+    const encoded = encodeToolResultCursor({
+      outputId: "out_abc",
+      revision: 1,
+      mode: "read",
+      position: 10,
+    });
+    const [body] = encoded.split(".");
+    const parsed = JSON.parse(
+      Buffer.from(body, "base64url").toString("utf8")
+    ) as Record<string, unknown>;
+    const stale = Buffer.from(
+      JSON.stringify({ ...parsed, policyVersion: "tool-result-policy-v0" })
+    ).toString("base64url");
+    // Sign with the same algorithm and key the codec itself uses.
+    const key = deriveToolResultCursorKey("test-key-for-retrieval");
+    const signature = crypto
+      .createHmac("sha256", key)
+      .update(stale)
+      .digest("base64url");
+    const decoded = decodeToolResultCursor(`${stale}.${signature}`, {
+      outputId: "out_abc",
+      mode: "read",
+      revision: 1,
+    });
+    expect(decoded.ok).toBe(false);
   });
 
   it("invalidates cursors when the key rotates, while output ids stay usable", () => {

@@ -1436,6 +1436,9 @@ export default {
     email_template_empty: "E-Mail-Vorlage darf nicht leer sein",
     email_filter_empty: "E-Mail-Filter darf nicht leer sein",
     email_service_empty: "E-Mail-Dienst darf nicht leer sein",
+    email_service_not_found:
+      "Der ausgewählte E-Mail-Dienst existiert nicht. Wählen Sie einen Dienst aus der Liste und versuchen Sie es erneut.",
+    start_send_email_failed: "E-Mail-Versand konnte nicht gestartet werden.",
     choose_at_least_one_souce: "Sie sollten mindestens eine Quelle auswählen",
     avoid_duplicate: "Vermeiden, dass Benutzer doppelte E-Mails erhalten",
     check_email_souce: "Bitte überprüfen Sie die E-Mail-Quelle",

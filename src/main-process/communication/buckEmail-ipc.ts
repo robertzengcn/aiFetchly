@@ -84,16 +84,36 @@ export function registerBuckEmailIpcHandlers() {
             email_html_content: qdata.email_html_content,
           };
 
-          const taskid = await buckemailCon.startBuckEmailTask(bucketEmailData);
-          const comMsgs: CommonDialogMsg = {
-            status: true,
-            code: 20241108151239,
-            data: {
-              action: "success",
-              title: "buckemailsend.start_send_email",
-              content: taskid.toString(),
-            },
-          };
+          let comMsgs: CommonDialogMsg;
+          try {
+            const taskid =
+              await buckemailCon.startBuckEmailTask(bucketEmailData);
+            comMsgs = {
+              status: true,
+              code: 20241108151239,
+              data: {
+                action: "success",
+                title: "buckemailsend.start_send_email",
+                content: taskid.toString(),
+              },
+            };
+          } catch (error: unknown) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            console.error("Error starting buck email campaign:", error);
+            const title = message.startsWith("Email service not found")
+              ? "buckemailsend.email_service_not_found"
+              : "buckemailsend.start_send_email_failed";
+            comMsgs = {
+              status: false,
+              code: 20261020085716,
+              data: {
+                action: "error",
+                title,
+                content: title,
+              },
+            };
+          }
           (
             event as {
               sender: { send: (channel: string, message: string) => void };

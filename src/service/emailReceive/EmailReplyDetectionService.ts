@@ -23,14 +23,16 @@
  *      (≤200 candidate fetches total), verify exact direct parent +
  *      configured sending identity. A verified match settles `replied`
  *      (`sent_search`); ambiguity/incomplete → unknown. Separate connections
- *      per step exhaust the 15s deadline on slow mailboxes (`probe_timeout`)
- *      and block draft generation.
+ *      per step exhaust the probe deadline on slow mailboxes (`probe_timeout`)
+ *      and block draft generation. The Sent search is limited to mail dated
+ *      on or after one day before the inbound message, so a large Sent
+ *      folder does not scan its whole history inside that budget.
  *   7. Before persisting a negative, confirm the account context is unchanged
  *      since the probe began; if it changed, return `identity_conflict` and do
  *      not persist. Close the IMAP connection in `finally`.
  *
  * In-memory cache, single-flight per message/context, one probe per mailbox,
- * and the 15s probe deadline are implemented in this class (§7.3): negative
+ * and the probe deadline are implemented in this class (§7.3): negative
  * entries expire at {@link NEGATIVE_CACHE_TTL_MS}; positive entries are sticky.
  */
 import { createHash } from "node:crypto";
@@ -109,8 +111,12 @@ export type {
  * write time, so a late write could pass the 5s freshness fence with a stale
  * observation. Bumping invalidates those rows (hash mismatch → re-probe,
  * fail-closed) instead of trusting them.
+ *
+ * v3: Sent HEADER search is bounded to one day before the inbound
+ * `receivedAt`. Pre-v3 negatives were computed against the whole Sent
+ * folder; a hash mismatch forces one re-probe under the bounded search.
  */
-export const REPLY_DETECTOR_VERSION = "reply-detection-v2";
+export const REPLY_DETECTOR_VERSION = "reply-detection-v3";
 
 /**
  * N03: validate + clamp the memory-cache TTL anchor. Returns the original
@@ -135,12 +141,39 @@ export function clampCacheObservationMs(
 const NEGATIVE_CACHE_TTL_MS = 60_000;
 
 /**
- * Overall probe deadline (§7.3): one mailbox probe must complete within 15s,
- * including any queue wait while a prior probe on the same mailbox holds the
- * single-flight lock. A probe whose result resolves after the deadline is
- * discarded and the caller receives `probe_timeout`.
+ * How far before the inbound message a Sent search may look. A direct reply
+ * cannot predate the message it answers; one day absorbs mailbox clock skew
+ * without scanning the rest of a large Sent folder.
  */
-const PROBE_DEADLINE_MS = 15_000;
+export const REPLY_SEARCH_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Lower bound for a Sent HEADER search, or undefined when the inbound
+ * timestamp is missing or unusable. Missing bounds stay unbounded so a
+ * message with no receipt time is not silently treated as "no reply".
+ */
+export function replySearchNotBefore(
+  receivedAt: Date | null | undefined
+): Date | undefined {
+  if (!(receivedAt instanceof Date)) return undefined;
+  const receivedMs = receivedAt.getTime();
+  if (!Number.isFinite(receivedMs)) return undefined;
+  return new Date(receivedMs - REPLY_SEARCH_CLOCK_SKEW_MS);
+}
+
+/**
+ * Overall probe deadline (§7.3): one mailbox probe must finish inside this
+ * budget, including any queue wait while a prior probe on the same mailbox
+ * holds the single-flight lock. A probe whose result resolves after the
+ * deadline is discarded and the caller receives `probe_timeout`.
+ *
+ * 45s, not 15s. A 15s cap is shorter than imapflow's 16s greeting timeout
+ * and shorter than a successful unread fetch on a slow mailbox (observed
+ * around 30s). The probe was aborted before it could decide, and draft
+ * generation then refused every time. The budget stays well inside the
+ * five-minute draft invocation limit.
+ */
+export const PROBE_DEADLINE_MS = 45_000;
 
 /** At most this many Sent folders are searched (§7.3). */
 const MAX_SENT_FOLDERS = 5;
@@ -235,6 +268,8 @@ export interface ReplyDetectionImapPort {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
+    /** Ignore Sent mail dated before this instant. */
+    notBefore?: Date;
   }): Promise<ReplyHeaderSearchResult | false>;
   /**
    * Run flag refresh, Sent discovery, and header search on one IMAP
@@ -536,7 +571,7 @@ export class EmailReplyDetectionService {
    * (§7.3): join a live probe for the same `(messageId, contextHash)` if one
    * is in flight; a forced send check MAY join a probe begun for the same
    * unchanged context during that send invocation, but never a cached
-   * pre-invocation negative. Otherwise start the 15s deadline (before
+   * pre-invocation negative. Otherwise start the probe deadline (before
    * acquiring, so queue wait is included) and run the probe under the
    * mailbox-level single-flight lock.
    */
@@ -579,7 +614,7 @@ export class EmailReplyDetectionService {
 
   /**
    * Acquire the mailbox-level single-flight lock, run the probe, and apply
-   * the 15s deadline. If the probe is still running when the deadline elapses,
+   * the probe deadline. If the probe is still running when the deadline elapses,
    * the caller receives `probe_timeout` and the late result is discarded (not
    * cached). A successful (on-time) result is cached: positives sticky,
    * negatives for 60s.
@@ -602,7 +637,7 @@ export class EmailReplyDetectionService {
     // fanned out together when A settled (max active probes > 1). Here the
     // token is installed synchronously; a concurrent C reads B's token, not
     // A's. The deadline was started before this call, so queue wait is counted
-    // against the 15s budget.
+    // against the probe budget.
     let releaseToken!: () => void;
     const myTurn = new Promise<void>((resolve) => {
       releaseToken = resolve;
@@ -1270,6 +1305,7 @@ export class EmailReplyDetectionService {
           originalMessageId,
           cap: fetchesRemaining,
           signal,
+          notBefore: replySearchNotBefore(message.receivedAt),
         });
         if (result === false) {
           // A failed/incomplete search does not collapse to no-matches (§7.2).
@@ -1993,12 +2029,14 @@ class PerCallImapSession implements ImapProbeSession {
     originalMessageId: string;
     cap: number;
     signal?: AbortSignal;
+    notBefore?: Date;
   }): Promise<ReplyHeaderSearchResult | false> {
     return this.port.searchReplyHeaders({
       config: this.config,
       folder: input.folder,
       originalMessageId: input.originalMessageId,
       cap: input.cap,
+      notBefore: input.notBefore,
       signal: input.signal,
     });
   }

@@ -1886,8 +1886,30 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
   toolApprovalMode.value = mode;
   if (!activeConversationId.value) return;
+  await writeToolApprovalMode(activeConversationId.value, mode);
+}
+
+/**
+ * Persist a non-default selector mode once a conversation id exists.
+ *
+ * The selector can show Full access before a conversation id exists, and
+ * that choice is only kept in memory. A scheduled run reads the persisted
+ * mode, so the id must be saved before the loop is created.
+ */
+async function persistCurrentToolApprovalMode(
+  conversationId: string
+): Promise<void> {
+  if (toolApprovalMode.value === "ask_for_approval") return;
+  await writeToolApprovalMode(conversationId, toolApprovalMode.value);
+}
+
+async function writeToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<void> {
+  if (!conversationId) return;
   try {
-    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    const saved = await setChatV2ToolApprovalMode(conversationId, mode);
     toolApprovalMode.value = saved;
   } catch (err) {
     console.error("[AiChatV2] failed to save tool approval mode:", err);
@@ -2930,6 +2952,7 @@ async function runScheduledLoopCreate(
   }
 ): Promise<void> {
   const conversationId = ensureWorkspaceConversationId();
+  await persistCurrentToolApprovalMode(conversationId);
   try {
     const created = await createScheduledLoop({
       conversationId,

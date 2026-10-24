@@ -21,6 +21,7 @@ import type {
 } from "@/entityTypes/aiMessageTaskTypes";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { OUTBOUND_EMAIL_SEND_TOOL } from "@/service/AIChatQueryLoop";
 import {
   ScheduledLoopEventSink,
@@ -508,14 +509,10 @@ export class ScheduledAiMessageRunner {
         policy,
         conversationId
       );
-      // Trusted scheduled-loop pre-authorization for the outbound send gate
-      // (see executeRunLoop for the rationale): the user pre-allowlisted
-      // start_email_send_task via the typed confirmation at loop creation.
-      // That typed pre-allowlist IS the trusted authorization AD-003 requires
-      // for an unattended send — there is no human present to click Review.
+      // Typed allowlist or this conversation's Full access. See
+      // resolveOutboundSendPreAuthorized.
       const outboundSendPreAuthorized =
-        policy.autoApproveTools &&
-        policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
+        await this.resolveOutboundSendPreAuthorized(conversationId, policy);
       engineRegistry.register({
         conversationId,
         engine,
@@ -1343,18 +1340,11 @@ export class ScheduledAiMessageRunner {
     };
 
     // Trusted scheduled-loop pre-authorization for the outbound send gate.
-    // The user pre-allowlisted start_email_send_task via the typed
-    // confirmation at loop creation (policy.autoApproveTools AND the tool is
-    // in policy.allowedTools). That typed pre-allowlist IS the trusted
-    // authorization AD-003 requires for an unattended send — there is no human
-    // present to click Review. The gate (AIChatQueryLoop.evaluateOutboundEmailGate)
-    // consults this to honor skip_review=true even for blocking reasonCodes
-    // (e.g. a dedup negation the pure resolver misreads as do-not-send),
-    // unblocking the scheduled outreach deadlock. Never true for interactive
-    // chat — scheduledContext is absent there and the renderer cannot forge it.
+    // Either the typed allowlist or this conversation's Full access mode is
+    // enough: there is no human present to click Review. The gate consults
+    // this to honor skip_review=true even for blocking reason codes.
     const outboundSendPreAuthorized =
-      policy.autoApproveTools &&
-      policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
+      await this.resolveOutboundSendPreAuthorized(conversationId, policy);
 
     try {
       try {
@@ -1724,6 +1714,36 @@ export class ScheduledAiMessageRunner {
       this.broadcaster.emit(event);
     } catch {
       // Renderer delivery failure does not fail the run.
+    }
+  }
+
+  /**
+   * Whether this scheduled occurrence may treat `start_email_send_task` as
+   * pre-authorized for the outbound gate.
+   *
+   * The typed allowlist is one grant. Full access on the same conversation is
+   * the other: the user already chose that registered tools run without an
+   * approval card. Full access does not skip the gate itself; it only lets
+   * `skip_review` proceed when nobody is present to click Review.
+   */
+  private async resolveOutboundSendPreAuthorized(
+    conversationId: string,
+    policy: AiMessageTaskToolPolicy
+  ): Promise<boolean> {
+    if (
+      policy.autoApproveTools &&
+      policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL)
+    ) {
+      return true;
+    }
+    try {
+      const approvalModule = new AIChatToolApprovalModule();
+      const mode = await approvalModule.getModeForScheduledRunner(
+        conversationId
+      );
+      return mode === "full_access";
+    } catch {
+      return false;
     }
   }
 

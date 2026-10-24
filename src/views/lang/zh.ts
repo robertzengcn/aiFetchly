@@ -1369,6 +1369,9 @@ export default {
     email_template_empty: "邮件模板不应为空",
     email_filter_empty: "邮件过滤器不应为空",
     email_service_empty: "邮件服务不应为空",
+    email_service_not_found:
+      "所选邮件服务不存在。请从邮件服务列表中重新选择后再试。",
+    start_send_email_failed: "启动邮件发送失败。",
     choose_at_least_one_souce: "您应至少选择一个来源",
     avoid_duplicate: "避免用户收到重复邮件",
     check_email_souce: "请检查邮件来源是否正确",

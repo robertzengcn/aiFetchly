@@ -1788,6 +1788,19 @@ export class ToolExecutor {
       };
     }
 
+    // Staged attachment ids are timestamp-uuid (letters, digits, hyphens).
+    // Reject other shapes here so a bad ref does not throw a stack into the
+    // model transcript. `out_` ids are saved tool results, not attachments.
+    if (!/^[a-zA-Z0-9-]+$/.test(attachmentRef)) {
+      const savedOutput = attachmentRef.startsWith("out_");
+      return {
+        success: false,
+        error: savedOutput
+          ? "attachment_ref is a saved tool-result id (out_...), not a chat attachment. Call tool_result_read with output_id set to that value."
+          : "Invalid attachment reference. Use the attachment_ref from the Attached files block (letters, digits, and hyphens only).",
+      };
+    }
+
     const maxLength =
       typeof toolParams.max_length === "number"
         ? Math.max(1000, Math.min(300000, Math.round(toolParams.max_length)))

@@ -14,6 +14,7 @@ import type { ToolFunction } from "@/api/aiChatApi";
 import { log } from "@/modules/Logger";
 import type {
   SkillDefinition,
+  SkillExecutionContext,
   SkillExecutionResult,
   SkillManifest,
 } from "@/entityTypes/skillTypes";
@@ -161,6 +162,108 @@ function getAttachLocalImagesDestinationLabel(): string {
     }
   }
   return "the configured AI server";
+}
+
+/** Saved tool-result ids (`out_` + 32 hex chars). Not staged attachment refs. */
+const SAVED_TOOL_OUTPUT_ID = /^out_[0-9a-f]{32}$/;
+
+/**
+ * Surface a tool-executor payload without reporting a failed read as success,
+ * and without forwarding stacks or telemetry into the model transcript.
+ */
+function attachmentReadResult(
+  result: Record<string, unknown>
+): SkillExecutionResult {
+  if (result.success === true) {
+    return { success: true, result };
+  }
+  const error =
+    typeof result.error === "string" && result.error.trim().length > 0
+      ? result.error
+      : "Failed to read attachment content";
+  const failure: Record<string, unknown> = { success: false, error };
+  if (typeof result.recovery === "string" && result.recovery.length > 0) {
+    failure.recovery = result.recovery;
+  }
+  return { success: false, result: failure };
+}
+
+/**
+ * `read_attachment_content` entry.
+ *
+ * Staged uploads use a timestamp-uuid ref. Models also pass saved tool-result
+ * ids (`out_...`) here; those are not attachment files, so they are read
+ * through `tool_result_read` instead of being rejected as malformed refs.
+ */
+async function executeReadAttachmentContentSkill(
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<SkillExecutionResult> {
+  const attachmentRef =
+    typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
+
+  if (SAVED_TOOL_OUTPUT_ID.test(attachmentRef)) {
+    const { handleToolResultRead } = await import(
+      "@/service/agentTools/toolResultReadTool"
+    );
+    const readArgs: Record<string, unknown> = { output_id: attachmentRef };
+    if (
+      typeof args.max_length === "number" &&
+      Number.isInteger(args.max_length) &&
+      args.max_length >= 1 &&
+      args.max_length <= 32000
+    ) {
+      readArgs.max_tokens = args.max_length;
+    }
+    const read = await handleToolResultRead(readArgs, context);
+    if (!read.success) {
+      return attachmentReadResult({
+        success: false,
+        error:
+          typeof read.result.error === "string"
+            ? read.result.error
+            : "Failed to read saved tool result",
+        recovery: read.result.recovery,
+      });
+    }
+    const text = typeof read.result.text === "string" ? read.result.text : "";
+    const complete = read.result.complete === true;
+    return {
+      success: true,
+      result: {
+        success: true,
+        fileName: attachmentRef,
+        content: text,
+        truncated: !complete,
+        output_id: attachmentRef,
+        next_cursor:
+          typeof read.result.next_cursor === "string"
+            ? read.result.next_cursor
+            : null,
+        complete,
+        read_via: "tool_result_read",
+        ...(complete
+          ? {}
+          : {
+              hint:
+                "This page is incomplete. Call tool_result_read with this output_id and next_cursor. Do not call read_attachment_content again with the same id.",
+            }),
+      },
+    };
+  }
+
+  const result = await ToolExecutor.execute(
+    "read_attachment_content",
+    args,
+    context.conversationId,
+    {
+      toolCallId: context.toolCallId,
+      skipPermissionCheck: context.skipPermissionCheck,
+      emitProgress: context.emitProgress,
+      signal: context.signal,
+    }
+  );
+  return attachmentReadResult(result);
 }
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
@@ -722,14 +825,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "read_attachment_content",
     description:
-      "Read staged markdown content from a chat attachment file path. Use this when the user message includes attachment references and you need full file content.",
+      "Read a file the user attached to this chat, or a saved tool result when attachment_ref is an out_ id. " +
+      "For an upload, copy attachment_ref from the Attached files block (timestamp-uuid, hyphens only). " +
+      "Do not pass a file path or file name. " +
+      "A saved tool-result id (out_...) is not an attachment: prefer tool_result_read with output_id. " +
+      "If an out_ id is passed here, this tool reads that saved result and returns its text plus next_cursor.",
     parameters: {
       type: "object",
       properties: {
         attachment_ref: {
           type: "string",
           description:
-            "Conversation-scoped reference ID of the staged attachment content to read.",
+            "Exact attachment_ref from an Attached files block, or a saved tool-result id (out_...). " +
+            "Copy it verbatim. Not a file path or file name.",
         },
         max_length: {
           type: "number",
@@ -744,20 +852,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "read_attachment_content",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
+    execute: executeReadAttachmentContentSkill,
   },
   {
     name: "generate_keywords",
@@ -2395,12 +2490,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_email_reply_draft",
     description:
-      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
-      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
-      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
-      "Include a URL when the user supplied one. A URL in the body is allowed and is not a " +
-      "safety finding, a block, or a reason to ask for extra confirmation. " +
-      "AI must be enabled. Returns the persisted draft for human review.",
+      "Create a knowledge-grounded reply draft for one inbound message. " +
+      "Call check_email_replied with the same message_id first. If that check " +
+      "returns state replied, do not call this tool. This tool does not probe " +
+      "the mailbox and does not decide whether a reply already exists. " +
+      "Searches the knowledge library by default, then writes the draft in the " +
+      "mailbox owner's voice. Does NOT send the reply and does NOT mention AI, " +
+      "retrieval, or confidence in the body. Include a URL when the user " +
+      "supplied one. A URL in the body is allowed and is not a safety finding, " +
+      "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
+      "Returns the persisted draft for human review. send_email_reply still " +
+      "checks reply state before sending.",
     parameters: {
       type: "object",
       properties: {
@@ -2491,14 +2591,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "check_email_replied",
     description:
-      "Diagnostic tool: check whether an inbound message already has a reply. Returns a three-state " +
-      "typed result — `replied` (a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
-      "complete negative across all required sources within the cache window), or `unknown` (inconclusive: " +
-      "POP3, config-unavailable, missing identity, partial/failed search, folder-auth error, timeout, " +
-      "exhausted bounds). An unknown is NEVER a negative. Read-only — does not mutate the mailbox and " +
-      "needs no confirmation; the local detection cache/read audit may update. The same detector enforces " +
-      "reply safety before draft generation and before SMTP, so tool invocation is not a prerequisite for " +
-      "safety. AI must be enabled. Requires message_id.",
+      "Check whether an inbound message already has a reply. Call this before " +
+      "create_email_reply_draft. Returns a three-state typed result — `replied` " +
+      "(a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
+      "complete negative across all required sources within the cache window), or " +
+      "`unknown` (inconclusive: POP3, config-unavailable, missing identity, " +
+      "partial/failed search, folder-auth error, timeout, exhausted bounds). An " +
+      "unknown is NEVER a negative. When state is replied, do not draft. When " +
+      "state is not_replied, call create_email_reply_draft; that tool does not " +
+      "repeat this check. Read-only — does not mutate the mailbox and needs no " +
+      "confirmation; the local detection cache/read audit may update. " +
+      "send_email_reply still runs this detector before SMTP. AI must be enabled. " +
+      "Requires message_id.",
     parameters: {
       type: "object",
       properties: {

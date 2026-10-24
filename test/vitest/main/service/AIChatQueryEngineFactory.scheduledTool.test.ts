@@ -32,6 +32,19 @@ vi.mock("@/config/skillsRegistry", () => ({
           execute: async () => ({ success: true, result: {} }),
         };
       }
+      if (name === "start_email_send_task") {
+        return {
+          name,
+          description: "start an outbound email send",
+          parameters: { type: "object", properties: {} },
+          tier: "main",
+          requiresConfirmation: true,
+          permissionCategory: "automation",
+          confirmationPolicy: "request_scoped_action",
+          source: "built-in",
+          execute: async () => ({ success: true, result: {} }),
+        };
+      }
       if (name === "shell_execute") {
         return {
           name,
@@ -50,6 +63,17 @@ vi.mock("@/config/skillsRegistry", () => ({
 }));
 
 // Stub SkillExecutor so a misrouted allowed call never performs real work.
+vi.mock("@/modules/AIChatToolApprovalModule", () => ({
+  AIChatToolApprovalModule: class {
+    getMode(conversationId: string): string {
+      const modes = (
+        globalThis as { __scheduledApprovalMode?: Record<string, string> }
+      ).__scheduledApprovalMode;
+      return modes?.[conversationId] ?? "ask_for_approval";
+    }
+  },
+}));
+
 vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: {
     execute: vi.fn(async () => ({
@@ -64,6 +88,7 @@ vi.mock("@/service/SkillExecutor", () => ({
 
 import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
 import { SkillExecutor } from "@/service/SkillExecutor";
+import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { ToolExecutionResult } from "@/api/aiChatApi";
@@ -91,7 +116,8 @@ type ExecuteScheduledTool = (
   name: string,
   args: Record<string, unknown>,
   context: SkillExecutionContext,
-  policy: AiMessageTaskToolPolicy
+  policy: AiMessageTaskToolPolicy,
+  approvalMode?: ChatToolApprovalMode | null
 ) => Promise<ToolExecutionResult>;
 
 function scheduledExecutor(
@@ -146,5 +172,51 @@ describe("AIChatQueryEngineFactory scheduled tool executor", () => {
       { path: "/tmp/x" },
       expect.objectContaining({ skipPermissionCheck: true })
     );
+  });
+
+  it("full_access runs start_email_send_task without a permission card", async () => {
+    const factory = new AIChatQueryEngineFactory();
+    const executor = scheduledExecutor(factory);
+    const executeSpy = vi.mocked(SkillExecutor.execute);
+    executeSpy.mockClear();
+    const result = await executor(
+      "start_email_send_task",
+      { service_ids: [1] },
+      ctx("call_send"),
+      { ...basePolicy, allowedTools: [] },
+      "full_access"
+    );
+    expect(result.result.needsPermissionPrompt).toBeFalsy();
+    expect(executeSpy).toHaveBeenCalledWith(
+      "start_email_send_task",
+      { service_ids: [1] },
+      expect.objectContaining({ skipPermissionCheck: true })
+    );
+  });
+
+  it("a Full access save after engine creation skips the send permission card", async () => {
+    (
+      globalThis as { __scheduledApprovalMode?: Record<string, string> }
+    ).__scheduledApprovalMode = { "conv-test": "full_access" };
+    const factory = new AIChatQueryEngineFactory();
+    const executor = scheduledExecutor(factory);
+    const executeSpy = vi.mocked(SkillExecutor.execute);
+    executeSpy.mockClear();
+    const result = await executor(
+      "start_email_send_task",
+      { service_ids: [1] },
+      ctx("call_send_live"),
+      { ...basePolicy, allowedTools: [] },
+      "ask_for_approval"
+    );
+    expect(result.result.needsPermissionPrompt).toBeFalsy();
+    expect(executeSpy).toHaveBeenCalledWith(
+      "start_email_send_task",
+      { service_ids: [1] },
+      expect.objectContaining({ skipPermissionCheck: true })
+    );
+    (
+      globalThis as { __scheduledApprovalMode?: Record<string, string> }
+    ).__scheduledApprovalMode = undefined;
   });
 });

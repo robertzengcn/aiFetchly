@@ -1797,8 +1797,11 @@ function initialize() {
       // already-migrated DB. Fire-and-forget so it never blocks startup,
       // but awaited in tests via migrateEmailServiceTagsToManyToMany.
       try {
-        const { replayLegacyServiceTags, dropLegacyServiceTagColumn } =
-          await import("@/modules/migrations/emailServiceTagMigration");
+        const {
+          replayLegacyServiceTags,
+          dropLegacyServiceTagColumn,
+          repairEmailServicePrimaryKey,
+        } = await import("@/modules/migrations/emailServiceTagMigration");
         const backfilled = await replayLegacyServiceTags(
           appDataSource.connection,
           legacyTagSnapshot
@@ -1806,9 +1809,12 @@ function initialize() {
         const columnDropped = await dropLegacyServiceTagColumn(
           appDataSource.connection
         );
-        if (backfilled > 0 || columnDropped) {
+        const primaryKeyRepaired = await repairEmailServicePrimaryKey(
+          appDataSource.connection
+        );
+        if (backfilled > 0 || columnDropped || primaryKeyRepaired) {
           log.info(
-            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}`
+            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}, primary key repaired=${primaryKeyRepaired}`
           );
         }
       } catch (err) {
