@@ -53,6 +53,15 @@ const NETWORK_PATTERNS = [
   /yarn\s+(?:add|install)\b/,
 ];
 
+/**
+ * Explicitly excluded from the offline scan: SETUP-TIME tools that are
+ * never part of the hook's execution graph (not referenced by pre-commit,
+ * lint-staged, or any gate command) and are documented as requiring
+ * network — the fresh-checkout drill's whole purpose is a real
+ * `yarn install --frozen-lockfile` on a clean clone.
+ */
+const SETUP_TIME_TOOLS = new Set(['fresh-checkout-drill.mjs']);
+
 /** Strip comments and backtick SPANS (hint strings) — never whole lines. */
 function codeOnly(source) {
   return source
@@ -63,17 +72,23 @@ function codeOnly(source) {
     .join('\n');
 }
 
+/** Scan gate script files for network-capable APIs (skipping setup tools). */
+function scanQualityScripts(files, offenders) {
+  for (const file of files) {
+    if (SETUP_TIME_TOOLS.has(path.basename(file))) continue;
+    const code = codeOnly(readFileSync(file, 'utf8'));
+    for (const pattern of NETWORK_PATTERNS) {
+      if (pattern.test(code)) offenders.push(`${path.relative(repoRoot, file)} matched ${pattern}`);
+    }
+  }
+}
+
 describe('offline hook (AC-13)', () => {
   test('static: no network-capable API in the hook execution graph', () => {
     const files = listQualityScripts(path.join(repoRoot, 'scripts', 'quality'));
     assert.ok(files.length >= 10, 'sanity: gate scripts found');
     const offenders = [];
-    for (const file of files) {
-      const code = codeOnly(readFileSync(file, 'utf8'));
-      for (const pattern of NETWORK_PATTERNS) {
-        if (pattern.test(code)) offenders.push(`${path.relative(repoRoot, file)} matched ${pattern}`);
-      }
-    }
+    scanQualityScripts(files, offenders);
     // package.json quality:* scripts are part of the surface too.
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     for (const [name, script] of Object.entries(pkg.scripts)) {
