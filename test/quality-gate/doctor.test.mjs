@@ -82,3 +82,18 @@ describe('doctor diagnostics (F13)', () => {
     assert.match(res.stdout, /FAIL\] exceptions\.json/);
   });
 });
+
+describe('audit 2026-10-24 fix (B02)', () => {
+  test('a comment-only no-op shim fails the shim-content check', () => {
+    const repo = makeRepo('b02-noop-shim');
+    writeFileSync(
+      path.join(repo.root, '.husky', '_', 'pre-commit'),
+      '#!/bin/sh\n# husky runner\nexit 0\n'
+    );
+    spawnSync('chmod', ['+x', path.join(repo.root, '.husky', '_', 'pre-commit')]);
+    const res = runDoctor(repo.root);
+    assert.equal(res.status, 2);
+    assert.match(res.stdout, /FAIL\] husky:shim-content/);
+    assert.match(res.stdout, /never invokes the husky runner/);
+  });
+});

@@ -248,6 +248,49 @@ if (untrackedPolicy.length > 0) {
   );
 }
 
+// B01: staged DELETIONS of policy/control inputs never reach the ACMR
+// staged list — a deletion-only commit could remove the gate's own runtime
+// files and take the docs-only skip path. Deleting gate policy is an
+// uninstall: rejected with guidance (rollback = revert the gate commits).
+{
+  const deleted = git([
+    'diff', '--cached', '--name-only', '--diff-filter=D', '-z', '--',
+    ...controls.map(controlPathspec),
+  ]);
+  const deletedPolicy = deleted.stdout.split('\0').filter((p) => p.length > 0);
+  if (deletedPolicy.length > 0) {
+    failOperational(
+      `policy/control inputs are STAGED FOR DELETION:\n` +
+        deletedPolicy.map((f) => `  - ${f}`).join('\n'),
+      'The gate cannot uninstall itself in place. Revert the deletions, or roll the whole feature back by reverting the gate commits.'
+    );
+  }
+}
+
+// B01: the gate's runtime files must exist in the INDEX — a deletion-only
+// commit of the runner used to pass validation because nothing imported it.
+for (const required of [
+  'scripts/quality/pre-commit.mjs',
+  'scripts/quality/lint-files.mjs',
+  'scripts/quality/check-exceptions.mjs',
+  'scripts/quality/architecture-check.mjs',
+  'scripts/quality/rules/index.cjs',
+  'scripts/quality/repo-boundary.cjs',
+  'scripts/quality/policy.cjs',
+  'scripts/quality/eslint-fast.cjs',
+  'scripts/quality/lint-staged.config.mjs',
+  'scripts/quality/exceptions.json',
+  '.eslintrc.json',
+]) {
+  const present = git(['ls-files', '--error-unmatch', '--', required], { allowFailure: true });
+  if (present.status !== 0) {
+    failOperational(
+      `gate runtime file is missing from the index: ${required}`,
+      'The gate cannot uninstall itself in place. Restore the file, or roll the whole feature back by reverting the gate commits.'
+    );
+  }
+}
+
 // Policy-control inputs among STAGED files → validate policy before ANY
 // exit (QG-10, BUG-5). This list is policy/config only; documentation is
 // deliberately absent (BUG-17: the operator guide is documentation, not a
@@ -347,6 +390,11 @@ function validateStagedPackageControls(stagedPolicy) {
     'eslint-plugin-vue',
     'vue-eslint-parser',
     '@typescript-eslint/parser',
+    // B10: directly consumed by .eslintrc.json (plugin rules + the
+    // shareable TS config) — a staged manifest can drop their
+    // declarations while node_modules still resolves them.
+    '@typescript-eslint/eslint-plugin',
+    '@vue/eslint-config-typescript',
     'lint-staged',
     'husky',
   ];
@@ -400,10 +448,17 @@ if (stagedSource.length === 0) {
 
 // Symlink guard: a staged source path that is a symlink is rejected with an
 // explanation rather than followed outside the repository (§6.1).
+// B09: gitlink entries (mode 160000 — submodules, even with a source-like
+// suffix such as vendored.ts) are NOT files: one mode lookup per staged
+// source, skipped before the file-level preflight.
+const stagedSourceFiles = [];
 for (const rel of stagedSource) {
-  const abs = path.join(repoRoot, rel);
   const stat = spawnSync('git', ['ls-files', '-s', '--', rel], { cwd: repoRoot, encoding: 'utf8' });
-  if (stat.status === 0 && /^120000 /.test(stat.stdout)) {
+  const mode = stat.status === 0 ? stat.stdout.slice(0, 6) : '';
+  if (mode === '160000') continue; // submodule gitlink, not a file
+  stagedSourceFiles.push(rel);
+  const abs = path.join(repoRoot, rel);
+  if (mode === '120000') {
     failOperational(
       `staged source path is a symlink: ${rel}`,
       'Symlinked source cannot be checked safely. Commit the real file instead.'
@@ -420,7 +475,7 @@ for (const rel of stagedSource) {
 // --- 3/4. lint-staged (single invocation, sequential, backed up) -----------
 
 process.stdout.write(
-  `quality: checking ${stagedSource.length} staged source file(s)\n`
+  `quality: checking ${stagedSourceFiles.length} staged source file(s)\n`
 );
 
 // BUG-10: record the index tree identity before lint-staged; the gate is

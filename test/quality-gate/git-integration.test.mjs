@@ -657,6 +657,8 @@ describe('outside-review hardening (codex round)', () => {
         'eslint-plugin-vue': '9.33.0',
         'vue-eslint-parser': '9.4.3',
         '@typescript-eslint/parser': '7.18.0',
+        '@typescript-eslint/eslint-plugin': '7.18.0',
+        '@vue/eslint-config-typescript': '13.0.0',
         'lint-staged': '16.2.7',
         husky: '9.1.7',
       },
@@ -672,5 +674,23 @@ describe('outside-review hardening (codex round)', () => {
     const res = run(root, ['commit', '-m', 'drop prepare']);
     assert.notEqual(res.status, 0, 'prepare-script removal must reject');
     assert.match(res.stdout + res.stderr, /prepare/);
+  });
+});
+
+describe('audit 2026-10-24 fixes (B01/B09)', () => {
+  test('B01: deleting a gate runtime file can never commit', () => {
+    const { root } = makeRepo('b01-runner-del');
+    run(root, ['rm', '-q', 'scripts/quality/lint-files.mjs']);
+    const res = run(root, ['commit', '-m', 'delete runner']);
+    assert.notEqual(res.status, 0, 'deletion-only commit must reject');
+    assert.match(res.stdout + res.stderr, /DELETION|missing from the index/);
+  });
+
+  test('B09: a source-suffixed submodule gitlink is not a file and commits', () => {
+    const { root } = makeRepo('b09-gitlink');
+    const sha = run(root, ['rev-parse', 'HEAD']).stdout.trim();
+    run(root, ['update-index', '--add', '--cacheinfo', `160000,${sha},vendored.ts`]);
+    const res = run(root, ['commit', '-m', 'gitlink suffix']);
+    assert.equal(res.status, 0, `suffixed gitlink must commit:\n${res.stdout}${res.stderr}`);
   });
 });

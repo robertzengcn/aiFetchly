@@ -215,3 +215,20 @@ describe('audit report defects and overages (outside-review round)', () => {
     );
   });
 });
+
+describe('audit 2026-10-24 fix (B03): unapproved ignores fail the audit', () => {
+  test('an .eslintignore-excluded violating file is an operational failure', () => {
+    setupDisposable();
+    writeFileSync(path.join(sandbox, 'Probe.ts'), 'export const value: any = 1;\n');
+    writeFileSync(path.join(sandbox, '.eslintignore'), 'Probe.ts\n');
+    spawnSync('git', ['add', 'Probe.ts', '.eslintignore'], { cwd: sandbox });
+    const res = spawnSync(
+      process.execPath,
+      [path.join(sandbox, 'scripts', 'quality', 'audit.mjs'), '--json'],
+      { cwd: sandbox, encoding: 'utf8', timeout: 240_000, maxBuffer: 64 * 1024 * 1024 }
+    );
+    assert.equal(res.status, 2, 'silently-ignored coverage must fail the audit');
+    const doc = JSON.parse(res.stdout);
+    assert.ok(doc.operationalErrors.some((e) => e.includes('UNAPPROVED ignore')));
+  });
+});

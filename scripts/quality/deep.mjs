@@ -50,7 +50,9 @@ export function buildSteps(root, scope) {
     steps.push({
       label: `typed lint ${Math.floor(i / CHUNK) + 1}/${Math.ceil(typedFiles.length / CHUNK)}`,
       command: process.execPath,
-      args: [...eslintArgs('eslint-deep.cjs'), ...typedFiles.slice(i, i + CHUNK)],
+      // B06: file operands after the terminator can never be parsed as
+      // options — a tracked '-bad.ts' must stay an operand.
+      args: [...eslintArgs('eslint-deep.cjs'), '--', ...typedFiles.slice(i, i + CHUNK)],
     });
   }
   steps.push({
@@ -59,6 +61,7 @@ export function buildSteps(root, scope) {
     args: [
       ...eslintArgs('eslint-fast.cjs'),
       '--ext', '.js,.jsx,.cjs,.mjs,.ts,.tsx,.vue',
+      '--',
       'scripts',
     ],
   });

@@ -10,6 +10,10 @@ import { parseComplexity, isExceptableRuleId, isOperationalDiagnostic } from './
 
 const COMPLEXITY_RULE = 'sonarjs/cognitive-complexity';
 
+// B07: paths may legally contain '::' (POSIX), so composite keys use a NUL
+// separator — impossible inside a path — and decode unambiguously.
+const pairKey = (path, rule) => `${path}\0${rule}`;
+
 /**
  * @param {Array<{path:string, ruleId:string|null, severity:number, fatal?:boolean, line?:number, column?:number, message:string}>} findings
  * @param {{exceptions: Array<object>}} manifest loaded manifest (validated)
@@ -46,7 +50,7 @@ function tallyFindings(findings) {
       codeDefects.push(f);
       continue;
     }
-    const key = `${f.path}::${f.ruleId}`;
+    const key = pairKey(f.path, f.ruleId);
     pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
     if (f.ruleId !== COMPLEXITY_RULE) continue;
     const keep = tallyComplexityFinding(f, key, pairCounts, complexityByPath);
@@ -70,7 +74,7 @@ function tallyComplexityFinding(f, key, pairCounts, complexityByPath) {
 function summarizeByRule(pairCounts) {
   const byRule = new Map();
   for (const [key, count] of pairCounts) {
-    const rule = key.split('::')[1];
+    const rule = key.split('\0')[1];
     if (!byRule.has(rule)) byRule.set(rule, { files: 0, findings: 0 });
     byRule.get(rule).files += 1;
     byRule.get(rule).findings += count;
@@ -84,7 +88,7 @@ function summarizeByRule(pairCounts) {
 function analyzeManifestEntries(exceptions, tallies, inventory) {
   const out = { stale: [], expired: [], tightening: [], ceilingExceeded: [], manifestKeys: new Set() };
   for (const entry of exceptions) {
-    out.manifestKeys.add(`${entry.path}::${entry.ruleId}`);
+    out.manifestKeys.add(pairKey(entry.path, entry.ruleId));
     if (entry.expired) {
       out.expired.push({ path: entry.path, ruleId: entry.ruleId, expiresOn: entry.expiresOn });
     }
@@ -106,7 +110,7 @@ function pushStale(entry, inventory, out) {
 }
 
 function analyzeOrdinaryEntry(entry, tallies, inventory, out) {
-  const current = tallies.pairCounts.get(`${entry.path}::${entry.ruleId}`) ?? 0;
+  const current = tallies.pairCounts.get(pairKey(entry.path, entry.ruleId)) ?? 0;
   if (current === 0) {
     pushStale(entry, inventory, out);
   } else if (current < entry.maxCount) {
@@ -128,7 +132,7 @@ function analyzeOrdinaryEntry(entry, tallies, inventory, out) {
 
 function analyzeComplexityEntry(entry, tallies, inventory, out) {
   const observed = tallies.complexityByPath.get(entry.path) ?? [];
-  if (observed.length === 0 && !tallies.pairCounts.has(`${entry.path}::${entry.ruleId}`)) {
+  if (observed.length === 0 && !tallies.pairCounts.has(pairKey(entry.path, entry.ruleId))) {
     pushStale(entry, inventory, out);
     return;
   }
@@ -192,7 +196,7 @@ function reportUnbaselinedPositions(entry, observed, out) {
 function draftUnmanifested(tallies, manifestKeys, codeDefects) {
   const draft = [];
   for (const [key, count] of [...tallies.pairCounts.entries()].sort()) {
-    const [file, rule] = key.split('::');
+    const [file, rule] = key.split('\0');
     if (manifestKeys.has(key)) continue;
     if (!isExceptableRuleId(rule)) {
       codeDefects.push({ path: file, ruleId: rule, message: 'unexceptable rule fired — fix the code' });

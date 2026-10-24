@@ -175,14 +175,16 @@ export function resolveTypedScope(repoRoot) {
     matchesAny(include, rel, rootDir) &&
     !matchesAny(exclude, rel, rootDir);
 
-  const trackedVue = trackedSourceFiles(repoRoot, /\.vue$/).filter(patternMatches);
+  const trackedVue = trackedSourceFiles(repoRoot, /\.(vue|jsx)$/).filter(patternMatches);
   const trackedJs = trackedSourceFiles(repoRoot, /\.(js|mjs|cjs)$/).filter(patternMatches);
 
   const included = new Set([...tsEnumerated, ...trackedVue, ...trackedJs]);
   const all = [...included];
   return {
     included,
-    typedTargets: all.filter((rel) => /\.(ts|tsx|vue)$/.test(rel)),
+    // B08: in-project .jsx joins the typed pass (TS enumeration includes it
+    // with allowJs, but it was silently dropped from every target set).
+    typedTargets: all.filter((rel) => /\.(ts|tsx|jsx|vue)$/.test(rel)),
     vueTargets: all.filter((rel) => rel.endsWith('.vue')),
     jsInProject: all.filter((rel) => /\.(js|mjs|cjs)$/.test(rel)),
     configDiagnostics,

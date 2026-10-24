@@ -129,12 +129,17 @@ if (hooksValue === '.husky/_') {
     // the runner script next to themselves — tolerate layout changes by
     // requiring the reference, not an exact byte match.
     if (executable) {
-      const shimContent = readFileSync(shimFile, 'utf8');
-      const sourcesRunner = /\/h("|'|\s|$)/.test(shimContent) || shimContent.includes('husky');
+      // B02: a substring match accepted '# husky runner' comments and
+      // no-op shims — inspect NON-COMMENT code lines only (the real husky 9
+      // shim is `. "$(dirname "$0")/h"`).
+      const shimCode = readFileSync(shimFile, 'utf8')
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('#'));
+      const sourcesRunner = shimCode.some((l) => /\/h\b|h"\)|husky\.sh/.test(l));
       check(
         'husky:shim-content',
         sourcesRunner,
-        sourcesRunner ? 'shim sources the husky runner' : shimContent.trim().split('\n')[0],
+        sourcesRunner ? 'shim sources the husky runner' : 'shim never invokes the husky runner (comment-only or no-op)',
         'The shim must source the husky runner — re-run `yarn prepare`'
       );
     }

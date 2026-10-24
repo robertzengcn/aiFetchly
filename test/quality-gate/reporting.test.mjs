@@ -100,3 +100,15 @@ describe('human reporting (F10)', () => {
     assert.match(res.stdout, /warning\(s\)/);
   });
 });
+
+describe('audit 2026-10-24 fix (B12)', () => {
+  test('empty --json invocation returns a parseable zero-file document', () => {
+    const res = runRunner(['--json']);
+    assert.equal(res.status, 0);
+    const doc = JSON.parse(res.stdout);
+    assert.equal(doc.schema, 'quality-gate/1');
+    assert.equal(doc.filesChecked, 0);
+    assert.equal(doc.blockerCount, 0);
+    assert.deepEqual(doc.operationalErrors, []);
+  });
+});

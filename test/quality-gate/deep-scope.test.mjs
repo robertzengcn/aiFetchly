@@ -121,3 +121,18 @@ describe('deep scope resolution (F05)', () => {
     assert.ok(scope.jsInProject.includes('forge.config.js'));
   });
 });
+
+describe('audit 2026-10-24 fix (B08)', () => {
+  test('in-project .jsx joins the typed target set', () => {
+    writeFileSync(
+      path.join(fixtureRoot, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { allowJs: true, noEmit: true },
+        include: ['src/**/*.ts', 'src/**/*.jsx'],
+      })
+    );
+    writeFileSync(path.join(fixtureRoot, 'src', 'Panel.jsx'), 'export const ok = 1;\n');
+    const scope = resolveTypedScope(fixtureRoot);
+    assert.ok(scope.typedTargets.includes('src/Panel.jsx'), JSON.stringify(scope.typedTargets));
+  });
+});

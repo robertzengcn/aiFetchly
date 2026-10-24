@@ -14,6 +14,7 @@
 
 import path from 'node:path';
 import process from 'node:process';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
@@ -71,7 +72,28 @@ function failOperational(message, hint) {
 
 const files = jsonMode ? process.argv.slice(3) : process.argv.slice(2);
 if (files.length === 0) {
-  process.stdout.write('quality: no files to check\n');
+  if (jsonMode) {
+    // B12: JSON consumers must always receive the versioned document — a
+    // human string with exit 0 is unparseable success.
+    process.stdout.write(
+      JSON.stringify({
+        schema: 'quality-gate/1',
+        mode: runMode,
+        filesChecked: 0,
+        filesSkippedApproved: 0,
+        elapsedMs: Number((process.hrtime.bigint() - startNs) / 1_000_000n),
+        blockers: [],
+        blockerCount: 0,
+        warnings: [],
+        warningCount: 0,
+        acceptedDebt: 0,
+        acceptedDebtFindings: [],
+        operationalErrors: [],
+      }) + '\n'
+    );
+  } else {
+    process.stdout.write('quality: no files to check\n');
+  }
   process.exit(0);
 }
 
@@ -79,12 +101,50 @@ if (files.length === 0) {
 // (tech design §11) before the engine starts. Shared boundary helper (F08)
 // — the same lexical + realpath validation the fix command and the
 // manifest loader use, so the checks cannot drift apart again.
+// B09: a gitlink (mode 160000 — submodule) can carry a source-like suffix
+// and arrive here via lint-staged's own enumeration; it is not a file and
+// is skipped with a report rather than treated as missing source.
+const checkable = [];
 for (const file of files) {
+  const rel = path.relative(repoRoot, path.resolve(repoRoot, file)).split(path.sep).join('/');
+  const stat = spawnSync('git', ['ls-files', '-s', '--', rel], { cwd: repoRoot, encoding: 'utf8' });
+  if (stat.status === 0 && stat.stdout.startsWith('160000 ')) {
+    (jsonMode ? process.stderr : process.stdout).write(
+      `quality: skipped ${rel} (submodule gitlink, not a file)\n`
+    );
+    continue;
+  }
+  checkable.push(file);
+}
+for (const file of checkable) {
   try {
     assertInsideRepo(repoRoot, path.resolve(repoRoot, file), `selected path ${file}`);
   } catch (e) {
     failOperational(e.message, 'Symlinked source cannot be checked safely.');
   }
+}
+if (checkable.length === 0) {
+  if (jsonMode) {
+    process.stdout.write(
+      JSON.stringify({
+        schema: 'quality-gate/1',
+        mode: runMode,
+        filesChecked: 0,
+        filesSkippedApproved: 0,
+        elapsedMs: Number((process.hrtime.bigint() - startNs) / 1_000_000n),
+        blockers: [],
+        blockerCount: 0,
+        warnings: [],
+        warningCount: 0,
+        acceptedDebt: 0,
+        acceptedDebtFindings: [],
+        operationalErrors: [],
+      }) + '\n'
+    );
+  } else {
+    process.stdout.write('quality: no files to check\n');
+  }
+  process.exit(0);
 }
 
 const eslint = new ESLint({
@@ -98,7 +158,7 @@ const eslint = new ESLint({
 
 let results;
 try {
-  results = await eslint.lintFiles(files);
+  results = await eslint.lintFiles(checkable);
 } catch (error) {
   // Missing plugin, malformed config, parser bootstrap errors — NEVER a pass
   // (QG-12). Individual file parse errors arrive as fatal messages instead
@@ -127,7 +187,7 @@ for (const r of results) {
   );
 }
 const ignoredPaths = [...new Set([
-  ...files.filter((f) => !resultFiles.has(path.resolve(repoRoot, f))).map((f) => path.relative(repoRoot, path.resolve(repoRoot, f)).split(path.sep).join('/')),
+  ...checkable.filter((f) => !resultFiles.has(path.resolve(repoRoot, f))).map((f) => path.relative(repoRoot, path.resolve(repoRoot, f)).split(path.sep).join('/')),
   ...ignoredStubs,
 ])];
 
@@ -162,7 +222,7 @@ results = results.filter(
 // same for aifetchly/* findings.
 const { checkArchitecture } = await import('./architecture-check.mjs');
 const archFindings = checkArchitecture(
-  files.map((f) => path.resolve(repoRoot, f)),
+  checkable.map((f) => path.resolve(repoRoot, f)),
   repoRoot
 );
 for (const finding of archFindings) {
@@ -303,6 +363,21 @@ if (jsonMode) {
   };
   process.stdout.write(JSON.stringify(document) + '\n');
 } else {
+  // B11: warnings are nonblocking but must stay actionable — show bounded
+  // details with location and rule, not just a count.
+  const MAX_HUMAN_WARNINGS = 10;
+  for (const w of warningFindings.slice(0, MAX_HUMAN_WARNINGS)) {
+    process.stdout.write(
+      `${w.path}:${w.line}:${w.column} warning ${w.ruleId ?? '(unknown)'}\n` +
+        `  ${w.message}\n`
+    );
+  }
+  if (warningFindings.length > MAX_HUMAN_WARNINGS) {
+    process.stdout.write(
+      `… ${warningFindings.length - MAX_HUMAN_WARNINGS} more warning(s) not shown. ` +
+        `Re-run with --json for the full list.\n`
+    );
+  }
   for (const f of findings.slice(0, MAX_HUMAN_BLOCKERS)) {
     process.stdout.write(
       `${f.path}:${f.line}:${f.column} error ${f.ruleId || '(fatal)'}\n` +

@@ -20,7 +20,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,18 @@ function step(label, command, args, opts = {}) {
   return res.status;
 }
 
+/**
+ * Audit V01 portability: spawning bare 'yarn' breaks under shell:false on
+ * Windows (.cmd shim). Drive yarn's JS entry through process.execPath when
+ * the clone has one; fall back to the bare name otherwise.
+ */
+function yarnArgs(sub) {
+  const yarnJs = path.join(clone, 'node_modules', 'yarn', 'bin', 'yarn.js');
+  return existsSync(yarnJs)
+    ? { cmd: process.execPath, args: [yarnJs, ...sub] }
+    : { cmd: 'yarn', args: sub };
+}
+
 function fail(label, detail) {
   process.stderr.write(`\nDRILL FAILED at "${label}": ${detail}\n`);
   process.stderr.write(`Clone kept for inspection: ${clone}\n`);
@@ -60,17 +72,19 @@ const cloned = spawnSync('git', ['clone', '--no-hardlinks', source, clone], {
 if (cloned.status !== 0) fail('clone', `git clone exited ${cloned.status}`);
 
 // 2. Install from the lockfile (setup-time network use is expected here).
-const install = step('yarn install --frozen-lockfile', 'yarn', [
-  'install', '--frozen-lockfile', '--ignore-scripts',
-]);
+const installCmd = yarnArgs(['install', '--frozen-lockfile', '--ignore-scripts']);
+const install = step('yarn install --frozen-lockfile', installCmd.cmd, installCmd.args);
 if (install !== 0) {
   // Native rebuilds (better-sqlite3) are not needed for the gate itself.
   fail('yarn install', `exit ${install} — the drill requires a networked environment`);
 }
-step('yarn prepare (husky)', 'yarn', ['prepare'], { timeout: 5 * 60_000 });
+const prepareCmd = yarnArgs(['prepare']);
+const prepare = step('yarn prepare (husky)', prepareCmd.cmd, prepareCmd.args, { timeout: 5 * 60_000 });
+if (prepare !== 0) fail('yarn prepare', `exit ${prepare} — hook installation failed`);
 
 // 4. Doctor (includes the real-commit rejection probe).
-const doctor = step('yarn quality:doctor', 'yarn', ['quality:doctor']);
+const doctorCmd = yarnArgs(['quality:doctor']);
+const doctor = step('yarn quality:doctor', doctorCmd.cmd, doctorCmd.args);
 if (doctor !== 0) fail('doctor', `exit ${doctor}`);
 
 // Commit identity for the probe commits.
