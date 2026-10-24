@@ -122,6 +122,18 @@ export class SupervisedStdioTransport implements Transport {
     this.child = child;
     this.started = true;
 
+    // T04 (R9): the child's stdio streams can emit 'error' (e.g. EPIPE when
+    // the peer exits mid-write) — an un-listened stream error becomes an
+    // uncaught exception in the host process even when the write callback
+    // is handled. Route them through the transport's error surface instead.
+    child.stdin?.on("error", (error: Error) => {
+      this.emitError(error);
+    });
+    child.stdout?.on("error", (error: Error) => {
+      this.emitError(error);
+    });
+    child.stderr?.on("error", () => undefined);
+
     child.stdout?.on("data", (chunk: Buffer) => this.handleStdoutChunk(chunk));
 
     child.stderr?.on("data", (chunk: Buffer) => {
