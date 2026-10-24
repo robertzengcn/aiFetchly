@@ -1,5 +1,16 @@
 # Local Commit Quality Gate — Implementation Audit
 
+> **SUPERSEDED as the active tracker — see [REQUIREMENTS_AUDIT_TODO.md](REQUIREMENTS_AUDIT_TODO.md).**
+> A fresh requirements audit (2026-10-23, reviewed at HEAD `bb5948a4a`) found
+> that the resolution statement below was too broad: probes demonstrated
+> false passes, false rejections, coverage gaps, and a filesystem boundary
+> violation. Everything from "## Resolution (2026-10-23)" onward is a
+> HISTORICAL SNAPSHOT of the first implementation pass and its 18-bug
+> remediation — kept verbatim as evidence, not as current status. The
+> follow-up defects (F01–F14) and verification work (V01–V05, D01) were
+> tracked and fixed under the requirements-audit TODO linked above
+> (2026-10-24 remediation commits).
+
 Date: 2026-10-22
 Worktree: `.worktrees/local-commit-quality-gate`
 Branch: `worktree-local-commit-quality-gate`
