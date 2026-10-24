@@ -169,3 +169,49 @@ describe('audit inventory integration (F11)', () => {
     assert.ok(doc.inventoryFiles >= 1);
   });
 });
+
+describe('audit report defects and overages (outside-review round)', () => {
+  test('missing-rule diagnostics are code defects, never drafted', () => {
+    const report = buildAuditReport(
+      [f({
+        ruleId: 'missing-plugin/nonexistent-rule',
+        message: "Definition for rule 'missing-plugin/nonexistent-rule' was not found.",
+      })],
+      { exceptions: [] },
+      new Set(['src/A.ts'])
+    );
+    assert.ok(report.codeDefects.length >= 1, 'classified as a defect');
+    assert.equal(report.draft.length, 0, 'never drafted as an allowance');
+  });
+
+  test('ordinary count EXCESS is reported as would-block-when-touched', () => {
+    const report = buildAuditReport(
+      [f(), f({ line: 2 }), f({ line: 3 }), f({ line: 4 })], // 4 > maxCount 5? no —
+      { exceptions: [ENTRY({ maxCount: 2 })] },
+      new Set(['src/A.ts'])
+    );
+    assert.ok(
+      report.ceilingExceeded.some((c) => c.detail.includes('4 > allowed 2')),
+      JSON.stringify(report.ceilingExceeded)
+    );
+  });
+
+  test('complexity findings at unbaselined positions are reported', () => {
+    const report = buildAuditReport(
+      [cx(20, 10), cx(16, 999)],
+      { exceptions: [ENTRY({
+        path: 'src/B.ts',
+        ruleId: 'sonarjs/cognitive-complexity',
+        maxCount: 1,
+        maxComplexity: 20,
+        maxTotalComplexity: 20,
+        functions: [{ line: 10, column: 1, maxComplexity: 20 }],
+      })] },
+      new Set(['src/B.ts'])
+    );
+    assert.ok(
+      report.ceilingExceeded.some((c) => c.detail.includes('999') && c.detail.includes('no baselined identity')),
+      JSON.stringify(report.ceilingExceeded)
+    );
+  });
+});

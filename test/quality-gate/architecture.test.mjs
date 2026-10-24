@@ -279,3 +279,14 @@ describe('requirements-audit fixes (F06/F07)', () => {
     assert.equal(findings.length, 1, JSON.stringify(findings));
   });
 });
+
+describe('outside-review fixes (codex round)', () => {
+  test('import TYPE equals is type-only and allowed (never a false block)', () => {
+    writeFileSync(
+      path.join(workerDir, 'import-type-equals.ts'),
+      "import type Db = require('typeorm');\nexport type Conn = Db.Connection;\nexport const y = 1;\n"
+    );
+    const findings = findingsFor(rel(path.join(workerDir, 'import-type-equals.ts')));
+    assert.equal(findings.length, 0, JSON.stringify(findings));
+  });
+});

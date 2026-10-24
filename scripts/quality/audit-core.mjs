@@ -6,7 +6,7 @@
  * defects that can never be excepted, and reviewable draft entries.
  */
 
-import { parseComplexity, isExceptableRuleId } from './check-exceptions.mjs';
+import { parseComplexity, isExceptableRuleId, isOperationalDiagnostic } from './check-exceptions.mjs';
 
 const COMPLEXITY_RULE = 'sonarjs/cognitive-complexity';
 
@@ -39,8 +39,11 @@ function tallyFindings(findings) {
   const complexityByPath = new Map();
   const codeDefects = [];
   for (const f of blockers) {
-    if (f.fatal === true || f.ruleId == null) {
-      codeDefects.push(f); // fatal/no-rule: fixes, never allowances
+    // Fatal, no-rule, and configuration/rule-resolution diagnostics (the
+    // "Definition for rule ... was not found" shape KEEPS the missing
+    // rule's id) are code/config defects — never drafted as allowances.
+    if (f.fatal === true || f.ruleId == null || isOperationalDiagnostic(f)) {
+      codeDefects.push(f);
       continue;
     }
     const key = `${f.path}::${f.ruleId}`;
@@ -113,6 +116,13 @@ function analyzeOrdinaryEntry(entry, tallies, inventory, out) {
       path: entry.path, ruleId: entry.ruleId, kind: 'count',
       detail: `finding count ${entry.maxCount} -> ${current}`,
     });
+  } else if (current > entry.maxCount) {
+    // Codex review: EXCESS findings block the gate when the file is
+    // touched — the audit must say so, not stay silent.
+    out.ceilingExceeded.push({
+      path: entry.path, ruleId: entry.ruleId,
+      detail: `finding count ${current} > allowed ${entry.maxCount} (would block when touched)`,
+    });
   }
 }
 
@@ -146,12 +156,34 @@ function analyzeComplexityEntry(entry, tallies, inventory, out) {
       path: entry.path, ruleId: entry.ruleId, kind: 'count',
       detail: `over-threshold functions ${entry.maxCount} -> ${observed.length}`,
     });
+  } else if (observed.length > entry.maxCount) {
+    out.ceilingExceeded.push({
+      path: entry.path, ruleId: entry.ruleId,
+      detail: `over-threshold functions ${observed.length} > allowed ${entry.maxCount} (would block when touched)`,
+    });
   }
+  reportUnbaselinedPositions(entry, observed, out);
   const observedSum = observed.reduce((n, o) => n + o.value, 0);
   if (entry.maxTotalComplexity !== undefined && observedSum < entry.maxTotalComplexity) {
     out.tightening.push({
       path: entry.path, ruleId: entry.ruleId, kind: 'aggregate',
       detail: `total complexity ${entry.maxTotalComplexity} -> ${observedSum}`,
+    });
+  }
+}
+
+
+/** Codex review: findings at positions with NO baselined identity have no
+ * allowance at all — report them, mirroring applyExceptions' rejection. */
+function reportUnbaselinedPositions(entry, observed, out) {
+  for (const o of observed) {
+    const baselined = (entry.functions ?? []).some(
+      (fn) => fn.line === o.line && fn.column === o.column
+    );
+    if (baselined) continue;
+    out.ceilingExceeded.push({
+      path: entry.path, ruleId: entry.ruleId,
+      detail: `function at ${o.line}:${o.column} (complexity ${o.value}) has no baselined identity (would block when touched)`,
     });
   }
 }

@@ -24,9 +24,9 @@ const { assertInsideRepo } = require('./repo-boundary.cjs');
 const files = process.argv.slice(2).filter((a) => a !== '--json');
 if (files.length === 0) {
   process.stderr.write(
-    'quality:fix requires explicit paths (it rewrites the working tree).\\n' +
-      'Usage: yarn quality:fix <paths...>\\n' +
-      'Nothing was changed and nothing was staged.\\n'
+    'quality:fix requires explicit paths (it rewrites the working tree).\n' +
+      'Usage: yarn quality:fix <paths...>\n' +
+      'Nothing was changed and nothing was staged.\n'
   );
   process.exit(2);
 }
@@ -57,7 +57,7 @@ let results;
 try {
   results = await eslint.lintFiles(files);
 } catch (error) {
-  process.stderr.write(`quality:fix engine failure: ${error?.message ?? error}\\n`);
+  process.stderr.write(`quality:fix engine failure: ${error?.message ?? error}\n`);
   process.exit(2);
 }
 

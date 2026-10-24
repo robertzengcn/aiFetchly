@@ -128,7 +128,10 @@ function visitForRequireAndImport(n, found) {
   }
   const importEquals = externalModuleSpecifier(n);
   if (importEquals !== null) {
-    found.push({ specifier: importEquals, node: n, typeOnly: false });
+    // Codex review: `import type Db = require('typeorm')` is a valid
+    // type-only import-equals — honor the declaration's importKind instead
+    // of always treating import-equals as runtime.
+    found.push({ specifier: importEquals, node: n, typeOnly: n.importKind === 'type' });
   }
   visitAstChildren(n, found);
 }

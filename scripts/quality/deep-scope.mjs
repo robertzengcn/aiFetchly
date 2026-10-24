@@ -63,13 +63,34 @@ function matchesAny(list, relPath, rootDir) {
   return false;
 }
 
+
+/** NUL-delimited git listing filtered to the wanted extensions. */
+function gitListMatching(repoRoot, args, extensionRegex) {
+  const out = spawnSync('git', args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (out.error || out.status !== 0) {
+    throw new Error(
+      `git ${args[0]} failed in ${repoRoot}: ${out.error ? out.error.message : out.stderr.trim()}`
+    );
+  }
+  const files = [];
+  for (const entry of out.stdout.split('\0')) {
+    if (entry.length > 0 && extensionRegex.test(entry)) files.push(entry);
+  }
+  return files;
+}
+
 /**
  * Source files for the extensions TS cannot enumerate itself. In a real
- * checkout this is the TRACKED file list (git ls-files, NUL-delimited) so
- * build output can never enter the typed scope. Fixture directories that
- * are not themselves git roots (test harness trees) fall back to a
- * filesystem walk — without this, git would climb to the PARENT repo and
- * enumerate the wrong tree.
+ * checkout this is the tracked list PLUS untracked non-ignored files (deep
+ * validation works on the WORKING TREE — an unstaged new .vue file is
+ * checked, not skipped), NUL-delimited so build output stays out via
+ * --exclude-standard. Fixture directories that are not themselves git
+ * roots (test harness trees) fall back to a filesystem walk — without
+ * this, git would climb to the PARENT repo and enumerate the wrong tree.
  */
 function trackedSourceFiles(repoRoot, extensionRegex) {
   const toplevel = spawnSync('git', ['rev-parse', '--show-toplevel'], {
@@ -80,21 +101,11 @@ function trackedSourceFiles(repoRoot, extensionRegex) {
     toplevel.status === 0 &&
     path.resolve(toplevel.stdout.trim()) === path.resolve(repoRoot);
   if (isOwnRepo) {
-    const out = spawnSync('git', ['ls-files', '-z'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (out.error || out.status !== 0) {
-      throw new Error(
-        `git ls-files failed in ${repoRoot}: ${out.error ? out.error.message : out.stderr.trim()}`
-      );
-    }
-    const files = [];
-    for (const entry of out.stdout.split('\0')) {
-      if (entry.length > 0 && extensionRegex.test(entry)) files.push(entry);
-    }
-    return files;
+    const files = [
+      ...gitListMatching(repoRoot, ['ls-files', '-z'], extensionRegex),
+      ...gitListMatching(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z'], extensionRegex),
+    ];
+    return [...new Set(files)];
   }
   const files = [];
   const walk = (dir, relDir) => {
