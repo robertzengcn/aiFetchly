@@ -1351,10 +1351,17 @@ export const useSelectedConversationStore = defineStore(
           // durable turn is pending. Hydrate the authoritative queued
           // status FIRST (R6-01 pattern); activeRunId stays null so the
           // pending row never displaces the host run identity.
-          presenter.hydrateRuntime({
-            runtimeStatus: "queued",
-            activeRunId: null,
-          });
+          // R9: hydrate ONLY from idle. Downgrading a LIVE running host
+          // turn to "queued" hid the pending bubble's Steer affordance
+          // (it requires runtimeStatus === "running") and broke §21.6-2/
+          // §21.6-3 steering E2E; busy/parked states were never the P1-7
+          // hole (isBusy is already true there).
+          if (presenter.getState().runtimeStatus === "idle") {
+            presenter.hydrateRuntime({
+              runtimeStatus: "queued",
+              activeRunId: null,
+            });
+          }
           syncFromPresenter();
         }
         return true;

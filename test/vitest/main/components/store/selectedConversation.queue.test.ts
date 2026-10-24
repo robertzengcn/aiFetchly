@@ -174,6 +174,30 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.isBusy).toBe(true);
   });
 
+  /**
+   * R9: the queued acceptance must never DOWNGRADE a live running host
+   * turn — the pending bubble's Steer affordance requires
+   * runtimeStatus === "running", and the P1-7 hydration (unconditional in
+   * the first cut) hid it and broke the §21.6-2/§21.6-3 steering E2E.
+   */
+  it("a queued acceptance never downgrades a running host turn (R9 steering)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn is STILL RUNNING when the queued accept resolves.
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-10",
+      status: "queued",
+    });
+    await store.sendMessage("steer candidate");
+    await flushPromises();
+
+    // The host turn owns the conversation: the status stays running (the
+    // Steer button's gate) and the conversation stays busy either way.
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+  });
+
   it("a rejection surfaces the error and REMOVES the optimistic row (T8/D5: no draft duplication)", async () => {
     await seedStore("running");
     startChatRunMock.mockRejectedValue(
