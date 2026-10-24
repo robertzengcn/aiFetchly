@@ -3,7 +3,8 @@
  * the transcript card must leave its frozen draft — on send, discard, and
  * terminal delivery events the card's displayed status updates from the
  * authoritative batch read, with the sent count and reason code rendered,
- * and Review stays hidden for every terminal status.
+ * and Review stays hidden for every settled terminal status. Delivery-unknown
+ * is inconclusive, not settled: the dialog reopen entry stays (FR-OUT-007/009).
  */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
@@ -259,5 +260,37 @@ describe("AiChatOutboundBatchReviewCard", () => {
       '[data-testid="outbound-batch-summary-detail"]'
     );
     expect(detail.text()).toContain("5/5");
+  });
+
+  // R9 T04 (FR-OUT-007/009 + the design table's "email dialog reopen"
+  // journey): delivery_unknown is inconclusive, not settled — the user must
+  // be able to reopen the review dialog to check per-recipient delivery
+  // progress after closing it. The settled statuses (sent, partially_sent,
+  // failed, cancelled, discarded) still hide Review.
+  it("a delivery-unknown outcome keeps the dialog reopen entry while showing the terminal summary", async () => {
+    vi.mocked(getOutboundEmailBatchStatus).mockResolvedValue(
+      statusResult("delivery_unknown", 3)
+    );
+    const wrapper = mountCard();
+    await wrapper
+      .find('[data-testid="outbound-batch-review"]')
+      .trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="dialog-send"]').trigger("click");
+    await flushPromises();
+
+    // The card left its draft state and carries the terminal evidence,
+    // with the unknown copy distinct from success (FR-OUT-008).
+    expect(getOutboundEmailBatchStatus).toHaveBeenCalledWith(21);
+    expect(wrapper.text()).toContain("Delivery status unknown.");
+    const detail = wrapper.find(
+      '[data-testid="outbound-batch-summary-detail"]'
+    );
+    expect(detail.exists()).toBe(true);
+    // The reopen entry survives for the inconclusive outcome.
+    expect(
+      wrapper.find('[data-testid="outbound-batch-review"]').exists()
+    ).toBe(true);
+    expect(wrapper.find('[data-testid="dialog-send"]').exists()).toBe(false);
   });
 });

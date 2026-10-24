@@ -727,11 +727,13 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     });
     await flushPromises();
 
-    // Terminal batches hide the Review action (card shows the outcome
-    // summary instead) — the interactive card surface itself still renders.
+    // Settled terminal batches hide the Review action; the card surface still
+    // renders. Delivery-unknown is inconclusive (§18): its summary carries the
+    // dialog reopen entry (FR-OUT-007/009; the "email dialog reopen" journey),
+    // so exactly ONE reopen entry remains.
     expect(
       wrapper.findAll('[data-testid="outbound-batch-review"]').length
-    ).toBe(0);
+    ).toBe(1);
     expect(
       wrapper.findAllComponents({ name: "OutboundEmailBatchCard" }).length
     ).toBe(1);

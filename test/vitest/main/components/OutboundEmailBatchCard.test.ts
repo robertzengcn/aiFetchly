@@ -102,12 +102,15 @@ describe("OutboundEmailBatchCard", () => {
     expect(wrapper.text()).toContain("Batch sent.");
   });
 
-  it("shows a delivery-unknown summary (no review button) for delivery_unknown", () => {
+  // R9 T04: delivery_unknown is inconclusive (§18) — the outcome summary
+  // renders AND the dialog reopen entry stays (FR-OUT-007/009; the design
+  // table's "email dialog reopen" journey). The settled statuses hide it.
+  it("shows a delivery-unknown summary with the dialog reopen entry for delivery_unknown", () => {
     const wrapper = mountCard({ batchStatus: "delivery_unknown" });
-    expect(wrapper.find('[data-testid="outbound-batch-review"]').exists()).toBe(
-      false
-    );
     expect(wrapper.text()).toContain("Delivery status unknown.");
+    expect(wrapper.find('[data-testid="outbound-batch-review"]').exists()).toBe(
+      true
+    );
   });
 
   it("shows a discarded summary for discarded status", () => {
