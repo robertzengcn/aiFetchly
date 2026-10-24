@@ -1,57 +1,72 @@
 # Local Commit Quality Gate — Performance Report
 
-Date: 2026-10-23
-Measured on the branch: `worktree-local-commit-quality-gate` (gate as of commit `c93dc1812`)
+Date: 2026-10-24 · Branch `worktree-local-commit-quality-gate`
+
+Produced by the COMMITTED repeatable harness
+`scripts/quality/benchmark.mjs` (also `yarn quality:benchmark`). Raw
+per-run sample series: [quality-gate-performance-samples.json](quality-gate-performance-samples.json)
+(schema `quality-gate-benchmark/1`).
 
 ## Methodology (PRD §10)
 
 - 20 measured runs per workload through a REAL `git commit` (hook fully
   wired: husky shim → coordinator → lint-staged → fast ESLint), in a
-  disposable repo sharing this checkout's node_modules.
-- p95 = sorted[⌈n×0.95⌉] over the 20 runs; median and min reported for
-  context. Cold start reported separately below.
-- Timing includes git's own commit bookkeeping (~25–30 ms floor observable
-  in the docs-only workload, which never starts the engine).
+  disposable repo sharing this checkout's node_modules; after every run
+  the commit is reset so each run starts from identical baseline state.
+- **Percentile definition (unambiguous):** p95 uses the ONE-BASED rank
+  r = ⌈0.95 × n⌉ over the ascending sorted samples and takes the element
+  at ZERO-BASED index r − 1 (for n = 20: r = 19, index 18). p50 likewise.
+- Timing is wall clock around the whole `git commit` invocation — it
+  includes git's own bookkeeping (~30 ms floor visible in the docs-only
+  workload, which never starts the engine).
+- **Cold start** is measured separately: the FIRST run of each workload
+  happens in a brand-new disposable repo before any other engine activity
+  there, and is reported as `coldStartSampleMs` rather than mixed into the
+  series. The gate uses no caches, so every commit pays full process
+  startup; OS page-cache state beyond that cannot be controlled and is not
+  claimed.
+- The corpus is deterministic and index-seeded (500 exported, fully
+  annotated functions per file — a near-worst-case shape for
+  `sonarjs/no-identical-functions`'s O(file-set) comparisons), so runs are
+  comparable across machines and over time. These numbers are therefore
+  CONSERVATIVE relative to typical application code.
 
-## Results
+## Results (raw series in the JSON artifact)
 
-| Workload | Runs | Median | p95 | PRD budget (p95) | Verdict |
-|---|---|---|---|---|---|
-| Documentation-only (no policy change) | 20 | 32 ms | 34 ms | < 1 s | PASS |
-| 10 staged source files, ~5,000 lines | 20 | 842 ms | 862 ms | < 5 s | PASS |
-| 50 staged source files, ~25,000 lines | 20 | 1,442 ms | 1,513 ms | < 15 s | PASS |
+| Workload | Runs | Cold start | Median | p95 | PRD budget (p95) | Verdict |
+|---|---|---|---|---|---|---|
+| Documentation-only (no policy change) | 20 | 37.25 ms | 33.03 ms | 35.57 ms | < 1 s | **PASS** |
+| 10 staged source files, 5,000 lines (≈41 KB/file) | 20 | 1,334.75 ms | 1,336.2 ms | 1,440.42 ms | < 5 s | **PASS** |
+| 50 staged source files, 25,000 lines (≈44 KB/file) | 20 | 3,086.95 ms | 3,061.34 ms | 3,125.66 ms | < 15 s | **PASS** |
 
-All three release budgets are met with wide margin.
+All three release budgets are met — with a deliberately adversarial
+corpus — at 3.5–28× headroom. Cold-start samples sit within ~2% of the
+medians: because every commit spawns fresh processes and the gate keeps no
+caches, there is no warm path whose loss could surprise later.
 
-## Cold start
+Historical note: the 2026-10-23 report quoted p95 34 / 862 / 1,513 ms from
+an unversioned one-off script with an unspecified corpus; its samples were
+not retained and its p95 indexing was not stated. This report supersedes
+it with the committed harness, retained raw series, explicit percentile
+definition, and a harsher corpus.
 
-Cold start = first engine invocation in a fresh process after a quiet
-period (OS page cache for node_modules not guaranteed warm). The first
-engine run of each measurement block (a fresh `node` process every commit —
-the gate deliberately uses no cache) showed `min` within ~3% of the median
-(see min column in a full run: 31 ms / 826 ms / 1,418 ms), i.e. cold vs
-warm difference is noise at these sizes because every commit already pays
-full process startup. There is no cross-commit cache to warm.
-
-## Environment
+## Environment (from the JSON artifact)
 
 | Item | Value |
 |---|---|
-| OS | WSL2 (Linux 6.18.54.1-microsoft-standard-WSL2) |
-| CPU | 28 vCPU (host class) |
-| RAM | (not restricted; node RSS during measurement ≈ 55 MB) |
+| OS | Linux 6.18.54.1-microsoft-standard-WSL2 (linux/x64) |
+| CPU | Intel(R) Core(TM) i7-14700KF, 28 logical cores |
+| Workstation RAM | 25,197,391,872 bytes (≈23.5 GiB total; ≈12.2 GiB free at measurement) |
 | Node | v22.19.0 |
-| eslint | 8.57.1 |
-| eslint-plugin-sonarjs | 1.0.4 (exact) |
-| typescript-eslint parser | 7.18.0 |
-| vue-eslint-parser | 9.4.3 |
-| lint-staged | 16.2.7 |
-| File sizes | 10×500-line and 50×500-line TS fixtures, valid content |
+| eslint / sonarjs / ts-parser / vue-parser / lint-staged | 8.57.1 / 1.0.4 / 7.18.0 / 9.4.3 / 16.2.7 |
+| Corpus | deterministic; 500 lines and ≈41–44 KB per file (see JSON `corpus`) |
 
-## Scaling note
+## Reproducing
 
-`sonarjs/no-identical-functions` is the most expensive enabled rule (O(file
-set) comparisons); it is included in the measurements above. If a future
-budget miss appears, profile per-rule time before changing the threshold:
-the numbers above include it with ~10× headroom. macOS/Windows were not
-measured (see the platform note in `local-quality-gate.md`).
+```sh
+yarn quality:benchmark 20 --json-out /tmp/samples.json
+```
+
+The harness exits nonzero if any workload misses its p95 budget, so it can
+gate a release checklist. macOS/Windows were not measured (see the
+platform status in quality-gate-compatibility.md).

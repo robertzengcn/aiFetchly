@@ -1,0 +1,136 @@
+{
+  "schema": "quality-gate-benchmark/1",
+  "date": "2026-10-24",
+  "runsPerWorkload": 20,
+  "percentileDefinition": "one-based rank r = ceil(p * n) over ascending samples; element at zero-based index r-1",
+  "timingScope": "wall clock around the whole `git commit` invocation (hook fully wired)",
+  "coldStartMethod": "first run of the workload in a brand-new disposable repo, recorded separately from the warm series; the gate uses no caches",
+  "environment": {
+    "os": "Linux 6.18.54.1-microsoft-standard-WSL2 (linux/x64)",
+    "cpuModel": "Intel(R) Core(TM) i7-14700KF",
+    "cpuCount": 28,
+    "workstationTotalRamBytes": 25197391872,
+    "workstationFreeRamBytes": 13101780992,
+    "node": "22.19.0",
+    "packages": {
+      "eslint": "8.57.1",
+      "eslint-plugin-sonarjs": "1.0.4",
+      "@typescript-eslint/parser": "7.18.0",
+      "vue-eslint-parser": "9.4.3",
+      "lint-staged": "16.2.7"
+    }
+  },
+  "corpus": {
+    "small": {
+      "files": 10,
+      "linesPerFile": 500,
+      "bytesPerFile": 41280
+    },
+    "large": {
+      "files": 50,
+      "linesPerFile": 500,
+      "bytesPerFile": 44500
+    }
+  },
+  "workloads": [
+    {
+      "label": "docs-only",
+      "runs": 20,
+      "budgetP95Ms": 1000,
+      "coldStartSampleMs": 37.25,
+      "medianMs": 33.03,
+      "minMs": 31.29,
+      "maxMs": 37.25,
+      "p95Ms": 35.57,
+      "verdict": "PASS",
+      "rawSamplesMs": [
+        37.25,
+        35.43,
+        34.11,
+        34.56,
+        34.24,
+        33.81,
+        33.7,
+        34.03,
+        35.57,
+        31.91,
+        31.78,
+        33.03,
+        31.67,
+        32.51,
+        31.89,
+        33.4,
+        32.75,
+        31.74,
+        31.29,
+        32.64
+      ]
+    },
+    {
+      "label": "10-files-5k-lines",
+      "runs": 20,
+      "budgetP95Ms": 5000,
+      "coldStartSampleMs": 1334.75,
+      "medianMs": 1336.2,
+      "minMs": 1322.28,
+      "maxMs": 1575.83,
+      "p95Ms": 1440.42,
+      "verdict": "PASS",
+      "rawSamplesMs": [
+        1334.75,
+        1329.56,
+        1325.72,
+        1336.2,
+        1360.41,
+        1360,
+        1323.24,
+        1333.38,
+        1335.45,
+        1440.42,
+        1575.83,
+        1334.8,
+        1349.87,
+        1344.25,
+        1358.81,
+        1356.87,
+        1356.92,
+        1358.34,
+        1326.19,
+        1322.28
+      ]
+    },
+    {
+      "label": "50-files-25k-lines",
+      "runs": 20,
+      "budgetP95Ms": 15000,
+      "coldStartSampleMs": 3086.95,
+      "medianMs": 3061.34,
+      "minMs": 3028.21,
+      "maxMs": 3159.85,
+      "p95Ms": 3125.66,
+      "verdict": "PASS",
+      "rawSamplesMs": [
+        3086.95,
+        3043.08,
+        3034.02,
+        3061.34,
+        3047.39,
+        3060.26,
+        3084.94,
+        3079.89,
+        3063.75,
+        3028.21,
+        3125.66,
+        3105.36,
+        3043.7,
+        3080.91,
+        3048.4,
+        3040.73,
+        3033.05,
+        3107.61,
+        3080.88,
+        3159.85
+      ]
+    }
+  ]
+}

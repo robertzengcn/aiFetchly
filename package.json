@@ -112,6 +112,7 @@
     "quality:fix": "node scripts/quality/fix.mjs",
     "quality:doctor": "node scripts/quality/doctor.mjs",
     "quality:fresh-checkout": "node scripts/quality/fresh-checkout-drill.mjs",
+    "quality:benchmark": "node scripts/quality/benchmark.mjs",
     "test:quality-gate": "node --test \"test/quality-gate/*.test.mjs\""
   },
   "dependencies": {
