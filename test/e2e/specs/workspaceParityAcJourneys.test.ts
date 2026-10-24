@@ -19,13 +19,19 @@
  *           that settles to idle at the terminal) and nothing to
  *           conversation B's selected view while B holds the selection —
  *           the model's tool detail (name + arguments) never crosses.
- *   AC 36  — one Electron journey through BOTH surfaces: the workspace shell
- *           carries a turn end to end, the operator rolls back, and the
- *           legacy Chat V2 dock carries the next turn end to end.
+ *   AC 36  — REJECTED-VALIDATION draft retention on BOTH surfaces: an
+ *           oversized send is refused by the durable store and the
+ *           composer retains its text, attachment, pasted body, generated
+ *           image tray, and selected history chips. The successful
+ *           ordinary-turn rollback happy path is certified separately
+ *           under its own accurate name.
+ *   AC 12  — an approved plan document continues with EXACTLY ONE provider
+ *           request (the continuation turn).
+ *   AC 11  — a stale/failed plan decision (a newer plan version appeared
+ *           before the user approved) never dispatches a continuation.
  *
- * AC 11/12 (plan-approval continuation counting) need a scripted plan
- * document scenario on the fake provider — they remain open in the audit
- * table by explicit decision (no scenario exists).
+ * The fake provider scripts deterministic plan documents via
+ * EnterPlanMode + SubmitPlanForApproval tool-call chains.
  *
  * Relative imports only (design §9.3).
  */
@@ -35,7 +41,10 @@ import { RENDERER_ORIGIN } from "../fixtures/types";
 import { assertCleanTeardown } from "../support/assertions";
 import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
 import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
-import { writeStateManifest } from "../fixtures/temporaryState";
+import {
+  createTemporaryRoot,
+  writeStateManifest,
+} from "../fixtures/temporaryState";
 import { closeApp } from "../support/processCleanup";
 import {
   FAKE_REPORT_ID,
@@ -43,7 +52,7 @@ import {
 } from "../fixtures/fakeReportingServer";
 import type { E2ETestRoot } from "../fixtures/types";
 import * as path from "path";
-import { execFile } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 import {
   createConversationWithStreamedTurn,
@@ -107,6 +116,82 @@ async function selectToolApproval(
     .locator(".v-field")
     .click();
   await app.mainWindow.getByRole("option", { name: optionTitle }).click();
+}
+
+/**
+ * History drawer (Search tab): find an archived passage by its unique
+ * marker and draft it as a selected-context chip. Same flow as the
+ * recoverable-history spec.
+ */
+async function selectArchivedPassage(
+  app: LaunchedApp,
+  marker: string
+): Promise<void> {
+  await app.mainWindow.getByTestId("workspace-history-toggle").click();
+  await expect(
+    app.mainWindow.getByTestId("ai-history-drawer")
+  ).toBeVisible({ timeout: 15_000 });
+  await app.mainWindow.getByTestId("ai-history-tab-search").click();
+  await expect(
+    app.mainWindow.getByTestId("ai-history-search-input")
+  ).toBeVisible({ timeout: 15_000 });
+  await app.mainWindow
+    .getByTestId("ai-history-search-input")
+    .locator("input")
+    .first()
+    .fill(marker);
+  await app.mainWindow.getByTestId("ai-history-search-button").click();
+  const selectBtn = app.mainWindow.getByTestId("ai-history-select-passage");
+  await expect(selectBtn.first()).toBeVisible({ timeout: 15_000 });
+  await selectBtn.first().click();
+
+  // Close the drawer via the Vue reactivity proxy (the scrim intercepts
+  // composer pointer events while it stays open).
+  await app.mainWindow.evaluate(() => {
+    const nav = document.querySelector('[data-testid="ai-history-drawer"]');
+    if (!nav) return;
+    type VueComp = {
+      setupState?: Record<string, unknown>;
+      parent?: VueComp | null;
+    };
+    type VueEl = HTMLElement & { __vueParentComponent?: VueComp | null };
+    let comp = (nav as VueEl).__vueParentComponent;
+    let depth = 0;
+    while (comp && depth < 20) {
+      const state = comp.setupState;
+      if (state && "showHistoryDrawer" in state) {
+        (state as Record<string, unknown>).showHistoryDrawer = false;
+        break;
+      }
+      comp = comp.parent ?? undefined;
+      depth++;
+    }
+  });
+  const panel = app.mainWindow.getByTestId("ai-selected-context");
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText(marker.slice(0, 8), { timeout: 15_000 });
+}
+
+/** First durable conversation id (the newest one the shell created). */
+async function firstConversationId(
+  app: LaunchedApp
+): Promise<string> {
+  const resp = await app.mainWindow.evaluate(async () => {
+    const api = (
+      window as unknown as {
+        api: {
+          invoke: (
+            channel: string,
+            data?: unknown
+          ) => Promise<{ status: boolean; data: unknown } | undefined>;
+        };
+      }
+    ).api;
+    return await api.invoke("ai-chat-v2:conversations", JSON.stringify({}));
+  });
+  const convs = (resp?.data ?? []) as Array<{ conversationId: string }>;
+  if (!convs[0]) throw new Error("no conversation exists");
+  return convs[0].conversationId;
 }
 
 /**
@@ -389,7 +474,7 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
     await expect(rowA).not.toContainText("*.txt");
   });
 
-  test("AC 36: one Electron journey across both surfaces — workspace shell turn, rollback, legacy dock turn", async ({
+  test("§23.2 rollback happy path: a successful ordinary turn on each surface around rollback", async ({
     aiApp,
     fakeAi,
   }) => {
@@ -454,5 +539,287 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
         timeout: 45_000,
       })
       .toBeGreaterThan(shellRequests);
+  });
+
+  test("AC 36 (workspace): a rejected send keeps text, attachment, paste chip, image tray, and history chip", async ({
+    fakeAi,
+  }) => {
+    test.setTimeout(300_000);
+    // Custom launch: the recoverable-history flags enable the archive
+    // drawer (selected-history leg).
+    const root = createTemporaryRoot({
+      testId: "workspace-parity ac36 workspace",
+      workerIndex: 0,
+    });
+    await fakeAi.reset();
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: {
+        ai_chat_archive_reads_flag: "true",
+        ai_chat_history_tools_flag: "true",
+        ai_chat_new_compaction_flag: "true",
+        ai_chat_history_ui_flag: "true",
+      },
+    });
+    let app: LaunchedApp | null = null;
+    try {
+      app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      });
+
+      // Turn 1: creates the conversation and a unique archived passage.
+      // The marker IS the whole user message (the seeding helper locates
+      // the conversation by exact user-content match; the history search
+      // matches its substring).
+      const passageMarker = `ac36passage${Date.now()}`;
+      await openChat(app);
+      await send(app, passageMarker);
+      await expect
+        .poll(() => requestCount(fakeAi), { timeout: 45_000 })
+        .toBe(1);
+
+      // Seeded images on the last turn; reload so the tiles render, then
+      // switch back to the seeded conversation (the reload lands on the
+      // empty-state selection).
+      await seedGeneratedImagesOnLastTurn(app, root, passageMarker);
+      await app.mainWindow.reload();
+      await openChat(app);
+      await startNewConversation(app);
+      await switchToConversationByMarker(app, passageMarker);
+      const surface = app.mainWindow.getByTestId("chat-center-surface");
+      await expect(
+        surface.locator(".v2-message__generated-image")
+      ).toHaveCount(2);
+
+      // IMAGE TRAY: "Use as reference" on the first tile.
+      await surface
+        .locator(".v2-message__generated-image")
+        .nth(0)
+        .getByRole("button", { name: "Use as reference" })
+        .click();
+      await expect(
+        app.mainWindow.getByTestId("ai-chat-generated-ref-tray")
+      ).toBeVisible({ timeout: 15_000 });
+
+      // HISTORY CHIP: search the archived passage and select it.
+      await selectArchivedPassage(app, passageMarker);
+
+      // ATTACHMENT: a small document staged in the composer.
+      await app.mainWindow
+        .locator(".v2-composer")
+        .locator('input[type="file"]')
+        .setInputFiles({
+          name: "ac37-notes.csv",
+          mimeType: "text/csv",
+          buffer: Buffer.from("a,b\n1,2\n", "utf8"),
+        });
+
+      // PASTE CHIP: a synthetic clipboard paste above the truncate tier.
+      const longText = "x".repeat(10_500);
+      await app.mainWindow.locator(".v2-composer textarea").first().evaluate(
+        (el: Element, text: string) => {
+          const dt = new DataTransfer();
+          dt.setData("text/plain", text);
+          const ev = new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+          });
+          Object.defineProperty(ev, "clipboardData", { value: dt });
+          el.dispatchEvent(ev);
+        },
+        longText
+      );
+
+      // OVERSIZE the text past the durable bound (100_000) and send.
+      const oversized = "y".repeat(100_001);
+      await textarea(app).fill(oversized);
+      const before = await requestCount(fakeAi);
+      await app.mainWindow.getByTestId("ai-chat-send").click();
+
+      // The send is refused: NO provider request and the composer retains
+      // EVERYTHING (PRD AC 2/AC 36 — the composer clears exactly once,
+      // only on acceptance).
+      await app.mainWindow.waitForTimeout(4_000);
+      expect(await requestCount(fakeAi)).toBe(before);
+      expect(await textarea(app).inputValue()).toBe(oversized);
+      await expect(
+        app.mainWindow.getByTestId("ai-chat-generated-ref-tray")
+      ).toBeVisible();
+      await expect(
+        app.mainWindow.getByTestId("ai-selected-context")
+      ).toBeVisible();
+      const composer = app.mainWindow.locator(".v2-composer");
+      await expect(composer).toContainText("ac37-notes.csv", {
+        timeout: 10_000,
+      });
+      await expect(composer).toContainText(/pasted text/i);
+      assertCleanTeardown(app);
+    } finally {
+      if (app) {
+        await closeApp(app);
+      }
+    }
+  });
+
+  test("AC 36 (legacy dock): a rejected send keeps the draft on the rollback surface", async ({
+    aiApp,
+    fakeAi,
+  }) => {
+    test.setTimeout(300_000);
+    await openChat(aiApp);
+    await send(aiApp, `legacy-reject-journey-${Date.now()}`);
+    await expect
+      .poll(() => requestCount(fakeAi), { timeout: 45_000 })
+      .toBe(1);
+
+    // Operator rollback + the legacy dock (same §30.2 mechanism).
+    const set = await aiApp.mainWindow.evaluate(async () => {
+      const api = (
+        window as unknown as {
+          api: {
+            invoke: (
+              channel: string,
+              data?: unknown
+            ) => Promise<{ status: boolean; data: unknown } | undefined>;
+          };
+        }
+      ).api;
+      return await api.invoke(
+        "ai-chat-workspace:set-flag",
+        JSON.stringify({ enabled: false, feature: "redesign" })
+      );
+    });
+    expect(set?.status).toBe(true);
+    await aiApp.mainWindow.evaluate(() => {
+      localStorage.setItem("aifetchly.innerPageShellV3", "false");
+    });
+    await aiApp.mainWindow.reload();
+    const chatToggle = aiApp.mainWindow.locator(
+      "header button:has(i.mdi-chat), .v-app-bar button:has(i.mdi-chat)"
+    );
+    await chatToggle.first().click({ timeout: 20_000 });
+    const legacyInput = aiApp.mainWindow
+      .getByTestId("ai-chat-root")
+      .locator("textarea")
+      .first();
+    await expect(legacyInput).toBeVisible({ timeout: 20_000 });
+
+    // The legacy composer's durable bound is 32_000 (pending-create schema);
+    // one char past it must refuse the send and retain the draft.
+    const oversized = "z".repeat(32_001);
+    await legacyInput.fill(oversized);
+    const before = await requestCount(fakeAi);
+    await aiApp.mainWindow
+      .getByTestId("ai-chat-root")
+      .getByTestId("ai-chat-send")
+      .click();
+    await aiApp.mainWindow.waitForTimeout(4_000);
+    expect(await requestCount(fakeAi)).toBe(before);
+    await expect(legacyInput).toHaveValue(oversized);
+  });
+
+  test("AC 12: approving a submitted plan continues with exactly one provider request", async ({
+    aiApp,
+    fakeAi,
+  }) => {
+    test.setTimeout(300_000);
+    await openChat(aiApp);
+    // Script the deterministic plan document: enter plan mode, then submit
+    // the plan. The ack continues the turn; the plan card persists.
+    await fakeAi.setToolCallQueue([
+      {
+        name: "EnterPlanMode",
+        arguments: JSON.stringify({
+          rationale: "e2e ac12 cert",
+          objective: "Ship the newsletter campaign",
+        }),
+      },
+      {
+        name: "SubmitPlanForApproval",
+        arguments: JSON.stringify({
+          title: "Newsletter campaign",
+          objective: "Ship the newsletter campaign",
+          planMarkdown:
+            "## Steps\n\n1. Draft the copy\n2. Schedule the send\n3. Verify the metrics",
+        }),
+      },
+    ]);
+
+    await send(aiApp, "plan the campaign");
+    const decisionCard = aiApp.mainWindow.getByTestId(
+      "workspace-plan-decision-card"
+    );
+    await expect(decisionCard).toBeVisible({ timeout: 60_000 });
+    const requestsBeforeDecision = await requestCount(fakeAi);
+
+    // Approve: exactly ONE continuation request rides the ordinary path.
+    await decisionCard.getByTestId("workspace-plan-approve").click();
+    await expect
+      .poll(async () => (await fakeAi.getRequests()).length, {
+        timeout: 45_000,
+      })
+      .toBe(requestsBeforeDecision + 1);
+    // The continuation settles terminally against the stream-text scenario.
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText(STREAM_TEXT_FINAL, { timeout: 45_000 });
+    // No duplicate continuation: the count stays at exactly one more.
+    await aiApp.mainWindow.waitForTimeout(5_000);
+    expect(await requestCount(fakeAi)).toBe(requestsBeforeDecision + 1);
+  });
+
+  test("AC 11: a stale plan decision never dispatches a continuation", async ({
+    aiApp,
+    fakeAi,
+    testRoot,
+  }) => {
+    test.setTimeout(300_000);
+    await openChat(aiApp);
+    await fakeAi.setToolCallQueue([
+      {
+        name: "EnterPlanMode",
+        arguments: JSON.stringify({
+          rationale: "e2e ac11 cert",
+          objective: "Ship the newsletter campaign",
+        }),
+      },
+      {
+        name: "SubmitPlanForApproval",
+        arguments: JSON.stringify({
+          title: "Newsletter campaign",
+          objective: "Ship the newsletter campaign",
+          planMarkdown: "## Steps\n\n1. Draft the copy",
+        }),
+      },
+    ]);
+
+    await send(aiApp, "plan the stale journey");
+    const decisionCard = aiApp.mainWindow.getByTestId(
+      "workspace-plan-decision-card"
+    );
+    await expect(decisionCard).toBeVisible({ timeout: 60_000 });
+    const requestsBeforeDecision = await requestCount(fakeAi);
+
+    // A newer plan version appears beneath the open card (source drift) —
+    // bump the durable currentVersion directly through the sqlite3 CLI.
+    const conversationId = await firstConversationId(aiApp);
+    const dbPath = path.join(testRoot.databasePath, DB_FILE_NAME);
+    execFileSync("sqlite3", [
+      dbPath,
+      `UPDATE ai_chat_plans SET currentVersion = currentVersion + 1 WHERE conversationId = '${conversationId}';`,
+    ]);
+
+    await decisionCard.getByTestId("workspace-plan-approve").click();
+    // The stale decision is rejected: the decision error surfaces and NO
+    // continuation request ever dispatches.
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-plan-decision-error")
+    ).toBeVisible({ timeout: 30_000 });
+    await aiApp.mainWindow.waitForTimeout(5_000);
+    expect(await requestCount(fakeAi)).toBe(requestsBeforeDecision);
   });
 });
