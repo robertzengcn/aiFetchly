@@ -4,6 +4,37 @@ Audit date: 2026-10-24. Reviewed implementation: `92297f75a` on `worktree-local-
 
 Requirements: [PRD.md](PRD.md) and [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md).
 
+## Resolution (2026-10-25 remediation commit `5a4089068`)
+
+All twelve B-defects were independently re-verified in disposable
+repositories, fixed, and covered by regressions in the same commit
+(suite 148/148; doctor all-green; real-tree audit exit 0 with ESLint's
+460 built-in default-ignored files reported as skips, not errors).
+
+| Item | Resolution in `5a4089068` |
+|---|---|
+| B01 runner deletion passes | staged-deletion enumeration + required-runtime-files index check with uninstall guidance |
+| B02 doctor certifies no-op shim | shim-content check reads non-comment lines only |
+| B03 audit honors ignores silently | requested-vs-reported comparison; unapproved ignore = exit 2 with operationalErrors; built-in dot-dir/node_modules ignoring classified as reported skips |
+| B04 audit succeeds on broken config | config diagnostics drive exit 2 + operationalErrors (still listed as code defects) |
+| B05 audit follows external symlinks | inventory boundary-validated via the shared repo-boundary helper |
+| B06 leading-hyphen filenames | `--` terminator before file operands in every ESLint CLI invocation (audit + deep) |
+| B07 `::` filenames corrupt keys | NUL-separated composite keys; exact round-trip regression |
+| B08 in-project JSX omitted | `.jsx` joins the typed target set |
+| B09 suffixed gitlinks checked as files | mode-160000 skip in coordinator preflight AND runner (reported skip) |
+| B10 dependency contract incomplete | `@typescript-eslint/eslint-plugin` + `@vue/eslint-config-typescript` added |
+| B11 warnings hidden on success | runner human output shows bounded warning details. The hook-path half (git discards hook stdout on SUCCESS) is Git behavior the hook cannot change from inside the process — documented as a limitation, not fixed |
+| B12 empty --json unparseable | versioned zero-file document |
+
+Also from the V01 note: the fresh-checkout drill now drives yarn through
+its JS entry (Windows .cmd-safe) and fails on a nonzero prepare status.
+
+**Still open:** V01 (networked drill run), V02 (macOS/Windows/GUI +
+declared-minimum Node), V03 (mid-run interruption and forced
+restoration-failure tests — the 1 ms timeout test predates meaningful
+backup processing), V04 (owner review of the 22 unmanifested pairs),
+D01 (completion statement — partially served by this ledger).
+
 ## Verdict
 
 **Not all requirements are complete.** The main gate, selected rules, exception mechanism, local commands, compatibility fixtures, and benchmark artifacts exist. However, this review identified **12 reproducible defects**, plus outstanding installation, platform, recovery, and rollout work. Passing the current test suite is insufficient to declare the feature complete.
@@ -53,7 +84,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B01 — P1: Deleting a required runner passes policy validation
 
-- [ ] **Validate policy deletions separately from source-file selection.**
+- [x] **Validate policy deletions separately from source-file selection.**
 - **Requirements:** QG-10/QG-12; AC-10; technical design §§5–6.
 - **Location:** `scripts/quality/pre-commit.mjs:170`, `:255`, `:100`.
 - **Reproduction:** In a disposable gate-enabled repository, run `git rm scripts/quality/lint-files.mjs`, then commit that deletion alone.
@@ -63,7 +94,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B02 — P1: Doctor can certify a hook that permits invalid commits
 
-- [ ] **Make doctor's commit probe exercise the installation being diagnosed.**
+- [x] **Make doctor's commit probe exercise the installation being diagnosed.**
 - **Requirements:** QG-01/QG-11/QG-12; AC-18.
 - **Location:** `scripts/quality/doctor.mjs:141` and `:229`; `scripts/quality/disposable-gate.mjs:57`.
 - **Reproduction:** In a disposable repo, leave `.husky/pre-commit` containing the proper coordinator command, but set executable `.husky/_/pre-commit` to `#!/bin/sh`, a `# husky runner` comment, and `exit 0`. Run doctor, then stage `export const value: any = 1;` and commit.
@@ -73,7 +104,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B03 — P1: Audit silently treats unexpectedly ignored source as checked
 
-- [ ] **Fail the audit on unapproved ignores or missing lint results.**
+- [x] **Fail the audit on unapproved ignores or missing lint results.**
 - **Requirements:** QG-11/QG-12; technical design §§7,9; the same fail-closed selection principle as AC-17.
 - **Location:** `scripts/quality/audit.mjs:82`; `scripts/quality/audit-core.mjs:37`.
 - **Reproduction:** Track `Probe.ts` with `export const value: any = 1;` and add `Probe.ts` to `.eslintignore`; run `node scripts/quality/audit.mjs --json` in the disposable repository.
@@ -83,7 +114,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B04 — P1: Audit returns success for a broken ESLint configuration
 
-- [ ] **Return operational failure and structured diagnostics for audit infrastructure errors.**
+- [x] **Return operational failure and structured diagnostics for audit infrastructure errors.**
 - **Requirements:** QG-12; technical design §10.
 - **Location:** `scripts/quality/audit.mjs:71`, `:178`.
 - **Reproduction:** Enable nonexistent rule `not-a-rule` and audit a tracked TS file.
@@ -102,7 +133,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B06 — P2: Leading-hyphen filenames become ESLint options in audit/deep
 
-- [ ] **Preserve filenames as operands in every ESLint CLI invocation.**
+- [x] **Preserve filenames as operands in every ESLint CLI invocation.**
 - **Requirements:** QG-13; technical design §11.
 - **Location:** `scripts/quality/audit.mjs:67`; `scripts/quality/deep.mjs:53`.
 - **Reproduction:** Track a valid root `-bad.ts` and run audit. Inspect `buildSteps` for the same in-project filename.
@@ -111,7 +142,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B07 — P2: Legal POSIX `::` filenames corrupt audit output and drafts
 
-- [ ] **Use an unambiguous representation for audit path/rule keys.**
+- [x] **Use an unambiguous representation for audit path/rule keys.**
 - **Requirements:** QG-07/QG-13; technical design §9 exact manifest paths/rules.
 - **Location:** `scripts/quality/audit-core.mjs:73`, `:195`.
 - **Reproduction:** Feed `buildAuditReport` an explicit-any finding at `src/a::b.ts`.
@@ -121,7 +152,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B08 — P2: Deep validation silently omits included JSX
 
-- [ ] **Include `.jsx` in the typed JavaScript target set.**
+- [x] **Include `.jsx` in the typed JavaScript target set.**
 - **Requirements:** QG-11/QG-15; technical design §7 explicit typed scope.
 - **Location:** `scripts/quality/deep-scope.mjs:185`–`:187`.
 - **Reproduction:** Use a temporary TSConfig with `allowJs: true`, `include: ['src/**/*']`, and `src/Panel.jsx`. Resolve the scope and build deep steps.
@@ -131,7 +162,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B09 — P2: Source-suffixed submodules are incorrectly checked as files
 
-- [ ] **Filter Git mode `160000` out before source-file preflight.**
+- [x] **Filter Git mode `160000` out before source-file preflight.**
 - **Requirements:** QG-02; technical design §6.1 explicitly requires skipping submodules.
 - **Location:** `scripts/quality/pre-commit.mjs:191`, `:403`–`:416`.
 - **Reproduction:** In a disposable repo, create an index gitlink named `vendored.ts` using `git update-index --add --cacheinfo 160000,<existing-commit>,vendored.ts`; leave the submodule directory uninitialized and commit.
@@ -140,7 +171,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B10 — P2: Dependency validation omits directly required configuration packages
 
-- [ ] **Validate the full directly consumed ESLint configuration dependency set.**
+- [x] **Validate the full directly consumed ESLint configuration dependency set.**
 - **Requirements:** QG-12; technical design §3, especially direct parser/plugin declarations.
 - **Location:** `scripts/quality/pre-commit.mjs:344`–`:352`; `.eslintrc.json:8`.
 - **Reproduction:** Remove `@typescript-eslint/eslint-plugin` and `@vue/eslint-config-typescript` declarations from a staged package manifest while leaving existing `node_modules` installed.
@@ -150,7 +181,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B11 — P2: Successful hook output hides warnings and runner summaries
 
-- [ ] **Surface bounded warning details and aggregate successful-run totals.**
+- [x] **Surface bounded warning details and aggregate successful-run totals.**
 - **Requirements:** QG-07; technical design §7 keeps warnings visible; §10 requires diagnostic details and totals.
 - **Location:** `scripts/quality/lint-files.mjs:306`–`:327`; `scripts/quality/pre-commit.mjs:442`.
 - **Reproduction:** Run the fast runner on warning-bearing, otherwise valid code; then commit valid/warning-bearing source through the hook.
@@ -159,7 +190,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B12 — P3: Empty JSON invocation returns non-JSON success
 
-- [ ] **Emit a valid empty report when JSON mode has no paths.**
+- [x] **Emit a valid empty report when JSON mode has no paths.**
 - **Requirement:** Technical design §10 versioned JSON contract.
 - **Location:** `scripts/quality/lint-files.mjs:72`–`:75`.
 - **Reproduction:** `node scripts/quality/lint-files.mjs --json`.
