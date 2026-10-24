@@ -10,7 +10,7 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -61,7 +61,7 @@ describe('doctor diagnostics (F13)', () => {
     const repo_husky = path.join(repo.root, '.husky', 'pre-commit');
     // The disposable repo has no user-level .husky/pre-commit (only the
     // shim); write one that mentions the coordinator only in a comment.
-    spawnSync('sh', ['-c', `printf '# TODO node scripts/quality/pre-commit.mjs\\ntrue\\n' > ${JSON.stringify(repo_husky)}`], { cwd: repo.root });
+    writeFileSync(repo_husky, '# TODO node scripts/quality/pre-commit.mjs\ntrue\n');
     const res = runDoctor(repo.root);
     assert.equal(res.status, 2);
     assert.match(res.stdout, /FAIL\] husky:pre-commit/);
@@ -70,7 +70,13 @@ describe('doctor diagnostics (F13)', () => {
   test('a semantically invalid manifest fails the exceptions check', () => {
     const repo = makeRepo('bad-manifest');
     // Wildcard ruleId passes JSON shape checks but fails the real validator.
-    spawnSync('sh', ['-c', `printf '{"schemaVersion":1,"exceptions":[{"path":"A.ts","ruleId":"sonarjs/*","maxCount":1,"reason":"x","owner":"m","expiresOn":"2099-01-01"}]}' > ${JSON.stringify(path.join(repo.root, 'scripts', 'quality', 'exceptions.json'))}`], { cwd: repo.root });
+    writeFileSync(
+      path.join(repo.root, 'scripts', 'quality', 'exceptions.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        exceptions: [{ path: 'A.ts', ruleId: 'sonarjs/*', maxCount: 1, reason: 'x', owner: 'm', expiresOn: '2099-01-01' }],
+      })
+    );
     const res = runDoctor(repo.root);
     assert.equal(res.status, 2);
     assert.match(res.stdout, /FAIL\] exceptions\.json/);

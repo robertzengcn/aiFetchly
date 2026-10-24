@@ -101,7 +101,8 @@ describe('git integration (AC-04/05/07/15/16)', () => {
     // scripts/lib debt would otherwise block the seed itself), then
     // restore the hook — the edit under test is now TRACKED-modified,
     // which is what `git diff --name-only` can see.
-    run(root, ['config', 'core.hooksPath', '/dev/null']);
+    // Portable hook disable: an empty hooks dir (see disposable-gate.mjs).
+    run(root, ['config', 'core.hooksPath', '.husky-disabled']);
     run(root, ['add', 'scripts', '.eslintrc.json']);
     run(root, ['commit', '-m', 'seed gate']);
     run(root, ['config', 'core.hooksPath', '.husky/_']);

@@ -36,7 +36,14 @@ export function createDisposableGateRepo(realRepo, name) {
   cpSync(path.join(realRepo, 'scripts'), path.join(root, 'scripts'), { recursive: true });
   cpSync(path.join(realRepo, '.eslintrc.json'), path.join(root, '.eslintrc.json'));
   cpSync(path.join(realRepo, 'tsconfig.json'), path.join(root, 'tsconfig.json'));
-  symlinkSync(path.join(realRepo, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+  // V04 portability: a Windows directory symlink needs privileges — use a
+  // junction there, a plain symlink elsewhere.
+  const nodeModulesLink = path.join(root, 'node_modules');
+  if (process.platform === 'win32') {
+    symlinkSync(path.join(realRepo, 'node_modules'), nodeModulesLink, 'junction');
+  } else {
+    symlinkSync(path.join(realRepo, 'node_modules'), nodeModulesLink, 'dir');
+  }
   writeFileSync(
     path.join(root, 'scripts', 'quality', 'exceptions.json'),
     JSON.stringify({ schemaVersion: 1, exceptions: [] })
@@ -46,9 +53,16 @@ export function createDisposableGateRepo(realRepo, name) {
     path.join(root, '.husky', '_', 'pre-commit'),
     '#!/usr/bin/env sh\nnode "$PWD/scripts/quality/pre-commit.mjs"\n'
   );
-  execSync(`chmod +x ${JSON.stringify(path.join(root, '.husky', '_', 'pre-commit'))}`);
-  // Seed-commit the gate itself with hooks disabled (see header).
-  git('config core.hooksPath /dev/null');
+  if (process.platform !== 'win32') {
+    // POSIX shim must be executable; Windows git-for-windows shims do not
+    // use the x bit.
+    spawnSync('chmod', ['+x', path.join(root, '.husky', '_', 'pre-commit')]);
+  }
+  // Seed-commit the gate itself with hooks disabled (see header). The
+  // "disabled" target is an EMPTY DIRECTORY — /dev/null is not portable
+  // (V04) and an empty hooks dir means git finds no hooks anywhere.
+  mkdirSync(path.join(root, '.husky-disabled'), { recursive: true });
+  git('config core.hooksPath .husky-disabled');
   git('add scripts .eslintrc.json tsconfig.json');
   git('commit -q -m "seed gate"');
   git('config core.hooksPath .husky/_');

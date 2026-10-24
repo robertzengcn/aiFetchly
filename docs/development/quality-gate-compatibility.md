@@ -83,3 +83,24 @@ yarn test:quality-gate     # fixture, dialect, integration, offline,
                            # doctor, audit, and reporting suites
 yarn lint                  # base-config repo lint unchanged
 ```
+
+## Platform and GUI verification status (V04)
+
+| Environment | Status |
+|---|---|
+| Linux x64 (WSL2), git CLI | VERIFIED — full suite, doctor incl. real-commit probe, disposable-repo integration drills |
+| macOS | NOT TESTED — no known platform-specific code path remains: the coordinator spawns `process.execPath` (never `.bin` shims or `.cmd`), path handling is `path.`-based, and the harness uses junctions on Windows |
+| Windows | NOT TESTED — the integration harness is portability-prepared (junction symlinks, `spawnSync` chmod instead of shell lines, empty-directory hook disabling instead of `/dev/null`, POSIX-only tests skipped/guarded) but has never executed on Windows |
+| Git GUI clients (SourceTree, Fork, VS Code git, etc.) | NOT TESTED — GUIs shell out to the same `git commit`, which fires `core.hooksPath` exactly like the CLI; the hook chain contains no TTY assumptions, but this is reasoning, not evidence |
+
+### Fresh-checkout drill
+
+`yarn quality:fresh-checkout` (scripts/quality/fresh-checkout-drill.mjs)
+performs the full AC-18 drill on a clean clone: lockfile install →
+`yarn prepare` → doctor → valid fixture commit (must pass) → invalid
+fixture commit (must be rejected). **Result on 2026-10-24 (this machine):
+blocked at `yarn install --frozen-lockfile` — the sandbox denies registry
+access and the local yarn cache is incomplete, so a real lockfile install
+cannot complete here.** The drill must be run on a networked machine (or
+CI) to complete V04's fresh-checkout evidence; the script aborts loudly
+at that step rather than substituting copied/symlinked dependencies.
