@@ -3,10 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The async-tool path re-checks USER_AI_ENABLED via Token, which touches
 // ElectronStoreService (unavailable under vitest). Mock it enabled like
 // AIChatQueryLoopAsyncPoll.test.ts does.
+// R9 T04: the mock is KEY-AWARE — returning "true" for every key also fed
+// USERSDBPATH, making every worker open the same cwd-relative `./true/`
+// scraper.db; concurrent full-suite workers then hit "database is locked"
+// during the loop's between-round bookkeeping and the turn fails before
+// the handoff round. An empty dbpath takes the per-worker isolated TMPDIR
+// fallback (test/vitest/_setup/isolatedTmpDir.ts) instead.
 vi.mock("@/modules/token", () => ({
   Token: vi.fn(function TokenMock() {
       return {
-    getValue: vi.fn().mockReturnValue("true"),
+    getValue: vi.fn(
+      (key: string) => (key === "user_dbpath" ? "" : "true")
+    ),
       };
     }),
 }));

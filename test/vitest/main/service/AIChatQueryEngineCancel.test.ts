@@ -219,9 +219,16 @@ vi.mock("@/config/skillsRegistry", () => ({
 vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: { execute: vi.fn() },
 }));
+// R9 T04: key-aware Token mock — a blanket "true" also fed USERSDBPATH,
+// making every worker open the same cwd-relative `./true/` scraper.db;
+// concurrent full-suite workers then hit `database is locked` during
+// between-round DB bookkeeping and the turn fails. Empty dbpath takes the
+// per-worker isolated TMPDIR fallback (test/vitest/_setup/isolatedTmpDir.ts).
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(function () {
-    return { getValue: vi.fn().mockReturnValue("true") };
+    return { getValue: vi.fn(
+        (key: string) => (key === "user_dbpath" ? "" : "true")
+      ) };
   }),
 }));
 vi.mock("@/config/usersetting", async (importOriginal) => {

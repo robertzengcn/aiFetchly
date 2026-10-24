@@ -33,6 +33,11 @@ describe("SearchModule.searchByKeywordAndEngine", () => {
     vi.restoreAllMocks();
   });
 
+  // R9 T04 stabilization: the test body dynamically imports the heavy
+  // SearchModule/@/modules graph on first use. Paying that import cost
+  // inside the 5s default made this test flake under full-suite parallel
+  // load (passes serially at --maxWorkers=2, flakes at full concurrency).
+  // B22 convention: 30s budget for import-heavy tests.
   test("initializes the database before saving the search task", async () => {
     fs.mkdirSync(testRuntimeDir, { recursive: true });
 
@@ -76,7 +81,7 @@ describe("SearchModule.searchByKeywordAndEngine", () => {
     });
 
     expect(events).toEqual(["ensure", "save", "log", "run"]);
-  });
+  }, 30_000);
 });
 
 describe("database-backed module connection guards", () => {
