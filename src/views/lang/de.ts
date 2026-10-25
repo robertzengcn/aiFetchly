@@ -3009,6 +3009,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    permission_deny_failed:
+      "Das Tool konnte nicht verweigert werden; es wartet weiterhin auf die Berechtigung.",
     permission_requested_scheduled:
       "Eine geplante Aufgabe fragt nach der Berechtigung, ein Tool zu verwenden. Überprüfen und genehmigen oder ablehnen.",
     auth_expired:

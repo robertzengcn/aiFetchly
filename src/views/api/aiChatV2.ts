@@ -1039,8 +1039,11 @@ export async function denyChatV2ToolPermission(
     toolId,
     conversationId,
   });
+  // R10 B02: a null/garbage response is NOT a confirmed denial — reporting
+  // it as a successful no-owner deny would replace the actionable card with
+  // a receipt the owner never confirmed. Report it as a failure instead.
   return (
-    (resp as DenyToolPermissionResult | null) ?? { ok: true, handled: false }
+    (resp as DenyToolPermissionResult | null) ?? { ok: false, handled: false }
   );
 }
 

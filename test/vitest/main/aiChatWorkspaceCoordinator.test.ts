@@ -684,6 +684,44 @@ describe("AIChatCoordinator", () => {
     });
   });
 
+  it("R10 B01: a cancel bound to a stale run id never cancels the conversation's newer run", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(31));
+    await waitFor(() => fake.turns.length === 1);
+    if (!accepted.ok) return;
+    const turn = fake.turns[0];
+
+    // A captured claim whose run id no longer resolves to the CURRENT run
+    // of the claimed conversation is stale: no-op — newer work survives.
+    const stale = await coordinator.cancelRun({
+      conversationId: "v2-test-31",
+      runId: "stale-run-id",
+    });
+    expect(stale.cancelled).toBe(false);
+    expect(fake.stopCalls).not.toContain("v2-test-31");
+    expect(coordinator.ownsConversation("v2-test-31")).toBe(true);
+
+    // The happy path is unchanged: cancelling with the CURRENT run id works.
+    const valid = await coordinator.cancelRun({
+      conversationId: "v2-test-31",
+      runId: accepted.response.runId,
+    });
+    expect(valid.cancelled).toBe(true);
+    expect(fake.stopCalls).toContain("v2-test-31");
+    emit(turn.input.eventSink, {
+      type: "cancelled",
+      conversationId: "v2-test-31",
+      messageId: "assistant-1",
+      fullContent: "partial",
+    });
+    turn.resolve({
+      type: "cancelled",
+      conversationId: "v2-test-31",
+      assistantMessageId: "assistant-1",
+    });
+  });
+
   it("observes engine permission pauses via the lifecycle listener and broadcasts attention (FR-021)", async () => {
     const { coordinator, router, fake, runModel } = buildCoordinator();
     const win = fakeWindow(2);

@@ -527,6 +527,18 @@ export class AIChatCoordinator {
     conversationId: string;
     runId?: string;
   }): Promise<{ cancelled: boolean }> {
+    // R10 B01: a renderer-supplied run id is the captured cancellation
+    // claim. When it no longer resolves to a run of the claimed
+    // conversation (finalized run, or a claim for a different
+    // conversation), the request is stale — a no-op that must never cancel
+    // the conversation's newer run. The coordinator owns run identity, so
+    // this validation cannot be done renderer-side.
+    if (input.runId) {
+      const claimed = this.runIndex.get(input.runId);
+      if (!claimed || claimed !== input.conversationId) {
+        return { cancelled: false };
+      }
+    }
     const conversationId = input.runId
       ? this.runIndex.get(input.runId) ?? input.conversationId
       : input.conversationId;

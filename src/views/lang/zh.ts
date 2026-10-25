@@ -2846,6 +2846,7 @@ export default {
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
+    permission_deny_failed: "无法拒绝该工具，它仍在等待权限确认。",
     permission_requested_scheduled:
       "计划任务正在请求使用工具的权限。请审核并批准或拒绝。",
     auth_expired: "您的登录已过期，请重新登录。",

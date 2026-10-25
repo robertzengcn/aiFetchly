@@ -3018,6 +3018,8 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    permission_deny_failed:
+      "No se pudo denegar la herramienta; sigue en pausa esperando permiso.",
     permission_requested_scheduled:
       "Una tarea programada solicita permiso para usar una herramienta. Revísala y aprueba o deniega.",
     auth_expired: "Tu sesión ha caducado. Inicia sesión de nuevo.",

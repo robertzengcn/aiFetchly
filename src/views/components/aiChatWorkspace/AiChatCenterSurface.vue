@@ -1093,6 +1093,9 @@ const permissionTexts = computed<PermissionActionTexts>(() => ({
   noToolIdText:
     t("aiChatV2.permission_resume_no_tool_id") ||
     "Missing tool call information; cannot continue execution.",
+  denyFailedText:
+    t("aiChatV2.permission_deny_failed") ||
+    "Could not deny the tool. It is still paused for permission.",
 }));
 
 function onGrantPermission(

@@ -33,6 +33,7 @@ import {
 import {
   denyChatV2ToolPermission,
   subscribeChatV2PendingEvents,
+  type DenyToolPermissionResult,
 } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
@@ -141,6 +142,8 @@ export interface PermissionActionTexts {
   readonly deniedText: string;
   readonly resumeFailedText: string;
   readonly noToolIdText: string;
+  /** R10 B02: safe localized copy shown when a denial fails to apply. */
+  readonly denyFailedText: string;
 }
 
 /**
@@ -1536,6 +1539,14 @@ export const useSelectedConversationStore = defineStore(
      * Grant a parked tool permission: mark the prompt executing locally,
      * resume the main-process turn, and surface failures on the row (the
      * resumed tool_result event replaces the row on success).
+     *
+     * R10 B03: the action's conversation ownership is captured BEFORE the
+     * IPC await; every post-await failure mutation (row restore and error
+     * banner) is scoped to the originating conversation. A delayed response
+     * or rejection after the user switched conversations retains the
+     * failure with its own conversation — the persisted pending permission
+     * re-renders the actionable decision when it is selected again — and
+     * never writes the error into another conversation's banner.
      */
     async function grantToolPermission(
       message: ChatV2MessageView,
@@ -1548,6 +1559,25 @@ export const useSelectedConversationStore = defineStore(
       }
       if (permissionResumeInFlightToolIds.has(toolId)) return;
       permissionResumeInFlightToolIds.add(toolId);
+      // B03: capture before the await — a delayed grant must not borrow the
+      // CURRENT selection's identity.
+      const originConversationId =
+        message.conversationId || workspaceStore.selectedConversationId;
+      /** Failed resume handling, scoped to the originating conversation. */
+      const recordGrantFailure = (errMsg: string): void => {
+        if (workspaceStore.selectedConversationId !== originConversationId) {
+          return;
+        }
+        // T4/D1 (audit): a failed resume RESTORES the prompt — Grant/Deny
+        // stay mounted and actionable (FR-PER-007); the safe error rides
+        // the row content so it is announced without stealing focus. The
+        // rewrite is id-scoped: a no-op while another window is mounted.
+        presenter.rewriteMessage(message.id, (m) =>
+          restorePermissionPromptAfterFailure([m], message.id, errMsg)[0]
+        );
+        syncFromPresenter();
+        errorMessage.value = errMsg;
+      };
       // Executing rewrite goes through the presenter so the next presenter
       // mutation cannot clobber it (single source of truth for the window).
       presenter.rewriteMessage(message.id, (m) => {
@@ -1559,8 +1589,7 @@ export const useSelectedConversationStore = defineStore(
           AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
           {
             toolId,
-            conversationId:
-              message.conversationId || workspaceStore.selectedConversationId,
+            conversationId: originConversationId,
           }
         );
         const res = raw as { ok: boolean; error?: string } | null;
@@ -1571,23 +1600,12 @@ export const useSelectedConversationStore = defineStore(
             // executing rewrite instead of restoring the card (FR-PER-005).
             return;
           }
-          // T4/D1 (audit): a failed resume RESTORES the prompt — Grant/Deny
-          // stay mounted and actionable (FR-PER-007); the safe error rides
-          // the row content so it is announced without stealing focus.
-          presenter.rewriteMessage(message.id, (m) =>
-            restorePermissionPromptAfterFailure([m], message.id, errMsg)[0]
-          );
-          syncFromPresenter();
-          errorMessage.value = errMsg;
+          recordGrantFailure(errMsg);
         }
       } catch (error) {
         const errMsg =
           error instanceof Error ? error.message : String(error);
-        presenter.rewriteMessage(message.id, (m) =>
-          restorePermissionPromptAfterFailure([m], message.id, errMsg)[0]
-        );
-        syncFromPresenter();
-        errorMessage.value = errMsg;
+        recordGrantFailure(errMsg);
       } finally {
         permissionResumeInFlightToolIds.delete(toolId);
       }
@@ -1598,60 +1616,111 @@ export const useSelectedConversationStore = defineStore(
      * Routes Deny by the exact tool/conversation through the existing
      * continuation API first: when a scheduled-loop engine owns the paused
      * turn it synthesizes the denial result and the run continues (honor
-     * `handled` — never stop an unrelated task). Otherwise falls back to
-     * the interactive stop, which settles the parked run to cancelled
-     * through the normal terminal path. Ordinary interactive denial keeps
-     * its stop fallback; only the scheduled-owner gap is closed here.
+     * `handled` — never stop an unrelated task).
+     *
+     * R10 B01/B02: the renderer never fires a generic cancellation from a
+     * failed denial. The authoritative claim — originating conversation,
+     * run identity and selection generation — is captured BEFORE the IPC
+     * await; only the main-process owner validates that claim, and a
+     * failed/stale decision keeps the card actionable for retry
+     * (FR-PER-007) instead of displaying a denied receipt or stopping
+     * whatever run is currently selected.
      */
     async function denyToolPermission(
       message: ChatV2MessageView,
       texts: PermissionActionTexts
     ): Promise<void> {
+      // B01: capture the claim before any await — a delayed decision must
+      // never borrow the CURRENT selection's identity.
+      const originConversationId =
+        message.conversationId ||
+        workspaceStore.selectedConversationId ||
+        undefined;
+      const originRunId = activeRunId.value;
       const toolId = resolveToolIdForPermission(message);
-      const targetConversationId =
-        message.conversationId || workspaceStore.selectedConversationId || undefined;
-      if (toolId) {
-        try {
-          const result = await denyChatV2ToolPermission(
-            toolId,
-            targetConversationId
-          );
-          if (result.handled) {
-            // Scheduled engine owned the paused turn — it synthesized a
-            // denied tool_result and the run continues. Rewrite the row to
-            // the denied receipt (the engine's tool_result replaces it on
-            // success) and do NOT stop any stream.
-            presenter.rewriteMessage(message.id, (m) => ({
-              ...m,
-              content: texts.deniedText,
-              metadata: {
-                ...m.metadata,
-                source: "chat-v2",
-                toolResult: undefined,
-                success: false,
-              },
-            }));
-            syncFromPresenter();
-            return;
-          }
-        } catch {
-          // IPC denied (e.g. AI gate) or stale tool id — fall through to
-          // the interactive stop below, which keeps an actionable card on
-          // failure via the grant-style restore path.
+
+      /** Id-scoped receipt rewrite: a no-op while another window is mounted. */
+      const rewriteToDeniedReceipt = (): void => {
+        presenter.rewriteMessage(message.id, (m) => ({
+          ...m,
+          content: texts.deniedText,
+          metadata: {
+            ...m.metadata,
+            source: "chat-v2",
+            toolResult: undefined,
+            success: false,
+          },
+        }));
+        syncFromPresenter();
+      };
+
+      /**
+       * B02: a failed/stale decision keeps the card actionable and announces
+       * the safe error. B03 parity: the banner belongs to the SELECTED
+       * conversation — write it only while the originating conversation is
+       * still selected; the persisted pending permission re-renders the
+       * actionable decision when the conversation is selected again.
+       */
+      const recordDenyFailure = (safeError: string): void => {
+        if (workspaceStore.selectedConversationId !== originConversationId) {
+          return;
         }
+        presenter.rewriteMessage(message.id, (m) =>
+          restorePermissionPromptAfterFailure([m], message.id, safeError)[0]
+        );
+        syncFromPresenter();
+        errorMessage.value = safeError;
+      };
+
+      /** The captured-claim interactive stop (deny-equals-stop). */
+      const cancelCapturedClaim = async (): Promise<void> => {
+        // No captured conversation → nothing authoritative to cancel.
+        if (!originConversationId) return;
+        await cancelChatRun({
+          conversationId: originConversationId,
+          ...(originRunId ? { runId: originRunId } : {}),
+        });
+      };
+
+      if (toolId) {
+        let result: DenyToolPermissionResult;
+        try {
+          result = await denyChatV2ToolPermission(
+            toolId,
+            originConversationId
+          );
+        } catch {
+          // B02: a transport failure (denied AI gate, stale payload, IPC
+          // down) is NOT success — keep the decision actionable with the
+          // localized safe error and never cancel anything.
+          recordDenyFailure(texts.denyFailedText);
+          return;
+        }
+        // B02: only a CONFIRMED denial may replace the card. A handled
+        // failure (owner's cancel reported not-cancelled, or the scheduled
+        // engine's denial error) keeps the decision available.
+        if (!result || result.ok !== true) {
+          recordDenyFailure(result?.error || texts.denyFailedText);
+          return;
+        }
+        if (result.handled) {
+          // Scheduled engine owned the paused turn — it synthesized a
+          // denied tool_result and the run continues (idempotent stale
+          // denies are the same shape). Rewrite the row to the denied
+          // receipt and do NOT stop any stream.
+          rewriteToDeniedReceipt();
+          return;
+        }
+        // handled:false — no scheduled owner claims the tool. Interactive
+        // deny-equals-stop proceeds, bound to the captured claim.
+        rewriteToDeniedReceipt();
+        await cancelCapturedClaim();
+        return;
       }
-      presenter.rewriteMessage(message.id, (m) => ({
-        ...m,
-        content: texts.deniedText,
-        metadata: {
-          ...m.metadata,
-          source: "chat-v2",
-          toolResult: undefined,
-          success: false,
-        },
-      }));
-      syncFromPresenter();
-      await stopActiveRun();
+      // No resolvable tool id: the deny cannot claim a tool — the
+      // interactive stop bound to the captured claim ends the parked run.
+      rewriteToDeniedReceipt();
+      await cancelCapturedClaim();
     }
 
     function teardown(): void {

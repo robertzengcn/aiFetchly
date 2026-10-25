@@ -3018,6 +3018,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    permission_deny_failed:
+      "Could not deny the tool. It is still paused for permission.",
     permission_requested_scheduled:
       "A scheduled task is asking for permission to use a tool. Review and approve or deny it.",
     auth_expired: "Your session has expired. Please sign in again.",

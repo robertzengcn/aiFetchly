@@ -2941,6 +2941,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    permission_deny_failed:
+      "ツールを拒否できませんでした。ツールは引き続き権限待ちで停止しています。",
     permission_requested_scheduled:
       "スケジュールされたタスクがツールの使用許可を要求しています。確認して承認または拒否してください。",
     auth_expired:
