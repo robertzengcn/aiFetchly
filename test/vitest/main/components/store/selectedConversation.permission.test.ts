@@ -503,6 +503,55 @@ describe("R10 permission ownership (B01/B02/B03)", () => {
     ).toBe(false);
   });
 
+  it("B01: a deny resolving after A→B→A rewrites the receipt and cancels the captured claim", async () => {
+    const perm = permissionResult("m-r10-b01c", { toolCallId: "tc-r10-b01c" });
+    await seedStore([perm]);
+    cancelChatRunMock.mockClear();
+    cancelChatRunMock.mockResolvedValue({ cancelled: true });
+    let resolveInvoke!: (value: unknown) => void;
+    windowInvokeMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveInvoke = resolve;
+        })
+    );
+    const pending = useSelectedConversationStore().denyToolPermission(
+      perm,
+      TEXTS
+    );
+    await switchToRunningB();
+    // Back on A: the snapshot still carries the parked permission card.
+    vi.mocked(selectConversation).mockResolvedValue({
+      conversationId: "conv-1",
+      acceptedGeneration: 3,
+      messages: [perm],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "awaiting_permission",
+      activeRunId: "run-1",
+      title: "Permission chat",
+    });
+    await useSelectedConversationStore().loadSelection("conv-1");
+    await flushPromises();
+    resolveInvoke({ ok: true, handled: false });
+    await pending;
+    await flushPromises();
+
+    // The interactive deny-equals-stop still ends A's parked run — bound to
+    // the captured claim, exactly once.
+    expect(cancelChatRunMock).toHaveBeenCalledTimes(1);
+    expect(cancelChatRunMock).toHaveBeenCalledWith({
+      conversationId: "conv-1",
+      runId: "run-1",
+    });
+    const row = useSelectedConversationStore().messages.find(
+      (m) => m.id === "m-r10-b01c"
+    );
+    expect(row?.content).toBe(TEXTS.deniedText);
+    expect(row?.metadata?.toolResult).toBeUndefined();
+    expect(useSelectedConversationStore().errorMessage).toBeNull();
+  });
+
   // --- B03: grant failures stay with the originating conversation -----------
 
   it("B03: a failed grant response after switching does not write A's error into B", async () => {
