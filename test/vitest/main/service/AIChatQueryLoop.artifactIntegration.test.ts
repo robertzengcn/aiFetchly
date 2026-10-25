@@ -71,15 +71,22 @@ vi.mock("@/service/PluginRecoveryLedger", () => ({
   }),
 }));
 
-vi.mock("@/config/usersetting", () => ({
-  Token: class {
-    getValue() {
-      return "true";
-    }
-  },
-  USER_AI_ENABLED: "true",
-  TOKENNAME: "user-social-market-token",
-}));
+vi.mock("@/config/usersetting", async (importOriginal) => {
+  // Partial mock: the rollout keys (AI_CHAT_MESSAGE_QUEUE_ENABLED etc.)
+  // used by AIChatWorkspaceRollout through the IPC import chain stay
+  // defined; the real module is pure constants.
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
+  return {
+    ...actual,
+    Token: class {
+      getValue() {
+        return "true";
+      }
+    },
+    USER_AI_ENABLED: "true",
+    TOKENNAME: "user-social-market-token",
+  };
+});
 
 vi.mock("@/modules/token", () => ({
   Token: class {
